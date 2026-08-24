@@ -1952,6 +1952,18 @@ def solve_imported_metal_from_msh_text(
         "channel_order": channel_order,
         "metadata": metadata,
     }
+    # A convenience mirror of the per-channel grids: the sorted union of every
+    # channel's frequencies. Optional in the contract -- envelopes persisted
+    # before it existed remain valid without it.
+    envelope_frequencies = sorted(
+        {
+            float(value)
+            for channel_payload in channels.values()
+            for value in (channel_payload.get("frequencies") or [])
+        }
+    )
+    if envelope_frequencies:
+        envelope["frequencies"] = envelope_frequencies
     if channel_bases_npz is not None:
         envelope["_channel_bases_npz"] = channel_bases_npz
     if cardioid_campaign is not None:

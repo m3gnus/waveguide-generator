@@ -9,6 +9,13 @@ export interface ResultData {
   client_request_id?: string | null;
   client_metadata?: Record<string, unknown>;
   provenance?: Record<string, unknown>;
+  /**
+   * May be absent at the top level of a stored multi_channel envelope (older
+   * solves kept frequencies per channel only); every frequency-shaped consumer
+   * must guard with Array.isArray. The type stays non-optional because making
+   * it `number[] | undefined` ripples through dozens of parametric-path
+   * consumers that are only ever handed frequency-shaped payloads.
+   */
   frequencies: number[];
   directivity?: {
     horizontal?: PolarSample[][];
@@ -81,7 +88,11 @@ function isSafeJson(value: unknown, depth = 0): boolean {
 
 function isResultData(value: unknown, depth = 0): value is ResultData {
   if (depth >= 8 || !isRecord(value) || !isSafeJson(value)) return false;
-  if (!Array.isArray(value.frequencies) || !value.frequencies.every(isFiniteNumber)) return false;
+  // ``frequencies`` is per-channel in a multi_channel envelope; the top level
+  // may omit it, so validate the field only when present.
+  if ('frequencies' in value && !(
+    Array.isArray(value.frequencies) && value.frequencies.every(isFiniteNumber)
+  )) return false;
   if ('metadata' in value && !isRecord(value.metadata)) return false;
   if ('channel_order' in value && !(
     Array.isArray(value.channel_order) && value.channel_order.every((item) => typeof item === 'string')
@@ -116,7 +127,11 @@ export function parseFinalResultEnvelope(value: unknown): JobResults {
     // fields; their shape is the parametric v1 contract, so adopt that
     // identity rather than refusing a documented, supported input. A payload
     // that declares either field is held to the declared contract below.
-    if (!isResultData(value)) throw new Error('invalid final result envelope');
+    // Top-level ``frequencies`` is the identity of that frequency-shaped
+    // contract, so require it explicitly before adopting the payload.
+    if (!Array.isArray(value.frequencies) || !isResultData(value)) {
+      throw new Error('invalid final result envelope');
+    }
     return { ...value, result_kind: 'parametric', result_contract_version: 1 } as JobResults;
   }
   if (!('result_contract_version' in value)) {
