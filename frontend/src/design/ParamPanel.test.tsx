@@ -426,6 +426,11 @@ describe('ParamPanel inventory UX', () => {
     expect(sharedDelayMode(useCadReturnStore.getState().combineSpec!)).toBe('manual');
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-mf'].delay)
       .toEqual({ mode: 'manual', ms: 0 });
+    // The rail fixture leaves an enabled, empty driver on drive-hf so the
+    // driver controls render. That is its own refusal now -- an unfinished
+    // driver is no longer dropped on the way to the wire -- so clear it before
+    // asserting the blocker this test is about.
+    act(() => useCadReturnStore.getState().setChannelDriverEnabled('drive-hf', false));
     expect(importedSubmissionBlocker()).toBeNull();
 
     const forceFull = host.querySelector<HTMLInputElement>('#cad-force-full-domain')!;
@@ -625,6 +630,11 @@ describe('ParamPanel inventory UX', () => {
     expect(section().querySelector('[aria-label="Rear volume in L"]')).toBeNull();
     act(() => host.querySelector<HTMLInputElement>('#cad-passive-cardioid')!.click());
     expect(section().textContent).toContain('roughly 20 seconds');
+    // The rail fixture leaves an enabled, empty driver on drive-hf so the
+    // driver controls render. That is its own refusal now -- an unfinished
+    // driver is no longer dropped on the way to the wire -- so clear it before
+    // asserting the blocker this test is about.
+    act(() => useCadReturnStore.getState().setChannelDriverEnabled('drive-hf', false));
     // Enabled but empty is a refusal, never a quiet pre-campaign submission.
     expect(importedSubmissionBlocker()).toContain('Rear volume');
 

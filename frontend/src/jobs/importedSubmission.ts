@@ -5,6 +5,7 @@ import {
   channelDriverWire,
   combineWire,
   hasPassiveCardioidSurface,
+  incompleteDriverChannels,
   passiveCardioidBlocker,
   passiveCardioidWire,
   useCadReturnStore,
@@ -100,6 +101,16 @@ export function importedSubmissionBlocker(
   }
   if (rangeInvalid || listInvalid) return 'Enter a valid explicit frequency sweep.';
   if (!state.driveChannels.length) return 'At least one drive channel is required.';
+  // Same rule as the cardioid form below, for the same reason: a driver the
+  // user asked for and did not finish is refused here rather than dropped on
+  // the way to the wire. Dropping it solved the channel unit-driven under a
+  // rail that named a driver, and the run's missing power, current and
+  // excursion were the first sign of it.
+  const incomplete = incompleteDriverChannels(state);
+  if (incomplete.length) {
+    return `${incomplete.map(({ channelId, missing }) => `${channelId} still needs ${missing}`).join('; ')}. `
+      + 'Complete the driver, or clear it to solve that channel unit-driven.';
+  }
   // A half-filled cardioid form is refused here rather than dropped silently.
   // Dropping it would submit the pre-campaign solve under a rail that says a
   // campaign is configured, which is the one failure mode this feature cannot

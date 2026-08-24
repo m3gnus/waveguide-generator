@@ -1126,6 +1126,30 @@ export function driverEditedKeys(form: ChannelDriverForm | undefined): DriverFie
 }
 
 /**
+ * The datasheet symbol each driver field is known by.
+ *
+ * One source for every surface that has to name a field in a sentence -- the
+ * T/S sheet's inputs, the shortfall hint under them, and the solve gate's
+ * refusal -- so a field cannot be `Mms` in one and `mms_g` in another.
+ */
+export const DRIVER_FIELD_LABELS: Record<DriverFieldKey, string> = {
+  sd_cm2: 'Sd',
+  bl_t_m: 'Bl',
+  re_ohm: 'Re',
+  le_mh: 'Le',
+  mmd_g: 'Mmd',
+  mms_g: 'Mms',
+  cms_m_per_n: 'Cms',
+  vas_l: 'Vas',
+  fs_hz: 'Fs',
+  qms: 'Qms',
+  rms_kg_per_s: 'Rms',
+  xmax_mm: 'Xmax',
+  count: 'Count',
+  rear_volume_l: 'Rear vol',
+};
+
+/**
  * Which requirement groups are still unsatisfied, mirroring the server's
  * `DriverSpec.validate_completeness` rather than a flat list of keys: one mass
  * and one compliance source are enough, and which one is the user's choice.
@@ -1162,6 +1186,36 @@ export function channelDriverWire(
   }
   if (form.preset?.label) wire.label = form.preset.label;
   return wire;
+}
+
+/** What a driver still needs, in the user's words: "Sd, one of Mms/Mmd". */
+export function driverShortfallText(form: ChannelDriverForm | undefined): string {
+  return driverMissingGroups(form)
+    .map((group) => (group.length === 1
+      ? DRIVER_FIELD_LABELS[group[0]]
+      : `one of ${group.map((key) => DRIVER_FIELD_LABELS[key]).join('/')}`))
+    .join(', ');
+}
+
+/**
+ * Channels whose driver was asked for but cannot be submitted.
+ *
+ * A driver reaches the wire only once it is complete, so an unfinished one
+ * used to be dropped on the way out: the solve ran, the channel came back
+ * unit-acceleration, and the first the user heard of it was a Power & Current
+ * chart saying this result has no drive -- after the BEM run, not before it.
+ * The library makes that easy to hit, since a catalogue row can name a driver
+ * while carrying none of its T/S.
+ */
+export function incompleteDriverChannels(
+  state: Pick<CadReturnState, 'driveChannels' | 'channelDrivers'>,
+): Array<{ channelId: string; missing: string }> {
+  return state.driveChannels.flatMap((channel) => {
+    const form = state.channelDrivers[channel.id];
+    if (!channelAcceptsDriver(channel) || !form?.enabled) return [];
+    if (channelDriverWire(form) !== undefined) return [];
+    return [{ channelId: channel.id, missing: driverShortfallText(form) }];
+  });
 }
 
 export const PASSIVE_CARDIOID_FIELD_LABELS: Record<PassiveCardioidNumberField, string> = {
