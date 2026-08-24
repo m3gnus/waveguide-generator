@@ -69,6 +69,14 @@ export interface DriverPreset {
   base: Partial<Record<DriverFieldKey, number>>;
 }
 
+/** A driver's own numbers as the library states them now, with the id they
+ * were read for so a form whose driver changed underneath is left alone. */
+export interface DriverBaseUpdate {
+  presetId: string;
+  base: Partial<Record<DriverFieldKey, number>>;
+  xo_min_hz?: number | null;
+}
+
 export interface ChannelDriverForm {
   enabled: boolean;
   /** Overrides on top of `preset.base`; the whole driver when there is none. */
@@ -221,6 +229,8 @@ interface CadReturnState {
   setChannelDriverPreset: (channelId: string, preset: DriverPreset | null, keepOverrides?: boolean) => void;
   /** *Reset to database values*: drop the edits, keep the driver. */
   clearChannelDriverOverrides: (channelId: string) => void;
+  /** Re-read picked drivers' own numbers from the library. See the action. */
+  refreshChannelDriverBases: (bases: Record<string, DriverBaseUpdate>) => string[];
   setDriveVoltage: (value: number) => void;
   setPassiveCardioid: (patch: Partial<PassiveCardioidForm>) => void;
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
@@ -1172,6 +1182,41 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     });
     saveSolveProfile(get());
   },
+  /**
+   * Re-read the picked drivers' own numbers from the library.
+   *
+   * A preset's `base` is a copy taken when the driver was picked, so a row
+   * that gains its T/S afterwards never reached the channel that named it:
+   * the form stayed incomplete, the driver was dropped on the way to the wire,
+   * and the run came back with no power, current or excursion. Nothing here
+   * touches `fields` -- an edit of the user's own outlives the row it was made
+   * against. Returns the channels whose numbers actually moved, because a
+   * simulation input changing on its own is worth saying out loud.
+   */
+  refreshChannelDriverBases: (bases) => {
+    const changed: string[] = [];
+    set((state) => {
+      const channelDrivers = { ...state.channelDrivers };
+      for (const [channelId, update] of Object.entries(bases)) {
+        const form = channelDrivers[channelId];
+        // Not the driver this was read for any more: the user has moved on.
+        if (!form?.preset || form.preset.id !== update.presetId) continue;
+        if (JSON.stringify(form.preset.base) === JSON.stringify(update.base)) continue;
+        changed.push(channelId);
+        channelDrivers[channelId] = {
+          ...form,
+          preset: {
+            ...form.preset,
+            base: { ...update.base },
+            xo_min_hz: update.xo_min_hz === undefined ? form.preset.xo_min_hz : update.xo_min_hz,
+          },
+        };
+      }
+      return changed.length ? { channelDrivers } : {};
+    });
+    if (changed.length) saveSolveProfile(get());
+    return changed;
+  },
   clearChannelDriverOverrides: (channelId) => {
     set((state) => {
       const current = state.channelDrivers[channelId];
@@ -1287,6 +1332,16 @@ export function channelDriverWire(
   }
   if (form.preset?.label) wire.label = form.preset.label;
   return wire;
+}
+
+/** The driver fields of a library row's spec, in the form a preset holds. */
+export function driverBaseFromSpec(spec: Record<string, number>): Partial<Record<DriverFieldKey, number>> {
+  const base: Partial<Record<DriverFieldKey, number>> = {};
+  for (const key of DRIVER_FIELD_KEYS) {
+    const value = spec[key];
+    if (typeof value === 'number' && Number.isFinite(value)) base[key] = value;
+  }
+  return base;
 }
 
 /** What a driver still needs, in the user's words: "Sd, one of Mms/Mmd". */

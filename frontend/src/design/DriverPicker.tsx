@@ -7,9 +7,9 @@ import {
   type DriverKind,
 } from '../api/drivers';
 import {
-  DRIVER_FIELD_KEYS,
   DRIVER_INSTALLATION_KEYS,
   driverEditedKeys,
+  driverBaseFromSpec,
   driverShortfallText,
   driverValues,
   useCadReturnStore,
@@ -61,11 +61,7 @@ export function driverHitLabel(hit: Pick<DriverHit, 'brand' | 'model'>): string 
 }
 
 function presetFromHit(hit: DriverHit): DriverPreset {
-  const base: Partial<Record<DriverFieldKey, number>> = {};
-  for (const key of DRIVER_FIELD_KEYS) {
-    const value = hit.spec[key];
-    if (typeof value === 'number' && Number.isFinite(value)) base[key] = value;
-  }
+  const base = driverBaseFromSpec(hit.spec);
   return {
     id: hit.id,
     label: driverHitLabel(hit),
