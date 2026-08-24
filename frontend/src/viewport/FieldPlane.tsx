@@ -7,7 +7,6 @@ import {
   FloatType,
   LinearFilter,
   Matrix4,
-  NearestFilter,
   RedFormat,
   RGFormat,
   RGBAFormat,
@@ -118,6 +117,8 @@ function lutTexture(colormap: readonly string[]): DataTexture {
   return texture;
 }
 
+/** Coverage (0..255) rather than a binary flag: linear filtering interpolates
+ * the worker's distance ramp so the silhouette edge stays anti-aliased. */
 function maskTexture(mask: AppliedFieldPlaneMask | null): DataTexture {
   const texture = new DataTexture(
     mask?.data ?? new Uint8Array([0]),
@@ -127,8 +128,8 @@ function maskTexture(mask: AppliedFieldPlaneMask | null): DataTexture {
     UnsignedByteType,
   );
   texture.internalFormat = 'R8';
-  texture.minFilter = NearestFilter;
-  texture.magFilter = NearestFilter;
+  texture.minFilter = LinearFilter;
+  texture.magFilter = LinearFilter;
   texture.wrapS = ClampToEdgeWrapping;
   texture.wrapT = ClampToEdgeWrapping;
   texture.generateMipmaps = false;

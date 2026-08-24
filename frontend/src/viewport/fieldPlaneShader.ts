@@ -37,7 +37,13 @@ export const FIELD_PLANE_FRAGMENT_SHADER = `
 
   void main() {
     #include <clipping_planes_fragment>
-    if (texture2D(uMask, vFieldUv).r > 0.0) discard;
+    // Coverage mask: 0 shows the field, 1 hides it (inside the model or on
+    // its surface band). The worker writes a linear ramp across the band
+    // edge and the texture samples with linear filtering, so a smoothstep
+    // here yields an anti-aliased silhouette instead of a texel staircase.
+    float maskCoverage = texture2D(uMask, vFieldUv).r;
+    if (maskCoverage >= 0.995) discard;
+    float maskAlpha = 1.0 - smoothstep(0.0, 1.0, maskCoverage);
     vec2 field = texture2D(uFieldComplex, vFieldUv).rg;
     float spl = pressureSpl(length(field));
     float value;
@@ -66,6 +72,6 @@ export const FIELD_PLANE_FRAGMENT_SHADER = `
       color = mix(color, color * 0.58, line * 0.32);
     }
 
-    gl_FragColor = vec4(color, uOpacity);
+    gl_FragColor = vec4(color, uOpacity * maskAlpha);
   }
 `;

@@ -630,7 +630,11 @@ class FieldPlaneResponseSpec(JobModel):
             return normalized
         if normalized.startswith("channel:") and normalized.removeprefix("channel:"):
             return normalized
-        raise ValueError("response.id must be 'system' or 'channel:<id>'")
+        if normalized.startswith("member:") and normalized.removeprefix("member:"):
+            return normalized
+        raise ValueError(
+            "response.id must be 'system', 'channel:<id>', or 'member:<id>'"
+        )
 
 
 class FieldPlaneRequest(JobModel):

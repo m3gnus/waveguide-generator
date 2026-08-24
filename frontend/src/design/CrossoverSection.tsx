@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { namespaceStorage } from '../stores/durableSettings';
 import { CAD_CONTROLS } from './cadControlRegistry';
 import { CrossoverAdvanced } from './CrossoverAdvanced';
 import { NumberField } from './NumberField';
@@ -124,6 +125,17 @@ function PairRow({ pair, spec, preset, onChange }: {
 const LIVE_RECOMBINE_DEBOUNCE_MS = 400;
 
 /**
+ * Which face of the section is shown, remembered across restarts. One string
+ * per namespace -- 'basic' or 'advanced'; anything else reads as basic.
+ * Settings hydrate before the app mounts, so the first paint is already right.
+ */
+const viewStorage = namespaceStorage('crossoverView');
+
+function storedAdvancedView(): boolean {
+  try { return viewStorage.getItem('crossoverView') === 'advanced'; } catch { return false; }
+}
+
+/**
  * Apply the rail's crossover to the shown run as it is edited.
  *
  * Recombining runs from stored bases in milliseconds, so the combined result
@@ -174,8 +186,11 @@ function useLiveRecombine(
 
 export function CadCrossover() {
   const state = useCadReturnStore();
-  const advancedAnchor = useRef<HTMLButtonElement | null>(null);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advanced, setAdvanced] = useState(storedAdvancedView);
+  const selectView = (next: boolean) => {
+    setAdvanced(next);
+    try { viewStorage.setItem('crossoverView', next ? 'advanced' : 'basic'); } catch { /* storage is optional */ }
+  };
   const shown = useSyncExternalStore(latestCombine.subscribe, latestCombine.getSnapshot, latestCombine.getSnapshot);
   const enabled = combineEnabledEffective(state);
   const spec = combineSpecEffective(state);
@@ -187,46 +202,55 @@ export function CadCrossover() {
   return <>
     <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append a filtered, time-aligned crossover sum of the drive channels as one more result channel. On by default for a return with two or more drive channels; the chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
     {enabled && spec && <>
-      {combineChain(state).map((pair) => <PairRow
-        key={pair.key}
-        pair={pair}
-        spec={spec}
-        preset={state.channelDrivers[pair.upper]?.preset ?? null}
-        onChange={apply}
-      />)}
-      <ModeRow
-        label={CAD_CONTROLS.levelMatch.label}
-        revealId={CAD_CONTROLS.levelMatch.reveal.id}
-        help="Equalise member band levels before summing. Manual keeps the gain each channel is given in Advanced; auto defaults off when every member carries a driver model, because real voltage-driven levels should not be re-equalised."
-        mode={sharedGainMode(spec)}
-        onSelect={(mode) => apply(withGainMode(spec, mode, Object.fromEntries(
-          Object.entries(resolved).map(([id, channel]) => [id, channel.gainAutoDb]),
-        )))}
-      />
-      <ModeRow
-        label={CAD_CONTROLS.timeAlign.label}
-        revealId={CAD_CONTROLS.timeAlign.reveal.id}
-        help="Delay each member so the crossover sums the way its filter pair says it should, fitted from the phase of the solved fields across the pair's overlap. Manual keeps the delay each channel is given in Advanced."
-        mode={sharedDelayMode(spec)}
-        onSelect={(mode) => apply(withDelayMode(spec, mode, Object.fromEntries(
-          Object.entries(resolved).map(([id, channel]) => [id, channel.delayAutoMs]),
-        )))}
-      />
-      <div className="crossover-advanced-row" data-control-reveal-id={CAD_CONTROLS.crossoverAdvanced.reveal.id}>
-        <button
-          ref={advancedAnchor}
-          type="button"
-          className={advancedOpen ? 'on' : ''}
-          aria-expanded={advancedOpen}
-          aria-haspopup="dialog"
-          title="Per-channel high-pass, low-pass, gain, delay and polarity"
-          onClick={() => setAdvancedOpen((open) => !open)}
-        >Advanced ▸</button>
-        {!isSimple(spec) && <span className="crossover-advanced-flag">edited per channel</span>}
+      <div className="crossover-view-row" data-control-reveal-id={CAD_CONTROLS.crossoverAdvanced.reveal.id}>
+        <div className="crossover-segment" role="group" aria-label="Crossover view">
+          <button
+            type="button"
+            aria-pressed={!advanced}
+            className={advanced ? '' : 'on'}
+            title="One symmetric crossover per pair, with chain-wide level match and time alignment"
+            onClick={() => selectView(false)}
+          >Basic</button>
+          <button
+            type="button"
+            aria-pressed={advanced}
+            className={advanced ? 'on' : ''}
+            title="Per-channel high-pass, low-pass, gain, delay and polarity"
+            onClick={() => selectView(true)}
+          >Advanced</button>
+        </div>
+        {/* Basic shows the chain's shared story, so a spec it cannot express
+            is flagged right where the Advanced view is one click away. */}
+        {!advanced && !isSimple(spec) && <span className="crossover-advanced-flag">edited per channel</span>}
       </div>
-      {advancedOpen && <CrossoverAdvanced
-        anchorRef={advancedAnchor}
-        onClose={() => setAdvancedOpen(false)}
+      {!advanced && <>
+        {combineChain(state).map((pair) => <PairRow
+          key={pair.key}
+          pair={pair}
+          spec={spec}
+          preset={state.channelDrivers[pair.upper]?.preset ?? null}
+          onChange={apply}
+        />)}
+        <ModeRow
+          label={CAD_CONTROLS.levelMatch.label}
+          revealId={CAD_CONTROLS.levelMatch.reveal.id}
+          help="Equalise member band levels before summing. Manual keeps the gain each channel is given in Advanced; auto defaults off when every member carries a driver model, because real voltage-driven levels should not be re-equalised."
+          mode={sharedGainMode(spec)}
+          onSelect={(mode) => apply(withGainMode(spec, mode, Object.fromEntries(
+            Object.entries(resolved).map(([id, channel]) => [id, channel.gainAutoDb]),
+          )))}
+        />
+        <ModeRow
+          label={CAD_CONTROLS.timeAlign.label}
+          revealId={CAD_CONTROLS.timeAlign.reveal.id}
+          help="Delay each member so the crossover sums the way its filter pair says it should, fitted from the phase of the solved fields across the pair's overlap. Manual keeps the delay each channel is given in Advanced."
+          mode={sharedDelayMode(spec)}
+          onSelect={(mode) => apply(withDelayMode(spec, mode, Object.fromEntries(
+            Object.entries(resolved).map(([id, channel]) => [id, channel.delayAutoMs]),
+          )))}
+        />
+      </>}
+      {advanced && <CrossoverAdvanced
         spec={spec}
         resolved={resolved}
         memberLabel={(member) => {

@@ -427,6 +427,12 @@ class FieldPlaneService:
                 *self._load_channel(job_id, request.frequency_index, channel_id),
                 NO_SYNTHESIS_REVISION,
             )
+        if response_id.startswith("member:"):
+            return self._load_member_traces(
+                job_id,
+                request.frequency_index,
+                response_id.removeprefix("member:"),
+            )
 
         raw_channels = self._raw_channel_ids(row)
         if len(raw_channels) == 1:
@@ -496,6 +502,68 @@ class FieldPlaneService:
             pressure,
             neumann,
             backend,
+            synthesis_revision,
+        )
+
+    def _load_member_traces(
+        self,
+        job_id: str,
+        frequency_index: int,
+        member_id: str,
+    ) -> tuple[
+        str,
+        float,
+        float,
+        str | None,
+        NDArray[Any],
+        NDArray[Any],
+        FieldTraceBackend,
+        str,
+    ]:
+        """One channel as it plays in the system: its combine weight applied.
+
+        Unlike ``channel:<id>``, which returns the raw retained traces, this
+        applies the stored crossover section, gain, delay and polarity for the
+        selected member — the same weight the system synthesis would multiply
+        it by — so the plane shows the member's actual contribution.
+        """
+
+        combine = self._current_combine(job_id)
+        members, channels, gains_db, delays_s, inverted = self._combine_parameters(
+            combine
+        )
+        if member_id not in members:
+            raise FieldPlaneInvalidSelection(
+                f"response 'member:{member_id}' does not match a stored "
+                f"synthesis member (members: {members})"
+            )
+        synthesis_revision = self._synthesis_revision(
+            members,
+            channels,
+            gains_db,
+            delays_s,
+            inverted,
+        )
+        loaded = self._load_channel(job_id, frequency_index, member_id)
+        mesh_text, frequency_hz, k_real, symmetry_plane = loaded[:4]
+        weights = raw_channel_weights(
+            np.asarray([frequency_hz], dtype=np.float64),
+            members,
+            None,
+            gains_db,
+            delays_s,
+            channels=channels,
+            inverted=inverted,
+        )
+        weight = complex(weights[member_id][0])
+        return (
+            mesh_text,
+            frequency_hz,
+            k_real,
+            symmetry_plane,
+            weight * np.asarray(loaded[4], dtype=np.complex128),
+            weight * np.asarray(loaded[5], dtype=np.complex128),
+            loaded[6],
             synthesis_revision,
         )
 

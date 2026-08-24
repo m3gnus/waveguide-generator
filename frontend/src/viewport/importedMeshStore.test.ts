@@ -5,6 +5,8 @@ import { importedMeshStore } from './importedMeshStore';
 const cadScene = { name: 'Fusion assembly', source: 'cad', ingestId: 'wgi_example' } as ImportedMeshScene;
 const fileScene = { name: 'inspection.msh', source: 'file', ingestId: null } as ImportedMeshScene;
 const secondFileScene = { name: 'comparison.msh', source: 'file', ingestId: null } as ImportedMeshScene;
+const solverScene = { name: 'Simulation mesh', source: 'solver', ingestId: null, artifactToken: 'solver:a' } as ImportedMeshScene;
+const secondSolverScene = { name: 'Simulation mesh', source: 'solver', ingestId: null, artifactToken: 'solver:b' } as ImportedMeshScene;
 
 describe('importedMeshStore', () => {
   afterEach(() => importedMeshStore.clear());
@@ -16,6 +18,7 @@ describe('importedMeshStore', () => {
     expect(importedMeshStore.getSnapshot()).toEqual({
       cad: cadScene,
       file: fileScene,
+      solver: null,
       showing: 'cad',
     });
 
@@ -23,6 +26,7 @@ describe('importedMeshStore', () => {
     expect(importedMeshStore.getSnapshot()).toEqual({
       cad: cadScene,
       file: secondFileScene,
+      solver: null,
       showing: 'file',
     });
   });
@@ -55,13 +59,13 @@ describe('importedMeshStore', () => {
     importedMeshStore.showParametric();
 
     expect(importedMeshStore.setCad(cadScene, generation)).toBe(false);
-    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: null, showing: 'parametric' });
+    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: null, solver: null, showing: 'parametric' });
   });
 
   it('can fill the CAD slot without stealing a parametric viewport', () => {
     const generation = importedMeshStore.beginIntent();
     expect(importedMeshStore.setCad(cadScene, generation, false)).toBe(true);
-    expect(importedMeshStore.getSnapshot()).toEqual({ cad: cadScene, file: null, showing: 'parametric' });
+    expect(importedMeshStore.getSnapshot()).toEqual({ cad: cadScene, file: null, solver: null, showing: 'parametric' });
   });
 
   it('keeps the snapshot reference stable across no-op calls', () => {
@@ -81,11 +85,45 @@ describe('importedMeshStore', () => {
     importedMeshStore.setCad(cadScene);
     importedMeshStore.clear('cad');
 
-    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: fileScene, showing: 'parametric' });
+    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: fileScene, solver: null, showing: 'parametric' });
     importedMeshStore.showFile();
     expect(importedMeshStore.getSnapshot().showing).toBe('file');
 
     importedMeshStore.clear();
-    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: null, showing: 'parametric' });
+    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: null, solver: null, showing: 'parametric' });
+  });
+
+  it('lets the solver view be selected before its scene exists', () => {
+    // Activation drives the first build, so `showing` moves ahead of the slot.
+    importedMeshStore.showSolver();
+    expect(importedMeshStore.getSnapshot()).toMatchObject({ solver: null, showing: 'solver' });
+
+    importedMeshStore.setSolver(solverScene);
+    expect(importedMeshStore.getSnapshot()).toMatchObject({ solver: solverScene, showing: 'solver' });
+  });
+
+  it('refreshes the solver slot in place without stealing another view', () => {
+    importedMeshStore.setSolver(solverScene);
+    importedMeshStore.showParametric();
+
+    const generation = importedMeshStore.beginIntent();
+    expect(importedMeshStore.setSolver(secondSolverScene, generation, false)).toBe(true);
+    expect(importedMeshStore.getSnapshot()).toMatchObject({ solver: secondSolverScene, showing: 'parametric' });
+  });
+
+  it('returns to parametric when the visible solver slot is cleared', () => {
+    importedMeshStore.setSolver(solverScene);
+    expect(importedMeshStore.getSnapshot().showing).toBe('solver');
+
+    importedMeshStore.clear('solver');
+    expect(importedMeshStore.getSnapshot()).toMatchObject({ solver: null, showing: 'parametric' });
+  });
+
+  it('rejects a solver scene from a stale generation', () => {
+    const generation = importedMeshStore.beginIntent();
+    importedMeshStore.showParametric();
+
+    expect(importedMeshStore.setSolver(solverScene, generation)).toBe(false);
+    expect(importedMeshStore.getSnapshot().solver).toBeNull();
   });
 });

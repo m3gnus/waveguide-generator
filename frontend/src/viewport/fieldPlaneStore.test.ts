@@ -8,6 +8,7 @@ import {
   type FieldPlaneSpec,
   type DecodedFieldPlane,
 } from '../api/fieldPlane';
+import type { ResultData } from '../api/results';
 import type { FrameScene } from './frameScene';
 import { DEFAULT_VIEWER_PREFERENCES } from '../viewerprefs/viewerPreferences';
 import { maxFieldSplDb } from './fieldPlaneColor';
@@ -16,6 +17,7 @@ import {
   defaultFieldPlane,
   fieldPlaneCacheKey,
   fieldPlaneErrorMessage,
+  fieldPlaneMemberResponses,
   FieldPlaneLruCache,
   LatestFieldPlaneRequestQueue,
   nearestFieldPlaneFrequencyIndex,
@@ -47,7 +49,7 @@ function response(jobId: string, request: FieldPlaneRequest): DecodedFieldPlane 
       ordering: FIELD_PLANE_ORDERING,
       phase_convention: 'solver_exp_plus_ikr',
       pressure_unit: 'Pa',
-      response_id: 'system',
+      response_id: request.response.id,
       geometry_sha256: 'geometry',
       synthesis_revision: 'synthesis-a',
       symmetry_plane: 'yz',
@@ -532,6 +534,96 @@ describe('field-plane state', () => {
   });
 });
 
+const multiChannelResults: ResultData = {
+  frequencies: [800],
+  channels: {
+    combined: {
+      frequencies: [800],
+      metadata: { combine: { members: ['left', 'right'], crossovers_hz: [1_000] } },
+    },
+    left: { frequencies: [800], metadata: { role: 'LF' } },
+    right: { frequencies: [800], metadata: { role: 'HF' } },
+  },
+  channel_order: ['combined', 'left', 'right'],
+};
+
+describe('field-plane per-driver responses', () => {
+  it('derives member views from the combine record and none for single channels', () => {
+    expect(fieldPlaneMemberResponses(multiChannelResults)).toEqual([
+      { id: 'left', label: 'LF' },
+      { id: 'right', label: 'HF' },
+    ]);
+    expect(fieldPlaneMemberResponses({ frequencies: [800] })).toEqual([]);
+    expect(fieldPlaneMemberResponses({
+      frequencies: [800],
+      channels: {
+        combined: {
+          frequencies: [800],
+          metadata: { combine: { members: ['only'], crossovers_hz: [] } },
+        },
+        only: { frequencies: [800] },
+      },
+      channel_order: ['combined', 'only'],
+    })).toEqual([]);
+  });
+
+  it('requests the selected member view and refuses ids the run does not offer', async () => {
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => response(jobId, request));
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => multiChannelResults,
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    expect(store.getState().memberResponses).toEqual([
+      { id: 'left', label: 'LF' },
+      { id: 'right', label: 'HF' },
+    ]);
+    expect(store.getState().responseId).toBe('system');
+    expect(fetchPlane.mock.calls[0][1].response.id).toBe('system');
+
+    store.getState().setResponseId('member:left');
+    expect(store.getState().responseId).toBe('member:left');
+    await vi.waitFor(() => expect(store.getState().field?.header.response_id).toBe('member:left'));
+    expect(fetchPlane).toHaveBeenCalledTimes(2);
+    expect(fetchPlane.mock.calls[1][1].response.id).toBe('member:left');
+    expect(fetchPlane.mock.calls[1][1].plane.nx).toBe(plane.nx);
+
+    store.getState().setResponseId('member:unknown');
+    expect(store.getState().responseId).toBe('member:left');
+    store.getState().setResponseId('member:left');
+    expect(fetchPlane).toHaveBeenCalledTimes(2);
+
+    // Selecting the combined view again returns to the system synthesis.
+    store.getState().setResponseId('system');
+    await vi.waitFor(() => expect(store.getState().field?.header.response_id).toBe('system'));
+    expect(fetchPlane).toHaveBeenCalledTimes(2); // served from the cache
+  });
+
+  it('remembers the member selection per job and resets it for single-channel runs', async () => {
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => response(jobId, request));
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async (jobId: string) => jobId === 'multi' ? multiChannelResults : { frequencies: [800] },
+    });
+    store.getState().enable('multi', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    store.getState().setResponseId('member:right');
+    await vi.waitFor(() => expect(store.getState().field?.header.response_id).toBe('member:right'));
+
+    store.getState().selectJob('single', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    expect(store.getState()).toMatchObject({ responseId: 'system', memberResponses: [] });
+    store.getState().setResponseId('member:right');
+    expect(store.getState().responseId).toBe('system');
+
+    store.getState().selectJob('multi', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    expect(store.getState().responseId).toBe('member:right');
+    expect(store.getState().field?.header.response_id).toBe('member:right');
+  });
+});
+
 describe('field-plane cache and request primitives', () => {
   it('quantizes cache transforms to 1e-6 and separates geometry and grid identity', () => {
     const parts = {
@@ -589,8 +681,8 @@ describe('field-plane defaults and status copy', () => {
       axis_v: [0, 0, 1],
       width_m: 0.2,
       height_m: 0.4,
-      nx: 96,
-      ny: 96,
+      nx: 192,
+      ny: 192,
     });
     expect(nearestFieldPlaneFrequencyIndex([100, 900, 1_500])).toBe(1);
   });

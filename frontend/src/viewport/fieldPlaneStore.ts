@@ -9,6 +9,8 @@ import {
   type FieldPlaneSpec,
 } from '../api/fieldPlane';
 import { fetchJobResults, type ResultData } from '../api/results';
+import { channelLabel } from '../results/channelLabel';
+import { combinedChannelId, combineMetadataOf, type ResultPayload } from '../results/types';
 import { viewerPreferences, type ViewerPreferences } from '../viewerprefs/viewerPreferences';
 import type { FrameScene } from './frameScene';
 import {
@@ -21,6 +23,12 @@ import {
 import { fieldPlanePreset } from './fieldPlaneMath';
 
 export type FieldPlaneStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+/** One selectable per-driver view: a synthesis member with its display name. */
+export interface FieldPlaneMemberResponse {
+  id: string;
+  label: string;
+}
 
 export type FieldPlaneWindows = Record<FieldPlaneDisplayMode, FieldPlaneValueWindow | null>;
 
@@ -39,6 +47,8 @@ export interface FieldPlaneStore {
   plane: FieldPlaneSpec | null;
   frequencyIndex: number;
   frequenciesHz: number[];
+  responseId: FieldPlaneResponseId;
+  memberResponses: FieldPlaneMemberResponse[];
   generation: number;
   lastAppliedGeneration: number;
   status: FieldPlaneStatus;
@@ -57,6 +67,7 @@ export interface FieldPlaneStore {
   selectJob: (jobId: string, defaultPlane: FieldPlaneSpec) => void;
   disable: () => void;
   setFrequencyIndex: (frequencyIndex: number) => void;
+  setResponseId: (responseId: FieldPlaneResponseId) => void;
   setPlane: (plane: FieldPlaneSpec) => void;
   beginPlaneDrag: () => void;
   updatePlaneDrag: (plane: FieldPlaneSpec) => void;
@@ -78,6 +89,7 @@ export interface FieldPlaneStore {
 interface RememberedPlane {
   plane: FieldPlaneSpec;
   frequencyIndex: number | null;
+  responseId: FieldPlaneResponseId;
 }
 
 interface FieldPlaneStoreDependencies {
@@ -269,6 +281,35 @@ export function nearestFieldPlaneFrequencyIndex(frequenciesHz: readonly number[]
   return nearest;
 }
 
+/**
+ * The per-driver views a run offers, derived from its stored synthesis.
+ *
+ * Only crossover combine members qualify: the server weights a
+ * `member:<id>` request by the stored combine (filter/gain/delay/polarity),
+ * so a run without a combined channel — a single-channel solve above all —
+ * has no member views and the selector stays hidden.
+ */
+export function fieldPlaneMemberResponses(results: ResultData): FieldPlaneMemberResponse[] {
+  const payload = results as ResultPayload;
+  const combinedId = combinedChannelId(payload);
+  if (combinedId === null) return [];
+  const combine = combineMetadataOf(payload.channels?.[combinedId] as ResultPayload | undefined);
+  const members = combine?.members ?? [];
+  if (members.length < 2) return [];
+  return members.map((id) => ({ id, label: channelLabel(payload, id) }));
+}
+
+function validResponseId(
+  responseId: FieldPlaneResponseId,
+  memberResponses: readonly FieldPlaneMemberResponse[],
+): FieldPlaneResponseId {
+  if (responseId.startsWith('member:')) {
+    const memberId = responseId.slice('member:'.length);
+    return memberResponses.some(({ id }) => id === memberId) ? responseId : 'system';
+  }
+  return responseId;
+}
+
 /** Default H-plane in solver metres. A FrameScene declares the only unit
  * conversion used here; the request itself never contains viewport units. */
 export function defaultFieldPlane(scene: FrameScene): FieldPlaneSpec {
@@ -278,8 +319,8 @@ export function defaultFieldPlane(scene: FrameScene): FieldPlaneSpec {
     axis_v: [0, 0, 1],
     width_m: 0.01,
     height_m: 0.01,
-    nx: 96,
-    ny: 96,
+    nx: 192,
+    ny: 192,
   };
   return fieldPlanePreset(seed, 'h', {
     min: scene.bounds.min.toArray(),
@@ -436,11 +477,11 @@ export function createFieldPlaneStore(
       jobId: string,
       plane: FieldPlaneSpec,
       frequencyIndex: number,
+      responseId: FieldPlaneResponseId = 'system',
       coarsened = false,
     ): void => {
       requestGeneration += 1;
       const generation = requestGeneration;
-      const responseId: FieldPlaneResponseId = 'system';
       set({ generation, status: 'loading', error: null, lastErrorCode: null });
 
       if (cacheJobId === jobId && cacheGeometrySha256 !== null) {
@@ -511,11 +552,16 @@ export function createFieldPlaneStore(
       const requestPlane = coarsened
         ? { ...clonePlane(plane), nx: DRAG_GRID_SIZE, ny: DRAG_GRID_SIZE }
         : clonePlane(plane);
-      load(current.jobId, requestPlane, current.frequencyIndex, coarsened);
+      load(current.jobId, requestPlane, current.frequencyIndex, current.responseId, coarsened);
     };
 
-    const remember = (jobId: string, plane: FieldPlaneSpec, frequencyIndex: number): void => {
-      remembered.set(jobId, { plane: clonePlane(plane), frequencyIndex });
+    const remember = (
+      jobId: string,
+      plane: FieldPlaneSpec,
+      frequencyIndex: number,
+      responseId: FieldPlaneResponseId,
+    ): void => {
+      remembered.set(jobId, { plane: clonePlane(plane), frequencyIndex, responseId });
     };
 
     const activate = (jobId: string, suppliedDefault: FieldPlaneSpec): void => {
@@ -540,6 +586,8 @@ export function createFieldPlaneStore(
         plane,
         frequencyIndex: saved?.frequencyIndex ?? 0,
         frequenciesHz: [],
+        responseId: 'system',
+        memberResponses: [],
         status: 'loading',
         error: null,
         lastErrorCode: null,
@@ -558,9 +606,11 @@ export function createFieldPlaneStore(
           const frequencyIndex = saved?.frequencyIndex === null || saved?.frequencyIndex === undefined
             ? nearestFieldPlaneFrequencyIndex(frequenciesHz)
             : Math.max(0, Math.min(frequenciesHz.length - 1, saved.frequencyIndex));
-          remember(jobId, plane, frequencyIndex);
-          set({ frequenciesHz, frequencyIndex });
-          load(jobId, plane, frequencyIndex);
+          const memberResponses = fieldPlaneMemberResponses(results);
+          const responseId = validResponseId(saved?.responseId ?? 'system', memberResponses);
+          remember(jobId, plane, frequencyIndex, responseId);
+          set({ frequenciesHz, frequencyIndex, memberResponses, responseId });
+          load(jobId, plane, frequencyIndex, responseId);
         })
         .catch((reason: unknown) => {
           const current = get();
@@ -582,6 +632,8 @@ export function createFieldPlaneStore(
       plane: null,
       frequencyIndex: 0,
       frequenciesHz: [],
+      responseId: 'system',
+      memberResponses: [],
       generation: 0,
       lastAppliedGeneration: 0,
       status: 'idle',
@@ -615,6 +667,8 @@ export function createFieldPlaneStore(
           plane: null,
           frequencyIndex: 0,
           frequenciesHz: [],
+          responseId: 'system',
+          memberResponses: [],
           status: 'idle',
           error: null,
           lastErrorCode: null,
@@ -635,15 +689,24 @@ export function createFieldPlaneStore(
           || frequencyIndex >= current.frequenciesHz.length
           || frequencyIndex === current.frequencyIndex
         ) return;
-        remember(current.jobId, current.plane, frequencyIndex);
+        remember(current.jobId, current.plane, frequencyIndex, current.responseId);
         set({ frequencyIndex });
         requestCurrentPlane({ ...current, frequencyIndex }, current.plane);
+      },
+      setResponseId: (responseId) => {
+        const current = get();
+        if (!current.enabled || !current.jobId || !current.plane) return;
+        const next = validResponseId(responseId, current.memberResponses);
+        if (next !== responseId || next === current.responseId) return;
+        remember(current.jobId, current.plane, current.frequencyIndex, next);
+        set({ responseId: next });
+        requestCurrentPlane({ ...current, responseId: next }, current.plane);
       },
       setPlane: (plane) => {
         const current = get();
         if (!current.enabled || !current.jobId) return;
         const next = clonePlane(plane);
-        remember(current.jobId, next, current.frequencyIndex);
+        remember(current.jobId, next, current.frequencyIndex, current.responseId);
         set({ plane: next, dragging: false, frozenNormalizationDb: null });
         requestCurrentPlane({ ...current, plane: next, dragging: false }, next);
       },
@@ -661,7 +724,7 @@ export function createFieldPlaneStore(
         const current = get();
         if (!current.enabled || !current.dragging || !current.jobId || !current.plane) return;
         const next = { ...clonePlane(plane), nx: current.plane.nx, ny: current.plane.ny };
-        remember(current.jobId, next, current.frequencyIndex);
+        remember(current.jobId, next, current.frequencyIndex, current.responseId);
         set({ plane: next });
         requestCurrentPlane(current, next);
       },
@@ -669,7 +732,7 @@ export function createFieldPlaneStore(
         const current = get();
         if (!current.enabled || !current.jobId || !current.plane) return;
         const next = clonePlane(plane ?? current.plane);
-        remember(current.jobId, next, current.frequencyIndex);
+        remember(current.jobId, next, current.frequencyIndex, current.responseId);
         set({ plane: next, dragging: false, frozenNormalizationDb: null });
         if (
           current.field
@@ -679,6 +742,7 @@ export function createFieldPlaneStore(
           && displayedRequest.jobId === current.jobId
           && displayedRequest.frequencyIndex === current.frequencyIndex
           && displayedRequest.responseId === current.field.header.response_id
+          && displayedRequest.responseId === current.responseId
           && displayedRequest.plane.nx === next.nx
           && displayedRequest.plane.ny === next.ny
           && current.field.header.nx === next.nx
@@ -713,6 +777,8 @@ export function createFieldPlaneStore(
           synthesisRevision: null,
           plane: null,
           frequenciesHz: [],
+          responseId: 'system',
+          memberResponses: [],
           status: 'error',
           error: reason,
           lastErrorCode: null,
