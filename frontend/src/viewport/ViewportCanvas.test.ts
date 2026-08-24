@@ -1,7 +1,7 @@
 import { Box3, OrthographicCamera, PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { clippingRange } from './cameraMath';
-import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, ownCameraProjection, pickGizmoAxis, rebracketCamera, resizeCameraFrustum, shouldShowAxisGizmo, transferCameraView, type GizmoAxis } from './ViewportCanvas';
+import { axisColorsFromTokens, boundsAreDiscontinuous, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, ownCameraProjection, pickGizmoAxis, rebracketCamera, resizeCameraFrustum, shouldShowAxisGizmo, transferCameraView, type GizmoAxis } from './ViewportCanvas';
 
 describe('viewport renderer guards', () => {
   it('probes an actual WebGL2 context rather than constructor globals', () => {
@@ -107,6 +107,58 @@ describe('cameraFitDisposition', () => {
 
   it('takes the camera back when the user asks for a view', () => {
     expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view: otherView })).toBe('apply');
+  });
+
+  // Switching back from CAD Link refits against the stale pre-switch scene,
+  // and the restored parametric frames land a beat later under the same view
+  // key. Merely recording those bounds left the model partly out of frame
+  // until the user touched the controls.
+  describe('escalates record to apply when the scene bounds jump discontinuously', () => {
+    const box = (min: [number, number, number], max: [number, number, number]) =>
+      new Box3(new Vector3(...min), new Vector3(...max));
+    const fitted = box([-100, -100, 0], [100, 100, 200]);
+
+    it('reframes a metres-to-millimetres unit jump', () => {
+      const cadMetres = box([-0.1, -0.1, 0], [0.1, 0.1, 0.2]);
+      expect(boundsAreDiscontinuous(cadMetres, fitted)).toBe(true);
+      expect(boundsAreDiscontinuous(fitted, cadMetres)).toBe(true);
+      expect(cameraFitDisposition(
+        { fit: 'a', view, bounds: cadMetres },
+        { fit: 'b', view, bounds: fitted },
+      )).toBe('apply');
+    });
+
+    it('reframes a model that no longer overlaps the fitted one', () => {
+      const elsewhere = box([500, 500, 500], [700, 700, 700]);
+      expect(boundsAreDiscontinuous(fitted, elsewhere)).toBe(true);
+      expect(cameraFitDisposition(
+        { fit: 'a', view, bounds: fitted },
+        { fit: 'b', view, bounds: elsewhere },
+      )).toBe('apply');
+    });
+
+    it('keeps recording ordinary geometry edits in place', () => {
+      const nudged = box([-110, -105, 0], [104, 100, 230]);
+      expect(boundsAreDiscontinuous(fitted, nudged)).toBe(false);
+      expect(cameraFitDisposition(
+        { fit: 'a', view, bounds: fitted },
+        { fit: 'b', view, bounds: nudged },
+      )).toBe('record');
+    });
+
+    it('records when no fitted bounds are known yet', () => {
+      expect(cameraFitDisposition(
+        { fit: 'a', view, bounds: null },
+        { fit: 'b', view, bounds: fitted },
+      )).toBe('record');
+    });
+
+    it('never outranks an explicit view request', () => {
+      expect(cameraFitDisposition(
+        { fit: 'a', view, bounds: fitted },
+        { fit: 'b', view: otherView, bounds: fitted },
+      )).toBe('apply');
+    });
   });
 
   it('re-brackets changed bounds without moving a user-owned camera', () => {
