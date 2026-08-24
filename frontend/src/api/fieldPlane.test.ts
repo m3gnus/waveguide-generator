@@ -133,6 +133,25 @@ describe('field-plane request builder', () => {
       frequencyIndex: 0,
     })).toThrow(/unit length and orthogonal/);
   });
+
+  it('accepts channel and member response forms and rejects bare prefixes', () => {
+    const plane = {
+      origin_m: [0, 0, 0] as [number, number, number],
+      axis_u: [1, 0, 0] as [number, number, number],
+      axis_v: [0, 0, 1] as [number, number, number],
+      width_m: 1,
+      height_m: 1,
+      nx: 96,
+      ny: 96,
+    };
+    const build = (responseId: Parameters<typeof buildFieldPlaneRequest>[0]['responseId']) =>
+      buildFieldPlaneRequest({ requestId: 'request-5', plane, frequencyIndex: 0, responseId });
+
+    expect(build('channel:default').response.id).toBe('channel:default');
+    expect(build('member:left').response.id).toBe('member:left');
+    expect(() => build('member:' as `member:${string}`)).toThrow(/'member:<id>'/);
+    expect(() => build('channel:' as `channel:${string}`)).toThrow(/'member:<id>'/);
+  });
 });
 
 describe('field-plane request errors', () => {
