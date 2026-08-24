@@ -21,6 +21,8 @@ import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
   DRIVER_FIELD_KEYS,
   PASSIVE_CARDIOID_DEFAULTS,
+  driversForChannels,
+  projectChannelDrivers,
   useCadReturnStore,
   type CadDriveChannel,
   type ChannelDriverForm,
@@ -74,7 +76,7 @@ interface CadLinkCoordinatorSnapshot {
   refresh(options?: RefreshOptions): Promise<void>;
   refreshOnshapeStatus(committed?: DesignIdentity): Promise<void>;
   returnFromOnshape(): Promise<void>;
-  selectBundle(bundle: CadReturnBundle): void;
+  selectBundle(bundle: CadReturnBundle, projectLineageId?: string | null): void;
   ingest(): Promise<void>;
   ingestSelected(): Promise<CadReturnIngestRecord>;
   pullFromFusion(): Promise<CadReturnBundle>;
@@ -492,9 +494,18 @@ export async function showCadJobModel(
     };
     useCadReturnStore.getState().beginIngestIntent();
     const savedSetup = cadHistorySetup(job, record);
+    const project = record.project?.lineage_id
+      ?? useCadReturnStore.getState().projectLineageId
+      ?? rememberedCadProject();
+    // The mesh, channels and sweep are the run's own -- they describe the
+    // geometry being put back on screen. The drivers are not: they are the
+    // project's, and the project's are newer. A run stores the numbers it was
+    // submitted with rather than which library row they came from, so replaying
+    // its own would re-solve with the T/S the library held that day and could
+    // never pick up values filled in since.
+    const projectDrivers = projectChannelDrivers(bundle, project);
     // Keep the archived source inventory visible, but disable actions that need
-    // the original return bundle path. Direct restoration deliberately avoids
-    // persisting this read-only history view as the current design's CAD profile.
+    // the original return bundle path.
     useCadReturnStore.setState({
       selectedBundle: {
         ...bundle,
@@ -502,7 +513,9 @@ export async function showCadJobModel(
         reason: 'Recalled from an archived run; the original return bundle is not active.',
       },
       ingestRecord: record,
+      projectLineageId: project,
       ...savedSetup,
+      ...(projectDrivers ? { channelDrivers: driversForChannels(projectDrivers, savedSetup.driveChannels) } : {}),
       areaDriftOverrides: [],
       areaDriftSourceIds: [...new Set((record.role_findings ?? [])
         .filter((finding) => String(finding.kind).includes('area-drift'))
@@ -576,7 +589,7 @@ export function CadLinkCoordinator() {
   const solveCommandSeen = useRef<string | null>(null);
   const autoIngestPending = useRef(false);
   const ingestSelectedRef = useRef<() => Promise<CadReturnIngestRecord>>(unavailable);
-  const selectBundleRef = useRef<(bundle: CadReturnBundle) => void>(() => undefined);
+  const selectBundleRef = useRef<(bundle: CadReturnBundle, projectLineageId?: string | null) => void>(() => undefined);
   const pendingReturnWaiter = useRef<{
     requestId: string;
     settle: (bundle: CadReturnBundle) => void;
@@ -896,7 +909,7 @@ export function CadLinkCoordinator() {
           const latest = useCadReturnStore.getState();
           if (latest.selectedBundle || latest.ingestRecord) return;
           if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
-          selectBundleRef.current(bundle);
+          selectBundleRef.current(bundle, project.lineageId);
           setStatus(`Reopened ${cadProjectName(project)}.`);
         } catch {
           // Restoring is a convenience; the empty-mode guidance stays the
@@ -1134,13 +1147,13 @@ export function CadLinkCoordinator() {
    * advances both generations, then a fresh ingest aborts any older request;
    * late fetch implementations that ignore abort are still rejected by the
    * store generation before they can publish a record or viewport scene. */
-  const selectBundle = useCallback((bundle: CadReturnBundle) => {
+  const selectBundle = useCallback((bundle: CadReturnBundle, projectLineageId?: string | null) => {
     if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
       setError(`That return belongs to another CAD-linked project. Open it from File → CAD-linked designs first.`);
       enterCadWorkspace();
       return;
     }
-    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().selectBundle(bundle, projectLineageId);
     importedMeshStore.beginIntent();
     enterCadWorkspace();
     autoIngestSelected();
