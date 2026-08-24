@@ -8,6 +8,7 @@ import {
 } from '../api/drivers';
 import {
   DRIVER_INSTALLATION_KEYS,
+  channelDriverPresent,
   driverEditedKeys,
   driverBaseFromSpec,
   driverShortfallText,
@@ -153,7 +154,9 @@ export function DriverFields({ channel, form, onField }: {
         onChange={(event) => onField(driverKey, event.target.value === '' ? null : Number(event.target.value))}
       />
     </label>)}
-    {missing && <p className="cad-driver-hint">Required: {missing}. The channel solves as a unit-drive basis until they are set.</p>}
+    {missing && <p className="cad-driver-hint">Required: {missing}. {channelDriverPresent(form)
+      ? 'The solve is refused while a started driver is missing them.'
+      : 'With nothing entered the channel solves as a unit-drive basis.'}</p>}
   </div>;
 }
 
@@ -164,10 +167,18 @@ function DriverResultRow({ hit, active, onPick, onHover, id }: {
   onPick: () => void;
   onHover: () => void;
 }) {
-  const z = impedanceText(hit.z_ohm);
+  // Every impedance this driver comes in, not just the variant the search
+  // pre-selected: the variant buttons live in the T/S sheet, so without this
+  // the row is the only place the user looks and "8 Ω exists too" is invisible.
+  const impedances = hit.variants
+    .map((variant) => variant.z_ohm)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const zBadge = impedances.length > 1
+    ? `${impedances.map((value) => formatNumber(value, 3)).join('|')} Ω`
+    : null;
   const facts = [
     hit.size,
-    z,
+    zBadge === null ? impedanceText(hit.z_ohm) : null,
     hit.display.fs_hz ? `Fs ${formatNumber(hit.display.fs_hz, 3)} Hz` : null,
     hit.display.sd_cm2 ? `Sd ${formatNumber(hit.display.sd_cm2, 3)} cm²` : null,
   ].filter(Boolean).join(' · ');
@@ -183,6 +194,7 @@ function DriverResultRow({ hit, active, onPick, onHover, id }: {
   >
     <span className="driver-result-name">{driverHitLabel(hit)}</span>
     <span className="driver-result-facts">{facts}</span>
+    {zBadge && <span className="driver-chip">{zBadge}</span>}
     {hit.completeness !== 'full' && <span className="driver-chip warn">{hit.completeness === 'catalogue' ? 'catalogue only' : 'partial'}</span>}
   </button>;
 }
