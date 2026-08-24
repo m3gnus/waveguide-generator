@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobArchiveSnapshot, fetchJobResults, fetchRadiationImpedancePresentation, mergeProvisionalResults, parseFinalResultEnvelope, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults, type ResultData } from '../api/results';
 import { COMBINED_VIEW } from '../stores/resultView';
-import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from './mappers';
+import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, groupDelayValue, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from './mappers';
 import { combinedChannelId, type ResultPayload } from './types';
 
 /** A channel as the server stamps it from the ingest record's source roles. */
@@ -309,6 +309,17 @@ describe('chart data mappers', () => {
       .toEqual([{ id: 'job-ordinary#drive-hf', label: 'Ordinary · HF' }]);
     expect(selectResultChannels('job-ordinary', 'Ordinary', payload, 'combined').map(({ id, label }) => ({ id, label })))
       .toEqual([{ id: 'job-ordinary#combined', label: 'Ordinary · combined' }]);
+  });
+
+  it('counts a group delay in periods of the frequency it occurs at', () => {
+    // One millisecond is exactly one period of 1 kHz, a tenth of one at 100 Hz,
+    // and ten at 10 kHz. Milliseconds pass through untouched.
+    expect(groupDelayValue(1, 1_000, 'cycles')).toBe(1);
+    expect(groupDelayValue(1, 100, 'cycles')).toBeCloseTo(0.1, 12);
+    expect(groupDelayValue(1, 10_000, 'cycles')).toBeCloseTo(10, 12);
+    expect(groupDelayValue(0.3, 2_000, 'cycles')).toBeCloseTo(0.6, 12);
+    expect(groupDelayValue(-0.25, 4_000, 'cycles')).toBeCloseTo(-1, 12);
+    expect(groupDelayValue(0.3, 2_000, 'ms')).toBe(0.3);
   });
 
   it('contributes only the chosen channel of an imported run', () => {

@@ -380,6 +380,33 @@ describe('Viewport preview errors', () => {
     expect(labels).toContain('Show frame stats');
   });
 
+  it('keys the CAD scene\'s source colours, and only where the colours are on screen', () => {
+    const ingestId = 'wgi_viewport_legend';
+    act(() => {
+      useCadReturnStore.setState({
+        ingestRecord: { ingest_id: ingestId } as CadReturnIngestRecord,
+        selectedBundle: { documentName: 'Speaker CAD', name: 'speaker.wgreturn' } as never,
+      });
+      importedMeshStore.setCad(createImportedMeshScene('Speaker CAD', parseMSH(meshFixture), 'cad', ingestId));
+      workspaceModeStore.setMode('cad');
+    });
+    const legend = () => host.querySelector('[aria-label="Acoustic source colours"]');
+    // The fixture paints one HF group and one LF group; role order is fixed,
+    // so HF leads whichever way round the mesh lists them.
+    expect([...legend()!.querySelectorAll('li span')].map((entry) => entry.textContent)).toEqual(['HF', 'LF']);
+
+    // Zebra replaces every surface colour with a reflection pattern, so a
+    // colour key there would be describing something that is not on screen.
+    const modeButton = () => host.querySelector<HTMLButtonElement>('[aria-label^="Display mode"]')!;
+    for (let step = 0; step < 8 && !modeButton().getAttribute('aria-label')?.startsWith('Display mode: Zebra'); step += 1) {
+      act(() => modeButton().click());
+    }
+    expect(modeButton().getAttribute('aria-label')).toContain('Display mode: Zebra');
+    expect(legend()).toBeNull();
+
+    act(() => workspaceModeStore.setMode('parametric'));
+  });
+
   it('switches between the parametric scene and matching CAD slot', () => {
     const ingestId = 'wgi_viewport_mode';
     act(() => {

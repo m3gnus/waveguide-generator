@@ -32,6 +32,7 @@ from server.design.textcfg import parse
 from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.legacy_design import resolve_job_design
 from server.jobs.models import (
+    PORT_APERTURE_NAME_GROUPS,
     CadIdentityProvenance,
     ChannelCombineSpec,
     FieldPlaneRequest,
@@ -622,6 +623,39 @@ class _ImportedSubmission:
     anchor_snapshot: dict[str, Any] | None
 
 
+async def _cad_authored_project(
+    store: Any, record: Mapping[str, Any]
+) -> tuple[str | None, str | None]:
+    """The project of a return with no design to anchor to.
+
+    Geometry authored in CAD has no WG design behind it, so its project is the
+    Fusion document, claimed during ingestion. Without this the run carried no
+    lineage at all and dropped out of the project history it belongs to, and
+    its archive folder was derived a second time from the run's own label.
+    """
+
+    project = record.get("project")
+    project = project if isinstance(project, Mapping) else {}
+    lineage_id = str(project.get("lineage_id") or "") or None
+    archive_stem = str(project.get("archive_stem") or "") or None
+    if lineage_id is not None:
+        return lineage_id, archive_stem
+    # Returns ingested before projects existed carry no project block. The
+    # claim is keyed on the document, so the document can still find it.
+    native_id = str((record.get("document") or {}).get("native_id") or "")
+    if not native_id:
+        return None, None
+    names = await asyncio.to_thread(store.get_lineage_for_cad_document, native_id)
+    if not names:
+        return None, None
+    return (
+        str(names.get("lineage_id") or "") or None,
+        str(names.get("archive_stem") or "")
+        or str(names.get("document_name") or "")
+        or None,
+    )
+
+
 def _imported_record_sources(record: Mapping[str, Any]) -> list[dict[str, Any]]:
     sources = record.get("sources")
     if not isinstance(sources, list) or not all(
@@ -770,24 +804,15 @@ def _validate_passive_cardioid_topology(
         str(source_id).strip().upper(): str(source_id)
         for source_id in source_tags
     }
-    if "PORT_EXIT" in by_upper:
-        port_source_ids = [by_upper["PORT_EXIT"]]
-    else:
-        port_source_ids = [
-            by_upper[name]
-            for name in ("PORT_EXIT_L", "PORT_EXIT_R")
-            if name in by_upper
-        ]
-        if not port_source_ids:
-            port_source_ids = [
-                by_upper[name]
-                for name in ("MID_PORT_EXIT_LEFT", "MID_PORT_EXIT_RIGHT")
-                if name in by_upper
-            ]
+    port_source_ids: list[str] = []
+    for group in PORT_APERTURE_NAME_GROUPS:
+        port_source_ids = [by_upper[name] for name in group if name in by_upper]
+        if port_source_ids:
+            break
     if not port_source_ids:
         raise ImportedSolveRefusal(
             "passive_cardioid_topology",
-            "passive cardioid requires PORT_EXIT aperture sources",
+            "passive cardioid requires PASSIVE_CARDIOID or PORT_EXIT aperture sources",
         )
 
     mf_source_ids = [
@@ -1441,7 +1466,8 @@ class JobRuntime:
         ):
             raise ImportedSolveRefusal(
                 "imported_diagonal_inclination_unsupported",
-                "Phase 2 imported solves support diagonal observation only at the default 45-degree inclination",
+                "Phase 2 imported solves support diagonal observation only at the "
+                "default 45-degree inclination; set the diagonal plane angle to 45",
                 details={"inclination": polar.inclination},
             )
         try:
@@ -1474,10 +1500,15 @@ class JobRuntime:
                 anchor_design_id = record_anchor_design_id
                 anchor_lineage_id = str(design_row["lineage_id"] or "") or None
                 if anchor_lineage_id is not None:
-                    # Claim the server-normalized portable key even when CAD
-                    # document capture is disabled. The browser consumes this
-                    # value verbatim, so every imported run and captured model
-                    # uses the same globally unique lineage folder.
+                    # The archive folder is the name the lineage already owns
+                    # in ``wglink/``, so a renamed design keeps writing its
+                    # history to one folder instead of starting a second one.
+                    # The claim reads an already-claimed stem before it writes
+                    # one, and the preferred fallback chain claims the
+                    # server-normalized portable key even when CAD document
+                    # capture is disabled. The browser consumes this value
+                    # verbatim, so every imported run and captured model uses
+                    # the same globally unique lineage folder.
                     names = await asyncio.to_thread(
                         self.cadlink_store.get_lineage_cad_names, anchor_lineage_id
                     )
@@ -1507,6 +1538,10 @@ class JobRuntime:
                         "Could not parse anchor design snapshot %s for imported job",
                         record_anchor_design_id,
                     )
+        else:
+            anchor_lineage_id, archive_stem = await _cad_authored_project(
+                self.cadlink_store, record
+            )
         identity = _cad_identity_provenance(record, geometry)
         return _ImportedSubmission(
             record=dict(record),
@@ -1590,7 +1625,11 @@ class JobRuntime:
         await self.start()
 
         def load() -> dict[str, Any]:
-            return self._serialize_job(self._require_job(job_id), detailed=True)
+            return self._serialize_job(
+                self._require_job(job_id),
+                detailed=True,
+                cadlink_store=self.cadlink_store,
+            )
 
         return await asyncio.to_thread(load)
 
@@ -1635,7 +1674,10 @@ class JobRuntime:
             rows, total = self.store.list_jobs(
                 statuses=statuses, limit=limit, offset=offset
             )
-            return [self._serialize_job(row) for row in rows], total
+            return [
+                self._serialize_job(row, cadlink_store=self.cadlink_store)
+                for row in rows
+            ], total
 
         return await asyncio.to_thread(load)
 
@@ -2020,7 +2062,10 @@ class JobRuntime:
             "v": 1,
             "kind": "snapshot",
             "cursor": cursor,
-            "jobs": [self._serialize_job(row) for row in rows],
+            "jobs": [
+                self._serialize_job(row, cadlink_store=self.cadlink_store)
+                for row in rows
+            ],
         }
 
     async def snapshot_async(self) -> dict[str, Any]:
@@ -3015,7 +3060,8 @@ class JobRuntime:
                 {
                     "id": request.geometry.combine.id,
                     "members": list(request.geometry.combine.members),
-                    "crossovers_hz": list(request.geometry.combine.crossovers_hz),
+                    "crossovers_hz": request.geometry.combine.linked_crossovers_hz(),
+                    "reference": request.geometry.combine.resolved_reference,
                 }
                 if request.geometry.combine is not None
                 else None
@@ -3117,7 +3163,12 @@ class JobRuntime:
         return float(start), float(end), count
 
     @staticmethod
-    def _serialize_job(row: Mapping[str, Any], *, detailed: bool = False) -> dict[str, Any]:
+    def _serialize_job(
+        row: Mapping[str, Any],
+        *,
+        detailed: bool = False,
+        cadlink_store: CadLinkStore | None = None,
+    ) -> dict[str, Any]:
         metadata = row.get("task_metadata") if isinstance(row.get("task_metadata"), dict) else {}
         field_metadata_present = any(
             key in metadata
@@ -3167,16 +3218,94 @@ class JobRuntime:
             imported_metadata = (
                 imported_metadata if isinstance(imported_metadata, Mapping) else {}
             )
-            document = imported_metadata.get("document")
-            document = document if isinstance(document, Mapping) else {}
+            geometry = geometry if isinstance(geometry, Mapping) else {}
+            ingest_id = imported_metadata.get("ingest_id") or geometry.get("ingest_id")
+            design_id = imported_metadata.get("anchor_design_id")
+            lineage_id = imported_metadata.get("anchor_lineage_id")
+            archive_stem = imported_metadata.get("archive_stem")
+            manifest_sha256 = (
+                imported_metadata.get("manifest_sha256")
+                or geometry.get("manifest_sha256")
+            )
+            stored_document = imported_metadata.get("document")
+            stored_document = (
+                stored_document if isinstance(stored_document, Mapping) else {}
+            )
+            recovered_document: Mapping[str, Any] = {}
+
+            # Jobs created before CAD project history retained only the ingest
+            # id (and, in the newest legacy slice, the anchor design id). The
+            # immutable ingestion and design registries still contain the rest,
+            # so recover it at the API boundary instead of making those runs
+            # permanently anonymous in the project history.
+            needs_registry_recovery = any(
+                key not in imported_metadata
+                for key in (
+                    "anchor_design_id",
+                    "anchor_lineage_id",
+                    "archive_stem",
+                    "manifest_sha256",
+                    "document",
+                )
+            )
+            if cadlink_store is not None and needs_registry_recovery:
+                try:
+                    record = (
+                        get_ingestion_record(cadlink_store, str(ingest_id))
+                        if ingest_id
+                        else None
+                    )
+                    if isinstance(record, Mapping):
+                        anchor = record.get("anchor")
+                        anchor = anchor if isinstance(anchor, Mapping) else {}
+                        design_id = design_id or anchor.get("design_id")
+                        manifest_sha256 = (
+                            manifest_sha256 or record.get("manifest_sha256")
+                        )
+                        document = record.get("document")
+                        recovered_document = (
+                            document if isinstance(document, Mapping) else {}
+                        )
+                    design_row = (
+                        cadlink_store.get_design(str(design_id))
+                        if design_id
+                        else None
+                    )
+                    if design_row is not None:
+                        lineage_id = lineage_id or design_row.get("lineage_id")
+                    names = (
+                        cadlink_store.get_lineage_cad_names(str(lineage_id))
+                        if lineage_id
+                        else None
+                    ) or {}
+                    archive_stem = (
+                        archive_stem
+                        or names.get("archive_stem")
+                        or names.get("bundle_stem")
+                    )
+                except Exception:
+                    # Job listing must remain available if the advisory CAD
+                    # registry cannot be read. The stored fields still surface.
+                    logger.warning(
+                        "Could not recover legacy CAD provenance for job %s",
+                        row.get("id"),
+                        exc_info=True,
+                    )
             cad_source = {
-                "ingest_id": imported_metadata.get("ingest_id"),
-                "design_id": imported_metadata.get("anchor_design_id"),
-                "lineage_id": imported_metadata.get("anchor_lineage_id"),
-                "archive_stem": imported_metadata.get("archive_stem"),
-                "manifest_sha256": imported_metadata.get("manifest_sha256"),
-                "document_name": document.get("name") or None,
-                "return_state_hash": document.get("return_state_hash"),
+                "ingest_id": ingest_id,
+                "design_id": design_id,
+                "lineage_id": lineage_id,
+                "archive_stem": archive_stem,
+                "manifest_sha256": manifest_sha256,
+                "document_name": (
+                    stored_document.get("name")
+                    or recovered_document.get("name")
+                    or None
+                ),
+                "return_state_hash": (
+                    stored_document.get("return_state_hash")
+                    or recovered_document.get("return_state_hash")
+                ),
                 "identity": imported_metadata.get("identity"),
             }
         item = {
@@ -3242,6 +3371,7 @@ class JobRuntime:
             ) or [],
             "solve_wall_time_seconds": metadata.get("solve_wall_time_seconds"),
             "cad_source": cad_source,
+            "cad_setup": dict(geometry) if imported else None,
         }
         if detailed:
             item["updated_at"] = row.get("updated_at")

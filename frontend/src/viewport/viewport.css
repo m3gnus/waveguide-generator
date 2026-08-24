@@ -19,6 +19,7 @@
 .wg2-viewport .viewport-scale,
 .wg2-viewport .frame-stat-card,
 .wg2-viewport .field-plane-legend,
+.wg2-viewport .source-role-legend,
 .wg2-viewport .viewport-empty,
 .wg2-viewport .viewport-mode-empty,
 .wg2-viewport .viewport-connection-banner,
@@ -197,3 +198,25 @@
 .viewport-mode-empty b { font-size: var(--text-base); }
 .viewport-empty span,
 .viewport-mode-empty span { font-size: var(--text-base); }
+
+/* Acoustic source colour key. Bottom-left is the one free corner: the mode
+   rail owns the centre, the scale bar and the field legend the right. */
+.source-role-legend {
+  position: absolute; left: 12px; bottom: 12px;
+  display: flex; align-items: center; gap: 10px;
+  max-width: calc(100% - 24px);
+  padding: 5px 9px;
+  border: 1px solid var(--glass-bd); border-radius: var(--r3);
+  background: var(--glass-bg); box-shadow: var(--glass-sh);
+  color: var(--fg2); pointer-events: none;
+  backdrop-filter: blur(12px) saturate(1.2);
+}
+.source-role-legend > b { color: var(--fg3); font-size: var(--text-micro); font-weight: 680; letter-spacing: .1em; text-transform: uppercase; }
+.source-role-legend ul { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0; padding: 0; list-style: none; }
+.source-role-legend li { display: flex; align-items: center; gap: 5px; font: var(--text-micro) var(--mono); }
+.source-role-legend li i { width: 9px; height: 9px; flex: none; border: 1px solid var(--hair-hi); border-radius: 2px; }
+.source-role-legend li em { color: var(--fg3); font-style: normal; }
+
+@container viewport (max-width: 900px) {
+  .source-role-legend > b { display: none; }
+}

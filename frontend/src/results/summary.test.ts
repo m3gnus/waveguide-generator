@@ -288,8 +288,48 @@ describe('simulation summary groups', () => {
 
     const groups = summaryGroups({ result: combined });
 
-    expect(row(groups, 'Combine', 'Crossover')?.value).toBe('LF → MF 100 Hz, MF → HF 1.00 kHz');
+    // A payload from before the filter library only ever meant LR4, and the
+    // row says so rather than leaving the slope unstated.
+    expect(row(groups, 'Combine', 'Crossover')?.value).toBe('LF → MF 100 Hz LR4, MF → HF 1.00 kHz LR4');
     expect(row(groups, 'Combine', 'Delays')?.value).toBe('LF 0.00 ms · MF 0.25 ms · HF 1.50 ms');
+    expect(row(groups, 'Combine', 'Gains')).toBeUndefined();
+    expect(row(groups, 'Combine', 'Alignment')).toBeUndefined();
+  });
+
+  it('states the family, the modes, the gains and the per-pair alignment of a v2 sum', () => {
+    const combined: ResultPayload = {
+      frequencies: [100],
+      metadata: {
+        combine: {
+          members: ['drive-mf', 'drive-hf'],
+          member_roles: ['MF', 'HF'],
+          reference: 'drive-hf',
+          crossovers_hz: [null],
+          channels: {
+            'drive-mf': {
+              hp: null, lp: { family: 'butterworth', order: 3, fc_hz: 900 },
+              gain_db: -1.5, gain_mode: 'auto', delay_ms: 0.45, delay_mode: 'manual',
+            },
+            'drive-hf': {
+              hp: { family: 'lr', order: 4, fc_hz: 1_100 }, lp: null,
+              gain_db: 0, gain_mode: 'manual', delay_ms: 0, delay_mode: 'auto',
+            },
+          },
+          pairs: {
+            'drive-mf-drive-hf': {
+              eval_hz: 1_000, fit_residual_deg: 3, phase_error_at_fc_deg: 4, reverse_null_db: -28.4,
+            },
+          },
+        },
+      },
+    };
+
+    const groups = summaryGroups({ result: combined });
+
+    expect(row(groups, 'Combine', 'Crossover')?.value).toBe('MF → HF LP 900 Hz BW3 / HP 1.10 kHz LR4');
+    expect(row(groups, 'Combine', 'Delays')?.value).toBe('MF 0.45 ms (manual) · HF ref');
+    expect(row(groups, 'Combine', 'Gains')?.value).toBe('MF −1.50 dB · HF +0.00 dB (manual)');
+    expect(row(groups, 'Combine', 'Alignment')?.value).toBe('MF/HF @ 1.00 kHz: 4° · null −28 dB · fit ±3°');
   });
 
   it('falls back to channel ids for an unroled sum and omits delays when unaligned', () => {
@@ -307,7 +347,7 @@ describe('simulation summary groups', () => {
 
     const groups = summaryGroups({ result: combined });
 
-    expect(row(groups, 'Combine', 'Crossover')?.value).toBe('low → high 800 Hz');
+    expect(row(groups, 'Combine', 'Crossover')?.value).toBe('low → high 800 Hz LR4');
     expect(row(groups, 'Combine', 'Delays')).toBeUndefined();
   });
 
@@ -319,10 +359,9 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Measurement', 'Balloon')?.value).not.toBe('0');
   });
 
-  it('shows the drive without a driver-name row the server cannot fill', () => {
-    // `metadata.driver.spec` is a DriverSpec dump: fourteen numeric Thiele-Small
-    // fields under `extra="forbid"`, no `model` and no `name`. A row reading
-    // either could only ever be blank, so the group carries what does exist.
+  it('omits the driver row for a spec that names no driver', () => {
+    // `label` is optional: a hand-entered driver has no name, and an invented
+    // one would be worse than none.
     const groups = summaryGroups({
       result: {
         frequencies: [100],
@@ -340,6 +379,21 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Drive', 'Driver')).toBeUndefined();
     expect(row(groups, 'Drive', 'Peak excursion')?.value).toBe('1.20 mm · 27% of Xmax 4.5 mm');
     expect(row(groups, 'Drive', 'Peak excursion')?.title).toContain('One-way peak');
+  });
+
+  it('names the driver the channel was solved with', () => {
+    // The solver copies `DriverSpec.label` to `metadata.driver.label` beside
+    // the spec, so a driver picked from the library can be read off the card.
+    const groups = summaryGroups({
+      result: {
+        frequencies: [100],
+        metadata: {
+          drive: { voltage_v: 2.83 },
+          driver: { label: 'Acme HD-1', spec: { sd_cm2: 26, label: 'Acme HD-1' } },
+        },
+      },
+    });
+    expect(row(groups, 'Drive', 'Driver')?.value).toBe('Acme HD-1');
   });
 
   it('retains count-only diagnostics from a partial legacy payload', () => {

@@ -1,18 +1,20 @@
 import type { ImportedSolveSubmission } from './actions';
 import {
-  acknowledgedFindingWire,
+  blockingFindingWire,
   channelAcceptsDriver,
   channelDriverWire,
   combineWire,
+  hasPassiveCardioidSurface,
   passiveCardioidBlocker,
   passiveCardioidWire,
-  unacknowledgedBlocking,
   useCadReturnStore,
 } from '../stores/cadReturn';
 import type { CadDriveChannel } from '../stores/cadReturn';
 import { parseFrequencyList, polarValidationError, useSolveOptionsStore } from '../stores/solveOptions';
 
 const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
+/** The only diagonal inclination Phase 2 imported solves accept. */
+const DEFAULT_DIAGONAL_INCLINATION_DEG = 45;
 
 /** The ingestion record's derivation may be widened but never narrowed, so the
  * submission starts FROM it: pinned axes (rejected mirror planes) force a full
@@ -23,13 +25,14 @@ export function widenPolarToDerivation(
 ): void {
   const axes = (derivation as { axes?: Record<string, { minimum_deg?: number; maximum_deg?: number }> })?.axes ?? {};
   const polar = options.polar_config as
-    | { angle_range: [number, number, number]; enabled_axes: string[] }
+    | { angle_range: [number, number, number]; enabled_axes: string[]; inclination?: number }
     | undefined;
   if (!polar || !Object.keys(axes).length) return;
   const [start, end, count] = polar.angle_range;
   const step = count > 1 ? (end - start) / (count - 1) : 5;
   let widenedStart = start;
   let widenedEnd = end;
+  const requested = new Set(polar.enabled_axes);
   const enabled = new Set(polar.enabled_axes);
   for (const [axis, spec] of Object.entries(axes)) {
     const minimum = typeof spec.minimum_deg === 'number' ? spec.minimum_deg : 0;
@@ -43,10 +46,29 @@ export function widenPolarToDerivation(
     polar.angle_range = [widenedStart, widenedEnd, widenedCount];
   }
   polar.enabled_axes = POLAR_AXIS_ORDER.filter((axis) => enabled.has(axis));
+  // A diagonal the caller never enabled carries no inclination intent: the form
+  // disables that field while the plane is off, so whatever angle is stored
+  // there is one the user can neither see nor change. Submitting it refuses the
+  // whole solve (imported_diagonal_inclination_unsupported) over a plane they
+  // did not choose, so a forced diagonal takes the supported default instead.
+  if (enabled.has('diagonal') && !requested.has('diagonal')) polar.inclination = DEFAULT_DIAGONAL_INCLINATION_DEG;
 }
 
 export type CadReturnSnapshot = ReturnType<typeof useCadReturnStore.getState>;
 export type SolveOptionsSnapshot = ReturnType<typeof useSolveOptionsStore.getState>;
+
+/**
+ * Whether this return can carry a cardioid campaign at all.
+ *
+ * The form persists in the solve profile, and a profile is reused across
+ * models. So an enabled campaign can outlive the geometry it was configured
+ * for: the rail hides the section when the port aperture is gone, and this is
+ * the matching half -- the form contributes neither a refusal the user cannot
+ * act on nor, worse, wire keys for an aperture the mesh does not contain.
+ */
+function cardioidSurfacePresent(state: CadReturnSnapshot): boolean {
+  return hasPassiveCardioidSurface(state.selectedBundle?.sources ?? []);
+}
 
 /** One readiness rule shared by the CAD-panel button and the global Solve
  * command. Keeping it here prevents the two entry points from drifting back
@@ -55,7 +77,6 @@ export function importedSubmissionBlocker(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useSolveOptionsStore.getState(),
 ): string | null {
-  const unacknowledged = unacknowledgedBlocking(state);
   const rangeInvalid = solveStore.frequencyMode === 'range' && (
     !(state.frequencyStartHz > 0)
     || state.frequencyEndHz <= state.frequencyStartHz
@@ -74,9 +95,6 @@ export function importedSubmissionBlocker(
   if (directivityError) return directivityError;
   if (!state.ingestRecord) return 'Ingest a CAD return before solving.';
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';
-  if (unacknowledged.length) {
-    return `Acknowledge ${unacknowledged.length} blocking finding${unacknowledged.length === 1 ? '' : 's'} before solving.`;
-  }
   if (requiredFem && !state.exteriorOnly) {
     return 'This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.';
   }
@@ -86,8 +104,13 @@ export function importedSubmissionBlocker(
   // Dropping it would submit the pre-campaign solve under a rail that says a
   // campaign is configured, which is the one failure mode this feature cannot
   // afford: the curve would look plausible and be the wrong physics.
-  const cardioid = passiveCardioidBlocker(state);
-  if (cardioid) return cardioid;
+  // Only while this model actually has the port aperture: a stale enabled form
+  // on a model without one is dropped, not turned into a blocker for a section
+  // the rail no longer shows.
+  if (cardioidSurfacePresent(state)) {
+    const cardioid = passiveCardioidBlocker(state);
+    if (cardioid) return cardioid;
+  }
   return null;
 }
 
@@ -103,7 +126,7 @@ export function importedSubmissionBlocker(
 function submittedDriver(
   state: Pick<CadReturnSnapshot, 'channelDrivers'>,
   channel: CadDriveChannel,
-): Record<string, number> | undefined {
+): Record<string, number | string> | undefined {
   return channelAcceptsDriver(channel) ? channelDriverWire(state.channelDrivers[channel.id]) : undefined;
 }
 
@@ -115,9 +138,12 @@ export function buildImportedSubmission(
   // The readiness gate already refuses this, but the builder is the last thing
   // between the rail and the wire and an enabled-yet-incomplete form must never
   // become a silently pre-campaign submission.
-  const cardioidBlocker = passiveCardioidBlocker(state);
-  if (cardioidBlocker) throw new Error(cardioidBlocker);
-  const passiveCardioid = passiveCardioidWire(state.passiveCardioid);
+  const cardioidPresent = cardioidSurfacePresent(state);
+  if (cardioidPresent) {
+    const cardioidBlocker = passiveCardioidBlocker(state);
+    if (cardioidBlocker) throw new Error(cardioidBlocker);
+  }
+  const passiveCardioid = cardioidPresent ? passiveCardioidWire(state.passiveCardioid) : null;
   const solveStore = useSolveOptionsStore.getState();
   const options = solveStore.options() as ImportedSolveSubmission['options'];
   if (solveStore.frequencyMode === 'range') {
@@ -148,7 +174,7 @@ export function buildImportedSubmission(
           Object.entries(state.sourceSizesMm).filter(([id]) => !state.skippedSourceIds.includes(id)),
         ),
       },
-      acknowledged_findings: acknowledgedFindingWire(record, state.acknowledgedFindingIds),
+      acknowledged_findings: blockingFindingWire(record),
       skipped_source_ids: [...state.skippedSourceIds],
       exterior_only: state.exteriorOnly,
       ...(combine ? { combine } : {}),

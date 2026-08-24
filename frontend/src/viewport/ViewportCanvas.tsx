@@ -682,8 +682,11 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, invertFieldC
   }, [clipMode, fieldPlane, invertFieldClip, scene.unitsPerMetre]);
   const clipActive = clipDefinition !== null;
   const materials = useMemo(
-    () => createMaterialLibrary(mode, clipActive ? stableClipPlane : null, theme, preferences.tintSolvedRegion),
-    [clipActive, mode, preferences.tintSolvedRegion, stableClipPlane, theme],
+    () => createMaterialLibrary(
+      mode, clipActive ? stableClipPlane : null, theme,
+      preferences.tintSolvedRegion, preferences.sourceRoleColors,
+    ),
+    [clipActive, mode, preferences.sourceRoleColors, preferences.tintSolvedRegion, stableClipPlane, theme],
   );
   const fieldColormap = useMemo(() => readChartTokens().colormap, [theme]);
   const center = useMemo(() => scene.bounds.getCenter(new Vector3()), [scene.bounds]);

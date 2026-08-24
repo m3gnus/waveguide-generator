@@ -52,6 +52,13 @@ describe('static run report', () => {
     expect(html).not.toContain('<script');
   });
 
+  it('states the group delay unit in the header it is written in', () => {
+    const options = { title: 'Units', generatedAt: new Date('2026-08-20T12:00:00Z') };
+    expect(buildRunReportHtml(channel, options)).toContain('<th>Group delay ms</th>');
+    expect(buildRunReportHtml(channel, { ...options, groupDelayUnit: 'cycles' }))
+      .toContain('<th>Group delay cycles</th>');
+  });
+
   it('renders a flat legacy result and honest empty derived sections', () => {
     const html = buildRunReportHtml({ frequencies: [] }, {
       title: 'Legacy', generatedAt: new Date('2026-08-20T12:00:00Z'),

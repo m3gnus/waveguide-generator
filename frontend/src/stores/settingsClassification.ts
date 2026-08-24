@@ -60,10 +60,14 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   // Panel sizes and which arrangement they were saved for.
   dockviewLayout: 'inert',
   dockviewMode: 'inert',
+  workspaceMode: 'inert',
+  cadProject: 'inert',
   paramHelp: 'inert',
   paramSections: 'inert',
   cadSolveProfiles: 'inert',
-  cadAcknowledgedFindings: 'inert',
+  // Saved drivers are a catalogue, not a setting: nothing solves differently
+  // until one is picked, and picking one is a rail edit of its own.
+  driverLibrary: 'inert',
   // Not a preference at all: the autosaved design. It is in this record
   // because the namespace list has to be answered exhaustively, and a design
   // change is the most solve-affecting thing there is.

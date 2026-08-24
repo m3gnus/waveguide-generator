@@ -168,6 +168,39 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('retains a safe saved CAD setup and rejects a non-imported setup shape', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    const cadSetup = {
+      type: 'imported' as const,
+      ingest_id: 'wgi_saved',
+      drive_channels: [{
+        id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' as const,
+        driver: { sd_cm2: 82, bl_t_m: 11.4, re_ohm: 5.8 },
+      }],
+      combine: null,
+      mesh: { rigid_size_mm: 8, transition_mm: 16, source_size_mm: { 'source-hf': 2.5 } },
+    };
+
+    socket.message({
+      v: 1, kind: 'snapshot', epoch: 4, cursor: 1,
+      jobs: [job({ cad_setup: cadSetup })],
+    });
+    expect(manager.getSnapshot().jobs[0].cad_setup).toEqual(cadSetup);
+
+    socket.message({
+      v: 1, kind: 'snapshot', epoch: 4, cursor: 2,
+      jobs: [job({ cad_setup: { type: 'parametric' } as never })],
+    });
+    expect(manager.getSnapshot()).toMatchObject({
+      cursor: 1,
+      error: 'Invalid jobs snapshot message',
+    });
+    manager.stop();
+  });
+
   it('rejects malformed event cursors before applying a valid recovery event', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');

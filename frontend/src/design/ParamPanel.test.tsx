@@ -3,12 +3,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import { sharedDelayMode } from '../results/crossoverSpec';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
-import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
+import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -40,19 +42,29 @@ const cadBundle = {
   ],
 } satisfies CadReturnBundle;
 
-function setCadReady(): void {
+/**
+ * The port aperture a passive-cardioid campaign is solved over. Only the
+ * returns that carry one may offer the section, so it is opt-in per test
+ * rather than part of the shared two-source bundle.
+ */
+const portSource = {
+  id: 'source-port', role: 'PORT_EXIT', required: false, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port',
+};
+
+function setCadReady({ cardioidPort = false }: { cardioidPort?: boolean } = {}): void {
   useCadReturnStore.setState({
-    selectedBundle: cadBundle,
+    selectedBundle: cardioidPort ? { ...cadBundle, sources: [...cadBundle.sources, portSource] } : cadBundle,
     ingestRecord: cadRecord,
     needsIngest: false,
-    sourceSizesMm: { 'source-hf': 2, 'source-mf': 4 },
+    sourceSizesMm: { 'source-hf': 2, 'source-mf': 4, ...(cardioidPort ? { 'source-port': 4 } : {}) },
     rigidSizeMm: 5,
     transitionMm: 4,
     driveChannels: [
       { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
       { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+      ...(cardioidPort ? [{ id: 'drive-port', source_ids: ['source-port'], motion: 'normal' as const }] : []),
     ],
-    channelDrivers: { 'drive-hf': { enabled: true, fields: {} } },
+    channelDrivers: { 'drive-hf': { enabled: true, fields: {}, preset: null } },
     exteriorOnly: true,
     // Left unset on purpose: a multi-driver return combines by default.
     combineEnabled: null,
@@ -106,6 +118,7 @@ describe('ParamPanel inventory UX', () => {
     resetCadReturnStore();
     resetCadPreparationStore();
     resetSolveOptionsStore();
+    resetDriverLibraryStore();
     workspaceModeStore.setMode('parametric');
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
@@ -246,7 +259,7 @@ describe('ParamPanel inventory UX', () => {
   it('renders only the CAD workspace section set and trims forced solve options', () => {
     act(() => {
       useDesignStore.getState().setFamily('OSSE');
-      setCadReady();
+      setCadReady({ cardioidPort: true });
       workspaceModeStore.setMode('cad');
     });
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
@@ -255,13 +268,34 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('Surface sampling');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drive channels & drivers', 'Passive cardioid', 'Crossover', 'Solve options', 'Mesh detail']);
+    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drivers', 'Crossover', 'Passive cardioid', 'Solve options', 'Mesh detail']);
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
     expect(host.textContent).toContain('Metal · full 3-D · free space');
     expect(host.textContent).toContain('Ingested cut planesx0');
     expect(host.textContent).toContain('Effective grid −180° … 180°');
+  });
+
+  it('drops the waveguide definition for geometry that was authored in CAD', () => {
+    act(() => {
+      useDesignStore.getState().setFamily('OSSE');
+      setCadReady();
+      // How a Fusion-authored return resolves: a project of its own, with no
+      // WG design behind it. There is no horn of WG's here to describe.
+      useCadReturnStore.setState({
+        ingestRecord: {
+          ...cadRecord,
+          project: { lineage_id: 'wgl_cad_authored', design_id: null },
+        } as unknown as CadReturnIngestRecord,
+      });
+      workspaceModeStore.setMode('cad');
+    });
+    const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
+    expect(titles()).toEqual(['Linked design', 'Realized dimensions']);
+    for (const gone of ['Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve']) {
+      expect(host.querySelector(`[data-section="${gone}"]`)).toBeNull();
+    }
   });
 
   it('renders manifest interface roles as read-only per-instance facts and omits informational roles', () => {
@@ -373,7 +407,7 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
 
-    for (const id of ['cad-force-full-domain', 'cad-combine', 'cad-combine-level', 'cad-combine-align', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
+    for (const id of ['cad-force-full-domain', 'cad-combine', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
       expect(host.querySelector(`#${id}`), id).not.toBeNull();
     }
     expect(host.querySelector('[aria-label="Drive channel for source-hf"]')).not.toBeNull();
@@ -384,11 +418,14 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('MF source');
     expect(host.textContent).toContain('Drive voltage');
 
-    const align = host.querySelector<HTMLInputElement>('#cad-combine-align')!;
-    expect(align.checked).toBe(true);
-    act(() => align.click());
-    expect(useCadReturnStore.getState().combineAlign).toBe(false);
-    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.align).toBe(false);
+    const levels = host.querySelector('[aria-label="Level match members mode"]')!;
+    expect(levels.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')!.textContent).toBe('Auto');
+    const align = host.querySelector('[aria-label="Time-align members mode"]')!;
+    expect(align.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')!.textContent).toBe('Auto');
+    act(() => [...align.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Manual')!.click());
+    expect(sharedDelayMode(useCadReturnStore.getState().combineSpec!)).toBe('manual');
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-mf'].delay)
+      .toEqual({ mode: 'manual', ms: 0 });
     expect(importedSubmissionBlocker()).toBeNull();
 
     const forceFull = host.querySelector<HTMLInputElement>('#cad-force-full-domain')!;
@@ -414,7 +451,8 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('MF → HF');
     expect(host.textContent).toContain('1000 Hz default.');
     expect(host.textContent).not.toContain('Untouched crossover defaults');
-    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.crossovers_hz).toEqual([1_000]);
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-mf'].lp)
+      .toEqual({ family: 'lr', order: 4, fc_hz: 1_000 });
 
     // A default the sweep cannot carry says so rather than blocking the solve:
     // the server refuses a crossover outside the solved band.
@@ -431,13 +469,148 @@ describe('ParamPanel inventory UX', () => {
 
     act(() => combine.click());
     expect(useCadReturnStore.getState().combineEnabled).toBe(false);
-    expect(host.querySelector('#cad-combine-align')).toBeNull();
+    expect(host.querySelector('[aria-label="Time-align members mode"]')).toBeNull();
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
+  });
+
+  it('warns when a pair sits below the upper channel driver\'s minimum crossover, in both simple and Advanced', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+
+    // drive-hf carries no preset yet, so there is nothing to warn about.
+    expect(host.textContent).not.toContain('minimum');
+
+    act(() => useCadReturnStore.getState().setChannelDriverPreset('drive-hf', {
+      id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database', kind: 'cd',
+      z_ohm: 8, xo_min_hz: 1_600, base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2 },
+    }));
+
+    // MF → HF defaults to 1000 Hz, below the driver's 1.6 kHz minimum.
+    expect(host.textContent).toContain('Acme HD-1 minimum 1.6 kHz — current 1 kHz');
+
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Advanced ▸')!.click());
+    const panel = document.querySelector('.crossover-advanced')!;
+    expect(panel.textContent).toContain('Acme HD-1 minimum 1.6 kHz — current 1 kHz');
+
+    // Raising the pair above the minimum clears the note in both views.
+    act(() => useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 2_000));
+    expect(host.textContent).not.toContain('minimum');
+    expect(panel.textContent).not.toContain('minimum');
+
+    // A driver whose source published no minimum never warns, whatever the
+    // pair's frequency.
+    act(() => {
+      useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 100);
+      useCadReturnStore.getState().setChannelDriverPreset('drive-hf', {
+        id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database', kind: 'cd',
+        z_ohm: 8, xo_min_hz: null, base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2 },
+      });
+    });
+    expect(host.textContent).not.toContain('minimum');
+  });
+
+  it('offers a family and a slope per pair and submits both', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+
+    const family = host.querySelector<HTMLSelectElement>('[aria-label="MF → HF filter family"]')!;
+    const slope = host.querySelector<HTMLSelectElement>('[aria-label="MF → HF slope"]')!;
+    expect(family.value).toBe('lr');
+    expect(slope.value).toBe('4');
+    expect([...slope.options].map((option) => option.textContent))
+      .toEqual(['12 dB/oct', '24 dB/oct', '36 dB/oct', '48 dB/oct']);
+
+    act(() => {
+      family.value = 'butterworth';
+      family.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    // Bessel has no order 4-only table, but Butterworth carries every order, so
+    // the previous 4 survives the family change untouched.
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="MF → HF slope"]')!.value).toBe('4');
+    act(() => {
+      const next = host.querySelector<HTMLSelectElement>('[aria-label="MF → HF slope"]')!;
+      next.value = '3';
+      next.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const wire = buildImportedSubmission(useCadReturnStore.getState()).geometry.combine!;
+    expect(wire.channels?.['drive-mf'].lp).toEqual({ family: 'butterworth', order: 3, fc_hz: 1_000 });
+    expect(wire.channels?.['drive-hf'].hp).toEqual({ family: 'butterworth', order: 3, fc_hz: 1_000 });
+  });
+
+  it('says a pair is unlinked after an Advanced edit, and relinks it on request', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+
+    const advanced = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Advanced ▸')!;
+    act(() => advanced.click());
+    const panel = document.querySelector('.crossover-advanced')!;
+    expect(panel).not.toBeNull();
+
+    const lowPass = panel.querySelector<HTMLInputElement>('[aria-label="Low-pass frequency in hertz"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(lowPass, '900');
+      lowPass.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const spec = useCadReturnStore.getState().combineSpec!;
+    expect(spec.channels['drive-mf'].lp).toEqual({ family: 'lr', order: 4, fcHz: 900 });
+    expect(host.textContent).toContain('LP 900 Hz LR4 / HP 1 kHz LR4 — edit in Advanced');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="MF → HF slope"]')!.disabled).toBe(true);
+
+    act(() => [...document.querySelectorAll<HTMLButtonElement>('.crossover-advanced button')]
+      .find((button) => button.textContent === 'Relink pairs')!.click());
+    expect(useCadReturnStore.getState().combineSpec!.channels['drive-hf'].hp)
+      .toEqual({ family: 'lr', order: 4, fcHz: 900 });
+    expect(host.textContent).not.toContain('edit in Advanced');
+  });
+
+  it('takes one channel off automatic gain from the Advanced popover', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Advanced ▸')!.click());
+
+    const groups = [...document.querySelectorAll('.crossover-advanced .crossover-segment')]
+      .filter((group) => group.getAttribute('aria-label') === 'Gain mode');
+    act(() => [...groups[0].querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Manual')!.click());
+
+    const spec = useCadReturnStore.getState().combineSpec!;
+    expect(spec.channels['drive-mf'].gain).toEqual({ mode: 'manual', db: 0 });
+    expect(spec.channels['drive-hf'].gain).toEqual({ mode: 'auto' });
+    // Clearing a manual field is the same gesture as everywhere else: it gives
+    // the value back to whatever computes it.
+    const field = document.querySelector<HTMLInputElement>('.crossover-advanced [aria-label="Gain in dB"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, '');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(useCadReturnStore.getState().combineSpec!.channels['drive-mf'].gain).toEqual({ mode: 'auto' });
+    act(() => [...groups[0].querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Manual')!.click());
+    // The chain-wide segment can no longer claim one mode for two.
+    const levels = host.querySelector('[aria-label="Level match members mode"]')!;
+    expect(levels.querySelector('button[aria-pressed="true"]')).toBeNull();
+    expect(host.textContent).toContain('edited per channel');
   });
 
   it('edits the passive-cardioid campaign in the rail, in cm² over an m² wire', () => {
     act(() => {
-      setCadReady();
+      setCadReady({ cardioidPort: true });
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
@@ -490,6 +663,44 @@ describe('ParamPanel inventory UX', () => {
     expect(geometry.model_port_area_m2).toBe(geometry.bem_port_area_m2);
   });
 
+  /**
+   * The campaign is a property of the geometry, not a preference. A model with
+   * no port aperture cannot be solved with one -- the server refuses the whole
+   * run -- so the section is absent rather than present-and-doomed.
+   */
+  it('offers the passive-cardioid section only for a return that carries a port aperture', () => {
+    const section = () => host.querySelector('[data-section="Passive cardioid"]');
+    const show = () => act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+
+    act(() => { setCadReady(); workspaceModeStore.setMode('cad'); });
+    show();
+    expect(section()).toBeNull();
+    // The sections around it are untouched by the gate.
+    expect(host.querySelector('[data-section="Crossover"]')).not.toBeNull();
+
+    act(() => setCadReady({ cardioidPort: true }));
+    show();
+    expect(section()).not.toBeNull();
+
+    // The role is one place CAD can carry the aperture; the source id is the
+    // other, and the server matches on either. Both spellings of the split
+    // port count, as does the newer PASSIVE_CARDIOID role.
+    for (const source of [
+      { id: 'port_exit_l', role: 'MF' },
+      { id: 'mid_port_exit_right', role: 'MF' },
+      { id: 'source-cardioid', role: 'PASSIVE_CARDIOID' },
+    ]) {
+      act(() => useCadReturnStore.setState({
+        selectedBundle: {
+          ...cadBundle,
+          sources: [{ ...portSource, ...source }],
+        },
+      }));
+      show();
+      expect(section(), `${source.role} / ${source.id}`).not.toBeNull();
+    }
+  });
+
   it('keeps the reserved coupled channel id out of the assignable drive channels', () => {
     act(() => {
       useCadReturnStore.setState({
@@ -497,7 +708,7 @@ describe('ParamPanel inventory UX', () => {
           ...cadBundle,
           sources: [
             { id: 'source-mf', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'passive_cardioid' },
-            { id: 'source-port', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port' },
+            { id: 'source-port', role: 'PORT_EXIT', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port' },
           ],
         },
         ingestRecord: cadRecord,
@@ -520,9 +731,70 @@ describe('ParamPanel inventory UX', () => {
     }));
     expect(options()).toEqual(['drive-port']);
     // The channel that already claims the id predates the choice, so the
-    // prevention is backed by a refusal the user can act on.
+    // prevention is backed by a refusal the user can act on -- and the control
+    // it asks for survives the list shrinking to one, or the blocker would be
+    // a dead end.
     expect(host.querySelector('[data-section="Passive cardioid"] [role="alert"]')?.textContent)
       .toContain('Reassign that source');
+    expect(host.querySelector('.cad-channel[data-channel-id="passive_cardioid"] .cad-channel-row')).not.toBeNull();
+  });
+
+  it('keeps each source assignment inside the card that drives it and moves it when regrouped', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const card = (id: string) => host.querySelector<HTMLElement>(`.cad-channel[data-channel-id="${id}"]`);
+    const assignment = (sourceId: string) => host.querySelector<HTMLSelectElement>(`[aria-label="Drive channel for ${sourceId}"]`);
+
+    // The standalone list above the cards is gone: every assignment sits in
+    // the card of the channel that currently drives that source.
+    expect([...host.querySelectorAll<HTMLElement>('.cad-channel-row')].map((row) => row.closest<HTMLElement>('.cad-channel')?.dataset.channelId))
+      .toEqual(['drive-hf', 'drive-mf']);
+    expect(card('drive-hf')!.contains(assignment('source-hf'))).toBe(true);
+    expect(card('drive-mf')!.contains(assignment('source-mf'))).toBe(true);
+    expect(host.textContent).not.toContain('Assign two sources to the same channel to drive them together.');
+
+    // Regrouping is the same store action as before, and the row follows the
+    // source to the card that now drives it.
+    const select = assignment('source-mf')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, 'drive-hf');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(useCadReturnStore.getState().driveChannels)
+      .toEqual([{ id: 'drive-hf', source_ids: ['source-hf', 'source-mf'], motion: 'normal' }]);
+    expect(card('drive-mf')).toBeNull();
+    expect(card('drive-hf')!.contains(assignment('source-mf'))).toBe(true);
+
+    // One active source is not a choice: skipping the other takes the selects
+    // away and leaves the summary that already names what is driven.
+    act(() => useCadReturnStore.getState().setSkipped('source-mf', true));
+    expect(host.querySelector('.cad-channel-row')).toBeNull();
+    expect(card('drive-hf')!.querySelector('.cad-channel-summary')!.textContent).toContain('drive-hf · source-hf');
+  });
+
+  it('offers no channel assignment for a single-channel return', () => {
+    act(() => {
+      setCadReady();
+      useCadReturnStore.setState({
+        selectedBundle: {
+          ...cadBundle,
+          sources: [{ id: 'source-hf', role: 'HF', required: true, suggestedResolutionMm: 2, defaultDriveChannelId: 'drive-hf' }],
+        },
+        driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.querySelector('.cad-channel[data-channel-id="drive-hf"] .cad-channel-summary')!.textContent)
+      .toContain('drive-hf · source-hf');
+    expect(host.querySelector('.cad-channel-row')).toBeNull();
+    expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
+    // Motion and the driver stay where they were.
+    expect(host.querySelector('[aria-label="Motion for drive-hf"]')).not.toBeNull();
+    expect(host.querySelector('#cad-driver-drive-hf')).not.toBeNull();
   });
 
   it('shows the CAD simulation empty state without hiding formula editing on Geometry', () => {
@@ -530,8 +802,8 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-section="Linked design"]')).not.toBeNull();
     expect(host.querySelector('[data-section="Profile Dimensions"]')).not.toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(host.textContent).toContain('Finish the CAD Link workflow');
-    expect(host.textContent).toContain('set up the connection');
+    expect(host.textContent).toContain('Prepare CAD geometry to unlock these inputs');
+    expect(host.textContent).toContain('Drivers, crossover, sweep');
     expect(host.textContent).toContain('Open CAD Link setup');
     expect(host.querySelector('[data-section]')).toBeNull();
   });
@@ -576,7 +848,7 @@ describe('ParamPanel inventory UX', () => {
     };
 
     expect(matchingSections('frequencyStartHz')).toEqual(['Frequency Sweep']);
-    expect(matchingSections('sd_cm2')).toEqual(['Drive channels & drivers']);
+    expect(matchingSections('sd_cm2')).toEqual(['Drivers']);
     expect(matchingSections('LR4')).toEqual(['Crossover']);
     expect(matchingSections('surface sizing')).toEqual(['Mesh detail']);
   });
@@ -845,5 +1117,353 @@ describe('parameter reveal requests', () => {
     expect(notified).toBe(1);
     unsubscribe();
     parameterRevealRequest.claim('geometry');
+  });
+});
+
+const LIBRARY_HIT = {
+  id: 'Acme::HD-1::8',
+  brand: 'Acme',
+  model: 'HD-1',
+  z_ohm: 8,
+  variants: [{ id: 'Acme::HD-1::8', z_ohm: 8 }, { id: 'Acme::HD-1::16', z_ohm: 16 }],
+  kind: 'cd' as const,
+  size: '1 in throat',
+  completeness: 'full' as const,
+  spec: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, le_mh: 0.12, mms_g: 2.4, fs_hz: 620, vas_l: 0.35, qms: 3.1, xmax_mm: 0.8 },
+  display: { fs_hz: 620, sd_cm2: 26, bl_t_m: 12.4, xmax_mm: 0.8 },
+  xo_min_hz: 1_200,
+  source: { file: 'compression-drivers.csv' },
+};
+
+/**
+ * One fetch stub for every driver route, with a switch for an empty library
+ * and another for a stocked library whose search happens to answer nothing --
+ * the case a driver that is not in any CSV actually presents.
+ */
+function stubDriverApi({ files = 1, hits = files }: { files?: number; hits?: number } = {}) {
+  const library = {
+    folder: '/library/driver-databases',
+    files: files ? [{ name: 'compression-drivers.csv', rows: 1 }] : [],
+    total_drivers: files ? 1 : 0,
+    last_scan: null,
+  };
+  const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('/api/drivers/library')) return json(library);
+    if (url.startsWith('/api/drivers?')) return json({ items: hits ? [LIBRARY_HIT] : [], total: hits });
+    if (url.startsWith('/api/drivers/')) return json({ ...LIBRARY_HIT, fields: {}, extras: {} });
+    return Promise.resolve(new Response('not found', { status: 404 }));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+describe('driver picker', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  const settle = async () => {
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+  };
+  const searchInput = () => host.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+  const type = (input: HTMLInputElement, value: string) => act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const press = (element: HTMLElement, key: string) => act(() => {
+    element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  });
+  const channelCard = () => host.querySelector<HTMLElement>('.cad-channel[data-channel-id="drive-hf"]')!;
+
+  beforeEach(async () => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    localStorage.clear();
+    resetDesignStore();
+    resetCadReturnStore();
+    resetCadPreparationStore();
+    resetSolveOptionsStore();
+    resetDriverLibraryStore();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    queryClient.clear();
+    workspaceModeStore.setMode('parametric');
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const mountWithLibrary = async (options?: { files?: number; hits?: number }) => {
+    const fetchMock = stubDriverApi(options);
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    await settle();
+    return fetchMock;
+  };
+
+  it('searches the library and collapses the keyboard-picked driver to a chip', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    // The kind toggle starts on the compression half for an HF channel.
+    expect(channelCard().querySelector<HTMLButtonElement>('.driver-kind-toggle button[aria-pressed="true"]')?.textContent)
+      .toBe('Compression');
+
+    act(() => input.focus());
+    await settle();
+    await type(input, 'hd-1');
+    await settle();
+
+    const options = [...channelCard().querySelectorAll<HTMLElement>('[role="option"]')];
+    // Hand entry is the last row even when the search found something.
+    expect(options.map((option) => option.querySelector('.driver-result-name')?.textContent))
+      .toEqual(['Acme HD-1', 'Enter T/S manually…']);
+    // The first hit is pre-selected, so Enter alone picks it.
+    expect(options[0].getAttribute('aria-selected')).toBe('true');
+
+    await press(input, 'Enter');
+    await settle();
+
+    const card = channelCard();
+    expect(card.querySelector('.driver-chip.name')?.textContent).toBe('Acme HD-1 · 8 Ω');
+    expect(card.querySelector('input[role="combobox"]')).toBeNull();
+    const facts = [...card.querySelectorAll<HTMLElement>('.driver-summary-facts .driver-chip')].map((chip) => chip.textContent);
+    expect(facts).toEqual(['Sd 26 cm²', 'Bl 12.4 T·m', 'Fs 620 Hz', 'Xmax 0.8 mm']);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset).toMatchObject({
+      id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database',
+    });
+  });
+
+  it('keeps the current driver when Escape closes the list', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    expect(channelCard().querySelectorAll('[role="option"]')).toHaveLength(2);
+
+    await press(input, 'Escape');
+    await settle();
+
+    expect(channelCard().querySelector('[role="listbox"]')).toBeNull();
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset).toBeNull();
+  });
+
+  it('falls back to the manual fields when the library holds no files', async () => {
+    await mountWithLibrary({ files: 0 });
+    const card = channelCard();
+    expect(card.querySelector('input[role="combobox"]')).toBeNull();
+    expect(card.textContent).toContain('No driver library found');
+    // Exactly the grid the rail has always shown, now including the API's
+    // alternatives so a datasheet driver can be typed in as printed.
+    const labels = [...card.querySelectorAll<HTMLElement>('.cad-driver-field > span')].map((span) => span.textContent);
+    expect(labels).toContain('Sd (cm²)');
+    expect(labels).toContain('Mms (g)');
+    expect(labels).toContain('Fs (Hz)');
+  });
+
+  it('derives values in the T/S sheet, counts the edits, and resets them', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await press(input, 'Enter');
+    await settle();
+
+    act(() => channelCard().querySelector<HTMLButtonElement>('.driver-edit-link')!.click());
+    await settle();
+    const sheet = document.querySelector<HTMLElement>('.driver-sheet')!;
+    expect(sheet.querySelector('h2')?.textContent).toBe('Acme HD-1');
+    expect(sheet.textContent).toContain('compression-drivers.csv');
+
+    const derived = [...sheet.querySelectorAll<HTMLElement>('.driver-derived-row')]
+      .map((entry) => entry.textContent);
+    // Qes = 2 pi Fs Mms Re / Bl^2 with the hit's own numbers.
+    const qes = (2 * Math.PI * 620 * 0.0024 * 6.2) / (12.4 * 12.4);
+    expect(derived[1]).toBe(`Qes${Number(qes.toPrecision(3))}`);
+    expect(derived[2]).toBe(`Qts${Number(((3.1 * qes) / (3.1 + qes)).toPrecision(3))}`);
+    expect(derived[3]).toMatch(/^Sensitivity\d/);
+
+    const blField = [...sheet.querySelectorAll<HTMLElement>('.cad-driver-field')]
+      .find((field) => field.querySelector('span')?.textContent === 'Bl (T·m)')!;
+    await type(blField.querySelector<HTMLInputElement>('input')!, '11.9');
+    await settle();
+
+    expect(document.querySelector('.driver-chip.accent')?.textContent).toBe('1 edited');
+    expect(blField.className).toContain('edited');
+    // Count is WG's own input and never reads as an edit of the driver.
+    const countField = [...sheet.querySelectorAll<HTMLElement>('.cad-driver-field')]
+      .find((field) => field.querySelector('span')?.textContent === 'Count')!;
+    await type(countField.querySelector<HTMLInputElement>('input')!, '2');
+    await settle();
+    expect(document.querySelector('.driver-chip.accent')?.textContent).toBe('1 edited');
+
+    act(() => [...document.querySelectorAll<HTMLButtonElement>('.driver-sheet-actions button')]
+      .find((button) => button.textContent === 'Reset to database values')!.click());
+    await settle();
+
+    expect(document.querySelector('.driver-chip.accent')).toBeNull();
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].fields).toEqual({ count: 2 });
+  });
+
+  const manualRow = () => [...channelCard().querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    .find((option) => option.querySelector('.driver-result-name')?.textContent === 'Enter T/S manually…');
+  const sheetField = (label: string) => [...document.querySelectorAll<HTMLElement>('.driver-sheet .cad-driver-field')]
+    .find((field) => field.querySelector('span')?.textContent === label)!
+    .querySelector<HTMLInputElement>('input')!;
+  const sheetButton = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('.driver-sheet-actions button')]
+    .find((button) => button.textContent === text);
+
+  const resultNames = () => [...channelCard().querySelectorAll<HTMLElement>('[role="option"]')]
+    .map((option) => option.querySelector('.driver-result-name')?.textContent);
+
+  it('offers hand entry as the last row on an untouched search', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    expect(resultNames()).toEqual(['Acme HD-1', 'Enter T/S manually…']);
+    expect(channelCard().textContent).not.toContain('No driver matches that search.');
+  });
+
+  it('offers hand entry beside the empty-search line rather than instead of it', async () => {
+    // A stocked library that answers nothing is exactly the situation hand
+    // entry exists for, and the worst moment to be left with a dead end.
+    await mountWithLibrary({ files: 1, hits: 0 });
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'radian 745');
+    await settle();
+    expect(resultNames()).toEqual(['Enter T/S manually…']);
+    expect(channelCard().textContent).toContain('No driver matches that search.');
+  });
+
+  it('lands a hand-entered driver in the sheet, submits it, and never calls it edited', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'Radian 745Neo');
+    await settle();
+
+    // Arrow past the single hit onto the manual row and take it from the
+    // keyboard, exactly as any other row is reachable.
+    await press(input, 'ArrowDown');
+    expect(manualRow()?.getAttribute('aria-selected')).toBe('true');
+    await press(input, 'Enter');
+    await settle();
+
+    const preset = useCadReturnStore.getState().channelDrivers['drive-hf'].preset!;
+    expect(preset).toMatchObject({ label: 'Radian 745Neo', source: 'manual', kind: 'cd', z_ohm: null, base: {} });
+    expect(preset.id).toBe('manual:radian-745neo');
+
+    // The sheet opened by itself, on empty fields: there is nowhere else for a
+    // driver with no numbers in it to be filled in.
+    const sheet = document.querySelector<HTMLElement>('.driver-sheet')!;
+    expect(sheet).not.toBeNull();
+    expect([...sheet.querySelectorAll<HTMLInputElement>('.driver-sheet-grid input')].every((field) => field.value === ''))
+      .toBe(true);
+    expect(sheet.textContent).toContain('Typed by hand');
+    expect(sheet.textContent).toContain('Still needed:');
+    // Nothing to reset to, so neither the count nor the button is offered.
+    expect(sheetButton('Reset to database values')).toBeUndefined();
+
+    for (const [label, value] of [['Sd (cm²)', '26'], ['Bl (T·m)', '12.4'], ['Re (Ω)', '6.2'], ['Mms (g)', '2.4'], ['Fs (Hz)', '620']] as const) {
+      await type(sheetField(label), value);
+      await settle();
+    }
+    expect(document.querySelector('.driver-chip.accent')).toBeNull();
+    expect(driverEditedKeys(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual([]);
+
+    // Derived values read the typed numbers like any other driver's.
+    const derived = [...document.querySelectorAll<HTMLElement>('.driver-derived-row')].map((row) => row.textContent);
+    const qes = (2 * Math.PI * 620 * 0.0024 * 6.2) / (12.4 * 12.4);
+    expect(derived[1]).toBe(`Qes${Number(qes.toPrecision(3))}`);
+
+    expect(channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual({
+      sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620, label: 'Radian 745Neo',
+    });
+  });
+
+  it('saves a hand-entered driver to My drivers, updates it in place, and finds it again', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'Radian 745Neo');
+    await settle();
+    act(() => manualRow()!.click());
+    await settle();
+
+    for (const [label, value] of [['Sd (cm²)', '26'], ['Bl (T·m)', '12.4'], ['Re (Ω)', '6.2'], ['Mms (g)', '2.4'], ['Fs (Hz)', '620'], ['Count', '2']] as const) {
+      await type(sheetField(label), value);
+      await settle();
+    }
+    act(() => sheetButton('Save to My drivers')!.click());
+    await settle();
+
+    // The typed numbers are the saved driver's own; the count is this
+    // channel's installation, not the driver's.
+    expect(useDriverLibraryStore.getState().saved).toEqual([{
+      id: 'mine:manual:radian-745neo',
+      label: 'Radian 745Neo',
+      based_on: 'manual',
+      base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620 },
+      overrides: {},
+      kind: 'cd',
+      z_ohm: null,
+      xo_min_hz: null,
+    }]);
+    // The channel now holds the saved copy, so the values survive and a second
+    // save is an update rather than a duplicate.
+    const afterSave = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(afterSave.preset).toMatchObject({ id: 'mine:manual:radian-745neo', source: 'mine' });
+    expect(afterSave.fields).toEqual({ count: 2 });
+    expect(channelDriverWire(afterSave)).toMatchObject({ sd_cm2: 26, count: 2, label: 'Radian 745Neo' });
+
+    // Renaming re-arms the button; saving again replaces the one entry.
+    const name = document.querySelector<HTMLInputElement>('.driver-name-input')!;
+    await type(name, 'Radian 745Neo (measured)');
+    await settle();
+    act(() => sheetButton('Save to My drivers')!.click());
+    await settle();
+    expect(useDriverLibraryStore.getState().saved).toHaveLength(1);
+    expect(useDriverLibraryStore.getState().saved[0].label).toBe('Radian 745Neo (measured)');
+
+    // And it is searchable: clearing the channel puts the search back, and the
+    // saved driver answers its own name under the "mine" section.
+    act(() => document.querySelector<HTMLButtonElement>('.driver-sheet-actions button.primary')!.click());
+    await settle();
+    act(() => channelCard().querySelector<HTMLButtonElement>('.driver-clear-link')!.click());
+    await settle();
+    const again = searchInput();
+    act(() => again.focus());
+    await settle();
+    await type(again, 'measured');
+    await settle();
+    expect([...channelCard().querySelectorAll<HTMLElement>('[role="option"]')]
+      .map((option) => option.querySelector('.driver-result-name')?.textContent))
+      .toEqual(['Acme HD-1', 'Radian 745Neo (measured)', 'Enter T/S manually…']);
+  });
+
+  it('keeps a library driver’s name read-only', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await press(input, 'Enter');
+    await settle();
+    act(() => channelCard().querySelector<HTMLButtonElement>('.driver-edit-link')!.click());
+    await settle();
+    expect(document.querySelector('.driver-name-input')).toBeNull();
+    expect(document.querySelector('.driver-sheet h2')?.textContent).toBe('Acme HD-1');
+    expect(sheetButton('Reset to database values')).toBeDefined();
   });
 });

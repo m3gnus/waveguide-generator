@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
 import { previewSocket } from '../api/previewSocket';
@@ -8,23 +8,19 @@ import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/ac
 import { useActiveBackendCapability, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import { backendLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
+import { CadCrossover } from './CrossoverSection';
 import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
   assignableChannelIds,
   channelAcceptsDriver,
-  combineChain,
-  combineEnabledEffective,
-  combineLevelMatchDefault,
-  DRIVER_REQUIRED_KEYS,
+  hasPassiveCardioidSurface,
   PASSIVE_CARDIOID_CHANNEL_ID,
   passiveCardioidBlocker,
   useCadReturnStore,
-  type CadDriveChannel,
-  type ChannelDriverForm,
-  type CombinePair,
-  type DriverFieldKey,
   type PortAreaSource,
 } from '../stores/cadReturn';
+import { ChannelDriverPicker } from './DriverPicker';
+import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { namespaceStorage } from '../stores/durableSettings';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
@@ -56,7 +52,6 @@ import {
   CAD_CARDIOID_FIELD_CONTROLS,
   CAD_CONTROLS,
   CAD_CONTROL_DESCRIPTORS,
-  CAD_DRIVER_FIELD_CONTROLS,
   cadControlIsAvailable,
   cadControlMatchesQuery,
   cadDisplayValue,
@@ -849,54 +844,52 @@ function CadFrequencySweep() {
   </>;
 }
 
-/** Hornresp-unit T/S entry for one drive channel. Plain inputs are required:
- * an empty field means "not provided", which NumberField cannot represent. */
-function DriverFields({ channel, form, onField }: {
-  channel: CadDriveChannel;
-  form: ChannelDriverForm | undefined;
-  onField: (field: DriverFieldKey, value: number | null) => void;
-}) {
-  const missing = DRIVER_REQUIRED_KEYS.filter((key) => form?.fields[key] === undefined);
-  return <div className="cad-driver-grid">
-    {CAD_DRIVER_FIELD_CONTROLS.map(({ driverKey, label, unit, step, reveal }) => <label key={driverKey} className="cad-driver-field" data-control-reveal-id={reveal.id}>
-      <span>{label}{unit ? ` (${unit})` : ''}{DRIVER_REQUIRED_KEYS.includes(driverKey) ? ' *' : ''}</span>
-      <input
-        type="number"
-        min={0}
-        step={step}
-        value={form?.fields[driverKey] ?? ''}
-        aria-label={`${label} for ${channel.id}`}
-        onChange={(event) => onField(driverKey, event.target.value === '' ? null : Number(event.target.value))}
-      />
-    </label>)}
-    {missing.length > 0 && <p className="cad-driver-hint">Required: {missing.map((key) => CAD_DRIVER_FIELD_CONTROLS.find((item) => item.driverKey === key)?.label ?? key).join(', ')}. The channel solves as a unit-drive basis until they are set. Vas/Fs/Qms alternatives are accepted through the API.</p>}
-  </div>;
-}
-
+/**
+ * Per-channel driver setup.
+ *
+ * One card per drive channel, and the source-to-channel assignment inside the
+ * card that currently drives it. The standalone list this replaces sat above
+ * every card and repeated each source there, so an LF channel's grouping and
+ * its driver were two separate places in the same section.
+ */
 function CadDriveChannels() {
   const state = useCadReturnStore();
-  const activeSources = (state.selectedBundle?.sources ?? []).filter((source) => !state.skippedSourceIds.includes(source.id));
+  const sources = state.selectedBundle?.sources ?? [];
+  const activeSources = sources.filter((source) => !state.skippedSourceIds.includes(source.id));
   // The coupled campaign writes its derived output to a reserved channel id.
   // Withholding it from the assignable list is what turns a server refusal
   // into a collision that cannot be made in the first place.
   const channelIds = assignableChannelIds(
-    [...new Set((state.selectedBundle?.sources ?? []).map((source) => source.defaultDriveChannelId))],
+    [...new Set(sources.map((source) => source.defaultDriveChannelId))],
     state.passiveCardioid.enabled && state.passiveCardioid.coupled,
   );
+  // Grouping is a choice only when there is another channel to move a source
+  // to and another source to move. One source on one channel would get a
+  // select offering the state it is already in, so it gets none -- the card
+  // summary already names the source. The palette's reveal for the assignment
+  // then falls back to the section, which is what `fallbackId` is for.
+  const regroupable = channelIds.length > 1 && activeSources.length > 1;
+  // The exception: a channel holding the id the coupled campaign reserves is
+  // no longer assignable, and the refusal it raises tells the user to reassign
+  // that source. Hiding the only control that can is how a blocker becomes a
+  // dead end, so a stranded channel keeps its select however few there are.
+  const showsAssignment = (channel: { id: string }) => regroupable || !channelIds.includes(channel.id);
   return <>
-    <p className="section-note">Assign two sources to the same channel to drive them together.</p>
     <div className="cad-channel-list">
-      {activeSources.map((source) => {
-        const channel = state.driveChannels.find((item) => item.source_ids.includes(source.id));
-        return <div className="cad-channel-row" data-control-reveal-id={CAD_CONTROLS.channelAssignment.reveal.id} key={source.id}><b>{source.id}</b><select aria-label={`${CAD_CONTROLS.channelAssignment.label} for ${source.id}`} value={channel?.id ?? ''} onChange={(event) => state.setSourceChannel(source.id, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>;
-      })}
       {state.driveChannels.map((channel) => {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
-        return <div className="cad-channel" key={channel.id}>
+        return <div className="cad-channel" data-channel-id={channel.id} key={channel.id}>
           <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
+          {showsAssignment(channel) && channel.source_ids
+            .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
+            .map((sourceId) => <div className="cad-channel-row" data-control-reveal-id={CAD_CONTROLS.channelAssignment.reveal.id} key={sourceId}><b>{sourceId}</b><select aria-label={`${CAD_CONTROLS.channelAssignment.label} for ${sourceId}`} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
           {driverEligible && <ToggleRow id={`cad-driver-${channel.id}`} label={`${CAD_CONTROLS.driverToggle.label} · ${channel.id}`} revealId={CAD_CONTROLS.driverToggle.reveal.id} help="Voltage-driven Thiele-Small coupling. The channel's levels become absolute at the drive voltage and its impedance chart becomes the electrical input impedance in ohms." checked={driverForm?.enabled ?? false} onChange={(checked) => state.setChannelDriverEnabled(channel.id, checked)}/>}
-          {driverEligible && driverForm?.enabled && <DriverFields channel={channel} form={driverForm} onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}/>}
+          {driverEligible && driverForm?.enabled && <ChannelDriverPicker
+            channel={channel}
+            form={driverForm}
+            roleHint={activeSources.find((source) => source.id === channel.source_ids[0])?.role}
+          />}
         </div>;
       })}
     </div>
@@ -985,40 +978,6 @@ function CadPassiveCardioid() {
   </>;
 }
 
-/** The bands a pair joins, in the words a designer uses for them. Unroled ends
- * fall back to the authored channel ids, which is all the return says. */
-function combinePairLabel(pair: CombinePair): string {
-  return pair.lowerRole && pair.upperRole
-    ? `${pair.lowerRole} → ${pair.upperRole}`
-    : `${pair.lower} → ${pair.upper}`;
-}
-
-/** What an untouched field would hold and why, stated per pair rather than as
- * one note for the whole section: the pairs no longer share a rule. */
-function combinePairHint(pair: CombinePair): string {
-  if (pair.defaultHz === undefined) return 'Default follows the current Frequency Sweep.';
-  return pair.outsideSweep
-    ? `${pair.defaultHz} Hz default is outside the sweep; using ${pair.hz} Hz.`
-    : `${pair.defaultHz} Hz default.`;
-}
-
-function CadCrossover() {
-  const state = useCadReturnStore();
-  if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
-  const enabled = combineEnabledEffective(state);
-  return <>
-    <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append an LR4 crossover sum of the drive channels as one more result channel. On by default for a return with two or more drive channels; the chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
-    {enabled && <>
-      {combineChain(state).map((pair) => <Fragment key={pair.key}>
-        <NumberField label={combinePairLabel(pair)} revealId={CAD_CONTROLS.crossoverFrequency.reveal.id} unit="Hz" value={pair.hz} min={1} step={50} precision={0} description={`${CAD_CONTROLS.crossoverFrequency.label} · ${pair.lower} → ${pair.upper}`} onCommit={(value) => state.setCombineCrossover(pair.key, value)}/>
-        <p className="section-note">{combinePairHint(pair)}</p>
-      </Fragment>)}
-      <ToggleRow id="cad-combine-level" label={CAD_CONTROLS.levelMatch.label} revealId={CAD_CONTROLS.levelMatch.reveal.id} help="Equalise member band levels before summing. Defaults off when every member carries a driver model — real voltage-driven levels should not be re-equalised." checked={state.combineLevelMatch ?? combineLevelMatchDefault(state)} onChange={state.setCombineLevelMatch}/>
-      <ToggleRow id="cad-combine-align" label={CAD_CONTROLS.timeAlign.label} revealId={CAD_CONTROLS.timeAlign.reveal.id} help="Delay each member so the crossover sums coherently, from the phase of the solved fields at each crossover frequency. Off sums the members as solved." checked={state.combineAlign ?? true} onChange={state.setCombineAlign}/>
-    </>}
-  </>;
-}
-
 function CadMeshDetail() {
   const state = useCadReturnStore();
   const symmetryMode = useCadPreparationStore((current) => current.symmetryMode);
@@ -1043,7 +1002,7 @@ function CadMeshDetail() {
     {(state.selectedBundle?.sources ?? []).map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
       <NumberField label={`${source.role} source`} revealId={CAD_CONTROLS.sourceSize.reveal.id} unit="mm" value={state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/>
       {!source.required && <ToggleRow id={`skip-${source.id}`} label={CAD_CONTROLS.skipSource.label} revealId={CAD_CONTROLS.skipSource.reveal.id} help="Exclude this optional source from ingestion and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>}
-      {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label={CAD_CONTROLS.areaDrift.label} revealId={CAD_CONTROLS.areaDrift.reveal.id} help="Explicitly accept the source-area mismatch and re-ingest. The override remains a finding that must be acknowledged." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
+      {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label={CAD_CONTROLS.areaDrift.label} revealId={CAD_CONTROLS.areaDrift.reveal.id} help="Explicitly accept the source-area mismatch and re-ingest. The override is recorded as a finding on the prepared model." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
     </div>)}
     {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason} Rebuild the mesh before solving.</div>}
     {cadCoordinator.error && <div className="field-error" role="alert">{cadCoordinator.error}</div>}
@@ -1053,7 +1012,7 @@ function CadMeshDetail() {
 
 function CadSimulationEmpty() {
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
-  return <div className="cad-mode-empty" role="status"><b>Finish the CAD Link workflow</b><span>Use CAD Link to set up the connection, open this design in {cadApplication}, and bring the finished geometry back for simulation.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link setup</button></div>;
+  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link setup</button></div>;
 }
 
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
@@ -1074,6 +1033,13 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const currentPreviewFields = previewErrorRevision === designRevision ? previewErrorFields : null;
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const ingestRecord = useCadReturnStore((state) => state.ingestRecord);
+  // The campaign needs a port aperture in the geometry. Offering it to a model
+  // that has none can only produce a server refusal, so the section is not
+  // shown at all -- and the submission drops the form to match.
+  const cardioidSurface = useCadReturnStore(
+    (state) => hasPassiveCardioidSurface(state.selectedBundle?.sources ?? []),
+  );
+  const waveguideLinked = useWaveguideDefinitionApplies();
   const setFamily = useDesignStore((state) => state.setFamily);
   const loadDesign = useDesignStore((state) => state.loadDesign);
   const helpVisible = useParameterHelp();
@@ -1085,7 +1051,8 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const searching = Boolean(query.trim());
   const definitions = useMemo(() => PARAMETER_SECTION_DEFINITIONS
     .filter((definition) => definition.tab === tab)
-    .filter((definition) => parameterSectionIsVisible(definition, workspaceMode, design)), [design, tab, workspaceMode]);
+    .filter((definition) => parameterSectionIsVisible(definition, { mode: workspaceMode, design, waveguideLinked })),
+    [design, tab, waveguideLinked, workspaceMode]);
   const fieldsBySection = useMemo(() => new Map(definitions.map(({ title }) => {
     const fields = PARAMETER_REGISTRY.filter((field) => field.section === title)
       .filter((field) => query.trim() ? fieldAppliesToFamily(field, design.formula) : fieldIsVisible(field, design))
@@ -1242,9 +1209,9 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
           {tab === 'simulation' && ingestRecord && <>
             {cadSectionMatches(CAD_CONTROLS.frequencySweep.section) && <Section title={CAD_CONTROLS.frequencySweep.section} description="The explicit range submitted with this imported CAD geometry." forceOpen={searching} revealId={CAD_CONTROLS.frequencySweep.reveal.id}><CadFrequencySweep/></Section>}
             {cadSectionMatches(CAD_CONTROLS.directivityMap.section) && <Section title={CAD_CONTROLS.directivityMap.section} description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={searching} revealId={CAD_CONTROLS.directivityMap.reveal.id}><DirectivityMapControls effectiveDerivation={ingestRecord.polar_grid_derivation}/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.driveChannels.section) && <Section title={CAD_CONTROLS.driveChannels.section} description="Source-to-channel assignment, motion, voltage drive, and per-channel Thiele-Small data." forceOpen={searching} revealId={CAD_CONTROLS.driveChannels.reveal.id}><CadDriveChannels/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.passiveCardioid.section) && <Section title={CAD_CONTROLS.passiveCardioid.section} description="Sealed rear chamber vented through a damped port, and the extra radiation-impedance campaign it needs." forceOpen={searching} revealId={CAD_CONTROLS.passiveCardioid.reveal.id}><CadPassiveCardioid/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.crossover.section) && <Section title={CAD_CONTROLS.crossover.section} description="Optional LR4 combination of adjacent drive channels, including level and phase alignment choices." forceOpen={searching} revealId={CAD_CONTROLS.crossover.reveal.id}><CadCrossover/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.driveChannels.section) && <Section title={CAD_CONTROLS.driveChannels.section} description="Per-channel driver setup: which sources each channel drives, its motion, voltage drive, and Thiele-Small data. Assign two sources to the same channel to drive them together." forceOpen={searching} revealId={CAD_CONTROLS.driveChannels.reveal.id}><CadDriveChannels/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.crossover.section) && <Section title={CAD_CONTROLS.crossover.section} description="Optional combined output of adjacent drive channels: a filter family and slope per pair, with automatic or manual level, delay and polarity per channel." forceOpen={searching} revealId={CAD_CONTROLS.crossover.reveal.id}><CadCrossover/></Section>}
+            {cardioidSurface && cadSectionMatches(CAD_CONTROLS.passiveCardioid.section) && <Section title={CAD_CONTROLS.passiveCardioid.section} description="Sealed rear chamber vented through a damped port, and the extra radiation-impedance campaign it needs." forceOpen={searching} revealId={CAD_CONTROLS.passiveCardioid.reveal.id}><CadPassiveCardioid/></Section>}
             {cadSectionMatches(CAD_CONTROLS.solveOptions.section) && <Section title={CAD_CONTROLS.solveOptions.section} description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={searching} revealId={CAD_CONTROLS.solveOptions.reveal.id}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>}
             {cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <Section title={CAD_CONTROLS.meshDetail.section} description="Imported-CAD surface sizing, optional-source policy, domain choice, and mesh regeneration." forceOpen={searching} revealId={CAD_CONTROLS.meshDetail.reveal.id}><CadMeshDetail/></Section>}
           </>}

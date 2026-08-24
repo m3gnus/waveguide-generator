@@ -1,3 +1,4 @@
+import type { CrossoverChannelWire } from '../results/crossoverSpec';
 export type NullableNumber = number | null;
 export type PolarSample = [number, NullableNumber | [number, number]];
 
@@ -443,10 +444,15 @@ export async function fetchRadiationImpedancePresentation(
   return response.json() as Promise<RadiationImpedancePresentation>;
 }
 
+/** The recombine body. New requests always send the per-channel v2 form; the
+ * legacy triple stays typed because the server still accepts it and because a
+ * stored job's own combine can be replayed as one. */
 export interface RecombineSpec {
   id?: string;
   members: string[];
-  crossovers_hz: number[];
+  reference?: string;
+  channels?: Record<string, CrossoverChannelWire>;
+  crossovers_hz?: number[];
   level_match?: boolean;
   align?: boolean;
 }

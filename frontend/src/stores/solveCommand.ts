@@ -64,8 +64,8 @@ export const parkedSolveCommandStore = new ParkedSolveCommandStore();
  * Retire a parked command against a job that was just submitted for it.
  *
  * Every solve of an imported return passes through here, so pressing Solve by
- * hand after acknowledging the findings consumes the same request Fusion
- * asked for instead of leaving it to replay. The job id travels with the
+ * hand after clearing a blocker consumes the same request Fusion asked for
+ * instead of leaving it to replay. The job id travels with the
  * ledger entry so a later replay can name the run that already exists.
  */
 export async function consumeParkedSolveCommand(

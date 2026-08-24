@@ -18,14 +18,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from server.app import create_app
+from server.cadlink.store import CadLinkStore
 from server.cadlink.api import (
     ArchiveRunDocumentRequest,
     archive_run_document,
     download_project_document,
     list_project_documents,
 )
-from server.cadlink.store import CadLinkStore
-from server.workspace.api import CadWorkspaceState, WorkspaceState
 from server.workspace.archive import archive_cad_document
 
 
@@ -65,22 +65,20 @@ def capture(runs: Path, tmp_path: Path, stem: str, digest: str, *, at: str) -> N
 
 
 def app_with_runs(tmp_path: Path):
+    app = create_app(data_dir=tmp_path / "data")
     runs = tmp_path / "runs"
     runs.mkdir()
-    data = tmp_path / "data"
-    workspace = WorkspaceState(data, default_path=runs)
-    workspace.select(runs)
-    app = SimpleNamespace(
-        state=SimpleNamespace(
-            cadlink_store=CadLinkStore(tmp_path / "cadlink.db"),
-            workspace=workspace,
-            cad_workspace=CadWorkspaceState(data),
-        )
-    )
+    app.state.workspace.select(runs)
     return app, runs
 
 
-def test_a_project_lists_its_captured_models_newest_first(tmp_path: Path) -> None:
+def test_a_project_lists_only_its_newest_captured_model(tmp_path: Path) -> None:
+    """The project-level cad/ folder keeps only the newest model state.
+
+    Capturing a second return state prunes the first, so the listing (which
+    reads that folder directly) reports one item, not one per return.
+    """
+
     app, runs = app_with_runs(tmp_path)
     _design_id, lineage_id = project(app)
     capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
@@ -89,11 +87,8 @@ def test_a_project_lists_its_captured_models_newest_first(tmp_path: Path) -> Non
     listing = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
 
     assert listing["archiveStem"] == "Tritonia"
-    assert [item["returnStateHash"] for item in listing["items"]] == [
-        "sha256:bbb",
-        "sha256:aaa",
-    ]
-    assert listing["items"][0]["filename"] == "sha256_bbb.f3d"
+    assert [item["returnStateHash"] for item in listing["items"]] == ["sha256:bbb"]
+    assert listing["items"][0]["filename"] == "Tritonia_260821-0900_bbb.f3d"
     assert listing["items"][0]["bytes"] == len(b"model-bbb")
 
 
@@ -109,7 +104,7 @@ def test_a_model_whose_file_was_removed_is_still_listed_as_unavailable(
     app, runs = app_with_runs(tmp_path)
     _design_id, lineage_id = project(app)
     capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
-    (runs / "Tritonia" / "cad" / "sha256_aaa.f3d").unlink()
+    (runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.f3d").unlink()
 
     listing = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
 
@@ -136,7 +131,7 @@ def test_downloading_a_model_hands_back_the_archived_file(tmp_path: Path) -> Non
     )
 
     assert Path(response.path).read_bytes() == b"model-aaa"
-    assert response.filename == "Tritonia.f3d"
+    assert response.filename == "Tritonia_260820-0900_aaa.f3d"
 
 
 def test_downloading_a_model_that_was_never_captured_says_why(tmp_path: Path) -> None:
@@ -321,3 +316,200 @@ def test_listing_reports_the_folder_it_read(tmp_path: Path) -> None:
     assert json.loads(json.dumps(listing["folder"])) == str(
         (runs / "Tritonia").resolve()
     )
+
+
+def test_a_document_authored_in_cad_becomes_a_project_of_its_own(
+    tmp_path: Path,
+) -> None:
+    """Geometry authored in CAD used to belong to no project at all.
+
+    Its runs carried no lineage, so they dropped out of the very history they
+    were listed above, and the panel named itself after whatever document
+    Fusion had open instead of after the project it was actually on.
+    """
+
+    app, _runs = app_with_runs(tmp_path)
+    store = app.state.cadlink_store
+    urn = "urn:adsk.wipprod:dm.lineage:Jur0DxWKR12JPVdr3BLhEQ"
+
+    lineage_id = store.claim_cad_document_lineage(urn, "260627 - PartyMEH v10")
+    assert lineage_id
+    # The urn is the identity, so a second return from the same document is the
+    # same project rather than a second one.
+    assert store.claim_cad_document_lineage(urn, "260627 - PartyMEH v11") == lineage_id
+    # The stem is the server-normalised ASCII folder key, not the document name:
+    # two documents whose names differ only in punctuation would otherwise share
+    # one folder. The readable name lives in document_name.
+    assert store.claim_archive_stem(lineage_id, preferred="260627 - PartyMEH v10") == (
+        "260627_-_PartyMEH_v10"
+    )
+
+    # A rename moves the label but never the folder: the captured .f3d already
+    # lives there.
+    assert store.claim_cad_document_lineage(urn, "PartyMEH final") == lineage_id
+    names = store.get_lineage_cad_names(lineage_id) or {}
+    assert names["document_name"] == "PartyMEH final"
+    assert names["archive_stem"] == "260627_-_PartyMEH_v10"
+
+
+def test_a_cad_only_project_is_listed_and_its_folder_resolves(tmp_path: Path) -> None:
+    from server.cadlink.api import list_designs
+
+    app, runs = app_with_runs(tmp_path)
+    store = app.state.cadlink_store
+    lineage_id = store.claim_cad_document_lineage(
+        "urn:adsk.wipprod:dm.lineage:cad-only", "PartyMEH"
+    )
+    store.claim_archive_stem(lineage_id, preferred="PartyMEH")
+
+    listing = asyncio.run(list_designs(SimpleNamespace(app=app)))
+    entry = next(
+        item for item in listing["items"] if item["lineageId"] == lineage_id
+    )
+    assert entry["designId"] is None
+    assert entry["documentName"] == "PartyMEH"
+    assert entry["archiveStem"] == "PartyMEH"
+
+    # It has no design row, so the folder used to 404 rather than resolve.
+    capture(runs, tmp_path, "PartyMEH", "ccc", at="2026-08-23T09:00:00Z")
+    documents = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
+    assert documents["archiveStem"] == "PartyMEH"
+    assert [item["returnStateHash"] for item in documents["items"]] == ["sha256:ccc"]
+
+
+def test_a_design_project_reports_what_cad_calls_it(tmp_path: Path) -> None:
+    from server.cadlink.api import list_designs
+
+    app, _runs = app_with_runs(tmp_path)
+    store = app.state.cadlink_store
+    _design_id, lineage_id = project(app)
+    store.record_cad_document(lineage_id, "urn:adsk.wipprod:dm.lineage:wg", "Tritonia M")
+
+    listing = asyncio.run(list_designs(SimpleNamespace(app=app)))
+    entry = next(item for item in listing["items"] if item["lineageId"] == lineage_id)
+    assert entry["documentName"] == "Tritonia M"
+
+    # First writer wins on the document: a second lineage cannot steal it.
+    _other_design_id, other_lineage = project(app, filename="Other.cfg")
+    store.record_cad_document(
+        other_lineage, "urn:adsk.wipprod:dm.lineage:wg", "Tritonia M"
+    )
+    assert (store.get_lineage_cad_names(other_lineage) or {}).get(
+        "document_native_id"
+    ) in (None, "")
+
+
+def test_ingestion_gives_a_cad_authored_return_a_project(tmp_path: Path) -> None:
+    from server.cadlink.ingest import _resolve_project
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    urn = "urn:adsk.wipprod:dm.lineage:party"
+
+    resolved = _resolve_project(store, None, urn, "260627 - PartyMEH v10")
+
+    assert resolved is not None
+    assert resolved["design_id"] is None
+    assert resolved["document_name"] == "260627 - PartyMEH v10"
+    assert resolved["archive_stem"] == "260627_-_PartyMEH_v10"
+    # The same document is the same project on every later return.
+    again = _resolve_project(store, None, urn, "260627 - PartyMEH v10")
+    assert again is not None
+    assert again["lineage_id"] == resolved["lineage_id"]
+
+
+def test_a_return_with_no_document_identity_claims_nothing(tmp_path: Path) -> None:
+    from server.cadlink.ingest import _resolve_project
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+
+    assert _resolve_project(store, None, None, "Untitled") is None
+    assert store.list_cad_document_projects() == []
+
+
+def test_a_cad_authored_run_joins_the_project_its_document_owns(
+    tmp_path: Path,
+) -> None:
+    from server.jobs.runtime import _cad_authored_project
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    urn = "urn:adsk.wipprod:dm.lineage:party"
+    lineage_id = store.claim_cad_document_lineage(urn, "PartyMEH")
+    store.claim_archive_stem(lineage_id, preferred="PartyMEH")
+
+    record = {
+        "project": {"lineage_id": lineage_id, "archive_stem": "PartyMEH"},
+        "document": {"native_id": urn, "name": "PartyMEH"},
+    }
+    assert asyncio.run(_cad_authored_project(store, record)) == (lineage_id, "PartyMEH")
+
+    # A return ingested before projects existed carries no project block, but
+    # the claim is keyed on the document, so the document still finds it.
+    legacy = {"document": {"native_id": urn, "name": "PartyMEH"}}
+    assert asyncio.run(_cad_authored_project(store, legacy)) == (lineage_id, "PartyMEH")
+
+    # A document nothing has claimed still belongs to no project.
+    unknown = {"document": {"native_id": "urn:adsk:unknown", "name": "Other"}}
+    assert asyncio.run(_cad_authored_project(store, unknown)) == (None, None)
+
+
+def legacy_capture(runs: Path, stem: str, digest: str, *, content: bytes) -> None:
+    """Write a document exactly as the pre-friendly-name archiver did.
+
+    Real legacy files predate this test suite's ``capture`` helper, so this
+    reproduces the old ``sha256_<digest>.f3d`` naming directly rather than
+    going through ``archive_cad_document``, which now only ever writes the
+    new friendly name.
+    """
+
+    directory = runs / stem / "cad"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"sha256_{digest}.f3d").write_bytes(content)
+    (directory / f"sha256_{digest}.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "documentName": "Tritonia",
+                "nativeId": None,
+                "returnStateHash": f"sha256:{digest}",
+                "ingestId": f"wgi_{digest}",
+                "returnId": f"wgr_{digest}",
+                "capturedAt": "2026-08-19T09:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_downloading_a_legacy_named_model_serves_its_own_filename(tmp_path: Path) -> None:
+    """A document captured before the friendly-name change stays readable.
+
+    ``sha256_<digest>.f3d`` is not renamed on disk, and the download route
+    must still hand back that exact name -- not a name recomputed to look
+    like the new convention.
+    """
+
+    app, runs = app_with_runs(tmp_path)
+    _design_id, lineage_id = project(app)
+    legacy_capture(runs, "Tritonia", "aaa", content=b"legacy-model-aaa")
+
+    response = asyncio.run(
+        download_project_document(lineage_id, "sha256:aaa", SimpleNamespace(app=app))
+    )
+
+    assert Path(response.path).read_bytes() == b"legacy-model-aaa"
+    assert response.filename == "sha256_aaa.f3d"
+
+
+def test_a_second_capture_of_a_legacy_document_is_a_no_op(tmp_path: Path) -> None:
+    """Re-archiving a return already filed under the legacy name writes nothing new."""
+
+    app, runs = app_with_runs(tmp_path)
+    project(app)
+    legacy_capture(runs, "Tritonia", "aaa", content=b"legacy-model-aaa")
+
+    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+
+    assert sorted(path.name for path in (runs / "Tritonia" / "cad").iterdir()) == [
+        "sha256_aaa.f3d",
+        "sha256_aaa.json",
+    ]

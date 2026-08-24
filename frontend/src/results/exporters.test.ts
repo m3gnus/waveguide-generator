@@ -455,7 +455,7 @@ describe('result exporters', () => {
     expect(await runExportFormat('png', context)).toEqual(['horn_1_spl.png', 'horn_1_directivity_map.png']);
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/render-directivity', '/api/render-charts']);
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).theme).toBe('paper');
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).angle_guide_step).toBe(10);
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).angle_guide_step).toBe(0);
     expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).theme).toBe('paper');
     expect(saveBlob.mock.calls.map(([, filename]) => filename)).toEqual(['horn_1_spl.png', 'horn_1_directivity_map.png']);
     expect(buildChartRenderPayload({

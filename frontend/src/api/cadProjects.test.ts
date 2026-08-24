@@ -41,7 +41,7 @@ function document(hash: string, capturedAt: string): CadProjectDocument {
 
 describe('listing CAD projects', () => {
   it('reads the server canonical-head contract including its archive stem', async () => {
-    const project = {
+    const serverRow = {
       designId: 'wgd_newest',
       lineageId: 'wgl_project',
       editVersion: 2,
@@ -56,13 +56,22 @@ describe('listing CAD projects', () => {
       updatedAt: '2026-08-22T10:00:00Z',
     };
     const fetcher = async () => new Response(
-      JSON.stringify({ items: [project] }),
+      JSON.stringify({ items: [serverRow] }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     );
 
     const projects = await listCadProjects(fetcher as typeof fetch);
 
-    expect(projects).toEqual([project]);
+    expect(projects).toEqual([{
+      designId: 'wgd_newest',
+      lineageId: 'wgl_project',
+      filename: 'newest.cfg',
+      documentName: null,
+      archiveStem: 'stable-project-folder',
+      exportCount: 0,
+      createdAt: '2026-08-20T10:00:00Z',
+      updatedAt: '2026-08-22T10:00:00Z',
+    }]);
   });
 });
 

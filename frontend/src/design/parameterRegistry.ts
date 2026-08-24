@@ -17,6 +17,13 @@ export type ParameterSection =
 
 export type ParameterTab = 'geometry' | 'simulation';
 
+export interface ParameterSectionContext {
+  mode: WorkspaceMode;
+  design: DesignDocument;
+  /** Whether a parametric waveguide design stands behind what is on screen. */
+  waveguideLinked: boolean;
+}
+
 export interface ParameterSectionDefinition {
   title: ParameterSection;
   tab: ParameterTab;
@@ -24,7 +31,7 @@ export interface ParameterSectionDefinition {
   /** Section policy is deliberately data-aware rather than a mode list. CAD
    * is the first consumer; later sections can use the same gate when their
    * presence depends on actual design content. */
-  visibleWhen?: (ctx: { mode: WorkspaceMode; design: DesignDocument }) => boolean;
+  visibleWhen?: (ctx: ParameterSectionContext) => boolean;
 }
 
 export type ParameterKind = 'number' | 'select' | 'text' | 'toggle' | 'table' | 'indicator';
@@ -82,6 +89,17 @@ const frequencySweep = 'Frequency Sweep' as const;
 const sourceDefinition = 'Source Definition' as const;
 const solveExportMesh = 'Solve & export mesh' as const;
 const parametricWorkspaceOnly: NonNullable<ParameterSectionDefinition['visibleWhen']> = ({ mode }) => mode === 'parametric';
+/**
+ * Sections that define WG's own horn.
+ *
+ * In CAD mode these still belong on screen for a project WG originated -- they
+ * are what you edit before sending the design back to CAD. A project authored
+ * in CAD has no horn of WG's behind it, so every field here would be an input
+ * that cannot move anything.
+ */
+const waveguideDefinitionOnly: NonNullable<ParameterSectionDefinition['visibleWhen']> = (
+  { mode, waveguideLinked },
+) => mode === 'parametric' || waveguideLinked;
 
 const number = (
   id: string,
@@ -304,26 +322,31 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
     title: 'Profile Dimensions',
     tab: 'geometry',
     description: 'Primary dimensions for the selected horn family. OSSE and R-OSSE labels carry their ATH formula symbol in parentheses.',
+    visibleWhen: waveguideDefinitionOnly,
   },
   {
     title: 'Throat Extension',
     tab: 'geometry',
     description: 'Optional conical throat extension and initial straight slot controls for OSSE-family profiles.',
+    visibleWhen: waveguideDefinitionOnly,
   },
   {
     title: 'Morph Target',
     tab: 'geometry',
     description: 'Post-profile shaping that transitions the mouth toward another target shape. Target extents smaller than the mouth are enlarged back to it unless Allow shrinkage is on, so a smaller width or height changes nothing on its own. Leave an extent at 0 to derive it from the mouth.',
+    visibleWhen: waveguideDefinitionOnly,
   },
   {
     title: 'Wall & Enclosure',
     tab: 'geometry',
     description: 'Freestanding wall-shell controls and enclosure clearances that change the exported or simulated solid.',
+    visibleWhen: waveguideDefinitionOnly,
   },
   {
     title: 'Guiding Curve',
     tab: 'geometry',
     description: 'OSSE-only throat profile, rotation, and guide-shape controls used to bend or infer the horn profile.',
+    visibleWhen: waveguideDefinitionOnly,
   },
   {
     title: 'Surface sampling',
@@ -359,10 +382,9 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
 
 export function parameterSectionIsVisible(
   definition: ParameterSectionDefinition,
-  mode: WorkspaceMode,
-  design: DesignDocument,
+  context: ParameterSectionContext,
 ): boolean {
-  return definition.visibleWhen?.({ mode, design }) ?? true;
+  return definition.visibleWhen?.(context) ?? true;
 }
 
 /** The 43 daggered v1 fields, the morph target exponent, and the two legacy four-value baffle tuples. */

@@ -106,3 +106,63 @@ describe('independent CAD viewport artifacts', () => {
       .toEqual([false, true]);
   });
 });
+
+describe('imported source roles', () => {
+  function tagged(names: Array<[number, string]>): ParsedMSH {
+    // One degenerate-free triangle per tag, sharing a vertex pool.
+    const triangles = names.map((_entry, index) => [index * 3, index * 3 + 1, index * 3 + 2]);
+    const vertices = names.flatMap((_entry, index) => [
+      index, 0, 0, index + 1, 0, 0, index, 1, 0,
+    ]);
+    return {
+      vertices: Float32Array.from(vertices),
+      indices: Uint32Array.from(triangles.flat()),
+      physicalNames: new Map(names),
+      physicalTags: Uint32Array.from(names.map(([tag]) => tag)),
+    };
+  }
+
+  it('reads the Fusion paint role out of a WG ingest physical name', () => {
+    const imported = createImportedMeshScene('return.msh', tagged([
+      [1, 'wg-import-v1|rigid'],
+      [2, 'wg-import-v1|tag=2|source_id=source-hf|instance_id=01J|role=HF'],
+      [3, 'wg-import-v1|tag=3|source_id=source-lf|instance_id=01J|role=LF'],
+      [4, 'wg-import-v1|tag=4|source_id=source-port-exit|instance_id=01J|role=PORT_EXIT'],
+    ]));
+    expect(imported.scene.surfaces.map((surface) => surface.role))
+      .toEqual(['imported.rigid', 'imported.HF', 'imported.LF', 'imported.PORT_EXIT']);
+    expect(imported.scene.surfaces.map((surface) => surface.sourceRole))
+      .toEqual([null, 'HF', 'LF', 'PORT_EXIT']);
+    expect(imported.scene.surfaces.map((surface) => surface.materialClass))
+      .toEqual(['horn-smooth', 'hf-smooth', 'lf-smooth', 'port-smooth']);
+  });
+
+  it('keeps two sources of the same role apart on screen', () => {
+    const imported = createImportedMeshScene('two-hf.msh', tagged([
+      [2, 'wg-import-v1|tag=2|source_id=source-hf|instance_id=01J|role=HF'],
+      [3, 'wg-import-v1|tag=3|source_id=source-hf-2|instance_id=01K|role=HF'],
+    ]));
+    expect(imported.scene.surfaces.map((surface) => surface.role))
+      .toEqual(['imported.HF', 'imported.HF-2']);
+    // Same role, so the same colour: the suffix distinguishes them by name.
+    expect(imported.scene.surfaces.map((surface) => surface.materialClass))
+      .toEqual(['hf-smooth', 'hf-smooth']);
+  });
+
+  it('colours the parametric mesher\'s own source groups too', () => {
+    const imported = createImportedMeshScene('solver.msh', tagged([
+      [1, 'SD1G0'],
+      [2, 'SD1D1001'],
+      [10, 'mid_port_exit_left'],
+    ]));
+    expect(imported.scene.surfaces.map((surface) => surface.sourceRole))
+      .toEqual([null, 'HF', 'PORT_EXIT']);
+  });
+
+  it('leaves an unrecognised group neutral rather than guessing a role', () => {
+    const imported = createImportedMeshScene('plain.msh', tagged([[7, 'imported surface']]));
+    expect(imported.scene.surfaces[0].role).toBe('imported.imported-surface');
+    expect(imported.scene.surfaces[0].sourceRole).toBeNull();
+    expect(imported.scene.surfaces[0].materialClass).toBe('horn-smooth');
+  });
+});

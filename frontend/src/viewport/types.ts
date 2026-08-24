@@ -3,13 +3,30 @@ import type { Material } from 'three';
 export type DisplayMode = 'clay' | 'solid-wire' | 'wireframe' | 'xray' | 'zebra' | 'curvature' | 'normals' | 'edges';
 export type CameraPreset = 'front' | 'three-quarter' | 'top';
 export type ViewportTheme = 'dark' | 'light';
-export type SurfaceMaterialClass = 'horn-smooth' | 'horn-flat' | 'source-smooth' | 'source-flat' | 'enclosure-smooth' | 'enclosure-flat';
+/** The paint roles WGLink recognises on an acoustic face, in Fusion's own
+ * vocabulary. They travel to the viewport inside the imported mesh's physical
+ * names, and the parametric source cap is the HF driver by construction. */
+export type SourceRole = 'HF' | 'MF' | 'LF' | 'PORT_EXIT';
+export const SOURCE_ROLES: readonly SourceRole[] = ['HF', 'MF', 'LF', 'PORT_EXIT'];
+
+/** One material family per distinguishable surface kind. The four role
+ * families carry the Fusion appearance colours; `source` is the neutral cap
+ * material they fall back to when role colouring is switched off. */
+export type SurfaceMaterialFamily = 'horn' | 'source' | 'enclosure' | 'hf' | 'mf' | 'lf' | 'port';
+export type SurfaceMaterialClass = `${SurfaceMaterialFamily}-smooth` | `${SurfaceMaterialFamily}-flat`;
+
+export const ROLE_MATERIAL_FAMILY: Record<SourceRole, SurfaceMaterialFamily> = {
+  HF: 'hf', MF: 'mf', LF: 'lf', PORT_EXIT: 'port',
+};
 
 export interface SceneSurface {
   key: string;
   role: string;
   shading: 'smooth' | 'flat';
   materialClass: SurfaceMaterialClass;
+  /** Set only on a radiating surface, so the viewport can name and colour it
+   * the way the CAD document does. */
+  sourceRole?: SourceRole | null;
   enclosure: boolean;
   positions: Float32Array;
   normals: Float32Array;

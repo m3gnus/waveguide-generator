@@ -1,0 +1,245 @@
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { CAD_CONTROLS } from './cadControlRegistry';
+import { CrossoverAdvanced } from './CrossoverAdvanced';
+import { NumberField } from './NumberField';
+import { ToggleRow } from './SolveOptionsSections';
+import { latestCombine } from '../results/latestCombine';
+import { recombineJobResults } from '../api/results';
+import {
+  driverXoMinNote,
+  familyOrders,
+  FILTER_FAMILIES,
+  FILTER_FAMILY_LABELS,
+  isSimple,
+  pairsOf,
+  resolvedChannels,
+  sharedDelayMode,
+  sharedGainMode,
+  slopeLabel,
+  unlinkedPairNote,
+  withDelayMode,
+  withGainMode,
+  withPair,
+  type CrossoverSpec,
+  type FilterFamily,
+  fromResult,
+  sameSpec,
+  toWire,
+} from '../results/crossoverSpec';
+import {
+  combineChain,
+  combineEnabledEffective,
+  combineSpecEffective,
+  useCadReturnStore,
+  type CombinePair,
+  type DriverPreset,
+} from '../stores/cadReturn';
+
+/** The bands a pair joins, in the words a designer uses for them. Unroled ends
+ * fall back to the authored channel ids, which is all the return says. */
+export function combinePairLabel(pair: CombinePair): string {
+  return pair.lowerRole && pair.upperRole
+    ? `${pair.lowerRole} → ${pair.upperRole}`
+    : `${pair.lower} → ${pair.upper}`;
+}
+
+/** What an untouched field would hold and why, stated per pair rather than as
+ * one note for the whole section: the pairs no longer share a rule. */
+export function combinePairHint(pair: CombinePair): string {
+  if (pair.defaultHz === undefined) return 'Default follows the current Frequency Sweep.';
+  return pair.outsideSweep
+    ? `${pair.defaultHz} Hz default is outside the sweep; using ${pair.hz} Hz.`
+    : `${pair.defaultHz} Hz default.`;
+}
+
+/** Auto/Manual as one exclusive control. A mixed chain presses neither, so the
+ * rail never claims one mode for a spec that holds two. */
+function ModeRow({ label, help, revealId, mode, onSelect }: {
+  label: string;
+  help: string;
+  revealId: string;
+  mode: 'auto' | 'manual' | null;
+  onSelect: (mode: 'auto' | 'manual') => void;
+}) {
+  return <div className="crossover-mode-row" data-control-reveal-id={revealId} title={help}>
+    <span>{label}</span>
+    <div className="crossover-segment" role="group" aria-label={`${label} mode`}>
+      <button type="button" aria-pressed={mode === 'auto'} className={mode === 'auto' ? 'on' : ''} onClick={() => onSelect('auto')}>Auto</button>
+      <button type="button" aria-pressed={mode === 'manual'} className={mode === 'manual' ? 'on' : ''} onClick={() => onSelect('manual')}>Manual</button>
+    </div>
+  </div>;
+}
+
+function PairRow({ pair, spec, preset, onChange }: {
+  pair: CombinePair;
+  spec: CrossoverSpec;
+  preset: DriverPreset | null;
+  onChange: (spec: CrossoverSpec) => void;
+}) {
+  const linked = pair.linked;
+  const specPair = pairsOf(spec).find((item) => item.key === pair.key);
+  // The upper channel's own high-pass corner, not the field's displayed
+  // value: an unlinked pair's `pair.hz` can come from the lower channel's
+  // low-pass instead, which would blame the wrong driver's minimum.
+  const upperHpHz = specPair?.upperHp?.fcHz;
+  const xoNote = preset?.xo_min_hz != null && upperHpHz !== undefined && upperHpHz < preset.xo_min_hz
+    ? driverXoMinNote(preset.label, preset.xo_min_hz, upperHpHz)
+    : null;
+  return <Fragment>
+    <NumberField
+      label={combinePairLabel(pair)}
+      revealId={CAD_CONTROLS.crossoverFrequency.reveal.id}
+      unit="Hz"
+      value={pair.hz}
+      min={1}
+      step={50}
+      precision={0}
+      disabled={!linked}
+      disabledReason={linked ? undefined : 'This pair is not symmetric; edit each channel in Advanced.'}
+      description={`${CAD_CONTROLS.crossoverFrequency.label} · ${pair.lower} → ${pair.upper}`}
+      onCommit={(value) => onChange(withPair(spec, pair.key, { hz: value }))}
+    />
+    <div className={`crossover-shape-row${linked ? '' : ' field-disabled'}`} data-control-reveal-id={CAD_CONTROLS.crossoverFamily.reveal.id}>
+      <select
+        aria-label={`${combinePairLabel(pair)} filter family`}
+        value={pair.family}
+        disabled={!linked}
+        onChange={(event) => onChange(withPair(spec, pair.key, { family: event.target.value as FilterFamily }))}
+      >{FILTER_FAMILIES.map((family) => <option key={family} value={family}>{FILTER_FAMILY_LABELS[family]}</option>)}</select>
+      <select
+        aria-label={`${combinePairLabel(pair)} slope`}
+        value={pair.order}
+        disabled={!linked}
+        onChange={(event) => onChange(withPair(spec, pair.key, { order: Number(event.target.value) }))}
+      >{familyOrders(pair.family).map((order) => <option key={order} value={order}>{slopeLabel(order)}</option>)}</select>
+    </div>
+    {linked
+      ? <p className="section-note">{combinePairHint(pair)}</p>
+      : <p className="section-note warning" role="status">{specPair ? unlinkedPairNote(specPair) : 'This pair is not symmetric; edit it in Advanced.'}</p>}
+    {xoNote && <p className="section-note warning" role="status">{xoNote}</p>}
+  </Fragment>;
+}
+
+/** How long an edit may settle before it is applied to the shown run. */
+const LIVE_RECOMBINE_DEBOUNCE_MS = 400;
+
+/**
+ * Apply the rail's crossover to the shown run as it is edited.
+ *
+ * Recombining runs from stored bases in milliseconds, so the combined result
+ * follows the settings live: whenever the effective spec differs from the one
+ * the shown combined channel was computed with, the recombine is posted after
+ * a short settle and the dock swaps the repainted result in through the
+ * bridge's own callback. The dock then republishes, the specs compare equal,
+ * and the loop rests. A run for different channels, a provisional live view,
+ * or an incomplete run is never touched.
+ */
+function useLiveRecombine(
+  spec: CrossoverSpec | null,
+  enabled: boolean,
+  shown: ReturnType<typeof latestCombine.getSnapshot>,
+): { live: boolean; busy: boolean; error: string | null } {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  useEffect(() => {
+    generation.current += 1;
+    const request = generation.current;
+    if (!enabled || !spec || !shown?.canApply) { setBusy(false); setError(null); return; }
+    const applied = fromResult(shown.combine);
+    if (!applied) return;
+    const members = shown.combine.members ?? [];
+    if (spec.members.length !== members.length
+      || spec.members.some((member, index) => member !== members[index])) return;
+    if (sameSpec(spec, applied)) { setBusy(false); setError(null); return; }
+    const timer = setTimeout(() => {
+      void (async () => {
+        setBusy(true); setError(null);
+        try {
+          const updated = await recombineJobResults(shown.jobId, { id: shown.channelId, ...toWire(spec) });
+          if (generation.current === request) shown.onApplied(shown.jobId, updated);
+        } catch (reason) {
+          if (generation.current === request) {
+            setError(reason instanceof Error ? reason.message : String(reason));
+          }
+        } finally {
+          if (generation.current === request) setBusy(false);
+        }
+      })();
+    }, LIVE_RECOMBINE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [spec, enabled, shown]);
+  return { live: Boolean(shown?.canApply), busy, error };
+}
+
+export function CadCrossover() {
+  const state = useCadReturnStore();
+  const advancedAnchor = useRef<HTMLButtonElement | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const shown = useSyncExternalStore(latestCombine.subscribe, latestCombine.getSnapshot, latestCombine.getSnapshot);
+  const enabled = combineEnabledEffective(state);
+  const spec = combineSpecEffective(state);
+  const liveState = useLiveRecombine(spec, enabled && state.driveChannels.length >= 2, shown);
+  if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
+  const apply = (next: CrossoverSpec) => state.setCombineSpec(next);
+  const resolved = resolvedChannels(shown?.combine);
+  const { live, busy, error: liveError } = liveState;
+  return <>
+    <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append a filtered, time-aligned crossover sum of the drive channels as one more result channel. On by default for a return with two or more drive channels; the chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
+    {enabled && spec && <>
+      {combineChain(state).map((pair) => <PairRow
+        key={pair.key}
+        pair={pair}
+        spec={spec}
+        preset={state.channelDrivers[pair.upper]?.preset ?? null}
+        onChange={apply}
+      />)}
+      <ModeRow
+        label={CAD_CONTROLS.levelMatch.label}
+        revealId={CAD_CONTROLS.levelMatch.reveal.id}
+        help="Equalise member band levels before summing. Manual keeps the gain each channel is given in Advanced; auto defaults off when every member carries a driver model, because real voltage-driven levels should not be re-equalised."
+        mode={sharedGainMode(spec)}
+        onSelect={(mode) => apply(withGainMode(spec, mode, Object.fromEntries(
+          Object.entries(resolved).map(([id, channel]) => [id, channel.gainAutoDb]),
+        )))}
+      />
+      <ModeRow
+        label={CAD_CONTROLS.timeAlign.label}
+        revealId={CAD_CONTROLS.timeAlign.reveal.id}
+        help="Delay each member so the crossover sums the way its filter pair says it should, fitted from the phase of the solved fields across the pair's overlap. Manual keeps the delay each channel is given in Advanced."
+        mode={sharedDelayMode(spec)}
+        onSelect={(mode) => apply(withDelayMode(spec, mode, Object.fromEntries(
+          Object.entries(resolved).map(([id, channel]) => [id, channel.delayAutoMs]),
+        )))}
+      />
+      <div className="crossover-advanced-row" data-control-reveal-id={CAD_CONTROLS.crossoverAdvanced.reveal.id}>
+        <button
+          ref={advancedAnchor}
+          type="button"
+          className={advancedOpen ? 'on' : ''}
+          aria-expanded={advancedOpen}
+          aria-haspopup="dialog"
+          title="Per-channel high-pass, low-pass, gain, delay and polarity"
+          onClick={() => setAdvancedOpen((open) => !open)}
+        >Advanced ▸</button>
+        {!isSimple(spec) && <span className="crossover-advanced-flag">edited per channel</span>}
+      </div>
+      {advancedOpen && <CrossoverAdvanced
+        anchorRef={advancedAnchor}
+        onClose={() => setAdvancedOpen(false)}
+        spec={spec}
+        resolved={resolved}
+        memberLabel={(member) => {
+          const pair = combineChain(state).find((item) => item.lower === member || item.upper === member);
+          const role = pair?.lower === member ? pair.lowerRole : pair?.upperRole;
+          return role ? `${role} · ${member}` : member;
+        }}
+        presetFor={(member) => state.channelDrivers[member]?.preset ?? null}
+        onChange={apply}
+      />}
+      {live && <p className={liveError ? 'section-note warning' : 'section-note'} role="status" aria-live="polite">
+        {liveError ?? (busy ? 'Updating the shown run…' : 'Changes apply to the shown combined result immediately.')}
+      </p>}
+    </>}
+  </>;
+}

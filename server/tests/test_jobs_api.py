@@ -208,7 +208,7 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
     ]["schema"]
     assert plan_schema == {"$ref": "#/components/schemas/SolvePlanResponse"}
     job_properties = schema["components"]["schemas"]["JobItem"]["properties"]
-    assert {"run_number", "parent_job_id", "solve_options"} <= set(job_properties)
+    assert {"run_number", "parent_job_id", "solve_options", "cad_setup"} <= set(job_properties)
     result_schema = paths["/api/results/{job_id}"]["get"]["responses"]["200"][
         "content"
     ]["application/json"]["schema"]

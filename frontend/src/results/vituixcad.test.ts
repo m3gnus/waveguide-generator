@@ -196,6 +196,100 @@ describe('VituixCAD exports', () => {
     ]);
     expect(parameters).toContainEqual(['f', '1200']);
     expect(parameters).toContainEqual(['dt', '250']);
+    // A legacy payload only ever meant LR4, and keeps saying so.
+    expect([...document.querySelectorAll('CROSSOVER > PART > Shape')]
+      .map((node) => node.textContent).filter(Boolean))
+      .toEqual(['Linkwitz-Riley', 'Linkwitz-Riley']);
+    expect([...document.querySelectorAll('CROSSOVER > PART > Order')].map((node) => node.textContent))
+      .toEqual(['4', '4']);
+  });
+
+  it('maps the per-channel families, orders and polarity into Shape, Order and Inverted', async () => {
+    const combined: ResultPayload = {
+      frequencies: [],
+      metadata: {
+        combine: {
+          type: 'filtered_time_aligned_sum',
+          members: ['drive-mf', 'drive-hf'],
+          reference: 'drive-hf',
+          crossovers_hz: [null],
+          channels: {
+            'drive-mf': {
+              hp: null, lp: { family: 'butterworth', order: 3, fc_hz: 900 },
+              gain_db: -2, gain_mode: 'auto', delay_ms: 0.25, delay_mode: 'auto',
+              inverted: true, invert_mode: 'auto',
+            },
+            'drive-hf': {
+              hp: { family: 'bessel', order: 2, fc_hz: 1_100 }, lp: null,
+              gain_db: 1.5, gain_mode: 'manual', delay_ms: 0, delay_mode: 'auto',
+              inverted: false, invert_mode: 'auto',
+            },
+          },
+        },
+      },
+    };
+    const wrapper: ResultPayload = {
+      frequencies: [],
+      channel_order: ['drive-mf', 'drive-hf', 'combined'],
+      channels: { 'drive-mf': electricalResult(), 'drive-hf': electricalResult(), combined },
+    };
+    const saveText = vi.fn();
+
+    await runExportFormat('vxp', {
+      result: wrapper, jobStem: 'horn_7', preferences: preferencesStore.getSnapshot(), saveText,
+    });
+
+    const project = String(saveText.mock.calls.find(([, filename]) => filename === 'horn_7.vxp')?.[0]);
+    const document = new DOMParser().parseFromString(project, 'application/xml');
+    // Written highest band first, so the HF Bessel high-pass leads.
+    expect([...document.querySelectorAll('CROSSOVER > PART')]
+      .filter((part) => part.querySelector('Type')?.textContent?.startsWith('Active'))
+      .map((part) => [
+        part.querySelector('Type')?.textContent,
+        part.querySelector('Shape')?.textContent,
+        part.querySelector('Order')?.textContent,
+        part.querySelector('PARAM > Value')?.textContent,
+      ])).toEqual([
+      ['Active High pass', 'Bessel', '2', '1100'],
+      ['Active Low pass', 'Butterworth', '3', '900'],
+    ]);
+    expect([...document.querySelectorAll('CROSSOVER > PART')]
+      .filter((part) => part.querySelector('Type')?.textContent === 'Buffer')
+      .map((part) => part.querySelector('Inverted')?.textContent)).toEqual(['False', 'True']);
+  });
+
+  it('exports a linear-phase section as Linkwitz-Riley and says so in the description', async () => {
+    const combined: ResultPayload = {
+      frequencies: [],
+      metadata: {
+        combine: {
+          type: 'filtered_time_aligned_sum',
+          members: ['drive-mf', 'drive-hf'],
+          crossovers_hz: [1_000],
+          channels: {
+            'drive-mf': { hp: null, lp: { family: 'linear_phase', order: 8, fc_hz: 1_000 } },
+            'drive-hf': { hp: { family: 'linear_phase', order: 8, fc_hz: 1_000 }, lp: null },
+          },
+        },
+      },
+    };
+    const wrapper: ResultPayload = {
+      frequencies: [],
+      channel_order: ['drive-mf', 'drive-hf', 'combined'],
+      channels: { 'drive-mf': electricalResult(), 'drive-hf': electricalResult(), combined },
+    };
+    const saveText = vi.fn();
+
+    await runExportFormat('vxp', {
+      result: wrapper, jobStem: 'horn_7', preferences: preferencesStore.getSnapshot(), saveText,
+    });
+
+    const project = String(saveText.mock.calls.find(([, filename]) => filename === 'horn_7.vxp')?.[0]);
+    const document = new DOMParser().parseFromString(project, 'application/xml');
+    expect([...document.querySelectorAll('CROSSOVER > PART > Shape')].filter((node) => node.textContent)
+      .map((node) => node.textContent)).toEqual(['Linkwitz-Riley', 'Linkwitz-Riley']);
+    expect(document.querySelector('SPEAKER > Description')?.textContent)
+      .toContain('linear-phase sections exported as Linkwitz-Riley');
   });
 
   it('allocates distinct portable dependency names for channel ids that sanitize alike', async () => {

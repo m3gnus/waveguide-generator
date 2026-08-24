@@ -30,13 +30,32 @@ describe('client preferences', () => {
       runNameDateFormat: 'yymmdd',
       runNameNumberPosition: 'suffix',
       runNameNumberFormat: 'natural',
-      directivityGuideInterval: 10,
+      directivityGuideInterval: 0,
     });
   });
+  it('keeps the reverse-null overlay off until it is asked for', () => {
+    expect(loadPreferences(null).showReverseNull).toBe(false);
+    // Unlike the members overlay, absence means off: it is a diagnostic, so a
+    // profile that never mentioned it must not acquire a fourth trace.
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {} })).showReverseNull).toBe(false);
+    preferencesStore.update({ showReverseNull: true });
+    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).showReverseNull).toBe(true);
+  });
+  it('reads group delay in milliseconds until cycles is asked for', () => {
+    expect(loadPreferences(null).groupDelayUnit).toBe('ms');
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {} })).groupDelayUnit).toBe('ms');
+    preferencesStore.update({ groupDelayUnit: 'cycles' });
+    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).groupDelayUnit).toBe('cycles');
+    // A hand-edited profile cannot invent a third unit for the axis to name.
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { groupDelayUnit: 'seconds' } })).groupDelayUnit).toBe('ms');
+  });
+
   it('persists and bounds the directivity angular guide interval', () => {
     preferencesStore.update({ directivityGuideInterval: 15 });
     expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).directivityGuideInterval).toBe(15);
-    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 0 } })).directivityGuideInterval).toBe(1);
+    // 0 is a real setting now -- the graticule off -- not a value to clamp up.
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 0 } })).directivityGuideInterval).toBe(0);
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: -5 } })).directivityGuideInterval).toBe(0);
     expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 999 } })).directivityGuideInterval).toBe(180);
   });
   /**
@@ -67,7 +86,7 @@ describe('client preferences', () => {
       minRating: 5,
       jobSort: 'completed_desc',
       cadApplication: 'fusion360',
-      directivityGuideInterval: 10,
+      directivityGuideInterval: 0,
     });
     // A non-array chart list is unusable, so the shipped six panels stand.
     expect(loaded.chartTypes).toHaveLength(6);
@@ -227,5 +246,22 @@ describe('client preferences', () => {
     const untitled = { ...job('1a2b3c4d', 0, '2026-01-01T00:00:00Z'), run_number: 123, label: null };
     expect(runDisplayName(untitled)).toBe('#123 · osse-1a2b3c');
     expect(runDisplayName(untitled, 'short')).toBe('osse-1a2b3c');
+  });
+});
+
+describe('angular graticule retirement', () => {
+  it('turns off a profile that still holds the old shipped interval', () => {
+    const stored = JSON.stringify({ version: 13, preferences: { directivityGuideInterval: 10 } });
+    expect(readPreferences(stored).value.directivityGuideInterval).toBe(0);
+    expect(readPreferences(stored).migrated).toBe(true);
+  });
+
+  it('leaves a deliberately chosen interval alone', () => {
+    const stored = JSON.stringify({ version: 13, preferences: { directivityGuideInterval: 15 } });
+    expect(readPreferences(stored).value.directivityGuideInterval).toBe(15);
+    // Already off stays off, and a profile written at the current version is
+    // never migrated at all.
+    expect(readPreferences(JSON.stringify({ version: 13, preferences: { directivityGuideInterval: 0 } })).value.directivityGuideInterval).toBe(0);
+    expect(readPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 10 } })).value.directivityGuideInterval).toBe(10);
   });
 });

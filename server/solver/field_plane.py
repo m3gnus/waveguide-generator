@@ -24,7 +24,11 @@ from server.jobs.models import FieldPlaneRequest, FieldPlaneSpec
 from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
 
-from .combine import raw_channel_weights
+from .combine import (
+    expand_legacy_channels,
+    normalize_channel,
+    raw_channel_weights,
+)
 from .field_traces_store import (
     ArtifactCorrupt,
     ArtifactMissing,
@@ -435,12 +439,15 @@ class FieldPlaneService:
                 NO_SYNTHESIS_REVISION,
             )
         combine = self._current_combine(job_id)
-        members, crossovers_hz, gains_db, delays_s = self._combine_parameters(combine)
+        members, channels, gains_db, delays_s, inverted = self._combine_parameters(
+            combine
+        )
         synthesis_revision = self._synthesis_revision(
             members,
-            crossovers_hz,
+            channels,
             gains_db,
             delays_s,
+            inverted,
         )
         unknown = [member for member in members if member not in raw_channels]
         if unknown:
@@ -469,9 +476,11 @@ class FieldPlaneService:
         weights = raw_channel_weights(
             np.asarray([frequency_hz], dtype=np.float64),
             members,
-            crossovers_hz,
+            None,
             gains_db,
             delays_s,
+            channels=channels,
+            inverted=inverted,
         )
         pressure = np.zeros_like(np.asarray(first[4]), dtype=np.complex128)
         neumann = np.zeros_like(np.asarray(first[5]), dtype=np.complex128)
@@ -560,55 +569,114 @@ class FieldPlaneService:
     @staticmethod
     def _combine_parameters(
         combine: Mapping[str, Any],
-    ) -> tuple[list[str], list[float], dict[str, float], dict[str, float]]:
+    ) -> tuple[
+        list[str],
+        dict[str, dict[str, Any]],
+        dict[str, float],
+        dict[str, float],
+        dict[str, bool],
+    ]:
+        """Rebuild the per-member synthesis weights from stored combine metadata.
+
+        The stored payload states its resolved sections, gain, delay and
+        polarity per channel. Results written before that (a plain LR4 chain)
+        only carry ``crossovers_hz``, so they are expanded the same way the
+        combine module expands a legacy spec.
+        """
+
         try:
             members_raw = combine["members"]
-            crossovers_raw = combine["crossovers_hz"]
             level_match = combine["level_match"]
             gains_raw = level_match["gains_db"]
             delays_raw = combine["delays_ms"]
             if (
                 not isinstance(members_raw, list)
-                or not isinstance(crossovers_raw, list)
                 or not isinstance(gains_raw, Mapping)
                 or not isinstance(delays_raw, Mapping)
             ):
                 raise TypeError
             members = [str(value) for value in members_raw]
-            crossovers = [float(value) for value in crossovers_raw]
             gains = {name: float(gains_raw[name]) for name in members}
             delays = {name: float(delays_raw[name]) / 1000.0 for name in members}
+            stored = combine.get("channels")
+            inverted: dict[str, bool] = {name: False for name in members}
+            if isinstance(stored, Mapping):
+                channels = {}
+                for name in members:
+                    entry = stored[name]
+                    if not isinstance(entry, Mapping):
+                        raise TypeError
+                    channels[name] = {
+                        "hp": entry.get("hp"),
+                        "lp": entry.get("lp"),
+                    }
+                    inverted[name] = bool(entry.get("inverted"))
+                crossovers: list[float] = []
+            else:
+                crossovers_raw = combine["crossovers_hz"]
+                if not isinstance(crossovers_raw, list):
+                    raise TypeError
+                crossovers = [float(value) for value in crossovers_raw]
+                channels = expand_legacy_channels(members, crossovers)
         except (KeyError, TypeError, ValueError) as exc:
             raise ArtifactCorrupt("stored system synthesis metadata is invalid") from exc
         numeric = [*crossovers, *gains.values(), *delays.values()]
         if (
             len(members) < 2
             or len(set(members)) != len(members)
-            or len(crossovers) != len(members) - 1
             or any(not name for name in members)
             or any(not math.isfinite(value) for value in numeric)
             or any(value <= 0.0 for value in crossovers)
-            or any(
-                later <= earlier
-                for earlier, later in zip(crossovers, crossovers[1:])
+            or (
+                crossovers
+                and (
+                    len(crossovers) != len(members) - 1
+                    or any(
+                        later <= earlier
+                        for earlier, later in zip(crossovers, crossovers[1:])
+                    )
+                )
             )
         ):
             raise ArtifactCorrupt("stored system synthesis metadata is invalid")
-        return members, crossovers, gains, delays
+        try:
+            for name in members:
+                normalize_channel(channels[name])
+        except ValueError as exc:
+            raise ArtifactCorrupt("stored system synthesis metadata is invalid") from exc
+        return members, channels, gains, delays, inverted
 
     @staticmethod
     def _synthesis_revision(
         members: list[str],
-        crossovers_hz: list[float],
+        channels: Mapping[str, Mapping[str, Any]],
         gains_db: Mapping[str, float],
         delays_s: Mapping[str, float],
+        inverted: Mapping[str, bool],
     ) -> str:
         def canonical_float(value: float) -> float:
             return 0.0 if value == 0.0 else value
 
+        def canonical_section(section: Any) -> Any:
+            if not isinstance(section, Mapping):
+                return None
+            return [
+                str(section.get("family")),
+                int(section.get("order", 0)),
+                canonical_float(float(section.get("fc_hz", 0.0))),
+            ]
+
         canonical = {
             "members": members,
-            "crossovers_hz": [canonical_float(value) for value in crossovers_hz],
+            "channels": [
+                [
+                    name,
+                    canonical_section(channels[name].get("hp")),
+                    canonical_section(channels[name].get("lp")),
+                    bool(inverted.get(name)),
+                ]
+                for name in members
+            ],
             "gains_db": [
                 [name, canonical_float(gains_db[name])] for name in members
             ],

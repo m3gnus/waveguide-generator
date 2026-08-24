@@ -1,5 +1,17 @@
 import { create } from 'zustand';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import type { DriverKind } from '../api/drivers';
+import {
+  cloneSpec,
+  expandLegacy,
+  pairsOf,
+  parseSpec,
+  toWire,
+  withPair,
+  type CrossoverSpec,
+  type CrossoverWire,
+  type FilterFamily,
+} from '../results/crossoverSpec';
 import { useDocumentStore, type DesignIdentity } from './document';
 import { namespaceStorage } from './durableSettings';
 
@@ -9,19 +21,62 @@ export interface CadDriveChannel {
   motion: 'normal' | 'axial';
 }
 
+/**
+ * The T/S fields the rail can hold, in wire order.
+ *
+ * The alternatives the server already accepts (`mms_g`, `vas_l`, `fs_hz`,
+ * `qms`) are here because that is what a driver database publishes: a
+ * datasheet gives Mms, Fs and Vas far more often than it gives Mmd and Cms.
+ * Each new key is inserted beside the one it substitutes for, so the emitted
+ * key order of a hand-entered Mmd/Cms driver is byte-for-byte what it was.
+ */
 export const DRIVER_FIELD_KEYS = [
-  'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mmd_g', 'cms_m_per_n',
-  'rms_kg_per_s', 'xmax_mm', 'count', 'rear_volume_l',
+  'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mmd_g', 'mms_g', 'cms_m_per_n',
+  'vas_l', 'fs_hz', 'qms', 'rms_kg_per_s', 'xmax_mm', 'count', 'rear_volume_l',
 ] as const;
 export type DriverFieldKey = typeof DRIVER_FIELD_KEYS[number];
-export const DRIVER_REQUIRED_KEYS: readonly DriverFieldKey[] = [
-  'sd_cm2', 'bl_t_m', 're_ohm', 'mmd_g', 'cms_m_per_n',
-];
+/** Always required, whatever else is supplied (`DriverSpec`, non-null fields). */
+export const DRIVER_REQUIRED_KEYS: readonly DriverFieldKey[] = ['sd_cm2', 'bl_t_m', 're_ohm'];
+/** Exactly one of these reaches the wire — `DriverSpec.validate_completeness`
+ * refuses a spec carrying both, and refuses one carrying neither. */
+export const DRIVER_MASS_KEYS: readonly DriverFieldKey[] = ['mms_g', 'mmd_g'];
+/** At least one of these is required; the solver derives the rest. */
+export const DRIVER_COMPLIANCE_KEYS: readonly DriverFieldKey[] = ['cms_m_per_n', 'vas_l', 'fs_hz'];
+/** WG's own inputs. They describe the installation, not the driver, so they
+ * are never part of a preset's base values and never count as an edit of one. */
+export const DRIVER_INSTALLATION_KEYS: readonly DriverFieldKey[] = ['count', 'rear_volume_l'];
+
+export type { DriverKind };
+export type DriverPresetSource = 'database' | 'mine' | 'manual';
+
+/**
+ * The driver a channel was filled in from.
+ *
+ * `base` is the picked driver's own numbers; `ChannelDriverForm.fields` holds
+ * only what the user changed on top of them. Keeping the two apart is what
+ * lets *Reset to database values* exist at all, and what lets an impedance
+ * variant reload its base without discarding the user's edits.
+ */
+export interface DriverPreset {
+  id: string;
+  label: string;
+  source: DriverPresetSource;
+  kind: DriverKind;
+  z_ohm: number | null;
+  /** The manufacturer's recommended minimum crossover frequency, or null when
+   * the driver's source did not publish one. */
+  xo_min_hz: number | null;
+  base: Partial<Record<DriverFieldKey, number>>;
+}
 
 export interface ChannelDriverForm {
   enabled: boolean;
+  /** Overrides on top of `preset.base`; the whole driver when there is none. */
   fields: Partial<Record<DriverFieldKey, number>>;
+  preset: DriverPreset | null;
 }
+
+const EMPTY_DRIVER_FORM: ChannelDriverForm = { enabled: false, fields: {}, preset: null };
 
 /**
  * The channel id the coupled passive-cardioid solve writes its derived output
@@ -86,7 +141,6 @@ export const PASSIVE_CARDIOID_DEFAULTS: PassiveCardioidForm = {
 interface CadReturnState {
   selectedBundle: CadReturnBundle | null;
   ingestRecord: CadReturnIngestRecord | null;
-  acknowledgedFindingIds: string[];
   sourceSizesMm: Record<string, number>;
   rigidSizeMm: number;
   transitionMm: number;
@@ -99,9 +153,17 @@ interface CadReturnState {
    * have made none. Null is not "off": `combineEnabledEffective` reads it as
    * on for a multi-driver return, which is what the rail and the wire use. */
   combineEnabled: boolean | null;
-  combineCrossoversHz: Record<string, number>;
-  combineLevelMatch: boolean | null;
-  combineAlign: boolean | null;
+  /**
+   * The user's crossover, or null while they have made no change to it.
+   *
+   * Null is not "no crossover": `combineSpecEffective` reads it as the base
+   * chain — role default frequencies, LR4, auto gain and delay — which is what
+   * the rail draws and what the wire submits. One override replaced the sparse
+   * frequency map plus two booleans it grew out of, because a per-channel spec
+   * cannot be expressed as "one number per pair" once a pair is unlinked or a
+   * single channel takes over its own gain.
+   */
+  combineSpec: CrossoverSpec | null;
   channelDrivers: Record<string, ChannelDriverForm>;
   passiveCardioid: PassiveCardioidForm;
   driveVoltageV: number;
@@ -116,16 +178,13 @@ interface CadReturnState {
   selectBundle: (bundle: CadReturnBundle | null) => void;
   /** Select a newly arrived return. When it correlates with the current
    * selection — same source inventory by id, role, and required flag — the
-   * user's mesh sizes, channel mapping, drivers, combine, and sweep survive;
-   * finding acknowledgements are reconciled after the new ingest identifies
-   * which evidence is still present. `initial` means there was no current or
-   * saved setup, while `reset` means an existing setup fell back to defaults. */
+   * user's mesh sizes, channel mapping, drivers, combine, and sweep survive.
+   * `initial` means there was no current or saved setup, while `reset` means
+   * an existing setup fell back to defaults. */
   selectArrivedBundle: (bundle: CadReturnBundle) => 'initial' | 'carried' | 'reset';
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
   markIngestStale: (reason: string) => void;
   applyIngest: (record: CadReturnIngestRecord, generation: number) => boolean;
-  acknowledge: (findingId: string, value: boolean) => void;
-  acknowledgeAllBlocking: () => void;
   setSourceSize: (sourceId: string, value: number) => void;
   setRigidSize: (value: number) => void;
   setTransition: (value: number) => void;
@@ -136,25 +195,37 @@ interface CadReturnState {
   flagAreaDrift: (sourceId: string) => void;
   setExteriorOnly: (enabled: boolean) => void;
   setCombineEnabled: (enabled: boolean) => void;
+  /** Replace the whole override, or clear it back to the base chain. */
+  setCombineSpec: (spec: CrossoverSpec | null) => void;
+  /** Edit the current effective spec in place. The editor is handed the spec
+   * the rail is showing, so a caller never has to reconstruct the base. */
+  updateCombineSpec: (edit: (spec: CrossoverSpec) => CrossoverSpec) => void;
   setCombineCrossover: (pairKey: string, hz: number) => void;
-  /** Adopt the crossovers a recombined result was computed with, so the dock
-   * and the rail hold one setting and the next solve starts where the last
-   * recombine left off. The run must carry the active return's immutable ingest
-   * id (the same identity `runMatchesContext` uses); matching channel ids alone
-   * are not lineage. Pairs naming channels this return has not got are ignored. */
-  setCombineCrossoversFromResult: (resultIngestId: string | null, members: string[], crossoversHz: number[]) => void;
-  setCombineLevelMatch: (value: boolean | null) => void;
-  setCombineAlign: (value: boolean | null) => void;
+  /** Adopt the crossover a recombined result was computed with, so the dock and
+   * the rail hold one setting and the next solve starts where the last
+   * recombine left off. A spec naming channels this return has not got is
+   * ignored: a stale run must not seed the rail with foreign ids. */
+  setCombineSpecFromResult: (spec: CrossoverSpec) => void;
   setChannelDriverEnabled: (channelId: string, enabled: boolean) => void;
   setChannelDriverField: (channelId: string, field: DriverFieldKey, value: number | null) => void;
+  /** Pick a driver, or clear the picked one back to hand entry.
+   *
+   * A new driver replaces the overrides as well: they were edits of the
+   * *previous* driver's numbers and applying them to this one would silently
+   * publish a hybrid. `keepOverrides` is for reloading the same driver's other
+   * impedance variant, where the edits are still the user's own. WG's
+   * installation inputs survive either way — they describe the box, not the
+   * driver. */
+  setChannelDriverPreset: (channelId: string, preset: DriverPreset | null, keepOverrides?: boolean) => void;
+  /** *Reset to database values*: drop the edits, keep the driver. */
+  clearChannelDriverOverrides: (channelId: string) => void;
   setDriveVoltage: (value: number) => void;
   setPassiveCardioid: (patch: Partial<PassiveCardioidForm>) => void;
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
 
 const solveProfileStorage = namespaceStorage('cadSolveProfiles');
-const acknowledgedFindingStorage = namespaceStorage('cadAcknowledgedFindings');
-const SOLVE_PROFILE_STORAGE_VERSION = 2;
+const SOLVE_PROFILE_STORAGE_VERSION = 3;
 /**
  * Version 1 stored the combined output as a plain boolean whose `false` was
  * the old default rather than a decision. The combined output now defaults on
@@ -163,15 +234,19 @@ const SOLVE_PROFILE_STORAGE_VERSION = 2;
  * keep the combined output off while the rail says it is on by default.
  */
 const LEGACY_SOLVE_PROFILE_VERSION = 1;
-const ACKNOWLEDGED_FINDING_STORAGE_VERSION = 1;
+/**
+ * Versions 1 and 2 stored the crossover as a sparse `combineCrossoversHz` map
+ * plus `combineLevelMatch` and `combineAlign`. Version 3 stores one spec
+ * override instead; `combineSpecFromLegacy` is the one place that converts.
+ */
+const LEGACY_COMBINE_FIELD_VERSIONS = new Set([1, 2]);
+const SUPPORTED_SOLVE_PROFILE_VERSIONS = new Set([1, 2, 3]);
 const MAX_SOLVE_PROFILES = 20;
-const MAX_ACKNOWLEDGED_FINDING_SETS = 20;
-const MAX_FINDING_IDS_PER_SET = 1_000;
 
 type PersistedSolveSettings = Pick<CadReturnState,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds' | 'driveChannels'
-  | 'exteriorOnly' | 'combineEnabled' | 'combineCrossoversHz' | 'combineLevelMatch'
-  | 'combineAlign' | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV'
+  | 'exteriorOnly' | 'combineEnabled' | 'combineSpec'
+  | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV'
   | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
 
 interface SourceInventoryEntry {
@@ -186,14 +261,6 @@ interface StoredSolveProfile {
   lineageId: string;
   inventory: SourceInventoryEntry[];
   settings: PersistedSolveSettings;
-}
-
-interface StoredAcknowledgedFindingSet {
-  key: string;
-  identity: Pick<DesignIdentity, 'designId' | 'lineageId'> | null;
-  documentName: string | null;
-  inventory: SourceInventoryEntry[];
-  findingIds: string[];
 }
 
 let selectedSolveProfileKey: string | null = null;
@@ -226,8 +293,14 @@ function bundleIdentity(bundle: CadReturnBundle): string {
   });
 }
 
+/** Set when a poll cannot find the ingested bundle. Unlike every other stale
+ * reason it can be wrong transiently -- a listing read during a server
+ * restart is empty -- so it is the one reason that clears itself when the
+ * identical bundle reappears. */
+export const LISTING_GONE_REASON = 'The ingested return no longer appears in the workspace listing.';
+
 function bundleChangeReason(previous: CadReturnBundle, current: CadReturnBundle | null): string | null {
-  if (!current) return 'The ingested return no longer appears in the workspace listing.';
+  if (!current) return LISTING_GONE_REASON;
   if (bundleIdentity(previous) === bundleIdentity(current)) return null;
   if (previous.readable !== current.readable) return current.readable
     ? 'The return became readable after it was ingested.'
@@ -310,18 +383,49 @@ function parseDriveChannels(value: unknown, inventory: SourceInventoryEntry[], s
   return channels.length === value.length ? channels : null;
 }
 
+function parseDriverFields(value: unknown): Partial<Record<DriverFieldKey, number>> | null {
+  if (!isObject(value)) return null;
+  const fields: Partial<Record<DriverFieldKey, number>> = {};
+  for (const [field, fieldValue] of Object.entries(value)) {
+    if (!DRIVER_FIELD_KEYS.includes(field as DriverFieldKey)
+      || typeof fieldValue !== 'number' || !Number.isFinite(fieldValue)) return null;
+    fields[field as DriverFieldKey] = fieldValue;
+  }
+  return fields;
+}
+
+/**
+ * A stored preset, or `null` for a profile written before drivers were picked.
+ *
+ * Absence is the migration: every profile saved before the picker existed
+ * carries hand-typed `fields` and no preset, and those numbers are still the
+ * whole driver. Anything present is parsed strictly, as everywhere else here.
+ */
+function parseDriverPreset(value: unknown): DriverPreset | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (!isObject(value)) return undefined;
+  const { id, label, source, kind, z_ohm: z, xo_min_hz: xoMin } = value;
+  if (typeof id !== 'string' || !id || typeof label !== 'string' || !label) return undefined;
+  if (source !== 'database' && source !== 'mine' && source !== 'manual') return undefined;
+  if (kind !== 'lf' && kind !== 'cd' && kind !== 'unknown') return undefined;
+  if (z !== null && (typeof z !== 'number' || !Number.isFinite(z))) return undefined;
+  // Absent is the migration: a preset stored before this field existed. A
+  // present value is parsed strictly, same as every other field here.
+  if (xoMin !== undefined && xoMin !== null && (typeof xoMin !== 'number' || !Number.isFinite(xoMin))) return undefined;
+  const base = parseDriverFields(value.base);
+  if (!base) return undefined;
+  return { id, label, source, kind, z_ohm: z, xo_min_hz: typeof xoMin === 'number' ? xoMin : null, base };
+}
+
 function parseChannelDrivers(value: unknown): Record<string, ChannelDriverForm> | null {
   if (!isObject(value)) return null;
   const drivers: Record<string, ChannelDriverForm> = {};
   for (const [channelId, item] of Object.entries(value)) {
-    if (!channelId || !isObject(item) || typeof item.enabled !== 'boolean' || !isObject(item.fields)) return null;
-    const fields: Partial<Record<DriverFieldKey, number>> = {};
-    for (const [field, fieldValue] of Object.entries(item.fields)) {
-      if (!DRIVER_FIELD_KEYS.includes(field as DriverFieldKey)
-        || typeof fieldValue !== 'number' || !Number.isFinite(fieldValue)) return null;
-      fields[field as DriverFieldKey] = fieldValue;
-    }
-    drivers[channelId] = { enabled: item.enabled, fields };
+    if (!channelId || !isObject(item) || typeof item.enabled !== 'boolean') return null;
+    const fields = parseDriverFields(item.fields);
+    const preset = parseDriverPreset(item.preset);
+    if (!fields || preset === undefined) return null;
+    drivers[channelId] = { enabled: item.enabled, fields, preset };
   }
   return drivers;
 }
@@ -362,10 +466,42 @@ function parsePassiveCardioid(value: unknown): PassiveCardioidForm | null | unde
   });
 }
 
-function parseSolveSettings(value: unknown, inventory: SourceInventoryEntry[]): PersistedSolveSettings | null {
+/**
+ * Convert a version 1/2 profile's crossover fields into one spec override.
+ *
+ * The old fields were sparse: only the pairs the user actually typed were
+ * stored, and the two booleans were nullable "no choice yet". A profile that
+ * touched none of them therefore migrates to `null` — no override — rather
+ * than to a spec that would freeze today's defaults into stored state.
+ */
+function combineSpecFromLegacy(
+  settings: Omit<PersistedSolveSettings, 'combineSpec'>,
+  sources: readonly RoleSource[],
+  crossoversHz: Record<string, number>,
+  levelMatch: boolean | null,
+  align: boolean | null,
+): CrossoverSpec | null {
+  const touched = Object.keys(crossoversHz).length > 0 || levelMatch !== null || align !== null;
+  if (!touched) return null;
+  const pairs = chainDefaults(settings.driveChannels, sources, settings.frequencyStartHz, settings.frequencyEndHz);
+  if (pairs.length < 1) return null;
+  return expandLegacy(
+    memberOrder(settings.driveChannels, sources),
+    pairs.map((pair) => crossoversHz[pair.key] ?? pair.defaultOrFallbackHz),
+    levelMatch ?? combineLevelMatchDefault(settings),
+    align ?? true,
+  );
+}
+
+function parseSolveSettings(
+  value: unknown,
+  inventory: SourceInventoryEntry[],
+  version: number,
+): PersistedSolveSettings | null {
   if (!isObject(value)) return null;
+  const legacyCombineFields = LEGACY_COMBINE_FIELD_VERSIONS.has(version);
   const sourceSizesMm = finiteNumberRecord(value.sourceSizesMm);
-  const combineCrossoversHz = finiteNumberRecord(value.combineCrossoversHz);
+  const combineCrossoversHz = legacyCombineFields ? finiteNumberRecord(value.combineCrossoversHz) : {};
   const skippedSourceIds = stringArray(value.skippedSourceIds);
   const channelDrivers = parseChannelDrivers(value.channelDrivers);
   const passiveCardioid = parsePassiveCardioid(value.passiveCardioid);
@@ -377,17 +513,19 @@ function parseSolveSettings(value: unknown, inventory: SourceInventoryEntry[]): 
     || new Set(skippedSourceIds).size !== skippedSourceIds.length) return null;
   const driveChannels = parseDriveChannels(value.driveChannels, inventory, skippedSourceIds);
   if (!driveChannels) return null;
+  const legacyLevelMatch = legacyCombineFields ? value.combineLevelMatch ?? null : null;
+  const legacyAlign = legacyCombineFields ? value.combineAlign ?? null : null;
   if (typeof value.rigidSizeMm !== 'number' || !Number.isFinite(value.rigidSizeMm)
     || typeof value.transitionMm !== 'number' || !Number.isFinite(value.transitionMm)
     || typeof value.exteriorOnly !== 'boolean'
     || (value.combineEnabled !== null && typeof value.combineEnabled !== 'boolean')
-    || (value.combineLevelMatch !== null && typeof value.combineLevelMatch !== 'boolean')
-    || (value.combineAlign !== null && typeof value.combineAlign !== 'boolean')
+    || (legacyLevelMatch !== null && typeof legacyLevelMatch !== 'boolean')
+    || (legacyAlign !== null && typeof legacyAlign !== 'boolean')
     || typeof value.driveVoltageV !== 'number' || !Number.isFinite(value.driveVoltageV)
     || typeof value.frequencyStartHz !== 'number' || !Number.isFinite(value.frequencyStartHz)
     || typeof value.frequencyEndHz !== 'number' || !Number.isFinite(value.frequencyEndHz)
     || typeof value.frequencyCount !== 'number' || !Number.isFinite(value.frequencyCount)) return null;
-  return {
+  const settings = {
     sourceSizesMm,
     rigidSizeMm: value.rigidSizeMm,
     transitionMm: value.transitionMm,
@@ -395,9 +533,6 @@ function parseSolveSettings(value: unknown, inventory: SourceInventoryEntry[]): 
     driveChannels,
     exteriorOnly: value.exteriorOnly,
     combineEnabled: value.combineEnabled,
-    combineCrossoversHz,
-    combineLevelMatch: value.combineLevelMatch,
-    combineAlign: value.combineAlign,
     channelDrivers,
     passiveCardioid,
     driveVoltageV: value.driveVoltageV,
@@ -405,14 +540,20 @@ function parseSolveSettings(value: unknown, inventory: SourceInventoryEntry[]): 
     frequencyEndHz: value.frequencyEndHz,
     frequencyCount: value.frequencyCount,
   };
+  if (legacyCombineFields) {
+    return {
+      ...settings,
+      combineSpec: combineSpecFromLegacy(settings, inventory, combineCrossoversHz, legacyLevelMatch, legacyAlign),
+    };
+  }
+  // An absent key is "no override", the same as a stored null; a present but
+  // malformed one fails the whole profile, as every other field here does.
+  if (value.combineSpec !== null && value.combineSpec !== undefined && !parseSpec(value.combineSpec)) return null;
+  return { ...settings, combineSpec: parseSpec(value.combineSpec ?? null) };
 }
 
 function solveProfileKey(identity: Pick<DesignIdentity, 'designId' | 'lineageId'>, inventory: SourceInventoryCarrier): string {
   return JSON.stringify([identity.designId, identity.lineageId, sourceInventorySignature(inventory)]);
-}
-
-function unlinkedAcknowledgementKey(documentName: string, inventory: SourceInventoryCarrier): string {
-  return JSON.stringify([documentName, sourceInventorySignature(inventory)]);
 }
 
 function dropStoredSolveProfiles(): void {
@@ -425,12 +566,14 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
     if (raw === null) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!isObject(parsed)
-      || (parsed.version !== SOLVE_PROFILE_STORAGE_VERSION && parsed.version !== LEGACY_SOLVE_PROFILE_VERSION)
+      || typeof parsed.version !== 'number'
+      || !SUPPORTED_SOLVE_PROFILE_VERSIONS.has(parsed.version)
       || !Array.isArray(parsed.profiles) || parsed.profiles.length > MAX_SOLVE_PROFILES) {
       dropStoredSolveProfiles();
       return [];
     }
-    const legacyCombineChoice = parsed.version === LEGACY_SOLVE_PROFILE_VERSION;
+    const version = parsed.version;
+    const legacyCombineChoice = version === LEGACY_SOLVE_PROFILE_VERSION;
     const profiles: StoredSolveProfile[] = [];
     for (const value of parsed.profiles) {
       if (!isObject(value) || typeof value.key !== 'string'
@@ -440,7 +583,7 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
         return [];
       }
       const inventory = parseInventory(value.inventory);
-      const settings = inventory ? parseSolveSettings(value.settings, inventory) : null;
+      const settings = inventory ? parseSolveSettings(value.settings, inventory, version) : null;
       if (!inventory || !settings) {
         dropStoredSolveProfiles();
         return [];
@@ -501,12 +644,14 @@ function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
     driveChannels: state.driveChannels.map((channel) => ({ ...channel, source_ids: [...channel.source_ids] })),
     exteriorOnly: state.exteriorOnly,
     combineEnabled: state.combineEnabled,
-    combineCrossoversHz: { ...state.combineCrossoversHz },
-    combineLevelMatch: state.combineLevelMatch,
-    combineAlign: state.combineAlign,
+    combineSpec: state.combineSpec ? cloneSpec(state.combineSpec) : null,
     channelDrivers: Object.fromEntries(Object.entries(state.channelDrivers).map(([channelId, form]) => [
       channelId,
-      { enabled: form.enabled, fields: { ...form.fields } },
+      {
+        enabled: form.enabled,
+        fields: { ...form.fields },
+        preset: form.preset ? { ...form.preset, base: { ...form.preset.base } } : null,
+      },
     ])),
     passiveCardioid: { ...state.passiveCardioid },
     driveVoltageV: state.driveVoltageV,
@@ -545,135 +690,6 @@ function restoreSolveProfile(bundle: CadReturnBundle): PersistedSolveSettings | 
   return profile.settings;
 }
 
-function dropStoredAcknowledgedFindings(): void {
-  try { acknowledgedFindingStorage.removeItem('cadAcknowledgedFindings'); } catch { /* persistence is best effort */ }
-}
-
-function readStoredAcknowledgedFindings(): StoredAcknowledgedFindingSet[] {
-  try {
-    const raw = acknowledgedFindingStorage.getItem('cadAcknowledgedFindings');
-    if (raw === null) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!isObject(parsed) || parsed.version !== ACKNOWLEDGED_FINDING_STORAGE_VERSION
-      || !Array.isArray(parsed.entries) || parsed.entries.length > MAX_ACKNOWLEDGED_FINDING_SETS) {
-      dropStoredAcknowledgedFindings();
-      return [];
-    }
-    const entries: StoredAcknowledgedFindingSet[] = [];
-    for (const value of parsed.entries) {
-      if (!isObject(value) || typeof value.key !== 'string'
-        || (value.documentName !== null && typeof value.documentName !== 'string')) {
-        dropStoredAcknowledgedFindings();
-        return [];
-      }
-      const inventory = parseInventory(value.inventory);
-      const findingIds = stringArray(value.findingIds);
-      if (!inventory || !findingIds || findingIds.length > MAX_FINDING_IDS_PER_SET
-        || findingIds.some((id) => !id)
-        || new Set(findingIds).size !== findingIds.length) {
-        dropStoredAcknowledgedFindings();
-        return [];
-      }
-      let identity: Pick<DesignIdentity, 'designId' | 'lineageId'> | null = null;
-      let expectedKey: string;
-      if (value.identity === null) {
-        if (typeof value.documentName !== 'string' || !value.documentName.trim()) {
-          dropStoredAcknowledgedFindings();
-          return [];
-        }
-        expectedKey = unlinkedAcknowledgementKey(value.documentName, { readable: true, sources: inventory });
-      } else {
-        if (!isObject(value.identity)
-          || typeof value.identity.designId !== 'string' || !value.identity.designId
-          || typeof value.identity.lineageId !== 'string' || !value.identity.lineageId
-          || value.documentName !== null) {
-          dropStoredAcknowledgedFindings();
-          return [];
-        }
-        identity = { designId: value.identity.designId, lineageId: value.identity.lineageId };
-        expectedKey = solveProfileKey(identity, { readable: true, sources: inventory });
-      }
-      if (value.key !== expectedKey) {
-        dropStoredAcknowledgedFindings();
-        return [];
-      }
-      entries.push({ key: value.key, identity, documentName: value.documentName, inventory, findingIds });
-    }
-    if (new Set(entries.map(({ key }) => key)).size !== entries.length) {
-      dropStoredAcknowledgedFindings();
-      return [];
-    }
-    return entries;
-  } catch {
-    dropStoredAcknowledgedFindings();
-    return [];
-  }
-}
-
-function writeStoredAcknowledgedFindings(entries: StoredAcknowledgedFindingSet[]): void {
-  try {
-    acknowledgedFindingStorage.setItem('cadAcknowledgedFindings', JSON.stringify({
-      version: ACKNOWLEDGED_FINDING_STORAGE_VERSION,
-      entries: entries.slice(0, MAX_ACKNOWLEDGED_FINDING_SETS),
-    }));
-  } catch { /* persistence is best effort */ }
-}
-
-function currentAcknowledgedFindingSet(
-  bundle: CadReturnBundle,
-  record: CadReturnIngestRecord,
-): Omit<StoredAcknowledgedFindingSet, 'findingIds'> | null {
-  const inventory = bundle.sources.map(({ id, role, required }) => ({ id, role, required }));
-  if (record.freshness.verdict === 'unlinked') {
-    const documentName = bundle.documentName?.trim();
-    if (!documentName) return null;
-    return {
-      key: unlinkedAcknowledgementKey(documentName, bundle),
-      identity: null,
-      documentName,
-      inventory,
-    };
-  }
-  const identity = useDocumentStore.getState().identity;
-  if (!identity?.designId || !identity.lineageId) return null;
-  const storedIdentity = { designId: identity.designId, lineageId: identity.lineageId };
-  return {
-    key: solveProfileKey(storedIdentity, bundle),
-    identity: storedIdentity,
-    documentName: null,
-    inventory,
-  };
-}
-
-function restoreAcknowledgedFindings(bundle: CadReturnBundle, record: CadReturnIngestRecord): string[] {
-  const current = currentAcknowledgedFindingSet(bundle, record);
-  if (!current) return [];
-  const entries = readStoredAcknowledgedFindings();
-  const index = entries.findIndex((entry) => entry.key === current.key);
-  if (index < 0) return [];
-  const entry = entries[index];
-  if (!compatibleSourceInventory({ readable: true, sources: entry.inventory }, bundle)) return [];
-  if (index > 0) writeStoredAcknowledgedFindings([entry, ...entries.filter((_, entryIndex) => entryIndex !== index)]);
-  const presentFindingIds = new Set(record.findings.map((finding) => finding.id));
-  return entry.findingIds.filter((findingId) => presentFindingIds.has(findingId));
-}
-
-function saveAcknowledgedFindings(state: CadReturnState): void {
-  const bundle = state.selectedBundle;
-  const record = state.ingestRecord;
-  if (!bundle?.readable || !record) return;
-  const current = currentAcknowledgedFindingSet(bundle, record);
-  if (!current) return;
-  const presentFindingIds = new Set(record.findings.map((finding) => finding.id));
-  const entry: StoredAcknowledgedFindingSet = {
-    ...current,
-    findingIds: state.acknowledgedFindingIds.filter((findingId) => presentFindingIds.has(findingId)),
-  };
-  writeStoredAcknowledgedFindings([
-    entry,
-    ...readStoredAcknowledgedFindings().filter((item) => item.key !== entry.key),
-  ]);
-}
 
 // This token deliberately lives outside Zustand state: advancing intent must
 // reject a late network result without manufacturing a render by itself. Every
@@ -743,12 +759,12 @@ function retainedChannelDrivers(
   state: Pick<CadReturnState, 'channelDrivers' | 'driveChannels'>,
   nextChannels: CadDriveChannel[],
 ): Record<string, ChannelDriverForm> {
-  const before = new Map(state.driveChannels.map((channel) => [channel.id, channel.source_ids.join('\u0000')]));
+  const before = new Map(state.driveChannels.map((channel) => [channel.id, channel.source_ids.join(' ')]));
   return Object.fromEntries(Object.entries(state.channelDrivers).filter(([id]) => {
     const next = nextChannels.find((channel) => channel.id === id);
     if (!next || !channelAcceptsDriver(next)) return false;
     const previousMembers = before.get(id);
-    return previousMembers === undefined || previousMembers === next.source_ids.join('\u0000');
+    return previousMembers === undefined || previousMembers === next.source_ids.join(' ');
   }));
 }
 
@@ -767,14 +783,11 @@ function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: stri
 export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   selectedBundle: null,
   ingestRecord: null,
-  acknowledgedFindingIds: [],
   ...initialFromBundle(null),
   areaDriftSourceIds: [],
   exteriorOnly: false,
   combineEnabled: null,
-  combineCrossoversHz: {},
-  combineLevelMatch: null,
-  combineAlign: null,
+  combineSpec: null,
   channelDrivers: {},
   passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
   driveVoltageV: 2.83,
@@ -795,9 +808,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       ...initialFromBundle(selectedBundle),
       exteriorOnly: false,
       combineEnabled: null,
-      combineCrossoversHz: {},
-      combineLevelMatch: null,
-      combineAlign: null,
+      combineSpec: null,
       channelDrivers: {},
       passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
       driveVoltageV: 2.83,
@@ -806,7 +817,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       frequencyCount: 24,
       ...(restored ?? {}),
       ingestRecord: null,
-      acknowledgedFindingIds: [],
       areaDriftOverrides: [],
       areaDriftSourceIds: [],
       needsIngest: true,
@@ -827,9 +837,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         ...initialFromBundle(bundle),
         exteriorOnly: false,
         combineEnabled: null,
-        combineCrossoversHz: {},
-        combineLevelMatch: null,
-        combineAlign: null,
+        combineSpec: null,
         channelDrivers: {},
         passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
         driveVoltageV: 2.83,
@@ -838,7 +846,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         frequencyCount: 24,
         ...(restored ?? {}),
         ingestRecord: null,
-        acknowledgedFindingIds: [],
         areaDriftOverrides: [],
         areaDriftSourceIds: [],
         needsIngest: true,
@@ -851,10 +858,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     supersedeIngestIntent();
     set((state) => ({
       ...reconcileListing(state, bundle),
-      // The new geometry needs its own ingest before stable finding ids can be
-      // reconciled with the evidence the user has already acknowledged.
+      // The new geometry needs its own ingest before its evidence is current.
       ingestRecord: null,
-      acknowledgedFindingIds: [],
       areaDriftOverrides: [],
       areaDriftSourceIds: [],
       needsIngest: true,
@@ -881,9 +886,16 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         ? bundleChangeReason(previous, selectedBundle) ?? state.ingestStaleReason ?? 'The return listing differs from the bundle used for this ingestion.'
         : null;
       if (!selectedBundle) return reason ? { needsIngest: true, ingestStaleReason: reason } : {};
+      // The one self-healing staleness: the bundle "vanished" only because a
+      // poll read an empty listing (a restarting server answers exactly that),
+      // and the identical bundle is back. Every real change keeps its flag.
+      const healed = !differsFromIngest && state.ingestStaleReason === LISTING_GONE_REASON
+        ? { needsIngest: false, ingestStaleReason: null }
+        : {};
       return {
         ...reconcileListing(state, selectedBundle),
         ...(reason ? { needsIngest: true, ingestStaleReason: reason } : {}),
+        ...healed,
       };
     });
   },
@@ -899,16 +911,12 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     if (generation !== ingestIntentGeneration) return false;
     const skipped = new Set(ingestRecord.skipped_source_ids);
     const current = get();
-    const acknowledgedFindingIds = current.selectedBundle
-      ? restoreAcknowledgedFindings(current.selectedBundle, ingestRecord)
-      : [];
     const channels = current.driveChannels.flatMap((channel) => {
       const source_ids = channel.source_ids.filter((id) => !skipped.has(id));
       return source_ids.length ? [{ ...channel, source_ids }] : [];
     });
     set({
       ingestRecord,
-      acknowledgedFindingIds,
       sourceSizesMm: { ...ingestRecord.mesh_sizes.source_size_mm },
       rigidSizeMm: ingestRecord.mesh_sizes.rigid_size_mm,
       transitionMm: ingestRecord.mesh_sizes.transition_mm,
@@ -924,20 +932,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     });
     saveSolveProfile(get());
     return true;
-  },
-  acknowledge: (findingId, value) => {
-    set((state) => ({
-      acknowledgedFindingIds: value
-        ? [...new Set([...state.acknowledgedFindingIds, findingId])]
-        : state.acknowledgedFindingIds.filter((id) => id !== findingId),
-    }));
-    saveAcknowledgedFindings(get());
-  },
-  acknowledgeAllBlocking: () => {
-    set((state) => ({
-      acknowledgedFindingIds: state.ingestRecord?.findings.filter((finding) => finding.blocking).map((finding) => finding.id) ?? [],
-    }));
-    saveAcknowledgedFindings(get());
   },
   setSourceSize: (sourceId, value) => {
     supersedeIngestIntent();
@@ -1010,45 +1004,68 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   flagAreaDrift: (sourceId) => set((state) => ({ areaDriftSourceIds: [...new Set([...state.areaDriftSourceIds, sourceId])] })),
   setExteriorOnly: (exteriorOnly) => { set({ exteriorOnly }); saveSolveProfile(get()); },
   setCombineEnabled: (combineEnabled) => { set({ combineEnabled }); saveSolveProfile(get()); },
-  setCombineCrossover: (pairKey, hz) => {
-    set((state) => ({ combineCrossoversHz: { ...state.combineCrossoversHz, [pairKey]: hz } }));
+  setCombineSpec: (combineSpec) => { set({ combineSpec }); saveSolveProfile(get()); },
+  updateCombineSpec: (edit) => {
+    set((state) => {
+      const current = combineSpecEffective(state);
+      return current ? { combineSpec: edit(current) } : {};
+    });
     saveSolveProfile(get());
   },
-  setCombineCrossoversFromResult: (resultIngestId, members, crossoversHz) => {
-    if (resultIngestId === null || resultIngestId !== get().ingestRecord?.ingest_id) return;
+  setCombineCrossover: (pairKey, hz) => {
+    useCadReturnStore.getState().updateCombineSpec((spec) => withPair(spec, pairKey, { hz }));
+  },
+  setCombineSpecFromResult: (spec) => {
     set((state) => {
       const known = new Set(state.driveChannels.map((channel) => channel.id));
-      const adopted = members.slice(0, -1).flatMap((lower, index): Array<[string, number]> => {
-        const upper = members[index + 1];
-        const hz = crossoversHz[index];
-        return known.has(lower) && known.has(upper) && typeof hz === 'number' && Number.isFinite(hz)
-          ? [[`${lower}→${upper}`, hz]]
-          : [];
-      });
-      return adopted.length
-        ? { combineCrossoversHz: { ...state.combineCrossoversHz, ...Object.fromEntries(adopted) } }
+      return spec.members.length >= 2 && spec.members.every((member) => known.has(member))
+        ? { combineSpec: cloneSpec(spec) }
         : {};
     });
     saveSolveProfile(get());
   },
-  setCombineLevelMatch: (combineLevelMatch) => { set({ combineLevelMatch }); saveSolveProfile(get()); },
-  setCombineAlign: (combineAlign) => { set({ combineAlign }); saveSolveProfile(get()); },
   setChannelDriverEnabled: (channelId, enabled) => {
-    set((state) => ({
-      channelDrivers: {
-        ...state.channelDrivers,
-        [channelId]: { enabled, fields: state.channelDrivers[channelId]?.fields ?? {} },
-      },
-    }));
+    set((state) => {
+      const current = state.channelDrivers[channelId] ?? EMPTY_DRIVER_FORM;
+      return { channelDrivers: { ...state.channelDrivers, [channelId]: { ...current, enabled } } };
+    });
     saveSolveProfile(get());
   },
   setChannelDriverField: (channelId, field, value) => {
     set((state) => {
-      const current = state.channelDrivers[channelId] ?? { enabled: true, fields: {} };
+      const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM, enabled: true };
       const fields = { ...current.fields };
-      if (value === null || !Number.isFinite(value)) delete fields[field];
+      // An override equal to the base value is not an edit; storing it would
+      // outline an untouched field and count it in the header.
+      if (value === null || !Number.isFinite(value) || value === current.preset?.base[field]) delete fields[field];
       else fields[field] = value;
       return { channelDrivers: { ...state.channelDrivers, [channelId]: { ...current, fields } } };
+    });
+    saveSolveProfile(get());
+  },
+  setChannelDriverPreset: (channelId, preset, keepOverrides = false) => {
+    set((state) => {
+      const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM, enabled: true };
+      const kept = keepOverrides ? { ...current.fields } : retainedInstallationFields(current.fields);
+      return {
+        channelDrivers: {
+          ...state.channelDrivers,
+          [channelId]: { ...current, preset, fields: kept },
+        },
+      };
+    });
+    saveSolveProfile(get());
+  },
+  clearChannelDriverOverrides: (channelId) => {
+    set((state) => {
+      const current = state.channelDrivers[channelId];
+      if (!current) return {};
+      return {
+        channelDrivers: {
+          ...state.channelDrivers,
+          [channelId]: { ...current, fields: retainedInstallationFields(current.fields) },
+        },
+      };
     });
     saveSolveProfile(get());
   },
@@ -1060,15 +1077,75 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   setSweep: (update) => { set(update); saveSolveProfile(get()); },
 }));
 
-/** The wire driver spec for one channel, or undefined while incomplete. */
-export function channelDriverWire(form: ChannelDriverForm | undefined): Record<string, number> | undefined {
+/** Only WG's own installation inputs survive a driver change or a reset. */
+function retainedInstallationFields(
+  fields: Partial<Record<DriverFieldKey, number>>,
+): Partial<Record<DriverFieldKey, number>> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([key]) => DRIVER_INSTALLATION_KEYS.includes(key as DriverFieldKey)),
+  );
+}
+
+/** The driver as it will be submitted: the preset's numbers under the edits. */
+export function driverValues(form: ChannelDriverForm | undefined): Partial<Record<DriverFieldKey, number>> {
+  if (!form) return {};
+  return { ...(form.preset?.base ?? {}), ...form.fields };
+}
+
+/**
+ * Which fields the user has changed away from the preset. Installation inputs
+ * are excluded: they were never the driver's to state.
+ *
+ * A hand-entered driver has no base to have been changed away from -- every
+ * number in it is the user's own -- so it reports no edits at all. Counting
+ * them would put an "n edited" chip and a live *Reset to database values* on a
+ * driver that has no database values to go back to.
+ */
+export function driverEditedKeys(form: ChannelDriverForm | undefined): DriverFieldKey[] {
+  if (!form?.preset || form.preset.source === 'manual') return [];
+  return DRIVER_FIELD_KEYS.filter((key) => (
+    !DRIVER_INSTALLATION_KEYS.includes(key)
+    && form.fields[key] !== undefined
+    && form.fields[key] !== form.preset?.base[key]
+  ));
+}
+
+/**
+ * Which requirement groups are still unsatisfied, mirroring the server's
+ * `DriverSpec.validate_completeness` rather than a flat list of keys: one mass
+ * and one compliance source are enough, and which one is the user's choice.
+ */
+export function driverMissingGroups(form: ChannelDriverForm | undefined): DriverFieldKey[][] {
+  const values = driverValues(form);
+  const groups: DriverFieldKey[][] = [];
+  for (const key of DRIVER_REQUIRED_KEYS) if (values[key] === undefined) groups.push([key]);
+  if (DRIVER_MASS_KEYS.every((key) => values[key] === undefined)) groups.push([...DRIVER_MASS_KEYS]);
+  if (DRIVER_COMPLIANCE_KEYS.every((key) => values[key] === undefined)) groups.push([...DRIVER_COMPLIANCE_KEYS]);
+  return groups;
+}
+
+/**
+ * The wire driver spec for one channel, or undefined while incomplete.
+ *
+ * Exactly one mass reaches the server, because a spec carrying both is a
+ * refusal of the whole solve. Mms wins when both are known: it is what a
+ * datasheet and the driver library publish, and the solver converts it to Mmd
+ * itself by subtracting the free-air radiation mass.
+ */
+export function channelDriverWire(
+  form: ChannelDriverForm | undefined,
+): Record<string, number | string> | undefined {
   if (!form?.enabled) return undefined;
-  if (DRIVER_REQUIRED_KEYS.some((key) => form.fields[key] === undefined)) return undefined;
-  const wire: Record<string, number> = {};
+  const values = driverValues(form);
+  if (driverMissingGroups(form).length) return undefined;
+  const mass: DriverFieldKey = values.mms_g !== undefined ? 'mms_g' : 'mmd_g';
+  const wire: Record<string, number | string> = {};
   for (const key of DRIVER_FIELD_KEYS) {
-    const value = form.fields[key];
+    if (DRIVER_MASS_KEYS.includes(key) && key !== mass) continue;
+    const value = values[key];
     if (value !== undefined) wire[key] = value;
   }
+  if (form.preset?.label) wire.label = form.preset.label;
   return wire;
 }
 
@@ -1162,6 +1239,31 @@ export function passiveCardioidBlocker(
   return null;
 }
 
+/**
+ * Whether this return carries the aperture a passive-cardioid campaign needs.
+ *
+ * The campaign is not a preference: it is a second radiation-impedance solve
+ * over a surface the model either has or does not have. Without that surface
+ * the server refuses the whole run (`passive_cardioid_topology`), so a rail
+ * offering the section on a model with no port can only ever produce a
+ * refusal. Hence the section, and the wire keys, are gated on this.
+ *
+ * Matching mirrors `_passive_cardioid_apertures` in server/solver/metal.py: it
+ * upper-cases the names it is given and knows the port under several. The name
+ * may arrive as either the source role or the source id -- CAD authoring puts
+ * it in one or the other -- so both are tested. The canonical role is
+ * PASSIVE_CARDIOID (with _L/_R for a split port); the PORT_EXIT family is the
+ * legacy spelling and stays valid for models already authored under it.
+ */
+export function hasPassiveCardioidSurface(
+  sources: readonly { id: string; role: string }[],
+): boolean {
+  const canonical = (name: string): string => name.trim().toUpperCase().replace(/[\s-]+/g, '_');
+  return sources.some((source) => [source.role, source.id]
+    .map((name) => canonical(String(name ?? '')))
+    .some((name) => name.includes('PASSIVE_CARDIOID') || name.includes('PORT_EXIT')));
+}
+
 /** Drive-channel ids the rail may offer. The coupled campaign owns its own. */
 export function assignableChannelIds(ids: readonly string[], coupled: boolean): string[] {
   return coupled ? ids.filter((id) => id !== PASSIVE_CARDIOID_CHANNEL_ID) : [...ids];
@@ -1172,7 +1274,9 @@ export interface CombinePair {
   lower: string;
   upper: string;
   /** The frequency this pair submits: the user's value when they set one, else
-   * the role default, else the log-spaced in-sweep fallback. */
+   * the role default, else the log-spaced in-sweep fallback. An unlinked pair
+   * reports the lower channel's low-pass corner, which is the closest thing to
+   * "the crossover" it has. */
   hz: number;
   lowerRole: string | undefined;
   upperRole: string | undefined;
@@ -1184,12 +1288,19 @@ export interface CombinePair {
    * outside the solved band (`SolveRequest.validate_combine_band`), so a
    * default must never be the reason a solve is rejected. */
   outsideSweep: boolean;
+  /** Whether the two sections agree, so one frequency and one slope describe
+   * the pair. An unlinked pair is editable only in Advanced. */
+  linked: boolean;
+  family: FilterFamily;
+  order: number;
 }
 
-// Keep this ranking in sync with _BAND_ROLE_RANK in server/solver/metal.py.
 const ROLE_BAND_RANK: Record<string, number> = { LF: 0, MF: 1, HF: 2 };
 
-/** Canonicalize band roles without rewriting structural CAD roles. */
+/** Canonicalize band roles without rewriting structural CAD roles. A return
+ * whose sources say `hf`/` LF ` must still rank as HF/LF: an exact lookup
+ * ordered such a chain backwards, low-passing the HF driver.
+ * Mirrors `canonical_source_role` in server/cadlink/roles.py. */
 function canonicalSourceRole(role: string | undefined): string {
   const rawRole = role ?? '';
   const bandRole = rawRole.trim().toUpperCase();
@@ -1213,6 +1324,88 @@ export function combineDefaultHz(
   return lowerRole && upperRole ? ROLE_DEFAULT_HZ[`${lowerRole}→${upperRole}`] : undefined;
 }
 
+/** The band-carrying sources a chain is ordered by. The stored solve profile
+ * carries the same two fields under another name, which is why the chain
+ * helpers below take this shape rather than a whole bundle. */
+interface RoleSource {
+  id: string;
+  role: string;
+}
+
+function bundleSources(state: Pick<CadReturnState, 'selectedBundle'>): RoleSource[] {
+  return (state.selectedBundle?.sources ?? []).map(({ id, role }) => ({ id, role }));
+}
+
+function memberRole(
+  channels: readonly CadDriveChannel[],
+  sources: readonly RoleSource[],
+  channelId: string,
+): string | undefined {
+  const channel = channels.find((item) => item.id === channelId);
+  return (channel?.source_ids ?? [])
+    .map((id) => canonicalSourceRole(sources.find((source) => source.id === id)?.role))
+    .filter((role) => ROLE_BAND_RANK[role] !== undefined)
+    .sort((a, b) => ROLE_BAND_RANK[a] - ROLE_BAND_RANK[b])[0];
+}
+
+function memberOrder(channels: readonly CadDriveChannel[], sources: readonly RoleSource[]): string[] {
+  return [...channels]
+    .map((channel, index) => {
+      const ranks = channel.source_ids
+        .map((id) => ROLE_BAND_RANK[canonicalSourceRole(sources.find((source) => source.id === id)?.role)])
+        .filter((rank): rank is number => rank !== undefined);
+      return { id: channel.id, index, rank: ranks.length ? Math.min(...ranks) : Number.POSITIVE_INFINITY };
+    })
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.id);
+}
+
+interface ChainDefault {
+  key: string;
+  lower: string;
+  upper: string;
+  lowerRole: string | undefined;
+  upperRole: string | undefined;
+  defaultHz: number | undefined;
+  outsideSweep: boolean;
+  /** The frequency an untouched pair submits. */
+  defaultOrFallbackHz: number;
+}
+
+/** The pairs and the frequency each one holds before the user touches it. This
+ * is the base the spec override sits on: role defaults where the roles say
+ * one, a log-spaced in-sweep frequency where they do not. */
+function chainDefaults(
+  channels: readonly CadDriveChannel[],
+  sources: readonly RoleSource[],
+  frequencyStartHz: number,
+  frequencyEndHz: number,
+): ChainDefault[] {
+  const members = memberOrder(channels, sources);
+  if (members.length < 2) return [];
+  const logStart = Math.log(Math.max(1, frequencyStartHz));
+  const logEnd = Math.log(Math.max(frequencyStartHz + 1, frequencyEndHz));
+  return members.slice(0, -1).map((lower, index) => {
+    const upper = members[index + 1];
+    const spaced = Math.round(Math.exp(logStart + ((index + 1) * (logEnd - logStart)) / members.length));
+    const lowerRole = memberRole(channels, sources, lower);
+    const upperRole = memberRole(channels, sources, upper);
+    const defaultHz = combineDefaultHz(lowerRole, upperRole);
+    const outsideSweep = defaultHz !== undefined
+      && (defaultHz < frequencyStartHz || defaultHz > frequencyEndHz);
+    return {
+      key: `${lower}→${upper}`,
+      lower,
+      upper,
+      lowerRole,
+      upperRole,
+      defaultHz,
+      outsideSweep,
+      defaultOrFallbackHz: defaultHz !== undefined && !outsideSweep ? defaultHz : spaced,
+    };
+  });
+}
+
 /** The band a channel speaks for: the lowest banded role among its sources,
  * which is the same rank that orders the chain. Undefined when no source
  * carries one. */
@@ -1220,12 +1413,7 @@ export function combineChannelRole(
   state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>,
   channelId: string,
 ): string | undefined {
-  const sources = state.selectedBundle?.sources ?? [];
-  const channel = state.driveChannels.find((item) => item.id === channelId);
-  return (channel?.source_ids ?? [])
-    .map((id) => canonicalSourceRole(sources.find((source) => source.id === id)?.role))
-    .filter((role) => ROLE_BAND_RANK[role] !== undefined)
-    .sort((a, b) => ROLE_BAND_RANK[a] - ROLE_BAND_RANK[b])[0];
+  return memberRole(state.driveChannels, bundleSources(state), channelId);
 }
 
 /** Whether the combined output is on: the user's explicit choice, or on by
@@ -1243,47 +1431,69 @@ export function combineEnabledEffective(
 export function combineMembers(
   state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>,
 ): string[] {
-  const sources = state.selectedBundle?.sources ?? [];
-  return [...state.driveChannels]
-    .map((channel, index) => {
-      const ranks = channel.source_ids
-        .map((id) => ROLE_BAND_RANK[canonicalSourceRole(sources.find((source) => source.id === id)?.role)])
-        .filter((rank): rank is number => rank !== undefined);
-      return { id: channel.id, index, rank: ranks.length ? Math.min(...ranks) : Number.POSITIVE_INFINITY };
-    })
-    .sort((a, b) => a.rank - b.rank || a.index - b.index)
-    .map((entry) => entry.id);
+  return memberOrder(state.driveChannels, bundleSources(state));
+}
+
+export type CombineChainState = Pick<CadReturnState,
+  'driveChannels' | 'selectedBundle' | 'combineSpec' | 'channelDrivers'
+  | 'frequencyStartHz' | 'frequencyEndHz'>;
+
+/** The untouched chain: LR4 at the role defaults, auto gain when level
+ * matching would default on, auto delay. Null when there is nothing to
+ * combine. */
+export function combineBaseSpec(state: CombineChainState): CrossoverSpec | null {
+  const pairs = chainDefaults(state.driveChannels, bundleSources(state), state.frequencyStartHz, state.frequencyEndHz);
+  if (!pairs.length) return null;
+  return expandLegacy(
+    combineMembers(state),
+    pairs.map((pair) => pair.defaultOrFallbackHz),
+    combineLevelMatchDefault(state),
+    true,
+  );
+}
+
+/**
+ * The spec the rail draws and the wire submits.
+ *
+ * The stored override wins, but only while it still describes this return's
+ * chain. A drive-channel edit that adds, removes or renames a member leaves an
+ * override naming channels that no longer exist, and submitting that is a
+ * refusal at best and a crossover on the wrong pair at worst; the base chain
+ * is the honest answer there.
+ */
+export function combineSpecEffective(state: CombineChainState): CrossoverSpec | null {
+  const base = combineBaseSpec(state);
+  if (!base) return null;
+  const override = state.combineSpec;
+  if (!override) return base;
+  const sameMembers = override.members.length === base.members.length
+    && override.members.every((member, index) => member === base.members[index]);
+  return sameMembers ? override : base;
 }
 
 /** Adjacent chain pairs, defaulted by the roles of the two bands they join and
  * falling back to a log-spaced frequency inside the current sweep, so an
  * untouched form is both submittable and what a designer would have typed. */
-export function combineChain(
-  state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'frequencyStartHz' | 'frequencyEndHz'>,
-): CombinePair[] {
-  const members = combineMembers(state);
-  if (members.length < 2) return [];
-  const logStart = Math.log(Math.max(1, state.frequencyStartHz));
-  const logEnd = Math.log(Math.max(state.frequencyStartHz + 1, state.frequencyEndHz));
-  return members.slice(0, -1).map((lower, index) => {
-    const upper = members[index + 1];
-    const key = `${lower}→${upper}`;
-    const spaced = Math.round(Math.exp(logStart + ((index + 1) * (logEnd - logStart)) / members.length));
-    const lowerRole = combineChannelRole(state, lower);
-    const upperRole = combineChannelRole(state, upper);
-    const defaultHz = combineDefaultHz(lowerRole, upperRole);
-    const outsideSweep = defaultHz !== undefined
-      && (defaultHz < state.frequencyStartHz || defaultHz > state.frequencyEndHz);
-    const fallback = defaultHz !== undefined && !outsideSweep ? defaultHz : spaced;
+export function combineChain(state: CombineChainState): CombinePair[] {
+  const spec = combineSpecEffective(state);
+  const defaults = chainDefaults(state.driveChannels, bundleSources(state), state.frequencyStartHz, state.frequencyEndHz);
+  if (!spec) return [];
+  const specPairs = pairsOf(spec);
+  return defaults.map((pair, index) => {
+    const specPair = specPairs[index];
+    const section = specPair?.lowerLp ?? specPair?.upperHp ?? null;
     return {
-      key,
-      lower,
-      upper,
-      hz: state.combineCrossoversHz[key] ?? fallback,
-      lowerRole,
-      upperRole,
-      defaultHz,
-      outsideSweep,
+      key: pair.key,
+      lower: pair.lower,
+      upper: pair.upper,
+      hz: section?.fcHz ?? pair.defaultOrFallbackHz,
+      lowerRole: pair.lowerRole,
+      upperRole: pair.upperRole,
+      defaultHz: pair.defaultHz,
+      outsideSweep: pair.outsideSweep,
+      linked: specPair?.linked ?? false,
+      family: section?.family ?? 'lr',
+      order: section?.order ?? 4,
     };
   });
 }
@@ -1300,34 +1510,27 @@ export function combineLevelMatchDefault(
   return !allDriven;
 }
 
+/** The submitted combine, always in the per-channel v2 form. The legacy
+ * `crossovers_hz` triple is still accepted by the server, but it cannot state
+ * a family, a slope, a manual gain or an unlinked pair, so nothing sends it. */
 export function combineWire(
-  state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'combineLevelMatch' | 'combineAlign' | 'channelDrivers' | 'frequencyStartHz' | 'frequencyEndHz'>,
-): { members: string[]; crossovers_hz: number[]; level_match: boolean; align: boolean } | undefined {
+  state: Pick<CadReturnState, 'combineEnabled'> & CombineChainState,
+): CrossoverWire | undefined {
   if (!combineEnabledEffective(state)) return undefined;
-  const pairs = combineChain(state);
-  if (!pairs.length) return undefined;
-  return {
-    members: combineMembers(state),
-    crossovers_hz: pairs.map((pair) => pair.hz),
-    level_match: state.combineLevelMatch ?? combineLevelMatchDefault(state),
-    // Null means the user has never made a choice. Preserve the server's
-    // existing aligned-sum behaviour while still making the choice explicit
-    // on every newly submitted wire.
-    align: state.combineAlign ?? true,
-  };
+  const spec = combineSpecEffective(state);
+  return spec ? toWire(spec) : undefined;
 }
 
 export function blockingFindings(record: CadReturnIngestRecord | null): CadReturnIngestRecord['findings'] {
   return record?.findings.filter((finding) => finding.blocking) ?? [];
 }
 
-export function unacknowledgedBlocking(state: Pick<CadReturnState, 'ingestRecord' | 'acknowledgedFindingIds'>): string[] {
-  const acknowledged = new Set(state.acknowledgedFindingIds);
-  return blockingFindings(state.ingestRecord).map((finding) => finding.id).filter((id) => !acknowledged.has(id));
-}
-
-export function acknowledgedFindingWire(record: CadReturnIngestRecord, findingIds: string[]): string[] {
-  return findingIds.map((id) => `${record.report_sha256}:${id}`);
+/** The wire form of every blocking finding on this record. Blocking findings
+ * no longer gate the solve in the UI; submitting them all keeps the server's
+ * acknowledgement contract satisfied and records, in the run's provenance,
+ * exactly which findings were on screen when the user chose to solve. */
+export function blockingFindingWire(record: CadReturnIngestRecord): string[] {
+  return blockingFindings(record).map((finding) => `${record.report_sha256}:${finding.id}`);
 }
 
 export function resetCadReturnStore(): void {
@@ -1336,14 +1539,11 @@ export function resetCadReturnStore(): void {
   useCadReturnStore.setState({
     selectedBundle: null,
     ingestRecord: null,
-    acknowledgedFindingIds: [],
     ...initialFromBundle(null),
     areaDriftSourceIds: [],
     exteriorOnly: false,
     combineEnabled: null,
-    combineCrossoversHz: {},
-    combineLevelMatch: null,
-    combineAlign: null,
+    combineSpec: null,
     channelDrivers: {},
     passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
     driveVoltageV: 2.83,

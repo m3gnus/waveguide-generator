@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DecodedFrame, FrameSurface } from '../api/frame';
-import { curvatureColors, frameToScene, hasRenderableSurfaces, materialClassForSurface, MAX_EDGE_TRIANGLES, surfaceBoundaryPositions } from './frameScene';
+import { curvatureColors, frameToScene, hasRenderableSurfaces, materialClassForSurface, MAX_EDGE_TRIANGLES, sourceRoleForSurface, surfaceBoundaryPositions } from './frameScene';
 
 function surface(role: string, prefix: string, shading: 'smooth' | 'flat' = 'smooth'): FrameSurface {
   return {
@@ -240,9 +240,13 @@ describe('frameToScene', () => {
   });
 
   it('colours only the radiating surface apart from the structure', () => {
-    expect(materialClassForSurface(surface('source_cap', 'cap', 'flat'))).toBe('source-flat');
+    // The throat cap is the driver, so it carries the HF role the CAD document
+    // would paint on the same face rather than a generic source material.
+    expect(materialClassForSurface(surface('source_cap', 'cap', 'flat'))).toBe('hf-flat');
+    expect(sourceRoleForSurface(surface('source_cap', 'cap', 'flat'))).toBe('HF');
     for (const role of ['horn.inner', 'horn.outer', 'mouth_rim', 'wall.rear_cap']) {
       expect(materialClassForSurface(surface(role, role, 'smooth'))).toBe('horn-smooth');
+      expect(sourceRoleForSurface(surface(role, role, 'smooth'))).toBeNull();
     }
   });
 

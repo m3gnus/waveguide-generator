@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
+import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
@@ -11,14 +11,16 @@ import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
-import { combineMetadataOf, type CombineMetadata, type ResultPayload } from '../results/types';
+import { latestCombine } from '../results/latestCombine';
+import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
+import { combineMetadataOf, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
-import { CHART_TYPES, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type PolarPlane } from '../prefs/preferences';
+import { CHART_TYPES, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
 import { seriesColorsByLabel } from '../results/seriesColors';
@@ -225,6 +227,7 @@ export function splOption(
   density: ChartDensity,
   measured: MeasuredOverlay[] = [],
   showPhase = false,
+  reverseNull: ReverseNullTrace[] = [],
 ): EChartsOption {
   const measuredNames = measured.map(({ label }) => measuredSeriesName(label));
   const colors = seriesColorsByLabel([...items.map(({ label }) => label), ...measuredNames], tokens.series, tokens.accent);
@@ -265,8 +268,21 @@ export function splOption(
       data: points,
     };
   }) : [];
+  // Muted and dashed, behind everything: the reverse null is a check on the
+  // sum, not a response anybody listens to. It must never be mistaken for one
+  // of the curves it is testing.
+  const reverseNullSeries = reverseNull.map((trace) => ({
+    name: trace.name,
+    type: 'line' as const,
+    showSymbol: false,
+    connectNulls: false,
+    z: 0,
+    lineStyle: { color: tokens.muted, width: 1, type: 'dashed' as const, opacity: .7 },
+    itemStyle: { color: tokens.muted },
+    data: trace.points,
+  }));
   return lineOption(
-    [...simulated, ...measuredSeries, ...phase],
+    [...simulated, ...measuredSeries, ...reverseNullSeries, ...phase],
     tokens,
     'dB SPL',
     density,
@@ -525,6 +541,33 @@ export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
   return polylines;
 }
 
+/** Round angular steps a person reads without decoding: 5 deg up to quadrants. */
+const ANGLE_LABEL_STEPS_DEG = [5, 10, 15, 20, 30, 45, 60, 90] as const;
+/** How many angle labels each card size can carry without crowding. */
+const ANGLE_LABEL_BUDGET: Record<ChartDensity, number> = { compact: 9, regular: 15, full: 37 };
+
+/**
+ * Which angle rows get a label.
+ *
+ * Leaving this to ECharts' `hideOverlap` produced an arbitrary, drifting set:
+ * on a small card it kept every second tick, so the axis read 170, 150, 130 ...
+ * and dropped 0 deg entirely -- the one angle a directivity map is read
+ * against. Choosing round steps that divide zero instead keeps the axis
+ * symmetric about the on-axis row and always labels it, at every card size.
+ */
+export function directivityAngleLabelIndices(angles: number[], density: ChartDensity): Set<number> {
+  if (angles.length < 2) return new Set(angles.map((_angle, index) => index));
+  const span = Math.abs(angles.at(-1)! - angles[0]);
+  const budget = ANGLE_LABEL_BUDGET[density];
+  const step = ANGLE_LABEL_STEPS_DEG.find((candidate) => span / candidate + 1 <= budget)
+    ?? ANGLE_LABEL_STEPS_DEG.at(-1)!;
+  const labelled = new Set<number>();
+  angles.forEach((angle, index) => {
+    if (Math.abs(angle - Math.round(angle / step) * step) < 1e-6) labelled.add(index);
+  });
+  return labelled;
+}
+
 /**
  * Return the interior angular graticule values for a directivity map.
  *
@@ -605,15 +648,21 @@ export function heatmapOption(
   const categoryAxis = { ...axes(tokens, density), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens, density).axisLabel, hideOverlap: true } };
   const frequencyTickLabels = directivityFrequencyTickLabels(grid.frequencies);
   const isFrequencyTick = (index: number) => frequencyTickLabels.has(index);
+  const angleLabels = directivityAngleLabelIndices(grid.angles, density);
   const angleGuides = directivityAngleGuides(grid.angles, angleGuideInterval);
   const angleGuideSeries = angleGuides.length ? [{
     name: `${angleGuideInterval}° angular guides`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 4, clip: true,
     data: angleGuides,
-    renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
+    // The guide angle is read from `angleGuides` by index, not through
+    // `api.value`. Both axes here are category axes, so ECharts expands a
+    // bare-number datum to [dataIndex, value] and `api.value(0)` hands back
+    // the ordinal instead of the angle -- which stacked every guide between
+    // 0 deg and the guide count rather than spreading them over the sweep.
+    renderItem: (params: { coordSys?: PlotRect; dataIndex: number }) => {
       if (!params.coordSys || grid.angles.length < 2) return null;
       const lower = grid.angles[0];
       const upper = grid.angles.at(-1)!;
-      const fraction = (Number(api.value(0)) - lower) / (upper - lower);
+      const fraction = (angleGuides[params.dataIndex] - lower) / (upper - lower);
       const y = params.coordSys.y + params.coordSys.height * (1 - fraction);
       return { type: 'line', shape: { x1: params.coordSys.x, y1: y, x2: params.coordSys.x + params.coordSys.width, y2: y }, style: { stroke: tokens.grid, lineWidth: .8, opacity: .9 } };
     },
@@ -708,7 +757,10 @@ export function heatmapOption(
       },
       splitLine: { ...categoryAxis.splitLine, show: true, interval: isFrequencyTick },
     },
-    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    // `hideOverlap` is off here on purpose: the label set is already chosen to
+    // fit this card size, and letting ECharts thin it again is what broke the
+    // axis's symmetry and dropped 0 deg.
+    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, hideOverlap: false, interval: (index: number) => angleLabels.has(index) } },
     visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: 11 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
@@ -839,9 +891,31 @@ export function phaseOption(items: NamedResult[], tokens: ChartTokens, density: 
   return lineOption(series, tokens, 'Phase [°]', density);
 }
 
-/** Group delay in ms, with the common time-of-flight to the mic removed. */
-export function groupDelayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
-  const traces = groupDelaySeries(items);
+/** Decimals that keep a group delay readable in the unit it is drawn in. */
+const GROUP_DELAY_DIGITS: Record<GroupDelayUnit, number> = { ms: 3, cycles: 2 };
+
+/** How one group delay sample reads in the tooltip, unit included. */
+export function formatGroupDelay(value: unknown, unit: GroupDelayUnit): string {
+  // Cartesian tooltips hand over the value dimension, but a series whose data
+  // are [frequency, value] pairs can hand over the pair; take the last element
+  // either way rather than printing a frequency as a delay.
+  const sample = Array.isArray(value) ? value[value.length - 1] : value;
+  // `Number(null)` is 0, and a gap printed as "0.000 ms" is a delay the solve
+  // never reported.
+  const numeric = typeof sample === 'number' || typeof sample === 'string' ? Number(sample) : Number.NaN;
+  return Number.isFinite(numeric) ? `${numeric.toFixed(GROUP_DELAY_DIGITS[unit])} ${unit}` : '—';
+}
+
+/**
+ * Group delay, with the common time-of-flight to the mic removed.
+ *
+ * The unit is the user's: milliseconds, or periods of the frequency the delay
+ * occurs at. Only the projection changes -- the curve, its trust gating and its
+ * series names are the same either way -- and the axis autoscales in both, since
+ * a constant delay rises linearly with frequency once it is counted in cycles.
+ */
+export function groupDelayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity, unit: GroupDelayUnit = 'ms'): EChartsOption {
+  const traces = groupDelaySeries(items, unit);
   const colors = seriesColorsByLabel(traces.map(({ name }) => name), tokens.series, tokens.accent);
   const series = traces.map((trace, index) => {
     const color = colors.get(trace.name) ?? tokens.accent;
@@ -851,7 +925,17 @@ export function groupDelayOption(items: NamedResult[], tokens: ChartTokens, dens
       itemStyle: { color },
     };
   });
-  return lineOption(series, tokens, 'Group delay [ms]', density);
+  const option = lineOption(series, tokens, `Group delay [${unit}]`, density);
+  // Compact and regular cards drop the axis title, so without this the tooltip
+  // is the only place the unit can be stated -- and a bare number reads as ms
+  // by habit.
+  return {
+    ...option,
+    tooltip: {
+      ...(option.tooltip as Record<string, unknown>),
+      valueFormatter: (value: unknown) => formatGroupDelay(value, unit),
+    },
+  };
 }
 
 /**
@@ -1031,7 +1115,8 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   balloon: { short: 'Balloon' },
   polar_response: { short: 'Polar', long: 'Polar response', unit: 'dB' },
   phase_response: { short: 'Phase', long: 'On-axis phase', unit: '°' },
-  group_delay: { short: 'GD', long: 'Group delay', unit: 'ms' },
+  // The group delay unit follows a preference, not the chart: see chartUnit.
+  group_delay: { short: 'GD', long: 'Group delay' },
   // The impedance unit depends on the result, not the chart: see chartUnit.
   impedance: { short: 'Impedance' },
   radiation_impedance: { short: 'Rad Z', long: 'Radiation load', unit: 'Pa·s/m³' },
@@ -1053,7 +1138,8 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
  * primary had no impedance block: an electrical overlay then put Ω on the axis
  * while the chip went blank, which is the mislabelling in its quietest form.
  */
-export function chartUnit(chartType: ChartType, result?: ResultPayload, items?: NamedResult[]): string | undefined {
+export function chartUnit(chartType: ChartType, result?: ResultPayload, items?: NamedResult[], groupDelayUnit: GroupDelayUnit = 'ms'): string | undefined {
+  if (chartType === 'group_delay') return groupDelayUnit;
   if (chartType === 'impedance') {
     const candidates = items?.length ? items : result ? [{ id: 'primary', label: 'Primary', result }] : [];
     const { items: comparable, units } = impedanceComparable(candidates);
@@ -1129,6 +1215,7 @@ function Summary({ result, wrapper, job, channelId, density }: { result: ResultP
 
 const NO_NAMED_RESULTS: NamedResult[] = [];
 const NO_MEASURED_OVERLAYS: MeasuredOverlay[] = [];
+const NO_REVERSE_NULL: ReverseNullTrace[] = [];
 
 export interface DirectivityMapPanel {
   key: string;
@@ -1430,12 +1517,22 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       : NO_MEASURED_OVERLAYS,
     [chartType, loadedMeasurements],
   );
+  // Only the Combined view has a reverse null to draw, and only while the
+  // preference asks for it. `reverseNullTraces` withholds the overlay unless
+  // it can rebuild the sum already on screen, so an empty list here is a
+  // deliberate silence rather than a missing feature.
+  const reverseNull = useMemo(
+    () => (chartType === 'frequency_response' && preferences.showReverseNull
+      ? reverseNullTraces(wrapper as ResultPayload | undefined, result, combineMetadataOf(result))
+      : NO_REVERSE_NULL),
+    [chartType, preferences.showReverseNull, result, wrapper],
+  );
   // Progress and log events replace the selected JobItem many times during a
   // solve. Keep those summary-only props outside the plot memo, otherwise a
   // new progress percentage rebuilds and repaints every EChart even when its
   // result snapshot has not changed.
   const plot = useMemo(() => {
-    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured, preferences.splPhase)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
     if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
@@ -1467,7 +1564,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="On-Axis Phase needs the spl_on_axis phase samples from a completed solve."/>;
     }
     if (chartType === 'group_delay') {
-      const option = groupDelayOption(overlays, tokens, density);
+      const option = groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit);
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab on-axis group delay by frequency" live={live}/>
         : <ChartStub reason={groupDelayMissingReason(result)}/>;
@@ -1515,7 +1612,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="The retained radiation matrix has no finite reduced load curves."/>;
     }
     return null;
-  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, wrapper]);
+  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.groupDelayUnit, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, wrapper]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
@@ -1612,10 +1709,14 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     : impedanceItems ? impedanceSubtitle(impedanceItems)
     : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
     : null;
-  const unit = chartUnit(chartType, result, impedanceItems);
+  const unit = chartUnit(chartType, result, impedanceItems, preferencesStore.getSnapshot().groupDelayUnit);
   const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
+  // The detail dialog owns the rendered chart while it is open, so capture from
+  // there rather than from the card behind it -- otherwise the large view would
+  // silently hand back the small view's image.
   const imageAction = useCallback(async (operation: 'copy' | 'download') => {
-    const target = card.current?.querySelector<HTMLElement>('.chart-placeholder');
+    const target = detail.current?.querySelector<HTMLElement>('.result-detail-chart')
+      ?? card.current?.querySelector<HTMLElement>('.chart-placeholder');
     if (!target || imageOperation) return;
     setImageOperation(operation);
     setImageStatus(null);
@@ -1659,7 +1760,18 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     </section>
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
-        <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
+        <header>
+          <div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div>
+          <small>Hover to inspect · Ctrl/scroll to zoom lines</small>
+          {/* The same actions the card carries: a view that shows the chart
+              larger should not offer less to do with it. */}
+          {chartType !== 'summary' && <>
+            <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Copy chart as PNG" title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
+            <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Download chart as PNG" title="Download chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
+          </>}
+          {imageStatus && <span className="result-image-status" role="status">{imageStatus}</span>}
+          <button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button>
+        </header>
         <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/></div>
       </section>
     </div>, document.body)}
@@ -1698,78 +1810,6 @@ interface ResultDisplaySnapshot {
 interface ResultFetchError {
   key: string;
   message: string;
-}
-
-/** Crossover editor for a combined channel: recombines from the job's stored
- * complex bases server-side, so a change repaints without a re-solve. The
- * applied frequencies are also written back to the CAD rail, so the dock and
- * the pre-solve fields are one setting rather than two that disagree. */
-function RecombineRow({ jobId, channelId, resultIngestId, combine, onApplied }: {
-  jobId: string;
-  channelId: string;
-  resultIngestId: string | null;
-  combine: CombineMetadata;
-  onApplied: (jobId: string, updated: JobResults) => void;
-}) {
-  const applied = combine.crossovers_hz.map((value) => String(value));
-  const [values, setValues] = useState<string[]>(applied);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const appliedKey = `${jobId}:${channelId}:${applied.join(',')}`;
-  const lastApplied = useRef(appliedKey);
-  if (lastApplied.current !== appliedKey) {
-    lastApplied.current = appliedKey;
-    setValues(applied);
-    setError(null);
-  }
-  const dirty = values.some((value, index) => value !== applied[index]);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const crossovers = values.map(Number);
-    if (crossovers.some((value) => !Number.isFinite(value) || value <= 0)) {
-      setError('Crossovers must be positive frequencies.');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await recombineJobResults(jobId, {
-        id: channelId,
-        members: combine.members,
-        crossovers_hz: crossovers,
-        level_match: combine.level_match?.enabled ?? true,
-        align: combine.align ?? true,
-      });
-      onApplied(jobId, updated);
-      useCadReturnStore.getState().setCombineCrossoversFromResult(resultIngestId, combine.members, crossovers);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return <form className="results-toolbar result-recombine" onSubmit={(event) => void submit(event)}>
-    {combine.members.slice(0, -1).map((lower, index) => {
-      const upper = combine.members[index + 1];
-      // Bands below, because that is how a crossover is spoken. The authored
-      // ids stay the fallback and remain the accessible name either way, so an
-      // unroled return still says which channels each field joins.
-      return <label key={`${lower}\u0000${upper}`} className="result-recombine-pair">
-        <span>{combine.member_roles?.[index] ?? lower} → {combine.member_roles?.[index + 1] ?? upper}</span>
-        <input
-          type="number"
-          min={1}
-          step={10}
-          value={values[index] ?? ''}
-          aria-label={`Crossover ${lower} to ${upper} in hertz`}
-          onChange={(event) => setValues((current) => current.map((value, i) => i === index ? event.target.value : value))}
-        />
-        <span>Hz</span>
-      </label>;
-    })}
-    <button type="submit" disabled={busy || !dirty} title="Recompute the combined channel from the stored solve — no re-solve needed">{busy ? 'Recombining…' : 'Apply'}</button>
-    {error && <span className="result-recombine-error" role="alert">{error}</span>}
-  </form>;
 }
 
 /**
@@ -1971,6 +2011,9 @@ export function ResultsPanel() {
     ? shownRaw.channels[shownActiveChannel] as ResultPayload
     : shownRaw;
   const shownCombine = combineMetadataOf(shown);
+  // The pre-solve rail shows what "auto" chose for gain and delay, and only a
+  // solved result knows those numbers. The dock already holds one, so it hands
+  // it over rather than making the rail fetch results of its own.
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
       ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }
@@ -2004,10 +2047,29 @@ export function ResultsPanel() {
     return newer ? latest : null;
   }, [dismissedNewRun, latest, primaryJob, selection.primary]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
+  const activeIngestId = useCadReturnStore((store) => store.ingestRecord?.ingest_id ?? null);
   const recombineIngestId = selectedJob && runMatchesContext(selectedJob, coherenceContext) === 'current'
     ? selectedJob.cad_source?.ingest_id ?? null
     : null;
   const primaryIsProvisional = Boolean(display?.provisionalIds.includes(display.primaryId));
+  // The rail may only repaint the run it is actually the rail for. Two CAD
+  // returns can name their drive channels identically, so matching channel ids
+  // are not lineage; the run has to carry the active return's immutable ingest
+  // id, the same identity the dock's own strip checked before it was replaced.
+  const shownIsActiveReturn = recombineIngestId !== null
+    && recombineIngestId === activeIngestId;
+  const shownCanApply = selectedJob?.status === 'complete'
+    && !primaryIsProvisional
+    && shownIsActiveReturn;
+  useEffect(() => {
+    latestCombine.publish(shownCombine && shownActiveChannel && display ? {
+      jobId: display.primaryId,
+      channelId: shownActiveChannel,
+      combine: shownCombine,
+      canApply: shownCanApply,
+      onApplied: applyRecombined,
+    } : null);
+  }, [shownCombine, shownActiveChannel, display, shownCanApply, applyRecombined]);
   const provisionalMetadata = primaryRaw?.metadata?.provisional;
   const provisionalRecord = provisionalMetadata && typeof provisionalMetadata === 'object'
     ? provisionalMetadata as Record<string, unknown>
@@ -2248,8 +2310,6 @@ export function ResultsPanel() {
         ? <><button type="button" onClick={() => { setCoherenceOpen(false); restorePrimaryDesign(); }}>Restore this run&apos;s design</button><button type="button" onClick={() => { setCoherenceOpen(false); solveCurrentDesign(); }}>Solve current design</button></>
         : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Show this model</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
     </AnchoredPanel>}
-    {shownActiveChannel && shownCombine && display && selectedJob?.status === 'complete' && !primaryIsProvisional
-      && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} resultIngestId={recombineIngestId} combine={shownCombine} onApplied={applyRecombined}/>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>
       {measuredOverlays.map((overlay) => <MeasuredOverlayRow key={overlay.id} overlay={overlay}/>)}

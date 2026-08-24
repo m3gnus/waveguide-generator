@@ -37,7 +37,6 @@ from server.workspace.api import (
 from server.workspace.archive import (
     CAD_SUBDIRECTORY,
     archive_cad_document,
-    archive_folder_slug,
     captured_cad_document,
     design_archive_folder,
     place_run_cad_document,
@@ -505,42 +504,76 @@ async def list_returns(request: Request) -> dict[str, Any]:
 async def list_designs(request: Request) -> dict[str, Any]:
     """Expose recent CAD-linked projects as a local project picker.
 
-    Each lineage contributes only its newest head and reports the archive folder its runs and captured CAD
-    documents share, so a project can be opened, revealed and counted from one
-    listing rather than from three that could disagree.
+    Each lineage contributes only its newest head and reports the archive
+    folder its runs and captured CAD documents share, so a project can be
+    opened, revealed and counted from one listing rather than from three that
+    could disagree.
     """
 
     store: CadLinkStore = request.app.state.cadlink_store
-    projects = await asyncio.to_thread(
-        lambda: [
-            (
-                row,
-                _project_archive_stem(
-                    store, str(row["lineage_id"]), str(row["filename"])
-                ),
+
+    def read_projects() -> tuple[
+        list[dict[str, Any]], dict[str, str], dict[str, Any], list[dict[str, Any]]
+    ]:
+        rows = store.list_projects()
+        stems = {
+            str(row["lineage_id"]): _project_archive_stem(
+                store, str(row["lineage_id"]), str(row["filename"])
             )
-            for row in store.list_projects()
-        ]
+            for row in rows
+        }
+        documents = {
+            str(row["lineage_id"]): (
+                store.get_lineage_cad_names(str(row["lineage_id"])) or {}
+            ).get("document_name")
+            for row in rows
+        }
+        return rows, stems, documents, store.list_cad_document_projects()
+
+    rows, stems, documents, cad_only = await asyncio.to_thread(read_projects)
+    items = [
+        {
+            "designId": str(row["design_id"]),
+            "lineageId": str(row["lineage_id"]),
+            "editVersion": int(row["edit_version"]),
+            "designHash": str(row["design_hash"]),
+            "filename": str(row["filename"]),
+            "archiveStem": stems.get(str(row["lineage_id"])) or None,
+            "documentName": documents.get(str(row["lineage_id"])),
+            "branchedFromDesignId": row.get("branched_from_design_id"),
+            "branchedFromEditVersion": row.get("branched_from_edit_version"),
+            "exportCount": int(row.get("export_count") or 0),
+            "lastExportedAt": row.get("last_exported_at"),
+            "createdAt": str(row["created_at"]),
+            "updatedAt": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
+    # A project that exists only in CAD has no design row to list, but it is a
+    # project all the same: runs, an archive folder and a history hang off it.
+    # It carries no designId because there is no snapshot to open.
+    items.extend(
+        {
+            "designId": None,
+            "lineageId": str(row["lineage_id"]),
+            "editVersion": None,
+            "designHash": None,
+            "filename": None,
+            "archiveStem": str(row.get("archive_stem") or "").strip()
+            or str(row.get("document_name") or "").strip()
+            or None,
+            "documentName": row.get("document_name"),
+            "branchedFromDesignId": None,
+            "branchedFromEditVersion": None,
+            "exportCount": 0,
+            "lastExportedAt": None,
+            "createdAt": str(row["created_at"]),
+            "updatedAt": str(row["updated_at"]),
+        }
+        for row in cad_only
     )
-    return {
-        "items": [
-            {
-                "designId": str(row["design_id"]),
-                "lineageId": str(row["lineage_id"]),
-                "editVersion": int(row["edit_version"]),
-                "designHash": str(row["design_hash"]),
-                "filename": str(row["filename"]),
-                "archiveStem": stem or None,
-                "branchedFromDesignId": row.get("branched_from_design_id"),
-                "branchedFromEditVersion": row.get("branched_from_edit_version"),
-                "exportCount": int(row.get("export_count") or 0),
-                "lastExportedAt": row.get("last_exported_at"),
-                "createdAt": str(row["created_at"]),
-                "updatedAt": str(row["updated_at"]),
-            }
-            for row, stem in projects
-        ]
-    }
+    items.sort(key=lambda item: str(item["updatedAt"]), reverse=True)
+    return {"items": items}
 
 
 @router.get("/designs/{design_id}")
@@ -867,7 +900,19 @@ async def _archive_cad_document(
     anchor = record.get("anchor")
     design_id = str((anchor or {}).get("design_id") or "") if isinstance(anchor, Mapping) else ""
     stem = str((record.get("document") or {}).get("name") or "")
-    if design_id:
+    # Ingestion already claimed the one folder this project's runs and captured
+    # documents share -- including for a CAD-authored return, which has no
+    # design to anchor to and so used to reach neither branch below and be
+    # filed under a raw document name no run ever wrote to.
+    project = record.get("project")
+    claimed = (
+        str(project.get("archive_stem") or "").strip()
+        if isinstance(project, Mapping)
+        else ""
+    )
+    if claimed:
+        stem = claimed
+    elif design_id:
         design_row = await asyncio.to_thread(store.get_design, design_id)
         lineage_id = str((design_row or {}).get("lineage_id") or "")
         if lineage_id:
@@ -960,6 +1005,7 @@ def _project_archive_stem(store: CadLinkStore, lineage_id: str, filename: str) -
         str(names.get("archive_stem") or "").strip()
         or str(names.get("bundle_stem") or "").strip()
         or Path(str(filename or "")).stem
+        or str(names.get("document_name") or "").strip()
     )
 
 
@@ -980,9 +1026,15 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
 
     def resolve() -> str:
         row = store.find_latest_design_for_lineage(lineage_id)
-        if row is None:
+        if row is not None:
+            return _project_archive_stem(store, lineage_id, str(row["filename"]))
+        # A CAD-authored project has no design row; its folder is named by the
+        # stem the lineage claimed when its document was first captured.
+        names = store.get_lineage_cad_names(lineage_id)
+        stem = _project_archive_stem(store, lineage_id, "") if names else ""
+        if not stem:
             raise HTTPException(status_code=404, detail="CAD-linked project not found")
-        return _project_archive_stem(store, lineage_id, str(row["filename"]))
+        return stem
 
     stem = await asyncio.to_thread(resolve)
     root = _runs_root(request).resolve()
@@ -1074,7 +1126,7 @@ async def download_project_document(
     return FileResponse(
         document,
         media_type="application/octet-stream",
-        filename=f"{archive_folder_slug(stem, 'project')}{document.suffix}",
+        filename=document.name,
     )
 
 

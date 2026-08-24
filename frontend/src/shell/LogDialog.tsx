@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './icons';
-import { trapDialogFocus } from './SettingsDialog';
+import { trapDialogFocus } from './dialogFocus';
 
 export const LOG_PREVIEW_BYTES = 1_000_000;
 

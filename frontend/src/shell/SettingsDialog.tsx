@@ -9,58 +9,50 @@ import {
 } from '../api/cadWorkspace';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
+import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { Icon } from './icons';
+import { WorkspaceFolderControls } from './WorkspaceFolderControls';
 import type { SettingsSection } from './settingsNavigation';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
 
 export type Theme = 'dark' | 'light';
 
-async function workspacePath(endpoint: '/path' | '/open' | '/select', method?: 'POST'): Promise<string> {
-  const response = await fetch(`/api/workspace${endpoint}`, method ? { method } : undefined);
-  if (!response.ok) throw new Error(`Workspace request failed (${response.status})`);
-  const payload = await response.json() as { path?: unknown };
-  if (typeof payload.path !== 'string' || !payload.path) throw new Error('Workspace response has no path');
-  return payload.path;
+/**
+ * Where the driver library reads its CSV files, and how many it found.
+ *
+ * Read-only apart from *Rescan*: the folder is resolved per platform beside
+ * WG's other application data, and the index rebuilds itself whenever a file's
+ * mtime changes, so this button is for the case where someone wants to see the
+ * count move after dropping a file in.
+ */
+function DriverLibrarySettings() {
+  const status = useDriverLibraryStore((store) => store.status);
+  const info = useDriverLibraryStore((store) => store.info);
+  const error = useDriverLibraryStore((store) => store.error);
+  const load = useDriverLibraryStore((store) => store.load);
+  const rescan = useDriverLibraryStore((store) => store.rescan);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const files = info?.files.length ?? 0;
+  return <section id="settings-drivers" className="settings-theme driver-library-settings" aria-labelledby="settings-drivers-title" tabIndex={-1}>
+    <h3 id="settings-drivers-title">Driver library</h3>
+    <p className={`workspace-settings-path ${info?.folder ? '' : 'not-selected'}`} title={info?.folder ?? undefined}>{info?.folder ?? 'Not resolved yet'}</p>
+    <p className="cad-settings-note">Waveguide Generator ships no driver data. Put CSV files in this folder and their drivers become searchable in <b>Drivers</b>.</p>
+    <div className="driver-library-counts">
+      <span>{files.toLocaleString()} file{files === 1 ? '' : 's'} · {(info?.total_drivers ?? 0).toLocaleString()} driver{info?.total_drivers === 1 ? '' : 's'}</span>
+    </div>
+    <div className="settings-theme-options">
+      <button disabled={status === 'loading'} onClick={() => void rescan()}>{status === 'loading' ? 'Rescanning…' : 'Rescan'}</button>
+    </div>
+    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+  </section>;
 }
 
 function WorkspaceSettings() {
-  const [path, setPath] = useState<string>();
-  const [busy, setBusy] = useState<'open' | 'select'>();
-  const [error, setError] = useState<string>();
-  const requestGeneration = useRef(0);
-
-  useEffect(() => {
-    const request = ++requestGeneration.current;
-    void workspacePath('/path').then(
-      (value) => { if (request === requestGeneration.current) setPath(value); },
-      (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
-    );
-    return () => { requestGeneration.current += 1; };
-  }, []);
-
-  const run = async (action: 'open' | 'select') => {
-    const request = ++requestGeneration.current;
-    setBusy(action);
-    setError(undefined);
-    try {
-      const nextPath = await workspacePath(action === 'open' ? '/open' : '/select', 'POST');
-      if (request === requestGeneration.current) setPath(nextPath);
-    } catch (reason) {
-      if (request === requestGeneration.current) setError(String(reason));
-    } finally {
-      if (request === requestGeneration.current) setBusy(undefined);
-    }
-  };
-
-  return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title" aria-busy={busy !== undefined}>
+  return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title">
     <h3 id="settings-workspace-title">Workspace</h3>
-    <p className="cad-settings-note">Manual and automatic run exports are saved here. The default is <code>Documents/Waveguide Generator/runs</code>; when you choose another workspace, the path shown below is authoritative. The application-data folder continues to hold internal databases and logs, not result exports.</p>
-    <p className="workspace-settings-path" title={path}>{path ?? (error ? 'Unavailable' : 'Loading…')}</p>
-    <div className="settings-theme-options">
-      <button disabled={!path || busy !== undefined} onClick={() => void run('open')}>Open folder</button>
-      <button disabled={busy !== undefined} onClick={() => void run('select')}>Select folder…</button>
-    </div>
-    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+    <WorkspaceFolderControls note={<>Manual and automatic run exports are saved here, and so is every CAD project’s archive folder. The default is <code>Documents/Waveguide Generator/runs</code>; when you choose another workspace, the path shown above is authoritative. The application-data folder continues to hold internal databases and logs, not result exports.</>}/>
   </section>;
 }
 
@@ -74,7 +66,7 @@ const CAPTURE_CHOICES: Array<{ mode: CadCaptureMode; label: string; detail: stri
   {
     mode: 'project',
     label: 'Once per project',
-    detail: 'In runs/<project>/cad/, one copy per model state however many times it is solved. Saves space when sweeping one geometry.',
+    detail: 'In runs/<project>/cad/, only the newest model state -- archiving a later one deletes the last. Saves space when sweeping one geometry; each run folder keeps its own copy regardless.',
   },
   {
     mode: 'off',
@@ -240,6 +232,26 @@ function OnshapeConnectionStatus({ onConnection }: {
   </div>;
 }
 
+/**
+ * Where CAD projects are archived -- which is the output workspace.
+ *
+ * A project's folder is <workspace>/<project>, so this is not a second setting
+ * with its own path to drift out of step; it is the workspace setting, offered
+ * where someone looking at a project would think to change it. Both surfaces
+ * read one store, so a change here is visible in Workspace below without
+ * reopening the dialog.
+ */
+function CadProjectFolderSettings() {
+  return <div className="cad-setup-folder cad-project-folder">
+    <h4 className="cad-settings-subhead">Project folder</h4>
+    <WorkspaceFolderControls
+      manual
+      selectLabel="Choose a new folder…"
+      note={<>Each CAD project keeps its runs and captured models in its own folder here. This is the same folder as <b>Workspace</b> below, and changing it in either place changes both. Existing projects are not moved.</>}
+    />
+  </div>;
+}
+
 function CadSettings() {
   const preferences = usePreferences();
   const onshape = preferences.cadApplication === 'onshape';
@@ -267,6 +279,7 @@ function CadSettings() {
       <li><b>Choose the WGLink folder</b><span>This is separate from the output folder below. WG and Fusion read the same setting, so it is chosen only here.</span><CadFolderSettings/></li>
       <li><b>Open a design in Fusion</b><span>Close Settings, open <b>CAD Link</b>, and choose <b>Open in Fusion 360</b>. WG writes the bundle, starts Fusion, and the connection card confirms when WGLink is online.</span></li>
     </ol>}
+    <CadProjectFolderSettings/>
   </section>;
 }
 
@@ -298,6 +311,7 @@ export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClo
           </div>
         </section>
         <CadSettings/>
+        <DriverLibrarySettings/>
         <WorkspaceSettings/>
         <ResultsPreferencesSurface expanded/>
         <JobsPreferencesSurface expanded/>
