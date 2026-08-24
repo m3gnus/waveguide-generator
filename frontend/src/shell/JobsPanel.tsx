@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExterna
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
-import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
+import { canLoadJobDesign } from '../jobs/jobDesign';
 import { showJobModel } from '../jobs/showJobModel';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { nextRunLabel } from '../jobs/runNaming';
@@ -66,16 +66,17 @@ function Rating({ job, onError }: { job: JobItem; onError: (message: string) => 
  * goes back into the viewport. Both stores are set synchronously so the row
  * expands on the same frame as the click; the results payload is served from
  * the LRU cache and the geometry preview catches up behind it.
+ *
+ * Showing the model always goes through `showJobModel`, which also puts the
+ * workspace into the run's owning mode — so selecting a parametric run from
+ * CAD Link mode brings the parametric workspace back with it, exactly as an
+ * imported run selected from parametric mode brings CAD Link back.
  */
 export function selectJob(job: JobItem): void {
   if (job.has_results) compareSelection.setPrimary(job.id);
-  if (job.config_summary.geometry_type === 'imported') {
-    void showJobModel(job);
-    return;
-  }
   // Undoable: browsing runs must not be able to discard the working design.
-  if (!canLoadDesign(job)) return;
-  replaceWithJobDesign(job, { keepHistory: true });
+  if (job.config_summary.geometry_type !== 'imported' && !canLoadDesign(job)) return;
+  void showJobModel(job);
 }
 
 /** The stage the passive-cardioid radiation-impedance campaign reports under. */
