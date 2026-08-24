@@ -3,7 +3,7 @@ import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { expandLegacy, toWire, withDelayMode } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { buildImportedSubmission, importedSubmissionBlocker, widenPolarToDerivation } from './importedSubmission';
+import { buildImportedSubmission, importedSubmissionBlocker, importedSubmissionNotices, widenPolarToDerivation } from './importedSubmission';
 
 const bundle = {
   name: 'three-way.wgreturn', bundlePath: 'wgreturn/three-way.wgreturn', modifiedAt: '2026-08-13T12:00:00Z', readable: true,
@@ -165,6 +165,75 @@ describe('an unfinished driver is refused, not dropped', () => {
     });
 
     expect(importedSubmissionBlocker()).toBeNull();
+  });
+});
+
+describe('an undriven channel is announced, not refused', () => {
+  beforeEach(() => { resetCadReturnStore(); resetSolveOptionsStore(); });
+
+  const COMPLETE = { sd_cm2: 552, bl_t_m: 18, re_ohm: 6.8, mms_g: 91.3, fs_hz: 30 };
+
+  const ready = (drivers: unknown, combineEnabled: boolean | null = null) => useCadReturnStore.setState({
+    selectedBundle: bundle,
+    ingestRecord: record,
+    skippedSourceIds: [],
+    driveChannels: [
+      { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+      { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+      { id: 'drive-lf', source_ids: ['source-lf'], motion: 'normal' },
+    ],
+    channelDrivers: drivers as never,
+    combineEnabled,
+    needsIngest: false,
+  });
+
+  it('says which channels solve unit-driven, and lets the solve run', () => {
+    // Exactly the shape of run 117: the cone channels are driven from the LF
+    // sheet, the compression channel has no driver because its sheet carries
+    // no T/S at all.
+    ready({
+      'drive-lf': { enabled: true, fields: COMPLETE, preset: null },
+      'drive-mf': { enabled: true, fields: COMPLETE, preset: null },
+    });
+
+    expect(importedSubmissionBlocker()).toBeNull();
+    const [first] = importedSubmissionNotices();
+    expect(first).toContain('drive-hf');
+    expect(first).toContain('unit-driven');
+    expect(first).toContain('no power, current or excursion');
+  });
+
+  it('spells out what a mixed combined output means', () => {
+    ready({
+      'drive-lf': { enabled: true, fields: COMPLETE, preset: null },
+      'drive-mf': { enabled: true, fields: COMPLETE, preset: null },
+    }, true);
+
+    const notices = importedSubmissionNotices();
+    expect(notices).toHaveLength(2);
+    expect(notices[1]).toContain('mixes driver-coupled and unit-driven');
+    expect(notices[1]).toContain('level-matched');
+    expect(notices[1]).toContain('absolute SPL');
+  });
+
+  it('says nothing when every channel is driven the same way', () => {
+    // No drivers anywhere is the ordinary unit-acceleration solve, not news.
+    ready({});
+    expect(importedSubmissionNotices()).toEqual([]);
+
+    ready({
+      'drive-lf': { enabled: true, fields: COMPLETE, preset: null },
+      'drive-mf': { enabled: true, fields: COMPLETE, preset: null },
+      'drive-hf': { enabled: true, fields: COMPLETE, preset: null },
+    }, true);
+    expect(importedSubmissionNotices()).toEqual([]);
+  });
+
+  it('is a notice, not a second chance to be incomplete', () => {
+    // An enabled-but-unfinished driver is still a refusal: the user asked for
+    // a driver there, and "it solved unit-driven instead" is not the answer.
+    ready({ 'drive-hf': { enabled: true, fields: { re_ohm: 5.4 }, preset: null } });
+    expect(importedSubmissionBlocker()).toContain('drive-hf still needs');
   });
 });
 

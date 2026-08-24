@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
 import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink';
-import { importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import { backendLimitation } from './backendSupport';
@@ -895,6 +895,12 @@ function CadDriveChannels() {
     </div>
     {state.driveChannels.some((channel) => state.channelDrivers[channel.id]?.enabled)
       && <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>}
+    {/* Said here, beside the drivers, and before the solve rather than after
+        it: a channel with no driver is a good solve with consequences that are
+        otherwise invisible until a chart has nothing to draw. */}
+    {importedSubmissionNotices(state).map((notice) => (
+      <p className="cad-driver-hint" role="status" key={notice}>{notice}</p>
+    ))}
   </>;
 }
 
