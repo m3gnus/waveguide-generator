@@ -24,6 +24,7 @@ import './cadLinkPanel.css';
 
 // Kept as public panel helpers for existing callers; implementation lives next
 // to the two solve entry points so the global command can share it.
+import { importedSubmissionNotices } from '../jobs/importedSubmission';
 export { buildImportedSubmission, widenPolarToDerivation } from '../jobs/importedSubmission';
 export { newestReturnArrival, showIngestedMeshInViewport } from './CadLinkCoordinator';
 
@@ -632,6 +633,12 @@ export function CadLinkPanel() {
       </div>}
       {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Prepare the model again before solving.</div>}
       {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}
+      {/* Beside the button that starts the solve, not only in the rail where
+          the drivers are set: this is what the run will and will not produce,
+          and it was previously only discoverable from the empty chart. */}
+      {record && !staleModel && importedSubmissionNotices(state).map((notice) => (
+        <div className="cad-alert cad-alert-notice" role="status" key={notice}>{notice}</div>
+      ))}
       {ingestError && <div className="cad-alert cad-alert-error" role="alert">Preparation failed — {ingestError}</div>}
       {bundle?.readable && (ingesting || !record || staleModel || ingestError) && <button
         className="primary cad-primary-action"

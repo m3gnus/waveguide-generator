@@ -12,6 +12,8 @@ import {
   driverEditedKeys,
   driverMissingGroups,
   driverValues,
+  driversForChannels,
+  projectChannelDrivers,
   DRIVER_REQUIRED_KEYS,
   resetCadReturnStore,
   useCadReturnStore,
@@ -416,11 +418,11 @@ describe('CAD return store', () => {
     useCadReturnStore.getState().setDriveVoltage(23);
 
     const stored = JSON.parse(localStorage.getItem(solveProfileStorageKey) ?? '{}') as {
-      profiles: Array<{ designId: string }>;
+      profiles: Array<{ owner: string }>;
     };
     expect(stored.profiles).toHaveLength(20);
-    expect(stored.profiles.map(({ designId }) => designId)).toContain('wgd_0');
-    expect(stored.profiles.map(({ designId }) => designId)).not.toContain('wgd_1');
+    expect(stored.profiles.map(({ owner }) => owner)).toContain('design:wgd_0:wgl_0');
+    expect(stored.profiles.map(({ owner }) => owner)).not.toContain('design:wgd_1:wgl_1');
   });
 
   it('marks a refreshed changed listing stale while preserving sizing edits', () => {
@@ -589,7 +591,11 @@ describe('combined output', () => {
     useCadReturnStore.getState().setCombineEnabled(true);
 
     const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    // Versions 1 to 3 were design-owned and stated the identity the owner is
+    // rebuilt from, so a fixture claiming to be one has to state it too.
     raw.version = 2;
+    raw.profiles[0].designId = 'wgd_speaker';
+    raw.profiles[0].lineageId = 'wgl_speaker';
     delete raw.profiles[0].settings.combineSpec;
     raw.profiles[0].settings.combineCrossoversHz = { 'drive-mf→drive-hf': 1_350 };
     raw.profiles[0].settings.combineLevelMatch = false;
@@ -610,7 +616,11 @@ describe('combined output', () => {
     useCadReturnStore.getState().setCombineEnabled(true);
 
     const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    // Versions 1 to 3 were design-owned and stated the identity the owner is
+    // rebuilt from, so a fixture claiming to be one has to state it too.
     raw.version = 2;
+    raw.profiles[0].designId = 'wgd_speaker';
+    raw.profiles[0].lineageId = 'wgl_speaker';
     delete raw.profiles[0].settings.combineSpec;
     raw.profiles[0].settings.combineCrossoversHz = {};
     raw.profiles[0].settings.combineLevelMatch = null;
@@ -843,6 +853,151 @@ describe('a channel driver picked from the library', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     expect(useCadReturnStore.getState().channelDrivers).toEqual({});
     expect(useCadReturnStore.getState().rigidSizeMm).toBe(8);
+  });
+});
+
+describe('the CAD project owns its solve settings', () => {
+  const PRESET_12RS430 = {
+    id: 'Faital Pro::12RS430::8', label: 'Faital Pro 12RS430', source: 'database' as const,
+    kind: 'lf' as const, z_ohm: 8, xo_min_hz: null,
+    base: { sd_cm2: 552, bl_t_m: 18, re_ohm: 6.8, mms_g: 91.3, vas_l: 131.2, fs_hz: 30 },
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+  });
+
+  it('keeps a project\'s drivers when the open design is a different one', () => {
+    // A project that exists only in CAD has no design identity of its own, so
+    // its settings used to be filed under whichever parametric design happened
+    // to be open -- and were gone as soon as another one was.
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_unrelated', lineageId: 'wgl_unrelated', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
+
+    // Another design is opened, and the same project's return comes back.
+    resetCadReturnStore();
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_other', lineageId: 'wgl_other', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+
+    expect(useCadReturnStore.getState().channelDrivers['drive-mf'].preset)
+      .toMatchObject({ id: 'Faital Pro::12RS430::8' });
+  });
+
+  it('does not hand one project\'s drivers to another', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_someone_else');
+
+    expect(useCadReturnStore.getState().channelDrivers).toEqual({});
+  });
+
+  it('saves a driver picked while an archived run is on screen', () => {
+    // A recalled run's bundle is not readable, which used to mean nothing done
+    // on it was kept -- including picking the driver you recalled it to change.
+    useCadReturnStore.setState({
+      selectedBundle: { ...bundle, readable: false, bundlePath: '' },
+      ingestRecord: record(),
+      projectLineageId: 'wgl_party',
+      driveChannels: [{ id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' }],
+      needsIngest: false,
+    });
+    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+
+    expect(useCadReturnStore.getState().channelDrivers['drive-mf'].preset)
+      .toMatchObject({ label: 'Faital Pro 12RS430' });
+  });
+
+  it('offers the project\'s drivers for a recalled run, fitted to its channels', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
+
+    const drivers = projectChannelDrivers(bundle, 'wgl_party')!;
+    expect(drivers['drive-mf'].preset).toMatchObject({ id: 'Faital Pro::12RS430::8' });
+    // A channel the recalled run does not have keeps nothing.
+    expect(driversForChannels(drivers, [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }]))
+      .toEqual({});
+    expect(projectChannelDrivers(bundle, 'wgl_other')).toBeNull();
+  });
+
+  it('survives a document rename, which is not a new project', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
+
+    const renamed = { ...bundle, documentName: 'Speaker v2', modifiedAt: '2026-08-12T00:00:00Z' };
+    expect(useCadReturnStore.getState().selectArrivedBundle(renamed)).toBe('carried');
+    expect(useCadReturnStore.getState().channelDrivers['drive-mf'].preset)
+      .toMatchObject({ id: 'Faital Pro::12RS430::8' });
+  });
+});
+
+describe('a picked driver re-reads its T/S from the library', () => {
+  const CATALOGUE_ROW = {
+    id: 'B&C::DE250::8', label: 'B&C DE250', source: 'database' as const,
+    kind: 'cd' as const, z_ohm: 8, xo_min_hz: 1_200,
+    // What a compression-driver sheet publishes before anyone fills in T/S:
+    // enough to name the driver, not enough to solve one.
+    base: { re_ohm: 5.4, bl_t_m: 17.5, le_mh: 0.62 },
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+  });
+
+  it('takes the numbers the row has now, and keeps the user\'s edits', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', CATALOGUE_ROW);
+    useCadReturnStore.getState().setChannelDriverField('drive-hf', 'count', 2);
+    expect(channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])).toBeUndefined();
+
+    // The library row gains its T/S.
+    const changed = useCadReturnStore.getState().refreshChannelDriverBases({
+      'drive-hf': {
+        presetId: 'B&C::DE250::8',
+        base: { re_ohm: 5.4, bl_t_m: 17.5, le_mh: 0.62, sd_cm2: 13.2, mms_g: 0.65, fs_hz: 550 },
+        xo_min_hz: 1_200,
+      },
+    });
+
+    expect(changed).toEqual(['drive-hf']);
+    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(driverValues(form)).toMatchObject({ sd_cm2: 13.2, mms_g: 0.65, fs_hz: 550, count: 2 });
+    // Complete now, so it reaches the wire instead of being dropped.
+    expect(channelDriverWire(form)).toMatchObject({ sd_cm2: 13.2, label: 'B&C DE250' });
+  });
+
+  it('leaves a channel alone when its driver has changed underneath', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', CATALOGUE_ROW);
+
+    const changed = useCadReturnStore.getState().refreshChannelDriverBases({
+      'drive-hf': { presetId: 'Someone::Else::8', base: { sd_cm2: 999 } },
+    });
+
+    expect(changed).toEqual([]);
+    expect(driverValues(useCadReturnStore.getState().channelDrivers['drive-hf']).sd_cm2).toBeUndefined();
+  });
+
+  it('reports nothing when the row still says what it said', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', CATALOGUE_ROW);
+
+    expect(useCadReturnStore.getState().refreshChannelDriverBases({
+      'drive-hf': { presetId: 'B&C::DE250::8', base: { ...CATALOGUE_ROW.base }, xo_min_hz: 1_200 },
+    })).toEqual([]);
   });
 });
 

@@ -38,6 +38,34 @@ from launchers.apply_update import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _never_open_the_real_failure_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, str]]:
+    """Keep the updater's visible failure channel out of the test process.
+
+    ``apply_update`` reports a failed update through
+    ``_show_update_failure_dialog`` unless the caller injects
+    ``failure_reporter``. On Windows that is a modal ``MessageBoxW``, which on a
+    headless runner waits for a click that never comes -- one such test hung
+    Windows CI for over two hours. Off Windows the same call raises inside the
+    function's own ``except Exception`` and vanishes, so the defect is invisible
+    everywhere except the platform it breaks.
+
+    Tests that care about the reported text inject their own reporter and assert
+    on it; this fixture only guarantees that the ones which do not can never
+    block. It records the calls so a test may inspect them if it wants to.
+    """
+
+    shown: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        apply_update_module,
+        "_show_update_failure_dialog",
+        lambda message, platform_name: shown.append((message, platform_name)),
+    )
+    return shown
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 handle semantics")
 def test_the_liveness_probe_survives_every_windows_case(tmp_path: Path) -> None:
     """os.kill cannot answer this on Windows, and not for the usual reason.

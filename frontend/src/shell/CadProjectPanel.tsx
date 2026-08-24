@@ -114,7 +114,10 @@ async function openCadOnlyProject(project: CadProject): Promise<string> {
   if (!bundle) {
     throw new Error(`No return from ${projectName(project)} is available to open. Send the document from Fusion again.`);
   }
-  cadLinkCoordinatorBridge.getSnapshot().selectBundle(bundle);
+  // Naming the project is what files this session's settings -- the drivers
+  // above all -- under the project being opened rather than under whichever
+  // one the workspace was on.
+  cadLinkCoordinatorBridge.getSnapshot().selectBundle(bundle, project.lineageId);
   return projectName(project);
 }
 
