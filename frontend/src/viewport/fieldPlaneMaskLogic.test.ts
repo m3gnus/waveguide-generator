@@ -4,6 +4,8 @@ import {
   classifyFieldPlaneMask,
   createFieldPlaneMaskMesh,
   fieldPlaneMaskDistanceMetres,
+  fieldPlaneMaskResolution,
+  FIELD_PLANE_MASK_SUPERSAMPLE,
   isPointInsideMaskMesh,
   isWatertightTriangleMesh,
 } from './fieldPlaneMaskLogic';
@@ -73,15 +75,47 @@ describe('field-plane worker mask logic', () => {
   it('skips interior masking for an open shell while retaining near-surface masking', () => {
     const closed = createFieldPlaneMaskMesh(boxVertices.slice(), boxIndices.slice());
     const open = createFieldPlaneMaskMesh(boxVertices.slice(), boxIndices.slice(0, -6));
-    expect([...classifyFieldPlaneMask(closed, interiorPlane)]).toEqual(new Array(9).fill(1));
-    expect([...classifyFieldPlaneMask(open, interiorPlane)]).toEqual(new Array(9).fill(0));
+    const points = 6 * 6;
+    expect([...classifyFieldPlaneMask(closed, interiorPlane).data]).toEqual(new Array(points).fill(255));
+    expect([...classifyFieldPlaneMask(open, interiorPlane).data]).toEqual(new Array(points).fill(0));
 
     const surfacePlane = { ...interiorPlane, origin_m: [0, 0, 1] as [number, number, number] };
-    expect([...classifyFieldPlaneMask(open, surfacePlane)]).toEqual(new Array(9).fill(1));
+    expect([...classifyFieldPlaneMask(open, surfacePlane).data]).toEqual(new Array(points).fill(255));
     expect(fieldPlaneMaskDistanceMetres({ ...interiorPlane, width_m: 1e-5, height_m: 1e-5 }))
       .toBe(1e-4);
     closed.geometry.dispose();
     open.geometry.dispose();
+  });
+
+  it('supersamples the mask grid relative to the field grid and caps each axis', () => {
+    expect(FIELD_PLANE_MASK_SUPERSAMPLE).toBeGreaterThan(1);
+    expect(fieldPlaneMaskResolution(interiorPlane))
+      .toEqual({ nx: 3 * FIELD_PLANE_MASK_SUPERSAMPLE, ny: 3 * FIELD_PLANE_MASK_SUPERSAMPLE });
+    expect(fieldPlaneMaskResolution({ ...interiorPlane, nx: 256, ny: 192 }))
+      .toEqual({ nx: 512, ny: 192 * FIELD_PLANE_MASK_SUPERSAMPLE });
+    const grid = classifyFieldPlaneMask(
+      createFieldPlaneMaskMesh(boxVertices.slice(), boxIndices.slice()),
+      interiorPlane,
+    );
+    expect(grid.nx).toBe(3 * FIELD_PLANE_MASK_SUPERSAMPLE);
+    expect(grid.ny).toBe(3 * FIELD_PLANE_MASK_SUPERSAMPLE);
+    expect(grid.data.length).toBe(grid.nx * grid.ny);
+  });
+
+  it('ramps coverage across the silhouette edge instead of stepping 0 to 255', () => {
+    const closed = createFieldPlaneMaskMesh(boxVertices.slice(), boxIndices.slice());
+    // Straddles the +x face at x=1: half the plane is inside the box, half
+    // outside, so the row runs fully-masked -> ramp -> clear.
+    const straddling: FieldPlaneSpec = {
+      ...interiorPlane,
+      origin_m: [1, 0, 0],
+    };
+    const { data } = classifyFieldPlaneMask(closed, straddling);
+    const values = [...data];
+    expect(values).toContain(255);
+    expect(values).toContain(0);
+    expect(values.some((value) => value > 0 && value < 255)).toBe(true);
+    closed.geometry.dispose();
   });
 
   it('closes a reduced half-box and classifies points in its mirrored half', () => {

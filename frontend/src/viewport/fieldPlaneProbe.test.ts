@@ -47,12 +47,14 @@ describe('field-plane interior mask lookup', () => {
     generation: 1,
     nx: 2,
     ny: 2,
-    data: new Uint8Array([0, 0, 0, 1]),
+    data: new Uint8Array([0, 0, 127, 255]),
   };
 
-  it('matches the shader discard at the nearest texel', () => {
+  it('reports the interior from half coverage upward at the nearest texel', () => {
     expect(fieldPlaneMaskedAt(mask, 0, 0)).toBe(false);
+    expect(fieldPlaneMaskedAt(mask, 0, 1)).toBe(false);
     expect(fieldPlaneMaskedAt(mask, 1, 1)).toBe(true);
+    expect(fieldPlaneMaskedAt({ ...mask, data: new Uint8Array([0, 0, 0, 128]) }, 1, 1)).toBe(true);
     expect(fieldPlaneMaskedAt(null, 1, 1)).toBe(false);
   });
 });
