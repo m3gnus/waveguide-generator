@@ -1,7 +1,7 @@
 import { GizmoHelper, GizmoViewport, OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { Component, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ErrorInfo, type ReactNode, type RefObject } from 'react';
-import { CanvasTexture, MathUtils, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
+import { Box3, CanvasTexture, MathUtils, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
 import { readChartTokens } from '../results/EChart';
 import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerPreferences';
 import { calculateCameraFit, clippingRange, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
@@ -68,25 +68,55 @@ export function cameraFitKey(bounds: FrameScene['bounds'], nonce: number, projec
   return `${nonce}:${projection}:${aspect}:${bounds.min.toArray().join(',')}:${bounds.max.toArray().join(',')}`;
 }
 
+/** How far apart bounding-sphere radii may drift before a scene change stops
+ * looking like an edit of the same geometry. Generous on purpose: parametric
+ * edits move a bound by percents, while the transitions this exists to catch
+ * (CAD metres against parametric millimetres, a different model entirely)
+ * shift it by orders of magnitude. */
+const BOUNDS_CONTINUITY_RATIO = 2;
+
+/**
+ * True when new scene bounds cannot plausibly be a routine geometry edit of
+ * the bounds the camera was last fitted to: the bounding-sphere radius jumped
+ * by more than BOUNDS_CONTINUITY_RATIO in either direction, or the boxes do
+ * not even intersect. Either way the retained framing shows some other
+ * region of space, so keeping it would leave the model partly (or entirely)
+ * out of view.
+ */
+export function boundsAreDiscontinuous(applied: Box3, next: Box3): boolean {
+  const radius = (box: Box3) => Math.max(box.min.distanceTo(box.max) / 2, 0.5);
+  const ratio = radius(next) / radius(applied);
+  if (ratio > BOUNDS_CONTINUITY_RATIO || ratio < 1 / BOUNDS_CONTINUITY_RATIO) return true;
+  return !applied.intersectsBox(next);
+}
+
 /**
  * What to do with a camera fit whose inputs have changed.
  *
  * The first scene is framed automatically. After that, new preview bounds,
  * projection changes, and panel resizes keep the same visible view so geometry
  * revisions can be compared in place. Only an explicit view request (preset or
- * gizmo axis, represented by a new view key) frames the model again.
+ * gizmo axis, represented by a new view key) frames the model again — unless
+ * the new bounds are discontinuous with the fitted ones (see
+ * `boundsAreDiscontinuous`), which happens when a scene swap lands *after* the
+ * refit that announced it: switching back from CAD Link fits the camera
+ * against the stale pre-switch scene, and the restored model's frames arrive
+ * a beat later under the same view key. Recording those bounds would leave
+ * the model partly out of frame until the user touches the controls.
  *
  * `settled` means the key is already applied. `record` remembers changed fit
  * inputs without moving the camera. `apply` means the requested direction or
- * reset nonce changed and therefore intentionally takes the camera back.
+ * reset nonce changed — or the scene itself discontinuously did — and
+ * therefore intentionally takes the camera back.
  */
 export function cameraFitDisposition(
-  applied: { fit: string | null; view: string | null },
-  next: { fit: string; view: string },
+  applied: { fit: string | null; view: string | null; bounds?: Box3 | null },
+  next: { fit: string; view: string; bounds?: Box3 },
 ): 'settled' | 'record' | 'apply' {
   if (applied.fit === next.fit) return 'settled';
-  if (applied.view === next.view) return 'record';
-  return 'apply';
+  if (applied.view !== next.view) return 'apply';
+  if (applied.bounds && next.bounds && boundsAreDiscontinuous(applied.bounds, next.bounds)) return 'apply';
+  return 'record';
 }
 
 /** Preserve the visible view while swapping between camera projection types. */
@@ -335,6 +365,9 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     : presetDirection(requestedPreset), [directionX, directionY, directionZ, requestedPreset]);
   const appliedRequest = useRef<string | null>(null);
   const appliedView = useRef<string | null>(null);
+  /** The bounds the camera was last *fitted* to (never merely recorded), so a
+   * later scene swap can be told apart from an edit of the framed geometry. */
+  const appliedBounds = useRef<Box3 | null>(null);
   const appliedZoom = useRef(zoomRequest.nonce);
   const viewTarget = useRef<Vector3 | null>(null);
   if (viewTarget.current === null) viewTarget.current = center.clone();
@@ -365,8 +398,8 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
 
   useLayoutEffect(() => {
     const disposition = cameraFitDisposition(
-      { fit: appliedRequest.current, view: appliedView.current },
-      { fit: fitRequestKey, view: viewKey },
+      { fit: appliedRequest.current, view: appliedView.current, bounds: appliedBounds.current },
+      { fit: fitRequestKey, view: viewKey, bounds },
     );
     if (disposition === 'settled') return;
     if (disposition === 'record') {
@@ -375,6 +408,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
       return;
     }
     appliedView.current = viewKey;
+    appliedBounds.current = bounds.clone();
     camera.position.copy(fit.position);
     camera.up.copy(cameraUp(direction));
     camera.lookAt(fit.center);
@@ -395,7 +429,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     controls.current?.update();
     appliedRequest.current = fitRequestKey;
     scheduler.schedule();
-  }, [aspect, boundsRadius, camera, center, direction, fit, fitRequestKey, scheduler, viewKey]);
+  }, [aspect, bounds, boundsRadius, camera, center, direction, fit, fitRequestKey, scheduler, viewKey]);
 
   // The first fit may run before the sibling OrbitControls ref is attached.
   // Apply only the target from the most recent explicit view request; geometry
