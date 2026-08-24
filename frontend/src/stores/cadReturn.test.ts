@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import {
-  acknowledgedFindingWire,
+  blockingFindingWire,
   combineChain,
   combineDefaultHz,
   combineEnabledEffective,
@@ -12,7 +12,6 @@ import {
   driverValues,
   DRIVER_REQUIRED_KEYS,
   resetCadReturnStore,
-  unacknowledgedBlocking,
   useCadReturnStore,
   type DriverPreset,
 } from './cadReturn';
@@ -28,7 +27,6 @@ import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
 
 const solveProfileStorageKey = 'waveguide-v2-g3-cad-solve-profiles';
-const acknowledgedFindingStorageKey = 'waveguide-v2-g3-cad-acknowledged-findings';
 
 const bundle: CadReturnBundle = {
   name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
@@ -89,87 +87,20 @@ describe('CAD return store', () => {
     expect(useCadReturnStore.getState().selectArrivedBundle(changedInventory)).toBe('reset');
   });
 
-  it('pre-acknowledges the same finding id when it reappears after re-ingest', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().applyIngest(record(), useCadReturnStore.getState().beginIngestIntent());
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual(['finding-a']);
-    useCadReturnStore.getState().acknowledge('finding-a', true);
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
-    expect(acknowledgedFindingWire(record(), ['finding-a'])).toEqual(['sha256:wgi_one:finding-a']);
-    useCadReturnStore.getState().applyIngest(record('wgi_two'), useCadReturnStore.getState().beginIngestIntent());
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['finding-a']);
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
-    expect(acknowledgedFindingWire(record('wgi_two'), useCadReturnStore.getState().acknowledgedFindingIds))
-      .toEqual(['sha256:wgi_two:finding-a']);
-  });
-
-  it('does not pre-acknowledge a new finding id after re-ingest', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    const store = useCadReturnStore.getState();
-    store.selectBundle(bundle);
-    store.applyIngest(record(), store.beginIngestIntent());
-    store.acknowledge('finding-a', true);
-
-    const changed = {
-      ...record('wgi_changed'),
-      findings: [{ id: 'finding-b', kind: 'healing-performed', blocking: true }],
-    };
-    store.applyIngest(changed, store.beginIngestIntent());
-
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual([]);
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual(['finding-b']);
-  });
-
-  it('persists acknowledgements for an unlinked return by document name and source inventory', () => {
-    const unlinkedRecord = {
+  it('puts every blocking finding on the wire without a gate', () => {
+    const twoFindings = {
       ...record(),
-      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
       findings: [
-        { id: 'unlinked-mode', kind: 'freshness', blocking: false, verdict: 'unlinked' },
-        { id: 'healing-a', kind: 'healing-performed', blocking: true },
+        { id: 'finding-a', kind: 'freshness', blocking: true },
+        { id: 'finding-b', kind: 'healing-performed', blocking: true },
+        { id: 'finding-c', kind: 'informational', blocking: false },
       ],
     };
-    const unlinkedBundle = { ...bundle, instanceCount: 0 };
-    let store = useCadReturnStore.getState();
-    store.selectBundle(unlinkedBundle);
-    store.applyIngest(unlinkedRecord, store.beginIngestIntent());
-    store.acknowledge('healing-a', true);
-
-    resetCadReturnStore();
-    store = useCadReturnStore.getState();
-    store.selectBundle({ ...unlinkedBundle, modifiedAt: '2026-08-12T00:00:00Z' });
-    store.applyIngest({
-      ...unlinkedRecord,
-      ingest_id: 'wgi_reexport',
-      report_sha256: 'sha256:reexport',
-    }, store.beginIngestIntent());
-
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['healing-a']);
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
-  });
-
-  it('drops a schema-invalid acknowledged-finding payload', () => {
-    localStorage.setItem(acknowledgedFindingStorageKey, JSON.stringify({
-      version: 1,
-      entries: [{
-        key: 'forged', identity: null, documentName: 'Speaker', inventory: [], findingIds: [42],
-      }],
-    }));
-    const unlinkedRecord = {
-      ...record(),
-      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
-    };
-    const store = useCadReturnStore.getState();
-    store.selectBundle({ ...bundle, instanceCount: 0 });
-    expect(() => store.applyIngest(unlinkedRecord, store.beginIngestIntent())).not.toThrow();
-
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual([]);
-    expect(localStorage.getItem(acknowledgedFindingStorageKey)).toBeNull();
+    expect(blockingFindingWire(twoFindings)).toEqual([
+      'sha256:wgi_one:finding-a',
+      'sha256:wgi_one:finding-b',
+    ]);
+    expect(blockingFindingWire(record('wgi_two'))).toEqual(['sha256:wgi_two:finding-a']);
   });
 
   it('supports explicit grouping and removes optional skipped sources from channels', () => {
@@ -183,11 +114,10 @@ describe('CAD return store', () => {
     expect(useCadReturnStore.getState().needsIngest).toBe(true);
   });
 
-  it('carries the solve setup across a same-inventory arrival but never acknowledgements', () => {
+  it('carries the solve setup across a same-inventory arrival', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle);
     store.applyIngest(record(), store.beginIngestIntent());
-    store.acknowledge('finding-a', true);
     store.setSourceSize('source-hf', 2.25);
     store.setSourceChannel('source-hf', 'drive-mf');
     store.setExteriorOnly(true);
@@ -214,7 +144,6 @@ describe('CAD return store', () => {
     expect(state.frequencyStartHz).toBe(300);
     // The new geometry re-earns its evidence.
     expect(state.ingestRecord).toBeNull();
-    expect(state.acknowledgedFindingIds).toEqual([]);
     expect(state.needsIngest).toBe(true);
   });
 
@@ -305,9 +234,8 @@ describe('CAD return store', () => {
 
   it('refuses ingestion evidence smuggled into a stored profile', () => {
     // The persisted payload is machine-local and user-writable, so the restore
-    // path — not just the save path — has to guarantee that acknowledgements
-    // and ingest state never come back. A restored acknowledgement would let a
-    // blocking finding pass its gate without ever being seen.
+    // path — not just the save path — has to guarantee that ingest state and
+    // evidence never come back from storage.
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
     }, 'current');
@@ -316,7 +244,6 @@ describe('CAD return store', () => {
 
     const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
     Object.assign(raw.profiles[0].settings, {
-      acknowledgedFindingIds: ['finding-a'],
       ingestRecord: { ingest_id: 'wgi_forged' },
       needsIngest: false,
       ingestedBundleIdentity: 'forged',
@@ -329,7 +256,6 @@ describe('CAD return store', () => {
 
     const state = useCadReturnStore.getState();
     expect(state.sourceSizesMm['source-hf']).toBe(2.25);
-    expect(state.acknowledgedFindingIds).toEqual([]);
     expect(state.ingestRecord).toBeNull();
     expect(state.needsIngest).toBe(true);
     expect(state.ingestedBundleIdentity).toBeNull();
@@ -390,7 +316,6 @@ describe('CAD return store', () => {
     store.setChannelDriverField('drive-mf', 'sd_cm2', 135);
     store.setDriveVoltage(4);
     store.setSweep({ frequencyStartHz: 300, frequencyEndHz: 12_000, frequencyCount: 31 });
-    store.acknowledge('finding-a', true);
     store.setAreaDriftOverride('source-mf', true);
     store.flagAreaDrift('source-mf');
     store.markIngestStale('Exact-ingest evidence must stay session-local.');
@@ -419,7 +344,6 @@ describe('CAD return store', () => {
       frequencyEndHz: 12_000,
       frequencyCount: 31,
       ingestRecord: null,
-      acknowledgedFindingIds: [],
       areaDriftOverrides: [],
       areaDriftSourceIds: [],
       needsIngest: true,
@@ -450,24 +374,6 @@ describe('CAD return store', () => {
       transitionMm: 8,
       combineEnabled: null,
     });
-  });
-
-  it('never restores finding acknowledgements with a solve profile', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
-    }, 'current');
-    const store = useCadReturnStore.getState();
-    store.selectBundle(bundle);
-    store.applyIngest(record(), store.beginIngestIntent());
-    store.acknowledge('finding-a', true);
-    store.setExteriorOnly(true);
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['finding-a']);
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().exteriorOnly).toBe(true);
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual([]);
-    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
   });
 
   it.each([
@@ -530,7 +436,6 @@ describe('CAD return store', () => {
     expect(state.needsIngest).toBe(true);
     expect(state.ingestStaleReason).toContain('source inventory or source sizing suggestions changed');
     expect(state.sourceSizesMm['source-hf']).toBe(2.25);
-    expect(state.acknowledgedFindingIds).toEqual([]);
   });
 });
 

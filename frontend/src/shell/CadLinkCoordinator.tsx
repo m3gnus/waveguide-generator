@@ -362,7 +362,7 @@ function restoreCadJobSolveOptions(job: JobItem): void {
 
 /** Show the CAD workspace and focus its panel.
  *
- * Every status line, error, finding and acknowledgement on the CAD return leg
+ * Every status line, error and finding on the CAD return leg
  * renders inside `CadLinkPanel`, which exists only in CAD mode — so a return
  * that arrives while WG shows the parametric design is otherwise completely
  * invisible. The mode store adds the dock panel synchronously, which is why
@@ -499,7 +499,6 @@ export async function showCadJobModel(
         reason: 'Recalled from an archived run; the original return bundle is not active.',
       },
       ingestRecord: record,
-      acknowledgedFindingIds: [],
       ...savedSetup,
       areaDriftOverrides: [],
       areaDriftSourceIds: [...new Set((record.role_findings ?? [])
@@ -1265,8 +1264,8 @@ export function CadLinkCoordinator() {
    *
    * Idempotency is the server's ledger, not this component: a coordinator
    * remount or a second poll must surface the existing job rather than submit
-   * again. A blocked gate is parked, not discarded — the user acknowledges the
-   * findings and presses Solve, which consumes the same request. */
+   * again. A blocked gate is parked, not discarded — the user resolves the
+   * blocker and presses Solve, which consumes the same request. */
   const consumeSolveCommand = useCallback(async () => {
     if (solveCommandInFlight.current) return;
     solveCommandInFlight.current = true;

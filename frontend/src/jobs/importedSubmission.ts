@@ -1,13 +1,12 @@
 import type { ImportedSolveSubmission } from './actions';
 import {
-  acknowledgedFindingWire,
+  blockingFindingWire,
   channelAcceptsDriver,
   channelDriverWire,
   combineWire,
   hasPassiveCardioidSurface,
   passiveCardioidBlocker,
   passiveCardioidWire,
-  unacknowledgedBlocking,
   useCadReturnStore,
 } from '../stores/cadReturn';
 import type { CadDriveChannel } from '../stores/cadReturn';
@@ -78,7 +77,6 @@ export function importedSubmissionBlocker(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useSolveOptionsStore.getState(),
 ): string | null {
-  const unacknowledged = unacknowledgedBlocking(state);
   const rangeInvalid = solveStore.frequencyMode === 'range' && (
     !(state.frequencyStartHz > 0)
     || state.frequencyEndHz <= state.frequencyStartHz
@@ -95,9 +93,6 @@ export function importedSubmissionBlocker(
   ));
   if (!state.ingestRecord) return 'Ingest a CAD return before solving.';
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';
-  if (unacknowledged.length) {
-    return `Acknowledge ${unacknowledged.length} blocking finding${unacknowledged.length === 1 ? '' : 's'} before solving.`;
-  }
   if (requiredFem && !state.exteriorOnly) {
     return 'This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.';
   }
@@ -177,7 +172,7 @@ export function buildImportedSubmission(
           Object.entries(state.sourceSizesMm).filter(([id]) => !state.skippedSourceIds.includes(id)),
         ),
       },
-      acknowledged_findings: acknowledgedFindingWire(record, state.acknowledgedFindingIds),
+      acknowledged_findings: blockingFindingWire(record),
       skipped_source_ids: [...state.skippedSourceIds],
       exterior_only: state.exteriorOnly,
       ...(combine ? { combine } : {}),

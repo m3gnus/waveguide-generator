@@ -4,85 +4,119 @@
   color: var(--fg1);
   font: var(--text-base)/1.45 var(--ui);
 }
-.cad-workflow { margin-bottom: 10px; padding: 8px; border: 1px solid var(--hair); background: var(--surface-panel); }
-.cad-workflow-header { display: grid; grid-template-columns: 24px minmax(0, 1fr) minmax(0, 82px); align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--hair); }
-/* Fusion has no step badge. Both tracks are allowed to shrink, but a useful
-   title column is reserved before the settings action wraps onto two lines. */
-.cad-workflow-header.no-step { grid-template-columns: minmax(112px, 1fr) minmax(0, 88px); }
-.cad-workflow-header > div { min-width: 0; }
-.cad-workflow-header h3, .cad-workflow-header p { margin: 0; }
-.cad-workflow-header h3 { font-size: var(--text-base); letter-spacing: .06em; }
-.cad-workflow-header p { color: var(--fg3); font-size: var(--text-micro); }
-.cad-workflow-header > button { width: 100%; min-width: 0; align-self: center; padding-inline: 4px; line-height: 1.25; overflow-wrap: anywhere; white-space: normal; }
-.cad-step { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--inv-bg); color: var(--inv-fg); font-weight: 700; }
-.cad-return-workflow > .cad-section { margin-right: -1px; margin-left: -1px; }
+/* The four cards. Each answers one question — project, link, model, runs —
+   and everything below the answer folds away until asked for. */
+.cad-workflow { margin-bottom: 8px; padding: 8px; border: 1px solid var(--hair); background: var(--surface-panel); }
+.cad-card-label { color: var(--fg3); font-size: var(--text-micro); letter-spacing: .08em; text-transform: uppercase; }
+.cad-icon-button { display: inline-flex; align-items: center; padding: 2px 5px; border: 1px solid transparent; background: transparent; color: var(--fg3); }
+.cad-icon-button:hover { border-color: var(--border-control); background: var(--ov1); color: var(--fg1); }
+.cad-icon-button svg { width: 13px; height: 13px; }
+.spacer { flex: 1; }
+
 .cad-direction-alert { display: grid; gap: 8px; margin-top: 8px; padding: 8px; border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 8%, transparent); }
 .cad-direction-alert div { display: grid; min-width: 0; }
 .cad-direction-alert span { color: var(--fg3); font-size: var(--text-base); overflow-wrap: anywhere; }
 .cad-direction-alert button, .cad-secondary-action { justify-content: center; width: 100%; }
-.cad-confirm-actions { display: grid; grid-template-columns: 1fr 1.7fr; gap: 6px; }
+.cad-confirm-actions { display: grid; grid-template-columns: 1fr 1.7fr; gap: 6px; margin-top: 8px; }
 .cad-secondary-action { margin-top: 8px; }
-.cadlink-toolbar, .cad-section > header { display: flex; align-items: center; gap: 7px; }
-.cadlink-toolbar { min-height: 28px; padding-bottom: 6px; border-bottom: 1px solid var(--hair); }
-.cadlink-toolbar button, .cad-section button { display: inline-flex; align-items: center; gap: 4px; }
 
+/* One notice channel at the top of the rail. */
 .cad-alert, .cad-status-strip { margin: 7px 0; padding: 6px 7px; border: 1px solid var(--hair); overflow-wrap: anywhere; }
 .cad-alert-error { border-color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); color: var(--fg1); }
 .cad-alert-notice { border-color: var(--hair); background: var(--surface-raised); color: var(--fg2); }
 .cad-status-strip { background: var(--ov1); color: var(--fg2); }
 
-.cad-simulation-guide { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin: 0 0 10px; padding: 8px; border: 1px solid var(--hair); background: var(--surface-raised); }
-.cad-simulation-guide > div { display: grid; min-width: 0; gap: 2px; }
-.cad-simulation-guide span { color: var(--fg3); font-size: var(--text-micro); overflow-wrap: anywhere; }
-.cad-simulation-guide button { white-space: nowrap; }
-.cad-simulation-guide.ready { border-color: color-mix(in srgb, var(--green) 45%, var(--hair)); }
+/* ---- 1 · Project ---- */
+.cad-project-row { display: flex; align-items: flex-start; gap: 8px; }
+.cad-project-title { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.cad-project-heading { margin: 0; min-width: 0; font-size: var(--text-title); font-weight: 600; letter-spacing: 0; text-transform: none; }
+.cad-project-trigger { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0; border: 0; background: none; color: var(--fg); text-align: left; }
+.cad-project-trigger .cad-project-name { min-width: 0; overflow: hidden; font-size: var(--text-title); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.cad-project-trigger svg { flex: none; width: 11px; height: 11px; color: var(--fg3); }
+.cad-project-trigger:hover .cad-project-name { color: var(--acc-text); }
+.cad-project-meta { margin: 0; color: var(--fg3); font-size: var(--text-micro); }
+.cad-project-switcher { position: relative; min-width: 0; }
+.cad-project-overflow { position: relative; flex: none; }
+.cad-overflow-trigger { padding: 0 7px; border: 1px solid transparent; background: transparent; color: var(--fg2); font-size: var(--text-title); line-height: 20px; }
+.cad-overflow-trigger:hover, .cad-overflow-trigger[aria-expanded="true"] { border-color: var(--border-control); background: var(--ov1); color: var(--fg); }
+.cad-project-menu { position: absolute; z-index: 5; top: calc(100% + 4px); right: 0; display: grid; gap: 2px; width: max(210px, 100%); max-height: 260px; padding: 4px; overflow-y: auto; border: 1px solid var(--hair); background: var(--surface-raised); box-shadow: var(--shadow-popover, 0 6px 18px rgb(0 0 0 / .28)); }
+.cad-project-switcher .cad-project-menu { right: auto; left: 0; }
+.cad-project-menu > button { display: grid; gap: 1px; width: 100%; padding: 6px 7px; text-align: left; background: none; border: 0; }
+.cad-project-menu > button:hover { background: var(--ov1); }
+.cad-project-menu > button[aria-current="true"] { background: var(--selection-row-bg); }
+.cad-project-menu b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cad-project-menu span { color: var(--fg3); font-size: var(--text-micro); }
+.cad-project-menu > div { padding: 6px 7px; }
+.cad-overflow-menu > button { display: flex; align-items: center; gap: 5px; color: var(--fg1); }
+.cad-overflow-menu > button svg { flex: none; width: 12px; height: 12px; }
+.cad-overflow-path { overflow: hidden; border-top: 1px solid var(--hair-soft); color: var(--fg3); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
+.cad-projects-folder-error { margin: 2px 7px 4px; color: var(--red); font-size: var(--text-micro); }
 
-.cad-return-quick-action, .cad-return-summary { display: grid; gap: 7px; margin: 7px 0; padding: 8px; border: 1px solid color-mix(in srgb, var(--acc) 45%, var(--hair)); background: color-mix(in srgb, var(--acc) 7%, var(--surface-panel)); }
-.cad-return-quick-action > div:first-child, .cad-return-summary-copy { display: grid; min-width: 0; gap: 2px; }
-.cad-return-quick-action span { color: var(--fg3); font-size: var(--text-base); overflow-wrap: anywhere; }
-.cad-return-quick-action > button, .cad-return-summary > button { position: static; justify-content: center; width: 100%; min-height: 34px; }
-.cad-return-summary.degraded { border-color: var(--amber); }
-.cad-return-summary h4 { margin: 0; overflow: hidden; color: var(--fg1); font-size: var(--text-title); text-overflow: ellipsis; white-space: nowrap; }
-.cad-return-summary time { color: var(--fg3); font: var(--text-micro) var(--mono); }
-.cad-return-summary p { margin: 3px 0 0; color: var(--fg1); font-size: var(--text-base); }
+/* ---- 2 · CAD Link ---- */
+.cad-link-card.attention { border-color: color-mix(in srgb, var(--amber) 45%, var(--hair)); }
+.cad-link-quiet > summary { display: flex; align-items: center; gap: 7px; min-height: 22px; list-style: none; cursor: pointer; user-select: none; }
+.cad-link-quiet > summary::-webkit-details-marker { display: none; }
+.cad-link-quiet b { min-width: 0; overflow: hidden; color: var(--fg); font-size: var(--text-base); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.cad-link-meta { margin-left: auto; overflow: hidden; color: var(--fg3); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
+.cad-link-chevron { flex: none; color: var(--fg3); font-size: 10px; transition: transform .12s; }
+.cad-link-quiet[open] .cad-link-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .cad-link-chevron { transition: none; } }
+.cad-link-quiet-body { padding: 6px 0 0 17px; }
+.cad-link-quiet-body p { margin: 0 0 6px; color: var(--fg3); overflow-wrap: anywhere; }
+.cad-link-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.cad-link-settings { margin-left: auto; color: var(--fg3); }
+.cad-connection { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 2px 0 7px; }
+.cad-connection > div { min-width: 0; }
+.cad-connection-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg3); box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg3) 12%, transparent); }
+.cad-connection h4 { margin: 0; font-size: var(--text-base); text-transform: none; letter-spacing: 0; }
+.cad-connection p { margin: 2px 0 0; color: var(--fg3); overflow-wrap: anywhere; }
+.cad-connection-current .cad-connection-dot, .cad-connection-dot-current { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 14%, transparent); }
+.cad-connection-dot-checking { background: var(--fg3); }
+.cad-link-quiet .cad-connection-dot { margin-top: 0; }
+.cad-connection-stale .cad-connection-dot, .cad-connection-not-configured .cad-connection-dot, .cad-connection-addin-offline .cad-connection-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
+.cad-primary-action { justify-content: center; width: 100%; min-height: 34px; }
+.cad-link-card code { color: var(--fg2); font: var(--text-micro) var(--mono); }
+.cad-onshape-open { display: inline-block; margin-top: 6px; color: var(--acc); }
 
-.cad-bundle-list { display: grid; gap: 4px; margin: 0; }
-.cad-bundle-list > button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%; min-width: 0; padding: 7px; text-align: left; border: 1px solid var(--hair); background: var(--surface-panel); }
-.cad-bundle-list > button[aria-selected="true"] { border-color: var(--selection-row-border); background: var(--selection-row-bg); color: var(--fg); }
-.cad-bundle-list b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cad-bundle-list span, .cad-bundle-list time, .cad-detail { color: var(--fg3); font-size: var(--text-micro); }
-.cad-bundle-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cad-bundle-list time { grid-column: 2; grid-row: 1 / span 2; align-self: center; white-space: nowrap; }
+/* ---- 3 · Model ---- */
+.cad-model-head { display: flex; align-items: center; gap: 7px; min-height: 20px; }
+.cad-model-identity { display: flex; align-items: baseline; gap: 7px; padding: 4px 0 6px; }
+.cad-model-name { min-width: 0; overflow: hidden; color: var(--fg1); font-size: var(--text-title); text-overflow: ellipsis; white-space: nowrap; }
+.cad-model-identity time { margin-left: auto; color: var(--fg3); font: var(--text-micro) var(--mono); white-space: nowrap; }
+.cad-prepared-line { display: flex; align-items: center; gap: 7px; padding: 6px 0 2px; color: var(--fg); }
+.cad-prepared-line .link-button { margin-left: auto; }
+.cad-state-chip { flex: none; padding: 1px 4px; border: 1px solid var(--hair); background: var(--ov1); color: var(--fg3); font: var(--text-micro) var(--mono); letter-spacing: 0; text-transform: lowercase; }
+.cad-state-chip.warn { border-color: color-mix(in srgb, var(--amber) 45%, var(--hair)); color: var(--amber); }
+
+/* The checklist: one row per verification, evidence one chevron away. */
+.cad-check { display: flex; align-items: baseline; gap: 7px; padding: 4px 0; border-top: 1px solid var(--hair-soft); }
+.cad-check:first-child { border-top: 0; }
+details.cad-check { display: block; }
+details.cad-check > summary { display: flex; align-items: baseline; gap: 7px; list-style: none; cursor: pointer; user-select: none; }
+details.cad-check > summary::-webkit-details-marker { display: none; }
+.cad-check b { flex: none; width: 72px; color: var(--fg); font-weight: 500; }
+.cad-check-verdict { flex: 1; min-width: 0; color: var(--fg2); overflow-wrap: anywhere; }
+.cad-check-glyph { flex: none; width: 13px; color: var(--fg3); font-weight: 700; text-align: center; }
+.cad-check-ok > .cad-check-glyph, .cad-check-ok > summary .cad-check-glyph, .cad-check-glyph.ok { color: var(--green); }
+.cad-check-warn > .cad-check-glyph, .cad-check-warn > summary .cad-check-glyph { color: var(--amber); }
+.cad-check-warn .cad-check-verdict { color: var(--fg1); }
+.cad-check-chevron { flex: none; color: var(--fg3); font-size: 10px; transition: transform .12s; }
+details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .cad-check-chevron { transition: none; } }
+.cad-check-detail { padding: 2px 0 6px 20px; }
+.cad-check-findings { margin-top: 6px; border-top: 1px solid var(--hair); }
+.cad-check-findings-head { margin: 5px 0 0; color: var(--fg3); font-size: var(--text-micro); letter-spacing: .06em; text-transform: uppercase; }
+.cad-blocking-suffix { display: inline; color: var(--amber); font-size: inherit; font-weight: 500; cursor: help; }
 
 .cad-section { margin-top: 7px; padding: 7px; border: 1px solid var(--hair); background: var(--surface-panel); }
 .cad-section.degraded { border-color: color-mix(in srgb, var(--amber) 65%, var(--hair)); }
-.cad-section > header { min-height: 24px; }
-.cad-section > header h4 { margin: 0; font-size: var(--text-base); text-transform: uppercase; letter-spacing: .06em; }
 .cad-section p { color: var(--fg3); font-size: var(--text-base); }
 .cad-section p.cad-detail { font-size: var(--text-micro); }
-.cad-section header > button { margin-left: auto; }
 .cad-drawer { padding: 0; }
 .cad-drawer .section-head { height: 30px; padding: 0 7px 0 6px; }
 .cad-drawer.closed .chevron { transform: rotate(-90deg); }
 .cad-drawer .section-body { padding: 1px 7px 7px; }
-.cad-state-chip { flex: none; padding: 1px 4px; border: 1px solid var(--hair); background: var(--ov1); color: var(--fg3); font: var(--text-micro) var(--mono); letter-spacing: 0; text-transform: lowercase; }
-.cad-state-chip.warn { border-color: color-mix(in srgb, var(--amber) 45%, var(--hair)); color: var(--amber); }
-/* The outbound leg leads the panel, so it carries no separating top margin. */
-.cad-send { margin-top: 0; }
-.cad-send code { color: var(--fg2); font: var(--text-micro) var(--mono); }
-.cad-application { display: flex; align-items: baseline; gap: 7px; padding-bottom: 7px; border-bottom: 1px solid var(--hair); font-size: var(--text-micro); }
-.cad-application > span { color: var(--fg3); text-transform: uppercase; letter-spacing: .05em; }
-.cad-application > b { color: var(--fg1); }
-.cad-application .link-button { margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--acc); font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
-.cad-connection { display: grid; grid-template-columns: 9px minmax(0, 1fr); align-items: start; gap: 8px; padding: 10px 0 7px; }
-.cad-connection > div { min-width: 0; }
-.cad-connection-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg3); box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg3) 12%, transparent); }
-.cad-connection h4 { margin: 0; font-size: var(--text-base); text-transform: none; letter-spacing: 0; }
-.cad-connection p { margin: 2px 0 0; overflow-wrap: anywhere; }
-.cad-connection-current .cad-connection-dot { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 14%, transparent); }
-.cad-connection-stale .cad-connection-dot, .cad-connection-not-configured .cad-connection-dot, .cad-connection-addin-offline .cad-connection-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
-.cad-primary-action { justify-content: center; width: 100%; min-height: 34px; }
-.cad-send .cad-transport-note { margin: 8px 0 0; padding-top: 7px; border-top: 1px solid var(--hair-soft); }
+.cad-detail { color: var(--fg3); font-size: var(--text-micro); }
 .cad-verdict { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 3px 8px; margin: 4px 0; padding: 5px; border-left: 2px solid var(--amber); background: var(--ov1); }
 .cad-verdict.ok { border-color: var(--green); }
 .cad-verdict.neutral { border-color: var(--fg3); }
@@ -91,41 +125,30 @@
 .cad-row small { grid-column: 1 / -1; color: var(--fg3); font-size: var(--text-micro); }
 .ok-text { color: var(--green); }
 .warn-text { color: var(--amber); }
-.cad-findings label { display: flex; gap: 7px; padding: 6px 0; border-top: 1px solid var(--hair); }
-.cad-findings label span { display: grid; min-width: 0; }
-.cad-findings small { color: var(--fg3); font-size: var(--text-micro); }
-.cad-blocking-suffix { display: inline; color: var(--amber); font-size: inherit; font-weight: 500; }
-.cadlink-panel .empty-state { min-height: 120px; }
 
-/* Project header and per-project run history.
-   The history caps its own height and scrolls inside the panel, so a project
-   with fifty runs never buries the round-trip controls underneath it. */
-/* This button lives in .cad-workflow, which has no icon rule of its own: an
-   unconstrained 16-viewBox svg stretches to the full width of a 100%-wide
-   button. */
-.cad-project .cad-secondary-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
-.cad-project .cad-secondary-action svg { flex: none; width: 13px; height: 13px; }
-.cad-project .cad-project-name { overflow: hidden; font-size: var(--text-title); text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; }
-.cad-project-switcher { position: relative; justify-self: end; }
-.cad-project-menu { position: absolute; z-index: 5; top: calc(100% + 4px); right: 0; display: grid; gap: 2px; width: max(210px, 100%); max-height: 260px; padding: 4px; overflow-y: auto; border: 1px solid var(--hair); background: var(--surface-raised); box-shadow: var(--shadow-popover, 0 6px 18px rgb(0 0 0 / .28)); }
-.cad-project-menu > button { display: grid; gap: 1px; width: 100%; padding: 6px 7px; text-align: left; background: none; border: 0; }
-.cad-project-menu > button:hover { background: var(--ov1); }
-.cad-project-menu > button[aria-current="true"] { background: var(--selection-row-bg); }
-.cad-project-menu b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cad-project-menu span { color: var(--fg3); font-size: var(--text-micro); }
-.cad-project-menu > div { padding: 6px 7px; }
+/* Model versions: previous returns, filtered rather than doubled. */
+.cad-version-filter { display: flex; gap: 6px; padding: 2px 0 6px; }
+.cad-version-filter button { padding: 2px 8px; border: 1px solid var(--border-control); background: transparent; color: var(--fg2); font-size: var(--text-micro); }
+.cad-version-filter button.on { border-color: var(--border-strong); background: var(--surface-field); color: var(--fg); }
+.cad-bundle-list { display: grid; gap: 4px; margin: 0; }
+.cad-bundle-list > button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%; min-width: 0; padding: 7px; text-align: left; border: 1px solid var(--hair); background: var(--surface-panel); }
+.cad-bundle-list > button[aria-selected="true"] { border-color: var(--selection-row-border); background: var(--selection-row-bg); color: var(--fg); }
+.cad-bundle-list b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cad-bundle-list span, .cad-bundle-list time { color: var(--fg3); font-size: var(--text-micro); }
+.cad-bundle-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cad-bundle-list time { grid-column: 2; grid-row: 1 / span 2; align-self: center; white-space: nowrap; }
 
-/* The workspace folder every project is archived under. Quiet on purpose: it is
-   one setting shared with Settings, not a property of the project above it. */
-.cad-projects-folder { display: grid; gap: 3px; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--hair-soft); }
-.cad-projects-folder-line { display: grid; gap: 1px; min-width: 0; }
-.cad-projects-folder-path { overflow: hidden; color: var(--fg2); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
-.cad-projects-folder-actions { display: flex; gap: 10px; }
-.cad-projects-folder-actions button { display: inline-flex; align-items: center; gap: 4px; }
-.cad-projects-folder-actions svg { flex: none; width: 11px; height: 11px; }
-.cad-projects-folder-error { margin: 2px 0 0; color: var(--red); font-size: var(--text-micro); }
+.cadlink-panel .empty-state { min-height: 80px; }
+.linked-instance-selection { display: grid; gap: 3px; margin: 7px 0; }
+.linked-instance-selection small { color: var(--fg3); font-size: var(--text-micro); }
 
-.cad-project-history .cad-run-list { max-height: 320px; margin-top: 7px; overflow-y: auto; }
+/* ---- 4 · Runs ---- */
+.cad-project-runs-head { display: flex; align-items: baseline; gap: 6px; }
+.cad-project-runs-head h3 { margin: 0; font-size: var(--text-base); letter-spacing: .06em; text-transform: uppercase; }
+.cad-runs-count { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; cursor: help; }
+.cad-runs-count svg { width: 12px; height: 12px; }
+.cad-runs-toggle { margin-top: 6px; }
+.cad-project-history .cad-run-list { margin-top: 7px; }
 .cad-run-group { display: grid; gap: 3px; }
 .cad-run-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--hair); background: var(--surface-panel); }
 .cad-run-row.selected { border-color: var(--selection-row-border); background: var(--selection-row-bg); }
@@ -147,7 +170,6 @@
 .cad-model-download, .cad-model-missing { margin-left: auto; font-size: var(--text-micro); white-space: nowrap; }
 .cad-model-download { color: var(--acc); }
 .cad-model-missing { color: var(--fg4); }
-.cad-history-foot { margin: 7px 0 0; }
 
 .cad-settings-capture { display: grid; gap: 5px; margin-top: 8px; padding: 0; border: 0; }
 .cad-settings-capture legend { padding: 0 0 4px; color: var(--fg2); font-size: var(--text-base); }
