@@ -62,6 +62,9 @@ class MultiChannelResultEnvelope(ExtensibleResultModel):
     metadata: dict[str, Any]
     channels: dict[str, dict[str, Any]]
     channel_order: list[str]
+    #: Sorted union of every channel's frequency grid. Optional: envelopes
+    #: persisted before the field existed remain valid without it.
+    frequencies: list[float] | None = None
 
 
 ResultEnvelope = Annotated[
