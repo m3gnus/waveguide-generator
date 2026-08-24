@@ -9,9 +9,20 @@ exit 141 and no test named. ubuntu CI died exactly this way at a fixed-looking
 position that was really just where the asynchronous signal landed. Native
 changes bypass Python's cached ``signal.getsignal`` value, so the fixture
 unconditionally restores the ignore before and after every test.
+
+Modal dialogs: three launcher paths report a failure with a blocking Win32
+MessageBoxW, which on a runner has nobody to select OK. A test that reaches one
+does not fail -- it stops, and the job holds the runner until something else
+cancels it. Server (windows-latest) burned two 2h+ runs that way on 2026-08-24
+while Linux and macOS stayed green, because ctypes.windll does not exist there
+and the best-effort except around each call swallowed the AttributeError.
+Injecting the reporter at each call site is the real fix; this is the net that
+catches the next one that forgets.
 """
 
 from __future__ import annotations
+
+import sys
 
 import pytest
 
@@ -25,3 +36,38 @@ def _sigpipe_stays_ignored():
         yield
     finally:
         restore_sigpipe_ignore()
+
+
+@pytest.fixture(autouse=True)
+def _modal_dialogs_fail_instead_of_blocking():
+    """Turn a blocking Win32 dialog into a named failure.
+
+    ``pytest.fail`` raises ``Failed``, which derives from BaseException rather
+    than Exception -- so it travels straight out through the deliberate
+    best-effort ``except Exception`` around every one of these call sites, which
+    an AssertionError would not.
+    """
+
+    if sys.platform != "win32":
+        yield
+        return
+
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    original = user32.MessageBoxW
+
+    def _refuse(*_arguments: object) -> int:
+        pytest.fail(
+            "a test reached a blocking Win32 MessageBoxW, which would hang the "
+            "run until the job is cancelled. Inject the seam the call site "
+            "offers -- failure_reporter= for apply_update, browser_fallback= "
+            "for DesktopWindow -- rather than letting the default dialog run.",
+            pytrace=False,
+        )
+
+    user32.MessageBoxW = _refuse
+    try:
+        yield
+    finally:
+        user32.MessageBoxW = original
