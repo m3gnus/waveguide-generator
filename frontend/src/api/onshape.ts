@@ -160,20 +160,6 @@ export async function sendDesignToOnshape(
   return response.json() as Promise<OnshapeSendResult>;
 }
 
-export async function unlinkOnshapeDocument(
-  designId: string,
-  fetcher: typeof fetch = fetch,
-  instanceId: string | null = null,
-): Promise<{ unlinked: boolean }> {
-  const response = await fetcher('/api/cadlink/onshape/unlink', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ designId, instanceId }),
-  });
-  if (!response.ok) throw new Error(await errorMessage(response));
-  return response.json() as Promise<{ unlinked: boolean }>;
-}
-
 export async function returnOnshapeToWg(
   designId: string,
   fetcher: typeof fetch = fetch,

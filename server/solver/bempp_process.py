@@ -34,6 +34,14 @@ class BemppWorkerError(RuntimeError):
     """A native BEMPP worker failed or exited without a result."""
 
 
+def _poll_and_recv(connection: Connection) -> tuple[Any, ...] | None:
+    """Wait briefly for and deserialize one worker event off the event loop."""
+
+    if not connection.poll(_POLL_SECONDS):
+        return None
+    return connection.recv()
+
+
 def _bempp_worker_main(connection: Connection) -> None:
     """Serve native solves serially in one warm process."""
 
@@ -193,10 +201,10 @@ class BemppProcessHost:
                     raise BemppWorkerError(
                         "The native BEMPP worker exited before returning a result"
                     )
-                ready = await asyncio.to_thread(connection.poll, _POLL_SECONDS)
-                if not ready:
+                event = await asyncio.to_thread(_poll_and_recv, connection)
+                if event is None:
                     continue
-                kind, event_job_id, value = connection.recv()
+                kind, event_job_id, value = event
                 if event_job_id != job_id:
                     raise BemppWorkerError(
                         "The native BEMPP worker returned an event for the wrong job"

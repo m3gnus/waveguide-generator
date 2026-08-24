@@ -10,6 +10,8 @@ import threading
 import time
 import sqlite3
 
+import pytest
+
 from server.cadlink.identity import SaveIdentity
 from server.cadlink.store import CadLinkStore
 
@@ -19,15 +21,17 @@ def _save(
     requested: SaveIdentity | None = None,
     *,
     marker: str = "one",
+    filename: str = "design.cfg",
+    saved_at: str = "2026-08-10T14:22:31Z",
 ) -> dict[str, object]:
     return store.save(
         requested=requested,
         design_hash="sha256:" + hashlib.sha256(marker.encode()).hexdigest(),
-        filename="design.cfg",
+        filename=filename,
         snapshot_builder=lambda identity: (
             f"DesignId={identity.design_id};Version={identity.edit_version};{marker}"
         ),
-        saved_at="2026-08-10T14:22:31Z",
+        saved_at=saved_at,
     )
 
 
@@ -51,10 +55,11 @@ def test_registry_schema_is_separate_versioned_and_snapshot_preserving(tmp_path:
     assert db_path.exists()
     assert not (tmp_path / "db" / "simulations.db").exists()
     conn = sqlite3.connect(db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
     assert {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= {
         "designs",
         "exports",
+        "export_reservations",
         "ingests",
         "onshape_links",
         "lineage_cad_names",
@@ -91,7 +96,7 @@ def test_v2_registry_with_rows_migrates_to_current_without_data_loss(tmp_path: P
     migrated.close()
 
     connection = sqlite3.connect(db_path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
     assert connection.execute("SELECT COUNT(*) FROM designs").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM exports").fetchone()[0] == 1
     connection.close()
@@ -148,6 +153,54 @@ def test_project_listing_orders_heads_without_loading_snapshot_text(tmp_path: Pa
     assert "snapshot_text" not in rows[0]
     assert rows[1]["export_count"] == 1
     assert rows[1]["last_exported_at"] == "2026-08-10T15:00:00Z"
+
+
+def test_project_listing_uses_only_the_newest_head_in_each_lineage(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = _save(
+        store,
+        marker="first",
+        filename="first-name.cfg",
+        saved_at="2026-08-10T10:00:00Z",
+    )
+    _save(
+        store,
+        _request(first),
+        marker="updated",
+        filename="older-head-name.cfg",
+        saved_at="2026-08-11T10:00:00Z",
+    )
+    fork = _save(
+        store,
+        _request(first),
+        marker="fork",
+        filename="canonical-name.cfg",
+        saved_at="2026-08-12T10:00:00Z",
+    )
+
+    rows = store.list_projects()
+
+    assert len(store.list_designs()) == 2
+    assert [row["design_id"] for row in rows] == [fork["identity"].design_id]  # type: ignore[union-attr]
+    assert rows[0]["filename"] == "canonical-name.cfg"
+
+
+def test_exact_lineage_lookup_returns_the_newest_head(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = _save(store, marker="first", saved_at="2026-08-10T10:00:00Z")
+    fork = _save(
+        store,
+        _request(first),
+        marker="fork",
+        saved_at="2026-08-12T10:00:00Z",
+    )
+    lineage_id = first["identity"].lineage_id  # type: ignore[union-attr]
+
+    latest = store.find_latest_design_for_lineage(lineage_id)
+
+    assert latest is not None
+    assert latest["design_id"] == fork["identity"].design_id  # type: ignore[union-attr]
+    assert store.find_latest_design_for_lineage("wgl_absent") is None
 
 
 def test_export_sequences_are_atomic_and_idempotent_across_store_instances(
@@ -321,6 +374,80 @@ def test_concurrent_same_key_runs_exactly_one_export_builder(tmp_path: Path) -> 
     assert calls == 1
 
 
+def test_slow_export_builder_does_not_block_registry_reads(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _save(store)
+    design_id = saved["identity"].design_id  # type: ignore[union-attr]
+    building = threading.Event()
+
+    def build(facts):
+        building.set()
+        time.sleep(0.25)
+        return {
+            "manifest_json": json.dumps(facts),
+            "geometry_hash": "sha256:geometry",
+            "artifact_sha256": "sha256:artifact",
+        }
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            store.allocate_export,
+            design_id=design_id,
+            idempotency_key="slow-build",
+            export_builder=build,
+        )
+        assert building.wait(timeout=1)
+        started = time.monotonic()
+        design = store.get_design(design_id)
+        read_elapsed = time.monotonic() - started
+        exported = future.result(timeout=1)
+
+    assert design is not None
+    assert exported["sequence"] == 1
+    assert read_elapsed < 0.1
+
+
+def test_failed_export_build_keeps_the_same_retryable_reservation(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _save(store)
+    design_id = saved["identity"].design_id  # type: ignore[union-attr]
+    attempts: list[dict[str, object]] = []
+
+    def fail(facts):
+        attempts.append(dict(facts))
+        raise RuntimeError("STEP generator failed")
+
+    with pytest.raises(RuntimeError, match="STEP generator failed"):
+        store.allocate_export(
+            design_id=design_id,
+            idempotency_key="retry-build",
+            export_builder=fail,
+        )
+
+    connection = sqlite3.connect(tmp_path / "cadlink.db")
+    assert connection.execute(
+        "SELECT state FROM export_reservations WHERE idempotency_key = 'retry-build'"
+    ).fetchone() == ("retryable",)
+    connection.close()
+
+    exported = store.allocate_export(
+        design_id=design_id,
+        idempotency_key="retry-build",
+        export_builder=lambda facts: (
+            attempts.append(dict(facts))
+            or {
+                "manifest_json": json.dumps(facts),
+                "geometry_hash": "sha256:geometry",
+                "artifact_sha256": "sha256:artifact",
+            }
+        ),
+    )
+
+    assert attempts[0] == attempts[1]
+    assert exported["export_id"] == attempts[0]["exportId"]
+    assert exported["sequence"] == 1
+
+
 def test_lineage_cad_names_are_claimed_once_and_span_a_fork(tmp_path: Path) -> None:
     """A linked CAD document depends on these names, so they never move."""
 
@@ -340,6 +467,112 @@ def test_lineage_cad_names_are_claimed_once_and_span_a_fork(tmp_path: Path) -> N
     assert claimed["bundle_stem"] is None
     assert later["parameter_slug"] == "demo_horn"
     assert later["bundle_stem"] == "demo_horn"
+
+
+def test_v9_archive_stem_migration_resolves_portable_collisions_stably(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "cadlink.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        CREATE TABLE lineage_cad_names (
+          lineage_id TEXT PRIMARY KEY,
+          parameter_slug TEXT,
+          bundle_stem TEXT,
+          archive_stem TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+        """
+    )
+    rows = [
+        ("wgl_a", "Horn A"),
+        ("wgl_b", "Horn+A"),
+        ("wgl_c", "Horn"),
+        ("wgl_d", "horn"),
+    ]
+    connection.executemany(
+        "INSERT INTO lineage_cad_names VALUES (?, NULL, NULL, ?, ?, ?)",
+        [
+            (lineage_id, stem, "2026-08-21T00:00:00Z", "2026-08-21T00:00:00Z")
+            for lineage_id, stem in rows
+        ],
+    )
+    connection.execute("PRAGMA user_version = 9")
+    connection.commit()
+    connection.close()
+
+    migrated = CadLinkStore(db_path)
+    migrated.initialize()
+    claimed = {
+        lineage_id: migrated.get_lineage_cad_names(lineage_id)["archive_stem"]  # type: ignore[index]
+        for lineage_id, _stem in rows
+    }
+    assert claimed["wgl_a"] == "Horn_A"
+    assert claimed["wgl_b"].startswith("Horn_A-")
+    assert claimed["wgl_c"] == "Horn"
+    assert claimed["wgl_d"].startswith("horn-")
+    assert len({stem.casefold() for stem in claimed.values()}) == 4
+    migrated.close()
+
+    restarted = CadLinkStore(db_path)
+    restarted.initialize()
+    assert {
+        lineage_id: restarted.get_lineage_cad_names(lineage_id)["archive_stem"]  # type: ignore[index]
+        for lineage_id, _stem in rows
+    } == claimed
+    restarted.close()
+
+    connection = sqlite3.connect(db_path)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE type = 'index' AND name = 'lineage_cad_names_by_archive_stem'"
+    ).fetchone()[0] == 1
+    connection.close()
+
+
+def test_archive_stems_are_unique_under_concurrent_portable_claims(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "cadlink.db"
+    seed = CadLinkStore(db_path)
+    seed.initialize()
+    seed.close()
+    requested = [
+        ("wgl_a", "Horn A"),
+        ("wgl_b", "Horn+A"),
+        ("wgl_c", "Horn"),
+        ("wgl_d", "horn"),
+    ]
+
+    def claim(item: tuple[str, str]) -> tuple[str, str]:
+        lineage_id, preferred = item
+        store = CadLinkStore(db_path)
+        try:
+            result = store.claim_archive_stem(lineage_id, preferred=preferred)
+            assert result is not None
+            return lineage_id, result
+        finally:
+            store.close()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claimed = dict(pool.map(claim, requested))
+
+    assert len({stem.casefold() for stem in claimed.values()}) == 4
+    assert all(" " not in stem and "+" not in stem for stem in claimed.values())
+    restarted = CadLinkStore(db_path)
+    restarted.initialize()
+    try:
+        assert {
+            lineage_id: restarted.claim_archive_stem(
+                lineage_id, preferred="renamed after restart"
+            )
+            for lineage_id, _preferred in requested
+        } == claimed
+    finally:
+        restarted.close()
 
 
 def test_latest_lineage_export_reaches_across_designs(tmp_path: Path) -> None:

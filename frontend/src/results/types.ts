@@ -1,4 +1,4 @@
-import type { JobResults, NullableNumber, RadiationImpedancePresentation } from '../api/results';
+import type { NullableNumber, RadiationImpedancePresentation, ResultData } from '../api/results';
 
 export interface ObservationMetadata {
   requested_distance_m?: number;
@@ -7,23 +7,55 @@ export interface ObservationMetadata {
   sound_speed_m_per_s?: number;
 }
 
+export interface RadiatedPowerMetadata {
+  surface_w: NullableNumber[];
+  sphere_w: NullableNumber[];
+  sphere_coverage_sr: number | null;
+  definition: string;
+  agreement_db: NullableNumber[];
+}
+
+/**
+ * What the LR4 sum recorded about the channels it summed.
+ *
+ * `member_roles` runs parallel to `members`, so a crossover pair can be named
+ * by band (`LF → MF`) without loading the ingest record the roles came from.
+ * Every field is stated as the server writes it; `combineMetadataOf` is the
+ * only sanctioned way to obtain one, because a payload that does not carry
+ * both members and crossovers is not a combined channel.
+ */
+export interface CombineMetadata {
+  members: string[];
+  member_roles?: Array<string | null>;
+  crossovers_hz: number[];
+  /** Time alignment applied per member, keyed by channel id. */
+  delays_ms?: Record<string, number>;
+  /** The server also records the target and the per-member gains it applied. */
+  level_match?: { enabled?: boolean; [key: string]: unknown };
+  align?: boolean;
+  warnings?: string[];
+}
+
 export interface ResultMetadata extends Record<string, unknown> {
   observation?: ObservationMetadata;
   /** Electrical impedance is engineering convention even when pressure is solver convention. */
   impedance_phase_convention?: string;
   /** Channel membership used to join wrapper-owned CAD validity evidence. */
   source_ids?: string[];
+  /** The driver band this channel speaks for, stamped from the ingest record's
+   * source roles. Null when the sources carry no band role, absent on
+   * parametric runs and on derived channels such as the combined sum. */
+  role?: string | null;
+  source_labels?: string[];
   per_source_frequency_validity?: Record<string, {
     effective_max_valid_frequency_hz?: number;
     [key: string]: unknown;
   }>;
-  combine?: {
-    warnings?: string[];
-    [key: string]: unknown;
-  };
+  radiated_power?: RadiatedPowerMetadata;
+  combine?: Partial<CombineMetadata> & Record<string, unknown>;
 }
 
-export interface ResultPayload extends JobResults {
+export interface ResultPayload extends ResultData {
   /** Stored separately from result JSON and joined by the Results surface. */
   radiation_impedance?: RadiationImpedancePresentation;
   directivity_phase?: {
@@ -75,6 +107,29 @@ export function resultChannels(result: ResultPayload): ResultChannel[] {
   const ordered = result.channel_order?.filter((id) => id in result.channels!) ?? [];
   const remaining = Object.keys(result.channels).filter((id) => !ordered.includes(id));
   return [...ordered, ...remaining].map((id) => ({ id, result: result.channels![id] as ResultPayload }));
+}
+
+/** The channel's combine record, or null when it is not a combined sum. */
+export function combineMetadataOf(payload: ResultPayload | undefined): CombineMetadata | null {
+  const combine = payload?.metadata?.combine;
+  if (!combine || typeof combine !== 'object') return null;
+  if (!Array.isArray(combine.members) || !Array.isArray(combine.crossovers_hz)) return null;
+  return combine as CombineMetadata;
+}
+
+/**
+ * Which channel is the combined sum.
+ *
+ * Read from the combine record rather than from the id, because the id is only
+ * a convention: a return that names its channels itself, or a recombine issued
+ * under another id, would otherwise leave the dock with no combined view at
+ * all. A drive channel may itself legally be named `combined`, so metadata is
+ * the only authoritative discriminator.
+ */
+export function combinedChannelId(result: ResultPayload): string | null {
+  const channels = resultChannels(result);
+  const tagged = channels.find(({ result: payload }) => combineMetadataOf(payload));
+  return tagged?.id ?? null;
 }
 
 function portableSuffixKey(value: string): string {

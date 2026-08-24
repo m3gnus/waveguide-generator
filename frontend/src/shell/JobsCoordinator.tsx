@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { fetchJobResults } from '../api/results';
+import { compareSelection, fetchJobResults } from '../api/results';
 import { planSolveDesign, submitDesign, submitImported, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
 import { useSolvePlan } from '../jobs/useSolvePlan';
@@ -17,8 +17,8 @@ import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { consumeParkedSolveCommand } from '../stores/solveCommand';
-import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
+import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 
@@ -208,6 +208,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     : cadGeometryActive
       ? importedSubmissionBlocker(cadReturn, solveOptions)
       : null;
+  const directivityError = polarValidationError(solveOptions.polar);
+  const solveBlocker = cadSolveBlocker ?? directivityError;
 
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision) => {
     if (submissionInFlight.current) return;
@@ -227,12 +229,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       await planSolveDesign(nextDesign, options);
       const designName = useDocumentStore.getState().designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-      await submitDesign(
+      const jobId = await submitDesign(
         nextDesign,
         options,
         fetch,
         { label, designRevision: nextRevision },
       );
+      // Pressing Solve is a request to see that solve. Claiming the primary
+      // slot for it here is what makes the finished run the one on screen even
+      // when a result had been pinned for comparison; without it, a pin taken
+      // at any point in the session quietly kept every later solve hidden.
+      compareSelection.awaitRun(jobId);
       acceptSubmittedLabel(designName);
       await jobsSocket.refresh();
     } finally {
@@ -254,19 +261,28 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // The CAD document names its own runs; see jobs/runNameSource.
       const designName = currentRunNameSource().name;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
+      const parked = parkedSolveCommandStore.getSnapshot().command;
+      const selectedBundlePath = useCadReturnStore.getState().selectedBundle?.bundlePath;
+      const clientRequestId = parked && parked.bundlePath === selectedBundlePath
+        ? `cad-solve:${parked.commandId}`
+        : undefined;
       // A typed refusal is the server naming a condition; the user needs the
       // remedy. Translating here covers every imported entry point at once.
-      const jobId = await submitImported(effectiveSubmission, fetch, label).catch((error) => {
+      const jobId = await submitImported(effectiveSubmission, fetch, label, clientRequestId).catch((error) => {
         throw error instanceof Error
           ? new Error(explainImportedRefusal(error.message))
           : error;
       });
-      acceptSubmittedLabel(designName);
       // A Fusion-authored request is retired by its ledger entry, not by the
       // marker on disk. Reporting the job from the one place every imported
       // solve passes through is what makes a manual Solve consume the parked
       // command instead of leaving it to replay into a duplicate run.
       await consumeParkedSolveCommand(jobId);
+      // Do not advance the label sequence until the CAD acknowledgement is
+      // durable. A replay after an acknowledgement failure must hash to the
+      // identical solve request and recover this same job id.
+      acceptSubmittedLabel(designName);
+      compareSelection.awaitRun(jobId);
       await jobsSocket.refresh();
       return jobId;
     } finally {
@@ -292,6 +308,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       setSubmitting(true);
       setActionError(null);
       await jobsSocket.retryJob(jobId);
+      compareSelection.awaitRun(jobId);
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
@@ -359,26 +376,26 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [cadGeometryActive, design, fileGeometryActive, reportError, revision, run, solveCurrentCadImport]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && solveAvailable && !submitting && !cadSolveBlocker && !fileGeometryActive) {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && solveAvailable && !submitting && !solveBlocker && !fileGeometryActive) {
         event.preventDefault();
         solve();
       }
     };
     window.addEventListener('keydown', shortcut);
     return () => window.removeEventListener('keydown', shortcut);
-  }, [cadSolveBlocker, fileGeometryActive, solve, solveAvailable, submitting]);
+  }, [fileGeometryActive, solve, solveAvailable, solveBlocker, submitting]);
 
   const control = useMemo<SolveControl>(() => ({
     solve,
-    disabled: !solveAvailable || submitting || Boolean(cadSolveBlocker) || fileGeometryActive,
+    disabled: !solveAvailable || submitting || Boolean(solveBlocker) || fileGeometryActive,
     submitting,
     label: cadGeometryActive ? 'Solve CAD Link' : 'Solve',
     title: submitting
       ? 'Submitting solve…'
       : fileGeometryActive
         ? 'Standalone imported meshes are viewport-only. Show Parametric to solve the WG design.'
-        : cadSolveBlocker
-          ? cadSolveBlocker
+        : solveBlocker
+          ? solveBlocker
           : cadGeometryActive && metalCapability?.available
             ? 'Solve the displayed CAD Link model with Metal'
             : solvePlan
@@ -386,7 +403,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? metalCapability?.reason ?? capabilityError ?? 'Metal engine is unavailable'
                 : parametricUnavailable,
-  }), [cadGeometryActive, cadSolveBlocker, capabilityError, fileGeometryActive, metalCapability?.available, metalCapability?.reason, parametricUnavailable, selectedEngine, solve, solveAvailable, solvePlan, submitting]);
+  }), [cadGeometryActive, capabilityError, fileGeometryActive, metalCapability?.available, metalCapability?.reason, parametricUnavailable, selectedEngine, solve, solveAvailable, solveBlocker, solvePlan, submitting]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }

@@ -3,7 +3,7 @@ import type { ChartTokens } from '../results/EChart';
 import { beamShapeSeries } from '../results/mappers';
 import type { NamedResult } from '../results/mappers';
 import type { ResultPayload } from '../results/types';
-import { chartDensity, directivityIndexOption, impedanceOption, lineOption, middleEllipsis, type ChartDensity } from './ResultsPanel';
+import { chartDensity, directivityIndexOption, heatmapOption, impedanceOption, lineOption, middleEllipsis, type ChartDensity } from './ResultsPanel';
 
 /**
  * Layout locks for the result dock.
@@ -43,6 +43,22 @@ function lineCharts(density: ChartDensity): LineOption[] {
     directivityIndexOption(items, tokens, 'none', density),
     impedanceOption(items, tokens, 'none', density),
   ] as unknown as LineOption[];
+}
+
+function expectFunctionalFontsAtLeast11(value: unknown, path = 'option'): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => expectFunctionalFontsAtLeast11(item, `${path}[${index}]`));
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  Object.entries(value as Record<string, unknown>).forEach(([key, item]) => {
+    if (key === 'fontSize' && typeof item === 'number') expect(item, `${path}.${key}`).toBeGreaterThanOrEqual(11);
+    if (key === 'font' && typeof item === 'string') {
+      const pixels = item.match(/(?:^|\s)(\d+(?:\.\d+)?)px(?:[\/\s]|$)/)?.[1];
+      if (pixels) expect(Number(pixels), `${path}.${key}=${item}`).toBeGreaterThanOrEqual(11);
+    }
+    expectFunctionalFontsAtLeast11(item, `${path}.${key}`);
+  });
 }
 
 describe('result dock chart layout', () => {
@@ -98,6 +114,33 @@ describe('result dock chart layout', () => {
     const { xAxis } = lineOption([], tokens, 'dB', 'full') as unknown as LineOption;
     expect(xAxis.min).toBeUndefined();
     expect(xAxis.max).toBeUndefined();
+  });
+
+  it.each(DENSITIES)('keeps every functional %s ECharts label at the 11 px floor', (density) => {
+    const heatmapResult = {
+      frequencies: [500, 1_000, 2_000],
+      directivity: {
+        horizontal: [500, 1_000, 2_000].map(() => [0, 30, 60, 90].map((angle) => [angle, -angle / 10])),
+      },
+    } as unknown as ResultPayload;
+    const heatmap = heatmapOption(heatmapResult, tokens, 'horizontal', -6, density);
+    [...lineCharts(density), heatmap as unknown as LineOption]
+      .forEach((option, index) => expectFunctionalFontsAtLeast11(option, `option[${index}]`));
+
+    // Custom contour labels live in renderItem output rather than directly in
+    // the option tree, so exercise those generated display objects too.
+    (heatmap.series as Array<{
+      type?: string;
+      data?: number[][];
+      renderItem?: (params: unknown, api: { value: (index: number) => unknown }) => unknown;
+    }>).filter(({ renderItem, data }) => renderItem && data?.length).forEach((series, index) => {
+      const datum = series.data![0];
+      const rendered = series.renderItem!(
+        { coordSys: { x: 0, y: 0, width: 400, height: 200 } },
+        { value: (itemIndex) => datum[itemIndex] },
+      );
+      expectFunctionalFontsAtLeast11(rendered, `renderItem[${index}]`);
+    });
   });
 });
 

@@ -23,6 +23,7 @@ import numpy as np
 
 from hornlab_sim.methods import driver_coupling, radiation_impedance
 
+from server.cadlink.roles import canonical_source_role
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 from server.preview.translate import has_closed_outer_body
@@ -101,6 +102,11 @@ class MetalUnavailable(RuntimeError):
 
 
 logger = logging.getLogger(__name__)
+
+# Ingest source roles that name a driver band on a result channel, lowest first.
+# Keep this ranking in sync with ROLE_BAND_RANK in frontend/src/stores/cadReturn.ts.
+_BAND_ROLE_RANK = {"LF": 0, "MF": 1, "HF": 2}
+_BAND_ROLES = frozenset(_BAND_ROLE_RANK)
 
 
 def _native_config_or_unavailable(kwargs: Mapping[str, Any]) -> Any:
@@ -593,6 +599,49 @@ def _record_source_area_m2(record: Mapping[str, Any], source_id: str) -> float:
     )
 
 
+def _channel_source_identity(
+    geometry: ImportedGeometrySource, record: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Name each drive channel's driver band and sources from the record.
+
+    Only band roles name a driver: the record also carries structural roles
+    (the rigid shell, port apertures) that no result may present as one. A
+    channel spanning several roles takes the lowest band, independent of the
+    source order authored by CAD.
+    """
+
+    roles: dict[str, str] = {}
+    labels: dict[str, str] = {}
+    for source in record.get("sources") or []:
+        if not isinstance(source, Mapping):
+            continue
+        source_id = str(source.get("id") or "")
+        if not source_id:
+            continue
+        role = canonical_source_role(str(source.get("role") or ""))
+        if role in _BAND_ROLES:
+            roles[source_id] = role
+        label = source.get("label") or source.get("name")
+        if isinstance(label, str) and label.strip():
+            labels[source_id] = label.strip()
+    identity: dict[str, dict[str, Any]] = {}
+    for channel in geometry.drive_channels:
+        source_ids = list(channel.source_ids)
+        entry: dict[str, Any] = {
+            "role": min(
+                (roles[source_id] for source_id in source_ids if source_id in roles),
+                key=_BAND_ROLE_RANK.__getitem__,
+                default=None,
+            )
+        }
+        if any(source_id in labels for source_id in source_ids):
+            entry["source_labels"] = [
+                labels.get(source_id, source_id) for source_id in source_ids
+            ]
+        identity[channel.id] = entry
+    return identity
+
+
 def _channel_basis_metadata(
     geometry: ImportedGeometrySource,
     record: Mapping[str, Any],
@@ -666,7 +715,7 @@ def _passive_cardioid_apertures(
         if not isinstance(source, Mapping):
             continue
         source_id = str(source.get("id") or "")
-        if str(source.get("role") or "").strip().upper() != "MF":
+        if canonical_source_role(str(source.get("role") or "")) != "MF":
             continue
         if source_id in source_tags:
             mf_candidates.append(("MF", source_id, int(source_tags[source_id])))
@@ -975,6 +1024,15 @@ def _apply_channel_driver(
         result.surface_neumann_complex = (
             np.asarray(surface_neumann, dtype=np.complex128) * scale_raw[:, None]
         )
+    power_scale = np.square(np.abs(scale_raw))
+    for field in ("radiated_power_surface_w", "radiated_power_sphere_w"):
+        radiated_power = getattr(result, field, None)
+        if radiated_power is not None:
+            setattr(
+                result,
+                field,
+                np.asarray(radiated_power, dtype=np.float64) * power_scale,
+            )
     payload["source_id"] = source_id
     payload["source_area_m2"] = area_m2
     return payload
@@ -1157,6 +1215,15 @@ def _coupled_cardioid_result(
         )[:, None] * np.asarray(port_sphere, dtype=np.complex128)
         mf_result.sphere_pressure_complex = total_sphere * scale_raw[:, None]
 
+    # The coupled response is a coherent synthesis of two native solves.  The
+    # member powers cannot be scaled or added into the power of that sum, so do
+    # not let the MF member's optional cross-check survive the copied result.
+    for field in ("radiated_power_surface_w", "radiated_power_sphere_w"):
+        if hasattr(mf_result, field):
+            setattr(mf_result, field, None)
+    if hasattr(mf_result, "radiated_power_sphere_coverage_sr"):
+        mf_result.radiated_power_sphere_coverage_sr = None
+
     payload = {
         "mf_source_id": mf_source_id,
         "mf_channel_id": mf_channel.id,
@@ -1192,6 +1259,7 @@ def _combined_channel_response(
     status: Mapping[str, Any],
     kwargs: Mapping[str, Any],
     per_source_validity: Mapping[str, Any],
+    channel_identity: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Package the LR4 time-aligned sum as one more contract-shaped channel."""
 
@@ -1216,6 +1284,10 @@ def _combined_channel_response(
         level_match=spec.level_match,
         align=spec.align,
         member_validity_hz=member_validity_hz,
+        member_roles={
+            member: channel_identity.get(member, {}).get("role")
+            for member in spec.members
+        },
     )
     source_ids = [
         source_id
@@ -1331,6 +1403,8 @@ def solve_imported_metal_from_msh_text(
         )
     )
 
+    channel_identity = _channel_source_identity(geometry, record)
+
     source_specs: list[dict[int, complex]] = []
     source_profiles: dict[int, Any] = {}
     for channel in geometry.drive_channels:
@@ -1401,6 +1475,7 @@ def solve_imported_metal_from_msh_text(
             )
             if len(channel.source_ids) > 1:
                 channel_response.pop("impedance", None)
+            channel_response["metadata"].update(channel_identity[channel.id])
             provisional_channels[channel.id] = channel_response
         result_callback(
             index,
@@ -1560,6 +1635,7 @@ def solve_imported_metal_from_msh_text(
                 "geometry_type": "imported",
                 "drive_channel_id": channel.id,
                 "source_ids": list(channel.source_ids),
+                **channel_identity[channel.id],
                 "device_interface": {"selected": "metal", "metal": status},
                 "engine": "hornlab-metal-bem",
                 "phase_time_convention": "exp(+ikr)",
@@ -1768,6 +1844,7 @@ def solve_imported_metal_from_msh_text(
             status=status,
             kwargs=kwargs,
             per_source_validity=per_source_validity,
+            channel_identity=channel_identity,
         )
         channels[geometry.combine.id] = combined_response
         channel_order.append(geometry.combine.id)

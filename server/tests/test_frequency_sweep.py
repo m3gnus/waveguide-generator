@@ -49,6 +49,8 @@ def test_native_result_is_restored_to_ascending_frequency_contract() -> None:
         directivity_db=np.asarray([[10], [70], [50], [30]]),
         impedance=np.asarray([1, 7, 5, 3]),
         sphere_pressure_complex=np.asarray([[101], [107], [105], [103]]),
+        radiated_power_surface_w=np.asarray([1, 7, 5, 3]),
+        radiated_power_sphere_w=np.asarray([11, 17, 15, 13]),
         surface_pressure_avg={2: np.asarray([201, 207, 205, 203])},
         solver_log=[{"frequency_hz": 100.0}, {"frequency_hz": 700.0}],
     )
@@ -61,6 +63,8 @@ def test_native_result_is_restored_to_ascending_frequency_contract() -> None:
     assert result.directivity_db[:, 0].tolist() == [10, 30, 50, 70]
     assert result.impedance.tolist() == [1, 3, 5, 7]
     assert result.sphere_pressure_complex[:, 0].tolist() == [101, 103, 105, 107]
+    assert result.radiated_power_surface_w.tolist() == [1, 3, 5, 7]
+    assert result.radiated_power_sphere_w.tolist() == [11, 13, 15, 17]
     assert result.surface_pressure_avg[2].tolist() == [201, 203, 205, 207]
     assert result.solver_log == [{"frequency_hz": 100.0}, {"frequency_hz": 700.0}]
 

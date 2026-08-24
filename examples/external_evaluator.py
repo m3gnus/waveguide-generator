@@ -18,6 +18,7 @@ SUPPORTED_RESULT_CONTRACTS = {
     ("parametric", 1),
     ("multi_channel", 2),
 }
+STOP_TIMEOUT_SECONDS = 5.0
 
 
 class WgApiError(RuntimeError):
@@ -49,6 +50,8 @@ class WaveguideGeneratorClient:
         method: str,
         path: str,
         payload: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float = 60.0,
     ) -> tuple[bytes, dict[str, str]]:
         data = None
         headers = {"Accept": "application/json"}
@@ -57,7 +60,7 @@ class WaveguideGeneratorClient:
             headers["Content-Type"] = "application/json"
         request = Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
         try:
-            with urlopen(request, timeout=60) as response:
+            with urlopen(request, timeout=timeout_seconds) as response:
                 return response.read(), {key.lower(): value for key, value in response.headers.items()}
         except HTTPError as exc:
             raw = exc.read()
@@ -85,6 +88,27 @@ class WaveguideGeneratorClient:
 
     def status(self, job_id: str) -> dict[str, Any]:
         return self.get_json(f"/api/status/{job_id}")
+
+    def stop(self, job_id: str) -> dict[str, Any]:
+        raw, _headers = self._request(
+            "POST",
+            f"/api/stop/{job_id}",
+            timeout_seconds=STOP_TIMEOUT_SECONDS,
+        )
+        response = json.loads(raw)
+        if not isinstance(response, dict):
+            raise RuntimeError("WG stop response must be a JSON object")
+        return response
+
+    def _stop_without_masking(self, job_id: str) -> None:
+        """Make one bounded cancellation attempt while preserving the caller's error."""
+
+        try:
+            self.stop(job_id)
+        except Exception:
+            # Cancellation is best-effort here. The timeout or interruption that
+            # caused it remains the actionable error for the calling program.
+            pass
 
     def results(self, job_id: str) -> tuple[dict[str, Any], str]:
         raw, headers = self._request("GET", f"/api/results/{job_id}")
@@ -119,19 +143,25 @@ class WaveguideGeneratorClient:
     ) -> Evaluation:
         job_id = self.submit(solve_request)
         deadline = time.monotonic() + timeout_seconds
-        while True:
-            status = self.status(job_id)
-            if status["status"] == "complete":
-                results, digest = self.results(job_id)
-                return Evaluation(job_id, status, results, digest)
-            if status["status"] in {"error", "cancelled"}:
-                raise RuntimeError(
-                    f"WG job {job_id} ended as {status['status']}: "
-                    f"{status.get('error_message') or status.get('message') or 'no detail'}"
-                )
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"WG job {job_id} did not finish within {timeout_seconds:g}s")
-            time.sleep(max(0.01, poll_seconds))
+        try:
+            while True:
+                status = self.status(job_id)
+                if status["status"] == "complete":
+                    results, digest = self.results(job_id)
+                    return Evaluation(job_id, status, results, digest)
+                if status["status"] in {"error", "cancelled"}:
+                    raise RuntimeError(
+                        f"WG job {job_id} ended as {status['status']}: "
+                        f"{status.get('error_message') or status.get('message') or 'no detail'}"
+                    )
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"WG job {job_id} did not finish within {timeout_seconds:g}s"
+                    )
+                time.sleep(max(0.01, poll_seconds))
+        except (TimeoutError, KeyboardInterrupt):
+            self._stop_without_masking(job_id)
+            raise
 
 
 def main(argv: list[str] | None = None) -> int:

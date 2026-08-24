@@ -11,7 +11,16 @@ const channel: ResultPayload = {
     horizontal_beamwidth_deg: [100, 80, 60],
     vertical_beamwidth_deg: [90, 70, 50],
   },
-  metadata: { warnings: ['mesh warning <check>'] },
+  metadata: {
+    warnings: ['mesh warning <check>'],
+    radiated_power: {
+      surface_w: [1, 2, 4],
+      sphere_w: [1.1, 2.2, 4.4],
+      sphere_coverage_sr: 12.566370614359172,
+      definition: 'sphere/surface definition <escaped>',
+      agreement_db: [0.4139, 0.4139, 0.4139],
+    },
+  },
 };
 
 describe('static run report', () => {
@@ -32,6 +41,11 @@ describe('static run report', () => {
     expect(html).toContain('<h2>MF</h2>');
     expect(html).toContain('<svg class="plot"');
     expect(html).toContain('Derived acoustics table (3 rows)');
+    expect(html).toContain('Radiated-power cross-check');
+    expect(html).toContain('Max |power agreement|');
+    expect(html).toContain('Surface power W');
+    expect(html).toContain('sphere/surface definition &lt;escaped&gt;');
+    expect(html).not.toContain('sphere/surface definition <escaped>');
     expect(html).toContain('mesh warning &lt;check&gt;');
     expect(html).not.toContain('mesh warning <check>');
     expect(html).toContain("default-src 'none'");

@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from server.cli.args import build_parser, main
+from server.cli import solve as solve_module
 from server.cli.solve import solve_path
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.integration.provenance import canonical_json_sha256
@@ -233,6 +234,42 @@ def test_solve_output_writes_artifacts_and_refuses_existing_dir(
     capsys.readouterr()
     assert main(argv, engine_registry=_registry()) == 1
     assert "already exists" in capsys.readouterr().err
+
+
+def test_failed_artifact_write_leaves_no_output_and_retry_can_succeed(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    design = _design(tmp_path)
+    output = tmp_path / "output"
+    argv = [
+        "solve",
+        str(design),
+        "--data-dir",
+        str(tmp_path / "data"),
+        "--output",
+        str(output),
+    ]
+    original_write = solve_module._write_artifact
+    calls = 0
+
+    def fail_on_second_artifact(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected artifact failure")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(solve_module, "_write_artifact", fail_on_second_artifact)
+    assert main(argv, engine_registry=_registry()) == 1
+    assert "injected artifact failure" in capsys.readouterr().err
+    assert not output.exists()
+    assert list(tmp_path.glob(".output.staging-*")) == []
+
+    monkeypatch.setattr(solve_module, "_write_artifact", original_write)
+    assert main(argv, engine_registry=_registry()) == 0
+    assert (output / "summary.json").is_file()
 
 
 def test_solve_accepts_canonical_request_json_and_preserves_identity(

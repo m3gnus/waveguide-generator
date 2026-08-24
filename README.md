@@ -40,7 +40,8 @@ Tools on Apple Silicon for the Metal solver.
 
 Useful flags: `--tag vX.Y.Z` installs a specific release, `--skip-spa` leaves
 `frontend/dist` alone while you are working on the interface, `--no-launch`
-stops before starting the app, and `--force` rebuilds the environment.
+stops before starting the app, and `--force` fully repairs the environment by
+reinstalling declared distributions and removing undeclared ones.
 `--skip-wglink` leaves Fusion untouched; `--replace-wglink` deliberately
 replaces a developer-managed copy; and `--wglink-archive PATH` rehearses an
 already-built, provenance-checked package without fetching its source.
@@ -155,12 +156,12 @@ installer can acquire the application data lock.
 
 ### Output workspace
 
-Manual and automatic run exports default to the `output/` folder inside the
-Waveguide Generator checkout. This folder is user-visible and does not require
-browser download permission or approval for a protected operating-system data
-directory. A different output folder can be selected once in **Settings →
-Workspace**. Internal databases, logs, and process locks remain under the
-platform application-data directory; result exports do not.
+Manual and automatic run exports default to `Documents/Waveguide Generator/runs`.
+This folder is user-visible and does not require browser download permission or
+approval for a protected operating-system data directory. A different output
+folder can be selected once in **Settings → Workspace**; the path displayed
+there is authoritative. Internal databases, logs, and process locks remain
+under the platform application-data directory; result exports do not.
 
 The Fusion WGLink exchange folder is configured separately under **Settings →
 CAD Link**. Changing the output folder never moves or disconnects Fusion's
@@ -169,17 +170,19 @@ CAD Link**. Changing the output folder never moves or disconnects Fusion's
 ### Original-app run migration
 
 On launch, Waveguide Generator looks for the original application's v1 run
-database in an upgraded checkout and in sibling checkout folders. When it finds
-one, it automatically merges its runs, results, mesh artifacts, and saved
+database in the current checkout, which covers an in-place upgrade. When it
+finds one, it automatically merges its runs, results, mesh artifacts, and saved
 workspace into the current data directory before the server starts. The v1
 database is opened read-only, the current data is backed up first, existing
 current-version runs win on an ID collision, and content hashes are verified
 before startup continues. A completion marker makes later launches no-ops;
 additional v1 runs are picked up if the source database changes.
 
-For a v1 checkout stored somewhere else, set `WG1_ROOT` to that checkout before
-launching. The manual dry-run, reporting, and rollback interface remains
-available:
+For every side-by-side install, including a v1 checkout in a sibling folder,
+set `WG1_ROOT` to that checkout before launching. Automatic sibling discovery
+is deliberately disabled because a v2 database retains the same core schema
+and cannot be distinguished safely by inspection alone. The manual dry-run,
+reporting, and rollback interface remains available:
 
 ```
 .venv/bin/python scripts/migrate_v1.py --v1-root "/path/to/v1 checkout" --dry-run
@@ -195,7 +198,8 @@ python3.13 scripts/bootstrap.py
 
 The bootstrap is idempotent: unchanged, valid environments do not contact the
 package index. Run `.venv/bin/python scripts/bootstrap.py --check` to validate
-without installing, or use `--force` to reinstall the locked dependency set.
+without installing. `--force` force-reinstalls every declared distribution and
+removes distributions that are not declared by the dependency manifests.
 
 ## Headless evaluation
 
@@ -249,15 +253,21 @@ python scripts/bump_version.py patch
 and `--check` proves every copy agrees. CI runs `--check` on every push; so does
 `server/tests/test_version_consistency.py`.
 
-Then commit, and tag:
+Create the release commit on `main`, push `main`, and wait for CI to finish
+successfully on that exact commit. Only then tag that same commit and push the
+tag; the branch and tag pushes are deliberately separate operations:
 
 ```bash
-git tag v0.2.1 && git push origin v0.2.1
+git push origin main
+# Wait for CI to be green on: git rev-parse HEAD
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 The tag fires `.github/workflows/release.yml`, which **refuses to build when the
-tag disagrees with `shared/version.json`** — a build that misreports itself is
-worse than a failed release. It then attaches the prebuilt SPA as
+tag disagrees with `shared/version.json`, the tagged commit is not reachable
+from `origin/main`, or CI did not succeed for that exact commit**. It then
+attaches the prebuilt SPA as
 `waveguide-generator-v2-spa-<version>.tar.gz` with a `.sha256` beside it, so
 installing Waveguide Generator needs no Node runtime.
 

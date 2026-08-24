@@ -9,7 +9,9 @@ import { nextRunLabel } from '../jobs/runNaming';
 import { useRunNameSource } from '../jobs/runNameSource';
 import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { runProvenanceMarker } from '../results/runCoherence';
 import { useDocumentStore } from '../stores/document';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
 import { middleEllipsis } from './ResultsPanel';
@@ -176,6 +178,11 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   const expanded = selected || running || failed || cancelled || editing;
   const selectable = !running && (job.has_results || canLoadDesign(job));
   const statusWord = running ? 'Running' : failed ? 'Failed' : cancelled ? 'Cancelled' : 'Completed';
+  // Only the mode, never the design revision: this card is one of a rail full
+  // of them, and a marker that moved with every keystroke would repaint the
+  // whole list mid-drag to say something none of these runs changed.
+  const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const provenance = runProvenanceMarker(job, mode);
   const displayName = runDisplayName({ ...job, label: displayLabel });
   const heading = <>
     {/* The dot is hue-only, and DESIGN.md's Signal Rule requires every state to
@@ -183,7 +190,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
         no width because it is only ever read aloud. */}
     <i/><span className="sr-only">{statusWord}. </span>
     {!editing && <b className="job-title" title={displayName}>{middleEllipsis(displayName, 22)}</b>}
-    {job.config_summary.geometry_type === 'imported' && <span className="pill accent" title="Solved from a CAD-return ingestion">CAD import</span>}
+    {provenance && <span className="pill accent" title={provenance === 'CAD' ? 'Solved from a CAD-return ingestion' : 'Solved from the parametric design, not from a CAD return'}>{provenance}</span>}
     {/* Stars are a label here, shown only once a run has actually been rated. */}
     {!expanded && rating > 0 && <span className="job-stars" aria-label={`Kept, rated ${rating} of 5`} title="Kept: rated runs are never cleaned up">{'★'.repeat(rating)}</span>}
   </>;

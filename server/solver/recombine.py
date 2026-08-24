@@ -86,6 +86,14 @@ def recombine_stored_results(
         if limits:
             member_validity_hz[member] = min(limits)
 
+    member_roles: dict[str, str | None] = {}
+    for member in spec.members:
+        stored = channels.get(member)
+        stored_metadata = stored.get("metadata") if isinstance(stored, Mapping) else None
+        member_roles[member] = (
+            stored_metadata.get("role") if isinstance(stored_metadata, Mapping) else None
+        )
+
     combined_result, combine_payload = combine_drive_channels(
         bundle["results_by_id"],
         members=list(spec.members),
@@ -93,6 +101,7 @@ def recombine_stored_results(
         level_match=spec.level_match,
         align=spec.align,
         member_validity_hz=member_validity_hz,
+        member_roles=member_roles,
     )
 
     motions = {channel.motion for channel in geometry.drive_channels}

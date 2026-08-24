@@ -319,6 +319,76 @@ def _run(command: list[str], *, quiet: bool = False) -> subprocess.CompletedProc
     )
 
 
+def _canonical_distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).casefold()
+
+
+def _declared_distribution_names() -> set[str]:
+    """Return every distribution intentionally present in the WG environment."""
+
+    names = {
+        _canonical_distribution_name(name)
+        for name in (*_locked_versions(), *_locked_git_commits())
+    }
+    for path in REQUIREMENT_FILES:
+        if path.name == "pins.json":
+            continue
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            git_requirement = GIT_REQUIREMENT_RE.fullmatch(line)
+            if git_requirement is not None:
+                names.add(_canonical_distribution_name(git_requirement.group("name")))
+                continue
+            match = re.match(r"(?P<name>[A-Za-z0-9_.-]+)", line)
+            if match is None:
+                raise RuntimeError(f"Invalid requirement in {path}: {raw_line!r}")
+            names.add(_canonical_distribution_name(match.group("name")))
+    return names
+
+
+def _installed_distribution_names(python: Path) -> set[str]:
+    probe = (
+        "import json; from importlib.metadata import distributions; "
+        "print(json.dumps(sorted({d.metadata['Name'] for d in distributions()})))"
+    )
+    completed = subprocess.run(
+        [str(python), "-c", probe],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Could not enumerate installed distributions before forced cleanup."
+        )
+    try:
+        installed = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "The installed-distribution inventory was not valid JSON."
+        ) from exc
+    if not isinstance(installed, list) or not all(
+        isinstance(name, str) for name in installed
+    ):
+        raise RuntimeError("The installed-distribution inventory was invalid.")
+    return {_canonical_distribution_name(name) for name in installed}
+
+
+def _remove_undeclared_distributions(python: Path) -> None:
+    extras = sorted(_installed_distribution_names(python) - _declared_distribution_names())
+    if not extras:
+        return
+    print("Removing undeclared distributions: " + ", ".join(extras))
+    if _run([str(python), "-m", "pip", "uninstall", "--yes", *extras]).returncode != 0:
+        raise RuntimeError(
+            "Could not remove undeclared distributions; review the pip output above."
+        )
+
+
 def _locked_versions() -> dict[str, tuple[str, str | None]]:
     """Map every locked distribution to its version and its PEP 508 marker."""
 
@@ -592,14 +662,23 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
     # path approve the half-reinstalled environment on the next launch.
     (environment / STAMP_NAME).unlink(missing_ok=True)
     print(f"Installing locked dependencies ({reason})")
+    force_reinstall = ["--force-reinstall"] if force else []
     commands = (
-        [str(python), "-m", "pip", "install", f"pip=={PIP_VERSION}"],
         [
             str(python),
             "-m",
             "pip",
             "install",
-            "-c",
+            *force_reinstall,
+            f"pip=={PIP_VERSION}",
+        ],
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            *force_reinstall,
+            "-r" if force else "-c",
             str(REPO_ROOT / "server" / "requirements-lock.txt"),
             "-r",
             str(REPO_ROOT / "server" / "requirements-runtime.txt"),
@@ -622,6 +701,8 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
     for command in commands:
         if _run(command).returncode != 0:
             raise RuntimeError("Dependency installation failed; review the pip output above.")
+    if force:
+        _remove_undeclared_distributions(python)
 
     _install_cli_entrypoint(environment)
     _write_stamp(environment, fingerprint)
@@ -636,7 +717,11 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="validate without installing")
-    parser.add_argument("--force", action="store_true", help="reinstall even when the stamp is current")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="force-reinstall declared distributions and remove undeclared ones",
+    )
     parser.add_argument("--venv", type=Path, default=DEFAULT_VENV, help="environment path")
     return parser
 

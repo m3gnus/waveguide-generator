@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { useCapabilities } from '../jobs/useCapabilities';
@@ -9,6 +9,7 @@ import {
   MAX_FREQUENCY_POINTS,
   parseFrequencyList,
   polarConfigFromUi,
+  polarValidationError,
   polarUiFromConfig,
   useSolveOptionsStore,
   type FrequencyMode,
@@ -119,11 +120,30 @@ export function ToggleRow({ id, label, help, checked, onChange, revealId }: {
   </label>;
 }
 
-function PolarNumber({ id, label, help, value, unit, min, max, step = 1, disabled, update }: {
-  id: string; label: string; help: string; value: number; unit: string; min?: number; max?: number; step?: number; disabled?: boolean; update: (value: number) => void;
+function PolarNumber({ id, label, help, value, unit, min, max, step = 1, disabled, gridInvalid, errorId, update }: {
+  id: string; label: string; help: string; value: number; unit: string; min?: number; max?: number; step?: number; disabled?: boolean; gridInvalid?: boolean; errorId?: string; update: (value: number) => void;
 }) {
   const tip = useHelpTip({ title: label, text: help });
-  return <div className={`field-row polar-number${disabled ? ' field-disabled' : ''}`}><label className="field-label" htmlFor={id} {...tip.triggerProps}>{label}{tip.tip}</label><div className="number-control"><input id={id} type="number" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => update(Number(event.target.value))} /><span className="unit">{unit}</span></div></div>;
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const draftInvalid = draft.trim() === '' || !Number.isFinite(Number(draft));
+  return <div className={`field-row polar-number${disabled ? ' field-disabled' : ''}`}><label className="field-label" htmlFor={id} {...tip.triggerProps}>{label}{tip.tip}</label><div className="number-control"><input
+    id={id}
+    type="number"
+    value={draft}
+    min={min}
+    max={max}
+    step={step}
+    disabled={disabled}
+    aria-invalid={draftInvalid || gridInvalid ? true : undefined}
+    aria-describedby={gridInvalid ? errorId : undefined}
+    onChange={(event) => {
+      const next = event.target.value;
+      setDraft(next);
+      if (next.trim() && Number.isFinite(Number(next))) update(Number(next));
+    }}
+    onBlur={() => { if (draftInvalid) setDraft(String(value)); }}
+  /><span className="unit">{unit}</span></div></div>;
 }
 
 const AXIS_INITIALS: Record<PolarAxis, string> = { horizontal: 'H', vertical: 'V', diagonal: 'D' };
@@ -230,11 +250,15 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
   const polar = useSolveOptionsStore((state) => state.polar);
   const update = useSolveOptionsStore((state) => state.updatePolar);
   const toggleAxis = useSolveOptionsStore((state) => state.toggleAxis);
+  const validationError = polarValidationError(polar);
+  const validationErrorId = 'polar-grid-error';
   const numeric = (key: keyof Pick<PolarUiState, 'angleStart' | 'angleEnd' | 'angleStep' | 'distance' | 'normAngle' | 'diagonalAngle'>) => (value: number) => {
     if (Number.isFinite(value)) update({ [key]: value });
   };
   const axisHelp = useHelpTip({ title: 'Directivity planes', text: 'Which planes through the horn axis are measured. Horizontal and vertical are the usual pair; diagonal catches what a non-round mouth does between them.' });
-  const effective = effectiveDerivation ? effectiveGridView(polar, effectiveDerivation) : null;
+  const axisDescribedBy = [axisHelp.triggerProps['aria-describedby'], validationError ? validationErrorId : null]
+    .filter(Boolean).join(' ') || undefined;
+  const effective = effectiveDerivation && !validationError ? effectiveGridView(polar, effectiveDerivation) : null;
   // A diagonal on a multiple of 90 degrees is literally the horizontal or the
   // vertical plane, so the solve measures the same plane twice. It is a legal
   // request and stays one -- the file round-trips it -- but it costs a second
@@ -243,13 +267,14 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     && Number.isFinite(polar.diagonalAngle)
     && Math.abs(polar.diagonalAngle % 90) < 1e-6;
   return <>
-    <PolarNumber id="polar-angle-start" label="Sweep start" help="First off-axis angle measured in each directivity plane. 0° is on-axis; negative angles cover the other side." value={polar.angleStart} unit="°" step={1} update={numeric('angleStart')} />
-    <PolarNumber id="polar-angle-end" label="Sweep end" help="Last off-axis angle measured in each directivity plane. 90° reaches the baffle plane." value={polar.angleEnd} unit="°" step={1} update={numeric('angleEnd')} />
-    <PolarNumber id="polar-angle-step" label="Angular step" help="Spacing between measured angles. Finer steps give smoother directivity maps and cost almost nothing, because the field is evaluated after the solve rather than solved again." value={polar.angleStep} unit="°" min={1} step={1} update={numeric('angleStep')} />
-    <PolarNumber id="polar-distance" label="Measurement distance" help="How far from the horn the virtual microphone sits. Keep it well beyond the mouth so the result is a far-field pattern." value={polar.distance} unit="m" min={.1} step={.1} update={numeric('distance')} />
-    <PolarNumber id="polar-norm-angle" label="Normalization angle" help="The angle held at 0 dB in normalized directivity plots. Every polar curve is shifted so this angle reads flat; it changes only the display, never the solve." value={polar.normAngle} unit="°" step={1} update={numeric('normAngle')} />
-    <div className="axis-toggles" role="group" aria-label="Directivity planes" {...axisHelp.triggerProps}>{(['horizontal', 'vertical', 'diagonal'] as PolarAxis[]).map((axis) => <label key={axis}><input type="checkbox" checked={polar.enabledAxes.includes(axis)} onChange={() => toggleAxis(axis)} /> {axis}</label>)}{axisHelp.tip}</div>
-    <PolarNumber id="polar-diagonal-angle" label="Diagonal plane angle" help="Where the diagonal plane sits, measured from the horizontal. 45° is the corner of a square mouth. Only used when the diagonal plane is enabled." value={polar.diagonalAngle} unit="°" step={1} disabled={!polar.enabledAxes.includes('diagonal')} update={numeric('diagonalAngle')} />
+    <PolarNumber id="polar-angle-start" label="Sweep start" help="First off-axis angle measured in each directivity plane. 0° is on-axis; negative angles cover the other side." value={polar.angleStart} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleStart')} />
+    <PolarNumber id="polar-angle-end" label="Sweep end" help="Last off-axis angle measured in each directivity plane. 90° reaches the baffle plane." value={polar.angleEnd} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleEnd')} />
+    <PolarNumber id="polar-angle-step" label="Angular step" help="Spacing between measured angles. Finer steps give smoother directivity maps and cost almost nothing, because the field is evaluated after the solve rather than solved again." value={polar.angleStep} unit="°" min={1} step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleStep')} />
+    <PolarNumber id="polar-distance" label="Measurement distance" help="How far from the horn the virtual microphone sits. Keep it well beyond the mouth so the result is a far-field pattern." value={polar.distance} unit="m" min={.1} step={.1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('distance')} />
+    <PolarNumber id="polar-norm-angle" label="Normalization angle" help="The angle held at 0 dB in normalized directivity plots. Every polar curve is shifted so this angle reads flat; it changes only the display, never the solve." value={polar.normAngle} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('normAngle')} />
+    <div className="axis-toggles" role="group" aria-label="Directivity planes" {...axisHelp.triggerProps} aria-invalid={validationError ? true : undefined} aria-describedby={axisDescribedBy}>{(['horizontal', 'vertical', 'diagonal'] as PolarAxis[]).map((axis) => <label key={axis}><input type="checkbox" checked={polar.enabledAxes.includes(axis)} onChange={() => toggleAxis(axis)} /> {axis}</label>)}{axisHelp.tip}</div>
+    <PolarNumber id="polar-diagonal-angle" label="Diagonal plane angle" help="Where the diagonal plane sits, measured from the horizontal. 45° is the corner of a square mouth. Only used when the diagonal plane is enabled." value={polar.diagonalAngle} unit="°" step={1} disabled={!polar.enabledAxes.includes('diagonal')} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('diagonalAngle')} />
+    {validationError && <div id={validationErrorId} className="field-error polar-grid-error" role="alert">{validationError}</div>}
     {cardinalDiagonal && <p className="section-note" role="status">A diagonal at {Number(polar.diagonalAngle.toFixed(6))}° is the {Math.abs((polar.diagonalAngle % 180 + 180) % 180 - 90) < 1e-6 ? 'vertical' : 'horizontal'} plane, so it will be measured and plotted twice. Use an angle between the planes, such as 45°.</p>}
     <HelpTipRow className="select-row" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></HelpTipRow>
     <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />

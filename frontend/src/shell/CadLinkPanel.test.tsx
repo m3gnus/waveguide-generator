@@ -93,6 +93,12 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
 describe('CadLinkPanel', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -894,8 +900,10 @@ describe('CadLinkPanel', () => {
 
   it('shows the selected CAD program, settings link, and connection state without an outbound button', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    expect(host.querySelector('.cad-workflow-header')?.textContent).toContain('Fusion 360 · Change');
-    expect(host.querySelector<HTMLButtonElement>('.cad-workflow-header button')?.textContent).toContain('Change');
+    // Scoped to the connection section: the project header is the panel's
+    // first workflow header now.
+    expect(host.querySelector('.cad-send .cad-workflow-header')?.textContent).toContain('Fusion 360 · Change');
+    expect(host.querySelector<HTMLButtonElement>('.cad-send .cad-workflow-header button')?.textContent).toContain('Change');
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion 360 is closed');
     // The Fusion outbound leg lives in the design menu and the Geometry rail.
     expect(host.querySelector('.cad-primary-action')).toBeNull();
@@ -972,6 +980,52 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).toContain('Continue: send WG changes');
   });
 
+  it('keeps both Fusion pull controls busy and suppresses repeated requests until arrival', async () => {
+    useDocumentStore.setState({
+      identity: { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 2 },
+    });
+    const fusion = { ...currentFusion, state: 'stale' as const, fusionChangesAvailable: true };
+    const request = deferred<Response>();
+    let requestCount = 0;
+    let returns = { items: listing.items };
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/fusion-status')) return Promise.resolve(json(fusion));
+      if (path.endsWith('/returns')) return Promise.resolve(json(returns));
+      if (path.endsWith('/request-fusion-return')) {
+        requestCount += 1;
+        return request.promise;
+      }
+      return Promise.resolve(json(record));
+    }));
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    const pullButtons = () => [...host.querySelectorAll<HTMLButtonElement>('.cad-direction-alert button')];
+
+    await act(async () => {
+      pullButtons()[0].click();
+      cadLinkCoordinatorBridge.getSnapshot().pullAndSolve();
+      cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
+      await Promise.resolve();
+    });
+    expect(requestCount).toBe(1);
+    expect(pullButtons()).toHaveLength(2);
+    expect(pullButtons().every((button) => button.disabled)).toBe(true);
+    expect(pullButtons().map((button) => button.textContent)).toEqual(['Waiting for Fusion…', 'Waiting for Fusion…']);
+
+    await act(async () => {
+      request.resolve(json({ status: 'requested', requestId: 'req_busy', documentName: 'Tritonia V' }));
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(pullButtons().every((button) => button.disabled)).toBe(true);
+    returns = { items: [{ ...listing.items[0], requestId: 'req_busy' }] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve();
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().pullingFromFusion).toBe(false);
+    expect(requestCount).toBe(1);
+  });
+
   it('builds acknowledgement wires from the current record, filters skipped sizes, and emits range/list sweep shapes', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
     useCadReturnStore.getState().applyIngest(record, useCadReturnStore.getState().beginIngestIntent());
@@ -1000,7 +1054,7 @@ describe('CadLinkPanel', () => {
     expect(() => buildImportedSubmission(useCadReturnStore.getState())).toThrow('Ingest a CAD return');
   });
 
-  it('emits the combine wire only when enabled, chained by role band order', () => {
+  it('emits the combine wire unless switched off, chained by role band order', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
     useCadReturnStore.getState().applyIngest(record, useCadReturnStore.getState().beginIngestIntent());
     useCadReturnStore.setState({
@@ -1019,13 +1073,15 @@ describe('CadLinkPanel', () => {
     });
     useCadReturnStore.getState().setSweep({ frequencyStartHz: 200, frequencyEndHz: 5_000, frequencyCount: 24 });
 
+    // Two drive channels combine without being asked to; the MF -> HF role
+    // default is 1000 Hz and the 200 Hz - 5 kHz sweep carries it.
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
+      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000], level_match: true, align: true });
+
+    useCadReturnStore.getState().setCombineEnabled(false);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
 
     useCadReturnStore.getState().setCombineEnabled(true);
-    // Untouched pair input: log-spaced default inside the sweep,
-    // round(sqrt(200 * 5000)) = 1000.
-    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
-      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000], level_match: true, align: true });
 
     useCadReturnStore.getState().setCombineCrossover('drive-mf\u2192drive-hf', 1_200);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)

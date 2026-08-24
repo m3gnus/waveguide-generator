@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from server.app import create_app
+from server.jobs.api import create_jobs_router
 from server.jobs.models import SolveRequest
 
 
@@ -82,6 +84,51 @@ async def _request(
         query=query,
     )
     return status, response_body
+
+
+def test_large_archive_snapshot_serialization_keeps_event_loop_responsive() -> None:
+    class Runtime:
+        async def start(self) -> None:
+            pass
+
+        async def shutdown(self) -> None:
+            pass
+
+        async def get_archive_snapshot(self, _job_id: str) -> dict[str, object]:
+            return {"schema_version": 1, "artifact": "x" * (64 * 1024 * 1024)}
+
+    route = next(
+        route
+        for route in create_jobs_router(Runtime()).routes  # type: ignore[arg-type]
+        if route.path == "/api/jobs/{job_id}/archive-snapshot"
+    )
+
+    async def exercise() -> tuple[bytes, float]:
+        gaps: list[float] = []
+        stop = asyncio.Event()
+
+        async def ticker() -> None:
+            previous = asyncio.get_running_loop().time()
+            while not stop.is_set():
+                await asyncio.sleep(0.005)
+                current = asyncio.get_running_loop().time()
+                gaps.append(current - previous)
+                previous = current
+
+        ticker_task = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        try:
+            response = await route.endpoint("large")
+            body = b"".join([chunk async for chunk in response.body_iterator])
+        finally:
+            stop.set()
+            await ticker_task
+        return body, max(gaps)
+
+    body, largest_gap = asyncio.run(exercise())
+
+    assert len(body) > 64 * 1024 * 1024
+    assert largest_gap < 0.03
 
 
 def _solve_body(delay_ms: int = 1) -> dict[str, Any]:
@@ -350,6 +397,50 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert item["parent_job_id"] == "parent-job"
         status, raw = await _request(app, "DELETE", f"/api/jobs/{job_id}")
         assert status == 200 and json.loads(raw)["deleted"] is True
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_cad_submission_replay_after_missing_outcome_returns_the_same_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failed CAD outcome POST leaves a marker, so remount replays the solve."""
+
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        solve_body = _solve_body(delay_ms=25)
+        solve_body["client_request_id"] = "cad-solve:cmd-remount"
+
+        first_status, first_raw = await _request(
+            app, "POST", "/api/solve", body=solve_body
+        )
+        # Simulate outcome persistence failing after creation: no terminal
+        # ledger entry is written, and the browser remount submits the marker.
+        replay_status, replay_raw = await _request(
+            app, "POST", "/api/solve", body=solve_body
+        )
+
+        assert (first_status, replay_status) == (200, 200)
+        first_id = json.loads(first_raw)["job_id"]
+        assert json.loads(replay_raw)["job_id"] == first_id
+        with sqlite3.connect(app.state.jobs_runtime.store.db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM simulation_jobs").fetchone()[0] == 1
+            assert conn.execute(
+                "SELECT submission_key, job_id FROM job_submissions"
+            ).fetchone() == ("cad-solve:cmd-remount", first_id)
+
+        changed = json.loads(json.dumps(solve_body))
+        changed["design"]["L"] = 121
+        conflict_status, conflict_raw = await _request(
+            app, "POST", "/api/solve", body=changed
+        )
+        assert conflict_status == 409
+        assert json.loads(conflict_raw)["error"]["code"] == "submission_key_conflict"
+
+        await app.state.jobs_runtime.wait_idle()
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())

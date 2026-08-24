@@ -362,11 +362,13 @@ describe('CadLinkCoordinator', () => {
       designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
     }, 'current');
     let listing: { items: CadReturnBundle[] } = { items: [] };
+    let pullRequests = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(linkedFusion);
       if (path.endsWith('/request-fusion-return')) {
+        pullRequests += 1;
         return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
       }
       return json({}, 404);
@@ -374,10 +376,15 @@ describe('CadLinkCoordinator', () => {
     await renderCoordinator();
 
     let pull!: Promise<CadReturnBundle>;
+    let duplicate!: Promise<CadReturnBundle>;
     await act(async () => {
       pull = cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
+      duplicate = cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
       await Promise.resolve(); await Promise.resolve();
     });
+    expect(duplicate).toBe(pull);
+    expect(pullRequests).toBe(1);
+    expect(cadLinkCoordinatorBridge.getSnapshot().pullingFromFusion).toBe(true);
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Waiting for Fusion…');
 
     // An uncorrelated bundle must not settle this pull.
@@ -391,7 +398,8 @@ describe('CadLinkCoordinator', () => {
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
     });
-    await expect(pull).resolves.toMatchObject({ requestId: 'req_1' });
+    await act(async () => { await expect(pull).resolves.toMatchObject({ requestId: 'req_1' }); });
+    expect(cadLinkCoordinatorBridge.getSnapshot().pullingFromFusion).toBe(false);
   });
 
   it('rejects and reports a pull that Fusion never answers', async () => {
@@ -1248,18 +1256,37 @@ describe('CadLinkCoordinator', () => {
     await renderCoordinator();
     await act(async () => { await Promise.resolve(); });
 
+    const origin = document.createElement('button');
+    origin.textContent = 'Send from rail';
+    document.body.append(origin);
+    origin.focus();
     let parked: unknown = 'unset';
     await act(async () => { parked = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
+    await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
     expect(parked).toBeNull();
     expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(true);
     expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Both WG and Fusion changed');
     expect(exportBodies).toHaveLength(0);
 
-    // Cancel clears without sending.
-    await act(async () => { cadLinkCoordinatorBridge.getSnapshot().cancelFusionConflict(); });
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    const cancel = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Cancel')!;
+    const proceed = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent?.startsWith('Continue'))!;
+    expect(document.activeElement).toBe(cancel);
+    const backwards = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    act(() => document.dispatchEvent(backwards));
+    expect(backwards.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(proceed);
+    const forwards = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    act(() => document.dispatchEvent(forwards));
+    expect(forwards.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(cancel);
+
+    // Escape is Cancel, and gives focus back to the control that opened it.
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
     expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(false);
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(exportBodies).toHaveLength(0);
+    expect(document.activeElement).toBe(origin);
 
     // Confirm sends one update carrying the expected-document guard.
     await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
@@ -1271,6 +1298,7 @@ describe('CadLinkCoordinator', () => {
       expectedFusionReturnStateHash: 'sha256:doc-state',
     });
     expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(false);
+    origin.remove();
   });
 
   it('keeps Fusion identity and feedback from the newest overlapping send', async () => {

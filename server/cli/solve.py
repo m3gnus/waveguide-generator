@@ -9,8 +9,10 @@ from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import signal
 import sys
+import tempfile
 import threading
 from typing import Any, TextIO
 
@@ -290,60 +292,70 @@ async def _write_output(
     submitted_request: Any,
     stderr: TextIO,
 ) -> dict[str, Any]:
-    output.mkdir(parents=True, exist_ok=False)
-    job_id = str(job["id"])
-    effective_request = await runtime.get_effective_request(job_id)
-    execution_request = await runtime.get_execution_request(job_id)
-    submitted_wire = submitted_request.model_dump(mode="json")
-    effective_wire = effective_request.model_dump(mode="json")
-    execution_wire = execution_request.model_dump(mode="json")
-    artifacts: dict[str, dict[str, Any]] = {
-        "results.json": _write_artifact(
-            output / "results.json",
-            results.encode("utf-8"),
-        ),
-        "request.json": _write_artifact(
-            output / "request.json",
-            _json_artifact_bytes(submitted_wire),
-            canonical_sha256=canonical_json_sha256(submitted_wire),
-        ),
-        "effective-request.json": _write_artifact(
-            output / "effective-request.json",
-            _json_artifact_bytes(effective_wire),
-            canonical_sha256=canonical_json_sha256(effective_wire),
-        ),
-        "execution-request.json": _write_artifact(
-            output / "execution-request.json",
-            _json_artifact_bytes(execution_wire),
-            canonical_sha256=canonical_json_sha256(execution_wire),
-        ),
-    }
+    if output.exists():
+        raise FileExistsError(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{output.name}.staging-", dir=output.parent)
+    )
     try:
-        mesh = await runtime.get_mesh_artifact(job_id)
-    except JobResourceUnavailableError:
-        print("Mesh artifact is unavailable; skipped mesh.msh.", file=stderr)
-    else:
-        artifacts["mesh.msh"] = _write_artifact(
-            output / "mesh.msh",
-            mesh.encode("utf-8"),
+        job_id = str(job["id"])
+        effective_request = await runtime.get_effective_request(job_id)
+        execution_request = await runtime.get_execution_request(job_id)
+        submitted_wire = submitted_request.model_dump(mode="json")
+        effective_wire = effective_request.model_dump(mode="json")
+        execution_wire = execution_request.model_dump(mode="json")
+        artifacts: dict[str, dict[str, Any]] = {
+            "results.json": _write_artifact(
+                staging / "results.json",
+                results.encode("utf-8"),
+            ),
+            "request.json": _write_artifact(
+                staging / "request.json",
+                _json_artifact_bytes(submitted_wire),
+                canonical_sha256=canonical_json_sha256(submitted_wire),
+            ),
+            "effective-request.json": _write_artifact(
+                staging / "effective-request.json",
+                _json_artifact_bytes(effective_wire),
+                canonical_sha256=canonical_json_sha256(effective_wire),
+            ),
+            "execution-request.json": _write_artifact(
+                staging / "execution-request.json",
+                _json_artifact_bytes(execution_wire),
+                canonical_sha256=canonical_json_sha256(execution_wire),
+            ),
+        }
+        try:
+            mesh = await runtime.get_mesh_artifact(job_id)
+        except JobResourceUnavailableError:
+            print("Mesh artifact is unavailable; skipped mesh.msh.", file=stderr)
+        else:
+            artifacts["mesh.msh"] = _write_artifact(
+                staging / "mesh.msh",
+                mesh.encode("utf-8"),
+            )
+        log_content = await runtime.get_log(job_id)
+        artifacts["job.log"] = _write_artifact(
+            staging / "job.log",
+            log_content.encode("utf-8"),
         )
-    log_content = await runtime.get_log(job_id)
-    artifacts["job.log"] = _write_artifact(
-        output / "job.log",
-        log_content.encode("utf-8"),
-    )
-    results_document = json.loads(results)
-    summary = _summary(
-        job,
-        request=submitted_wire,
-        results=results_document,
-        artifacts=artifacts,
-    )
-    _write_artifact(
-        output / "summary.json",
-        _json_artifact_bytes(summary),
-    )
-    return summary
+        results_document = json.loads(results)
+        summary = _summary(
+            job,
+            request=submitted_wire,
+            results=results_document,
+            artifacts=artifacts,
+        )
+        _write_artifact(
+            staging / "summary.json",
+            _json_artifact_bytes(summary),
+        )
+        staging.rename(output)
+        return summary
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
 
 
 def _print_summary(job: Mapping[str, Any], *, output: Path | None, stream: TextIO) -> None:

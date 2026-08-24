@@ -70,7 +70,10 @@ describe('SettingsDialog', () => {
     const section = host.querySelector<HTMLElement>('[aria-labelledby="settings-workspace-title"]')!;
     expect(section).not.toBeNull();
     expect(section.textContent).toContain('/data/workspace');
+    expect(section.textContent).toContain('Documents/Waveguide Generator/runs');
+    expect(section.textContent).toContain('path shown below is authoritative');
     expect(section.textContent).toContain('not result exports');
+    expect(section.textContent).not.toContain('folder beside Waveguide Generator');
 
     const buttons = [...section.querySelectorAll<HTMLButtonElement>('button')];
     await act(async () => buttons.find((button) => button.textContent === 'Open folder')!.click());
@@ -145,18 +148,18 @@ describe('SettingsDialog', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/cad-workspace/select', { method: 'POST' });
   });
 
-  it('lets the user decline the Fusion model copy and reflects a refused write', async () => {
-    let stored = true;
+  it('chooses where the Fusion model is filed and reflects a refused write', async () => {
+    let stored = 'run';
     const failNext = { value: false };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === '/api/cad-workspace/path') {
-        return new Response(JSON.stringify({ selected: true, path: '/cad/exchange', captureDocument: stored }));
+        return new Response(JSON.stringify({ selected: true, path: '/cad/exchange', captureMode: stored }));
       }
       if (path === '/api/cad-workspace/capture-document' && init?.method === 'POST') {
         if (failNext.value) return new Response(JSON.stringify({ detail: 'disk is read-only' }), { status: 500 });
-        stored = (JSON.parse(String(init.body)) as { enabled: boolean }).enabled;
-        return new Response(JSON.stringify({ captureDocument: stored }));
+        stored = (JSON.parse(String(init.body)) as { mode: string }).mode;
+        return new Response(JSON.stringify({ captureDocument: stored !== 'off', captureMode: stored }));
       }
       return new Response('not found', { status: 404 });
     });
@@ -164,20 +167,67 @@ describe('SettingsDialog', () => {
 
     await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
     const cad = host.querySelector<HTMLElement>('#settings-cad')!;
-    const capture = [...cad.querySelectorAll<HTMLInputElement>('input[type=checkbox]')]
-      .find((input) => input.closest('label')?.textContent?.includes('Fusion model'))!;
-    expect(capture.checked).toBe(true);
+    const choice = (label: string) => [...cad.querySelectorAll<HTMLInputElement>('input[type=radio]')]
+      .find((input) => input.closest('label')?.textContent?.includes(label))!;
+    // Filed with each run by default: that is where people look for it.
+    expect(choice('With every run').checked).toBe(true);
 
-    await act(async () => capture.click());
-    expect(stored).toBe(false);
-    expect(capture.checked).toBe(false);
+    await act(async () => choice('Once per project').click());
+    expect(stored).toBe('project');
+    expect(choice('Once per project').checked).toBe(true);
 
-    // A refused write must not leave the box disagreeing with the file the
+    // A refused write must not leave the radio disagreeing with the file the
     // Fusion add-in reads.
     failNext.value = true;
-    await act(async () => capture.click());
-    expect(capture.checked).toBe(false);
+    await act(async () => choice('Don\u2019t keep one').click());
+    expect(choice('Once per project').checked).toBe(true);
     expect(cad.textContent).toContain('disk is read-only');
+  });
+
+  it('serializes rapid capture choices so the latest choice is the last server write', async () => {
+    const firstWrite = deferred<Response>();
+    const secondWrite = deferred<Response>();
+    const writes: string[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') {
+        return Promise.resolve(new Response(JSON.stringify({
+          selected: true, path: '/cad/exchange', captureMode: 'run',
+        })));
+      }
+      if (path === '/api/cad-workspace/capture-document' && init?.method === 'POST') {
+        writes.push((JSON.parse(String(init.body)) as { mode: string }).mode);
+        return writes.length === 1 ? firstWrite.promise : secondWrite.promise;
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const cad = host.querySelector<HTMLElement>('#settings-cad')!;
+    const choice = (label: string) => [...cad.querySelectorAll<HTMLInputElement>('input[type=radio]')]
+      .find((input) => input.closest('label')?.textContent?.includes(label))!;
+
+    await act(async () => {
+      choice('Don\u2019t keep one').click();
+      choice('With every run').click();
+      await Promise.resolve();
+    });
+
+    expect(writes).toEqual(['off']);
+    await act(async () => {
+      firstWrite.resolve(new Response(JSON.stringify({ captureDocument: false, captureMode: 'off' })));
+      await firstWrite.promise;
+      await Promise.resolve();
+    });
+    expect(writes).toEqual(['off', 'run']);
+
+    await act(async () => {
+      secondWrite.resolve(new Response(JSON.stringify({ captureDocument: true, captureMode: 'run' })));
+      await secondWrite.promise;
+      await Promise.resolve();
+    });
+    expect(choice('With every run').checked).toBe(true);
   });
 
   /** Open Settings with the CAD application switched to Onshape, serving one

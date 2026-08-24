@@ -2,16 +2,19 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation } from '../api/results';
+import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
-import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, expandResultChannels, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, splSeries, type NamedResult } from '../results/mappers';
+import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { runWorkspaceExportBundle } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
-import type { ResultPayload } from '../results/types';
+import { combineMetadataOf, type CombineMetadata, type ResultPayload } from '../results/types';
+import { ResultViewSwitch } from '../results/ResultViewSwitch';
+import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
@@ -25,14 +28,16 @@ import { deEmbeddedPhaseRadians, hasOnAxisPhase, phaseSpatialSign, phaseUnwrapIs
 import { Icon } from './icons';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
-import { trapDialogFocus } from './SettingsDialog';
+import { trapDialogFocus } from './dialogFocus';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
-import { runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
+import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
+import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
+import { powerAgreementHealth } from '../results/radiatedPower';
 
-export function splSubtitle(result: JobResults | undefined): string {
+export function splSubtitle(result: ResultData | undefined): string {
   const observation = result?.metadata?.observation;
   const record = observation && typeof observation === 'object' ? observation as Record<string, unknown> : {};
   const distance = Number(record.effective_distance_m ?? record.requested_distance_m);
@@ -74,6 +79,7 @@ export const COMPARABLE_CHARTS = new Set<ChartType>([
   'directivity_map_d',
   'directivity_map',
   'directivity_index',
+  'power_response',
   'impedance',
   'phase_response',
   'group_delay',
@@ -95,7 +101,7 @@ export function chartDensity(width: number, height: number): ChartDensity {
   return 'compact';
 }
 
-const LABEL_FONT: Record<ChartDensity, number> = { compact: 10, regular: 11, full: 12 };
+const LABEL_FONT: Record<ChartDensity, number> = { compact: 11, regular: 11, full: 12 };
 /** `top` is the band reserved for the floating title chip and the legend. */
 const LINE_GRID: Record<ChartDensity, { left: number; right: number; top: number; bottom: number }> = {
   compact: { left: 30, right: 8, top: 16, bottom: 17 },
@@ -155,10 +161,10 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     // a single row rather than wrapping down over the plot on a narrow card.
     // The tooltip and the detail view still name every series in full.
     legend: {
-      ...(density === 'compact' ? { type: 'scroll' as const, width: '46%', pageIconSize: 9, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 10 } } : {}),
+      ...(density === 'compact' ? { type: 'scroll' as const, width: '46%', pageIconSize: 9, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 11 } } : {}),
       top: density === 'full' ? 2 : 1,
       right: density === 'full' ? 8 : LEGEND_INSET,
-      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 10 : 11 },
+      textStyle: { color: tokens.muted, fontSize: 11 },
       formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22),
       itemWidth: density === 'compact' ? 10 : 14,
       itemHeight: 2,
@@ -224,6 +230,12 @@ export function splOption(
   const colors = seriesColorsByLabel([...items.map(({ label }) => label), ...measuredNames], tokens.series, tokens.accent);
   const simulated = splSeries(items, smoothing).map((series, index) => {
     const color = colors.get(series.name) ?? tokens.accent;
+    // A member of the combined sum is drawn beneath the curve it adds up to,
+    // not beside it: thin, solid and faint, so the eye reads one response with
+    // its branches showing rather than several competing responses.
+    if (items[index]?.secondary) {
+      return { ...series, z: 1, lineStyle: { color, width: 1, type: 'solid' as const, opacity: .45 }, itemStyle: { color, opacity: .45 } };
+    }
     return { ...series, lineStyle: { color, width: index ? 1.2 : 2, type: index ? 'dashed' as const : 'solid' as const }, itemStyle: { color } };
   });
   const measuredSeries = measured.map((overlay, index) => {
@@ -624,7 +636,7 @@ export function heatmapOption(
         const points = polylines[Number(api.value(0))].map((point) => contourPointToPixels(point, contourGrid, params.coordSys!));
         const middle = points[Math.floor(points.length / 2)];
         const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: smoothContourShape(points), style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
-        if (Number(api.value(1))) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: isComparisonContour ? middleEllipsis(comparison!.primaryLabel, 18) : `${level} dB`, fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
+        if (Number(api.value(1)) && (density !== 'compact' || level === -6 || isComparisonContour)) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: isComparisonContour ? middleEllipsis(comparison!.primaryLabel, 14) : `${level} dB`, fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
         return { type: 'group', children };
       },
     }];
@@ -657,7 +669,7 @@ export function heatmapOption(
         }];
         if (Number(api.value(1))) children.push({
           type: 'text',
-          style: { x: middle[0] + 3, y: middle[1] - 3, text: middleEllipsis(reference.label, 18), fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 },
+          style: { x: middle[0] + 3, y: middle[1] - 3, text: middleEllipsis(reference.label, density === 'compact' ? 12 : 18), fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 },
         });
         return { type: 'group', children };
       },
@@ -672,7 +684,7 @@ export function heatmapOption(
       data: comparisonLabels,
       top: 1,
       right: LEGEND_INSET,
-      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 },
+      textStyle: { color: tokens.muted, fontSize: 11 },
       formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 11 : 18),
       itemWidth: density === 'compact' ? 10 : 14,
       itemHeight: 2,
@@ -697,7 +709,7 @@ export function heatmapOption(
       splitLine: { ...categoryAxis.splitLine, show: true, interval: isFrequencyTick },
     },
     yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
-    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 }, inRange: { color: tokens.colormap } },
+    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: 11 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
     series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...angleGuideSeries, ...contourSeries, ...comparisonSeries] as EChartsOption['series'],
@@ -726,6 +738,20 @@ export function directivityIndexOption(items: NamedResult[], tokens: ChartTokens
     };
   }));
   return lineOption(series, tokens, 'DI [dB]', density);
+}
+
+export function powerResponseOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const series = items.flatMap((item, index) => powerResponseSeries(item.result as ResultPayload, smoothing).map((entry) => {
+    const color = colors.get(item.label) ?? tokens.accent;
+    return {
+      ...entry,
+      name: items.length === 1 ? entry.name : `${item.label} · ${entry.name}`,
+      lineStyle: { color, width: index ? 1.35 : 2, type: index ? 'dashed' as const : 'solid' as const },
+      itemStyle: { color },
+    };
+  }));
+  return lineOption(series, tokens, 'Spatial-average level [dB SPL]', density);
 }
 
 /**
@@ -844,6 +870,45 @@ export function drivePowerOption(result: ResultPayload, tokens: ChartTokens, den
   return lineOption(series, tokens, 'Power [W]', density, undefined, series.length > 1 ? 'Current [A]' : undefined);
 }
 
+/**
+ * Power and current for several channels at once.
+ *
+ * Only the Combined view reaches this: an LR4 sum has no electrical impedance
+ * and no cone, so the card that would otherwise be empty draws the members that
+ * do. Colour separates the channels and line weight separates the two
+ * quantities, the same split the single-channel card makes.
+ */
+export function drivePowerOverlayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const series = items.flatMap(({ label, result }) => {
+    const color = colors.get(label) ?? tokens.accent;
+    return drivePowerChartSeries(result as ResultPayload).map((trace) => ({
+      ...trace,
+      name: `${label} · ${trace.name}`,
+      lineStyle: { color, width: trace.yAxisIndex ? 1.35 : 2, type: trace.yAxisIndex ? 'dashed' as const : 'solid' as const },
+      itemStyle: { color },
+    }));
+  });
+  return lineOption(series, tokens, 'Power [W]', density, undefined, series.some((trace) => trace.yAxisIndex) ? 'Current [A]' : undefined);
+}
+
+/** Cone excursion for several channels at once, each against its own Xmax. */
+export function excursionOverlayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const series = items.flatMap(({ label, result }) => {
+    const color = colors.get(label) ?? tokens.accent;
+    return excursionChartSeries(result as ResultPayload).map((trace, index) => ({
+      ...trace,
+      name: `${label} · ${trace.name}`,
+      // The limit keeps its driver's colour so it cannot be read against the
+      // wrong cone, and stays dotted so it cannot be read as a response.
+      lineStyle: index ? { color, width: 1, type: 'dotted' as const } : { color, width: 2 },
+      itemStyle: { color },
+    }));
+  });
+  return lineOption(series, tokens, 'Excursion [mm peak]', density);
+}
+
 /** Cone excursion, with Xmax drawn flat across the sweep when the spec states it. */
 export function excursionOption(result: ResultPayload, tokens: ChartTokens, density: ChartDensity): EChartsOption {
   const series = excursionChartSeries(result).map((trace, index) => ({
@@ -908,7 +973,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     color: tokens.series,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
     tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 } },
-    legend: { top: 1, right: LEGEND_INSET, textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 10 : 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2 },
+    legend: { top: 1, right: LEGEND_INSET, textStyle: { color: tokens.muted, fontSize: 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2 },
     polar: { radius: density === 'compact' ? '68%' : '72%', center: ['50%', '54%'] },
     angleAxis: {
       type: 'value' as const,
@@ -959,6 +1024,7 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   directivity_map_d: { short: 'Dir D', long: 'Directivity Diagonal', unit: 'dB' },
   directivity_map: { short: 'Dir', long: 'Directivity', unit: 'dB' },
   directivity_index: { short: 'DI', long: 'Directivity index', unit: 'dB' },
+  power_response: { short: 'Power resp', long: 'Power response', unit: 'dB SPL' },
   beam_shape: { short: 'Beam', long: 'Beam width', unit: '°' },
   beam_fit: { short: 'Beam fit', long: 'Beam shape fit' },
   beam_map: { short: 'Beam map' },
@@ -1009,7 +1075,7 @@ export function chartImageFilename(chartType: ChartType, job?: JobItem | null, c
   return `${stem}${channel}_${chartType}.png`;
 }
 
-export function resolvedPolarStepNotice(result: JobResults): string | null {
+export function resolvedPolarStepNotice(result: ResultData): string | null {
   const grid = result.metadata?.polar_grid;
   if (!grid || typeof grid !== 'object') return null;
   const record = grid as Record<string, unknown>;
@@ -1294,15 +1360,67 @@ export function groupDelayMissingReason(result: ResultPayload): string {
   return 'Group Delay could not be derived from this result.';
 }
 
-function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
+/**
+ * Cards about the drivers rather than about the radiated field.
+ *
+ * An LR4 sum has no electrical impedance, no drive and no cone, so in the
+ * Combined view these three would draw their empty-state over a run that is
+ * perfectly well driven. They show the members instead — which is also the more
+ * useful reading in a single-driver view, where the member list is that driver
+ * alone.
+ */
+const MEMBER_CHARTS = new Set<ChartType>(['impedance', 'drive_power', 'excursion']);
+
+/**
+ * The primary run's own entries: itself and, in the Combined view, its members.
+ *
+ * `named` is grouped by run in selection order and only a run's own channel is
+ * ever primary, so the group ends at the next non-member entry. Power and
+ * excursion are per-run cards; overlaying a comparison run's drivers on them
+ * would be a comparison the card does not claim to be making.
+ */
+function primaryRunEntries(named: NamedResult[]): NamedResult[] {
+  const next = named.findIndex((item, index) => index > 0 && !item.secondary);
+  return next === -1 ? named : named.slice(0, next);
+}
+
+/**
+ * Which of the selected entries a chart draws.
+ *
+ * The active view already chose one channel per run; what is left to decide is
+ * what a card does with the members of a combined sum. Only the SPL chart draws
+ * them beneath the sum (the classic crossover plot, and the one thing a
+ * preference turns off), and only the driver cards treat them as ordinary
+ * series. Everywhere else a member is a component of the curve on screen, not a
+ * second opinion about it, and overlaying it would be drawing the same sound
+ * twice.
+ */
+export function chartEntries(chartType: ChartType, named: NamedResult[], showMembers: boolean): NamedResult[] {
+  if (chartType === 'frequency_response') return showMembers ? named : named.filter(({ secondary }) => !secondary);
+  // Impedance is a comparable chart and overlays every selected run's drivers;
+  // power and excursion describe one run, so they take the shown run's alone.
+  if (chartType === 'impedance') return named;
+  if (MEMBER_CHARTS.has(chartType)) return primaryRunEntries(named);
+  return named.filter(({ secondary }) => !secondary);
+}
+
+interface RadiationArtifactView {
+  status: 'absent' | 'failed' | 'loading' | 'loaded';
+  message?: string;
+  retry?: () => void;
+}
+
+function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
   const preferences = usePreferences();
-  // Only comparable charts read the cross-job list. Keeping it in the
+  // Only comparable and driver charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
   // surfaces whenever the comparison selection changes.
   const overlays = useMemo(() => {
-    if (!COMPARABLE_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
-    return named.length ? named : [{ id: 'primary', label: 'Primary', result }];
-  }, [chartType, named, result]);
+    if (!COMPARABLE_CHARTS.has(chartType) && !MEMBER_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
+    const entries = chartEntries(chartType, named, preferences.showMembersUnderCombined);
+    if (entries.length) return entries;
+    return COMPARABLE_CHARTS.has(chartType) ? [{ id: 'primary', label: 'Primary', result }] : NO_NAMED_RESULTS;
+  }, [chartType, named, preferences.showMembersUnderCombined, result]);
   // Only the on-axis SPL chart carries measurements, and it is the only card
   // that should rebuild when one is loaded, hidden or nudged in level.
   const loadedMeasurements = useMeasuredOverlayStore((state) => state.overlays);
@@ -1322,6 +1440,12 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field from a supported solve backend."/>;
+    }
+    if (chartType === 'power_response') {
+      const option = powerResponseOption(overlays, tokens, preferences.smoothing, density);
+      return Array.isArray(option.series) && option.series.length
+        ? <EChart option={option} label="Interactive HornLab spatially averaged power response from the solved spherical balloon" live={live}/>
+        : <ChartStub reason="Power Response needs on-axis SPL and directivity index from a complete spherical field."/>;
     }
     if (chartType === 'beam_shape') {
       if (result.beam_shape?.frequencies?.length) return <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density)} label="Interactive HornLab horizontal and vertical forward beam width" live={live}/>;
@@ -1349,13 +1473,19 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason={groupDelayMissingReason(result)}/>;
     }
     if (chartType === 'drive_power') {
-      const option = drivePowerOption(result, tokens, density);
+      // One member left standing is drawn as itself, so a two-way whose sum is
+      // shown does not gain a legend entry it does not need.
+      const option = overlays.length > 1
+        ? drivePowerOverlayOption(overlays, tokens, density)
+        : drivePowerOption((overlays[0]?.result ?? result) as ResultPayload, tokens, density);
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab electrical power and current draw by frequency" live={live}/>
         : <ChartStub reason={driverChartMissingReason(result, 'Power & Current Draw')}/>;
     }
     if (chartType === 'excursion') {
-      const option = excursionOption(result, tokens, density);
+      const option = overlays.length > 1
+        ? excursionOverlayOption(overlays, tokens, density)
+        : excursionOption((overlays[0]?.result ?? result) as ResultPayload, tokens, density);
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab cone excursion by frequency" live={live}/>
         : <ChartStub reason={excursionSeries(result) ? 'Cone Excursion could not be read from this result.' : driverChartMissingReason(result, 'Cone Excursion')}/>;
@@ -1373,6 +1503,11 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     }
     if (chartType === 'radiation_impedance') {
       const presentation = wrapper?.radiation_impedance ?? result.radiation_impedance;
+      if (radiationArtifact?.status === 'failed') return <ChartStub
+        reason={`Could not load Radiation Matrix Load. ${radiationArtifact.message ?? 'The artifact request failed.'}`}
+        action={radiationArtifact.retry ? { label: 'Retry', onClick: radiationArtifact.retry } : undefined}
+      />;
+      if (radiationArtifact?.status === 'loading') return <ChartStub reason="Loading Radiation Matrix Load…"/>;
       if (!presentation) return <ChartStub reason="Radiation Matrix Load needs a retained passive-cardioid radiation-impedance artifact."/>;
       const option = radiationImpedanceOption(presentation, tokens, density);
       return Array.isArray(option.series) && option.series.length
@@ -1380,7 +1515,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="The retained radiation matrix has no finite reduced load curves."/>;
     }
     return null;
-  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, result, tokens, wrapper]);
+  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, wrapper]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
@@ -1420,11 +1555,13 @@ export function useCardMetrics(target: React.RefObject<HTMLElement | null>): Car
   return metrics;
 }
 
-function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAction, wrapper, job, channelId }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; live: boolean; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
+function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
   // A comparison is active but this card cannot carry it. Saying so is the
   // whole point: silently drawing the primary run looks identical to drawing
-  // both, so the user believes they are comparing when they are not.
-  const comparisonIgnored = named.length > 1 && !COMPARABLE_CHARTS.has(chartType);
+  // both, so the user believes they are comparing when they are not. Members of
+  // a combined sum are not a comparison and are not counted here.
+  const compared = named.filter(({ secondary }) => !secondary);
+  const comparisonIgnored = compared.length > 1 && !COMPARABLE_CHARTS.has(chartType);
   const [expanded, setExpanded] = useState(false);
   const [imageReady, setImageReady] = useState(false);
   const [imageOperation, setImageOperation] = useState<'copy' | 'download' | null>(null);
@@ -1471,11 +1608,12 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   const subtitle = chartType.startsWith('directivity_map')
     ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}`
     : chartType === 'frequency_response' ? splSubtitle(result)
+    : chartType === 'power_response' ? powerResponseMethodCaption(result)
     : impedanceItems ? impedanceSubtitle(impedanceItems)
     : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
     : null;
   const unit = chartUnit(chartType, result, impedanceItems);
-  const activeLabel = named.find((item) => item.result === result)?.label ?? named[0]?.label ?? 'the primary run';
+  const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
   const imageAction = useCallback(async (operation: 'copy' | 'download') => {
     const target = card.current?.querySelector<HTMLElement>('.chart-placeholder');
     if (!target || imageOperation) return;
@@ -1496,7 +1634,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   return <>
     <section ref={card} className={`result-card result-${index}`} data-density={density}>
       <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
-        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>
+        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/>
       </div>
       {/* Chrome floats over the plot rather than reserving a row of its own:
           a fixed header costs a quarter of a six-panel card's height. */}
@@ -1508,7 +1646,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
           <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>
         </span>
         {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
-        {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {named.length}</span>}
+        {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {compared.length}</span>}
         <span className="result-chrome-spacer"/>
         {imageReady && <>
           <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Copy panel ${index + 1} as PNG`} title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
@@ -1522,7 +1660,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
         <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
-        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/></div>
+        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/></div>
       </section>
     </div>, document.body)}
   </>;
@@ -1532,19 +1670,20 @@ export function resultLayoutClass(count: number): string {
   return `result-layout-${Math.max(0, Math.min(MAX_RESULT_PANELS, Math.floor(count)))}`;
 }
 
-export function ResultsChartGrid({ chartTypes, result, named, tokens, live = false, beamShapeAction, wrapper, job, channelId }: {
+export function ResultsChartGrid({ chartTypes, result, named, tokens, live = false, beamShapeAction, radiationArtifact, wrapper, job, channelId }: {
   chartTypes: ChartType[];
   result: ResultPayload;
   named: NamedResult[];
   tokens: ChartTokens;
   live?: boolean;
   beamShapeAction?: ChartStubAction;
+  radiationArtifact?: RadiationArtifactView;
 } & SummarySourceProps) {
   if (!chartTypes.length) {
     return <div className="result-grid-empty" role="status"><b>NO CHARTS OPEN</b><span>Add a chart to rebuild the results workspace.</span><button onClick={() => preferencesStore.addChart()}>+ Add chart</button></div>;
   }
   return <div className={`result-grid ${resultLayoutClass(chartTypes.length)}`} data-chart-count={chartTypes.length}>
-    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>) }
+    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/>) }
   </div>;
 }
 
@@ -1561,26 +1700,14 @@ interface ResultFetchError {
   message: string;
 }
 
-interface CombineMetadata {
-  members: string[];
-  crossovers_hz: number[];
-  level_match?: { enabled?: boolean };
-  align?: boolean;
-}
-
-function combineMetadataOf(payload: ResultPayload | undefined): CombineMetadata | null {
-  const combine = (payload?.metadata as { combine?: unknown } | undefined)?.combine;
-  if (!combine || typeof combine !== 'object') return null;
-  const value = combine as CombineMetadata;
-  if (!Array.isArray(value.members) || !Array.isArray(value.crossovers_hz)) return null;
-  return value;
-}
-
 /** Crossover editor for a combined channel: recombines from the job's stored
- * complex bases server-side, so a change repaints without a re-solve. */
-function RecombineRow({ jobId, channelId, combine, onApplied }: {
+ * complex bases server-side, so a change repaints without a re-solve. The
+ * applied frequencies are also written back to the CAD rail, so the dock and
+ * the pre-solve fields are one setting rather than two that disagree. */
+function RecombineRow({ jobId, channelId, resultIngestId, combine, onApplied }: {
   jobId: string;
   channelId: string;
+  resultIngestId: string | null;
   combine: CombineMetadata;
   onApplied: (jobId: string, updated: JobResults) => void;
 }) {
@@ -1614,6 +1741,7 @@ function RecombineRow({ jobId, channelId, combine, onApplied }: {
         align: combine.align ?? true,
       });
       onApplied(jobId, updated);
+      useCadReturnStore.getState().setCombineCrossoversFromResult(resultIngestId, combine.members, crossovers);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -1623,8 +1751,11 @@ function RecombineRow({ jobId, channelId, combine, onApplied }: {
   return <form className="results-toolbar result-recombine" onSubmit={(event) => void submit(event)}>
     {combine.members.slice(0, -1).map((lower, index) => {
       const upper = combine.members[index + 1];
-      return <label key={`${lower} ${upper}`} className="result-recombine-pair">
-        <span>{lower} → {upper}</span>
+      // Bands below, because that is how a crossover is spoken. The authored
+      // ids stay the fallback and remain the accessible name either way, so an
+      // unroled return still says which channels each field joins.
+      return <label key={`${lower}\u0000${upper}`} className="result-recombine-pair">
+        <span>{combine.member_roles?.[index] ?? lower} → {combine.member_roles?.[index + 1] ?? upper}</span>
         <input
           type="number"
           min={1}
@@ -1636,7 +1767,7 @@ function RecombineRow({ jobId, channelId, combine, onApplied }: {
         <span>Hz</span>
       </label>;
     })}
-    <button type="submit" disabled={busy || !dirty} title="Recompute the combined channel from the stored solve — no re-solve needed">{busy ? 'Recombining…' : 'Apply crossover'}</button>
+    <button type="submit" disabled={busy || !dirty} title="Recompute the combined channel from the stored solve — no re-solve needed">{busy ? 'Recombining…' : 'Apply'}</button>
     {error && <span className="result-recombine-error" role="alert">{error}</span>}
   </form>;
 }
@@ -1692,12 +1823,16 @@ export function ResultsPanel() {
   const [display, setDisplay] = useState<ResultDisplaySnapshot | null>(null);
   const [fetchError, setFetchError] = useState<ResultFetchError | null>(null);
   const [fetchAttempt, setFetchAttempt] = useState(0);
+  const [radiationArtifactLoads, setRadiationArtifactLoads] = useState<Record<string, RadiationArtifactView>>({});
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
   const [beamRerunSubmitting, setBeamRerunSubmitting] = useState(false);
-  const [primaryChannel, setPrimaryChannel] = useState<string | null>(null);
+  const [coherenceOpen, setCoherenceOpen] = useState(false);
+  const coherenceAnchor = useRef<HTMLButtonElement | null>(null);
+  const [dismissedNewRun, setDismissedNewRun] = useState<string | null>(null);
+  const view = useResultView();
   const measuredOverlays = useMeasuredOverlayStore((state) => state.overlays);
   const [measuredError, setMeasuredError] = useState<string | null>(null);
   const measuredInput = useRef<HTMLInputElement | null>(null);
@@ -1708,21 +1843,41 @@ export function ResultsPanel() {
     runMatchesContext(job, coherenceContext) !== 'other-model'
     && ((job.status === 'complete' && job.has_results)
       || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id])))
-  )) ?? null, [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, provisional]);
+  )) ?? null, [coherenceContext.designFingerprint, coherenceContext.designId, coherenceContext.ingestId, coherenceContext.mode, jobs, provisional]);
   useEffect(() => {
-    // While following, every solve that finishes takes the primary slot as soon
-    // as its results exist — the charts repaint without anyone selecting a job.
-    if (selection.following) {
-      if ((latest?.id ?? null) !== selection.primary) compareSelection.followLatest(latest?.id ?? null);
-      return;
+    // A solve the user started outranks a pinned comparison: the run submitted
+    // for it takes the primary slot as soon as its results exist, and only
+    // then, so the pinned result stays on screen while the solve runs. A run
+    // that ends without ever producing results releases the claim, leaving the
+    // pin where it was.
+    if (selection.awaiting) {
+      const awaited = jobs.find((job) => job.id === selection.awaiting) ?? null;
+      if (awaited && (awaited.has_results || Boolean(provisional.entries[awaited.id]))) {
+        compareSelection.followLatest(awaited.id);
+        return;
+      }
+      if (awaited && (awaited.status === 'error' || awaited.status === 'cancelled')) {
+        compareSelection.awaitRun(null);
+        return;
+      }
     }
-    // A pinned result that no longer exists falls back to following again.
-    if (selection.primary && jobs.some((job) => (
-      job.id === selection.primary
-      && (job.has_results || Boolean(provisional.entries[job.id]))
-    ))) return;
-    compareSelection.followLatest(latest?.id ?? null);
-  }, [jobs, latest, provisional, selection.following, selection.primary]);
+    // A run that finished without being asked for never replaces what is on
+    // screen; the toolbar offers it as `New · #NN` instead. The slot is only
+    // taken over when what it holds cannot be shown: nothing chosen yet at the
+    // start of a session, a run that has disappeared, or -- while no run has
+    // been chosen by hand -- a run belonging to the model family the workspace
+    // has just left.
+    const held = selection.primary ? jobs.find((job) => job.id === selection.primary) ?? null : null;
+    if (
+      held
+      && (held.has_results || Boolean(provisional.entries[held.id]))
+      && (!selection.following || runMatchesContext(held, coherenceContext) !== 'other-model')
+    ) return;
+    if ((latest?.id ?? null) !== selection.primary) compareSelection.followLatest(latest?.id ?? null);
+  }, [
+    coherenceContext.designFingerprint, coherenceContext.ingestId, coherenceContext.mode,
+    jobs, latest, provisional, selection.awaiting, selection.following, selection.primary,
+  ]);
 
   const ids = useMemo(() => [selection.primary, ...selection.overlays].filter((id): id is string => Boolean(id)), [selection]);
   const selectionKey = ids.join('\u0000');
@@ -1739,20 +1894,29 @@ export function ResultsPanel() {
     void Promise.all(requestedIds.map(async (id) => {
       const job = jobs.find((item) => item.id === id);
       const provisionalEntry = job?.status !== 'complete' ? provisional.entries[id] : undefined;
-      if (provisionalEntry) return [id, provisionalEntry.result as ResultPayload, true] as const;
+      if (provisionalEntry) return { id, result: provisionalEntry.result as ResultPayload, isProvisional: true, radiationArtifact: { status: 'absent' as const } };
       const result = await fetchJobResults(id) as ResultPayload;
-      if (!job?.has_radiation_impedance_artifact) return [id, result, false] as const;
+      if (!job?.has_radiation_impedance_artifact) return { id, result, isProvisional: false, radiationArtifact: { status: 'absent' as const } };
       try {
         const presentation = await fetchRadiationImpedancePresentation(id);
-        return [
+        return {
           id,
-          presentation ? { ...result, radiation_impedance: presentation } : result,
-          false,
-        ] as const;
-      } catch {
+          result: presentation ? { ...result, radiation_impedance: presentation } : result,
+          isProvisional: false,
+          radiationArtifact: { status: presentation ? 'loaded' as const : 'absent' as const },
+        };
+      } catch (reason) {
         // The matrix is optional. A corrupt or temporarily unavailable
         // artifact must not make otherwise valid SPL/directivity disappear.
-        return [id, result, false] as const;
+        return {
+          id,
+          result,
+          isProvisional: false,
+          radiationArtifact: {
+            status: 'failed' as const,
+            message: reason instanceof Error ? reason.message : String(reason),
+          },
+        };
       }
     }))
       .then((pairs) => {
@@ -1761,10 +1925,14 @@ export function ResultsPanel() {
           key: selectionKey,
           primaryId: selection.primary!,
           ids: requestedIds,
-          results: Object.fromEntries(pairs.map(([id, result]) => [id, result])),
-          provisionalIds: pairs.filter(([, , isProvisional]) => isProvisional).map(([id]) => id),
+          results: Object.fromEntries(pairs.map(({ id, result }) => [id, result])),
+          provisionalIds: pairs.filter(({ isProvisional }) => isProvisional).map(({ id }) => id),
         });
-        pairs.forEach(([id, , isProvisional]) => {
+        setRadiationArtifactLoads((current) => ({
+          ...current,
+          ...Object.fromEntries(pairs.map(({ id, radiationArtifact }) => [id, radiationArtifact])),
+        }));
+        pairs.forEach(({ id, isProvisional }) => {
           if (!isProvisional) provisionalResults.remove(id);
         });
       })
@@ -1784,24 +1952,24 @@ export function ResultsPanel() {
   const primaryRaw = selection.primary && currentDisplay
     ? currentDisplay.results[selection.primary]
     : undefined;
-  const primaryChannels = primaryRaw?.channels;
-  const channelIds = primaryChannels
-    ? [...(primaryRaw?.channel_order?.filter((id) => id in primaryChannels) ?? []), ...Object.keys(primaryChannels).filter((id) => !primaryRaw?.channel_order?.includes(id))]
-    : [];
-  const activeChannel = channelIds.includes(primaryChannel ?? '') ? primaryChannel : channelIds[0] ?? null;
-  const primary = activeChannel && primaryChannels ? primaryChannels[activeChannel] as ResultPayload : primaryRaw;
+  // One view for the whole dock: the chosen channel where the run has it, its
+  // combined sum otherwise, and its first channel when it has neither. The
+  // fallback is resolved per run so a comparison keeps drawing something and
+  // says on the label which channel it substituted.
+  const activeChannel = primaryRaw ? resolveResultView(primaryRaw, view) : null;
+  const primary = activeChannel && primaryRaw?.channels
+    ? primaryRaw.channels[activeChannel] as ResultPayload
+    : primaryRaw;
   // One keyed snapshot owns the primary and every overlay. During a transition
   // the complete outgoing set may remain visible, but no incoming result is
   // combined with it; the whole set swaps only after Promise.all succeeds.
   const shownRaw = selection.primary && display
     ? display.results[display.primaryId]
     : undefined;
-  const shownChannels = shownRaw?.channels;
-  const shownChannelIds = shownChannels
-    ? [...(shownRaw.channel_order?.filter((id) => id in shownChannels) ?? []), ...Object.keys(shownChannels).filter((id) => !shownRaw.channel_order?.includes(id))]
-    : [];
-  const shownActiveChannel = shownChannelIds.includes(primaryChannel ?? '') ? primaryChannel : shownChannelIds[0] ?? null;
-  const shown = shownActiveChannel && shownChannels ? shownChannels[shownActiveChannel] as ResultPayload : shownRaw;
+  const shownActiveChannel = shownRaw ? resolveResultView(shownRaw, view) : null;
+  const shown = shownActiveChannel && shownRaw?.channels
+    ? shownRaw.channels[shownActiveChannel] as ResultPayload
+    : shownRaw;
   const shownCombine = combineMetadataOf(shown);
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
@@ -1810,19 +1978,35 @@ export function ResultsPanel() {
   }, []);
   const displayLabels = display?.ids.map((id) => labelFor(id, jobs)).join('\u0000') ?? '';
   const named = useMemo(
-    () => display?.ids.flatMap((id, index) => expandResultChannels(
+    () => display?.ids.flatMap((id, index) => selectResultChannels(
       id,
       displayLabels.split('\u0000')[index],
       display.results[id],
+      view,
     )) ?? NO_NAMED_RESULTS,
-    [display, displayLabels],
+    [display, displayLabels, view],
   );
   const error = fetchError?.key === selectionKey ? fetchError.message : null;
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
   const primaryJob = useMemo(() => jobs.find((job) => job.id === selection.primary) ?? null, [jobs, selection.primary]);
   const primaryVerdict = primaryJob ? runMatchesContext(primaryJob, coherenceContext) : 'current';
+  // The menu belongs to one run under one verdict; solving, restoring or
+  // switching runs answers it, so it must not stay open over its own answer.
+  useEffect(() => { setCoherenceOpen(false); }, [primaryVerdict, selection.primary]);
+  // A finished run nobody here asked for is offered, not imposed. Both orders
+  // are checked because run numbers restart with a fresh jobs database, and
+  // both are needed because two runs can share a timestamp to the second.
+  const newRun = useMemo(() => {
+    if (!latest || !primaryJob || latest.id === selection.primary || latest.id === dismissedNewRun) return null;
+    const newer = latest.run_number > primaryJob.run_number
+      || Date.parse(latest.created_at) > Date.parse(primaryJob.created_at);
+    return newer ? latest : null;
+  }, [dismissedNewRun, latest, primaryJob, selection.primary]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
+  const recombineIngestId = selectedJob && runMatchesContext(selectedJob, coherenceContext) === 'current'
+    ? selectedJob.cad_source?.ingest_id ?? null
+    : null;
   const primaryIsProvisional = Boolean(display?.provisionalIds.includes(display.primaryId));
   const provisionalMetadata = primaryRaw?.metadata?.provisional;
   const provisionalRecord = provisionalMetadata && typeof provisionalMetadata === 'object'
@@ -1860,6 +2044,35 @@ export function ResultsPanel() {
     disabled: beamRerunSubmitting,
     busy: beamRerunSubmitting,
   } : undefined, [beamRerunSubmitting, enableBalloonAndRerun, selectedJobCanRerun]);
+  const retryRadiationArtifact = useCallback((jobId: string) => {
+    setRadiationArtifactLoads((current) => ({ ...current, [jobId]: { status: 'loading' } }));
+    void fetchRadiationImpedancePresentation(jobId)
+      .then((presentation) => {
+        if (presentation) {
+          setDisplay((current) => current?.results[jobId]
+            ? { ...current, results: { ...current.results, [jobId]: { ...current.results[jobId], radiation_impedance: presentation } } }
+            : current);
+        }
+        setRadiationArtifactLoads((current) => ({
+          ...current,
+          [jobId]: { status: presentation ? 'loaded' : 'absent' },
+        }));
+      })
+      .catch((reason) => setRadiationArtifactLoads((current) => ({
+        ...current,
+        [jobId]: { status: 'failed', message: reason instanceof Error ? reason.message : String(reason) },
+      })));
+  }, []);
+  const radiationArtifact = selectedJob ? radiationArtifactLoads[selectedJob.id] : undefined;
+  const radiationArtifactView = useMemo<RadiationArtifactView | undefined>(() => radiationArtifact ? {
+    ...radiationArtifact,
+    ...(radiationArtifact.status === 'failed' && selectedJob
+      ? { retry: () => retryRadiationArtifact(selectedJob.id) }
+      : {}),
+  } : undefined, [radiationArtifact, retryRadiationArtifact, selectedJob]);
+  const powerHealth = shown
+    ? powerAgreementHealth(shown, shownRaw ?? shown)
+    : null;
   const restorePrimaryDesign = useCallback(() => {
     if (!primaryJob || replaceWithJobDesign(primaryJob, { keepHistory: true })) return;
     coordinator.reportError('This result has no readable design snapshot, so its design cannot be restored.');
@@ -1879,7 +2092,7 @@ export function ResultsPanel() {
   // is rebuilt and no canvas is touched until the tab is in front again, and
   // then exactly once from the newest snapshot.
   const charts = useVisibleRedraw(shown
-    ? <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>
+    ? <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifactView} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>
     : null);
   /** Every file is attempted; the ones that fail are named rather than
    * cancelling the ones that parsed. */
@@ -1906,7 +2119,20 @@ export function ResultsPanel() {
     try {
       const job = jobs.find(({ id }) => id === selection.primary);
       if (!job) throw new Error('The selected run is no longer available for export.');
-      const result = await runWorkspaceExportBundle({ result: primary, ...resultExportSnapshot(job), jobStem: exportStemForJob(job), jobId: job.id, hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact, preferences }, preferences.exportFormats);
+      // The envelope plus the active channel, not the channel alone: the file
+      // suffix is allocated from the channel id against its siblings, and the
+      // formats that fan out across members (VituixCAD) need the envelope to
+      // fan out from. Handing over the scoped payload left every CAD export
+      // named as if the run had one channel.
+      const result = await runWorkspaceExportBundle({
+        result: primaryRaw ?? primary,
+        ...(activeChannel ? { channelId: activeChannel } : {}),
+        ...resultExportSnapshot(job),
+        jobStem: exportStemForJob(job),
+        jobId: job.id,
+        hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
+        preferences,
+      }, preferences.exportFormats);
       if (selection.primary && result.files.length) {
         await jobsSocket.patchMetadata(selection.primary, { exported_files: [...new Set([...(job?.exported_files ?? []), ...result.files])] });
       }
@@ -1927,26 +2153,36 @@ export function ResultsPanel() {
     data-result-set={shown ? display?.key : undefined}
   >
     <div className="results-toolbar">
-      <button
-        className={`result-follow${selection.following ? ' on' : ''}`}
-        aria-pressed={selection.following}
-        title={selection.following ? 'Following the latest solve — charts repaint when results land. Click to pin this result.' : 'Pinned to a chosen result. Click to follow the latest solve again.'}
-        onClick={() => selection.following ? compareSelection.setPrimary(selection.primary) : compareSelection.followLatest(latest?.id ?? null)}
-      ><i/>{selection.following ? 'Latest' : 'Pinned'}</button>
-      {primaryJob && primaryVerdict !== 'current' && <span className={`result-coherence-notice ${primaryVerdict}`} role="status">
-        <span>{primaryVerdict === 'older-revision'
-          ? `Showing ${runDisplayName(primaryJob)} — the design has changed since this run.`
-          : `Showing ${runDisplayName(primaryJob)}${primaryJob.config_summary.geometry_type === 'imported' ? ' (CAD import)' : ''} — not the model in the viewport.`}</span>
-        {primaryVerdict === 'older-revision'
-          ? <><button type="button" onClick={restorePrimaryDesign}>Restore this run&apos;s design</button><button type="button" onClick={solveCurrentDesign}>Solve current design</button></>
-          : <><button type="button" onClick={showPrimaryModel}>Show this model</button><button type="button" onClick={() => compareSelection.followLatest(latest?.id ?? null)}>Back to latest</button></>}
-      </span>}
       {ids.map((id, index) => {
         const job = jobs.find((item) => item.id === id);
-        const marker = job ? runContextMarker(job, coherenceContext) : null;
-        return <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title={`${labelFor(id, jobs)} — remove from comparison`}><i/><span>{middleEllipsis(labelFor(id, jobs))}</span>{marker && <span className="result-context-marker">{marker}</span>} ×</button>;
+        // The shown run is the only one whose coherence is actionable, and its
+        // own chip is where it belongs: the banner this replaces spent the
+        // widest slot in the toolbar naming the run the chip beside it named.
+        const stale = index === 0 && Boolean(primaryJob) && primaryVerdict !== 'current';
+        const marker = job && !stale ? runContextMarker(job, coherenceContext) : null;
+        const chip = <button
+          key={id}
+          className={`result-chip ${index ? 'muted' : ''}${stale ? ' stale' : ''}`}
+          onClick={() => compareSelection.remove(id)}
+          title={stale
+            ? `${labelFor(id, jobs)} — ${RUN_VERDICT_SENTENCE[primaryVerdict]} Click to remove it from the comparison.`
+            : `${labelFor(id, jobs)} — remove from comparison`}
+        ><i/><span>{middleEllipsis(labelFor(id, jobs))}</span>{marker && <span className="result-context-marker">{marker}</span>} ×</button>;
+        if (!stale) return chip;
+        return <span key={id} className="result-chip-group">
+          {chip}
+          <button
+            ref={coherenceAnchor}
+            type="button"
+            className="result-context-marker stale"
+            aria-expanded={coherenceOpen}
+            aria-haspopup="dialog"
+            title={`${RUN_VERDICT_SENTENCE[primaryVerdict]} Click for what to do about it.`}
+            onClick={() => setCoherenceOpen((value) => !value)}
+          ><i/>{RUN_VERDICT_MARKER[primaryVerdict]}</button>
+        </span>;
       })}
-      {channelIds.map((channel) => <button key={channel} className={`result-chip result-channel-chip${activeChannel === channel ? '' : ' muted'}`} aria-pressed={activeChannel === channel} title={`Show ${channel} in single-channel detail views and exports`} onClick={() => setPrimaryChannel(channel)}><span>{channel}</span></button>)}
+      {primaryRaw && <ResultViewSwitch result={primaryRaw} view={view} onSelect={(next) => resultViewStore.setView(next)}/>}
       {/* How much of the dock is actually comparing. Five of the six default
           charts describe one run by nature, so a comparison that silently
           applies to one card looked identical to one that applied to all six.
@@ -1957,10 +2193,23 @@ export function ResultsPanel() {
         return <span className="result-single-run" title={`${comparing} of ${preferences.chartTypes.length} charts overlay every selected run. The rest describe one run at a time and show ${labelFor(ids[0], jobs)}.`}>{comparing}/{preferences.chartTypes.length} compare</span>;
       })()}
       {primaryIsProvisional && <span className="pill accent" role="status">Live · {liveCompleted}{liveExpected ? `/${liveExpected}` : ''} frequencies</span>}
+      {powerHealth && <span
+        className="pill result-power-check"
+        role="status"
+        title="A far-field sphere integral that disagrees with driven-surface power indicates mesh or spherical-quadrature error. Only frequencies inside the result's valid band are checked."
+      >Power check: far-field vs surface differ by {Number(powerHealth.maxDifferenceDb.toFixed(3))} dB</span>}
       <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => {
         const marker = runContextMarker(job, coherenceContext);
         return <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}{marker ? ` · ${marker}` : ''}</option>;
       })}</select>
+      {newRun && <button
+        type="button"
+        className="result-new-run"
+        title={`${runDisplayName(newRun)} finished. Click to show it; nothing else replaces the run on screen.`}
+        onClick={() => { setDismissedNewRun(newRun.id); compareSelection.followLatest(newRun.id); }}
+      ><i/>New · #{newRun.run_number} → Show</button>}
+      {/* Left of the spacer on purpose: this chip comes and goes on its own,
+          and the controls on the right must not move under the cursor. */}
       <span className="spacer"/>
       <label className="result-count-control" title="Number of chart panels">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
       <button className="toolbar-icon" disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} aria-label="Add chart" title="Add chart panel" onClick={() => preferencesStore.addChart()}><Icon name="plus"/></button>
@@ -1988,8 +2237,19 @@ export function ResultsPanel() {
       <button disabled={exporting || !primary || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
+    {coherenceOpen && primaryJob && primaryVerdict !== 'current' && <AnchoredPanel
+      anchorRef={coherenceAnchor}
+      onClose={() => setCoherenceOpen(false)}
+      className="result-coherence-popover"
+      label={`${runDisplayName(primaryJob)} coherence`}
+    >
+      <p>{RUN_VERDICT_SENTENCE[primaryVerdict]}</p>
+      {primaryVerdict === 'older-revision'
+        ? <><button type="button" onClick={() => { setCoherenceOpen(false); restorePrimaryDesign(); }}>Restore this run&apos;s design</button><button type="button" onClick={() => { setCoherenceOpen(false); solveCurrentDesign(); }}>Solve current design</button></>
+        : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Show this model</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
+    </AnchoredPanel>}
     {shownActiveChannel && shownCombine && display && selectedJob?.status === 'complete' && !primaryIsProvisional
-      && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
+      && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} resultIngestId={recombineIngestId} combine={shownCombine} onApplied={applyRecombined}/>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>
       {measuredOverlays.map((overlay) => <MeasuredOverlayRow key={overlay.id} overlay={overlay}/>)}

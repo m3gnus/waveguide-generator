@@ -33,7 +33,10 @@ export function archiveFolderForJob(
   job: Pick<JobItem, 'label' | 'config_summary' | 'cad_source'>,
 ): string {
   const stem = job.cad_source?.archive_stem?.trim();
-  if (stem) return exportTitleSlug(stem);
+  // CAD archive stems are server-allocated ASCII folder keys whose uniqueness
+  // is enforced case-insensitively. Treat that contract as opaque: slugging it
+  // again here would give the browser a second, divergent filesystem rule.
+  if (stem) return stem;
   return exportTitleSlug(job.label?.trim() || job.config_summary.formula_type || 'design');
 }
 

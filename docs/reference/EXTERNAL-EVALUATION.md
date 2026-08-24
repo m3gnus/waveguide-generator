@@ -34,7 +34,9 @@ ranges belong to the calling study.
 design, while `imported` references a verified CAD ingestion. The legacy top-level
 `design` spelling remains accepted, but new clients should send `geometry` explicitly.
 
-`client_request_id` is an optional trimmed string up to 200 characters.
+`client_request_id` is an optional trimmed string up to 200 characters and acts as a
+durable submission key. Replaying the same normalized request with the same key returns
+the original `job_id`; reusing the key for a different request returns HTTP 409.
 `client_metadata` is a finite JSON object limited to 16 KiB. Both are stored with the
 job and echoed into final results. Use them instead of design-text passthrough blocks.
 
@@ -97,7 +99,8 @@ submission and serial execution, not process-level parallelism. Multiple data
 directories are isolation tools, not a resource-scheduling contract.
 
 The standard-library example at `examples/external_evaluator.py` exercises discovery,
-submission, polling, structured errors, result retrieval, and digest verification.
+submission, polling, timeout and interruption cancellation, structured errors, result
+retrieval, and digest verification.
 
 CLI clients should always supply `--output` and own the resulting artifact directory;
 HTTP clients should persist the digest-verified response in their own study storage.

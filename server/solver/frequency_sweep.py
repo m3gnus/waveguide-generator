@@ -23,6 +23,8 @@ _FREQUENCY_SHAPED_RESULT_FIELDS = (
     "surface_pressure_complex",
     "surface_neumann_complex",
     "sphere_pressure_complex",
+    "radiated_power_surface_w",
+    "radiated_power_sphere_w",
 )
 
 

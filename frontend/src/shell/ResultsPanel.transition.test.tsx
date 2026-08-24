@@ -40,7 +40,32 @@ function publishJobs(jobs: JobItem[]): void {
 }
 
 function response(frequencies: number[], ok = true): Response {
-  return new Response(JSON.stringify(ok ? { frequencies, metadata: {} } : { detail: 'result vanished' }), {
+  const digest = 'a'.repeat(64);
+  const result = {
+    result_kind: 'parametric',
+    result_contract_version: 1,
+    client_request_id: null,
+    client_metadata: {},
+    provenance: {
+      schema_version: 1,
+      wg_version: 'test',
+      dependency_shas: {},
+      request_sha256: digest,
+      geometry_sha256: digest,
+      solve_options_sha256: digest,
+      request_identity: 'execution',
+      execution_request_sha256: digest,
+      execution_geometry_sha256: digest,
+      execution_solve_options_sha256: digest,
+      effective_request_sha256: digest,
+      effective_geometry_sha256: digest,
+      effective_solve_options_sha256: digest,
+      resolved_engine: 'test',
+    },
+    frequencies,
+    metadata: {},
+  };
+  return new Response(JSON.stringify(ok ? result : { detail: 'result vanished' }), {
     status: ok ? 200 : 500,
     headers: { 'Content-Type': 'application/json' },
   });
@@ -162,6 +187,52 @@ describe('atomic results display transitions', () => {
     expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('broken');
   });
 
+  // The rail kept showing the previous run after a new solve finished: a
+  // result picked by hand pins the primary slot, and the pin outlived every
+  // later solve. A submitted run claims the slot at submission time and takes
+  // it the moment it has something to show -- not before, so the pinned result
+  // stays on screen for the length of the solve.
+  it('hands a pinned slot to the run a new solve submitted, once it has results', async () => {
+    publishJobs([job('old')]);
+    compareSelection.setPrimary('old');
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('old')!(response([100])); });
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('old');
+
+    const running = job('fresh');
+    Object.assign(running, { status: 'running', progress: .2, has_results: false, completed_at: null });
+    await act(async () => {
+      compareSelection.awaitRun('fresh');
+      publishJobs([running, job('old')]);
+      await Promise.resolve();
+    });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'old', following: false, awaiting: 'fresh' });
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('old');
+
+    await act(async () => { publishJobs([job('fresh'), job('old')]); await Promise.resolve(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'fresh', following: true, awaiting: null });
+    await act(async () => { pending.get('fresh')!(response([200])); });
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('fresh');
+  });
+
+  it('leaves the pinned result alone when the run it submitted fails', async () => {
+    publishJobs([job('old')]);
+    compareSelection.setPrimary('old');
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('old')!(response([100])); });
+
+    const failed = job('fresh');
+    Object.assign(failed, { status: 'error', has_results: false, error_message: 'solver failed' });
+    await act(async () => {
+      compareSelection.awaitRun('fresh');
+      publishJobs([failed, job('old')]);
+      await Promise.resolve();
+    });
+
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'old', following: false, awaiting: null });
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('old');
+  });
+
   it('does not mix a resolved new primary with a still-loading overlay', async () => {
     act(() => compareSelection.toggleOverlay('old-overlay'));
     await act(async () => { root.render(<ResultsPanel/>); });
@@ -204,6 +275,10 @@ describe('atomic results display transitions', () => {
       solve_options: { num_frequencies: 2 } as JobItem['solve_options'],
     });
     await act(async () => {
+      // The claim a submitted solve leaves behind: nothing else may take the
+      // charts off the run on screen, so a streamed run has to be one this
+      // window asked for.
+      compareSelection.awaitRun('live');
       publishJobs([liveJob, job('old')]);
       provisionalResults.apply('live', 1, {
         frequencies: [200],

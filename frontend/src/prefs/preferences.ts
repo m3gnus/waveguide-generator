@@ -11,6 +11,7 @@ export const CHART_TYPES = [
   { id: 'directivity_map', label: 'Directivity Map (All planes)' },
   { id: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
   { id: 'directivity_index', label: 'Directivity Index' },
+  { id: 'power_response', label: 'Power Response (Spatial Average)' },
   { id: 'beam_shape', label: 'Forward Beam Shape' },
   { id: 'beam_fit', label: 'Beam Shape Fit (aspect / exponent)' },
   { id: 'beam_map', label: 'Forward Beam Map' },
@@ -112,6 +113,14 @@ export interface Preferences {
    * the chart on screen and the chart in the file are not the same picture.
    */
   splPhase: boolean;
+  /**
+   * Draw the members beneath the combined sum on the SPL chart.
+   *
+   * On by default: the sum of an LR4 crossover is read against the branches
+   * that make it, and without them the one thing the Combined view exists to
+   * show — where the drivers hand over — is invisible.
+   */
+  showMembersUnderCombined: boolean;
   impedanceDisplay: ImpedanceDisplay;
   exportFormats: ExportFormat[];
   autoExportFormats: ExportFormat[];
@@ -169,6 +178,7 @@ const defaults: Preferences = {
   chartTypes: ['frequency_response', 'directivity_map_h', 'directivity_map_v', 'directivity_index', 'impedance', 'summary'],
   chartTheme: MATCH_INTERFACE_THEME,
   splPhase: true,
+  showMembersUnderCombined: true,
   impedanceDisplay: 'real_imaginary',
   exportFormats: ['csv', 'png'],
   autoExportFormats: [],
@@ -226,6 +236,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     // literal "[object Object]" and asked the exporter to render in it.
     chartTheme: typeof raw.chartTheme === 'string' && raw.chartTheme ? raw.chartTheme : defaults.chartTheme,
     splPhase: raw.splPhase !== false,
+    showMembersUnderCombined: raw.showMembersUnderCombined !== false,
     impedanceDisplay: impedanceDisplayIds.has(raw.impedanceDisplay as ImpedanceDisplay)
       ? raw.impedanceDisplay as ImpedanceDisplay
       : defaults.impedanceDisplay,

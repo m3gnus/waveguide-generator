@@ -16,6 +16,7 @@ on:
         required: true
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -25,6 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
@@ -33,7 +35,8 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Tag must match shared/version.json
+      - name: Tag must match shared/version.json and belong to main
+        id: release_guard
         # The version reaches the UI, /health and the update checker from this
         # one file. A tag that disagrees with it ships a build that misreports
         # itself, which is worse than a failed release.
@@ -52,7 +55,38 @@ jobs:
             echo "$tag is not a tag for the checked-out commit." >&2
             exit 1
           fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$tagged_commit" origin/main; then
+            echo "$tagged_commit is not reachable from origin/main." >&2
+            exit 1
+          fi
           echo "version=${declared#v}" >> "$GITHUB_ENV"
+          echo "tagged_commit=$tagged_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Tagged commit must have successful CI
+        uses: actions/github-script@v7
+        env:
+          TAGGED_COMMIT: ${{ steps.release_guard.outputs.tagged_commit }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: "ci.yml",
+              head_sha: process.env.TAGGED_COMMIT,
+              event: "push",
+              status: "completed",
+              per_page: 100,
+            });
+            const successful = response.data.workflow_runs.some(
+              (run) => run.conclusion === "success"
+            );
+            if (!successful) {
+              core.setFailed(
+                `CI has not completed successfully for ${process.env.TAGGED_COMMIT}.`
+              );
+            }
 
       - name: Build the SPA
         working-directory: frontend

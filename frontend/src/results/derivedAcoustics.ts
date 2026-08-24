@@ -1,4 +1,5 @@
 import { groupDelayMilliseconds, propagationReference } from './phaseAnalysis';
+import { radiatedPowerMetadata } from './radiatedPower';
 import type { ResultPayload } from './types';
 
 export const DERIVED_ACOUSTICS_SCHEMA_VERSION = 1;
@@ -8,6 +9,9 @@ export interface DerivedAcousticsRow {
   on_axis_spl_db: number | null;
   directivity_index_db: number | null;
   power_response_db_spl_avg: number | null;
+  radiated_power_surface_w: number | null;
+  radiated_power_sphere_w: number | null;
+  power_agreement_db: number | null;
   group_delay_ms: number | null;
   horizontal_beamwidth_deg: number | null;
   vertical_beamwidth_deg: number | null;
@@ -21,6 +25,9 @@ export interface DerivedAcousticsPayload {
   rows: DerivedAcousticsRow[];
   metadata: {
     power_response_formula: string;
+    power_agreement_formula: string;
+    radiated_power_definition: string | null;
+    radiated_power_sphere_coverage_sr: number | null;
     directivity_index_definition: string;
     group_delay_definition: string;
     group_delay_available: boolean;
@@ -79,12 +86,21 @@ export function buildDerivedAcoustics(result: ResultPayload): DerivedAcousticsPa
   const sphericalDi = seriesAt(beamFrequencies, beam?.spherical_di_db);
   const exponent = seriesAt(beamFrequencies, beam?.shape_exponent);
   const residual = seriesAt(beamFrequencies, beam?.fit_residual_percent);
+  const radiatedPower = radiatedPowerMetadata(result);
+  const surfacePower = seriesAt(result.frequencies, radiatedPower?.surface_w);
+  const spherePower = seriesAt(result.frequencies, radiatedPower?.sphere_w);
+  const powerAgreement = seriesAt(result.frequencies, radiatedPower?.agreement_db);
   const reference = propagationReference(result);
   const groupDelay = new Map(groupDelayMilliseconds({
     frequencies: splFrequencies,
     phaseDegrees: result.spl_on_axis?.phase_degrees ?? [],
   }, reference).map(({ frequencyHz, value }) => [frequencyHz, value]));
-  const frequencies = unionFrequencies([splFrequencies, diFrequencies, beamFrequencies]);
+  const frequencies = unionFrequencies([
+    splFrequencies,
+    diFrequencies,
+    beamFrequencies,
+    radiatedPower ? result.frequencies : undefined,
+  ]);
 
   const rows = frequencies.map((frequency): DerivedAcousticsRow => {
     const onAxis = spl.get(frequency) ?? null;
@@ -95,6 +111,9 @@ export function buildDerivedAcoustics(result: ResultPayload): DerivedAcousticsPa
       directivity_index_db: directivityIndex,
       power_response_db_spl_avg: onAxis !== null && directivityIndex !== null
         ? onAxis - directivityIndex : null,
+      radiated_power_surface_w: surfacePower.get(frequency) ?? null,
+      radiated_power_sphere_w: spherePower.get(frequency) ?? null,
+      power_agreement_db: powerAgreement.get(frequency) ?? null,
       group_delay_ms: groupDelay.get(frequency) ?? null,
       horizontal_beamwidth_deg: horizontal.get(frequency) ?? null,
       vertical_beamwidth_deg: vertical.get(frequency) ?? null,
@@ -110,6 +129,9 @@ export function buildDerivedAcoustics(result: ResultPayload): DerivedAcousticsPa
     rows,
     metadata: {
       power_response_formula: 'on_axis_spl_db - directivity_index_db',
+      power_agreement_formula: '10 * log10(radiated_power_sphere_w / radiated_power_surface_w)',
+      radiated_power_definition: radiatedPower?.definition || null,
+      radiated_power_sphere_coverage_sr: radiatedPower?.sphere_coverage_sr ?? null,
       directivity_index_definition: String(
         (result.metadata?.directivity_index as Record<string, unknown> | undefined)?.definition
           ?? 'full-sphere mean-square-pressure directivity index',
@@ -140,6 +162,9 @@ export function buildDerivedAcousticsCsv(result: ResultPayload): string {
     'on_axis_spl_db',
     'directivity_index_db',
     'power_response_db_spl_avg',
+    'radiated_power_surface_w',
+    'radiated_power_sphere_w',
+    'power_agreement_db',
     'group_delay_ms',
     'horizontal_beamwidth_deg',
     'vertical_beamwidth_deg',

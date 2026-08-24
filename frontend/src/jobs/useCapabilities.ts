@@ -5,7 +5,7 @@ import {
   type EngineCapability,
   type EngineSelection,
 } from './actions';
-import { activeBackendCapability, activeBackendName, plannedBackendCapabilities } from '../design/backendSupport';
+import { activeBackendCapability, plannedBackendCapabilities } from '../design/backendSupport';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 
 /**
@@ -63,21 +63,6 @@ export function useCapabilities(): CapabilitiesSnapshot {
     error: isError ? (error instanceof Error ? error.message : String(error)) : null,
     isLoading: isPending,
   };
-}
-
-/**
- * The backend a solve would use right now, for controls that gate on it.
- *
- * Null while the probe is in flight and whenever no backend is available at
- * all; `backendSupports` treats that as "do not hide anything", so a slow or
- * failed probe degrades to the pre-gating behaviour rather than to an empty
- * panel. Rides the same shared query as everything else, so calling it from
- * every rendered field costs one cached read.
- */
-export function useActiveBackend(): string | null {
-  const engine = useSolveOptionsStore((state) => state.engine);
-  const { engines, engineSelection } = useCapabilities();
-  return activeBackendName(engine, engines, engineSelection);
 }
 
 /** Full capability record for controls whose support is version-dependent. */

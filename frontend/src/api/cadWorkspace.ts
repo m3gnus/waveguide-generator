@@ -1,8 +1,19 @@
+/**
+ * Where a captured CAD document is filed in the run archive.
+ *
+ * `run` puts the model beside the run it produced, which is where people look
+ * for it; `project` keeps one copy per model state for the whole project, which
+ * costs less when one geometry is swept many times; `off` asks the add-in not
+ * to carry the document at all.
+ */
+export type CadCaptureMode = 'off' | 'project' | 'run';
+
 export interface CadWorkspacePath {
   selected: boolean;
   path: string | null;
   /** Whether returns carry a copy of the CAD document they were taken from. */
   captureDocument?: boolean;
+  captureMode?: CadCaptureMode;
 }
 
 async function errorMessage(response: Response): Promise<string> {
@@ -45,21 +56,22 @@ export async function openCadWorkspace(
 }
 
 /**
- * Choose whether a return carries the CAD document with it.
+ * Choose whether a return carries the CAD document, and where WG files it.
  *
  * The setting is written where the Fusion add-in already reads WG's CAD-link
  * configuration, so there is one switch rather than the same choice offered in
- * both applications.
+ * both applications. The add-in reads only whether to capture; the mode is
+ * WG's own filing decision.
  */
-export async function setCaptureDocument(
-  enabled: boolean,
+export async function setCaptureMode(
+  mode: CadCaptureMode,
   fetcher: typeof fetch = fetch,
-): Promise<boolean> {
+): Promise<CadCaptureMode> {
   const response = await fetcher('/api/cad-workspace/capture-document', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
+    body: JSON.stringify({ mode }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
-  return ((await response.json()) as { captureDocument: boolean }).captureDocument;
+  return ((await response.json()) as { captureMode: CadCaptureMode }).captureMode;
 }

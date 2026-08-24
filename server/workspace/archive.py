@@ -6,9 +6,10 @@ by design rather than by pipeline, so one design's parametric and CAD history
 read as one story.
 
 The folder slug here mirrors ``designNameSlug`` in
-``frontend/src/stores/designName.ts``. Two implementations of one name rule can
-disagree, so ``test_run_archive.py`` and ``runArchive.test.ts`` assert the same
-table of names; change both or neither.
+``frontend/src/stores/designName.ts`` for ordinary parametric archives. For CAD
+lineages this server function is the authority: ``CadLinkStore`` persists its
+ASCII result under a case-insensitive uniqueness constraint, and
+``frontend/src/jobs/exportNaming.ts`` consumes that allocated key verbatim.
 """
 
 from __future__ import annotations
@@ -119,9 +120,101 @@ def archive_cad_document(
     return relative
 
 
+def captured_cad_document(runs_root: Path, stem: object, return_state_hash: str) -> Path | None:
+    """The archived CAD document for one return state, if it was captured."""
+
+    digest = str(return_state_hash or "").strip()
+    if not digest:
+        return None
+    directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
+    name = archive_folder_slug(digest, "return")
+    for candidate in sorted(directory.glob(f"{name}.*")):
+        if candidate.suffix == ".json" or candidate.is_symlink() or not candidate.is_file():
+            continue
+        return candidate
+    return None
+
+
+def place_run_cad_document(
+    runs_root: Path,
+    stem: object,
+    run_subdirectory: str,
+    run_stem: str,
+    return_state_hash: str,
+) -> str | None:
+    """Put the run's CAD document beside the run, for the ``run`` capture mode.
+
+    The project-level ``cad/`` copy stays the content-addressed original: a
+    return that is ingested and never solved still has to keep its document
+    somewhere. This adds the copy people actually look for -- open the folder
+    for run 14 and the model that produced it is in it.
+
+    A plain copy, deliberately. Hard-linking would make this free, but the
+    archive commonly lives in a cloud-synced folder, where a shared inode is
+    either desynchronised or silently propagates an edit of one file to the
+    other; these are archives, and an archive that changes underneath you is
+    worse than a second copy of a small file.
+
+    Refuses to overwrite a file that is already there with different content,
+    so re-archiving a run cannot clobber a document the user replaced. Returns
+    the path relative to the design folder, or ``None`` when there is nothing
+    to place.
+    """
+
+    source = captured_cad_document(runs_root, stem, return_state_hash)
+    if source is None:
+        return None
+    design_folder = design_archive_folder(runs_root, stem)
+    segments = [segment for segment in str(run_subdirectory).split("/") if segment]
+    if not segments or any(segment in {".", ".."} for segment in segments):
+        return None
+    destination_directory = design_folder.joinpath(*segments)
+    destination = destination_directory / f"{archive_folder_slug(run_stem, 'run')}{source.suffix}"
+    source_sidecar = source.with_suffix(".json")
+    destination_sidecar = destination.with_suffix(".cad.json")
+    relative = f"{'/'.join(segments)}/{destination.name}"
+    resolved_root = design_folder.resolve()
+    if resolved_root not in destination_directory.resolve().parents and destination_directory.resolve() != resolved_root:
+        return None
+    if destination.is_symlink():
+        return None
+    if destination_sidecar.is_symlink():
+        return None
+    if destination.is_file():
+        # Byte-identical means the archive already holds it: a retried archive
+        # after a restart must be a no-op, not a second write.
+        if destination.read_bytes() != source.read_bytes():
+            return None
+    if source_sidecar.is_file() and destination_sidecar.is_file():
+        # A CAD sidecar is part of the same immutable archive copy. Refuse a
+        # collision rather than replacing metadata that may belong to a file
+        # the user put there.
+        if destination_sidecar.read_bytes() != source_sidecar.read_bytes():
+            return None
+
+    if destination.is_file():
+        if source_sidecar.is_file() and not destination_sidecar.is_file():
+            shutil.copy2(source_sidecar, destination_sidecar)
+        return relative
+
+    destination_directory.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".wg2-run-document-", dir=destination_directory))
+    try:
+        staged = staging / destination.name
+        shutil.copy2(source, staged)
+        os.replace(staged, destination)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    if source_sidecar.is_file():
+        shutil.copy2(source_sidecar, destination_sidecar)
+    return relative
+
+
 __all__ = [
     "CAD_SUBDIRECTORY",
     "archive_cad_document",
     "archive_folder_slug",
+    "captured_cad_document",
     "design_archive_folder",
+    "place_run_cad_document",
 ]

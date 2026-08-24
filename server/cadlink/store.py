@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+import hashlib
 from pathlib import Path
 import sqlite3
 import threading
 from typing import Any
 
 from server.platform.paths import data_paths
+from server.workspace.archive import archive_folder_slug
 
 from .identity import (
     CadLink,
@@ -58,6 +60,22 @@ _SCHEMA = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS exports_by_artifact ON exports(artifact_sha256)",
+    """
+    CREATE TABLE IF NOT EXISTS export_reservations (
+      idempotency_key TEXT PRIMARY KEY,
+      export_id TEXT NOT NULL UNIQUE,
+      bundle_id TEXT NOT NULL UNIQUE,
+      design_id TEXT NOT NULL REFERENCES designs(design_id),
+      sequence INTEGER NOT NULL,
+      parent_export_id TEXT,
+      edit_version INTEGER NOT NULL,
+      design_hash TEXT NOT NULL,
+      snapshot_text TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('building', 'retryable')),
+      UNIQUE (design_id, sequence)
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS ingests (
       ingest_id TEXT PRIMARY KEY,
@@ -111,11 +129,95 @@ _SCHEMA = (
       lineage_id TEXT PRIMARY KEY,
       parameter_slug TEXT,
       bundle_stem TEXT,
+      archive_stem TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
     """,
 )
+
+
+def _archive_stem_candidate(value: object) -> str:
+    """Return the server-owned portable folder spelling for a CAD lineage."""
+
+    return archive_folder_slug(value, "design")
+
+
+def _suffixed_archive_stem(base: str, lineage_id: str, used: set[str]) -> str:
+    """Disambiguate a portable/case-fold collision from durable identity."""
+
+    digest = hashlib.sha256(lineage_id.encode("utf-8")).hexdigest()
+    for length in range(12, len(digest) + 1, 4):
+        candidate = f"{base}-{digest[:length]}"
+        if candidate.casefold() not in used:
+            return candidate
+    # A natural filename could theoretically contain the entire digest. Keep
+    # the lineage-derived suffix and add a deterministic final discriminator.
+    discriminator = 2
+    while f"{base}-{digest}-{discriminator}".casefold() in used:
+        discriminator += 1
+    return f"{base}-{digest}-{discriminator}"
+
+
+def _migrate_archive_stems(conn: sqlite3.Connection) -> None:
+    """Normalize legacy names and resolve their portable collisions stably."""
+
+    conn.execute(
+        "UPDATE lineage_cad_names SET archive_stem = NULL "
+        "WHERE archive_stem IS NOT NULL AND TRIM(archive_stem) = ''"
+    )
+    rows = conn.execute(
+        "SELECT lineage_id, archive_stem FROM lineage_cad_names "
+        "WHERE archive_stem IS NOT NULL AND TRIM(archive_stem) != ''"
+    ).fetchall()
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for row in rows:
+        lineage_id = str(row["lineage_id"])
+        base = _archive_stem_candidate(row["archive_stem"])
+        groups.setdefault(base.casefold(), []).append((lineage_id, base))
+
+    allocated: dict[str, str] = {}
+    used: set[str] = set()
+    collisions: list[tuple[str, str]] = []
+    # The lexicographically first lineage keeps each readable base. Sorting
+    # makes the migration independent of SQLite row order and repeatable from
+    # the same v9 database image.
+    for portable_key in sorted(groups):
+        members = sorted(groups[portable_key])
+        winner_lineage, winner_base = members[0]
+        allocated[winner_lineage] = winner_base
+        used.add(winner_base.casefold())
+        collisions.extend((lineage_id, base) for lineage_id, base in members[1:])
+    for lineage_id, base in sorted(collisions, key=lambda item: (item[1].casefold(), item[0])):
+        candidate = _suffixed_archive_stem(base, lineage_id, used)
+        allocated[lineage_id] = candidate
+        used.add(candidate.casefold())
+
+    for lineage_id, archive_stem in allocated.items():
+        conn.execute(
+            "UPDATE lineage_cad_names SET archive_stem = ? WHERE lineage_id = ?",
+            (archive_stem, lineage_id),
+        )
+
+
+def _allocate_archive_stem(
+    conn: sqlite3.Connection, lineage_id: str, preferred: object
+) -> str:
+    base = _archive_stem_candidate(preferred)
+    used = {
+        str(row["archive_stem"]).casefold()
+        for row in conn.execute(
+            "SELECT archive_stem FROM lineage_cad_names "
+            "WHERE lineage_id != ? AND archive_stem IS NOT NULL AND archive_stem != ''",
+            (lineage_id,),
+        )
+    }
+    if base.casefold() not in used:
+        return base
+    return _suffixed_archive_stem(base, lineage_id, used)
+
+_EXPORT_BUILD_LOCKS_GUARD = threading.Lock()
+_EXPORT_BUILD_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 
 
 class CadLinkStore:
@@ -140,7 +242,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8}:
+            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -181,7 +283,25 @@ class CadLinkStore:
                 "CREATE UNIQUE INDEX IF NOT EXISTS onshape_links_by_instance "
                 "ON onshape_links(instance_id)"
             )
-            conn.execute("PRAGMA user_version = 8")
+            lineage_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(lineage_cad_names)")
+            }
+            if "archive_stem" not in lineage_columns:
+                conn.execute("ALTER TABLE lineage_cad_names ADD COLUMN archive_stem TEXT")
+            if version < 10:
+                _migrate_archive_stems(conn)
+            # archive_stem is an ASCII portable folder key from schema 10 on.
+            # NOCASE therefore matches the case-insensitive filesystems this
+            # key must survive, while BEGIN IMMEDIATE serializes allocation.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS lineage_cad_names_by_archive_stem "
+                "ON lineage_cad_names(archive_stem COLLATE NOCASE) "
+                "WHERE archive_stem IS NOT NULL AND archive_stem != ''"
+            )
+            # Schema 11 adds export_reservations (created by _SCHEMA above):
+            # exports are reserved in a short transaction and finalised after
+            # the bundle is built outside the registry lock.
+            conn.execute("PRAGMA user_version = 11")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -219,6 +339,57 @@ class CadLinkStore:
                     return []
                 raise
         return [dict(row) for row in rows]
+
+    def list_projects(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """List one canonical, newest design head per lineage."""
+
+        if not self._initialized and (
+            str(self.db_path) == ":memory:" or not self.db_path.exists()
+        ):
+            return []
+        bounded_limit = max(1, min(int(limit), 500))
+        with self._lock:
+            try:
+                rows = self._connect().execute(
+                    """SELECT designs.design_id, designs.lineage_id,
+                              designs.edit_version, designs.design_hash,
+                              designs.filename, designs.branched_from_design_id,
+                              designs.branched_from_edit_version,
+                              designs.created_at, designs.updated_at,
+                              COUNT(exports.export_id) AS export_count,
+                              MAX(exports.created_at) AS last_exported_at
+                       FROM designs
+                       LEFT JOIN exports ON exports.design_id = designs.design_id
+                       WHERE NOT EXISTS (
+                         SELECT 1 FROM designs AS newer
+                         WHERE newer.lineage_id = designs.lineage_id
+                           AND (
+                             newer.updated_at > designs.updated_at
+                             OR (
+                               newer.updated_at = designs.updated_at
+                               AND newer.design_id > designs.design_id
+                             )
+                           )
+                       )
+                       GROUP BY designs.design_id
+                       ORDER BY designs.updated_at DESC, designs.design_id DESC
+                       LIMIT ?""",
+                    (bounded_limit,),
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                if "no such table" in str(exc):
+                    return []
+                raise
+        return [dict(row) for row in rows]
+
+    def find_latest_design_for_lineage(self, lineage_id: str) -> dict[str, Any] | None:
+        """Find a lineage's canonical head without a bounded recent scan."""
+
+        return self._read_one(
+            """SELECT * FROM designs WHERE lineage_id = ?
+               ORDER BY updated_at DESC, design_id DESC LIMIT 1""",
+            (lineage_id,),
+        )
 
     def find_design_by_hash(self, value: str) -> dict[str, Any] | None:
         return self._read_one(
@@ -272,6 +443,7 @@ class CadLinkStore:
         *,
         parameter_slug: str | None = None,
         bundle_stem: str | None = None,
+        archive_stem: str | None = None,
         recorded_at: str | None = None,
     ) -> dict[str, Any]:
         """Claim a lineage's CAD names, first writer per column winning.
@@ -284,11 +456,23 @@ class CadLinkStore:
         self.initialize()
         now = recorded_at or utc_now()
         with self._lock, self._transaction() as conn:
+            existing = conn.execute(
+                "SELECT archive_stem FROM lineage_cad_names WHERE lineage_id = ?",
+                (lineage_id,),
+            ).fetchone()
+            claimed_archive_stem = (
+                str(existing["archive_stem"] or "").strip() if existing else ""
+            )
+            if not claimed_archive_stem and str(archive_stem or "").strip():
+                claimed_archive_stem = _allocate_archive_stem(
+                    conn, lineage_id, archive_stem
+                )
             conn.execute(
                 """
                 INSERT INTO lineage_cad_names (
-                  lineage_id, parameter_slug, bundle_stem, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?)
+                  lineage_id, parameter_slug, bundle_stem, archive_stem,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT (lineage_id) DO UPDATE SET
                   parameter_slug = COALESCE(
                     lineage_cad_names.parameter_slug, excluded.parameter_slug
@@ -296,14 +480,66 @@ class CadLinkStore:
                   bundle_stem = COALESCE(
                     lineage_cad_names.bundle_stem, excluded.bundle_stem
                   ),
+                  archive_stem = CASE
+                    WHEN lineage_cad_names.archive_stem IS NULL
+                      OR TRIM(lineage_cad_names.archive_stem) = ''
+                    THEN excluded.archive_stem
+                    ELSE lineage_cad_names.archive_stem
+                  END,
                   updated_at = excluded.updated_at
                 """,
-                (lineage_id, parameter_slug, bundle_stem, now, now),
+                (
+                    lineage_id,
+                    parameter_slug,
+                    bundle_stem,
+                    claimed_archive_stem or None,
+                    now,
+                    now,
+                ),
             )
             row = conn.execute(
                 "SELECT * FROM lineage_cad_names WHERE lineage_id = ?", (lineage_id,)
             ).fetchone()
         return self._row(row) or {}
+
+    def claim_archive_stem(
+        self,
+        lineage_id: str,
+        *,
+        preferred: str | None = None,
+        recorded_at: str | None = None,
+    ) -> str | None:
+        """The single folder a lineage's runs and captured CAD documents share.
+
+        Two writers file into the run archive for one project: the ingest files
+        a captured Fusion document the moment a return arrives, and the run
+        archive files the solve afterwards. They used to derive the folder
+        independently -- the bundle stem or the document name on one side, the
+        job's own label on the other -- so renaming a run was enough to strand
+        its Fusion document in a folder the run never appeared in.
+
+        The name is therefore claimed once per lineage and never changed:
+        an already-claimed stem wins, then the ``.wglink`` folder the lineage
+        owns, then the caller's suggestion (in practice the CAD document name).
+        Returns ``None`` only when the lineage has no usable name yet, which
+        leaves the caller to fall back exactly as it did before.
+        """
+
+        recorded = self.get_lineage_cad_names(lineage_id) or {}
+        claimed = str(recorded.get("archive_stem") or "").strip()
+        if claimed:
+            return claimed
+        stem = (
+            str(recorded.get("bundle_stem") or "").strip()
+            or str(preferred or "").strip()
+        )
+        if not stem:
+            return None
+        written = self.record_lineage_cad_names(
+            lineage_id, archive_stem=stem, recorded_at=recorded_at
+        )
+        # A concurrent claimant may have won; its name is the answer for both.
+        return str(written.get("archive_stem") or "").strip() or stem
 
     def get_ingest(self, ingest_id: str) -> dict[str, Any] | None:
         return self._read_one(
@@ -463,97 +699,172 @@ class CadLinkStore:
         parent_export_id: str | None = None,
         created_at: str | None = None,
     ) -> dict[str, Any]:
-        """Atomically allocate a per-design sequence and immutable snapshot."""
+        """Reserve quickly, build unlocked, then atomically finalize an export."""
 
+        builders = sum(
+            value is not None
+            for value in (manifest_json, manifest_builder, export_builder)
+        )
+        if builders != 1:
+            raise ValueError(
+                "provide exactly one of manifest_json, manifest_builder, or export_builder"
+            )
         self.initialize()
-        now = created_at or utc_now()
-        with self._lock, self._transaction() as conn:
-            retry = conn.execute(
-                "SELECT * FROM exports WHERE idempotency_key = ?", (idempotency_key,)
-            ).fetchone()
-            if retry is not None:
-                return self._row(retry) or {}
-            design = conn.execute(
-                "SELECT * FROM designs WHERE design_id = ?", (design_id,)
-            ).fetchone()
-            if design is None:
-                raise KeyError(f"unknown design_id {design_id}")
-            latest = conn.execute(
-                "SELECT export_id, sequence FROM exports WHERE design_id = ? "
-                "ORDER BY sequence DESC LIMIT 1",
-                (design_id,),
-            ).fetchone()
-            sequence = (int(latest["sequence"]) if latest else 0) + 1
-            resolved_parent = (
-                parent_export_id
-                if parent_export_id is not None
-                else (str(latest["export_id"]) if latest else None)
-            )
-            export_id = mint_id("wge_")
-            resolved_bundle_id = bundle_id or mint_id("wgb_")
+        build_lock = self._export_build_lock(design_id)
+        with build_lock:
+            now = created_at or utc_now()
+            with self._lock, self._transaction() as conn:
+                retry = conn.execute(
+                    "SELECT * FROM exports WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if retry is not None:
+                    return self._row(retry) or {}
+                reservation = conn.execute(
+                    "SELECT * FROM export_reservations WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if reservation is None:
+                    design = conn.execute(
+                        "SELECT * FROM designs WHERE design_id = ?", (design_id,)
+                    ).fetchone()
+                    if design is None:
+                        raise KeyError(f"unknown design_id {design_id}")
+                    latest = conn.execute(
+                        """
+                        SELECT export_id, sequence FROM (
+                          SELECT export_id, sequence FROM exports WHERE design_id = ?
+                          UNION ALL
+                          SELECT export_id, sequence FROM export_reservations
+                          WHERE design_id = ?
+                        ) ORDER BY sequence DESC LIMIT 1
+                        """,
+                        (design_id, design_id),
+                    ).fetchone()
+                    sequence = (int(latest["sequence"]) if latest else 0) + 1
+                    resolved_parent = (
+                        parent_export_id
+                        if parent_export_id is not None
+                        else (str(latest["export_id"]) if latest else None)
+                    )
+                    export_id = mint_id("wge_")
+                    resolved_bundle_id = bundle_id or mint_id("wgb_")
+                    conn.execute(
+                        """
+                        INSERT INTO export_reservations (
+                          idempotency_key, export_id, bundle_id, design_id,
+                          sequence, parent_export_id, edit_version, design_hash,
+                          snapshot_text, created_at, state
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building')
+                        """,
+                        (
+                            idempotency_key,
+                            export_id,
+                            resolved_bundle_id,
+                            design_id,
+                            sequence,
+                            resolved_parent,
+                            design["edit_version"],
+                            design["design_hash"],
+                            design["snapshot_text"],
+                            now,
+                        ),
+                    )
+                    reservation = conn.execute(
+                        "SELECT * FROM export_reservations WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    ).fetchone()
+                elif str(reservation["design_id"]) != design_id:
+                    raise ValueError("idempotency_key is reserved for another design")
+                conn.execute(
+                    "UPDATE export_reservations SET state = 'building' "
+                    "WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                )
+
+            assert reservation is not None
             facts: dict[str, object] = {
-                "exportId": export_id,
-                "bundleId": resolved_bundle_id,
-                "designId": design_id,
-                "sequence": sequence,
-                "parentExportId": resolved_parent,
-                "editVersion": design["edit_version"],
-                "designHash": design["design_hash"],
-                "createdAt": now,
+                "exportId": reservation["export_id"],
+                "bundleId": reservation["bundle_id"],
+                "designId": reservation["design_id"],
+                "sequence": reservation["sequence"],
+                "parentExportId": reservation["parent_export_id"],
+                "editVersion": reservation["edit_version"],
+                "designHash": reservation["design_hash"],
+                "createdAt": reservation["created_at"],
             }
-            builders = sum(
-                value is not None
-                for value in (manifest_json, manifest_builder, export_builder)
-            )
-            if builders != 1:
-                raise ValueError(
-                    "provide exactly one of manifest_json, manifest_builder, or export_builder"
-                )
-            if export_builder is not None:
-                products = export_builder(facts)
-                stored_manifest = products.get("manifest_json")
-                geometry_hash = products.get("geometry_hash")
-                artifact_sha256 = products.get("artifact_sha256")
-                bundle_path = products.get("bundle_path")
-            else:
-                stored_manifest = (
-                    manifest_builder(facts)
-                    if manifest_builder is not None
-                    else manifest_json
-                )
-            assert stored_manifest is not None
-            if geometry_hash is None or artifact_sha256 is None:
-                raise ValueError("geometry_hash and artifact_sha256 are required")
-            conn.execute(
-                """
-                INSERT INTO exports (
-                  export_id, bundle_id, design_id, sequence, parent_export_id,
-                  edit_version, design_hash, geometry_hash, artifact_sha256,
-                  manifest_json, snapshot_text, idempotency_key, created_at,
-                  bundle_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    export_id,
-                    resolved_bundle_id,
-                    design_id,
-                    sequence,
-                    resolved_parent,
-                    design["edit_version"],
-                    design["design_hash"],
-                    geometry_hash,
-                    artifact_sha256,
-                    stored_manifest,
-                    design["snapshot_text"],
-                    idempotency_key,
-                    now,
-                    bundle_path,
-                ),
-            )
-            row = conn.execute(
-                "SELECT * FROM exports WHERE idempotency_key = ?", (idempotency_key,)
-            ).fetchone()
+            try:
+                if export_builder is not None:
+                    products = export_builder(facts)
+                    stored_manifest = products.get("manifest_json")
+                    geometry_hash = products.get("geometry_hash")
+                    artifact_sha256 = products.get("artifact_sha256")
+                    bundle_path = products.get("bundle_path")
+                else:
+                    stored_manifest = (
+                        manifest_builder(facts)
+                        if manifest_builder is not None
+                        else manifest_json
+                    )
+                if stored_manifest is None:
+                    raise ValueError("manifest builder did not return manifest_json")
+                if geometry_hash is None or artifact_sha256 is None:
+                    raise ValueError("geometry_hash and artifact_sha256 are required")
+
+                with self._lock, self._transaction() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO exports (
+                          export_id, bundle_id, design_id, sequence, parent_export_id,
+                          edit_version, design_hash, geometry_hash, artifact_sha256,
+                          manifest_json, snapshot_text, idempotency_key, created_at,
+                          bundle_path
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            reservation["export_id"],
+                            reservation["bundle_id"],
+                            reservation["design_id"],
+                            reservation["sequence"],
+                            reservation["parent_export_id"],
+                            reservation["edit_version"],
+                            reservation["design_hash"],
+                            geometry_hash,
+                            artifact_sha256,
+                            stored_manifest,
+                            reservation["snapshot_text"],
+                            idempotency_key,
+                            reservation["created_at"],
+                            bundle_path,
+                        ),
+                    )
+                    conn.execute(
+                        "DELETE FROM export_reservations WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    )
+                    row = conn.execute(
+                        "SELECT * FROM exports WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    ).fetchone()
+            except BaseException:
+                with self._lock, self._transaction() as conn:
+                    conn.execute(
+                        "UPDATE export_reservations SET state = 'retryable' "
+                        "WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    )
+                raise
         return self._row(row) or {}
+
+    def _export_build_lock(self, design_id: str) -> threading.Lock:
+        database = (
+            f"memory:{id(self)}"
+            if str(self.db_path) == ":memory:"
+            else str(self.db_path.absolute())
+        )
+        key = (database, design_id)
+        with _EXPORT_BUILD_LOCKS_GUARD:
+            return _EXPORT_BUILD_LOCKS.setdefault(key, threading.Lock())
 
     def get_onshape_link(
         self, design_id: str, account_id: str | None = None

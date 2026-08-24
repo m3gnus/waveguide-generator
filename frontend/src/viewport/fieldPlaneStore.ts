@@ -8,7 +8,7 @@ import {
   type FieldPlaneResponseId,
   type FieldPlaneSpec,
 } from '../api/fieldPlane';
-import { fetchJobResults, type JobResults } from '../api/results';
+import { fetchJobResults, type ResultData } from '../api/results';
 import { viewerPreferences, type ViewerPreferences } from '../viewerprefs/viewerPreferences';
 import type { FrameScene } from './frameScene';
 import {
@@ -82,7 +82,7 @@ interface RememberedPlane {
 
 interface FieldPlaneStoreDependencies {
   fetchPlane?: typeof fetchFieldPlane;
-  fetchResults?: (jobId: string) => Promise<JobResults>;
+  fetchResults?: (jobId: string) => Promise<ResultData>;
   cacheCapacity?: number;
   preferences?: {
     getSnapshot: () => ViewerPreferences;

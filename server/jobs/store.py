@@ -18,6 +18,7 @@ import sqlite3
 import threading
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
+from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.paths import data_paths
 from server.solver.field_traces_store import (
     ArtifactMissing,
@@ -106,6 +107,12 @@ METADATA_MERGE_POLICIES: Mapping[str, MetadataMergeStrategy] = {
     "exported_files": _ordered_string_set_union,
     "auto_export_formats": _shallow_dict_merge,
 }
+
+
+class SubmissionConflictError(RuntimeError):
+    """A submission key was replayed with a different normalized request."""
+
+
 logger = logging.getLogger(__name__)
 _SAFE_LOG_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _SCHEMA_STATEMENTS = (
@@ -174,6 +181,12 @@ _SCHEMA_STATEMENTS = (
       run_number INTEGER PRIMARY KEY AUTOINCREMENT,
       job_id TEXT NOT NULL UNIQUE,
       parent_job_id TEXT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS job_submissions (
+      submission_key TEXT PRIMARY KEY,
+      request_sha256 TEXT NOT NULL,
+      job_id TEXT NOT NULL UNIQUE,
+      FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
     )""",
     # The UNIQUE constraint above creates SQLite's lookup index for every
     # simulation_jobs.id -> job_identity.job_id join; another index would only
@@ -301,53 +314,122 @@ class JobStore:
         """
 
         with self._lock, self._transaction() as conn:
-            conn.execute(
-                """
-                INSERT INTO simulation_jobs (
-                  id, status, created_at, updated_at, queued_at,
-                  started_at, completed_at, progress, stage, stage_message,
-                  error_message, cancellation_requested, config_json,
-                  config_summary_json, has_results, has_mesh_artifact, mesh_stats_json, label,
-                  script_snapshot_json, task_metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job["id"],
-                    job["status"],
-                    job["created_at"],
-                    job["updated_at"],
-                    job["queued_at"],
-                    job.get("started_at"),
-                    job.get("completed_at"),
-                    float(job.get("progress", 0.0)),
-                    job.get("stage"),
-                    job.get("stage_message"),
-                    job.get("error_message"),
-                    1 if job.get("cancellation_requested") else 0,
-                    json.dumps(job["config_json"]),
-                    json.dumps(job["config_summary_json"]),
-                    1 if job.get("has_results") else 0,
-                    1 if job.get("has_mesh_artifact") else 0,
-                    json.dumps(job["mesh_stats"]) if job.get("mesh_stats") is not None else None,
-                    job.get("label"),
-                    json.dumps(job.get("script_snapshot"))
-                    if job.get("script_snapshot") is not None
-                    else None,
-                    json.dumps(job.get("task_metadata") or {}),
-                ),
+            return self._insert_job(
+                conn,
+                job,
+                initial_event=initial_event,
+                mesh_artifact=mesh_artifact,
+            )
+
+    def resolve_submission(self, submission_key: str, request_sha256: str) -> str | None:
+        """Return the original job for an identical submission-key replay."""
+
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """SELECT job_id, request_sha256 FROM job_submissions
+                   WHERE submission_key = ?""",
+                (submission_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        if str(row["request_sha256"]) != request_sha256:
+            raise SubmissionConflictError(
+                f"Submission key {submission_key!r} was already used for a different request"
+            )
+        return str(row["job_id"])
+
+    def create_job_idempotent(
+        self,
+        job: Mapping[str, Any],
+        *,
+        submission_key: str,
+        request_sha256: str,
+        initial_event: tuple[str, Mapping[str, Any]] | None = None,
+        mesh_artifact: str | None = None,
+    ) -> tuple[str, bool, dict[str, Any] | None]:
+        """Atomically claim a unique submission key and create its job."""
+
+        with self._lock, self._transaction() as conn:
+            existing = conn.execute(
+                """SELECT job_id, request_sha256 FROM job_submissions
+                   WHERE submission_key = ?""",
+                (submission_key,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["request_sha256"]) != request_sha256:
+                    raise SubmissionConflictError(
+                        f"Submission key {submission_key!r} was already used for a different request"
+                    )
+                return str(existing["job_id"]), False, None
+
+            event = self._insert_job(
+                conn,
+                job,
+                initial_event=initial_event,
+                mesh_artifact=mesh_artifact,
             )
             conn.execute(
-                "INSERT INTO job_identity (job_id, parent_job_id) VALUES (?, ?)",
-                (job["id"], job.get("parent_job_id")),
+                """INSERT INTO job_submissions (submission_key, request_sha256, job_id)
+                   VALUES (?, ?, ?)""",
+                (submission_key, request_sha256, job["id"]),
             )
-            if mesh_artifact is not None:
-                conn.execute(
-                    "INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)",
-                    (job["id"], mesh_artifact),
-                )
-            if initial_event is None:
-                return None
-            return self._append_event(conn, job["id"], *initial_event)
+            return str(job["id"]), True, event
+
+    def _insert_job(
+        self,
+        conn: sqlite3.Connection,
+        job: Mapping[str, Any],
+        *,
+        initial_event: tuple[str, Mapping[str, Any]] | None,
+        mesh_artifact: str | None,
+    ) -> dict[str, Any] | None:
+        conn.execute(
+            """
+            INSERT INTO simulation_jobs (
+              id, status, created_at, updated_at, queued_at,
+              started_at, completed_at, progress, stage, stage_message,
+              error_message, cancellation_requested, config_json,
+              config_summary_json, has_results, has_mesh_artifact, mesh_stats_json, label,
+              script_snapshot_json, task_metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job["id"],
+                job["status"],
+                job["created_at"],
+                job["updated_at"],
+                job["queued_at"],
+                job.get("started_at"),
+                job.get("completed_at"),
+                float(job.get("progress", 0.0)),
+                job.get("stage"),
+                job.get("stage_message"),
+                job.get("error_message"),
+                1 if job.get("cancellation_requested") else 0,
+                json.dumps(job["config_json"]),
+                json.dumps(job["config_summary_json"]),
+                1 if job.get("has_results") else 0,
+                1 if job.get("has_mesh_artifact") else 0,
+                json.dumps(job["mesh_stats"]) if job.get("mesh_stats") is not None else None,
+                job.get("label"),
+                json.dumps(job.get("script_snapshot"))
+                if job.get("script_snapshot") is not None
+                else None,
+                json.dumps(job.get("task_metadata") or {}),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO job_identity (job_id, parent_job_id) VALUES (?, ?)",
+            (job["id"], job.get("parent_job_id")),
+        )
+        if mesh_artifact is not None:
+            conn.execute(
+                "INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)",
+                (job["id"], mesh_artifact),
+            )
+        if initial_event is None:
+            return None
+        return self._append_event(conn, str(job["id"]), *initial_event)
 
     def update_job(self, job_id: str, **fields: Any) -> bool:
         """Update allowed job columns, matching v1 ``server/db.py:137-161``."""
@@ -792,6 +874,11 @@ class JobStore:
         This preserves the v1 ordering at ``server/services/simulation_runner.py:540-567``
         while making a completed row with missing results impossible.
         """
+
+        # Validate the final contract once before any terminal row or result
+        # mutation. The original mapping is still serialized unchanged so GET
+        # can continue returning the exact stored bytes without reparsing.
+        RESULT_ENVELOPE_ADAPTER.validate_python(results)
 
         with self._lock, self._transaction() as conn:
             values = {**fields, "has_results": True, "updated_at": _now_iso()}
