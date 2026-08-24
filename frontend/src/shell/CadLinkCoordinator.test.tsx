@@ -1373,7 +1373,6 @@ describe('CadLinkCoordinator', () => {
       cad.applyIngest(ingestRecord, cad.beginIngestIntent());
       cad.setSourceChannel('source-hf', 'custom-hf');
       cad.setChannelMotion('custom-hf', 'axial');
-      cad.setChannelDriverEnabled('custom-hf', true);
       cad.setChannelDriverField('custom-hf', 'sd_cm2', 54);
       cad.setCombineEnabled(true);
       cad.setCombineCrossover('custom-hf→custom-mf', 1_200);
@@ -1524,7 +1523,6 @@ describe('CadLinkCoordinator', () => {
     expect(shown).toBe(true);
     expect(state.driveChannels).toEqual(job.cad_setup?.drive_channels?.map(({ driver: _driver, ...channel }) => channel));
     expect(state.channelDrivers['drive-hf']).toEqual({
-      enabled: true,
       fields: {
         sd_cm2: 82, bl_t_m: 11.4, re_ohm: 5.8, le_mh: 0.4,
         mmd_g: 18.5, cms_m_per_n: 0.00042, rms_kg_per_s: 1.2,

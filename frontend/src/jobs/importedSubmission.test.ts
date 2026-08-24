@@ -3,7 +3,7 @@ import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { expandLegacy, toWire, withDelayMode } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { buildImportedSubmission, importedSubmissionBlocker, importedSubmissionNotices, widenPolarToDerivation } from './importedSubmission';
+import { buildImportedSubmission, importedSubmissionBlocker, importedSubmissionNotices, undrivenChannels, widenPolarToDerivation } from './importedSubmission';
 
 const bundle = {
   name: 'three-way.wgreturn', bundlePath: 'wgreturn/three-way.wgreturn', modifiedAt: '2026-08-13T12:00:00Z', readable: true,
@@ -43,7 +43,6 @@ describe('imported solve submission wire', () => {
       combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [1_250], false, true),
       channelDrivers: {
         'drive-hf': {
-          enabled: true,
           fields: { sd_cm2: 80, bl_t_m: 7.2, re_ohm: 5.8, le_mh: 0.4, mmd_g: 12, cms_m_per_n: 0.0003 },
           preset: null,
         },
@@ -83,7 +82,6 @@ describe('imported solve submission wire', () => {
       driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
       channelDrivers: {
         'drive-hf': {
-          enabled: true,
           fields: { bl_t_m: 11.9, count: 2 },
           preset: {
             id: 'Acme::HD-1::8',
@@ -143,7 +141,7 @@ describe('an unfinished driver is refused, not dropped', () => {
     // A catalogue row can name a compression driver while carrying none of
     // its T/S: Re and Bl arrive, Sd and the mass do not. That used to submit
     // the channel unit-driven and the run came back with no power or current.
-    ready({ 'drive-hf': { enabled: true, fields: { re_ohm: 5.4, bl_t_m: 17.5 }, preset: null } });
+    ready({ 'drive-hf': { fields: { re_ohm: 5.4, bl_t_m: 17.5 }, preset: null } });
 
     const blocker = importedSubmissionBlocker();
     expect(blocker).toContain('drive-hf');
@@ -152,16 +150,31 @@ describe('an unfinished driver is refused, not dropped', () => {
     expect(blocker).toContain('one of Cms/Vas/Fs');
     expect(buildImportedSubmission(useCadReturnStore.getState())
       .geometry.drive_channels.find((channel) => channel.id === 'drive-hf')?.driver).toBeUndefined();
+
+    // The same refusal when the incompleteness arrived by picking a library
+    // row rather than typing: the pick alone makes the channel driven, and a
+    // catalogue CD row carries Re/Le/Bl but neither Sd nor a mass.
+    ready({
+      'drive-hf': {
+        fields: {},
+        preset: {
+          id: 'Acme::CD::8', label: 'Acme CD', source: 'database', kind: 'cd',
+          z_ohm: 8, xo_min_hz: null, base: { re_ohm: 5.4, bl_t_m: 17.5, le_mh: 0.1 },
+        },
+      },
+    });
+    expect(importedSubmissionBlocker()).toContain('drive-hf');
+    expect(importedSubmissionBlocker()).toContain('Sd');
   });
 
   it('accepts a complete driver, and a channel that asked for none', () => {
     ready({
       'drive-hf': {
-        enabled: true,
         fields: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620 },
         preset: null,
       },
-      'drive-mf': { enabled: false, fields: {}, preset: null },
+      // Nothing entered is nothing asked for: an empty form is not a driver.
+      'drive-mf': { fields: {}, preset: null },
     });
 
     expect(importedSubmissionBlocker()).toBeNull();
@@ -192,8 +205,8 @@ describe('an undriven channel is announced, not refused', () => {
     // sheet, the compression channel has no driver because its sheet carries
     // no T/S at all.
     ready({
-      'drive-lf': { enabled: true, fields: COMPLETE, preset: null },
-      'drive-mf': { enabled: true, fields: COMPLETE, preset: null },
+      'drive-lf': { fields: COMPLETE, preset: null },
+      'drive-mf': { fields: COMPLETE, preset: null },
     });
 
     expect(importedSubmissionBlocker()).toBeNull();
@@ -205,8 +218,8 @@ describe('an undriven channel is announced, not refused', () => {
 
   it('spells out what a mixed combined output means', () => {
     ready({
-      'drive-lf': { enabled: true, fields: COMPLETE, preset: null },
-      'drive-mf': { enabled: true, fields: COMPLETE, preset: null },
+      'drive-lf': { fields: COMPLETE, preset: null },
+      'drive-mf': { fields: COMPLETE, preset: null },
     }, true);
 
     const notices = importedSubmissionNotices();
@@ -225,18 +238,22 @@ describe('an undriven channel is announced, not refused', () => {
     // combineLevelMatchDefault), so the drivers' own levels stand and there is
     // nothing to reconcile or announce.
     ready({
-      'drive-lf': { enabled: true, fields: COMPLETE, preset: null },
-      'drive-mf': { enabled: true, fields: COMPLETE, preset: null },
-      'drive-hf': { enabled: true, fields: COMPLETE, preset: null },
+      'drive-lf': { fields: COMPLETE, preset: null },
+      'drive-mf': { fields: COMPLETE, preset: null },
+      'drive-hf': { fields: COMPLETE, preset: null },
     }, true);
     expect(importedSubmissionNotices()).toEqual([]);
   });
 
   it('is a notice, not a second chance to be incomplete', () => {
-    // An enabled-but-unfinished driver is still a refusal: the user asked for
+    // A present-but-unfinished driver is still a refusal: the user asked for
     // a driver there, and "it solved unit-driven instead" is not the answer.
-    ready({ 'drive-hf': { enabled: true, fields: { re_ohm: 5.4 }, preset: null } });
+    ready({ 'drive-hf': { fields: { re_ohm: 5.4 }, preset: null } });
     expect(importedSubmissionBlocker()).toContain('drive-hf still needs');
+    // And exactly because it is refused, it must not also be announced as a
+    // channel that "solves unit-driven" -- the two statements contradict.
+    expect(undrivenChannels(useCadReturnStore.getState())).toEqual(['drive-mf', 'drive-lf']);
+    expect(importedSubmissionNotices()).toEqual([]);
   });
 });
 

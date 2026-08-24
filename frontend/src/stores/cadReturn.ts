@@ -78,13 +78,12 @@ export interface DriverBaseUpdate {
 }
 
 export interface ChannelDriverForm {
-  enabled: boolean;
   /** Overrides on top of `preset.base`; the whole driver when there is none. */
   fields: Partial<Record<DriverFieldKey, number>>;
   preset: DriverPreset | null;
 }
 
-const EMPTY_DRIVER_FORM: ChannelDriverForm = { enabled: false, fields: {}, preset: null };
+const EMPTY_DRIVER_FORM: ChannelDriverForm = { fields: {}, preset: null };
 
 /**
  * The channel id the coupled passive-cardioid solve writes its derived output
@@ -216,7 +215,6 @@ interface CadReturnState {
    * recombine left off. A spec naming channels this return has not got is
    * ignored: a stale run must not seed the rail with foreign ids. */
   setCombineSpecFromResult: (spec: CrossoverSpec) => void;
-  setChannelDriverEnabled: (channelId: string, enabled: boolean) => void;
   setChannelDriverField: (channelId: string, field: DriverFieldKey, value: number | null) => void;
   /** Pick a driver, or clear the picked one back to hand entry.
    *
@@ -455,11 +453,17 @@ function parseChannelDrivers(value: unknown): Record<string, ChannelDriverForm> 
   if (!isObject(value)) return null;
   const drivers: Record<string, ChannelDriverForm> = {};
   for (const [channelId, item] of Object.entries(value)) {
-    if (!channelId || !isObject(item) || typeof item.enabled !== 'boolean') return null;
+    if (!channelId || !isObject(item)) return null;
+    // Migration: forms stored before "present = driven" carried an `enabled`
+    // flag. Its value is deliberately ignored — presence of a preset or T/S
+    // fields is what drives a channel now, so a stored driver that was
+    // switched off comes back driven. A present flag still has to be a
+    // boolean, same strictness as every other field here.
+    if (item.enabled !== undefined && typeof item.enabled !== 'boolean') return null;
     const fields = parseDriverFields(item.fields);
     const preset = parseDriverPreset(item.preset);
     if (!fields || preset === undefined) return null;
-    drivers[channelId] = { enabled: item.enabled, fields, preset };
+    drivers[channelId] = { fields, preset };
   }
   return drivers;
 }
@@ -719,7 +723,6 @@ function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
     channelDrivers: Object.fromEntries(Object.entries(state.channelDrivers).map(([channelId, form]) => [
       channelId,
       {
-        enabled: form.enabled,
         fields: { ...form.fields },
         preset: form.preset ? { ...form.preset, base: { ...form.preset.base } } : null,
       },
@@ -1150,16 +1153,9 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     });
     saveSolveProfile(get());
   },
-  setChannelDriverEnabled: (channelId, enabled) => {
-    set((state) => {
-      const current = state.channelDrivers[channelId] ?? EMPTY_DRIVER_FORM;
-      return { channelDrivers: { ...state.channelDrivers, [channelId]: { ...current, enabled } } };
-    });
-    saveSolveProfile(get());
-  },
   setChannelDriverField: (channelId, field, value) => {
     set((state) => {
-      const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM, enabled: true };
+      const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM };
       const fields = { ...current.fields };
       // An override equal to the base value is not an edit; storing it would
       // outline an untouched field and count it in the header.
@@ -1171,7 +1167,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   },
   setChannelDriverPreset: (channelId, preset, keepOverrides = false) => {
     set((state) => {
-      const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM, enabled: true };
+      const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM };
       const kept = keepOverrides ? { ...current.fields } : retainedInstallationFields(current.fields);
       return {
         channelDrivers: {
@@ -1310,6 +1306,22 @@ export function driverMissingGroups(form: ChannelDriverForm | undefined): Driver
 }
 
 /**
+ * Whether this channel has asked for a driver at all.
+ *
+ * There is no switch any more: picking a driver, or typing any of its own T/S
+ * numbers, is what makes a channel voltage-driven, and clearing the driver is
+ * what reverts it to the unit-acceleration basis. WG's installation inputs
+ * (count, rear volume) deliberately do not count — they describe the channel,
+ * not a driver, and they survive a Clear on purpose, so counting them would
+ * make a cleared channel impossible to return to unit-driven.
+ */
+export function channelDriverPresent(form: ChannelDriverForm | undefined): form is ChannelDriverForm {
+  if (!form) return false;
+  return form.preset !== null
+    || Object.keys(form.fields).some((key) => !DRIVER_INSTALLATION_KEYS.includes(key as DriverFieldKey));
+}
+
+/**
  * The wire driver spec for one channel, or undefined while incomplete.
  *
  * Exactly one mass reaches the server, because a spec carrying both is a
@@ -1320,7 +1332,7 @@ export function driverMissingGroups(form: ChannelDriverForm | undefined): Driver
 export function channelDriverWire(
   form: ChannelDriverForm | undefined,
 ): Record<string, number | string> | undefined {
-  if (!form?.enabled) return undefined;
+  if (!channelDriverPresent(form)) return undefined;
   const values = driverValues(form);
   if (driverMissingGroups(form).length) return undefined;
   const mass: DriverFieldKey = values.mms_g !== undefined ? 'mms_g' : 'mmd_g';
@@ -1368,7 +1380,7 @@ export function incompleteDriverChannels(
 ): Array<{ channelId: string; missing: string }> {
   return state.driveChannels.flatMap((channel) => {
     const form = state.channelDrivers[channel.id];
-    if (!channelAcceptsDriver(channel) || !form?.enabled) return [];
+    if (!channelAcceptsDriver(channel) || !channelDriverPresent(form)) return [];
     if (channelDriverWire(form) !== undefined) return [];
     return [{ channelId: channel.id, missing: driverShortfallText(form) }];
   });

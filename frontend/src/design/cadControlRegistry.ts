@@ -81,17 +81,9 @@ export const CAD_CONTROLS = {
     // server refusals and the CAD roles call this.
     ['drive channel', 'drive channels', 'source assignment', 'channel', 'motion', 'driver', 'Thiele-Small', 'T/S'],
   ),
-  channelAssignment: control(
-    'cad.drive-channel.assignment', 'Drive channel', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
-    ['source assignment', 'channel id'], 'ingested-return', 'cad.drive-channels',
-  ),
   channelMotion: control(
     'cad.drive-channel.motion', 'Motion', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
     ['normal motion', 'axial motion', 'velocity'], 'ingested-return', 'cad.drive-channels',
-  ),
-  driverToggle: control(
-    'cad.driver.enabled', 'Driver T/S', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
-    ['Thiele-Small', 'voltage driven', 'driver model'], 'ingested-return', 'cad.drive-channels',
   ),
   driverSearch: control(
     'cad.driver.search', 'Find driver', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',

@@ -8,6 +8,7 @@ import {
 } from '../api/drivers';
 import {
   DRIVER_INSTALLATION_KEYS,
+  channelDriverPresent,
   driverEditedKeys,
   driverBaseFromSpec,
   driverShortfallText,
@@ -153,7 +154,9 @@ export function DriverFields({ channel, form, onField }: {
         onChange={(event) => onField(driverKey, event.target.value === '' ? null : Number(event.target.value))}
       />
     </label>)}
-    {missing && <p className="cad-driver-hint">Required: {missing}. The channel solves as a unit-drive basis until they are set.</p>}
+    {missing && <p className="cad-driver-hint">Required: {missing}. {channelDriverPresent(form)
+      ? 'The solve is refused while a started driver is missing them.'
+      : 'With nothing entered the channel solves as a unit-drive basis.'}</p>}
   </div>;
 }
 
