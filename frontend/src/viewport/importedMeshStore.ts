@@ -1,21 +1,25 @@
 import type { ImportedMeshScene } from './importedMesh';
 
 type Listener = () => void;
-export type ImportedMeshShowing = 'parametric' | 'cad' | 'file';
+export type ImportedMeshShowing = 'parametric' | 'cad' | 'file' | 'solver';
 export type ImportedMeshSlot = Exclude<ImportedMeshShowing, 'parametric'>;
 
 export interface ImportedMeshState {
   cad: ImportedMeshScene | null;
   file: ImportedMeshScene | null;
+  solver: ImportedMeshScene | null;
   showing: ImportedMeshShowing;
 }
 
-/** Viewport alternatives live outside React so CAD Link and file import can
- * retain their independent artifacts while useSyncExternalStore observes one
- * cached snapshot. The generation stays private: intent changes that do not
- * change the snapshot must still make an in-flight load stale. */
+const EMPTY_STATE: ImportedMeshState = { cad: null, file: null, solver: null, showing: 'parametric' };
+
+/** Viewport alternatives live outside React so CAD Link, file import and the
+ * solver-mesh view can retain their independent artifacts while
+ * useSyncExternalStore observes one cached snapshot. The generation stays
+ * private: intent changes that do not change the snapshot must still make an
+ * in-flight load stale. */
 class ImportedMeshStore {
-  private value: ImportedMeshState = { cad: null, file: null, showing: 'parametric' };
+  private value: ImportedMeshState = EMPTY_STATE;
   private generation = 0;
   private listeners = new Set<Listener>();
 
@@ -46,6 +50,13 @@ class ImportedMeshStore {
     return this.setSlot('file', scene, generation);
   }
 
+  /** Publish a freshly built solver-mesh scene. Unlike the other slots this
+   * one refreshes in place, so it must never steal the viewport: it only
+   * activates when the solver view is what the user is already looking at. */
+  setSolver(scene: ImportedMeshScene, generation = this.beginIntent(), activate = true): boolean {
+    return this.setSlot('solver', scene, generation, activate);
+  }
+
   showParametric(): void {
     const generation = this.beginIntent();
     this.show('parametric', generation);
@@ -59,16 +70,26 @@ class ImportedMeshStore {
     this.show('file', generation);
   }
 
+  showSolver(generation = this.beginIntent()): void {
+    this.show('solver', generation);
+  }
+
   clear(slot: ImportedMeshSlot | 'all' = 'all'): void {
     this.beginIntent();
     const cad = slot === 'cad' || slot === 'all' ? null : this.value.cad;
     const file = slot === 'file' || slot === 'all' ? null : this.value.file;
-    const showing = this.value.showing !== 'parametric' && (
-      (this.value.showing === 'cad' && cad === null)
-      || (this.value.showing === 'file' && file === null)
-    ) ? 'parametric' : this.value.showing;
-    if (cad === this.value.cad && file === this.value.file && showing === this.value.showing) return;
-    this.publish({ cad, file, showing });
+    const solver = slot === 'solver' || slot === 'all' ? null : this.value.solver;
+    const cleared = { cad, file, solver };
+    const showing = this.value.showing !== 'parametric' && cleared[this.value.showing] === null
+      ? 'parametric'
+      : this.value.showing;
+    if (
+      cad === this.value.cad
+      && file === this.value.file
+      && solver === this.value.solver
+      && showing === this.value.showing
+    ) return;
+    this.publish({ cad, file, solver, showing });
   }
 
   private setSlot(slot: ImportedMeshSlot, scene: ImportedMeshScene, generation: number, activate = true): boolean {
@@ -81,9 +102,12 @@ class ImportedMeshStore {
 
   private show(showing: ImportedMeshShowing, generation: number): void {
     if (!this.isCurrentGeneration(generation) || showing === this.value.showing) return;
-    // Empty alternatives are a no-op. This keeps `showing` truthful while the
-    // generation advance above still rejects a load started for older intent.
-    if (showing !== 'parametric' && this.value[showing] === null) return;
+    // An empty solver slot may still be selected: the solver view builds its
+    // scene on demand after activation. The other alternatives are loaded
+    // before they are offered, so an empty one stays a no-op and `showing`
+    // stays truthful, while the generation advance above still rejects a load
+    // started for older intent.
+    if (showing !== 'parametric' && showing !== 'solver' && this.value[showing] === null) return;
     this.publish({ ...this.value, showing });
   }
 
