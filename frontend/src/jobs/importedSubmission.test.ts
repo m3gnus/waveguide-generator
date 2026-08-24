@@ -221,6 +221,9 @@ describe('an undriven channel is announced, not refused', () => {
     ready({});
     expect(importedSubmissionNotices()).toEqual([]);
 
+    // Fully driven: level matching defaults off for exactly this case (see
+    // combineLevelMatchDefault), so the drivers' own levels stand and there is
+    // nothing to reconcile or announce.
     ready({
       'drive-lf': { enabled: true, fields: COMPLETE, preset: null },
       'drive-mf': { enabled: true, fields: COMPLETE, preset: null },
