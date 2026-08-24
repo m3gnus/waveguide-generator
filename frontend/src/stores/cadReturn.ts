@@ -299,6 +299,19 @@ function bundleIdentity(bundle: CadReturnBundle): string {
  * identical bundle reappears. */
 export const LISTING_GONE_REASON = 'The ingested return no longer appears in the workspace listing.';
 
+/** Whether this bundle is one the workspace listing can speak about.
+ *
+ * A bundle recalled from an archived run is rebuilt from that run's ingest
+ * record and carries no workspace path: the return folder may hold it, may
+ * hold a newer revision of it, or may have aged it out, and none of those is
+ * evidence about the archived run. Reconciling one against the listing would
+ * report it missing on the first poll after every recall -- 2.5 s -- and latch
+ * the recalled run out of being solved again.
+ */
+function fromWorkspaceListing(bundle: CadReturnBundle): boolean {
+  return bundle.bundlePath !== '';
+}
+
 function bundleChangeReason(previous: CadReturnBundle, current: CadReturnBundle | null): string | null {
   if (!current) return LISTING_GONE_REASON;
   if (bundleIdentity(previous) === bundleIdentity(current)) return null;
@@ -870,6 +883,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   },
   refreshSelectedBundle: (selectedBundle) => {
     const previous = get().selectedBundle;
+    // Nothing the return folder holds revises a recalled archived run.
+    if (previous && !fromWorkspaceListing(previous)) return;
     // A listing revision can replace the geometry under the same path. Advance
     // intent even before any ingest record exists, or an older request could
     // later attach itself to the revised evidence as though it described it.
