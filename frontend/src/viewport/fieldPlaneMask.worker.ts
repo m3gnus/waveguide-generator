@@ -50,11 +50,11 @@ scope.onmessage = (event) => {
         jobId: request.jobId,
         geometrySha256: request.geometrySha256,
         symmetryPlane: request.symmetryPlane,
-        nx: request.plane.nx,
-        ny: request.plane.ny,
+        nx: mask.nx,
+        ny: mask.ny,
         watertight: mesh.watertight,
         snappedVertexCount: mesh.snappedVertexCount,
-        mask: mask.buffer as ArrayBuffer,
+        mask: mask.data.buffer as ArrayBuffer,
       };
       scope.postMessage(result, [result.mask]);
     })
