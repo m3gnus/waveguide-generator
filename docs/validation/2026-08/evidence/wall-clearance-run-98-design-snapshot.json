@@ -1,0 +1,293 @@
+{
+  "version": 1,
+  "design": {
+    "formula": "R-OSSE",
+    "scale": {
+      "value": 1.0,
+      "raw": "1"
+    },
+    "throat_ext_angle": {
+      "value": 5.25,
+      "raw": "5.25"
+    },
+    "throat_ext_length": {
+      "value": 12.0,
+      "raw": "12"
+    },
+    "slot_length": {
+      "value": 0.0,
+      "raw": "0"
+    },
+    "length_mode": "profile",
+    "coverage_mode": "auto",
+    "morph": {
+      "target_shape": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "target_exponent": null,
+      "target_width": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "target_height": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "corner_radius": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "rate": {
+        "value": 3.0,
+        "raw": "3"
+      },
+      "fixed_part": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "allow_shrinkage": {
+        "value": 0.0,
+        "raw": "0"
+      }
+    },
+    "mesh": {
+      "angular_segments": {
+        "value": 40.0,
+        "raw": "40"
+      },
+      "corner_segments": {
+        "value": 4.0,
+        "raw": "4"
+      },
+      "throat_segments": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "length_segments": {
+        "value": 20.0,
+        "raw": "20"
+      },
+      "throat_resolution": {
+        "value": 7.0,
+        "raw": "7"
+      },
+      "mouth_resolution": {
+        "value": 15.0,
+        "raw": "15"
+      },
+      "throat_slice_density": {
+        "value": 0.5,
+        "raw": "0.5"
+      },
+      "sampling_mode": "uniform",
+      "z_map_points": "",
+      "vertical_offset": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "quadrants": {
+        "value": 1234.0,
+        "raw": "1234"
+      },
+      "wall_thickness": {
+        "value": 5.0,
+        "raw": "5"
+      },
+      "rear_resolution": {
+        "value": 40.0,
+        "raw": "40"
+      },
+      "aperture_resolution_scale": {
+        "value": 1.5,
+        "raw": "1.5"
+      },
+      "max_triangles": {
+        "value": 50000.0,
+        "raw": "50000"
+      },
+      "allow_large_mesh": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "max_edge": null
+    },
+    "enclosure": {
+      "depth": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "edge_radius": {
+        "value": 18.0,
+        "raw": "18"
+      },
+      "edge_type": {
+        "value": 1.0,
+        "raw": "1"
+      },
+      "space_l": {
+        "value": 25.0,
+        "raw": "25"
+      },
+      "space_t": {
+        "value": 25.0,
+        "raw": "25"
+      },
+      "space_r": {
+        "value": 25.0,
+        "raw": "25"
+      },
+      "space_b": {
+        "value": 25.0,
+        "raw": "25"
+      },
+      "front_resolution": {
+        "value": 25.0,
+        "raw": "25"
+      },
+      "back_resolution": {
+        "value": 40.0,
+        "raw": "40"
+      }
+    },
+    "source": {
+      "shape": {
+        "value": 2.0,
+        "raw": "2"
+      },
+      "radius": {
+        "value": -1.0,
+        "raw": "-1"
+      },
+      "curvature": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "velocity": {
+        "value": 1.0,
+        "raw": "1"
+      },
+      "contours": "",
+      "velocity_convention": "normal"
+    },
+    "simulation": {
+      "f1": {
+        "value": 80.0,
+        "raw": "80"
+      },
+      "f2": {
+        "value": 16000.0,
+        "raw": "16000"
+      },
+      "num_frequencies": {
+        "value": 60.0,
+        "raw": "60"
+      },
+      "sim_type": "freestanding",
+      "solver_mode": null
+    },
+    "output": {
+      "stl": {
+        "value": 0.0,
+        "raw": "0"
+      },
+      "msh": {
+        "value": 0.0,
+        "raw": "0"
+      }
+    },
+    "extra_keys": {},
+    "extra_blocks": {
+      "Report": {
+        "items": {
+          "Title": "\"Untitled4\""
+        },
+        "lines": [],
+        "comments": [],
+        "entries": [
+          "Title = \"Untitled4\""
+        ]
+      },
+      "ABEC.Polars:SPL_H": {
+        "items": {
+          "MapAngleRange": "0,90,19",
+          "NormAngle": "0",
+          "Distance": "5"
+        },
+        "lines": [],
+        "comments": [],
+        "entries": [
+          "MapAngleRange = 0,90,19",
+          "NormAngle = 0",
+          "Distance = 5"
+        ]
+      },
+      "WG.Solve": {
+        "items": {
+          "Engine": "bempp",
+          "Symmetry": "auto",
+          "MeshValidation": "warn",
+          "Verbose": "0",
+          "SweepPoints": "range",
+          "SweepSpacing": "log",
+          "ObservationOrigin": "mouth",
+          "SphericalSampling": "0",
+          "FieldPlane": "0"
+        },
+        "lines": [],
+        "comments": [],
+        "entries": [
+          "Engine = bempp",
+          "Symmetry = auto",
+          "MeshValidation = warn",
+          "Verbose = 0",
+          "SweepPoints = range",
+          "SweepSpacing = log",
+          "ObservationOrigin = mouth",
+          "SphericalSampling = 0",
+          "FieldPlane = 0"
+        ]
+      }
+    },
+    "R": {
+      "value": 600.0,
+      "raw": "600"
+    },
+    "a": {
+      "value": 37.0,
+      "raw": "37"
+    },
+    "a0": {
+      "value": 5.25,
+      "raw": "5.25"
+    },
+    "b": {
+      "value": 0.3,
+      "raw": "0.3"
+    },
+    "k": {
+      "value": 0.65,
+      "raw": "0.65"
+    },
+    "m": {
+      "value": 0.8,
+      "raw": "0.8"
+    },
+    "q": {
+      "value": 4.0,
+      "raw": "4"
+    },
+    "r": {
+      "value": 0.3,
+      "raw": "0.3"
+    },
+    "r0": {
+      "value": 19.5,
+      "raw": "19.5"
+    },
+    "tmax": {
+      "value": 1.0,
+      "raw": "1"
+    }
+  }
+}
