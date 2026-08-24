@@ -141,7 +141,6 @@ export const PASSIVE_CARDIOID_DEFAULTS: PassiveCardioidForm = {
 interface CadReturnState {
   selectedBundle: CadReturnBundle | null;
   ingestRecord: CadReturnIngestRecord | null;
-  acknowledgedFindingIds: string[];
   sourceSizesMm: Record<string, number>;
   rigidSizeMm: number;
   transitionMm: number;
@@ -179,16 +178,13 @@ interface CadReturnState {
   selectBundle: (bundle: CadReturnBundle | null) => void;
   /** Select a newly arrived return. When it correlates with the current
    * selection — same source inventory by id, role, and required flag — the
-   * user's mesh sizes, channel mapping, drivers, combine, and sweep survive;
-   * finding acknowledgements are reconciled after the new ingest identifies
-   * which evidence is still present. `initial` means there was no current or
-   * saved setup, while `reset` means an existing setup fell back to defaults. */
+   * user's mesh sizes, channel mapping, drivers, combine, and sweep survive.
+   * `initial` means there was no current or saved setup, while `reset` means
+   * an existing setup fell back to defaults. */
   selectArrivedBundle: (bundle: CadReturnBundle) => 'initial' | 'carried' | 'reset';
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
   markIngestStale: (reason: string) => void;
   applyIngest: (record: CadReturnIngestRecord, generation: number) => boolean;
-  acknowledge: (findingId: string, value: boolean) => void;
-  acknowledgeAllBlocking: () => void;
   setSourceSize: (sourceId: string, value: number) => void;
   setRigidSize: (value: number) => void;
   setTransition: (value: number) => void;
@@ -229,7 +225,6 @@ interface CadReturnState {
 }
 
 const solveProfileStorage = namespaceStorage('cadSolveProfiles');
-const acknowledgedFindingStorage = namespaceStorage('cadAcknowledgedFindings');
 const SOLVE_PROFILE_STORAGE_VERSION = 3;
 /**
  * Version 1 stored the combined output as a plain boolean whose `false` was
@@ -246,10 +241,7 @@ const LEGACY_SOLVE_PROFILE_VERSION = 1;
  */
 const LEGACY_COMBINE_FIELD_VERSIONS = new Set([1, 2]);
 const SUPPORTED_SOLVE_PROFILE_VERSIONS = new Set([1, 2, 3]);
-const ACKNOWLEDGED_FINDING_STORAGE_VERSION = 1;
 const MAX_SOLVE_PROFILES = 20;
-const MAX_ACKNOWLEDGED_FINDING_SETS = 20;
-const MAX_FINDING_IDS_PER_SET = 1_000;
 
 type PersistedSolveSettings = Pick<CadReturnState,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds' | 'driveChannels'
@@ -269,14 +261,6 @@ interface StoredSolveProfile {
   lineageId: string;
   inventory: SourceInventoryEntry[];
   settings: PersistedSolveSettings;
-}
-
-interface StoredAcknowledgedFindingSet {
-  key: string;
-  identity: Pick<DesignIdentity, 'designId' | 'lineageId'> | null;
-  documentName: string | null;
-  inventory: SourceInventoryEntry[];
-  findingIds: string[];
 }
 
 let selectedSolveProfileKey: string | null = null;
@@ -572,10 +556,6 @@ function solveProfileKey(identity: Pick<DesignIdentity, 'designId' | 'lineageId'
   return JSON.stringify([identity.designId, identity.lineageId, sourceInventorySignature(inventory)]);
 }
 
-function unlinkedAcknowledgementKey(documentName: string, inventory: SourceInventoryCarrier): string {
-  return JSON.stringify([documentName, sourceInventorySignature(inventory)]);
-}
-
 function dropStoredSolveProfiles(): void {
   try { solveProfileStorage.removeItem('cadSolveProfiles'); } catch { /* persistence is best effort */ }
 }
@@ -710,135 +690,6 @@ function restoreSolveProfile(bundle: CadReturnBundle): PersistedSolveSettings | 
   return profile.settings;
 }
 
-function dropStoredAcknowledgedFindings(): void {
-  try { acknowledgedFindingStorage.removeItem('cadAcknowledgedFindings'); } catch { /* persistence is best effort */ }
-}
-
-function readStoredAcknowledgedFindings(): StoredAcknowledgedFindingSet[] {
-  try {
-    const raw = acknowledgedFindingStorage.getItem('cadAcknowledgedFindings');
-    if (raw === null) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!isObject(parsed) || parsed.version !== ACKNOWLEDGED_FINDING_STORAGE_VERSION
-      || !Array.isArray(parsed.entries) || parsed.entries.length > MAX_ACKNOWLEDGED_FINDING_SETS) {
-      dropStoredAcknowledgedFindings();
-      return [];
-    }
-    const entries: StoredAcknowledgedFindingSet[] = [];
-    for (const value of parsed.entries) {
-      if (!isObject(value) || typeof value.key !== 'string'
-        || (value.documentName !== null && typeof value.documentName !== 'string')) {
-        dropStoredAcknowledgedFindings();
-        return [];
-      }
-      const inventory = parseInventory(value.inventory);
-      const findingIds = stringArray(value.findingIds);
-      if (!inventory || !findingIds || findingIds.length > MAX_FINDING_IDS_PER_SET
-        || findingIds.some((id) => !id)
-        || new Set(findingIds).size !== findingIds.length) {
-        dropStoredAcknowledgedFindings();
-        return [];
-      }
-      let identity: Pick<DesignIdentity, 'designId' | 'lineageId'> | null = null;
-      let expectedKey: string;
-      if (value.identity === null) {
-        if (typeof value.documentName !== 'string' || !value.documentName.trim()) {
-          dropStoredAcknowledgedFindings();
-          return [];
-        }
-        expectedKey = unlinkedAcknowledgementKey(value.documentName, { readable: true, sources: inventory });
-      } else {
-        if (!isObject(value.identity)
-          || typeof value.identity.designId !== 'string' || !value.identity.designId
-          || typeof value.identity.lineageId !== 'string' || !value.identity.lineageId
-          || value.documentName !== null) {
-          dropStoredAcknowledgedFindings();
-          return [];
-        }
-        identity = { designId: value.identity.designId, lineageId: value.identity.lineageId };
-        expectedKey = solveProfileKey(identity, { readable: true, sources: inventory });
-      }
-      if (value.key !== expectedKey) {
-        dropStoredAcknowledgedFindings();
-        return [];
-      }
-      entries.push({ key: value.key, identity, documentName: value.documentName, inventory, findingIds });
-    }
-    if (new Set(entries.map(({ key }) => key)).size !== entries.length) {
-      dropStoredAcknowledgedFindings();
-      return [];
-    }
-    return entries;
-  } catch {
-    dropStoredAcknowledgedFindings();
-    return [];
-  }
-}
-
-function writeStoredAcknowledgedFindings(entries: StoredAcknowledgedFindingSet[]): void {
-  try {
-    acknowledgedFindingStorage.setItem('cadAcknowledgedFindings', JSON.stringify({
-      version: ACKNOWLEDGED_FINDING_STORAGE_VERSION,
-      entries: entries.slice(0, MAX_ACKNOWLEDGED_FINDING_SETS),
-    }));
-  } catch { /* persistence is best effort */ }
-}
-
-function currentAcknowledgedFindingSet(
-  bundle: CadReturnBundle,
-  record: CadReturnIngestRecord,
-): Omit<StoredAcknowledgedFindingSet, 'findingIds'> | null {
-  const inventory = bundle.sources.map(({ id, role, required }) => ({ id, role, required }));
-  if (record.freshness.verdict === 'unlinked') {
-    const documentName = bundle.documentName?.trim();
-    if (!documentName) return null;
-    return {
-      key: unlinkedAcknowledgementKey(documentName, bundle),
-      identity: null,
-      documentName,
-      inventory,
-    };
-  }
-  const identity = useDocumentStore.getState().identity;
-  if (!identity?.designId || !identity.lineageId) return null;
-  const storedIdentity = { designId: identity.designId, lineageId: identity.lineageId };
-  return {
-    key: solveProfileKey(storedIdentity, bundle),
-    identity: storedIdentity,
-    documentName: null,
-    inventory,
-  };
-}
-
-function restoreAcknowledgedFindings(bundle: CadReturnBundle, record: CadReturnIngestRecord): string[] {
-  const current = currentAcknowledgedFindingSet(bundle, record);
-  if (!current) return [];
-  const entries = readStoredAcknowledgedFindings();
-  const index = entries.findIndex((entry) => entry.key === current.key);
-  if (index < 0) return [];
-  const entry = entries[index];
-  if (!compatibleSourceInventory({ readable: true, sources: entry.inventory }, bundle)) return [];
-  if (index > 0) writeStoredAcknowledgedFindings([entry, ...entries.filter((_, entryIndex) => entryIndex !== index)]);
-  const presentFindingIds = new Set(record.findings.map((finding) => finding.id));
-  return entry.findingIds.filter((findingId) => presentFindingIds.has(findingId));
-}
-
-function saveAcknowledgedFindings(state: CadReturnState): void {
-  const bundle = state.selectedBundle;
-  const record = state.ingestRecord;
-  if (!bundle?.readable || !record) return;
-  const current = currentAcknowledgedFindingSet(bundle, record);
-  if (!current) return;
-  const presentFindingIds = new Set(record.findings.map((finding) => finding.id));
-  const entry: StoredAcknowledgedFindingSet = {
-    ...current,
-    findingIds: state.acknowledgedFindingIds.filter((findingId) => presentFindingIds.has(findingId)),
-  };
-  writeStoredAcknowledgedFindings([
-    entry,
-    ...readStoredAcknowledgedFindings().filter((item) => item.key !== entry.key),
-  ]);
-}
 
 // This token deliberately lives outside Zustand state: advancing intent must
 // reject a late network result without manufacturing a render by itself. Every
@@ -932,7 +783,6 @@ function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: stri
 export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   selectedBundle: null,
   ingestRecord: null,
-  acknowledgedFindingIds: [],
   ...initialFromBundle(null),
   areaDriftSourceIds: [],
   exteriorOnly: false,
@@ -967,7 +817,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       frequencyCount: 24,
       ...(restored ?? {}),
       ingestRecord: null,
-      acknowledgedFindingIds: [],
       areaDriftOverrides: [],
       areaDriftSourceIds: [],
       needsIngest: true,
@@ -997,7 +846,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         frequencyCount: 24,
         ...(restored ?? {}),
         ingestRecord: null,
-        acknowledgedFindingIds: [],
         areaDriftOverrides: [],
         areaDriftSourceIds: [],
         needsIngest: true,
@@ -1010,10 +858,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     supersedeIngestIntent();
     set((state) => ({
       ...reconcileListing(state, bundle),
-      // The new geometry needs its own ingest before stable finding ids can be
-      // reconciled with the evidence the user has already acknowledged.
+      // The new geometry needs its own ingest before its evidence is current.
       ingestRecord: null,
-      acknowledgedFindingIds: [],
       areaDriftOverrides: [],
       areaDriftSourceIds: [],
       needsIngest: true,
@@ -1065,16 +911,12 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     if (generation !== ingestIntentGeneration) return false;
     const skipped = new Set(ingestRecord.skipped_source_ids);
     const current = get();
-    const acknowledgedFindingIds = current.selectedBundle
-      ? restoreAcknowledgedFindings(current.selectedBundle, ingestRecord)
-      : [];
     const channels = current.driveChannels.flatMap((channel) => {
       const source_ids = channel.source_ids.filter((id) => !skipped.has(id));
       return source_ids.length ? [{ ...channel, source_ids }] : [];
     });
     set({
       ingestRecord,
-      acknowledgedFindingIds,
       sourceSizesMm: { ...ingestRecord.mesh_sizes.source_size_mm },
       rigidSizeMm: ingestRecord.mesh_sizes.rigid_size_mm,
       transitionMm: ingestRecord.mesh_sizes.transition_mm,
@@ -1090,20 +932,6 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     });
     saveSolveProfile(get());
     return true;
-  },
-  acknowledge: (findingId, value) => {
-    set((state) => ({
-      acknowledgedFindingIds: value
-        ? [...new Set([...state.acknowledgedFindingIds, findingId])]
-        : state.acknowledgedFindingIds.filter((id) => id !== findingId),
-    }));
-    saveAcknowledgedFindings(get());
-  },
-  acknowledgeAllBlocking: () => {
-    set((state) => ({
-      acknowledgedFindingIds: state.ingestRecord?.findings.filter((finding) => finding.blocking).map((finding) => finding.id) ?? [],
-    }));
-    saveAcknowledgedFindings(get());
   },
   setSourceSize: (sourceId, value) => {
     supersedeIngestIntent();
@@ -1687,13 +1515,12 @@ export function blockingFindings(record: CadReturnIngestRecord | null): CadRetur
   return record?.findings.filter((finding) => finding.blocking) ?? [];
 }
 
-export function unacknowledgedBlocking(state: Pick<CadReturnState, 'ingestRecord' | 'acknowledgedFindingIds'>): string[] {
-  const acknowledged = new Set(state.acknowledgedFindingIds);
-  return blockingFindings(state.ingestRecord).map((finding) => finding.id).filter((id) => !acknowledged.has(id));
-}
-
-export function acknowledgedFindingWire(record: CadReturnIngestRecord, findingIds: string[]): string[] {
-  return findingIds.map((id) => `${record.report_sha256}:${id}`);
+/** The wire form of every blocking finding on this record. Blocking findings
+ * no longer gate the solve in the UI; submitting them all keeps the server's
+ * acknowledgement contract satisfied and records, in the run's provenance,
+ * exactly which findings were on screen when the user chose to solve. */
+export function blockingFindingWire(record: CadReturnIngestRecord): string[] {
+  return blockingFindings(record).map((finding) => `${record.report_sha256}:${finding.id}`);
 }
 
 export function resetCadReturnStore(): void {
@@ -1702,7 +1529,6 @@ export function resetCadReturnStore(): void {
   useCadReturnStore.setState({
     selectedBundle: null,
     ingestRecord: null,
-    acknowledgedFindingIds: [],
     ...initialFromBundle(null),
     areaDriftSourceIds: [],
     exteriorOnly: false,

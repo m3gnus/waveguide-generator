@@ -481,7 +481,7 @@ describe('CadLinkCoordinator', () => {
     // The readiness gate lives inside solveCurrentCadImport, so a blocked
     // chain is a refusal thrown from there — the same thing the real one does.
     const solveCurrentCadImport = vi.fn(async () => {
-      throw new Error('Acknowledge 1 blocking finding before solving.');
+      throw new Error('This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.');
     });
     vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
       ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
@@ -506,7 +506,7 @@ describe('CadLinkCoordinator', () => {
     });
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
     expect(outcome).toBe('blocked');
-    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('Acknowledge 1 blocking finding');
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('exterior-only Phase 2 solve');
 
     // With the gate satisfied the same chain reaches the solve.
     solveCurrentCadImport.mockImplementation(async () => 'submitted' as never);
@@ -753,10 +753,12 @@ describe('CadLinkCoordinator', () => {
 
   it('parks a gated Fusion command, consumes it on the next solve, and never replays it', async () => {
     vi.useFakeTimers();
+    // A blocking finding no longer gates the solve; the FEM exterior-only
+    // choice is a real gate a user has to make, so it is what parks here.
     const blocking: CadReturnIngestRecord = {
       ...ingestRecord,
       ingest_id: 'wgi_blocked',
-      findings: [{ id: 'finding-a', kind: 'freshness', blocking: true, verdict: 'design_changed' }],
+      evidence: { fem_air_volumes: [{ required: true }] },
     };
     const harness = solveCommandHarness({ ingests: [blocking] });
     await renderCoordinator();
@@ -770,7 +772,7 @@ describe('CadLinkCoordinator', () => {
     expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject({
       commandId: 'cmd-1',
       bundlePath: initialBundle.bundlePath,
-      blockers: ['Acknowledge 1 blocking finding before solving.'],
+      blockers: ['This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.'],
     });
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
 
@@ -778,9 +780,9 @@ describe('CadLinkCoordinator', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
     expect(harness.solveCurrentCadImport).toHaveBeenCalledOnce();
 
-    // Acknowledging and solving consumes the very same request, with its job.
+    // Making the gated choice and solving consumes the very same request.
     await act(async () => {
-      useCadReturnStore.getState().acknowledgeAllBlocking();
+      useCadReturnStore.getState().setExteriorOnly(true);
       await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand();
     });
     expect(harness.submitted).toEqual(['wgi_blocked']);
@@ -798,7 +800,7 @@ describe('CadLinkCoordinator', () => {
     vi.useFakeTimers();
     const blocking: CadReturnIngestRecord = {
       ...ingestRecord,
-      findings: [{ id: 'finding-a', kind: 'freshness', blocking: true }],
+      evidence: { fem_air_volumes: [{ required: true }] },
     };
     const harness = solveCommandHarness({ ingests: [blocking] });
     await renderCoordinator();
@@ -1347,7 +1349,6 @@ describe('CadLinkCoordinator', () => {
       cad.setChannelDriverField('custom-hf', 'sd_cm2', 54);
       cad.setCombineEnabled(true);
       cad.setCombineCrossover('custom-hf→custom-mf', 1_200);
-      cad.acknowledge('reviewed-finding', true);
       workspaceModeStore.setMode('cad');
     });
 
@@ -1357,7 +1358,6 @@ describe('CadLinkCoordinator', () => {
     const retainedChannels = useCadReturnStore.getState().driveChannels;
     const retainedDrivers = useCadReturnStore.getState().channelDrivers;
     const retainedCrossovers = useCadReturnStore.getState().combineSpec;
-    const retainedAcknowledgements = useCadReturnStore.getState().acknowledgedFindingIds;
 
     act(replace);
 
@@ -1368,7 +1368,6 @@ describe('CadLinkCoordinator', () => {
     expect(state.driveChannels).toBe(retainedChannels);
     expect(state.channelDrivers).toBe(retainedDrivers);
     expect(state.combineSpec).toBe(retainedCrossovers);
-    expect(state.acknowledgedFindingIds).toBe(retainedAcknowledgements);
     expect(state.needsIngest).toBe(true);
     expect(state.ingestStaleReason).toContain('design was replaced');
     expect(importedSubmissionBlocker()).toBe(state.ingestStaleReason);

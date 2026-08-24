@@ -26,7 +26,7 @@ import { useUnsavedChanges } from '../stores/unsavedChanges';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { Icon } from './icons';
 import { middleEllipsis } from './ResultsPanel';
-import { ProjectsFolderStrip } from './WorkspaceFolderControls';
+import { useWorkspaceFolder } from './WorkspaceFolderControls';
 
 export { groupRunsByModelState, newestReturnForProject } from '../api/cadProjects';
 
@@ -118,9 +118,11 @@ async function openCadOnlyProject(project: CadProject): Promise<string> {
   return projectName(project);
 }
 
-function ProjectSwitcher({ current, onOpened, onError }: {
+function ProjectSwitcher({ current, label, onOpened, onError }: {
   /** The current project's lineage: the one identity every project has. */
   current: string | null;
+  /** The trigger is the project name itself: what you would click to change it. */
+  label: string;
   onOpened: (name: string) => void;
   onError: (message: string) => void;
 }) {
@@ -170,12 +172,12 @@ function ProjectSwitcher({ current, onOpened, onError }: {
 
   return <div className="cad-project-switcher">
     <button
-      className="link-button"
+      className="cad-project-trigger"
       aria-expanded={open}
       aria-haspopup="menu"
-      title="Open a different CAD-linked project"
+      title="Switch to a different CAD-linked project"
       onClick={() => void toggle()}
-    >Switch{open ? ' ⌄' : ' ›'}</button>
+    ><span className="cad-project-name" title={label}>{label}</span><Icon name="caret"/></button>
     {open && <div role="menu" aria-label="CAD-linked projects" className="cad-project-menu">
       {projects === null && <div role="status" className="cad-detail">Loading…</div>}
       {projects?.length === 0 && <div role="status" className="cad-detail">No CAD-linked projects yet. Send a design to CAD to start one.</div>}
@@ -199,8 +201,52 @@ function ProjectSwitcher({ current, onOpened, onError }: {
 }
 
 /**
+ * The folder plumbing behind a compact ⋯ menu: the project archive and the
+ * shared workspace folder are one click away without occupying permanent
+ * panel height. The workspace folder is the same store as Settings, so a
+ * change made in either place names the same folder everywhere.
+ */
+function ProjectOverflowMenu({ project, onNotice, onError }: {
+  project: { lineageId: string } | null;
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const folder = useWorkspaceFolder();
+
+  const reveal = async () => {
+    if (!project) return;
+    setOpen(false);
+    try {
+      onNotice(`Opened ${await revealProjectFolder(project.lineageId)}`);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  return <div className="cad-project-overflow">
+    <button
+      className="cad-overflow-trigger"
+      aria-expanded={open}
+      aria-haspopup="menu"
+      aria-label="Project folders"
+      title="Project and workspace folders"
+      onClick={() => setOpen((value) => !value)}
+    >⋯</button>
+    {open && <div role="menu" aria-label="Project folders" className="cad-project-menu cad-overflow-menu">
+      {project && <button role="menuitem" title="Open this project's archive folder: every run's files, beside the captured Fusion documents." onClick={() => void reveal()}><Icon name="folder"/>Open project folder</button>}
+      <button role="menuitem" disabled={!folder.path || folder.busy !== null} title="Open the workspace folder every CAD project is archived under. The same folder as Settings → Workspace folder." onClick={() => { setOpen(false); void folder.open(); }}><Icon name="folder"/>Open workspace folder</button>
+      <button role="menuitem" disabled={folder.busy !== null} title="Choose a different workspace folder. Changes the same setting as Settings → Workspace folder." onClick={() => { setOpen(false); void folder.select(); }}>Change workspace folder…</button>
+      <div className="cad-overflow-path" title={folder.path ?? undefined}>{folder.path ?? (folder.loaded ? 'No workspace folder selected' : 'Loading…')}</div>
+      {folder.error && <div className="cad-projects-folder-error" role="status">{folder.error}</div>}
+    </div>}
+  </div>;
+}
+
+/**
  * Which project the CAD workspace is working on, and how to leave it.
  *
+ * One row: the name is the switcher, the ⋯ menu holds the folder plumbing.
  * There is no rename here on purpose. WG has exactly one design name, and in
  * CAD mode the Fusion document owns it -- renaming the document in Fusion is
  * what renames this. The archive folder is frozen separately so that renaming
@@ -213,38 +259,21 @@ export function CadProjectHeader() {
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
   const runs = runsForProject(snapshot.jobs, project?.lineageId ?? null);
 
-  const reveal = async () => {
-    if (!project) return;
-    setError(null);
-    try {
-      setNotice(`Opened ${await revealProjectFolder(project.lineageId)}`);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  };
-
-  if (!project) {
-    return <section className="cad-workflow cad-project">
-      <header className="cad-workflow-header no-step">
-        <div><h3>No CAD project open</h3><p>Send a design to CAD, or switch to one you already have.</p></div>
-        <ProjectSwitcher current={null} onOpened={(name) => setNotice(`Opened ${name}`)} onError={setError}/>
-      </header>
-      <ProjectsFolderStrip/>
-      {notice && <div className="cad-status-strip" role="status">{notice}</div>}
-      {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
-    </section>;
-  }
-
   return <section className="cad-workflow cad-project">
-    <header className="cad-workflow-header no-step">
-      <div>
-        <h3 className="cad-project-name" title={project.name}>{project.name}</h3>
-        <p>{runs.length ? `${pluralized(runs.length, 'run')} in this project` : 'No runs in this project yet'}</p>
+    <header className="cad-project-row">
+      <div className="cad-project-title">
+        <h3 className="cad-project-heading"><ProjectSwitcher
+          current={project?.lineageId ?? null}
+          label={project?.name ?? 'No CAD project open'}
+          onOpened={(name) => setNotice(`Opened ${name}`)}
+          onError={setError}
+        /></h3>
+        <p className="cad-project-meta">{project
+          ? (runs.length ? `${pluralized(runs.length, 'run')} in this project` : 'No runs in this project yet')
+          : 'Send a design to CAD, or switch to one you already have.'}</p>
       </div>
-      <ProjectSwitcher current={project.lineageId} onOpened={(name) => setNotice(`Opened ${name}`)} onError={setError}/>
+      <ProjectOverflowMenu project={project} onNotice={setNotice} onError={setError}/>
     </header>
-    <button className="cad-secondary-action" onClick={() => void reveal()}><Icon name="folder"/>Open project folder</button>
-    <ProjectsFolderStrip/>
     {notice && <div className="cad-status-strip" role="status">{notice}</div>}
     {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
   </section>;
@@ -291,10 +320,15 @@ function RunRow({ job, selected, current, onRemove }: {
   </article>;
 }
 
+/** How many runs the panel shows before asking. Enough to see the recent
+ * shape of the work; few enough that the card below stays one glance away. */
+const RUNS_PREVIEW_COUNT = 5;
+
 /**
  * This project's runs, newest first, split where the CAD geometry changed.
  *
- * Deliberately one flat list. The jobs rail answers "everything this machine
+ * Deliberately one flat list, capped at {@link RUNS_PREVIEW_COUNT} until the
+ * user asks for all of it. The jobs rail answers "everything this machine
  * solved"; this answers "this project, in order". A divider marks each point
  * where the model itself changed and offers the Fusion file for the runs above
  * it, which is the whole of "that older one was better -- give it back to me".
@@ -308,6 +342,7 @@ export function CadProjectHistory() {
   const [documents, setDocuments] = useState<CadProjectDocument[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const generation = useRef(0);
 
   // The list is a projection of `jobsSocket`'s own snapshot, and deleteJob
@@ -347,10 +382,25 @@ export function CadProjectHistory() {
   if (!lineageId) return null;
   const runs = runsForProject(snapshot.jobs, lineageId);
   const groups = groupRunsByModelState(runs, documents);
+  // The cap trims runs, never dividers: a partially shown group still names
+  // the model its visible runs were solved from and still offers its file.
+  const budget = showAll ? runs.length : RUNS_PREVIEW_COUNT;
+  const shownGroups: typeof groups = [];
+  let shownRuns = 0;
+  for (const group of groups) {
+    if (shownRuns >= budget) break;
+    const take = Math.min(group.runs.length, budget - shownRuns);
+    shownGroups.push(take === group.runs.length ? group : { ...group, runs: group.runs.slice(0, take) });
+    shownRuns += take;
+  }
 
   return <section className="cad-workflow cad-project-history">
-    <header className="cad-workflow-header no-step">
-      <div><h3>Runs in this project</h3><p>Newest first. A break marks where the CAD model changed.</p></div>
+    <header className="cad-project-runs-head">
+      <h3>Runs</h3>
+      <span
+        className="cad-detail cad-runs-count"
+        title="Newest first. A dashed break marks where the CAD model changed and offers the Fusion file those runs were solved from. Older runs are cleaned out of the database after 30 days unless they are rated; the archive folder keeps every run's files."
+      >{runs.length ? `${runs.length} · ` : ''}<Icon name="info"/></span>
     </header>
     {error && <div className="cad-alert cad-alert-notice" role="status">Could not read the archived Fusion files: {error}</div>}
     {removeError && <div className="cad-alert cad-alert-error" role="alert">{removeError}</div>}
@@ -359,7 +409,7 @@ export function CadProjectHistory() {
       <span>Bring geometry in from CAD and solve it. Every solve of this project is listed here with the model it came from.</span>
     </div>}
     {runs.length > 0 && <div className="cad-run-list" role="list" aria-label="Runs in this project">
-      {groups.map((group, index) => <div key={`${group.returnStateHash ?? 'none'}-${index}`} className="cad-run-group">
+      {shownGroups.map((group, index) => <div key={`${group.returnStateHash ?? 'none'}-${index}`} className="cad-run-group">
         {group.runs.map((job) => <RunRow
           key={job.id}
           job={job}
@@ -369,7 +419,10 @@ export function CadProjectHistory() {
         />)}
         <ModelDivider group={group} lineageId={lineageId}/>
       </div>)}
-      <p className="cad-detail cad-history-foot">Older runs are cleaned out of the database after 30 days unless they are rated. The archive folder keeps every run's files.</p>
+      {runs.length > RUNS_PREVIEW_COUNT && <button
+        className="link-button cad-runs-toggle"
+        onClick={() => setShowAll((value) => !value)}
+      >{showAll ? 'Show fewer runs' : `Show all ${runs.length} runs`}</button>}
     </div>}
   </section>;
 }

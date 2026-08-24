@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useWorkspaceFolderStore } from '../stores/workspaceFolder';
-import { Icon } from './icons';
 
 /**
  * The folder WG writes into, wherever it is shown.
@@ -11,7 +10,7 @@ import { Icon } from './icons';
  * case, a browser on a different machine from the server, where a picker on the
  * server's screen is no help at all.
  */
-function useWorkspaceFolder() {
+export function useWorkspaceFolder() {
   const store = useWorkspaceFolderStore();
   useEffect(() => { void store.load(); }, [store.load]);
   return store;
@@ -45,30 +44,5 @@ export function WorkspaceFolderControls({ note, manual = false, selectLabel = 'S
       <button disabled={!typed.trim() || busy !== null} onClick={() => void useTyped()}>Use this path</button>
     </details>}
     {error && <p className="workspace-settings-error" role="status">{error}</p>}
-  </div>;
-}
-
-/**
- * The same setting as Settings' "Workspace folder", small enough to sit under
- * a project without competing with it. Deliberately not a second copy of the
- * state: both read one store, so changing the folder in Settings retitles
- * this line immediately — and it carries the same name, because two names for
- * one folder read as two folders.
- */
-export function ProjectsFolderStrip() {
-  const { path, loaded, busy, error, open, select } = useWorkspaceFolder();
-  return <div className="cad-projects-folder" aria-busy={busy !== null}>
-    <div className="cad-projects-folder-line">
-      <span className="cad-detail" title="The same folder as Settings → Workspace folder. Every CAD project's archive lives in it, beside run exports.">Workspace folder</span>
-      <span className="cad-projects-folder-path" title={path ?? undefined}>{path ?? (loaded ? 'Unavailable' : 'Loading…')}</span>
-    </div>
-    <div className="cad-projects-folder-actions">
-      <button className="link-button" disabled={!path || busy !== null} onClick={() => void open()}><Icon name="folder"/>Open</button>
-      <button className="link-button" disabled={busy !== null} onClick={() => void select()}>Change…</button>
-    </div>
-    {/* Deliberately not the panel's alert channel: a folder that could not be
-        read says so quietly, and leaves the loud treatment to the round trip
-        this strip merely sits beneath. */}
-    {error && <p className="cad-projects-folder-error" role="status">{error}</p>}
   </div>;
 }

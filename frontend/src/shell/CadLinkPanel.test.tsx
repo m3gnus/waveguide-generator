@@ -140,18 +140,17 @@ describe('CadLinkPanel', () => {
     });
   };
 
-  it('runs listing → ingest → blocking acknowledgement without a duplicate local solve control', async () => {
+  it('lists a blocking finding for understanding without gating the solve', async () => {
     await renderAndSelect();
     await clickIngest();
-    expect(importedSubmissionBlocker()).toContain('Acknowledge 1 blocking finding');
-    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('1 finding needs review');
-    expect(host.querySelector('.cad-blocking-suffix')?.textContent).toContain('blocking');
-    const acknowledgement = host.querySelector<HTMLInputElement>('.cad-findings input[type="checkbox"]')!;
-    act(() => { acknowledgement.click(); });
+    // Blocking findings inform; they never gate. The wire still records them.
     expect(importedSubmissionBlocker()).toBeNull();
-    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('Ready to solve');
-    expect(host.querySelector('.cad-findings .section-head')?.getAttribute('aria-expanded')).toBe('false');
-    expect(host.querySelector('.cad-blocking-suffix')).toBeNull();
+    expect(host.querySelector('.cad-blocking-suffix')?.textContent).toContain('blocking');
+    expect(host.querySelector('.cad-checks input[type="checkbox"]')).toBeNull();
+    expect(host.querySelector('.cad-check-findings')?.textContent).toContain('freshness');
+    // A record that needs attention arrives with its checklist open.
+    expect(host.querySelector('.cad-checks .section-head')?.getAttribute('aria-expanded')).toBe('true');
+    expect(host.querySelector('.cad-checks .cad-state-chip')?.textContent).toContain('need attention');
     for (const moved of ['Mesh detail', 'Crossover', 'Rebuild mesh']) {
       expect(host.textContent).not.toContain(moved);
     }
@@ -170,24 +169,23 @@ describe('CadLinkPanel', () => {
     act(() => parkedSolveCommandStore.park({
       commandId: 'cmd-1',
       bundlePath: listing.items[0].bundlePath,
-      blockers: ['Acknowledge 1 blocking finding before solving.'],
+      blockers: ['a solve is already running'],
       parkedAt: '2026-08-18T12:00:00Z',
     }));
 
     const banner = host.querySelector('.cad-parked-command')!;
     expect(banner.textContent).toContain('Fusion asked for a solve');
-    expect(banner.textContent).toContain('Waiting on: Acknowledge 1 blocking finding before solving.');
+    expect(banner.textContent).toContain('Waiting on: a solve is already running');
     const buttons = [...banner.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.textContent);
-    expect(buttons).toEqual(['Dismiss', 'Acknowledge all 1 & solve']);
+    expect(buttons).toEqual(['Dismiss', 'Solve now']);
 
-    // Resuming clears the gate the request is waiting on before it solves.
+    // Resuming starts the very request Fusion parked.
     const solveCurrentCadImport = vi.fn(async () => 'submitted' as const);
     vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
       ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
     });
     const [dismiss, resume] = [...banner.querySelectorAll<HTMLButtonElement>('button')];
     await act(async () => { resume.click(); await Promise.resolve(); await Promise.resolve(); });
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['finding-a']);
     expect(importedSubmissionBlocker()).toBeNull();
     expect(solveCurrentCadImport).toHaveBeenCalledOnce();
 
@@ -197,7 +195,7 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector('.cad-parked-command')).toBeNull();
   });
 
-  it('runs Fusion command, blocker acknowledgement, and submission through both real coordinators', async () => {
+  it('runs a Fusion command straight through both real coordinators without parking on findings', async () => {
     vi.useFakeTimers();
     let command: Record<string, unknown> | null = null;
     const outcomes: Array<Record<string, unknown>> = [];
@@ -234,22 +232,14 @@ describe('CadLinkPanel', () => {
     };
     await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
 
-    const banner = host.querySelector('.cad-parked-command')!;
-    expect(banner.textContent).toContain('Fusion asked for a solve');
-    expect(importedSubmissionBlocker()).toContain('Acknowledge 1 blocking finding');
-    expect(mocks.submitImported).not.toHaveBeenCalled();
-
-    const resume = [...banner.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent?.includes('Acknowledge all'))!;
-    await act(async () => {
-      resume.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
+    // The record carries a blocking finding, and the solve still goes straight
+    // through: findings inform, the wire records them, nothing parks.
+    expect(host.querySelector('.cad-parked-command')).toBeNull();
+    expect(importedSubmissionBlocker()).toBeNull();
     expect(mocks.submitImported).toHaveBeenCalledOnce();
     expect(mocks.submitImported.mock.calls[0][0].geometry.ingest_id).toBe(record.ingest_id);
+    expect(mocks.submitImported.mock.calls[0][0].geometry.acknowledged_findings)
+      .toEqual([`${record.report_sha256}:finding-a`]);
     expect(outcomes).toEqual([{
       commandId: 'cmd-fusion-1', state: 'accepted', jobId: 'job-fusion-1', reason: null,
     }]);
@@ -451,7 +441,8 @@ describe('CadLinkPanel', () => {
 
   it('does not offer the Fusion workspace-folder return workflow under Onshape', async () => {
     await renderOnshape(onshapeStatus());
-    expect(host.textContent).toContain('No linked Onshape Part Studio');
+    expect(host.textContent).toContain('No CAD model yet');
+    expect(host.textContent).toContain('Send this design to Onshape');
     expect(host.querySelector('.cad-bundle-list')).toBeNull();
   });
 
@@ -514,8 +505,9 @@ describe('CadLinkPanel', () => {
       root.render(<CadLinkTestSurface/>);
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
+    // The in-sync link folds quiet; its bring action lives in the fold body.
     const button = [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((candidate) => candidate.textContent === 'Bring Onshape geometry into WG')!;
+      .find((candidate) => candidate.textContent === 'Bring geometry into WG')!;
     await act(async () => {
       button.click();
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -524,7 +516,7 @@ describe('CadLinkPanel', () => {
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
     expect(useCadReturnStore.getState().selectedBundle?.documentName).toBe('Tritonia');
     expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Returned and ingested Tritonia');
-    expect(host.querySelector('.cad-findings')?.textContent).toContain('freshness');
+    expect(host.querySelector('.cad-check-findings')?.textContent).toContain('freshness');
   });
 
   it('asks for confirmation before creating a world-readable document, then sends', async () => {
@@ -689,20 +681,24 @@ describe('CadLinkPanel', () => {
   it('selects the newest readable return when CAD Link first mounts', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(listing.items[0].bundlePath);
-    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('Ready to prepare');
+    expect(host.querySelector('.cad-model-name')?.textContent).toBe('Speaker');
     expect([...host.querySelectorAll<HTMLButtonElement>('button')]
       .some((button) => button.textContent === 'Prepare simulation')).toBe(true);
     expect(host.querySelector('.cad-history .section-head')?.getAttribute('aria-expanded')).toBe('false');
     expect(host.textContent).not.toContain('Mesh detail');
   });
 
-  it('points directly to the Simulation tab and names the hidden driver inputs', async () => {
+  it('points directly to the Simulation tab from the prepared model', async () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate');
-    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    await renderAndSelect();
+    await clickIngest();
 
-    const guide = host.querySelector('.cad-simulation-guide')!;
-    expect(guide.textContent).toContain('Drivers, crossover, sweep, directivity, solve options, and mesh detail');
-    act(() => guide.querySelector<HTMLButtonElement>('button')!.click());
+    const prepared = host.querySelector('.cad-prepared-line')!;
+    expect(prepared.textContent).toContain('Prepared for simulation');
+    const open = prepared.querySelector<HTMLButtonElement>('button')!;
+    // The hover tooltip names the inputs that moved to the Simulation tab.
+    expect(open.title).toContain('Drivers, crossover, sweep, directivity, solve options');
+    act(() => open.click());
     expect(activate).toHaveBeenCalledWith('simulation');
   });
 
@@ -717,9 +713,9 @@ describe('CadLinkPanel', () => {
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
-    act(() => host.querySelector<HTMLButtonElement>('.cad-return-summary button')!.click());
-    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('Preparing…');
-    expect(host.querySelector<HTMLButtonElement>('.cad-return-summary button')?.disabled).toBe(true);
+    act(() => host.querySelector<HTMLButtonElement>('.cad-model-card .cad-primary-action')!.click());
+    expect(host.querySelector('.cad-model-card .cad-primary-action')?.textContent).toContain('Preparing…');
+    expect(host.querySelector<HTMLButtonElement>('.cad-model-card .cad-primary-action')?.disabled).toBe(true);
     await act(async () => {
       resolveIngest(json(record));
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -756,12 +752,12 @@ describe('CadLinkPanel', () => {
       : json(historyListing)));
 
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    const summary = host.querySelector('.cad-return-summary')!;
-    expect(summary.querySelector('h4')?.textContent).toMatch(/^Return · \d{2}:\d{2}$/);
-    expect(summary.querySelector('time')?.textContent).toBe('2 min ago');
-    expect(summary.querySelector('time')?.title).toBeTruthy();
+    const identity = host.querySelector('.cad-model-identity')!;
+    expect(identity.querySelector('.cad-model-name')?.textContent).toMatch(/^Return · \d{2}:\d{2}$/);
+    expect(identity.querySelector('time')?.textContent).toBe('2 min ago');
+    expect(identity.querySelector('time')?.title).toBeTruthy();
     const disclosure = host.querySelector<HTMLButtonElement>('.cad-history .section-head')!;
-    expect(disclosure.textContent).toContain('History (2)');
+    expect(disclosure.textContent).toContain('Model versions (2)');
     expect(disclosure.getAttribute('aria-expanded')).toBe('false');
     expect(host.querySelector('.cad-bundle-list')).toBeNull();
 
@@ -799,8 +795,9 @@ describe('CadLinkPanel', () => {
 
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
-    expect(host.textContent).toContain('1 return hidden because it belongs to another CAD-linked project');
     openHistory();
+    expect(host.querySelector('.cad-history')?.textContent)
+      .toContain('1 return from other CAD-linked projects is not listed');
     const history = host.querySelector('.cad-bundle-list')!;
     expect(history.textContent).toContain('Current project');
     expect(history.textContent).not.toContain('Other project');
@@ -828,14 +825,14 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
 
-    const detailDrawers = [...host.querySelectorAll<HTMLElement>('.cad-details > .cad-drawer')];
-    expect(detailDrawers).toHaveLength(6);
-    expect(detailDrawers.map((drawer) => drawer.querySelector('button')?.getAttribute('aria-expanded')))
-      .toEqual(['false', 'false', 'false', 'false', 'false', 'false']);
-    expect(host.querySelector('.cad-findings .section-head')?.getAttribute('aria-expanded')).toBe('false');
+    // Six always-open drawers became one collapsed checklist line.
+    const checks = host.querySelector<HTMLElement>('.cad-checks')!;
+    expect(checks.querySelector('.section-head')?.getAttribute('aria-expanded')).toBe('false');
+    expect(checks.querySelector('.cad-state-chip')?.textContent).toBe('all passed');
+    expect(checks.querySelector('.section-head')?.textContent).toContain('Checks (6)');
     expect(host.querySelector('h2')?.textContent).toBe('CAD Link');
-    expect(host.querySelector('.cad-workflow-header h3')).toBeTruthy();
-    expect(host.querySelector('.cad-details h4')).toBeTruthy();
+    expect(host.querySelector('h3')).toBeTruthy();
+    expect(checks.querySelector('h4')).toBeTruthy();
   });
 
   it('auto-expands degraded scope and combines degradation with pending findings in the summary', async () => {
@@ -858,11 +855,15 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
 
-    expect(host.querySelector('.cad-return-summary')?.textContent)
-      .toContain('Degraded: 2 objects skipped · 1 finding needs review');
-    const scope = host.querySelector('.cad-scope')!;
-    expect(scope.querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
-    expect(scope.textContent).toContain('2 exported objects were skipped');
+    const checks = host.querySelector<HTMLElement>('.cad-checks')!;
+    expect(checks.querySelector('.section-head')?.getAttribute('aria-expanded')).toBe('true');
+    expect(checks.querySelector('.cad-state-chip')?.textContent).toContain('need attention');
+    const scope = [...checks.querySelectorAll<HTMLDetailsElement>('details.cad-check')]
+      .find((row) => row.textContent?.includes('Scope'))!;
+    expect(scope.open).toBe(true);
+    expect(scope.textContent).toContain('2 objects skipped — solve is degraded');
+    expect(scope.textContent).toContain('Skipped · Body A');
+    expect(scope.textContent).toContain('Skipped · Body B');
   });
 
   it('does not mislabel native STEP-coordinate diagnostics as millimetres', async () => {
@@ -893,9 +894,12 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).toContain('max residual 0.125 STEP units');
     expect(host.textContent).toContain('worst off-model 0.25 STEP units');
     expect(host.textContent).not.toContain('max residual 0.125 mm');
-    expect(host.querySelector('.cad-symmetry-context')?.textContent).toContain('CAD prepared as full domain');
-    expect(host.querySelector('.cad-symmetry-context')?.textContent).toContain('resolved independently from Parametric mode');
-    expect(host.querySelector('.cad-symmetry-context')?.textContent).toContain('keeps the larger safe domain');
+    const symmetry = [...host.querySelectorAll<HTMLDetailsElement>('details.cad-check')]
+      .find((row) => row.textContent?.includes('Symmetry'))!;
+    expect(symmetry.textContent).toContain('solving full domain');
+    expect(symmetry.textContent).toContain('Resolved independently from Parametric mode');
+    // The hover explanation carries the safe-domain rule.
+    expect(symmetry.querySelector('summary')?.title).toContain('keeps the larger safe domain');
   });
 
   it('routes neutral notices separately from errors', async () => {
@@ -908,15 +912,14 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector('.cad-solver-unavailable.cad-alert-notice[role="status"]')).toBeTruthy();
   });
 
-  it('shows the selected CAD program, settings link, and connection state without an outbound button', async () => {
+  it('shows the connection state with its settings link and the symmetric outbound action', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    // Scoped to the connection section: the project header is the panel's
-    // first workflow header now.
-    expect(host.querySelector('.cad-send .cad-workflow-header')?.textContent).toContain('Fusion 360 · Change');
-    expect(host.querySelector<HTMLButtonElement>('.cad-send .cad-workflow-header button')?.textContent).toContain('Change');
-    expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion 360 is closed');
-    // The Fusion outbound leg lives in the design menu and the Geometry rail.
-    expect(host.querySelector('.cad-primary-action')).toBeNull();
+    const card = host.querySelector('.cad-link-card')!;
+    expect(card.textContent).toContain('Fusion 360 is closed');
+    expect([...card.querySelectorAll<HTMLButtonElement>('button')]
+      .some((button) => button.textContent === 'Settings')).toBe(true);
+    // A closed Fusion offers its resolving action right on the card.
+    expect(card.querySelector('.cad-primary-action')?.textContent).toBe('Open in Fusion 360');
     expect(host.textContent).not.toContain('WG → CAD');
   });
 
@@ -925,19 +928,24 @@ describe('CadLinkPanel', () => {
       ? json(currentFusion)
       : json(listing)));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion 360 is open · Tritonia V');
-    expect(host.querySelector('.cad-connection')?.textContent).toContain('13 managed CAD parameters');
-    expect(host.querySelector('.cad-primary-action')).toBeNull();
+    const quiet = host.querySelector<HTMLDetailsElement>('.cad-link-quiet')!;
+    expect(quiet.open).toBe(false);
+    expect(quiet.querySelector('summary')?.textContent).toContain('Fusion 360 · in sync');
+    expect(quiet.querySelector('summary')?.textContent).toContain('Tritonia V');
+    // The full detail is one hover — or one click — away.
+    expect(quiet.querySelector('summary')?.title).toContain('13 managed CAD parameters');
+    expect(quiet.textContent).toContain('13 managed CAD parameters');
+    expect(host.querySelector('.cad-link-card .cad-primary-action')).toBeNull();
   });
 
-  it('explains a stale link in the connection card and leaves the update to the rail and menu', async () => {
+  it('explains a stale link in the connection card and offers the update in place', async () => {
     const stale = { ...currentFusion, state: 'stale' as const, currentFormula: 'R-OSSE', fusionFormula: 'osse', wgChangesAvailable: true };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status')
       ? json(stale)
       : json(listing)));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion has OSSE; WG is now R-OSSE');
-    expect(host.querySelector('.cad-primary-action')).toBeNull();
+    expect(host.querySelector('.cad-primary-action')?.textContent).toBe('Send WG changes to Fusion');
   });
 
   it('explains local Fusion parameter edits instead of claiming synchronization', async () => {
@@ -980,20 +988,19 @@ describe('CadLinkPanel', () => {
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
-    // The panel owns only the inbound direction; the outbound update lives in
-    // the rail and menu, whose sends park on the coordinator's conflict dialog.
-    expect(host.textContent).toContain('Bring changes into WG');
-    expect(host.textContent).toContain('Bring changes in & solve');
-    expect(host.textContent).not.toContain('Send WG changes to Fusion');
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
+    // Both directions live on the one card; sending still parks on the
+    // coordinator's conflict dialog because Fusion changed too.
+    expect(host.textContent).toContain('Bring Fusion changes in');
+    const send = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Send WG changes to Fusion')!;
+    await act(async () => { send.click(); await Promise.resolve(); });
     expect(host.textContent).toContain('Both WG and Fusion changed');
     expect(host.textContent).toContain('Continue: send WG changes');
   });
 
-  it('builds acknowledgement wires from the current record, filters skipped sizes, and emits range/list sweep shapes', () => {
+  it('records blocking findings on the wire, filters skipped sizes, and emits range/list sweep shapes', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
     useCadReturnStore.getState().applyIngest(record, useCadReturnStore.getState().beginIngestIntent());
-    useCadReturnStore.getState().acknowledge('finding-a', true);
     useCadReturnStore.setState({
       sourceSizesMm: { 'source-hf': 3.25, optional: 9 },
       skippedSourceIds: ['optional'],
@@ -1078,7 +1085,7 @@ describe('CadLinkPanel', () => {
     expect(polar.enabled_axes).toEqual(expect.arrayContaining(['vertical', 'diagonal']));
   });
 
-  it('size change → re-ingest produces the new report acknowledgement wire', async () => {
+  it('size change → re-ingest carries the new report on the finding wire', async () => {
     let ingestCount = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/returns')) return json(listing);
@@ -1106,7 +1113,6 @@ describe('CadLinkPanel', () => {
     await clickIngest();
     act(() => useCadReturnStore.getState().setSourceSize('source-hf', 2.5));
     await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().ingest(); });
-    act(() => host.querySelector<HTMLInputElement>('.cad-findings input[type="checkbox"]')!.click());
     const submission = buildImportedSubmission(useCadReturnStore.getState());
     expect(submission.geometry).toMatchObject({
       mesh: { source_size_mm: { 'source-hf': 2.5 } },
@@ -1131,7 +1137,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     act(() => useCadReturnStore.getState().setSourceSize('source-hf', 2.5));
-    const refresh = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Refresh')!;
+    const refresh = host.querySelector<HTMLButtonElement>('button[aria-label="Refresh CAD returns"]')!;
     await act(async () => { refresh.click(); await Promise.resolve(); await Promise.resolve(); });
 
     expect(host.textContent).toContain('source inventory or source sizing suggestions changed');
@@ -1252,7 +1258,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     expect(useCadReturnStore.getState().areaDriftSourceIds).toContain('source-hf');
-    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('Preparation failed');
+    expect(host.querySelector('.cad-model-card')?.textContent).toContain('Preparation failed');
     expect(host.querySelector('.cad-alert-error[role="alert"]')?.textContent).toContain('Role resolution refused');
     expect([...host.querySelectorAll<HTMLButtonElement>('button')]
       .some((button) => button.textContent === 'Prepare simulation')).toBe(true);

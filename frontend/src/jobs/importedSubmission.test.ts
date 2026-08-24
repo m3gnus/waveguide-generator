@@ -17,7 +17,8 @@ const bundle = {
 
 const record = {
   ingest_id: 'wgi_wire_fixture', manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', report_sha256: 'sha256:report',
-  findings: [], evidence: { fem_air_volumes: [] }, skipped_source_ids: ['source-lf'],
+  findings: [{ id: 'accepted-area-drift', kind: 'source-area-drift', blocking: true }],
+  evidence: { fem_air_volumes: [] }, skipped_source_ids: ['source-lf'],
   mesh_sizes: { rigid_size_mm: 5, transition_mm: 3, source_size_mm: { 'source-hf': 2, 'source-mf': 4 } },
   symmetry: { cut_planes: ['x0'], planes: {} }, polar_grid_derivation: {}, role_findings: [],
 } as unknown as CadReturnIngestRecord;
@@ -29,7 +30,6 @@ describe('imported solve submission wire', () => {
     useCadReturnStore.setState({
       selectedBundle: bundle,
       ingestRecord: record,
-      acknowledgedFindingIds: ['accepted-area-drift'],
       sourceSizesMm: { 'source-hf': 1.75, 'source-mf': 3.5, 'source-lf': 7 },
       rigidSizeMm: 4.5,
       transitionMm: 2.5,

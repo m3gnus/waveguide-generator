@@ -1,12 +1,9 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect } from 'react';
 import type { CadReturnBundle, CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
-import {
-  blockingFindings,
-  unacknowledgedBlocking,
-  useCadReturnStore,
-} from '../stores/cadReturn';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { parkedSolveCommandStore } from '../stores/solveCommand';
 import { recordCommittedAthPolars, useDesignStore } from '../stores/design';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
@@ -38,6 +35,7 @@ const FRESHNESS_COPY: Record<string, string> = {
   generator_changed: 'The same saved design would export differently with the current generator.',
   unknown: 'Freshness could not be established from the available evidence.',
   unlinked: 'Imported CAD model — not linked to a Waveguide Generator design. The assembly frame is solved as-is: radiation along +Z with the throat at the origin.',
+  mixed: 'The linked instances disagree about freshness; each instance carries its own verdict.',
 };
 
 // The workflow views moved beside the coordinator's unified send path; the
@@ -75,6 +73,21 @@ function bundleInventory(bundle: CadReturnBundle): string {
   return `${sources} · ${pluralized(bundle.instanceCount, 'linked instance')}`;
 }
 
+function formatCount(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return compactValue(value);
+  if (value < 1_000) return String(Math.round(value));
+  const thousands = value / 1_000;
+  return `${thousands >= 100 ? Math.round(thousands) : thousands.toFixed(1)} k`;
+}
+
+function formatDuration(seconds: unknown): string | null {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return null;
+  if (seconds < 60) return '<1 min';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `~${minutes} min`;
+  return `~${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
 interface CadDrawerProps {
   title: string;
   chip?: string;
@@ -84,8 +97,8 @@ interface CadDrawerProps {
   children: ReactNode;
 }
 
-/** CAD diagnostics use the same heading/button/chevron disclosure pattern as
- * the parameter rail, but keep their own compact card surface and state chip. */
+/** CAD sections use the same heading/button/chevron disclosure pattern as the
+ * parameter rail, but keep their own compact card surface and state chip. */
 function CadDrawer({ title, chip, defaultOpen = false, warning = false, className = '', children }: CadDrawerProps) {
   const [open, setOpen] = useState(defaultOpen);
   const bodyId = useId();
@@ -102,49 +115,94 @@ function CadDrawer({ title, chip, defaultOpen = false, warning = false, classNam
   </section>;
 }
 
-function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
+type CheckState = 'ok' | 'info' | 'warn';
+
+interface CheckDescriptor {
+  key: string;
+  name: string;
+  state: CheckState;
+  verdict: string;
+  /** Hover: what this check verifies, spelled out. */
+  title: string;
+  /** The full evidence, one chevron away. Absent when the verdict is whole. */
+  detail?: ReactNode;
+}
+
+const CHECK_GLYPH: Record<CheckState, string> = { ok: '✓', info: 'i', warn: '!' };
+
+function freshnessSummary(record: CadReturnIngestRecord): string {
+  if (record.freshness.verdict === 'unlinked') return 'unlinked';
+  const instances = record.freshness.instances;
+  if (instances.length === 0) return 'unknown';
+  if (instances.every((instance) => instance.verdict === 'current')) return 'current';
+  if (instances.every((instance) => instance.verdict === instances[0]?.verdict)) {
+    return instances[0].verdict.replaceAll('_', ' ');
+  }
+  return 'mixed';
+}
+
+/** One row per verification the ingest performed. The six drawers this list
+ * replaced each carried a chip that read "clean" on virtually every return;
+ * a check only asks for attention when it deviates, and holds its evidence
+ * behind its own chevron. */
+function recordChecks(record: CadReturnIngestRecord): CheckDescriptor[] {
+  const checks: CheckDescriptor[] = [];
+
+  // Scope
+  const scopeClean = record.scope.status === 'clean';
+  const included = record.scope.included ?? [];
+  const skipped = record.scope.skipped ?? [];
   const scopeFindings = record.findings.filter((finding) => finding.kind === 'scope-degradation');
+  checks.push({
+    key: 'scope',
+    name: 'Scope',
+    state: scopeClean ? 'ok' : 'warn',
+    verdict: scopeClean
+      ? included.length
+        ? `${pluralized(included.length, 'body', 'bodies')} exported, nothing skipped`
+        : 'the exported exterior was complete'
+      : `${pluralized(record.scope.degraded_skip_count, 'object')} skipped — solve is degraded`,
+    title: 'Everything the CAD document exported for the acoustic exterior, and anything it had to skip.',
+    detail: (included.length || skipped.length || scopeFindings.length) ? <>
+      {included.map((item, index) => <p key={`${String(item.object_id)}-${index}`} className="cad-detail"><b>Included · {String(item.name ?? item.object_id ?? 'Unnamed object')}</b>{item.body_kind ? ` — ${item.body_kind}` : ''}</p>)}
+      {skipped.map((item, index) => <p key={`${String(item.object_id)}-${index}`} className={`cad-detail scope-skip-${item.severity ?? 'info'}`}><b>Skipped · {String(item.name ?? item.object_id ?? item.kind ?? 'Unnamed object')}</b> — {String(item.reason ?? item.kind ?? 'not included')} · {String(item.severity ?? 'info')}</p>)}
+      {skipped.length === 0 && scopeFindings.map((finding) => <p key={finding.id} className="cad-detail"><b>{String(finding.object_id ?? 'Unnamed object')}</b> — {findingDetail(finding)}</p>)}
+    </> : undefined,
+  });
+
+  // Freshness
+  const freshness = freshnessSummary(record);
+  checks.push({
+    key: 'freshness',
+    name: 'Freshness',
+    state: freshness === 'current' ? 'ok' : freshness === 'unlinked' ? 'info' : 'warn',
+    verdict: freshness,
+    title: FRESHNESS_COPY[freshness.replaceAll(' ', '_')] ?? 'Whether this returned geometry still matches the linked WG design and generator.',
+    detail: record.freshness.verdict === 'unlinked'
+      ? <p className="cad-verdict neutral">{FRESHNESS_COPY.unlinked}</p>
+      : record.freshness.instances.length ? <>{record.freshness.instances.map((instance) => <div className={`cad-verdict ${instance.verdict === 'current' ? 'ok' : 'warn'}`} key={instance.instance_id}>
+          <b>{instance.instance_id}</b><span>{FRESHNESS_COPY[instance.verdict] ?? instance.verdict}</span>
+          {instance.error && <small>{instance.error}</small>}
+        </div>)}</> : undefined,
+  });
+
+  // Symmetry
   const planes = Object.entries(record.symmetry.planes ?? {});
-  const freshnessState = record.freshness.verdict === 'unlinked'
-    ? 'unlinked'
-    : record.freshness.instances.length === 0
-      ? 'unknown'
-      : record.freshness.instances.every((instance) => instance.verdict === 'current')
-        ? 'current'
-        : record.freshness.instances.every((instance) => instance.verdict === record.freshness.instances[0]?.verdict)
-          ? record.freshness.instances[0].verdict.replaceAll('_', ' ')
-          : 'mixed';
-  const rejectedPlanes = planes.filter(([, verdict]) => !verdict.accepted).length;
+  const rejectedPlanes = planes.filter(([, verdict]) => !verdict.accepted);
   const appliedCuts = record.symmetry.cut_planes ?? [];
-  const cadDomain = appliedCuts.length >= 2
-    ? 'quarter domain'
-    : appliedCuts.length === 1 ? 'half domain' : 'full domain';
-  const symmetryState = planes.length === 0
-    ? 'not recorded'
-    : rejectedPlanes === 0 ? 'accepted' : pluralized(rejectedPlanes, 'rejected plane');
-  const polarAxes = Object.values((record.polar_grid_derivation.axes ?? {}) as Record<string, { symmetry_accepted?: boolean }>);
-  const widenedAxes = polarAxes.filter((axis) => axis.symmetry_accepted === false).length;
-  const polarState = widenedAxes ? pluralized(widenedAxes, 'widened axis', 'widened axes') : 'accepted';
-  return <div className="cad-details">
-    <CadDrawer key={`${record.ingest_id}-scope`} title="Scope" chip={record.scope.status} defaultOpen={record.scope.status !== 'clean'} warning={record.scope.status !== 'clean'} className="cad-scope">
-      <p>{record.scope.status === 'clean'
-        ? 'The exported exterior scope was complete.'
-        : `${record.scope.degraded_skip_count} exported object${record.scope.degraded_skip_count === 1 ? ' was' : 's were'} skipped. The solve is degraded.`}</p>
-      {(record.scope.included ?? []).map((item, index) => <p key={`${String(item.object_id)}-${index}`} className="cad-detail"><b>Included · {String(item.name ?? item.object_id ?? 'Unnamed object')}</b>{item.body_kind ? ` — ${item.body_kind}` : ''}</p>)}
-      {(record.scope.skipped ?? []).map((item, index) => <p key={`${String(item.object_id)}-${index}`} className={`cad-detail scope-skip-${item.severity ?? 'info'}`}><b>Skipped · {String(item.name ?? item.object_id ?? item.kind ?? 'Unnamed object')}</b> — {String(item.reason ?? item.kind ?? 'not included')} · {String(item.severity ?? 'info')}</p>)}
-      {(record.scope.skipped?.length ?? 0) === 0 && scopeFindings.map((finding) => <p key={finding.id} className="cad-detail"><b>{String(finding.object_id ?? 'Unnamed object')}</b> — {findingDetail(finding)}</p>)}
-    </CadDrawer>
-    <CadDrawer key={`${record.ingest_id}-freshness`} title="Freshness" chip={freshnessState} defaultOpen={freshnessState !== 'current'} warning={freshnessState !== 'current' && freshnessState !== 'unlinked'}>
-      {record.freshness.verdict === 'unlinked'
-        ? <p className="cad-verdict neutral">{FRESHNESS_COPY.unlinked}</p>
-        : record.freshness.instances.map((instance) => <div className={`cad-verdict ${instance.verdict === 'current' ? 'ok' : 'warn'}`} key={instance.instance_id}>
-            <b>{instance.instance_id}</b><span>{FRESHNESS_COPY[instance.verdict] ?? instance.verdict}</span>
-            {instance.error && <small>{instance.error}</small>}
-          </div>)}
-    </CadDrawer>
-    <CadDrawer key={`${record.ingest_id}-symmetry`} title="Symmetry" chip={symmetryState} defaultOpen={symmetryState !== 'accepted'} warning={symmetryState !== 'accepted'}>
-      <p className="cad-detail cad-symmetry-context"><b>CAD prepared as {cadDomain}.</b> This is resolved independently from Parametric mode: WG re-tests the returned STEP after Fusion edits, bodies and source tags are applied. A rejected plane below means the CAD solve keeps the larger safe domain instead of inheriting the parametric reduction.</p>
-      {planes.length ? planes.map(([name, verdict]) => {
+  const cadDomain = appliedCuts.length >= 2 ? 'quarter domain' : appliedCuts.length === 1 ? 'half domain' : 'full domain';
+  checks.push({
+    key: 'symmetry',
+    name: 'Symmetry',
+    state: planes.length === 0 ? 'info' : rejectedPlanes.length === 0 ? 'ok' : 'warn',
+    verdict: planes.length === 0
+      ? 'no plane verdicts recorded'
+      : rejectedPlanes.length === 0
+        ? `accepted · solving ${cadDomain}`
+        : `${rejectedPlanes.map(([name]) => name).join(', ')} rejected · solving ${cadDomain}`,
+    title: 'Mirror planes WG re-tested on the returned STEP after CAD edits, bodies and source tags were applied. A rejected plane keeps the larger safe domain instead of inheriting the parametric reduction.',
+    detail: <>
+      {planes.map(([name, verdict]) => {
         const residual = verdict.max_residual_step_units ?? verdict.residuals;
         const offModel = verdict.worst_off_model_distance_step_units;
         const details = [
@@ -153,125 +211,176 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
           offModel === undefined ? null : `worst off-model ${compactValue(offModel)} STEP units`,
         ].filter(Boolean).join(' · ');
         return <div className="cad-row" key={name}><b>{name}</b><span className={verdict.accepted ? 'ok-text' : 'warn-text'}>{verdict.accepted ? 'accepted' : 'rejected'}</span><small>{details}</small></div>;
-      }) : <p>No coordinate plane verdicts were recorded.</p>}
+      })}
+      {planes.length === 0 && <p>No coordinate plane verdicts were recorded.</p>}
       {appliedCuts.length > 0 && <p className="cad-detail">Applied cuts: {appliedCuts.join(', ')}</p>}
-    </CadDrawer>
-    <CadDrawer key={`${record.ingest_id}-healing`} title="Healing performed" chip={record.healing.performed ? record.healing.mode ?? 'healed' : 'clean'} defaultOpen={Boolean(record.healing.performed)} warning={Boolean(record.healing.performed)}>
-      {record.healing.performed
-        ? <><p>The exported CAD did not mesh unchanged. OCC healing was used; re-export stitched or imprinted CAD when possible.</p>
-          {'original_mesh_error' in record.healing && <p className="cad-detail">{compactValue(record.healing.original_mesh_error)}</p>}</>
-        : <p>No CAD healing was needed.</p>}
-    </CadDrawer>
-    <CadDrawer key={`${record.ingest_id}-sizing`} title="Sizing & cost" chip="current" className="cad-pairs">
-      {Object.entries(record.sizing_estimate).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}
-    </CadDrawer>
-    <CadDrawer key={`${record.ingest_id}-polar`} title="Polar derivation" chip={polarState} defaultOpen={polarState !== 'accepted'} warning={polarState !== 'accepted'} className="cad-pairs">
-      {Object.entries(record.polar_grid_derivation).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}
-    </CadDrawer>
+      <p className="cad-detail">Resolved independently from Parametric mode: WG re-tests the returned geometry itself.</p>
+    </>,
+  });
+
+  // Healing
+  const healed = Boolean(record.healing.performed);
+  checks.push({
+    key: 'healing',
+    name: 'Healing',
+    state: healed ? 'warn' : 'ok',
+    verdict: healed ? `OCC healing was needed${record.healing.mode ? ` · ${record.healing.mode}` : ''}` : 'not needed',
+    title: 'Whether OCC healing had to repair the exported CAD before it could mesh. Healed geometry can differ subtly from the export.',
+    detail: healed ? <>
+      <p>The exported CAD did not mesh unchanged. OCC healing was used; re-export stitched or imprinted CAD when possible.</p>
+      {'original_mesh_error' in record.healing && <p className="cad-detail">{compactValue(record.healing.original_mesh_error)}</p>}
+    </> : undefined,
+  });
+
+  // Mesh sizing & cost
+  const sizing = record.sizing_estimate;
+  const feasibility = typeof sizing.feasibility === 'string' ? sizing.feasibility : null;
+  const meshParts = [
+    typeof sizing.n_triangles === 'number' ? `${formatCount(sizing.n_triangles)} triangles` : null,
+    typeof sizing.ram_gb === 'number' ? `~${(sizing.ram_gb as number).toFixed(1)} GB` : null,
+    formatDuration(sizing.solve_seconds_total),
+  ].filter(Boolean);
+  checks.push({
+    key: 'mesh',
+    name: 'Mesh',
+    state: feasibility === null || feasibility === 'ok' ? 'ok' : feasibility === 'caution' ? 'info' : 'warn',
+    verdict: meshParts.length
+      ? meshParts.join(' · ') + (feasibility && feasibility !== 'ok' ? ` · ${feasibility}` : '')
+      : 'no cost estimate recorded',
+    title: 'Estimated solver cost of the prepared mesh at the chosen sizing: symmetry-reduced triangle count, dense-matrix memory, and solve time for the sweep.',
+    detail: <>{Object.entries(sizing).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}</>,
+  });
+
+  // Polar grid
+  const polarAxes = Object.entries((record.polar_grid_derivation.axes ?? {}) as Record<string, { symmetry_accepted?: boolean; minimum_deg?: number; maximum_deg?: number; plane?: string }>);
+  const widened = polarAxes.filter(([, axis]) => axis.symmetry_accepted === false);
+  checks.push({
+    key: 'polar',
+    name: 'Polar grid',
+    state: widened.length ? 'info' : 'ok',
+    verdict: polarAxes.length === 0
+      ? 'no derivation recorded'
+      : widened.length
+        ? `${widened.map(([axis]) => axis).join(', ')} widened to a full sweep`
+        : 'follows the accepted symmetry',
+    title: 'The directivity sweep derived from the symmetry verdicts. An axis whose mirror plane was rejected is swept over the full circle; sweeps may widen but never narrow.',
+    detail: <>
+      {polarAxes.map(([axis, spec]) => <div className="cad-row" key={axis}><b>{axis}</b><span>{spec.minimum_deg ?? 0}° … {spec.maximum_deg ?? 180}°{spec.symmetry_accepted === false ? ' · widened' : ''}</span></div>)}
+      {Object.entries(record.polar_grid_derivation).filter(([key]) => key !== 'axes').map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}
+    </>,
+  });
+
+  return checks;
+}
+
+function CheckRow({ check }: { check: CheckDescriptor }) {
+  // A failing check arrives open; the user can still fold it away, so the
+  // element is stateful rather than a hard-wired `open` attribute React would
+  // keep re-asserting on every render.
+  const [open, setOpen] = useState(check.state === 'warn');
+  if (!check.detail) {
+    return <div className={`cad-check cad-check-${check.state}`} title={check.title}>
+      <span className="cad-check-glyph" aria-hidden="true">{CHECK_GLYPH[check.state]}</span>
+      <b>{check.name}</b>
+      <span className="cad-check-verdict">{check.verdict}</span>
+    </div>;
+  }
+  return <details
+    className={`cad-check cad-check-${check.state}`}
+    open={open}
+    onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}
+  >
+    <summary title={check.title}>
+      <span className="cad-check-glyph" aria-hidden="true">{CHECK_GLYPH[check.state]}</span>
+      <b>{check.name}</b>
+      <span className="cad-check-verdict">{check.verdict}</span>
+      <span className="cad-check-chevron" aria-hidden="true">›</span>
+    </summary>
+    <div className="cad-check-detail">{check.detail}</div>
+  </details>;
+}
+
+/** Findings are part of the same checklist: a blocking finding is a failing
+ * check, not a gate. It is recorded with the run when the user solves. */
+function FindingRows({ record }: { record: CadReturnIngestRecord }) {
+  if (record.findings.length === 0) return null;
+  return <div className="cad-check-findings">
+    <p className="cad-check-findings-head">{pluralized(record.findings.length, 'finding')}</p>
+    {record.findings.map((finding) => <div key={finding.id} className={`cad-check ${finding.blocking ? 'cad-check-warn' : 'cad-check-info'}`}>
+      <span className="cad-check-glyph" aria-hidden="true">{finding.blocking ? '!' : 'i'}</span>
+      <b>{finding.kind.replaceAll('-', ' ')}</b>
+      <span className="cad-check-verdict">{findingDetail(finding)}{finding.blocking && <small
+        className="cad-blocking-suffix"
+        title="Recorded in the run's provenance when you solve. Solving is not blocked; this marks evidence worth understanding first."
+      > · blocking</small>}</span>
+    </div>)}
   </div>;
 }
 
-interface FindingsProps {
-  record: CadReturnIngestRecord;
-  acknowledgedFindingIds: string[];
-  acknowledge: (findingId: string, value: boolean) => void;
-  acknowledgeAllBlocking: () => void;
+function ChecksSection({ record }: { record: CadReturnIngestRecord }) {
+  const checks = useMemo(() => recordChecks(record), [record]);
+  const attention = checks.filter((check) => check.state === 'warn').length;
+  const blocking = record.findings.filter((finding) => finding.blocking).length;
+  const needsAttention = attention > 0 || blocking > 0;
+  const chip = needsAttention
+    ? `${attention + blocking} need attention`
+    : record.findings.length
+      ? `passed · ${pluralized(record.findings.length, 'finding')}`
+      : 'all passed';
+  return <CadDrawer
+    key={record.ingest_id}
+    title={`Checks (${checks.length})`}
+    chip={chip}
+    defaultOpen={needsAttention}
+    warning={needsAttention}
+    className="cad-checks"
+  >
+    {checks.map((check) => <CheckRow key={check.key} check={check}/>)}
+    <FindingRows record={record}/>
+  </CadDrawer>;
 }
 
-function FindingRows({ record, acknowledgedFindingIds, acknowledge }: Omit<FindingsProps, 'acknowledgeAllBlocking'>) {
-  if (record.findings.length === 0) return <p>No findings. This ingestion needs no acknowledgements.</p>;
-  return <>{record.findings.map((finding) => <label key={finding.id} className={finding.blocking ? 'blocking' : ''}>
-    {finding.blocking && <input type="checkbox" checked={acknowledgedFindingIds.includes(finding.id)} onChange={(event) => acknowledge(finding.id, event.target.checked)}/>}
-    <span><b>{finding.kind.replaceAll('-', ' ')}{finding.blocking && <small className="cad-blocking-suffix"> · blocking</small>}</b><small>{findingDetail(finding)}</small></span>
-  </label>)}</>;
-}
-
-function Findings({ record, acknowledgedFindingIds, acknowledge, acknowledgeAllBlocking }: FindingsProps) {
-  const blocking = blockingFindings(record);
-  const unacknowledged = blocking.filter((finding) => !acknowledgedFindingIds.includes(finding.id));
-  if (unacknowledged.length === 0) {
-    const chip = blocking.length
-      ? `${blocking.length} acknowledged`
-      : record.findings.length ? `${record.findings.length} informational` : 'clean';
-    return <CadDrawer key={`${record.ingest_id}-findings`} title="Findings" chip={chip} className="cad-findings">
-      <FindingRows record={record} acknowledgedFindingIds={acknowledgedFindingIds} acknowledge={acknowledge}/>
-    </CadDrawer>;
-  }
-  return <section className="cad-section cad-findings degraded">
-    <header><h4>Findings</h4>{blocking.length > 1 && <button onClick={acknowledgeAllBlocking}>Acknowledge all {blocking.length}</button>}</header>
-    <FindingRows record={record} acknowledgedFindingIds={acknowledgedFindingIds} acknowledge={acknowledge}/>
-  </section>;
-}
-
-function returnStatus(record: CadReturnIngestRecord | null, acknowledgedFindingIds: string[], ingesting: boolean, ingestError: string | null): string {
-  if (ingesting) return 'Preparing…';
-  if (ingestError) return `Preparation failed — ${ingestError}`;
-  if (!record) return 'Ready to prepare';
-  const unacknowledged = blockingFindings(record).filter((finding) => !acknowledgedFindingIds.includes(finding.id)).length;
-  const findings = unacknowledged
-    ? `${pluralized(unacknowledged, 'finding')} ${unacknowledged === 1 ? 'needs' : 'need'} review`
-    : null;
-  const degraded = record.scope.status === 'clean'
-    ? null
-    : `Degraded: ${pluralized(record.scope.degraded_skip_count, 'object')} skipped`;
-  return [degraded, findings].filter(Boolean).join(' · ') || 'Ready to solve';
-}
-
-interface CadReturnReviewProps extends Omit<FindingsProps, 'record'> {
-  bundle: CadReturnBundle;
-  record: CadReturnIngestRecord | null;
-  ingesting: boolean;
-  ingestError: string | null;
-  prepare: () => void;
-}
-
-function CadReturnReview({ bundle, record, ingesting, ingestError, prepare, ...findingsProps }: CadReturnReviewProps) {
-  const titleId = useId();
-  const timestamp = record?.created_at || bundle.modifiedAt;
-  return <>
-    <article className={`cad-return-summary${record && record.scope.status !== 'clean' ? ' degraded' : ''}`} aria-labelledby={titleId}>
-      <div className="cad-return-summary-copy">
-        <h4 id={titleId}>{returnDisplayName(bundle)}</h4>
-        <time dateTime={timestamp} title={fullTime(timestamp)}>{relativeTime(timestamp)}</time>
-        <p>{returnStatus(record, findingsProps.acknowledgedFindingIds, ingesting, ingestError)}</p>
-      </div>
-      {(ingesting || ingestError || !record) && <button className="primary" disabled={ingesting} onClick={prepare}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
-    </article>
-    {record && <><RecordSummary record={record}/><Findings record={record} {...findingsProps}/></>}
-  </>;
-}
-
-interface CadHistoryProps {
-  bundles: CadReturnBundle[];
+interface ModelVersionsProps {
+  projectBundles: CadReturnBundle[];
+  unlinkedReturns: CadReturnBundle[];
+  otherProjectReturns: number;
   selectedPath: string | null;
   select: (bundle: CadReturnBundle) => void;
-  title?: string;
 }
 
-function CadHistory({ bundles, selectedPath, select, title = 'History' }: CadHistoryProps) {
-  return <CadDrawer title={`${title} (${bundles.length})`} className="cad-history">
+/** Previous returns are previous models, so they live under the model they
+ * relate to. Unlinked returns are a filter, never merged into the project's
+ * own history, and are never selected as this project's geometry automatically. */
+function ModelVersions({ projectBundles, unlinkedReturns, otherProjectReturns, selectedPath, select }: ModelVersionsProps) {
+  const [filter, setFilter] = useState<'project' | 'unlinked'>('project');
+  const showChips = unlinkedReturns.length > 0 && projectBundles.length > 0;
+  const shown = filter === 'unlinked' && unlinkedReturns.length ? unlinkedReturns : projectBundles.length ? projectBundles : unlinkedReturns;
+  const total = projectBundles.length + unlinkedReturns.length;
+  if (total === 0 && otherProjectReturns === 0) return null;
+  return <CadDrawer title={`Model versions (${total})`} className="cad-history">
+    {showChips && <div className="cad-version-filter" role="tablist" aria-label="Model version filter">
+      <button role="tab" aria-selected={filter === 'project'} className={filter === 'project' ? 'on' : ''} onClick={() => setFilter('project')}>This project · {projectBundles.length}</button>
+      <button
+        role="tab"
+        aria-selected={filter === 'unlinked'}
+        className={filter === 'unlinked' ? 'on' : ''}
+        title="Returns that name no CAD-linked project. Never selected as this project's geometry automatically."
+        onClick={() => setFilter('unlinked')}
+      >Unlinked · {unlinkedReturns.length}</button>
+    </div>}
     <div className="cad-bundle-list" role="listbox" aria-label="CAD return history">
-      {bundles.map((bundle) => <button
+      {shown.map((bundle) => <button
         type="button"
         key={bundle.bundlePath}
         role="option"
         aria-selected={selectedPath === bundle.bundlePath}
         disabled={!bundle.readable}
         onClick={() => select(bundle)}
-        title={!bundle.readable ? bundle.reason ?? 'Manifest is unreadable' : undefined}
+        title={!bundle.readable ? bundle.reason ?? 'Manifest is unreadable' : `${bundleInventory(bundle)} · ${fullTime(bundle.modifiedAt)}`}
       ><b>{returnDisplayName(bundle)}</b><span>{bundleInventory(bundle)}</span><time dateTime={bundle.modifiedAt} title={fullTime(bundle.modifiedAt)}>{relativeTime(bundle.modifiedAt)}</time></button>)}
     </div>
+    {otherProjectReturns > 0 && <p className="cad-detail">{pluralized(otherProjectReturns, 'return')} from other CAD-linked projects {otherProjectReturns === 1 ? 'is' : 'are'} not listed. Open that project from File → CAD-linked designs to use {otherProjectReturns === 1 ? 'it' : 'them'}.</p>}
   </CadDrawer>;
-}
-
-function SimulationInputsGuide({ prepared }: { prepared: boolean }) {
-  return <section className={`cad-simulation-guide${prepared ? ' ready' : ''}`}>
-    <div>
-      <b>{prepared ? 'Simulation inputs are ready' : 'Simulation inputs appear after preparation'}</b>
-      <span>Drivers, crossover, sweep, directivity, solve options, and mesh detail live in the Simulation tab.</span>
-    </div>
-    <button onClick={() => workspaceNavigation.activate('simulation')}>Open Simulation</button>
-  </section>;
 }
 
 export function CadLinkPanel() {
@@ -294,6 +403,7 @@ export function CadLinkPanel() {
     loading,
     ingesting,
     ingestError,
+    sendingToFusion,
     error,
     status,
     viewportNotice,
@@ -356,10 +466,6 @@ export function CadLinkPanel() {
     }
   };
 
-  // The Onshape outbound leg. Fusion's outbound action left this panel: the
-  // design menu and the Geometry rail call the coordinator's unified path.
-  const send = async () => { await sendToOnshape(); };
-
   const bringFromFusion = async () => {
     setRequestingReturn(true); cadCoordinator.clearFeedback();
     try {
@@ -373,146 +479,200 @@ export function CadLinkPanel() {
     }
   };
 
+  const sendToFusion = () => { void cadCoordinator.sendWgToFusion().catch(() => undefined); };
+
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
-  const settingsLabel = onshape ? 'Onshape · Change' : 'Fusion 360 · Change';
   // Imported geometry is solved on Metal or not at all: runtime.py rewrites
   // AUTO to metal and refuses bempp outright. Without Metal the whole round
   // trip still works as a CAD workflow and only the solve is out of reach, so
   // this states the boundary up front instead of hiding the panel or letting
-  // someone discover it after exporting, ingesting and acknowledging findings.
+  // someone discover it after exporting and preparing the model.
   const { engines: solverEngines, isLoading: capabilitiesLoading } = useCapabilities();
   const metalUnavailable = !capabilitiesLoading
     && !solverEngines.some((engine) => engine.name.toLowerCase() === 'metal' && engine.available);
   const designName = designNameSlug(documentName);
   const shownName = designName === UNTITLED_SLUG ? 'this design' : designName;
-  const actionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
-  const busy = sendingToOnshape;
   const canRequestFusionReturn = Boolean(
     fusionStatus?.running && fusionStatus.documentName && fusionStatus.documentId
     && fusionStatus.link && identity?.designId,
   );
   // A Fusion solve request that stopped at a gate is held, not discarded, so it
-  // needs somewhere to be seen and acted on. Acknowledging is offered inline
-  // when it is the whole of what the request is waiting for.
-  const unacknowledged = unacknowledgedBlocking(state);
+  // needs somewhere to be seen and acted on.
   const parked = parkedCommand && parkedCommand.blockers.length > 0 ? parkedCommand : null;
-  const resumeParked = () => {
-    if (unacknowledged.length) state.acknowledgeAllBlocking();
-    void cadCoordinator.solveParkedCommand().catch(() => undefined);
-  };
   // Onshape's Free plan makes every document world-readable. Say so before the
   // user sends, not after -- and say it from the plan WG actually read.
   const publicOnly = onshapeConnection?.plan?.publicOnly === true;
   const linkedDocument = onshapeStatus?.link ?? null;
   const matchingOnshapeLinks = onshapeStatus?.matchingLinks ?? [];
+  const matchingFusionLinks = fusionStatus?.matchingLinks ?? [];
+  const record = state.ingestRecord;
+  const bundle = state.selectedBundle;
+  const quietLink = workflow.state === 'current' || workflow.state === 'checking';
+  const fusionBothChanged = Boolean(fusionStatus?.wgChangesAvailable && fusionStatus.fusionChangesAvailable);
+  const staleModel = Boolean(record && state.needsIngest);
+  const onshapeActionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
+
+  const linkActions = onshape
+    ? <>
+      <button className="link-button" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>Send to Onshape</button>
+      {linkedDocument && <button className="link-button" disabled={ingesting} title="Export the linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver." onClick={() => { void cadCoordinator.returnFromOnshape().catch(() => undefined); }}>Bring geometry into WG</button>}
+      {linkedDocument?.documentUrl && <a className="link-button" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open in Onshape</a>}
+    </>
+    : <>
+      <button className="link-button" disabled={sendingToFusion} title="Rebuild the linked Fusion waveguide from the current WG design." onClick={sendToFusion}>Send to Fusion</button>
+      <button className="link-button" disabled={!canRequestFusionReturn || requestingReturn} title="Ask Fusion for the active document's current geometry and source tags." onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring geometry into WG'}</button>
+    </>;
 
   return <div className="cadlink-panel panel-scroll">
     <h2 className="sr-only">CAD Link</h2>
-    {/* The project you are in, then its history, then the round trip. Asked
-        for in that order: what am I working on, how did it get here, what do I
-        do next. The history caps its own height so the workflow below it stays
-        one scroll away rather than N runs away. */}
-    <CadProjectHeader/>
-    <CadProjectHistory/>
-    <SimulationInputsGuide prepared={Boolean(state.ingestRecord)}/>
-    {metalUnavailable && <div className="cad-alert cad-alert-notice cad-solver-unavailable" role="status">
-      <b>Imported CAD geometry cannot be solved on this machine.</b> Solving an
-      ingested model needs the Metal backend, which is macOS-only; this host has
-      no Metal engine available. The round trip below still works for building
-      and exporting geometry, and the parametric workspace still solves here.
-    </div>}
-    {/* Fusion's outbound leg lives in the design menu and the Geometry rail;
-        this panel only reports the connection and owns the inbound leg. The
-        Onshape workflow keeps its two numbered steps: the panel is its home. */}
-    {onshape && <section className="cad-workflow cad-send">
-      <header className="cad-workflow-header"><span className="cad-step">1</span><div><h3>WG → CAD</h3><p>Create or update this WG design in Onshape.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{settingsLabel}</button></header>
-      <div className={`cad-connection cad-connection-${workflow.state}`}>
-        <span className="cad-connection-dot" aria-hidden="true"/>
-        <div><h4>{workflow.headline}</h4><p>{workflow.detail}</p></div>
-      </div>
-      {matchingOnshapeLinks.length > 1 && <label className="field-row linked-instance-selection">
-        <span>Managed Onshape link</span>
-        <select
-          aria-label="Linked Onshape instance"
-          value={onshapeStatus?.selectedInstanceId ?? ''}
-          onChange={(event) => cadCoordinator.selectOnshapeInstance(event.target.value)}
-        >
-          <option value="" disabled>Choose a link</option>
-          {matchingOnshapeLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>
-            {link.documentName} · {link.instanceId}
-          </option>)}
-        </select>
-        <small>Updates and returns use this exact managed Part Studio link. WG does not guess from the newest document.</small>
-      </label>}
-      {linkedDocument?.documentUrl && <a className="cad-secondary-action cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
-      {publicOnly && !confirmPublicDocument && <div className="cad-alert cad-alert-notice" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
-      {onshapeConnection?.insecureKeyFile && <div className="cad-alert cad-alert-error" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
-      {workflow.action && !confirmPublicDocument && <button className="primary cad-primary-action" disabled={busy} onClick={() => void send()}>{busy ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : actionLabel}</button>}
-      {confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
-      {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
-      {status && <div className="cad-status-strip" role="status">{status}</div>}
-    </section>}
-    {!onshape && <section className="cad-workflow cad-send">
-      <header className="cad-workflow-header no-step"><div><h3>Fusion connection</h3><p>Sends live in the design menu and the Geometry rail.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{settingsLabel}</button></header>
-      <div className={`cad-connection cad-connection-${workflow.state}`}>
-        <span className="cad-connection-dot" aria-hidden="true"/>
-        <div><h4>{workflow.headline}</h4><p>{workflow.detail}</p></div>
-      </div>
-      {workflow.state === 'not-configured' && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
-    </section>}
-    {onshape && <section className="cad-workflow cad-return-workflow">
-      <header className="cad-workflow-header"><span className="cad-step">2</span><div><h3>CAD → SIMULATION</h3><p>Bring CAD geometry and source tags into WG.</p></div></header>
-      {linkedDocument ? <div className="cad-return-quick-action">
-        <div><b>{linkedDocument.documentName}</b><span>Export the current linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver.</span></div>
-        <button className="primary" disabled={ingesting} onClick={() => { void cadCoordinator.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Returning & preparing…' : 'Bring Onshape geometry into WG'}</button>
-      </div> : <div className="empty-state"><b>No linked Onshape Part Studio</b><span>Send this WG design to Onshape first, then return its current geometry here.</span></div>}
-      {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Return the current Onshape geometry again before solving.</div>}
-      {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}
-      {state.selectedBundle?.readable && <CadReturnReview
-        bundle={state.selectedBundle}
-        record={state.ingestRecord}
-        ingesting={ingesting}
-        ingestError={ingestError}
-        prepare={() => { void cadCoordinator.ingest(); }}
-        acknowledgedFindingIds={state.acknowledgedFindingIds}
-        acknowledge={state.acknowledge}
-        acknowledgeAllBlocking={state.acknowledgeAllBlocking}
-      />}
-      {projectBundles.length > 0 && <CadHistory bundles={projectBundles} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
-      {unlinkedReturns.length > 0 && <CadHistory title="Unlinked returns" bundles={unlinkedReturns} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
-    </section>}
-    {!onshape && <section className="cad-workflow cad-return-workflow">
-    <header className="cad-workflow-header no-step"><div><h3>FUSION → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
-    {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><div className="cad-confirm-actions"><button disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring changes into WG'}</button><button className="primary" disabled={!canRequestFusionReturn || requestingReturn} onClick={() => { void cadCoordinator.pullAndSolve(); }}>Bring changes in & solve</button></div></div>}
-    {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Refresh geometry from Fusion'}</button>}
-    {parked && <div className="cad-direction-alert cad-parked-command" role="status">
-      <div><b>Fusion asked for a solve</b><span>Waiting on: {parked.blockers.join(' · ')}</span></div>
-      <div className="cad-confirm-actions">
-        <button onClick={() => void cadCoordinator.dismissSolveCommand().catch(() => undefined)}>Dismiss</button>
-        <button className="primary" onClick={resumeParked}>{unacknowledged.length
-          ? `Acknowledge all ${unacknowledged.length} & solve`
-          : 'Solve now'}</button>
-      </div>
-    </div>}
+    {/* One notice channel. Transient events land here, at the top of the rail;
+        persistent conditions render inside the card they belong to. */}
     {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
-    {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}
-    {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
-    {otherProjectReturns > 0 && <div className="cad-alert cad-alert-notice" role="status">{pluralized(otherProjectReturns, 'return')} hidden because {otherProjectReturns === 1 ? 'it belongs' : 'they belong'} to another CAD-linked project. Open that project from File → CAD-linked designs to use {otherProjectReturns === 1 ? 'it' : 'them'}.</div>}
-    {unlinkedReturns.length > 0 && <div className="cad-alert cad-alert-notice" role="status">Unlinked returns are listed separately and are never selected as this project’s geometry automatically.</div>}
-    {!loading && workflow.state !== 'not-configured' && !error && projectBundles.length === 0 && unlinkedReturns.length === 0 && otherProjectReturns === 0 && <div className="empty-state"><b>No CAD returns yet.</b><span>Send a design from Fusion 360 and it will appear here.</span></div>}
-    {state.selectedBundle?.readable && <CadReturnReview
-      bundle={state.selectedBundle}
-      record={state.ingestRecord}
-      ingesting={ingesting}
-      ingestError={ingestError}
-      prepare={() => { void cadCoordinator.ingest(); }}
-      acknowledgedFindingIds={state.acknowledgedFindingIds}
-      acknowledge={state.acknowledge}
-      acknowledgeAllBlocking={state.acknowledgeAllBlocking}
-    />}
-    {projectBundles.length > 0 && <CadHistory bundles={projectBundles} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
-    {unlinkedReturns.length > 0 && <CadHistory title="Unlinked returns" bundles={unlinkedReturns} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
-    </section>}
+
+    {/* 1 · Project: what am I working on? */}
+    <CadProjectHeader/>
+
+    {/* 2 · CAD Link: is CAD in sync with WG? One card, both directions. */}
+    <section className={`cad-workflow cad-link-card${quietLink ? '' : ' attention'}`}>
+      {quietLink
+        ? <details className="cad-link-quiet">
+          <summary title={workflow.detail}>
+            <span className="cad-link-chevron" aria-hidden="true">›</span>
+            <span className={`cad-connection-dot cad-connection-dot-${workflow.state}`} aria-hidden="true"/>
+            <b>{onshape ? 'Onshape' : 'Fusion 360'}{workflow.state === 'current' ? ' · in sync' : ' · checking…'}</b>
+            <span className="cad-link-meta">{onshape ? linkedDocument?.documentName ?? '' : fusionStatus?.documentName ?? ''}</span>
+          </summary>
+          <div className="cad-link-quiet-body">
+            <p>{workflow.detail}</p>
+            <div className="cad-link-actions">
+              {linkActions}
+              <button className="link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
+            </div>
+          </div>
+        </details>
+        : <>
+          <div className={`cad-connection cad-connection-${workflow.state}`}>
+            <span className="cad-connection-dot" aria-hidden="true"/>
+            <div><h4>{workflow.headline}</h4><p>{workflow.detail}</p></div>
+            <button className="link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
+          </div>
+          {!onshape && matchingFusionLinks.length > 1 && workflow.state === 'instance-selection' && <label className="field-row linked-instance-selection">
+            <span>Managed Fusion link</span>
+            <select
+              aria-label="Linked Fusion instance"
+              value={fusionStatus?.link?.instanceId ?? ''}
+              onChange={(event) => cadCoordinator.selectFusionInstance(event.target.value)}
+            >
+              <option value="" disabled>Choose an instance</option>
+              {matchingFusionLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>{link.instanceId}</option>)}
+            </select>
+            <small>Freshness, geometry requests and updates use this exact managed body.</small>
+          </label>}
+          {onshape && matchingOnshapeLinks.length > 1 && <label className="field-row linked-instance-selection">
+            <span>Managed Onshape link</span>
+            <select
+              aria-label="Linked Onshape instance"
+              value={onshapeStatus?.selectedInstanceId ?? ''}
+              onChange={(event) => cadCoordinator.selectOnshapeInstance(event.target.value)}
+            >
+              <option value="" disabled>Choose a link</option>
+              {matchingOnshapeLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>
+                {link.documentName} · {link.instanceId}
+              </option>)}
+            </select>
+            <small>Updates and returns use this exact managed Part Studio link. WG does not guess from the newest document.</small>
+          </label>}
+          {/* Fusion: the actions that resolve the out-of-sync state, and only those. */}
+          {!onshape && workflow.state === 'not-configured' && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
+          {!onshape && workflow.action === 'open' && <button className="primary cad-primary-action" disabled={sendingToFusion} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Open in Fusion 360'}</button>}
+          {!onshape && fusionStatus?.fusionChangesAvailable && !fusionStatus.wgChangesAvailable && <div className="cad-confirm-actions">
+            <button disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring in'}</button>
+            <button className="primary" disabled={!canRequestFusionReturn || requestingReturn} title="Bring the current Fusion geometry into WG, prepare it, and start the solve." onClick={() => { void cadCoordinator.pullAndSolve(); }}>Bring in &amp; solve</button>
+          </div>}
+          {!onshape && workflow.action === 'update' && <div className={fusionBothChanged ? 'cad-confirm-actions' : undefined}>
+            {fusionBothChanged && <button disabled={!canRequestFusionReturn || requestingReturn} title="Keep the Fusion edits: bring the Fusion geometry into WG instead of overwriting it." onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring Fusion changes in'}</button>}
+            <button className="primary cad-primary-action" disabled={sendingToFusion} onClick={sendToFusion}>{sendingToFusion ? 'Sending…' : 'Send WG changes to Fusion'}</button>
+          </div>}
+          {/* Onshape: the same card carries its send/return pair. */}
+          {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="primary cad-primary-action" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
+          {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="cad-secondary-action" disabled={ingesting} onClick={() => { void cadCoordinator.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Returning & preparing…' : 'Bring Onshape geometry into WG'}</button>}
+          {onshape && linkedDocument?.documentUrl && <a className="link-button cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
+        </>}
+      {onshape && publicOnly && !confirmPublicDocument && <div className="cad-alert cad-alert-notice" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
+      {onshape && onshapeConnection?.insecureKeyFile && <div className="cad-alert cad-alert-error" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
+      {onshape && confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
+    </section>
+
+    {/* 3 · Model: is the geometry sound? */}
+    <section className="cad-workflow cad-model-card">
+      <header className="cad-model-head">
+        <span className="cad-card-label">Model</span>
+        <span className="spacer"/>
+        <button
+          className="cad-icon-button"
+          disabled={loading || ingesting}
+          title="Refresh the CAD return listing"
+          aria-label="Refresh CAD returns"
+          onClick={() => void cadCoordinator.refresh()}
+        ><Icon name="reset"/></button>
+      </header>
+      {!bundle && !record && <div className="empty-state">
+        <b>No CAD model yet.</b>
+        <span>{onshape
+          ? 'Send this design to Onshape, then bring its geometry back here.'
+          : 'Send a design from Fusion 360 and it will appear here.'}</span>
+      </div>}
+      {bundle && <div className="cad-model-identity">
+        <b className="cad-model-name" title={bundle.documentName ?? bundle.name}>{returnDisplayName(bundle)}</b>
+        {record && <span
+          className={`cad-state-chip${freshnessSummary(record) === 'current' ? '' : ' warn'}`}
+          title={FRESHNESS_COPY[freshnessSummary(record).replaceAll(' ', '_')] ?? FRESHNESS_COPY.unknown}
+        >{freshnessSummary(record)}</span>}
+        <time dateTime={record?.created_at || bundle.modifiedAt} title={fullTime(record?.created_at || bundle.modifiedAt)}>{relativeTime(record?.created_at || bundle.modifiedAt)}</time>
+      </div>}
+      {metalUnavailable && <div className="cad-alert cad-alert-notice cad-solver-unavailable" role="status">
+        <b>Imported CAD geometry cannot be solved on this machine.</b> Solving an
+        ingested model needs the Metal backend, which is macOS-only; this host has
+        no Metal engine available. The round trip still works for building and
+        exporting geometry, and the parametric workspace still solves here.
+      </div>}
+      {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Prepare the model again before solving.</div>}
+      {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}
+      {ingestError && <div className="cad-alert cad-alert-error" role="alert">Preparation failed — {ingestError}</div>}
+      {bundle?.readable && (ingesting || !record || staleModel || ingestError) && <button
+        className="primary cad-primary-action"
+        disabled={ingesting}
+        title="Mesh the returned geometry, verify its evidence, and make it the solve truth."
+        onClick={() => { void cadCoordinator.ingest(); }}
+      >{ingesting ? 'Preparing…' : record ? 'Prepare again' : 'Prepare simulation'}</button>}
+      {record && !staleModel && !ingesting && <div className="cad-prepared-line">
+        <span className="cad-check-glyph ok" aria-hidden="true">✓</span>
+        <span>Prepared for simulation</span>
+        <button
+          className="link-button"
+          title="Drivers, crossover, sweep, directivity, solve options, and mesh detail live in the Simulation tab."
+          onClick={() => workspaceNavigation.activate('simulation')}
+        >Open Simulation</button>
+      </div>}
+      {record && <ChecksSection record={record}/>}
+      {parked && <div className="cad-direction-alert cad-parked-command" role="status">
+        <div><b>Fusion asked for a solve</b><span>Waiting on: {parked.blockers.join(' · ')}</span></div>
+        <div className="cad-confirm-actions">
+          <button title="Refuse the request for good; Fusion will not offer it again." onClick={() => void cadCoordinator.dismissSolveCommand().catch(() => undefined)}>Dismiss</button>
+          <button className="primary" onClick={() => { void cadCoordinator.solveParkedCommand().catch(() => undefined); }}>Solve now</button>
+        </div>
+      </div>}
+      <ModelVersions
+        projectBundles={projectBundles}
+        unlinkedReturns={unlinkedReturns}
+        otherProjectReturns={otherProjectReturns}
+        selectedPath={bundle?.bundlePath ?? null}
+        select={cadCoordinator.selectBundle}
+      />
+    </section>
+
+    {/* 4 · Runs: what have I solved? */}
+    <CadProjectHistory/>
   </div>;
 }
