@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, postSymmetry, resolveEngine, submitDesign, submitImported, toSolveDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, plannedEngineNames, planSolveDesign, postSymmetry, resolveEngine, submitDesign, submitImported, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('formats structured FastAPI detail arrays with locations', async () => {
@@ -16,13 +16,45 @@ describe('API validation errors', () => {
 });
 
 describe('solve submission', () => {
-  it('keeps AUTO on real backends even when solver mode forces the Metal fast path', () => {
+  it('requires the advertised Axisym runner when solver mode forces the meridian path', () => {
     const capabilities = { engines: [
       { name: 'dryrun', available: true, reason: null, version: 'builtin', fast_paths: [] },
       { name: 'metal', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'] },
-    ] };
+    ], engineSelection: {
+      default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal', 'dryrun'], axisymmetricRunner: 'axisym',
+    } };
     expect(resolveEngine('auto', capabilities)).toBe('metal');
-    expect(resolveEngine('auto', capabilities, 'circsym')).toBe('metal');
+    expect(() => resolveEngine('auto', capabilities, 'circsym')).toThrow('requires the advertised axisym runner');
+    expect(() => resolveEngine('metal', capabilities, 'circsym')).toThrow('requires the advertised axisym runner');
+
+    capabilities.engines.push({
+      name: 'axisym', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'],
+    });
+    expect(resolveEngine('auto', capabilities, 'circsym')).toBe('axisym');
+    expect(resolveEngine('metal', capabilities, 'circsym')).toBe('axisym');
+    expect(() => resolveEngine('dryrun', capabilities, 'circsym')).toThrow('Dry-run cannot run forced Axisymmetric');
+    expect(() => resolveEngine('stale-manual-engine', capabilities, 'circsym')).toThrow('Unknown solve engine');
+    expect(() => resolveEngine('axisym', capabilities, 'full_3d')).toThrow("cannot run solver mode Full 3D");
+    expect(resolveEngine('dryrun', capabilities, 'auto')).toBe('dryrun');
+    expect(resolveEngine('metal', capabilities, 'full_3d')).toBe('metal');
+
+    expect(plannedEngineNames('metal', capabilities, 'auto')).toEqual(['axisym', 'metal']);
+    expect(plannedEngineNames('auto', capabilities, 'full_3d')).toEqual(['metal', 'dryrun']);
+    expect(plannedEngineNames('metal', capabilities, 'circsym')).toEqual(['axisym']);
+    expect(plannedEngineNames('dryrun', capabilities, 'auto')).toEqual(['dryrun']);
+
+    const staleBeat = {
+      engines: [
+        { name: 'beat', available: false, reason: 'GPU offline', version: null, fast_paths: [], formulations: ['full-3d'] },
+        { name: 'axisym', available: true, reason: null, version: '1', fast_paths: [], formulations: ['axisymmetric'] },
+      ],
+      engineSelection: {
+        default: 'auto', resolvedDefault: null, full3dOrder: ['beat'], axisymmetricRunner: 'axisym',
+      },
+    };
+    expect(resolveEngine('beat', staleBeat, 'auto')).toBe('beat');
+    expect(plannedEngineNames('beat', staleBeat, 'auto')).toEqual(['axisym', 'beat']);
+    expect(resolveEngine('beat', staleBeat, 'full_3d')).toBe('beat');
   });
 
   it('resolves AUTO to Axisym when it is the only engine the host has', () => {
@@ -33,17 +65,24 @@ describe('solve submission', () => {
     const axisymOnly = { engines: [
       { name: 'axisym', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'] },
       { name: 'bempp', available: false, reason: 'not installed', version: null, fast_paths: [] },
-    ] };
+    ], engineSelection: {
+      default: 'auto', resolvedDefault: null, full3dOrder: ['bempp'], axisymmetricRunner: 'axisym',
+    } };
     expect(resolveEngine('auto', axisymOnly)).toBe('axisym');
+    expect(() => resolveEngine('auto', axisymOnly, 'full_3d')).toThrow('No full-3D solver backend');
 
     // A full-3D backend still wins when the host has one, and a host with
     // nothing available still refuses rather than inventing an engine.
     const withBempp = { engines: [
       ...axisymOnly.engines.slice(0, 1),
       { name: 'bempp', available: true, reason: null, version: '1', fast_paths: [] },
-    ] };
+    ], engineSelection: {
+      ...axisymOnly.engineSelection,
+      resolvedDefault: 'bempp',
+    } };
     expect(resolveEngine('auto', withBempp)).toBe('bempp');
     expect(() => resolveEngine('auto', { engines: [] })).toThrow('No solver backend is currently available');
+    expect(() => resolveEngine('removed-engine', withBempp)).toThrow('Unknown solve engine');
   });
 
   it('submits every solve option and the G1 polar_config contract without forcing dryrun', async () => {
@@ -60,6 +99,32 @@ describe('solve submission', () => {
     expect(body?.options).toEqual(options);
     expect(body).toMatchObject({ label: 'atomic', design_revision: 19, design_snapshot: { version: 1 } });
     expect((body?.design_snapshot as { design: unknown }).design).toEqual(body?.design);
+  });
+
+  it('preflights the same design and options that submission will use', async () => {
+    const design = designForFamily('OSSE');
+    design.simulation.sim_type = 'infinite-baffle';
+    const options: SolveOptions = {
+      engine: 'auto', solver_mode: 'full_3d', symmetry: 'auto', mesh_validation_mode: 'warn', verbose: false, frequency_spacing: 'log',
+      polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false, field_plane: true },
+    };
+    let path = '';
+    let body: Record<string, unknown> | undefined;
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      path = String(input);
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        engine: 'bempp', formulation: 'full-3d',
+        reason: "explicit solver_mode='full_3d'", eligibility_reasons: [],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    await expect(planSolveDesign(design, options, fetcher as typeof fetch)).resolves.toEqual({
+      engine: 'bempp', formulation: 'full-3d',
+      reason: "explicit solver_mode='full_3d'", eligibility_reasons: [],
+    });
+    expect(path).toBe('/api/solve/plan');
+    expect(body).toEqual({ design: toSolveDesign(design), options });
   });
 
   it('submits the imported geometry union without a parametric design sibling', async () => {

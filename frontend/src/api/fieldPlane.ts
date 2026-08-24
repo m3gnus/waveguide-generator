@@ -218,6 +218,7 @@ export function decodeFieldPlane(buffer: ArrayBuffer): DecodedFieldPlane {
 interface FieldPlaneErrorBody {
   code?: string;
   message?: string;
+  remedy?: string;
   replacement_request_id?: string;
 }
 
@@ -227,6 +228,7 @@ export class FieldPlaneHttpError extends Error {
     message: string,
     readonly code: string | null = null,
     readonly replacementRequestId: string | null = null,
+    readonly remedy: string | null = null,
   ) {
     super(message);
     this.name = 'FieldPlaneHttpError';
@@ -237,20 +239,30 @@ async function fieldPlaneHttpError(response: Response): Promise<FieldPlaneHttpEr
   let message = `${response.status} ${response.statusText}`.trim();
   let code: string | null = null;
   let replacementRequestId: string | null = null;
+  let remedy: string | null = null;
   try {
-    const body = await response.json() as { detail?: string | FieldPlaneErrorBody };
+    const body = await response.json() as FieldPlaneErrorBody & {
+      detail?: string | FieldPlaneErrorBody;
+      error_contract_version?: number;
+    };
     if (typeof body.detail === 'string') message = body.detail;
-    else if (isRecord(body.detail)) {
-      if (typeof body.detail.message === 'string') message = body.detail.message;
-      if (typeof body.detail.code === 'string') code = body.detail.code;
-      if (typeof body.detail.replacement_request_id === 'string') {
-        replacementRequestId = body.detail.replacement_request_id;
-      }
+    const structured = isRecord(body.detail) ? body.detail : body;
+    if (typeof structured.message === 'string') message = structured.message;
+    if (typeof structured.code === 'string') code = structured.code;
+    if (typeof structured.remedy === 'string') remedy = structured.remedy;
+    if (typeof structured.replacement_request_id === 'string') {
+      replacementRequestId = structured.replacement_request_id;
     }
   } catch {
     // The status remains actionable when an intermediary returned non-JSON.
   }
-  return new FieldPlaneHttpError(response.status, message, code, replacementRequestId);
+  return new FieldPlaneHttpError(
+    response.status,
+    message,
+    code,
+    replacementRequestId,
+    remedy,
+  );
 }
 
 export async function fetchFieldPlane(

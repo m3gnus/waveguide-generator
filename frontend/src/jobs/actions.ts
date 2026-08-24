@@ -1,5 +1,5 @@
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
-import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { useSolveOptionsStore, type SolveOptions, type SolverMode } from '../stores/solveOptions';
 
 export interface EngineCapability {
   name: string;
@@ -9,13 +9,30 @@ export interface EngineCapability {
   fast_paths: string[];
   formulations?: string[];
   mountings?: string[];
+  geometry_sources?: string[];
   symmetry_domains?: string[];
   field_traces?: boolean;
   di_sphere?: boolean;
   cancellation_granularity?: string;
 }
 
-export interface Capabilities { engines: EngineCapability[] }
+export interface EngineSelection {
+  readonly default: string;
+  readonly resolvedDefault: string | null;
+  readonly full3dOrder: readonly string[];
+  readonly axisymmetricRunner: string;
+}
+
+export interface Capabilities {
+  engines: EngineCapability[];
+  engineSelection: EngineSelection;
+}
+export interface SolvePlan {
+  engine: string;
+  formulation: 'axisymmetric' | 'full-3d';
+  reason: string;
+  eligibility_reasons: string[];
+}
 export interface SolveSubmissionMetadata { label: string; designRevision: number }
 export interface ImportedGeometrySubmission {
   type: 'imported';
@@ -105,18 +122,97 @@ export async function getCapabilities(fetcher: typeof fetch = fetch): Promise<Ca
   return response.json() as Promise<Capabilities>;
 }
 
+interface EngineModePlan {
+  requested: string;
+  runner: string;
+  full3dOrder: readonly string[];
+  solverMode: SolverMode;
+}
+
+/** Normalize and validate the engine/formulation pair exactly once. */
+function engineModePlan(
+  engine: string,
+  capabilities: {
+    engines: readonly EngineCapability[];
+    engineSelection?: Readonly<EngineSelection>;
+  },
+  solverMode: SolverMode,
+): EngineModePlan {
+  const requested = engine.trim().toLowerCase();
+  const runner = capabilities.engineSelection?.axisymmetricRunner.trim().toLowerCase() ?? '';
+  const known = capabilities.engines.some((item) => item.name.toLowerCase() === requested);
+  if (requested !== 'auto' && !known) {
+    throw new Error(`Unknown solve engine: ${requested || '(empty)'}`);
+  }
+  if (requested === runner && solverMode === 'full_3d') {
+    throw new Error(`Engine '${runner}' cannot run solver mode Full 3D.`);
+  }
+  if (requested === 'dryrun' && solverMode === 'circsym') {
+    throw new Error('Dry-run cannot run forced Axisymmetric solver mode.');
+  }
+  const full3dOrder = capabilities.engineSelection?.full3dOrder.map((name) => name.toLowerCase())
+    ?? capabilities.engines
+      .filter((item) => item.formulations?.includes('full-3d'))
+      .map((item) => item.name.toLowerCase());
+  return { requested, runner, full3dOrder, solverMode };
+}
+
+/**
+ * Server-advertised candidates the formulation planner may reach, in order.
+ *
+ * This is shared by capability gating and submission resolution so AUTO's
+ * conditional Axisym-first path cannot drift between those two UI surfaces.
+ */
+export function plannedEngineNames(
+  engine: string,
+  capabilities: {
+    engines: readonly EngineCapability[];
+    engineSelection?: Readonly<EngineSelection>;
+  },
+  solverMode: SolverMode = 'auto',
+): readonly string[] {
+  const plan = engineModePlan(engine, capabilities, solverMode);
+  if (plan.solverMode === 'circsym') return plan.runner ? [plan.runner] : [];
+  if (plan.solverMode === 'full_3d') {
+    return plan.requested === 'auto' ? plan.full3dOrder : [plan.requested];
+  }
+  if (plan.requested === 'dryrun' || plan.requested === plan.runner) {
+    return [plan.requested];
+  }
+  const axisymFirst = plan.runner ? [plan.runner] : [];
+  return plan.requested === 'auto'
+    ? [...axisymFirst, ...plan.full3dOrder]
+    : [...axisymFirst, plan.requested];
+}
+
 export function resolveEngine(
   engine: string,
-  capabilities: { engines: readonly EngineCapability[] },
-  solverMode = 'auto',
+  capabilities: {
+    engines: readonly EngineCapability[];
+    engineSelection?: Readonly<EngineSelection>;
+  },
+  solverMode: SolverMode = 'auto',
 ): string {
-  if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
+  const plan = engineModePlan(engine, capabilities, solverMode);
+  const selection = capabilities.engineSelection;
   if (solverMode === 'circsym') {
-    const axisym = capabilities.engines.find((item) => item.available && item.name.toLowerCase() === 'axisym');
-    if (axisym) return 'axisym';
+    const runner = plan.runner;
+    const axisym = capabilities.engines.find((item) => item.available
+      && item.name.toLowerCase() === runner);
+    if (axisym) return runner!;
+    const advertised = capabilities.engines.find((item) => item.name.toLowerCase() === runner);
+    const detail = advertised?.reason ? ` ${advertised.reason}` : '';
+    throw new Error(runner
+      ? `Forced Axisymmetric mode requires the advertised ${runner} runner, but it is unavailable.${detail}`
+      : 'Forced Axisymmetric mode is unavailable because the server advertised no axisymmetric runner.');
   }
-  const order = ['metal', 'beat', 'bempp', 'dryrun'];
-  const available = order.flatMap((name) => capabilities.engines.filter((item) => item.available && item.name.toLowerCase() === name))[0];
+  if (plan.requested !== 'auto') return plan.requested;
+  const order = plan.full3dOrder;
+  const resolvedDefault = selection?.resolvedDefault?.toLowerCase() ?? null;
+  const available = capabilities.engines.find((item) => item.available
+    && item.name.toLowerCase() === resolvedDefault)
+    ?? order.flatMap((name) => capabilities.engines.filter((item) => item.available
+      && item.name.toLowerCase() === name))[0];
   if (available) return available.name.toLowerCase();
   // An Axisym-only host is not a host without a solver. The server planner
   // selects the meridian runner for an eligible circular design before any
@@ -124,8 +220,13 @@ export function resolveEngine(
   // and Run blocked on a design the server would have solved -- escapable only
   // by knowing to force the meridian mode by hand. Geometry eligibility is the
   // planner's to judge, not this function's.
-  const axisym = capabilities.engines.find((item) => item.available && item.name.toLowerCase() === 'axisym');
-  if (axisym) return 'axisym';
+  if (solverMode === 'full_3d') {
+    throw new Error('No full-3D solver backend is currently available');
+  }
+  const runner = plan.runner;
+  const axisym = capabilities.engines.find((item) => item.available
+    && item.name.toLowerCase() === runner);
+  if (axisym) return runner!;
   throw new Error('No solver backend is currently available');
 }
 
@@ -160,6 +261,55 @@ export async function postSymmetry(
   });
   if (!response.ok) throw new Error(await detail(response));
   return response.json() as Promise<SymmetryResolution>;
+}
+
+export function solvePlanRequestBody(
+  design: DesignDocument,
+  requestedOptions: SolveOptions = useSolveOptionsStore.getState().options(),
+): string {
+  return JSON.stringify({
+    design: toSolveDesign(design),
+    options: structuredClone(requestedOptions),
+  });
+}
+
+export async function postSolvePlan(
+  body: string,
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<SolvePlan> {
+  const response = await fetcher('/api/solve/plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    signal,
+  });
+  if (!response.ok) throw new Error(await detail(response));
+  const plan = await response.json() as Partial<SolvePlan>;
+  if (
+    typeof plan.engine !== 'string'
+    || !plan.engine.trim()
+    || (plan.formulation !== 'axisymmetric' && plan.formulation !== 'full-3d')
+    || typeof plan.reason !== 'string'
+    || !Array.isArray(plan.eligibility_reasons)
+    || !plan.eligibility_reasons.every((reason) => typeof reason === 'string')
+  ) {
+    throw new Error('Solve plan response is invalid');
+  }
+  return plan as SolvePlan;
+}
+
+export async function planSolveDesign(
+  design: DesignDocument,
+  requestedOptions: SolveOptions = useSolveOptionsStore.getState().options(),
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<SolvePlan> {
+  return postSolvePlan(
+    solvePlanRequestBody(design, requestedOptions),
+    fetcher,
+    signal,
+  );
 }
 
 export async function submitDesign(

@@ -281,7 +281,9 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
     case 'artifact_persistence_failed': return 'Field plane unavailable — the solve could not retain its field traces';
     case 'size_cap_exceeded': return 'Field plane unavailable — reduce the mesh or sweep size, then re-solve';
     case 'trace_output_missing': return 'Field plane unavailable — the solver returned no field traces; re-solve the design';
-    case 'unsupported_solve_mode': return 'Field plane unavailable — use a full-3D Metal solve';
+    case 'unsupported_axisymmetric_formulation': return 'Field plane unavailable — switch Solver mode to Full 3D with Metal or BEMPP; coupled infinite baffle must also be changed to Free-standing';
+    case 'unsupported_coupled_infinite_baffle': return 'Field plane unavailable — switch Simulation type to Free-standing and re-solve with Metal or BEMPP';
+    case 'unsupported_solve_mode': return 'Field plane unavailable — use a supported full-3D solve';
     case 'disabled_by_option': return 'Field plane unavailable — enable Keep field plane data and re-solve';
     default: return 'Field plane unavailable — no completed run has retained field traces';
   }

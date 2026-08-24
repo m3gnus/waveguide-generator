@@ -18,8 +18,16 @@ vi.mock('../results/exporters', () => ({
   runWorkspaceExportBundle: mocks.runWorkspaceExportBundle,
 }));
 vi.mock('../jobs/useCapabilities', () => ({
-  useCapabilities: () => ({ engines: [], error: null, isLoading: false }),
+  useCapabilities: () => ({
+    engines: [],
+    engineSelection: { default: 'auto', resolvedDefault: null, full3dOrder: [], axisymmetricRunner: 'axisym' },
+    error: null,
+    isLoading: false,
+  }),
   useCapabilityRefreshOnReconnect: () => undefined,
+}));
+vi.mock('../jobs/useSolvePlan', () => ({
+  useSolvePlan: () => ({ plan: null, error: null, isPending: true }),
 }));
 
 function job(id: string, label: string, runNumber: number): JobItem {

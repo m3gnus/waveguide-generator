@@ -10,6 +10,12 @@ const CAPABILITIES = {
     { name: 'metal', available: true, reason: 'ok', version: '0.1.0', fast_paths: ['axisymmetric-meridian'] },
     { name: 'bempp', available: false, reason: 'not installed', version: null, fast_paths: [] },
   ],
+  engineSelection: {
+    default: 'auto',
+    resolvedDefault: 'metal',
+    full3dOrder: ['metal', 'beat', 'bempp', 'dryrun'],
+    axisymmetricRunner: 'axisym',
+  },
 };
 
 function Consumer({ tag }: { tag: string }) {

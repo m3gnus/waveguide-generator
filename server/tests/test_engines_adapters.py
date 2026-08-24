@@ -322,7 +322,9 @@ def test_metal_infinite_baffle_requires_and_maps_aperture_tag(monkeypatch) -> No
     assert captured["return_surface_traces"] is False
     assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
     assert response["metadata"]["infinite_baffle"]["backend"] == "full_3d_coupled"
-    assert response["_field_trace_unavailable_reason"] == "unsupported_solve_mode"
+    assert response["_field_trace_unavailable_reason"] == (
+        "unsupported_coupled_infinite_baffle"
+    )
 
 
 def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monkeypatch) -> None:
@@ -381,7 +383,9 @@ def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monk
         "aperture_tag": 12,
         "source": "hornlab-waveguide-mesher",
     }
-    assert ib_response["_field_trace_unavailable_reason"] == "unsupported_solve_mode"
+    assert ib_response["_field_trace_unavailable_reason"] == (
+        "unsupported_coupled_infinite_baffle"
+    )
 
 
 def test_bempp_field_plane_option_disables_trace_retention(monkeypatch) -> None:
@@ -496,6 +500,30 @@ def test_circsym_meridian_resolution_is_refined_from_sweep_top(monkeypatch) -> N
     assert report["policy"] == "wavelength_over_6_max_segment"
     assert report["max_segment_mm"] == pytest.approx(5.0)
     assert report["refined"] is True
+
+
+def test_circsym_missing_mesh_controls_preserve_legacy_discretization(monkeypatch) -> None:
+    monkeypatch.setattr(circsym, "solver_sound_speed_m_per_s", lambda _name: 300.0)
+
+    missing, missing_report = circsym._frequency_refined_meridian_config(
+        {},
+        1_000.0,
+    )
+    legacy, legacy_report = circsym._frequency_refined_meridian_config(
+        {
+            "mesh": {
+                "throatResolution": 3.0,
+                "mouthResolution": 12.0,
+                "rearResolution": 18.0,
+                "apertureResolutionScale": 1.0,
+            }
+        },
+        1_000.0,
+    )
+
+    assert missing["mesh"] == legacy["mesh"]
+    assert missing_report["applied"] == legacy_report["applied"]
+    assert missing_report["refined"] is legacy_report["refined"] is False
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import json
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ import pytest
 
 from server.engines import registry
 from server.engines.dryrun import DryRunEngine
+from server.jobs.api import create_jobs_router
 from server.jobs.models import SolveRequest
 from server.jobs.runtime import (
     EngineUnavailableError,
@@ -98,11 +100,19 @@ def _planner_request(
     )
 
 
-def test_formulation_planner_uses_portable_axisym_without_metal(
+@pytest.mark.parametrize("solver_mode", ["auto", "circsym"])
+def test_formulation_planner_uses_portable_axisym_without_revolved_symmetry(
     monkeypatch,
+    solver_mode: str,
 ) -> None:
     from server.solver import circsym
 
+    monkeypatch.setattr(
+        "server.jobs.runtime.resolve_symmetry",
+        lambda _design: pytest.fail(
+            "axisymmetric submissions must not build a revolved surface"
+        ),
+    )
     monkeypatch.setattr(circsym, "axisymmetric_eligibility_reasons", lambda _request: [])
     monkeypatch.setattr(
         circsym,
@@ -120,17 +130,24 @@ def test_formulation_planner_uses_portable_axisym_without_metal(
         factory=lambda name: object() if name in {"axisym", "bempp"} else None,
     )
 
-    resolution = asyncio.run(resolve_submission(_planner_request(), engine_registry))
+    resolution = asyncio.run(
+        resolve_submission(_planner_request(solver_mode=solver_mode), engine_registry)
+    )
 
     assert resolution.engine_name == "axisym"
     assert resolution.request.options.engine == "axisym"
     assert resolution.symmetry_metadata["solver_plan"] == {
         "formulation": "axisymmetric",
         "engine": "axisym",
-        "reason": "AUTO selected the eligible platform-neutral axisymmetric runner",
+        "reason": (
+            "forced by solver_mode='circsym'"
+            if solver_mode == "circsym"
+            else "AUTO selected the eligible platform-neutral axisymmetric runner"
+        ),
         "eligibility_reasons": [],
         "cost_evidence": {"model": "test", "full_3d_quadrants": 1},
     }
+    assert resolution.symmetry_metadata["domain"] == "continuous-axisymmetric"
 
 
 def test_axisymmetric_cost_evidence_uses_refined_meridian_and_requested_domain() -> None:
@@ -184,6 +201,59 @@ def test_formulation_planner_falls_back_to_selected_full_3d_backend(
         "reason": "axisymmetric formulation was not eligible",
         "eligibility_reasons": ["mouth is not circular"],
     }
+
+
+def test_submission_plan_endpoint_uses_the_submitted_design(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from server.solver import circsym
+
+    eligibility_reasons: list[str] = []
+    monkeypatch.setattr(
+        circsym,
+        "axisymmetric_eligibility_reasons",
+        lambda _request: eligibility_reasons,
+    )
+    monkeypatch.setattr(
+        circsym,
+        "axisymmetric_plan_cost",
+        lambda _request, *, full_3d_quadrants: {
+            "model": "test",
+            "full_3d_quadrants": full_3d_quadrants,
+        },
+    )
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("axisym", True, "portable CPU", "1"),
+            registry.EngineInfo("beat", False, "GPU backend is offline", None),
+        ],
+        factory=lambda name: object() if name == "axisym" else None,
+    )
+    runtime = JobRuntime(
+        JobStore(tmp_path / "jobs.db"),
+        engine_registry=engine_registry,
+    )
+    endpoint = next(
+        route.endpoint
+        for route in create_jobs_router(runtime).routes
+        if getattr(route, "path", None) == "/api/solve/plan"
+    )
+    request = _planner_request(engine="beat", solver_mode="auto")
+
+    eligible = asyncio.run(endpoint(request))
+    assert eligible.engine == "axisym"
+    assert eligible.formulation == "axisymmetric"
+    assert eligible.eligibility_reasons == []
+
+    eligibility_reasons.append("mouth is not circular")
+    ineligible = asyncio.run(endpoint(request))
+    assert ineligible.status_code == 503
+    refusal = json.loads(ineligible.body)
+    assert refusal["error"]["code"] == "engine_unavailable"
+    assert refusal["error"]["message"] == (
+        "Solve engine 'beat' is unavailable. GPU backend is offline"
+    )
 
 
 def test_bempp_coupled_infinite_baffle_planner_requires_full_domain() -> None:

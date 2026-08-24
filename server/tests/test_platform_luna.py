@@ -572,6 +572,7 @@ def test_capability_probe_runs_off_thread_and_is_cached(
                     "fast_paths": (),
                     "formulations": (),
                     "mountings": (),
+                    "geometry_sources": ("parametric",),
                     "symmetry_domains": (),
                     "field_traces": False,
                     "di_sphere": True,
