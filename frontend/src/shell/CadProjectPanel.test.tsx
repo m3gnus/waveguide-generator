@@ -418,7 +418,9 @@ describe('CAD project history', () => {
     expect(item.disabled).toBe(false);
     await act(async () => { item.click(); await Promise.resolve(); await Promise.resolve(); });
 
-    expect(selectBundle).toHaveBeenCalledWith(newest);
+    // Named: the project being opened owns the settings from here on, not
+    // whichever one the workspace happened to be showing.
+    expect(selectBundle).toHaveBeenCalledWith(newest, 'wgl_cad_first');
     expect(newestReturnForProject([older, newest], { documentName: '260627 - PartyMEH v10', archiveStem: null })).toBe(newest);
     expect(newestReturnForProject([older, newest], { documentName: 'Other', archiveStem: null })).toBeNull();
   });
