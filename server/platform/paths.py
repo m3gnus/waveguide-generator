@@ -11,10 +11,21 @@ from typing import Literal, Mapping
 
 
 DATA_DIR_ENV = "WG2_DATA_DIR"
+APP_ROOT_ENV = "WG2_APP_ROOT"
 APP_DIRECTORY = "WaveguideGenerator"
 LEGACY_APP_DIRECTORY = "WaveguideGenerator2"
 
 log = logging.getLogger("wg.paths")
+
+
+def app_root(*, environ: Mapping[str, str] | None = None) -> Path:
+    """Return the application source layer, whether bundled or checked out."""
+
+    env = os.environ if environ is None else environ
+    configured = env.get(APP_ROOT_ENV)
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path(__file__).resolve().parents[2]
 
 
 @dataclass(frozen=True, slots=True)

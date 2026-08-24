@@ -16,6 +16,7 @@ from server.updates.api import mount_updates
 from server.updates.service import (
     INCOMPLETE_TTL_SECONDS,
     ReleaseResponse,
+    UpdateInstallUnavailable,
     UpdateRateLimitError,
     UpdateService,
     checkout_status,
@@ -337,6 +338,18 @@ def test_checkout_classifier_only_supports_an_exact_clean_release(tmp_path: Path
     assert modified["updateSupported"] is False
 
 
+def test_bundle_with_missing_manifests_never_falls_back_to_the_git_installer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+
+    bundled = checkout_status(tmp_path, "2.0.0")
+
+    assert bundled["kind"] == "bundle"
+    assert bundled["updateSupported"] is False
+    assert "manifest" in bundled["reason"]
+
+
 def test_status_endpoint_runs_the_blocking_service_off_loop(tmp_path: Path):
     class FakeService:
         def get_status(self, *, force: bool = False) -> dict[str, object]:
@@ -385,3 +398,27 @@ def test_install_endpoint_requires_confirmation_and_runs_off_loop(tmp_path: Path
     accepted = asyncio.run(endpoint(confirmation="install"))
     assert accepted["accepted"] is True
     assert accepted["thread"] != main_thread
+
+
+def test_install_endpoint_reports_active_job_conflicts_as_409(tmp_path: Path) -> None:
+    class ConflictingService:
+        def request_install(self) -> dict[str, object]:
+            raise UpdateInstallUnavailable(
+                "Update 2.0.1 is already active; wait before installing 2.0.2."
+            )
+
+    app = FastAPI()
+    mount_updates(
+        app,
+        running_version="2.0.0",
+        data_dir=tmp_path,
+        repo_root=tmp_path,
+        service=ConflictingService(),  # type: ignore[arg-type]
+    )
+    endpoint = next(route.endpoint for route in app.routes if route.path == "/api/updates/install")
+
+    with pytest.raises(HTTPException) as conflict:
+        asyncio.run(endpoint(confirmation="install"))
+
+    assert conflict.value.status_code == 409
+    assert "2.0.1" in conflict.value.detail

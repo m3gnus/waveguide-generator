@@ -384,7 +384,8 @@ acquire → conflict → release → re-acquire and passes on Windows.
 **Graceful shutdown: pass.** `launch/serve.py` now also handles `SIGBREAK`,
 which is what Ctrl+Break raises on Windows, alongside `SIGINT` and `SIGTERM`.
 That is worth having on its own — `SIGTERM` cannot be delivered by another
-process on Windows at all, since `os.kill` maps to `TerminateProcess` — and it
+process on Windows at all, since `os.kill` maps to `TerminateProcess` for every
+signal except `0` — and it
 is also the only stop signal that can be addressed to a *specific* process
 group, which is what finally made this testable. `CTRL_BREAK_EVENT` aimed at
 the server's own group cannot touch any other console, unlike
@@ -509,21 +510,75 @@ could interleave a seek with another's truncate and leave malformed metadata.
 No caller does this today — `serve.py` holds one lock on one thread — but the
 extra seeks are mine, so the hazard is mine to close.
 
-### 4.1a `_pid_is_running()` was a process killer on Windows
+### 4.1a `_pid_is_running()` could not answer the question on Windows
 
 Not required to make anything start, fixed because leaving it would be a
 landmine in a module being made portable.
 
-`os.kill(pid, 0)` is not a liveness probe on Windows. CPython implements
-`os.kill` there as `OpenProcess` + `TerminateProcess(handle, sig)`, so signal 0
-**terminates the process being asked about**. Demonstrated directly: a spawned
-process was gone immediately after `os.kill(pid, 0)` returned without raising.
+**Correction (2026-08-22).** This section previously claimed that
+`os.kill(pid, 0)` terminates the process it is asked about. That is **false for
+signal 0 and true for every other signal**, and the distinction is the whole
+point -- getting it wrong in either direction misleads the next reader.
 
-The function has no call site today, which is why nothing has been damaged, but
-it is monkeypatched by `test_platform_batch_e.py` and is exactly the shape
-someone would wire into stale-lock handling next. It now branches to
-`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess` on
-Windows, treating `ERROR_ACCESS_DENIED` as "alive but not ours to open".
+Measured on Windows, CPython 3.13.3, and reproduced on the bundled 3.13.12:
+
+| call | result |
+|---|---|
+| `os.kill(pid, 0)` | no exception; the process is **still alive** |
+| `os.kill(pid, signal.SIGTERM)` | no exception; the process is **dead**, exit code 15 |
+
+Exit code 15 is the signal number handed straight to `TerminateProcess(handle,
+sig)`, so CPython special-cases signal 0 alone. `os.kill` on Windows is
+therefore genuinely destructive for `SIGTERM` and friends -- see §4.2's note on
+graceful shutdown, which depends on that being true -- and is merely a poor
+liveness probe for signal 0.
+
+The "demonstrated directly" evidence for the original claim did not survive
+re-measurement by two independent Windows sessions. The claim was repeated in a
+source comment in `server/platform/instance.py`, where it was read and reasoned
+from in good faith months later; both have been corrected. Do not restore it,
+and do not over-correct it into "os.kill is not destructive on Windows", which
+is equally wrong.
+
+The real defect is narrower and still worth the change. `os.kill(pid, 0)` raises
+a plain `OSError` (WinError 87) for a pid that no longer exists, which is neither
+`ProcessLookupError` nor `PermissionError`, so a probe catching only those two
+lets it escape. More importantly, Win32 keeps a process object resolvable while
+any handle to it is open, so `os.kill` reports an exited process as **running**
+for as long as anything holds a handle on it — a silent hang rather than a crash.
+
+What signal `0` actually gets wrong is subtler and worse to debug. Win32 keeps
+a process object resolvable for as long as *anyone* holds a handle to it, so a
+dead process reads as running whenever some other process still has it open.
+A probe that answers "alive" forever turns a bounded wait into a hang, which
+leaves nothing in a log. Separately, a pid that never existed raises a bare
+`OSError` (`WinError 87`) rather than `ProcessLookupError`, so the POSIX-shaped
+`except` misses it.
+
+| case | `os.kill(pid, 0)` | handle probe |
+|---|---|---|
+| live process | alive | alive |
+| dead, a handle still held | **alive (wrong)** | dead |
+| dead, handles released | `OSError 87` | dead |
+| pid never existed | `OSError 87` | dead |
+| dead, exited with code 259 | **alive (wrong)** | dead |
+
+`GetExitCodeProcess` fixes the handle-held case and walks into the last row:
+`STILL_ACTIVE` is 259, so a process that exits with code 259 is
+indistinguishable from a running one. The function now opens with
+`PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE` and waits on the handle with
+a zero timeout, which is immune to the exit code entirely — a process handle
+is signalled exactly when the process has exited. `SYNCHRONIZE` is not
+optional: with a query-only handle the wait fails with `WAIT_FAILED`, which is
+not `WAIT_OBJECT_0`, so the probe silently answers "alive" for everything it
+can open and still passes a live-process test. `ERROR_ACCESS_DENIED` from
+`OpenProcess` is treated as "alive but not ours to open".
+
+It also asks for `SYNCHRONIZE` and prefers `WaitForSingleObject(handle, 0)`,
+because `STILL_ACTIVE` is 259: a process that exits with code 259 is
+indistinguishable from a running one by exit code alone, and would be reported
+alive forever. The wait is unambiguous, and the exit code remains the fallback
+for a process we may query but not synchronise on.
 
 Those three Win32 calls carry explicit `argtypes`/`restype`. Without them ctypes
 assumes a C `int` return, but a `HANDLE` is pointer-sized: on 64-bit Windows the

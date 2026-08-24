@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import math
 import struct
-from pathlib import Path
 from typing import Any, Mapping, TypeAlias
 
 import numpy as np
+
+from server.platform.paths import app_root
 
 Header: TypeAlias = dict[str, Any]
 
@@ -30,7 +31,7 @@ _DTYPES: dict[str, np.dtype[Any]] = {
     "i32": np.dtype("<i4"),
 }
 _DTYPE_NAMES = {(dtype.kind, dtype.itemsize): name for name, dtype in _DTYPES.items()}
-_RULES_PATH = Path(__file__).resolve().parents[2] / "shared" / "frame-rules.json"
+_RULES_PATH = app_root() / "shared" / "frame-rules.json"
 RULE_IDS = frozenset(json.loads(_RULES_PATH.read_text(encoding="utf-8")))
 
 

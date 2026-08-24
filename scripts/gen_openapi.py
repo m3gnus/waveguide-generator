@@ -5,16 +5,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = REPO_ROOT / "docs" / "reference" / "openapi.v1.json"
-
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+_IMPORT_ROOT = Path(
+    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
+).expanduser().resolve()
+if str(_IMPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_ROOT))
 
 from server.app import create_app  # noqa: E402
+from server.platform.paths import app_root  # noqa: E402
+
+
+REPO_ROOT = app_root()
+OUTPUT = REPO_ROOT / "docs" / "reference" / "openapi.v1.json"
 
 
 def render() -> str:

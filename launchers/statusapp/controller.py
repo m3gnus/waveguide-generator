@@ -28,7 +28,15 @@ from scripts.frontend_freshness import (
     refresh_hint,
 )
 from server.platform.instance import requested_port
-from .updater import UpdateHandoffError, consume_update_request, launch_update_handoff
+from server.platform.paths import app_root, resolve_data_dir
+from .updater import (
+    BundleUpdateRequest,
+    UpdateHandoffError,
+    UpdateRequest,
+    consume_update_request,
+    launch_bundle_update_handoff,
+    launch_update_handoff,
+)
 
 
 HOST = "127.0.0.1"
@@ -207,11 +215,11 @@ class StatusController:
         request_timeout: float = 0.35,
         shutdown_timeout: float = 8.0,
     ) -> None:
-        self.repo_root = Path(repo_root or Path(__file__).resolve().parents[2]).resolve()
+        self.environ = dict(os.environ if environ is None else environ)
+        self.repo_root = Path(repo_root or app_root(environ=self.environ)).resolve()
         self.python_executable = Path(python_executable or sys.executable).resolve()
         self.server_args = tuple(server_args)
         self.server_command = tuple(server_command) if server_command is not None else None
-        self.environ = dict(os.environ if environ is None else environ)
         self.request_probe = request_probe
         self.request_timeout = request_timeout
         self.shutdown_timeout = shutdown_timeout
@@ -251,6 +259,10 @@ class StatusController:
         with self._lock:
             return self._update_request_path
 
+    @property
+    def data_dir(self) -> Path:
+        return self._data_dir()
+
     def __enter__(self) -> StatusController:
         self.start()
         return self
@@ -276,6 +288,15 @@ class StatusController:
             elif argument.startswith("--port="):
                 cli_port = int(argument.partition("=")[2])
         return requested_port(cli_port, environ=self.environ)
+
+    def _data_dir(self) -> Path:
+        override: str | None = None
+        for index, argument in enumerate(self.server_args):
+            if argument == "--data-dir" and index + 1 < len(self.server_args):
+                override = self.server_args[index + 1]
+            elif argument.startswith("--data-dir="):
+                override = argument.partition("=")[2]
+        return resolve_data_dir(override, environ=self.environ)
 
     def _command(self, port: int, control_path: Path) -> list[str]:
         if self.server_command is None:
@@ -557,7 +578,7 @@ class StatusController:
         if temporary_directory is not None:
             temporary_directory.cleanup()
 
-    def take_update_request(self) -> str | None:
+    def take_update_request(self) -> UpdateRequest | None:
         """Return one delayed, validated UI request when it is ready to run."""
 
         with self._lock:
@@ -565,18 +586,27 @@ class StatusController:
         if path is None:
             return None
         try:
-            return consume_update_request(path)
+            return consume_update_request(path, data_dir=self._data_dir())
         except UpdateHandoffError as exc:
             with self._lock:
                 self._output.append(str(exc))
             return None
 
-    def launch_update(self, tag: str) -> None:
+    def launch_update(self, request: UpdateRequest) -> None:
         """Start the independent updater before this status owner shuts down."""
 
+        if isinstance(request, BundleUpdateRequest):
+            launch_bundle_update_handoff(
+                self.repo_root,
+                request,
+                os.getpid(),
+                environ=self.environ,
+                server_args=self.server_args,
+            )
+            return
         launch_update_handoff(
             self.repo_root,
-            tag,
+            request,
             os.getpid(),
             environ=self.environ,
             server_args=self.server_args,

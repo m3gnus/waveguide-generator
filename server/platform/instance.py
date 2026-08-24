@@ -26,6 +26,8 @@ if sys.platform == "win32":
     _kernel32.OpenProcess.restype = wintypes.HANDLE
     _kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
     _kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    _kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    _kernel32.WaitForSingleObject.restype = wintypes.DWORD
     _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
     _kernel32.CloseHandle.restype = wintypes.BOOL
 else:
@@ -52,8 +54,13 @@ LOCK_BYTE_OFFSET = 1 << 30
 
 # Win32 constants for the liveness probe below.
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# WaitForSingleObject needs SYNCHRONIZE; a query-only handle makes it fail
+# with WAIT_FAILED, which is indistinguishable from "still running".
+SYNCHRONIZE = 0x00100000
 ERROR_ACCESS_DENIED = 5
 STILL_ACTIVE = 259
+WAIT_OBJECT_0 = 0x00000000
+WAIT_TIMEOUT = 0x00000102
 
 log = logging.getLogger("wg.instance")
 
@@ -120,14 +127,42 @@ LockConflict = InstanceAlreadyRunning
 
 
 def _windows_pid_is_running(pid: int) -> bool:
-    # os.kill(pid, 0) is not a liveness probe on Windows: it resolves to
-    # TerminateProcess, so the check kills the process it is asked about.
-    # Opening a query handle answers the same question without that side effect.
-    handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    """Answer whether a pid is live, without asking ``os.kill``.
+
+    A handle answers for a process whose handle someone still holds: Win32
+    keeps the process object resolvable until the last handle closes, so an
+    exited process stays addressable and ``os.kill(pid, 0)`` reports it as
+    running. That, plus the bare ``OSError`` (WinError 87) it raises for a pid
+    that never existed, is why it is the wrong probe here.
+
+    It is *not* the wrong probe because it kills: signal 0 is special-cased and
+    leaves the process alone (measured on Windows 2026-08-22; an earlier comment
+    here claimed otherwise and was read and reasoned from in good faith). Every
+    *other* signal does map to ``TerminateProcess(handle, sig)`` and really does
+    terminate -- ``SIGTERM`` leaves exit code 15 -- so do not reduce this to
+    "os.kill is harmless on Windows" either.
+    """
+
+    # SYNCHRONIZE is what WaitForSingleObject needs below. Ask for it, but do
+    # not require it: a process we may only query is still one we can answer
+    # for, just without the unambiguous wait.
+    handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+    waitable = bool(handle)
+    if not handle:
+        handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         # A live process we are not allowed to open still counts as running.
         return ctypes.get_last_error() == ERROR_ACCESS_DENIED
     try:
+        if waitable:
+            # The wait is unambiguous where the exit code is not: a process
+            # that exits with 259 is indistinguishable from a running one,
+            # because STILL_ACTIVE *is* 259. Signalled means exited.
+            state = _kernel32.WaitForSingleObject(handle, 0)
+            if state == WAIT_OBJECT_0:
+                return False
+            if state == WAIT_TIMEOUT:
+                return True
         exit_code = wintypes.DWORD()
         if not _kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
             return True
@@ -153,7 +188,7 @@ def _pid_is_running(pid: int) -> bool:
 
 
 def pid_is_running(pid: int) -> bool:
-    """Return whether ``pid`` is live without the destructive Windows os.kill trap."""
+    """Return whether ``pid`` is live without relying on Windows ``os.kill`` semantics."""
 
     return _pid_is_running(pid)
 
@@ -276,9 +311,7 @@ class InstanceLock:
         self.release()
 
 
-def requested_port(
-    cli_port: int | None = None, *, environ: Mapping[str, str] | None = None
-) -> int:
+def requested_port(cli_port: int | None = None, *, environ: Mapping[str, str] | None = None) -> int:
     """Resolve and validate CLI/environment/default port precedence."""
 
     env = os.environ if environ is None else environ

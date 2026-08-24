@@ -23,6 +23,25 @@ Then run the installer for your platform:
 | Windows | double-click `installers\windows\install-and-update.bat` |
 | Linux | `bash installers/linux/install.sh` |
 
+For a self-contained macOS install, download the release's
+**Waveguide.Generator-&lt;version&gt;-macos-arm64.dmg**, open it, and drag **Waveguide Generator** to
+Applications. The app is ad-hoc signed rather than notarized, so on first launch
+macOS may require **System Settings → Privacy & Security → Open Anyway** and a
+confirmation; later launches work normally.
+
+For a self-contained Windows install, download
+**Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip**, extract the complete **Waveguide Generator**
+folder, and double-click **Waveguide Generator.exe** inside it. The executable is
+not publisher-signed, so Microsoft Defender SmartScreen may require **More info →
+Run anyway** on first launch. The native window requires the **Microsoft Edge
+WebView2 Evergreen Runtime (x64)**, which is normally present on current Windows
+10 and Windows 11 systems; when it is missing or its pythonnet bridge cannot load,
+WG shows repair instructions containing the WebView2 download URL and opens the
+interface in the default browser. The folder
+also includes `WaveguideGenerator.ico` for a shortcut. The executable itself keeps
+the generic Python icon until a future signed build adds the icon as a Windows
+executable resource.
+
 It fast-forwards the checkout, downloads that version's prebuilt interface from
 the GitHub release and **refuses to extract it unless it matches the published
 SHA-256**, creates `.venv` with CPython 3.13 and the locked dependency set,
@@ -85,6 +104,13 @@ The repository root intentionally has no duplicate install or launch scripts;
 use the platform folders above. On first launch the entry creates `.venv` with
 CPython 3.13 and installs the locked dependencies.
 
+On macOS and Windows, append `--window` to the command launcher to open the
+interface in one native desktop window instead of the tkinter status window.
+Closing that window stops the owned server. `--browser` explicitly keeps the
+normal status-window/browser workflow. Linux does not offer the native window
+in this release; `--window` reports that limitation and falls back to the
+status window.
+
 For the original plain-terminal behavior, append `--no-gui`:
 
 ```
@@ -141,18 +167,28 @@ is reported as such and is not treated as a fault.
 
 The version in the top-left corner checks GitHub's latest published full
 release after the interface opens. When a newer, complete release is available
-it turns amber and says **update available**. Click **Install update** to close
-WG, run the verified platform installer, and restart automatically. The dialog
-also retains the exact local installer command as a manual fallback. The same
-action is available from the command palette as **Application update**.
+it turns amber and says **update available**. In the standalone application,
+click **Install update** to download the checksum-verified app layer and, when
+its content id changed, the matching runtime layer. WG stages them in its data
+directory, closes only after verification succeeds, swaps the complete layers,
+restores the ad-hoc bundle signature, and restarts. The previous layers remain
+available for automatic rollback until the updated native application starts successfully.
+The same action is available from the command palette as **Application update**.
+
+The job-log dialog reads and renders at most the first 1.0 MB. For example, opening
+a 50 MB log keeps a 1.0 MB preview in the interface; **Download complete log** uses
+the browser's download path for the full file, and **Copy preview** copies only the
+bounded text shown in the dialog.
 
 WG caches successful checks, retries incomplete releases quickly, and keeps the
 last known result when the network is unavailable. It also inspects the local
 checkout without changing it: modified, development, detached, and non-Git
 installs are explained instead of being handed an action that would silently do
-the wrong thing. Automatic installation is available when WG was opened through
-its status window. For a copied command, close Waveguide Generator first so the
-installer can acquire the application data lock.
+the wrong thing. Checkout-based installs keep their existing platform-installer
+handoff and exact command fallback; automatic installation there is available
+when WG was opened through its status window. For a copied checkout command,
+close Waveguide Generator first so the installer can acquire the application
+data lock.
 
 ### Output workspace
 
@@ -266,9 +302,18 @@ git push origin v0.2.1
 
 The tag fires `.github/workflows/release.yml`, which **refuses to build when the
 tag disagrees with `shared/version.json`, the tagged commit is not reachable
-from `origin/main`, or CI did not succeed for that exact commit**. It then
-attaches the prebuilt SPA as
-`waveguide-generator-v2-spa-<version>.tar.gz` with a `.sha256` beside it, so
+from `origin/main`, or CI did not succeed for that exact commit** — a build that
+misreports itself is worse than a failed release. Its SPA job attaches
+`waveguide-generator-v2-spa-<version>.tar.gz`; the macOS job builds the canonical
+platform-neutral app ZIP and manifest, the macOS runtime ZIP, and
+`Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job
+checks its independently built app ZIP byte-for-byte against the canonical one and
+builds the Windows runtime ZIP plus
+`Waveguide.Generator-<version>-windows-x86_64.zip`. Every attached file has a
+`.sha256` sidecar. A final publisher job validates the exact seven asset pairs, uploads
+them to a draft, and makes the release public only after all three build jobs succeed.
+Installer filenames use dots because those are the names GitHub serves; the installed
+application and extracted Windows folder retain spaces. The prebuilt SPA means
 installing Waveguide Generator needs no Node runtime.
 
 Pre-release and build-metadata suffixes are deliberately unsupported: the tag is

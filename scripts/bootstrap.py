@@ -23,7 +23,16 @@ else:
     import fcntl
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+_IMPORT_ROOT = Path(
+    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
+).expanduser().resolve()
+if str(_IMPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_ROOT))
+
+from server.platform.paths import app_root  # noqa: E402
+
+
+REPO_ROOT = app_root()
 DEFAULT_VENV = REPO_ROOT / ".venv"
 STAMP_NAME = ".wg2-bootstrap.json"
 # Run by path rather than as -m launchers.statusapp.diagnostics: the package

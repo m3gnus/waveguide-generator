@@ -6,14 +6,25 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import zipfile
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+_IMPORT_ROOT = Path(
+    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
+).expanduser().resolve()
+if str(_IMPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_ROOT))
+
+from server.platform.paths import app_root  # noqa: E402
+
+
+REPO_ROOT = app_root()
 SOURCE_SPEC = REPO_ROOT / "integrations" / "wglink" / "source.json"
 VERSION_FILE = REPO_ROOT / "shared" / "version.json"
 ARCHIVE_ROOT = "wglink"
