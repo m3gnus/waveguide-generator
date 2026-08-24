@@ -1970,6 +1970,9 @@ def test_combined_channel_is_appended_with_contract_metadata(
     response = asyncio.run(run())
 
     assert response["channel_order"] == ["left", "right", "combined"]
+    # The final envelope mirrors the per-channel grids as one sorted top-level
+    # union so frequency-shaped consumers need not walk the channels.
+    assert response["frequencies"] == [100.0, 500.0, 1000.0]
     combined = response["channels"]["combined"]
     assert "impedance" not in combined
     assert combined["metadata"]["impedance_omitted"] == (

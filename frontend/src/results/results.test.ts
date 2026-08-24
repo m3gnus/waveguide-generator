@@ -60,6 +60,24 @@ function result(offset = 0): JobResults {
   };
 }
 
+/** The server's multi_channel envelope: frequencies live per channel, and the
+ * top level carries none (server/solver/metal.py's final envelope). */
+function multiChannelResult(): JobResults {
+  const { frequencies: _hz, spl_on_axis: _spl, directivity: _dir, impedance: _imp, ...contract } = result();
+  const channel = (offset: number): ResultData => {
+    const { result_kind: _kind, result_contract_version: _version, provenance: _provenance, ...body } = result(offset);
+    return body;
+  };
+  // The cast covers the deliberately absent top-level `frequencies`.
+  return {
+    ...contract,
+    result_kind: 'multi_channel',
+    result_contract_version: 2,
+    channels: { hf: channel(0), lf: channel(-6) },
+    channel_order: ['hf', 'lf'],
+  } as unknown as JobResults;
+}
+
 describe('results LRU', () => {
   it('caps at 15 and evicts the least recently used job', () => {
     const cache = new ResultsLruCache(15);
@@ -118,16 +136,28 @@ describe('results LRU', () => {
 
   it('accepts parametric v1 and multi-channel v2 final envelopes', () => {
     expect(parseFinalResultEnvelope(result()).result_kind).toBe('parametric');
-    const multi = {
-      ...result(),
-      result_kind: 'multi_channel',
-      result_contract_version: 2,
-      channels: { hf: { frequencies: [200] } },
-      channel_order: ['hf'],
-    };
-    expect(parseFinalResultEnvelope(multi)).toMatchObject({
+    expect(parseFinalResultEnvelope(multiChannelResult())).toMatchObject({
       result_kind: 'multi_channel', result_contract_version: 2,
     });
+  });
+
+  it('accepts a multi_channel envelope without top-level frequencies', () => {
+    // The server's multi_channel envelope keeps frequencies per channel; the
+    // top level has none. That envelope must parse -- refusing it wiped the
+    // charts of every finished CAD Link solve.
+    const envelope = multiChannelResult();
+    expect('frequencies' in envelope).toBe(false);
+    const parsed = parseFinalResultEnvelope(envelope);
+    expect(parsed.channels?.hf?.frequencies).toEqual([200, 1_000]);
+    // A present-but-garbage top-level frequencies field still fails.
+    expect(() => parseFinalResultEnvelope({ ...multiChannelResult(), frequencies: ['garbage'] }))
+      .toThrow('invalid final result envelope');
+    expect(() => parseFinalResultEnvelope({ ...multiChannelResult(), channels: 'garbage' }))
+      .toThrow('invalid final result envelope');
+    // A legacy payload (no envelope fields) still needs top-level frequencies
+    // before it can be adopted as parametric v1.
+    const { result_kind: _kind, result_contract_version: _version, frequencies: _hz, ...legacy } = result();
+    expect(() => parseFinalResultEnvelope(legacy)).toThrow('invalid final result envelope');
   });
 
   it('validates archive snapshots before caching their final result', async () => {
