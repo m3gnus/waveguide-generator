@@ -868,6 +868,30 @@ describe('listing-gone staleness self-heals', () => {
     useCadReturnStore.getState().refreshSelectedBundle({ ...bundle, modifiedAt: '2099-01-01T00:00:00Z' });
     expect(useCadReturnStore.getState().needsIngest).toBe(true);
   });
+
+  it('leaves a run recalled from the archive solvable across listing polls', () => {
+    // A recalled run's bundle is rebuilt from its ingest record and has no
+    // workspace path, so the listing can never contain it. Reconciling it
+    // against the listing blocked "that older one was better -- run it again"
+    // 2.5 s after every recall.
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+    useCadReturnStore.setState({
+      selectedBundle: { ...bundle, bundlePath: '', readable: false },
+      ingestRecord: record(),
+      needsIngest: false,
+      ingestedBundleIdentity: null,
+      ingestStaleReason: null,
+    });
+
+    useCadReturnStore.getState().refreshSelectedBundle(null);
+    useCadReturnStore.getState().refreshSelectedBundle(bundle);
+
+    expect(useCadReturnStore.getState().needsIngest).toBe(false);
+    expect(useCadReturnStore.getState().ingestStaleReason).toBeNull();
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('');
+  });
 });
 
 describe('combined output: band roles', () => {
