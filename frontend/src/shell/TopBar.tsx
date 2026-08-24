@@ -5,6 +5,7 @@ import { CAD_CONTROL_DESCRIPTORS, cadControlIsAvailable, cadControlMatchesQuery 
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterTab } from '../design/parameterRegistry';
 import { PARAMETRIC_CONTROL_DESCRIPTORS, parametricControlMatchesQuery } from '../design/parametricControlRegistry';
+import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
 import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
@@ -71,8 +72,11 @@ export interface ParameterPaletteContext {
 
 /** Enter a workspace mode and route first-time CAD users to the workflow that
  * can make that mode usable. A prepared return stays in place because its CAD
- * controls and viewport are already available. */
+ * controls and viewport are already available. Returning to Parametric first
+ * restores the parametric working design if a CAD flow replaced it, so the
+ * toggle never presents a CAD project's design as the user's own. */
 export function activateWorkspaceMode(mode: WorkspaceMode): void {
+  if (mode === 'parametric') restoreParametricWorkingDesign();
   workspaceModeStore.setMode(mode);
   if (mode === 'cad' && !useCadReturnStore.getState().ingestRecord) {
     workspaceNavigation.activate('cadlink');

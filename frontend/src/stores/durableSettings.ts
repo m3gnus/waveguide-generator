@@ -30,6 +30,7 @@ export const SETTINGS_NAMESPACES = {
   dockviewMode: 'wg2.dockview.mode.v4',
   workspaceMode: 'wg2.workspace.mode.v1',
   cadProject: 'wg2.cad.project.v1',
+  crossoverView: 'wg2.crossover.view.v1',
   paramHelp: 'wg-param-help-visible',
   paramSections: 'wg-param-sections',
   cadSolveProfiles: 'waveguide-v2-g3-cad-solve-profiles',

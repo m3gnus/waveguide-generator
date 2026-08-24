@@ -269,6 +269,82 @@ describe('Viewport preview errors', () => {
     expect(setFrequencyIndex).toHaveBeenCalledWith(2);
   });
 
+  it('snaps a typed frequency to the nearest solved one and says when they differ', () => {
+    act(() => {
+      compareSelection.setPrimary('available');
+      publishJobs([completeJob('available', true)]);
+      useFieldPlaneStore.setState({
+        enabled: true,
+        jobId: 'available',
+        plane: fieldPlane,
+        status: 'ready',
+        frequenciesHz: [500, 987, 2_000],
+        frequencyIndex: 0,
+      });
+    });
+    const noticeText = () => [...host.querySelectorAll('.field-plane-note')]
+      .map((note) => note.textContent)
+      .find((text) => text?.includes('requested'));
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Field plane frequency in hertz"]')!;
+    expect(input).not.toBeNull();
+    const enter = (value: string) => {
+      act(() => {
+        input.focus();
+        setInputValue(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      act(() => input.blur());
+    };
+
+    enter('1000');
+    expect(useFieldPlaneStore.getState().frequencyIndex).toBe(1);
+    expect(noticeText()).toBe('requested 1,000 Hz → showing 987 Hz');
+
+    // Moving the slider away retires the notice; retyping the exact solved
+    // frequency never raises one.
+    const slider = host.querySelector<HTMLInputElement>('[aria-label="Field plane frequency"]')!;
+    act(() => {
+      setInputValue(slider, '2');
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(noticeText()).toBeUndefined();
+    enter('987');
+    expect(useFieldPlaneStore.getState().frequencyIndex).toBe(1);
+    expect(noticeText()).toBeUndefined();
+  });
+
+  it('offers per-driver response views only when the run has combine members', () => {
+    act(() => {
+      compareSelection.setPrimary('available');
+      publishJobs([completeJob('available', true)]);
+      useFieldPlaneStore.setState({
+        enabled: true,
+        jobId: 'available',
+        plane: fieldPlane,
+        status: 'ready',
+      });
+    });
+    expect(host.querySelector('[aria-label="Field plane response"]')).toBeNull();
+
+    act(() => useFieldPlaneStore.setState({
+      memberResponses: [{ id: 'left', label: 'LF' }, { id: 'right', label: 'HF' }],
+    }));
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Field plane response"]')!;
+    expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([
+      ['system', 'Combined'],
+      ['member:left', 'LF'],
+      ['member:right', 'HF'],
+    ]);
+    expect(select.value).toBe('system');
+
+    const setResponseId = vi.spyOn(useFieldPlaneStore.getState(), 'setResponseId');
+    act(() => {
+      select.value = 'member:left';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(setResponseId).toHaveBeenCalledWith('member:left');
+  });
+
   it('moves and resizes the plane from the numeric transform inputs', () => {
     act(() => {
       compareSelection.setPrimary('available');

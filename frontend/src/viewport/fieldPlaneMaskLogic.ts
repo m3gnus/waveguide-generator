@@ -194,28 +194,77 @@ export function fieldPlaneMaskDistanceMetres(plane: FieldPlaneSpec): number {
   return Math.max(fieldPlaneGridSpacingMetres(plane) / 4, 1e-4);
 }
 
-/** Classify in solver metres. 1 means transparent: either near the surface or,
- * only for a validated closed manifold shell, inside it. */
-export function classifyFieldPlaneMask(mesh: FieldPlaneMaskMesh, plane: FieldPlaneSpec): Uint8Array {
-  const mask = new Uint8Array(plane.nx * plane.ny);
+/** Extra mask texels per field texel. The mask outlines the model silhouette,
+ * so it profits from resolution the pressure data itself does not need. */
+export const FIELD_PLANE_MASK_SUPERSAMPLE = 2;
+
+/** The GPU texture limit the request validators enforce is 256 per axis, so a
+ * supersampled mask stays within 2x that and well under common texture caps. */
+const MAX_MASK_AXIS_POINTS = 512;
+
+export interface FieldPlaneMaskGrid {
+  nx: number;
+  ny: number;
+  /** Coverage per texel, 0 (field visible) to 255 (fully masked). */
+  data: Uint8Array;
+}
+
+export function fieldPlaneMaskResolution(
+  plane: FieldPlaneSpec,
+  scale = FIELD_PLANE_MASK_SUPERSAMPLE,
+): { nx: number; ny: number } {
+  return {
+    nx: Math.min(plane.nx * scale, MAX_MASK_AXIS_POINTS),
+    ny: Math.min(plane.ny * scale, MAX_MASK_AXIS_POINTS),
+  };
+}
+
+/**
+ * Coverage mask in solver metres. 255 means fully transparent: either within
+ * the near-surface band or, only for a validated closed manifold shell, inside
+ * it. The band edge ramps linearly over one mask cell on each side of the
+ * threshold so the silhouette resolves as an anti-aliased edge instead of a
+ * binary staircase; the mask grid is also supersampled relative to the field
+ * grid, which the linear texture filter then smooths further.
+ */
+export function classifyFieldPlaneMask(
+  mesh: FieldPlaneMaskMesh,
+  plane: FieldPlaneSpec,
+  scale = FIELD_PLANE_MASK_SUPERSAMPLE,
+): FieldPlaneMaskGrid {
+  const { nx, ny } = fieldPlaneMaskResolution(plane, scale);
+  const mask = new Uint8Array(nx * ny);
   const threshold = fieldPlaneMaskDistanceMetres(plane);
+  const rampHalfWidth = Math.max(
+    Math.max(plane.width_m / (nx - 1), plane.height_m / (ny - 1)) / 2,
+    1e-9,
+  );
+  const cutoff = threshold + rampHalfWidth;
   const origin = new Vector3(...plane.origin_m);
   const axisU = new Vector3(...plane.axis_u);
   const axisV = new Vector3(...plane.axis_v);
   const point = new Vector3();
   const closest: HitPointInfo = { point: new Vector3(), distance: Infinity, faceIndex: -1 };
-  for (let y = 0; y < plane.ny; y += 1) {
-    for (let x = 0; x < plane.nx; x += 1) {
+  for (let y = 0; y < ny; y += 1) {
+    for (let x = 0; x < nx; x += 1) {
       point.copy(origin)
-        .addScaledVector(axisU, (x / (plane.nx - 1) - 0.5) * plane.width_m)
-        .addScaledVector(axisV, (y / (plane.ny - 1) - 0.5) * plane.height_m);
-      const nearest = mesh.bvh.closestPointToPoint(point, closest, 0, threshold);
-      const nearSurface = nearest !== null && nearest.distance < threshold;
-      const inside = !nearSurface && mesh.watertight
-        ? isPointInsideMaskMesh(mesh, point.toArray())
-        : false;
-      if (nearSurface || inside) mask[y * plane.nx + x] = 1;
+        .addScaledVector(axisU, (x / (nx - 1) - 0.5) * plane.width_m)
+        .addScaledVector(axisV, (y / (ny - 1) - 0.5) * plane.height_m);
+      const nearest = mesh.bvh.closestPointToPoint(point, closest, 0, cutoff);
+      const distance = nearest === null ? Infinity : nearest.distance;
+      if (distance <= threshold - rampHalfWidth) {
+        mask[y * nx + x] = 255;
+        continue;
+      }
+      if (mesh.watertight && isPointInsideMaskMesh(mesh, point.toArray())) {
+        mask[y * nx + x] = 255;
+        continue;
+      }
+      if (distance < cutoff) {
+        const coverage = (cutoff - distance) / (2 * rampHalfWidth);
+        mask[y * nx + x] = Math.round(Math.min(Math.max(coverage, 0), 1) * 255);
+      }
     }
   }
-  return mask;
+  return { nx, ny, data: mask };
 }

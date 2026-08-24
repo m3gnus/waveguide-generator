@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MIN_POLAR_DISTANCE_M,
+  athPolarOverrides,
   designWireWithAthPolars,
   polarUiFromAthBlocks,
   replaceAthPolarBlocks,
@@ -108,5 +110,15 @@ describe('ATH directivity config compatibility', () => {
     const design = { formula: 'OSSE', extra_blocks: { Report: { items: {}, lines: [] } } };
     expect(designWireWithAthPolars(design, null)).toBe(design);
     expect(designWireWithAthPolars(design, { angle_range: [0, 180, 37] })).toBe(design);
+  });
+
+  it('clamps a stated measurement distance the solve path would refuse', () => {
+    const overrides = athPolarOverrides({
+      'ABEC.Polars:SPL_H': {
+        items: { MapAngleRange: '0,180,37', Distance: '0.001', NormAngle: '10' },
+        lines: [],
+      },
+    });
+    expect(overrides?.distance).toBe(MIN_POLAR_DISTANCE_M);
   });
 });

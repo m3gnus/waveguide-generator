@@ -15,10 +15,12 @@ export interface FieldPlaneMaskResult {
   jobId: string;
   geometrySha256: string;
   symmetryPlane: string | null;
+  /** Mask grid dimensions: supersampled relative to the requested plane grid. */
   nx: number;
   ny: number;
   watertight: boolean;
   snappedVertexCount: number;
+  /** Coverage per texel, 0 (field visible) to 255 (fully masked). */
   mask: ArrayBuffer;
 }
 
