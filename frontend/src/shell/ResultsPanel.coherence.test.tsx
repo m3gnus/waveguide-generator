@@ -156,6 +156,44 @@ describe('results run coherence', () => {
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'cad', following: true });
   });
 
+  it('opens on the newest drawable run when no model is loaded yet', async () => {
+    // A refreshed window restores its CAD project's return but not an
+    // ingestion, so nothing matches the context and the dock would sit on
+    // "Loading results" with nothing selected for the rest of the session.
+    const imported = job('cad', 2, null, true);
+    publishJobs([imported]);
+    compareSelection.clear();
+    workspaceModeStore.setMode('cad');
+
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+
+    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
+    // Pinned, not followed: nothing can match the context, so a followed slot
+    // would be released again on the very next pass.
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'cad', following: false });
+    // Shown, but never passed off as the model in the viewport.
+    expect(host.querySelector('button.result-context-marker')?.textContent).toBe('other model');
+
+    // And it stays: re-rendering must not hand the slot back to nothing.
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'cad' });
+  });
+
+  it('leaves the dock empty when a model family with no runs is entered', async () => {
+    // The opening fallback is for the opening selection only: once a run has
+    // been shown, leaving its model family clears the dock rather than
+    // dragging an unrelated run onto the charts.
+    const parametric = job('parametric', 1, liveDesign());
+    publishJobs([parametric]);
+    compareSelection.clear();
+
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'parametric' });
+
+    await act(async () => { workspaceModeStore.setMode('cad'); await Promise.resolve(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: null });
+  });
+
   it('marks an edited-since run on its chip and offers restore and solve', async () => {
     const solved = designForFamily('OSSE');
     solved.L = 321;
