@@ -753,6 +753,126 @@ def test_plane_limits_and_orthonormality_are_rejected(
         FieldPlaneRequest.model_validate(body)
 
 
+def test_member_response_applies_only_that_members_system_weight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def evaluate(
+        _mesh: object,
+        _frequency_hz: float,
+        _k_real: float,
+        pressure: np.ndarray,
+        neumann: np.ndarray,
+        points: np.ndarray,
+        **_kwargs: Any,
+    ) -> np.ndarray:
+        calls.append((pressure.copy(), neumann.copy()))
+        return np.zeros(points.shape[0], dtype=np.complex128)
+
+    _mock_field_backend(monkeypatch, evaluate)
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        _create_job(store, "member", multi=True)
+
+        system_status, system_raw, _headers = await _request(
+            app,
+            "/api/results/member/field-plane",
+            _body("system-baseline", response_id="system"),
+        )
+        assert system_status == 200
+        system_header, _values = _decode(system_raw)
+
+        weights = raw_channel_weights(
+            np.asarray([1000.0]),
+            ["left", "right"],
+            [1000.0],
+            {"left": -1.0, "right": 2.0},
+            {"left": 0.00025, "right": 0.0},
+        )
+        base = _artifact(multi=True)
+        for index, channel in enumerate(base.channels):
+            member_id = channel.channel_id
+            status, raw, _headers = await _request(
+                app,
+                "/api/results/member/field-plane",
+                _body(f"member-{member_id}", response_id=f"member:{member_id}"),
+            )
+            assert status == 200
+            header, _values = _decode(raw)
+            assert header["response_id"] == f"member:{member_id}"
+            # A member view is derived from the same synthesis parameters, so
+            # combine edits invalidate it through the same revision hash.
+            assert header["synthesis_revision"] == system_header["synthesis_revision"]
+            weight = weights[member_id][0]
+            np.testing.assert_allclose(
+                calls[index + 1][0], weight * channel.pressure_p1[0]
+            )
+            np.testing.assert_allclose(
+                calls[index + 1][1], weight * channel.neumann_dp0[0]
+            )
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_member_response_unknown_or_without_combine_maps_to_422(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_field_backend(
+        monkeypatch,
+        lambda *_args, **_kwargs: np.zeros(6, dtype=np.complex128),
+    )
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        _create_job(store, "multi-member", multi=True)
+        _create_job(store, "parametric-member")
+
+        status, _raw, _headers = await _request(
+            app,
+            "/api/results/multi-member/field-plane",
+            _body(response_id="member:unknown"),
+        )
+        assert status == 422
+
+        # A single-channel run stores no combine metadata to weight against.
+        status, _raw, _headers = await _request(
+            app,
+            "/api/results/parametric-member/field-plane",
+            _body(response_id="member:default"),
+        )
+        assert status == 422
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("response_id", "valid"),
+    [
+        ("system", True),
+        ("channel:default", True),
+        ("member:left", True),
+        ("member:", False),
+        ("channel:", False),
+        ("invalid", False),
+    ],
+)
+def test_response_id_forms(response_id: str, valid: bool) -> None:
+    body = _body(response_id=response_id)
+    if valid:
+        assert FieldPlaneRequest.model_validate(body).response.id == response_id
+    else:
+        with pytest.raises(ValueError):
+            FieldPlaneRequest.model_validate(body)
+
+
 @pytest.mark.parametrize(
     ("response_id", "frequency_index"),
     [("channel:unknown", 0), ("channel:default", 1), ("invalid", 0)],

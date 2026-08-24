@@ -3,7 +3,10 @@ export const FIELD_PLANE_HEADER_VERSION = 2 as const;
 export const FIELD_PLANE_ORDERING = 'v-major-row-major' as const;
 
 export type Vector3Tuple = [number, number, number];
-export type FieldPlaneResponseId = 'system' | `channel:${string}`;
+/** 'channel:<id>' is the raw retained basis; 'member:<id>' is that channel
+ * with its stored crossover combine weight (filter/gain/delay/polarity)
+ * applied, i.e. the channel as it plays inside the system sum. */
+export type FieldPlaneResponseId = 'system' | `channel:${string}` | `member:${string}`;
 
 export interface FieldPlaneSpec {
   origin_m: Vector3Tuple;
@@ -95,8 +98,8 @@ export function buildFieldPlaneRequest({
   }
   if (
     normalizedResponseId.length > 256
-    || (normalizedResponseId !== 'system' && !/^channel:.+/.test(normalizedResponseId))
-  ) throw new Error("Field-plane response id must be 'system' or 'channel:<id>'");
+    || (normalizedResponseId !== 'system' && !/^(?:channel|member):.+/.test(normalizedResponseId))
+  ) throw new Error("Field-plane response id must be 'system', 'channel:<id>', or 'member:<id>'");
   return {
     version: FIELD_PLANE_VERSION,
     request_id: normalizedRequestId,

@@ -45,12 +45,14 @@ export function sampleFieldPlaneBilinear(
   return { real, imag };
 }
 
-/** Nearest-texel read of the interior mask, matching the shader's discard. */
+/** Nearest-texel read of the coverage mask. The mask carries an anti-aliasing
+ * ramp, so the probe reports "inside" from half coverage upward — the point
+ * where the shader has faded the field to mostly hidden. */
 export function fieldPlaneMaskedAt(mask: AppliedFieldPlaneMask | null, u: number, v: number): boolean {
   if (!mask || mask.nx < 1 || mask.ny < 1) return false;
   const x = Math.round(clamp01(u) * (mask.nx - 1));
   const y = Math.round(clamp01(v) * (mask.ny - 1));
-  return (mask.data[y * mask.nx + x] ?? 0) > 0;
+  return (mask.data[y * mask.nx + x] ?? 0) >= 128;
 }
 
 export interface FieldPlaneProbeReading {
