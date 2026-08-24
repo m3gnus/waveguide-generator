@@ -12,6 +12,7 @@ import threading
 import pytest
 from pydantic import ValidationError
 
+from server.jobs.result_contracts import MultiChannelResultEnvelope
 from server.jobs.store import JobStore, SubmissionConflictError
 
 
@@ -222,6 +223,17 @@ def test_complete_job_accepts_supported_result_envelopes(
     _complete(store, kind, result)
 
     assert store.get_results(kind) == result
+
+    if kind == "multi_channel":
+        # ``frequencies`` is a declared optional field: typed when present, and
+        # envelopes persisted before the field existed stay valid without it.
+        assert MultiChannelResultEnvelope.model_validate(result).frequencies == [100.0]
+        legacy = _result_envelope(kind)
+        del legacy["frequencies"]
+        assert MultiChannelResultEnvelope.model_validate(legacy).frequencies is None
+        store.create_job(_job("legacy", "running"))
+        _complete(store, "legacy", legacy)
+        assert store.get_results("legacy") == legacy
 
 
 def test_radiation_impedance_artifact_round_trip(tmp_path: Path) -> None:
