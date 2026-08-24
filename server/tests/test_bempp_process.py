@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 
 import pytest
 
+from server.solver import bempp_process
 from server.solver.bempp_process import BemppProcessHost
 from server.solver.context import SolverContext
 
@@ -138,6 +140,14 @@ def test_large_worker_result_is_deserialized_without_blocking_event_loop() -> No
                 gaps.append(current - previous)
                 previous = current
 
+        recv_threads: set[str] = set()
+        original_poll_and_recv = bempp_process._poll_and_recv
+
+        def recording_poll_and_recv(connection):
+            recv_threads.add(threading.current_thread().name)
+            return original_poll_and_recv(connection)
+
+        bempp_process._poll_and_recv = recording_poll_and_recv
         ticker_task = asyncio.create_task(ticker())
         try:
             result = await host.run(
@@ -150,12 +160,21 @@ def test_large_worker_result_is_deserialized_without_blocking_event_loop() -> No
                 result_cb=None,
             )
         finally:
+            bempp_process._poll_and_recv = original_poll_and_recv
             stop.set()
             await ticker_task
             host.close()
-        return result, max(gaps)
+        return result, max(gaps), recv_threads
 
-    result, largest_gap = asyncio.run(exercise())
+    result, largest_gap, recv_threads = asyncio.run(exercise())
 
     assert len(result["values"]) == 2_000_000
-    assert largest_gap < 0.05
+    # What this test is really about: recv() unpickles the whole message, and
+    # doing that on the loop stalled it 162 ms on a 30 MiB payload. Assert the
+    # structural property -- every receive happened on a worker thread -- and
+    # keep only a coarse responsiveness bound. A wall-clock threshold tight
+    # enough to catch 162 ms is not separable from scheduling jitter on a
+    # shared CI runner, where this ticker has been measured at 93 ms while the
+    # loop was never blocked at all.
+    assert recv_threads and "MainThread" not in recv_threads
+    assert largest_gap < 1.0

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import hashlib
+import threading
 import time
 
 import pytest
@@ -583,7 +584,12 @@ def test_status_resolution_with_500_returns_keeps_event_loop_responsive(
     app.state.cad_workspace.select(workspace)
     original_parse = cadlink_api._parse_return_manifest
 
+    parse_threads: set[str] = set()
+    parse_calls: list[Path] = []
+
     def measurable_parse(path: Path):
+        parse_threads.add(threading.current_thread().name)
+        parse_calls.append(path)
         time.sleep(0.0002)
         return original_parse(path)
 
@@ -625,7 +631,16 @@ def test_status_resolution_with_500_returns_keeps_event_loop_responsive(
     status, largest_gap = asyncio.run(exercise())
 
     assert status["cadFolderConfigured"] is True
-    assert largest_gap < 0.03
+    # The regression this guards is 33 ms of scanning and reparsing on the loop
+    # at 500 bundles. That is smaller than the scheduling jitter of a shared CI
+    # runner -- this ticker has been measured at 94 ms there with the loop never
+    # blocked -- so the wall clock cannot be the assertion. Assert instead that
+    # resolution ran off the loop thread and that the selected manifest was
+    # parsed once rather than five times, which is what the fix actually did.
+    assert parse_threads and "MainThread" not in parse_threads
+    selected = [path for path in parse_calls if path.parent.name.endswith("-499")]
+    assert len(selected) <= 1, f"selected manifest parsed {len(selected)} times"
+    assert largest_gap < 1.0
 
 
 def test_status_endpoint_reports_old_addins_and_folder_mismatches(
