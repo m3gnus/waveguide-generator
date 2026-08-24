@@ -3611,7 +3611,7 @@
           "degraded_label": null
         }
       ],
-      "description": "What the horn radiates into. Free-standing solves the whole body in open air, with the enclosure or wall shell you configured. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring both of those and removing all cabinet-edge diffraction; it requires the Metal backend."
+      "description": "What the horn radiates into. Free-standing solves the whole body in open air, with the enclosure or wall shell you configured. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring both of those and removing all cabinet-edge diffraction; availability follows the solver capabilities reported by this host."
     },
     {
       "id": "mesh.quadrants",

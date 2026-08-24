@@ -255,7 +255,7 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('simulation.f1', 'freqStart', 'simulation.f1', frequencySweep, 'Sweep start', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0, description: 'Lowest frequency of the generated sweep. Ignored when Solve options is set to an explicit frequency list.' }),
   number('simulation.f2', 'freqEnd', 'simulation.f2', frequencySweep, 'Sweep end', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0, description: 'Highest frequency of the generated sweep; raising it may need a finer Mouth mesh resolution to resolve the shorter wavelength. Ignored when Solve options is set to an explicit frequency list.' }),
   number('simulation.num_frequencies', 'numFreqs', 'simulation.num_frequencies', frequencySweep, 'Frequency samples', { min: 10, max: 200, step: 1, precision: 0, description: 'How many frequencies are solved between the start and end. Every frequency costs about the same, so this sets solve time almost directly. Spacing is chosen under Solve options, which also overrides this entirely when an explicit list is used.' }),
-  select('simulation.sim_type', 'simType', 'simulation.sim_type', solveExportMesh, 'Simulation type', [{ value: 'freestanding', label: 'Free-standing' }, { value: 'infinite-baffle', label: 'Infinite baffle', requiresFeature: 'infinite-baffle' }], { description: 'What the horn radiates into. Free-standing solves the whole body in open air, with the enclosure or wall shell you configured. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring both of those and removing all cabinet-edge diffraction; it requires the Metal backend.' }),
+  select('simulation.sim_type', 'simType', 'simulation.sim_type', solveExportMesh, 'Simulation type', [{ value: 'freestanding', label: 'Free-standing' }, { value: 'infinite-baffle', label: 'Infinite baffle', requiresFeature: 'infinite-baffle' }], { description: 'What the horn radiates into. Free-standing solves the whole body in open air, with the enclosure or wall shell you configured. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring both of those and removing all cabinet-edge diffraction; availability follows the solver capabilities reported by this host.' }),
   // These saved fields remain in the document for ATH text fidelity, but none
   // is a solve-domain control. Runtime symmetry replaces Mesh.Quadrants before
   // a parametric mesh is built, while geometry export always restores all four
@@ -421,14 +421,14 @@ export function fieldOptionsForBackend(
   field: ParameterDefinition,
   value: unknown,
   backend: BackendIdentity,
-  host: readonly EngineCapability[] = [],
+  plan?: readonly EngineCapability[],
 ): ParameterOption[] {
   return (field.options ?? [])
     .filter((option) => !option.requiresFeature
-      || backendSupports(backend, option.requiresFeature, host)
+      || backendSupports(backend, option.requiresFeature, plan)
       || String(option.value) === String(value ?? ''))
     .map((option) => (option.degradedWithout && option.degradedLabel
-      && !backendSupports(backend, option.degradedWithout, host)
+      && !backendSupports(backend, option.degradedWithout, plan)
       ? { ...option, label: option.degradedLabel }
       : option));
 }
@@ -443,11 +443,11 @@ export function fieldUnsupportedFeature(
   field: ParameterDefinition,
   value: unknown,
   backend: BackendIdentity,
-  host: readonly EngineCapability[] = [],
+  plan?: readonly EngineCapability[],
 ): BackendFeature | undefined {
   const selected = (field.options ?? []).find((option) => String(option.value) === String(value ?? ''));
   const feature = selected?.requiresFeature;
-  return feature && !backendSupports(backend, feature, host) ? feature : undefined;
+  return feature && !backendSupports(backend, feature, plan) ? feature : undefined;
 }
 
 export function fieldMatchesQuery(field: ParameterDefinition, query: string): boolean {

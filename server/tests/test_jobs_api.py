@@ -137,10 +137,12 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
     paths = schema["paths"]
     assert {
         "/api/solve",
+        "/api/solve/plan",
         "/api/stop/{job_id}",
         "/api/jobs/{job_id}/retry",
         "/api/status/{job_id}",
         "/api/results/{job_id}",
+        "/api/results/{job_id}/field-plane",
         "/api/jobs/{job_id}/archive-snapshot",
         "/api/mesh-artifact/{job_id}",
         "/api/radiation-impedance/{job_id}",
@@ -154,6 +156,10 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
         "application/json"
     ]["schema"]
     assert "$ref" in solve_schema
+    plan_schema = paths["/api/solve/plan"]["post"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    assert plan_schema == {"$ref": "#/components/schemas/SolvePlanResponse"}
     job_properties = schema["components"]["schemas"]["JobItem"]["properties"]
     assert {"run_number", "parent_job_id", "solve_options"} <= set(job_properties)
     result_schema = paths["/api/results/{job_id}"]["get"]["responses"]["200"][
@@ -174,42 +180,59 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
     assert presentation_schema == {
         "$ref": "#/components/schemas/RadiationImpedancePresentation"
     }
+    field_plane_error_schema = paths["/api/results/{job_id}/field-plane"]["post"][
+        "responses"
+    ]["422"]["content"]["application/json"]["schema"]
+    assert "#/components/schemas/FieldPlaneUnavailableResponse" in {
+        item["$ref"] for item in field_plane_error_schema["anyOf"]
+    }
+    unavailable_properties = schema["components"]["schemas"][
+        "FieldPlaneUnavailableResponse"
+    ]["properties"]
+    assert unavailable_properties["detail"]["type"] == "string"
+    assert unavailable_properties["error_contract_version"]["const"] == 1
+    assert set(unavailable_properties["code"]["enum"]) == {
+        "unsupported_axisymmetric_formulation",
+        "unsupported_coupled_infinite_baffle",
+    }
+    assert unavailable_properties["remedy"]["type"] == "string"
 
 
 def test_solve_body_validation_uses_versioned_error_envelope(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path)
-        status, raw = await _request(
-            app,
-            "POST",
-            "/api/solve",
-            body={"client_request_id": "  external-invalid-7  ", "options": {}},
-        )
+        for path in ("/api/solve", "/api/solve/plan"):
+            status, raw = await _request(
+                app,
+                "POST",
+                path,
+                body={"client_request_id": "  external-invalid-7  ", "options": {}},
+            )
 
-        assert status == 422
-        failure = json.loads(raw)
-        assert failure["detail"] == "Solve request body is invalid"
-        assert failure["error"] == {
-            "schema_version": 1,
-            "code": "invalid_request",
-            "stage": "input",
-            "message": "Solve request body is invalid",
-            "retryable": False,
-            "details": {
-                "validation_errors": [
-                    {
-                        "type": "missing",
-                        "loc": ["body", "geometry"],
-                        "msg": "Field required",
-                        "input": {
-                            "client_request_id": "  external-invalid-7  ",
-                            "options": {},
-                        },
-                    }
-                ]
-            },
-            "client_request_id": "external-invalid-7",
-        }
+            assert status == 422
+            failure = json.loads(raw)
+            assert failure["detail"] == "Solve request body is invalid"
+            assert failure["error"] == {
+                "schema_version": 1,
+                "code": "invalid_request",
+                "stage": "input",
+                "message": "Solve request body is invalid",
+                "retryable": False,
+                "details": {
+                    "validation_errors": [
+                        {
+                            "type": "missing",
+                            "loc": ["body", "geometry"],
+                            "msg": "Field required",
+                            "input": {
+                                "client_request_id": "  external-invalid-7  ",
+                                "options": {},
+                            },
+                        }
+                    ]
+                },
+                "client_request_id": "external-invalid-7",
+            }
 
         status, raw = await _request(
             app,

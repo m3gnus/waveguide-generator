@@ -1,13 +1,17 @@
 import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
 import { compactFrequency } from '../design/lambdaLimit';
-import { resolveEngine, type EngineCapability } from '../jobs/actions';
+import {
+  resolveEngine,
+  type EngineCapability,
+  type EngineSelection,
+} from '../jobs/actions';
 import { useCapabilities } from '../jobs/useCapabilities';
 import { usePreferences, type Preferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
-import { parseFrequencyList, useSolveOptionsStore, type FrequencyMode } from '../stores/solveOptions';
+import { parseFrequencyList, useSolveOptionsStore, type FrequencyMode, type SolverMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { previewErrorMessage, previewMeshMetrics } from '../viewport/presentation';
 import { Icon } from './icons';
@@ -61,12 +65,27 @@ export function cadSolveSummary(
 
 export function engineStatusLabel(
   engines: readonly EngineCapability[],
+  engineSelection: Readonly<EngineSelection>,
   selectedEngine: string,
-  solverMode: string,
+  solverMode: SolverMode,
   isLoading = false,
 ): string {
   let effectiveEngine = selectedEngine.toLowerCase();
-  try { effectiveEngine = resolveEngine(selectedEngine, { engines }, solverMode); } catch { /* reported as offline below */ }
+  try {
+    effectiveEngine = resolveEngine(selectedEngine, { engines, engineSelection }, solverMode);
+  } catch {
+    // A forced meridian solve cannot fall back to the selected full-3D engine.
+    // Name the advertised dependency that is offline instead of implying AUTO
+    // or an explicit full-3D selection remains the path that will run.
+    const requested = selectedEngine.trim().toLowerCase();
+    const requestedIsKnown = requested === 'auto'
+      || engines.some((item) => item.name.toLowerCase() === requested);
+    if (solverMode === 'circsym' && requested !== 'dryrun' && requestedIsKnown) {
+      effectiveEngine = engineSelection.axisymmetricRunner.trim().toLowerCase() || 'axisym';
+    } else {
+      return `${effectiveEngine.toUpperCase()} · INVALID`;
+    }
+  }
   const engine = engines.find((item) => item.name.toLowerCase() === effectiveEngine);
   if (engine) return `${engine.name.toUpperCase()} · ${engine.available ? engine.version ?? 'READY' : 'OFFLINE'}`;
   return isLoading ? `${effectiveEngine.toUpperCase()}…` : `${effectiveEngine.toUpperCase()} · OFFLINE`;
@@ -77,7 +96,7 @@ export function documentLabel(filename: string): string {
 }
 
 export function StatusBar() {
-  const { engines, isLoading } = useCapabilities();
+  const { engines, engineSelection, isLoading } = useCapabilities();
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
@@ -88,7 +107,7 @@ export function StatusBar() {
   const frequencyMode = useSolveOptionsStore((state) => state.frequencyMode);
   const frequencyListText = useSolveOptionsStore((state) => state.frequencyListText);
   const preferences = usePreferences();
-  const engineLabel = engineStatusLabel(engines, mode === 'cad' ? 'metal' : selectedEngine, mode === 'cad' ? 'full_3d' : solverMode, isLoading);
+  const engineLabel = engineStatusLabel(engines, engineSelection, mode === 'cad' ? 'metal' : selectedEngine, mode === 'cad' ? 'full_3d' : solverMode, isLoading);
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
   const meshMetrics = previewMeshMetrics(preview.frame);
   const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;

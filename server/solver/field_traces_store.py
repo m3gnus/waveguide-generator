@@ -203,6 +203,7 @@ def field_trace_retention_plan(
     enabled: bool,
     supported: bool,
     cap_bytes: int | None,
+    unsupported_reason: str = "unsupported_solve_mode",
 ) -> tuple[bool, str | None, int | None, int]:
     """Resolve whether a solve may retain complete surface traces."""
 
@@ -212,7 +213,7 @@ def field_trace_retention_plan(
     if not enabled:
         return False, "disabled_by_option", None, cap
     if not supported:
-        return False, "unsupported_solve_mode", None, cap
+        return False, unsupported_reason, None, cap
     try:
         n_p1, n_dp0 = mesh_trace_dof_counts(msh_text, mesh_stats)
     except ValueError:

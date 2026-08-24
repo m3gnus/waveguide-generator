@@ -61,6 +61,17 @@ class FieldPlaneJobIncomplete(RuntimeError):
 class FieldPlaneUnsupported(ValueError):
     """The job's solve path cannot provide exterior field planes."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        remedy: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.remedy = remedy
+
 
 class FieldPlaneInvalidSelection(ValueError):
     """The frequency or response selector is not available in the artifact."""
@@ -252,8 +263,33 @@ class FieldPlaneService:
         metadata = metadata if isinstance(metadata, Mapping) else {}
         solve_path = metadata.get("solve_path")
         unavailable_reason = metadata.get("unavailable_reason")
-        if solve_path not in {None, "full-3d"} or unavailable_reason == (
-            "unsupported_solve_mode"
+        unsupported_reasons = {
+            "unsupported_solve_mode",
+            "unsupported_axisymmetric_formulation",
+            "unsupported_coupled_infinite_baffle",
+        }
+        if unavailable_reason == "unsupported_axisymmetric_formulation":
+            raise FieldPlaneUnsupported(
+                "Axisymmetric meridian solves do not retain exterior field traces.",
+                code="unsupported_axisymmetric_formulation",
+                remedy=(
+                    "Set Solver mode to Full 3D and re-solve with Metal or BEMPP. "
+                    "For a coupled infinite-baffle design, also change Simulation "
+                    "type to Free-standing."
+                ),
+            )
+        if unavailable_reason == "unsupported_coupled_infinite_baffle":
+            raise FieldPlaneUnsupported(
+                "Coupled infinite-baffle solves do not retain exterior field traces.",
+                code="unsupported_coupled_infinite_baffle",
+                remedy=(
+                    "Set Simulation type to Free-standing and re-solve with Metal "
+                    "or BEMPP."
+                ),
+            )
+        if (
+            solve_path not in {None, "full-3d"}
+            or unavailable_reason in unsupported_reasons
         ):
             raise FieldPlaneUnsupported(
                 "Field planes require a completed full-3D solve"

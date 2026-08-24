@@ -122,7 +122,8 @@ def _frequency_refined_meridian_config(
         mesh[key] = applied[key]
 
     aperture_scale = _positive_resolution(
-        mesh.get("apertureResolutionScale", 1.0), "apertureResolutionScale"
+        mesh.get("apertureResolutionScale", 1.0),
+        "apertureResolutionScale",
     )
     requested["apertureResolutionScale"] = aperture_scale
     max_aperture_scale = max(1.0, max_segment_mm / applied["mouthResolution"])
@@ -616,7 +617,7 @@ class AxisymmetricEngine:
         )
         return EngineRunResult(
             results=results,
-            field_trace_unavailable_reason="unsupported_solve_mode",
+            field_trace_unavailable_reason="unsupported_axisymmetric_formulation",
         )
 
 

@@ -52,8 +52,48 @@ describe('frontend result and status labels', () => {
       { name: 'metal', available: true, reason: null, version: '1.0', fast_paths: [] },
       { name: 'bempp', available: true, reason: null, version: '2.0', fast_paths: [] },
     ];
-    expect(engineStatusLabel(engines, 'bempp', 'auto')).toBe('BEMPP · 2.0');
-    expect(engineStatusLabel(engines, 'auto', 'auto')).toBe('METAL · 1.0');
+    const selection = {
+      default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal', 'bempp'], axisymmetricRunner: 'axisym',
+    };
+    expect(engineStatusLabel(engines, selection, 'bempp', 'auto')).toBe('BEMPP · 2.0');
+    expect(engineStatusLabel(engines, selection, 'auto', 'auto')).toBe('METAL · 1.0');
+  });
+
+  it('labels the advertised Axisym dependency offline when forced mode cannot run', () => {
+    const engines = [
+      { name: 'metal', available: true, reason: null, version: '1.0', fast_paths: [] },
+      { name: 'axisym', available: false, reason: 'runner unavailable', version: null, fast_paths: [] },
+    ];
+    const selection = {
+      default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal'], axisymmetricRunner: 'axisym',
+    };
+    expect(engineStatusLabel(engines, selection, 'auto', 'circsym')).toBe('AXISYM · OFFLINE');
+    expect(engineStatusLabel(engines, selection, 'metal', 'circsym')).toBe('AXISYM · OFFLINE');
+  });
+
+  it('labels invalid engine/mode pairs without implying Axisym will run', () => {
+    const engines = [
+      { name: 'dryrun', available: true, reason: null, version: 'builtin', fast_paths: [] },
+      { name: 'axisym', available: true, reason: null, version: '1.0', fast_paths: [] },
+    ];
+    const selection = {
+      default: 'auto', resolvedDefault: 'dryrun', full3dOrder: ['dryrun'], axisymmetricRunner: 'axisym',
+    };
+    expect(engineStatusLabel(engines, selection, 'dryrun', 'circsym')).toBe('DRYRUN · INVALID');
+    expect(engineStatusLabel(engines, selection, 'stale-engine', 'circsym')).toBe('STALE-ENGINE · INVALID');
+    expect(engineStatusLabel(engines, selection, 'axisym', 'full_3d')).toBe('AXISYM · INVALID');
+  });
+
+  it('keeps an unavailable explicit fallback honest while AUTO may try Axisym', () => {
+    const engines = [
+      { name: 'beat', available: false, reason: 'GPU offline', version: null, fast_paths: [] },
+      { name: 'axisym', available: true, reason: null, version: '1.0', fast_paths: [] },
+    ];
+    const selection = {
+      default: 'auto', resolvedDefault: null, full3dOrder: ['beat'], axisymmetricRunner: 'axisym',
+    };
+    expect(engineStatusLabel(engines, selection, 'beat', 'auto')).toBe('BEAT · OFFLINE');
+    expect(engineStatusLabel(engines, selection, 'beat', 'full_3d')).toBe('BEAT · OFFLINE');
   });
 
   it('shows the tracked design filename instead of a path placeholder', () => {

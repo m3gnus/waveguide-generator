@@ -1,4 +1,5 @@
-import type { EngineCapability } from '../jobs/actions';
+import { plannedEngineNames, type EngineCapability, type EngineSelection } from '../jobs/actions';
+import type { SolverMode } from '../stores/solveOptions';
 
 export type BackendIdentity = string | EngineCapability | null;
 
@@ -10,9 +11,8 @@ export type BackendIdentity = string | EngineCapability | null;
  * told the backend cannot solve it at all. These names let the controls that
  * offer a backend-specific choice hide it up front instead.
  *
- * Each entry mirrors a real server-side refusal. Keep them in sync: a feature
- * listed here as supported that the server then rejects is worse than no gate,
- * because the user has no way left to see why the solve failed.
+ * Support comes from the server's capability record. This file owns only the
+ * UI vocabulary and remedies; it does not maintain a second engine matrix.
  */
 export type BackendFeature =
   /** Coupled infinite-baffle solves — ``server/solver/infinite_baffle.py``. */
@@ -21,19 +21,6 @@ export type BackendFeature =
   | 'meridian-fast-path'
   /** Solving ingested CAD geometry — ``server/jobs/runtime.py``. */
   | 'imported-geometry';
-
-/**
- * Backends that implement each feature, lower-cased to match ``EngineCapability``.
- *
- * Axisymmetric execution is a platform-neutral runner rather than a full-3D
- * backend. Metal and BEMPP both understand the coupled ``MOUTH_APERTURE``
- * infinite-baffle contract; imported CAD remains Metal-only.
- */
-const FEATURE_BACKENDS: Record<BackendFeature, readonly string[]> = {
-  'infinite-baffle': ['metal', 'bempp', 'axisym'],
-  'meridian-fast-path': ['axisym'],
-  'imported-geometry': ['metal'],
-};
 
 /** Human phrasing for the feature, as the object of "X does not support …". */
 const FEATURE_LABELS: Record<BackendFeature, string> = {
@@ -63,10 +50,17 @@ const FEATURE_REMEDIES: Record<BackendFeature, string> = {
 export function activeBackendName(
   engine: string,
   engines: readonly EngineCapability[],
+  selection?: Readonly<EngineSelection>,
 ): string | null {
   const requested = engine.trim().toLowerCase();
   if (requested && requested !== 'auto') return requested;
-  const available = ['metal', 'beat', 'bempp', 'dryrun']
+  const resolved = selection?.resolvedDefault?.toLowerCase();
+  if (resolved && engines.some((item) => item.available
+    && item.name.toLowerCase() === resolved)) return resolved;
+  const order = selection?.full3dOrder.map((name) => name.toLowerCase())
+    ?? engines.filter((item) => item.formulations?.includes('full-3d'))
+      .map((item) => item.name.toLowerCase());
+  const available = order
     .flatMap((name) => engines.filter((item) => item.available && item.name.toLowerCase() === name));
   return available[0]?.name.toLowerCase() ?? null;
 }
@@ -75,34 +69,53 @@ export function activeBackendName(
 export function activeBackendCapability(
   engine: string,
   engines: readonly EngineCapability[],
+  selection?: Readonly<EngineSelection>,
 ): EngineCapability | null {
-  const name = activeBackendName(engine, engines);
+  const name = activeBackendName(engine, engines, selection);
   return name === null
     ? null
     : engines.find((item) => item.name.toLowerCase() === name) ?? null;
 }
 
 /**
- * Whether the host can run `feature` regardless of the selected full-3D backend.
+ * Available capabilities the server may plan for the requested engine.
  *
- * The server planner routes an eligible circular design to the Axisym meridian
- * runner *before* it reaches any full-3D fallback, so a host carrying Axisym
- * solves a coupled infinite-baffle design even when the resolved backend --
- * BEAT, say -- refuses one. Gating that option on the full-3D record alone
- * removed it from designs the server would have solved, and the user had no
- * way to discover that forcing the meridian mode brought it back.
+ * Solver mode AUTO can first select the advertised meridian runner for
+ * eligible geometry, even with an explicit non-dryrun backend chosen as the
+ * full-3D fallback. An AUTO engine then walks the server-advertised full-3D
+ * order. Forced Full 3D excludes the meridian runner; forced CircSym includes
+ * only that runner. Keeping the whole AUTO-engine plan matters on a GPU host:
+ * BEAT can be the resolved free-standing default while BEMPP later in the plan
+ * handles coupled infinite-baffle solves.
  *
- * Geometry eligibility stays the planner's call. This only decides whether the
- * option is worth offering at all.
+ * Geometry eligibility and final routing stay the server planner's call. This
+ * list only prevents the frontend from hiding an option no planned candidate
+ * could run.
  */
-function hostCoversFeature(
-  host: readonly EngineCapability[],
-  feature: BackendFeature,
-): boolean {
-  if (feature !== 'infinite-baffle') return false;
-  return host.some((item) => item.available
-    && item.name.toLowerCase() === 'axisym'
-    && (item.mountings?.includes('infinite-baffle') ?? true));
+export function plannedBackendCapabilities(
+  engine: string,
+  engines: readonly EngineCapability[],
+  selection?: Readonly<EngineSelection>,
+  solverMode: SolverMode = 'auto',
+): readonly EngineCapability[] {
+  let advertised: readonly string[];
+  try {
+    advertised = plannedEngineNames(
+      engine,
+      { engines, engineSelection: selection },
+      solverMode,
+    );
+  } catch {
+    // Gating is deliberately total while capabilities/local settings settle;
+    // resolveEngine still blocks the stale or contradictory submission.
+    return [];
+  }
+  const planned: EngineCapability[] = [];
+  for (const name of advertised) {
+    const capability = engines.find((item) => item.available && item.name.toLowerCase() === name);
+    if (capability && !planned.includes(capability)) planned.push(capability);
+  }
+  return planned;
 }
 
 function backendName(backend: BackendIdentity): string | null {
@@ -114,24 +127,29 @@ function backendName(backend: BackendIdentity): string | null {
 export function backendSupports(
   backend: BackendIdentity,
   feature: BackendFeature,
-  host: readonly EngineCapability[] = [],
+  plan?: readonly EngineCapability[],
 ): boolean {
   if (!backend) return true;
   const normalized = backendName(backend);
   if (!normalized) return true;
-  if (hostCoversFeature(host, feature)) return true;
-  if (typeof backend !== 'string') {
-    if (feature === 'infinite-baffle' && backend.mountings) {
-      return backend.mountings.includes('infinite-baffle');
-    }
-    if (feature === 'meridian-fast-path' && backend.formulations) {
-      return backend.formulations.includes('axisymmetric');
-    }
+  // When supplied, the plan is authoritative: a full-3D backend outside a
+  // forced CircSym plan must not rescue a feature the sole Axisym candidate
+  // lacks (and vice versa).
+  if (plan !== undefined) {
+    return plan.some((item) => capabilitySupports(item, feature));
   }
-  const known = Object.values(FEATURE_BACKENDS).some((names) => names.includes(normalized))
-    || normalized === 'bempp' || normalized === 'dryrun' || normalized === 'beat';
-  if (!known) return true;
-  return FEATURE_BACKENDS[feature].includes(normalized);
+  if (typeof backend !== 'string') {
+    return capabilitySupports(backend, feature);
+  }
+  // A bare name has no capability payload. Preserve the pre-gating behaviour
+  // instead of hiding a control based on client-side engine knowledge.
+  return true;
+}
+
+function capabilitySupports(backend: EngineCapability, feature: BackendFeature): boolean {
+  if (feature === 'infinite-baffle') return backend.mountings?.includes('infinite-baffle') ?? true;
+  if (feature === 'meridian-fast-path') return backend.formulations?.includes('axisymmetric') ?? true;
+  return backend.geometry_sources?.includes('imported') ?? true;
 }
 
 /**
@@ -141,9 +159,9 @@ export function backendSupports(
 export function backendLimitation(
   backend: BackendIdentity,
   feature: BackendFeature,
-  host: readonly EngineCapability[] = [],
+  plan?: readonly EngineCapability[],
 ): string | undefined {
-  if (backendSupports(backend, feature, host)) return undefined;
+  if (backendSupports(backend, feature, plan)) return undefined;
   const name = (backendName(backend) ?? '').toUpperCase();
   return `${name} does not support ${FEATURE_LABELS[feature]}. ${FEATURE_REMEDIES[feature]}`;
 }

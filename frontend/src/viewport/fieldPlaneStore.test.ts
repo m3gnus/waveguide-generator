@@ -600,6 +600,26 @@ describe('field-plane defaults and status copy', () => {
     expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(409, 'stale'))).toContain('changed');
     expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(410, 'pruned'))).toBe('re-solve to enable field planes');
     expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(422, 'unsupported'))).toContain('unavailable');
+    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(
+      422,
+      'Axisymmetric meridian solves do not retain exterior field traces.',
+      'unsupported_axisymmetric_formulation',
+      null,
+      'Set Solver mode to Full 3D and re-solve with Metal or BEMPP.',
+    ))).toBe(
+      'Axisymmetric meridian solves do not retain exterior field traces. '
+      + 'Set Solver mode to Full 3D and re-solve with Metal or BEMPP.',
+    );
+    expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(
+      422,
+      'Coupled infinite-baffle solves do not retain exterior field traces.',
+      'unsupported_coupled_infinite_baffle',
+      null,
+      'Set Simulation type to Free-standing and re-solve with Metal or BEMPP.',
+    ))).toBe(
+      'Coupled infinite-baffle solves do not retain exterior field traces. '
+      + 'Set Simulation type to Free-standing and re-solve with Metal or BEMPP.',
+    );
     expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(429, 'superseded'))).toContain('superseded');
     expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(503, 'busy'))).toBe('waiting for solve to finish');
     expect(fieldPlaneErrorMessage(new FieldPlaneHttpError(504, 'timeout'))).toContain('timed out');
