@@ -1099,20 +1099,23 @@ textarea:disabled { opacity: .48; }
 .crossover-segment button:first-child { border-left: 0; }
 .crossover-segment button:hover:not(.on) { background: var(--ov3); color: var(--fg1); }
 .crossover-segment button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
-.panel-preferences-popover.crossover-advanced { width: min(420px, calc(100vw - 16px)); padding: 8px; overflow-y: auto; gap: 6px; }
-.crossover-advanced-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* The Advanced view lives inline in the rail, so everything below must lay
+   out at ~253px: rows wrap rather than widen, and nothing may force the
+   section past the rail (the dockview container clips overflow). */
+.crossover-advanced-inline { display: grid; gap: 6px; min-width: 0; margin: 2px 0; }
+.crossover-advanced-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; min-width: 0; }
 .crossover-advanced-head button { height: 21px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
 .crossover-advanced-head button:hover { border-color: var(--hair-hi); background: var(--ov3); color: var(--fg); }
-.crossover-reference { display: flex; align-items: center; gap: 5px; color: var(--fg2); font-size: var(--text-micro); }
-.crossover-reference select { height: 21px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-reference { display: flex; flex: 1 1 auto; align-items: center; gap: 5px; min-width: 0; color: var(--fg2); font-size: var(--text-micro); }
+.crossover-reference select { flex: 1 1 60px; min-width: 0; height: 21px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
 .crossover-advanced-note { margin: 0; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
-.crossover-channel { display: grid; gap: 3px; padding: 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
+.crossover-channel { display: grid; gap: 3px; min-width: 0; padding: 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
 .crossover-channel h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 2px; color: var(--fg1); font-size: var(--text-micro); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
 .crossover-reference-chip { padding: 0 4px; border: 1px solid rgba(var(--acc-rgb), .28); border-radius: var(--r3); color: var(--acc); font: var(--text-micro) var(--mono); font-weight: 400; letter-spacing: 0; text-transform: none; }
-.crossover-band { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 21px; color: var(--fg2); font-size: var(--text-micro); }
+.crossover-band { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px; min-width: 0; min-height: 21px; color: var(--fg2); font-size: var(--text-micro); }
 .crossover-band-name { width: 62px; flex: none; color: var(--fg3); }
 .crossover-band input[type="number"] { width: 66px; height: 19px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font: var(--text-micro) var(--mono); }
-.crossover-band select { height: 19px; max-width: 118px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-band select { flex: 0 1 auto; min-width: 0; height: 19px; max-width: 118px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
 .crossover-unit { color: var(--fg4); }
 .crossover-band-toggle { height: 19px; min-width: 34px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg3); font-size: var(--text-micro); }
 .crossover-band-toggle.on { border-color: rgba(var(--acc-rgb), .38); background: rgba(var(--acc-rgb), .12); color: var(--acc); }

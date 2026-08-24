@@ -134,7 +134,7 @@ export const CAD_CONTROLS = {
   ),
   crossoverAdvanced: control(
     'cad.crossover.advanced', 'Advanced crossover (per channel)', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['high-pass', 'low-pass', 'per channel', 'popover'], 'ingested-return', 'cad.crossover',
+    ['high-pass', 'low-pass', 'per channel', 'basic', 'advanced view'], 'ingested-return', 'cad.crossover',
   ),
   crossoverReference: control(
     'cad.crossover.reference', 'Alignment reference channel', CAD_CONTROL_SECTIONS.crossover, 'simulation',
