@@ -1420,9 +1420,16 @@ def test_tree_digest_covers_content_not_packing(tmp_path: Path) -> None:
     (second / "server" / "app.py").write_text("print('x')\n", encoding="utf-8")
     assert build_bundle.tree_digest(first) == build_bundle.tree_digest(second)
 
-    (second / "server" / "app.py").chmod(0o755)
-    assert build_bundle.tree_digest(first) != build_bundle.tree_digest(second)
-    (second / "server" / "app.py").chmod(0o644)
+    # The executable bit is only assertable where the filesystem has one.
+    # Windows has no POSIX mode: os.chmod() there toggles the read-only
+    # attribute and nothing else, so a .py file reports st_mode & 0o111 == 0
+    # both before and after chmod(0o755) and the digest correctly does not
+    # move. The bit belongs in the identity on POSIX, so skip the step rather
+    # than weaken tree_digest to make it pass everywhere.
+    if os.name != "nt":
+        (second / "server" / "app.py").chmod(0o755)
+        assert build_bundle.tree_digest(first) != build_bundle.tree_digest(second)
+        (second / "server" / "app.py").chmod(0o644)
 
     (second / "extra.txt").write_text("", encoding="utf-8")
     assert build_bundle.tree_digest(first) != build_bundle.tree_digest(second)
