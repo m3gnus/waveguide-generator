@@ -97,6 +97,7 @@
 .field-plane-presets button:hover { border-color: rgba(var(--acc-rgb), .48); background: rgba(var(--acc-rgb), .1); color: var(--fg1); }
 .field-plane-frequency { display: flex; flex-direction: column; gap: 2px; margin-bottom: 7px; }
 .field-plane-frequency input { width: 100%; min-width: 0; accent-color: var(--acc); }
+.field-plane-frequency-row { display: grid; grid-template-columns: minmax(0, 1fr) 66px; align-items: center; gap: 7px; }
 .field-plane-frequency-scale { display: flex; justify-content: space-between; gap: 6px; color: var(--fg4); font: var(--text-micro) var(--mono); }
 .field-plane-transform { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .field-plane-transform-row { display: grid; grid-template-columns: 40px repeat(3, minmax(0, 1fr)); align-items: center; gap: 4px; color: var(--fg3); font: var(--text-micro) var(--mono); }

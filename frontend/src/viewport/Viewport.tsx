@@ -39,7 +39,8 @@ import {
 } from './fieldPlaneMath';
 import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
-import { defaultFieldPlane, useFieldPlaneStore } from './fieldPlaneStore';
+import { defaultFieldPlane, nearestFieldPlaneFrequencyIndex, useFieldPlaneStore } from './fieldPlaneStore';
+import type { FieldPlaneResponseId } from '../api/fieldPlane';
 import { importedMeshStore } from './importedMeshStore';
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
@@ -366,6 +367,9 @@ export function Viewport() {
   const fieldMaskState = useFieldPlaneMaskStore((state) => state);
   const fieldFrequencyIndex = useFieldPlaneStore((state) => state.frequencyIndex);
   const fieldFrequencies = useFieldPlaneStore((state) => state.frequenciesHz);
+  const fieldResponseId = useFieldPlaneStore((state) => state.responseId);
+  const fieldMemberResponses = useFieldPlaneStore((state) => state.memberResponses);
+  const [fieldFrequencySnap, setFieldFrequencySnap] = useState<{ requestedHz: number; index: number } | null>(null);
   const fieldDisplayMode = useFieldPlaneStore((state) => state.displayMode);
   const fieldRangeLocked = useFieldPlaneStore((state) => state.rangeLocked);
   const fieldAnimationSpeed = useFieldPlaneStore((state) => state.animationSpeed);
@@ -455,6 +459,14 @@ export function Viewport() {
   const fieldWindow = storedFieldWindow ?? defaultFieldPlaneWindow(fieldDisplayMode);
   const fieldMaxSplDb = useMemo(() => (field ? maxFieldSplDb(field.real, field.imag) : null), [field]);
   const fieldFrequencyHz = fieldFrequencies[fieldFrequencyIndex] ?? field?.header.frequency_hz ?? null;
+  // The notice survives only while the snapped index is still what is shown;
+  // moving the slider or activating another run retires it naturally.
+  const fieldFrequencySnapNotice = fieldFrequencySnap !== null
+    && fieldFrequencySnap.index === fieldFrequencyIndex
+    && fieldFrequencies[fieldFrequencySnap.index] !== undefined
+    && Math.round(fieldFrequencySnap.requestedHz) !== Math.round(fieldFrequencies[fieldFrequencySnap.index])
+    ? `requested ${Math.round(fieldFrequencySnap.requestedHz).toLocaleString()} Hz → showing ${Math.round(fieldFrequencies[fieldFrequencySnap.index]).toLocaleString()} Hz`
+    : null;
   const sceneMarker = importedMesh
     ? `msh:${importedMesh.artifactToken}`
     : workspaceMode === 'cad'
@@ -808,22 +820,53 @@ export function Viewport() {
       </div>
       {fieldFrequencies.length > 1 && <div className="field-plane-frequency">
         {/* The slider indexes solved frequencies, so it snaps to what the
-            solver actually evaluated rather than interpolating between them. */}
-        <input
-          type="range"
-          aria-label="Field plane frequency"
-          aria-valuetext={`${Math.round(fieldFrequencies[fieldFrequencyIndex] ?? 0).toLocaleString()} Hz`}
-          min={0}
-          max={fieldFrequencies.length - 1}
-          step={1}
-          value={fieldFrequencyIndex}
-          onChange={(event) => useFieldPlaneStore.getState().setFrequencyIndex(Number(event.target.value))}
-        />
+            solver actually evaluated rather than interpolating between them.
+            The numeric cell snaps a typed frequency to the nearest solved one
+            and says so when they differ; it never solves new frequencies. */}
+        <div className="field-plane-frequency-row">
+          <input
+            type="range"
+            aria-label="Field plane frequency"
+            aria-valuetext={`${Math.round(fieldFrequencies[fieldFrequencyIndex] ?? 0).toLocaleString()} Hz`}
+            min={0}
+            max={fieldFrequencies.length - 1}
+            step={1}
+            value={fieldFrequencyIndex}
+            onChange={(event) => useFieldPlaneStore.getState().setFrequencyIndex(Number(event.target.value))}
+          />
+          <FieldPlaneNumberCell
+            ariaLabel="Field plane frequency in hertz"
+            value={fieldFrequencies[fieldFrequencyIndex] ?? 0}
+            step={1}
+            min={1}
+            decimals={0}
+            onCommit={(requestedHz) => {
+              if (requestedHz <= 0) return;
+              const index = nearestFieldPlaneFrequencyIndex(fieldFrequencies, requestedHz);
+              useFieldPlaneStore.getState().setFrequencyIndex(index);
+              setFieldFrequencySnap({ requestedHz, index });
+            }}
+          />
+        </div>
         <div className="field-plane-frequency-scale">
           <span>{Math.round(fieldFrequencies[0]).toLocaleString()}</span>
           <span>{fieldFrequencyIndex + 1}/{fieldFrequencies.length}</span>
           <span>{Math.round(fieldFrequencies[fieldFrequencies.length - 1]).toLocaleString()} Hz</span>
         </div>
+        {fieldFrequencySnapNotice && <div className="field-plane-note" role="status">{fieldFrequencySnapNotice}</div>}
+      </div>}
+      {fieldMemberResponses.length > 0 && <div className="field-plane-mode-row">
+        <label>
+          <span>Response</span>
+          <select
+            aria-label="Field plane response"
+            value={fieldResponseId}
+            onChange={(event) => useFieldPlaneStore.getState().setResponseId(event.target.value as FieldPlaneResponseId)}
+          >
+            <option value="system">Combined</option>
+            {fieldMemberResponses.map(({ id, label }) => <option key={id} value={`member:${id}`}>{label}</option>)}
+          </select>
+        </label>
       </div>}
       <div className="field-plane-mode-row">
         <label>
