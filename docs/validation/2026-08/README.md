@@ -17,6 +17,10 @@ constraints stated inside them; they are not a current release status dashboard.
 - [Result and archive sizes](ARTIFACT-SIZES.md) — measured archive, retained
   artifact, and snapshot-wire sizes across the available local corpus on
   2026-08-20, with explicit evidence still required before hard limits.
+- [Wall-clearance acoustic replay note](WALL-CLEARANCE-ACOUSTICS.md) — a
+  non-reproducible local run-101 observation from 2026-08-22; the committed
+  snapshots support design identity only, while unpublished artifact hashes do
+  not independently validate the mesh or acoustic claims.
 
 Current release gates are maintained in the workspace-local maintainer backlog, not in
 this dated evidence directory.
