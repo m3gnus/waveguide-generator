@@ -3,6 +3,8 @@ import {
   blockingFindingWire,
   channelAcceptsDriver,
   channelDriverWire,
+  combineEnabledEffective,
+  combineSpecEffective,
   combineWire,
   hasPassiveCardioidSurface,
   incompleteDriverChannels,
@@ -123,6 +125,72 @@ export function importedSubmissionBlocker(
     if (cardioid) return cardioid;
   }
   return null;
+}
+
+/**
+ * Channels this solve will run without a driver model.
+ *
+ * A channel with no driver is solved at unit acceleration -- no voltage, no
+ * ohms, no cone -- which is what WG did for every channel before drivers
+ * existed and is a perfectly good basis. It is only worth saying because the
+ * consequences are invisible until afterwards: that channel has no power,
+ * current or excursion to show, and in a combined output its level was matched
+ * rather than derived from a driver.
+ */
+export function undrivenChannels(
+  state: Pick<CadReturnSnapshot, 'driveChannels' | 'channelDrivers'>,
+): string[] {
+  return state.driveChannels
+    .filter((channel) => channelDriverWire(state.channelDrivers[channel.id]) === undefined)
+    .map((channel) => channel.id);
+}
+
+function list(items: string[]): string {
+  return items.length > 1
+    ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+    : items[0] ?? '';
+}
+
+/**
+ * What this submission will do that the user cannot see from the rail.
+ *
+ * Advisory, not refusals: everything here is a solve worth running, said out
+ * loud before it runs rather than discovered in a chart that has nothing to
+ * draw. `importedSubmissionBlocker` remains the only thing that stops a solve.
+ */
+export function importedSubmissionNotices(
+  state: CadReturnSnapshot = useCadReturnStore.getState(),
+): string[] {
+  const undriven = undrivenChannels(state);
+  const driven = state.driveChannels.length - undriven.length;
+  // Only the mixture is worth a word. A solve with no drivers at all is the
+  // ordinary unit-acceleration solve this product did for years and still
+  // does; saying "no power or current" about every channel of it would be
+  // noise on the majority of runs, and noise is what gets a notice ignored on
+  // the run where it matters.
+  if (!undriven.length || !driven) return [];
+  const notices: string[] = [];
+  notices.push(
+    `${list(undriven)} ${undriven.length === 1 ? 'solves' : 'solve'} unit-driven: `
+    + `no driver model, so ${undriven.length === 1 ? 'it has' : 'they have'} no power, current or excursion to report.`,
+  );
+  // The mixed case is the one worth spelling out. A driven channel's field is
+  // scaled to the cone acceleration its voltage produces; an undriven one is
+  // left at unit acceleration. The two are not in the same units, and it is
+  // level matching -- not physics -- that puts them on one chart.
+  if (combineEnabledEffective(state)) {
+    const members = new Set(combineSpecEffective(state)?.members ?? []);
+    const mixedMembers = undriven.filter((id) => members.has(id));
+    if (mixedMembers.length) {
+      notices.push(
+        `The combined output mixes driver-coupled and unit-driven channels. `
+        + `${list(mixedMembers)} ${mixedMembers.length === 1 ? 'is' : 'are'} level-matched into the sum, `
+        + 'so the combined shape is meaningful but its absolute SPL is not the voltage-referenced level '
+        + 'the driven channels report on their own.',
+      );
+    }
+  }
+  return notices;
 }
 
 /**
