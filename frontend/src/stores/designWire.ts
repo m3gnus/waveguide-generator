@@ -92,8 +92,19 @@ export function wgSolveSettingsFromSolveOptions(options: unknown): WgSolveSettin
 export function documentSettingsSignature(
   state = useSolveOptionsStore.getState(),
 ): string {
+  // This runs as a Zustand selector on the render path, so it must be total:
+  // a directivity grid mid-edit can be invalid (`polarConfigFromUi` throws for
+  // it), and a selector throw unmounts the entire app. An invalid grid is
+  // still a document change, so it is serialized raw -- the signature keeps
+  // changing as the user types -- rather than resolved.
+  let polar: unknown;
+  try {
+    polar = polarConfigFromUi(state.polar);
+  } catch {
+    polar = { invalid: state.polar };
+  }
   return JSON.stringify({
-    polar: polarConfigFromUi(state.polar),
+    polar,
     solve: wgSolveSettingsFromStore(state),
   });
 }

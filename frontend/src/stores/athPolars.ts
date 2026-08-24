@@ -5,6 +5,15 @@ const AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
 const DIAGONAL_BLOCK = `${ATH_POLAR_PREFIX}SPL_D`;
 const EPSILON = 1e-6;
 
+/**
+ * Metres. Closer than this is inside the mouth of most horns, so a stated
+ * value below it is clamped up rather than replaced: the intent to measure
+ * close is kept, the impossible part is not. Defined here so the `.cfg`
+ * reader below can apply the same floor the solve-options store enforces
+ * (`solveOptions` re-exports it).
+ */
+export const MIN_POLAR_DISTANCE_M = 0.1;
+
 export interface AthPolarUiState {
   angleStart: number;
   angleEnd: number;
@@ -113,7 +122,10 @@ export function athPolarOverrides(blocks: unknown): Partial<AthPolarUiState> | n
   const range = parseRange(firstItems.MapAngleRange);
   if (range) Object.assign(overrides, range);
   const distance = finite(firstItems.Distance);
-  if (distance !== null) overrides.distance = distance;
+  // A file may state an impossibly close distance; clamp it on the way in the
+  // same way `normalizePolarUi` clamps a stored one, so an override can never
+  // seed the store with a value the solve path refuses.
+  if (distance !== null) overrides.distance = Math.max(MIN_POLAR_DISTANCE_M, distance);
   const normAngle = finite(firstItems.NormAngle);
   if (normAngle !== null) overrides.normAngle = normAngle;
 
