@@ -4,7 +4,8 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { runContext, runMatchesContext, useRunContext, type RunContext } from '../results/runCoherence';
-import { postSymmetry, toSolveDesign } from '../jobs/actions';
+import { postSolvePlan, postSymmetry, solvePlanRequestBody, toSolveDesign } from '../jobs/actions';
+import { postSolverMesh, solverMeshArtifactToken, solverMeshScene } from '../api/solverMesh';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { subscribeRevision, useDesignStore } from '../stores/design';
@@ -42,6 +43,7 @@ import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskSto
 import { defaultFieldPlane, nearestFieldPlaneFrequencyIndex, useFieldPlaneStore } from './fieldPlaneStore';
 import type { FieldPlaneResponseId } from '../api/fieldPlane';
 import { importedMeshStore } from './importedMeshStore';
+import { SolverMeshRefreshController, type SolverMeshRefreshState } from './solverMeshRefresh';
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
@@ -333,6 +335,7 @@ export function Viewport() {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
+  const solveSolverMode = useSolveOptionsStore((state) => state.solverMode);
   const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadRecord = useCadReturnStore((state) => state.ingestRecord);
@@ -435,12 +438,59 @@ export function Viewport() {
   const cadMesh = cadRecord && importedMeshState.cad?.ingestId === cadRecord.ingest_id
     ? importedMeshState.cad
     : null;
+  const solverViewSelected = workspaceMode === 'parametric' && importedMeshState.showing === 'solver';
   const importedMesh = workspaceMode === 'cad'
     ? cadMesh
     : importedMeshState.showing === 'file'
       ? importedMeshState.file
-      : null;
+      : solverViewSelected
+        ? importedMeshState.solver
+        : null;
   const availableFileMesh = importedMeshState.file;
+  const [solverMeshState, setSolverMeshState] = useState<SolverMeshRefreshState>({
+    building: false, stale: false, staleReason: null, error: null,
+  });
+  const [axisymPlanned, setAxisymPlanned] = useState(false);
+  // Created once: the build reads the design, symmetry mode, and job list at
+  // call time, so the latest design always wins without re-instantiating.
+  const solverRefreshRef = useRef<SolverMeshRefreshController | null>(null);
+  if (solverRefreshRef.current === null) {
+    solverRefreshRef.current = new SolverMeshRefreshController({
+      runBuild: async (signal) => {
+        const generation = importedMeshStore.beginIntent();
+        const started = performance.now();
+        try {
+          const body = JSON.stringify({
+            design: toSolveDesign(useDesignStore.getState().design),
+            symmetry: useSolveOptionsStore.getState().symmetry,
+          });
+          const result = await postSolverMesh(body, fetch, signal);
+          const token = solverMeshArtifactToken(result.stats.mesh_cache_key);
+          const current = importedMeshStore.getSnapshot().solver;
+          // An unchanged artifact — a frequency-only edit is a server cache
+          // hit — keeps the existing scene object, so nothing re-renders.
+          if (current?.artifactToken !== token) {
+            importedMeshStore.setSolver(
+              solverMeshScene('Simulation mesh', result),
+              generation,
+              importedMeshStore.getSnapshot().showing === 'solver',
+            );
+          }
+          return { ok: true, durationMs: performance.now() - started };
+        } catch (error) {
+          return {
+            ok: false,
+            durationMs: performance.now() - started,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      isSolveActive: () => jobsSocket.getSnapshot().jobs
+        .some((job) => job.status === 'running' || job.status === 'queued'),
+      onState: setSolverMeshState,
+    });
+  }
+  const solverRefresh = solverRefreshRef.current;
   const [dismissedPreviewError, setDismissedPreviewError] = useState<string | null>(null);
   const [refreshRequestedAt, setRefreshRequestedAt] = useState<number | null>(null);
   const [stalled, setStalled] = useState(false);
@@ -590,10 +640,64 @@ export function Viewport() {
   // ingest), so the camera refit follows the store rather than the setters.
   const lastImportedMesh = useRef(importedMesh);
   useEffect(() => {
-    if (lastImportedMesh.current === importedMesh) return;
+    const previous = lastImportedMesh.current;
+    if (previous === importedMesh) return;
     lastImportedMesh.current = importedMesh;
+    // A solver-mesh rebuild replaces geometry inside the current view, exactly
+    // like a parametric edit; refitting the camera there would make every
+    // auto-refresh jump the framing.
+    if (previous?.source === 'solver' && importedMesh?.source === 'solver') return;
     setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
   }, [importedMesh]);
+
+  // Simulation-mesh view lifecycle: activation is user intent, so it builds
+  // (or re-serves from the shared artifact cache) immediately and defaults the
+  // display mode to solid + wireframe; the mode picker stays live after that.
+  useEffect(() => {
+    if (!solverViewSelected) return undefined;
+    setMode('solid-wire');
+    solverRefresh.activate(useDesignStore.getState().designRevision);
+    return () => solverRefresh.deactivate();
+  }, [solverRefresh, solverViewSelected]);
+
+  useEffect(
+    () => subscribeRevision((event) => solverRefresh.designChanged(event.revision)),
+    [solverRefresh],
+  );
+
+  useEffect(() => {
+    if (!solveRunningOrQueued) solverRefresh.solveSettled();
+  }, [solveRunningOrQueued, solverRefresh]);
+
+  // The axisymmetric formulation never integrates over this 3D mesh, so say so
+  // while it is what the solve plan resolves to.
+  useEffect(() => {
+    if (!solverViewSelected) {
+      setAxisymPlanned(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      let body: string;
+      try {
+        body = solvePlanRequestBody(design);
+      } catch {
+        setAxisymPlanned(false);
+        return;
+      }
+      void postSolvePlan(body, fetch, controller.signal)
+        .then((plan) => {
+          if (!controller.signal.aborted) setAxisymPlanned(plan.formulation === 'axisymmetric');
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setAxisymPlanned(false);
+        });
+    }, SYMMETRY_TINT_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [design, solveSolverMode, solveSymmetry, solverViewSelected]);
 
   useEffect(() => {
     if (availableFieldJob || !fieldEnabled) return;
@@ -712,15 +816,24 @@ export function Viewport() {
     />}
 
     <div className="viewport-title">
-      <b>{importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
+      <b>{importedMesh?.source === 'solver'
+        ? designName || 'Untitled design'
+        : importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
       <span>{importedMesh
         ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
         : workspaceMode === 'cad' ? (cadCoordinator.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadCoordinator.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design)}</span>
     </div>
     <div className="viewport-live">
-      {workspaceMode === 'parametric' && availableFileMesh && <span className="imported-mesh-badge" aria-label="Standalone mesh display">
-        <button type="button" className={!importedMesh ? 'active' : ''} aria-pressed={!importedMesh} onClick={showParametric}>Parametric</button>
-        <button type="button" className={importedMesh?.source === 'file' ? 'active' : ''} aria-pressed={importedMesh?.source === 'file'} onClick={() => importedMeshStore.showFile()}>Imported mesh</button>
+      {workspaceMode === 'parametric' && <span className="imported-mesh-badge" aria-label="Viewport mesh source">
+        <button type="button" className={!importedMesh && !solverViewSelected ? 'active' : ''} aria-pressed={!importedMesh && !solverViewSelected} onClick={showParametric}>Parametric</button>
+        <button
+          type="button"
+          className={solverViewSelected ? 'active' : ''}
+          aria-pressed={solverViewSelected}
+          title="Display the real solver mesh triangles instead of the smooth preview"
+          onClick={() => importedMeshStore.showSolver()}
+        >Simulation mesh</button>
+        {availableFileMesh && <button type="button" className={importedMesh?.source === 'file' ? 'active' : ''} aria-pressed={importedMesh?.source === 'file'} onClick={() => importedMeshStore.showFile()}>Imported mesh</button>}
       </span>}
       {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
       {workspaceMode === 'parametric' && behindDesign && !importedMesh && <button
@@ -732,7 +845,13 @@ export function Viewport() {
         onClick={refresh}
       ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
       {workspaceMode === 'parametric'
-        ? <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
+        ? solverViewSelected
+          ? <span>{solverMeshState.building
+            ? 'building solver mesh…'
+            : importedMesh
+              ? solverMeshState.stale ? 'solver mesh out of date' : 'solver mesh current'
+              : 'solver mesh pending'}</span>
+          : <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
         : <span>CAD Link workspace</span>}
     </div>
 
@@ -753,6 +872,20 @@ export function Viewport() {
     {activeScene && connectionInterrupted && !importedMesh && <div className={`viewport-connection-banner${showPreviewError ? ' below-error' : ''}`} role="status">
       <span><i />{preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}</span>
       <b>Last valid geometry retained</b>
+    </div>}
+    {solverViewSelected && solverMeshState.stale && <div className="viewport-connection-banner solver-mesh-banner" role="status">
+      <span><i />{solverMeshState.error ? 'Mesh build failed' : 'Mesh out of date'}</span>
+      {solverMeshState.error
+        ? <b title={solverMeshState.error}>{solverMeshState.error}</b>
+        : solverMeshState.staleReason === 'solve-running'
+          ? <b>auto-rebuild paused while a solve runs</b>
+          : solverMeshState.staleReason === 'build-slow'
+            ? <b>auto-rebuild paused — the last build was slow</b>
+            : null}
+      <button type="button" disabled={solverMeshState.building} onClick={() => solverRefresh.refresh()}>Refresh</button>
+    </div>}
+    {solverViewSelected && axisymPlanned && <div className="solver-axisym-note" role="note">
+      Axisymmetric solve planned: the solver uses a meridian discretisation of the profile, not these 3D triangles.
     </div>}
     {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
       <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>

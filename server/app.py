@@ -25,6 +25,7 @@ from server.drivers import mount_drivers
 from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.integration import mount_integration
+from server.mesh.api import mount_solver_mesh
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
 from server.platform.origin import (
@@ -373,6 +374,7 @@ def create_app(
         resolution = await asyncio.to_thread(resolve_symmetry, design)
         return resolution.as_dict()
 
+    mount_solver_mesh(application)
     mount_preview(application, extra_ws_origins=extra_ws_origins)
     mount_design_io(application)
     mount_exports(application)

@@ -9,7 +9,7 @@ let nextArtifactToken = 1;
 
 export interface ImportedMeshScene {
   name: string;
-  source: 'cad' | 'file';
+  source: 'cad' | 'file' | 'solver';
   /** Present for CAD-return scenes so the solve command can prove that the
    * visible mesh and the immutable ingestion record are the same artifact. */
   ingestId: string | null;
