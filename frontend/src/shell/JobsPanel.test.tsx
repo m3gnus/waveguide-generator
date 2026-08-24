@@ -253,25 +253,48 @@ describe('jobs panel run list', () => {
   });
 
   it('offers the radiation-impedance download only while the run still has one', async () => {
-    const radiationButton = () => [...host.querySelectorAll<HTMLButtonElement>('.job-card footer button')]
-      .find((button) => button.textContent === 'Radiation Z');
+    const radiationLink = () => [...host.querySelectorAll<HTMLAnchorElement>('.job-card footer a')]
+      .find((link) => link.textContent === 'Radiation Z');
     const plain = job(1, 'No campaign');
     const withArtifact = { ...job(2, 'Cardioid'), has_radiation_impedance_artifact: true };
     publishJobs([plain, withArtifact]);
     compareSelection.setPrimary(plain.id);
     await act(async () => root.render(<JobsPanel/>));
-    expect(radiationButton()).toBeUndefined();
+    expect(radiationLink()).toBeUndefined();
 
     act(() => compareSelection.setPrimary(withArtifact.id));
-    const open = vi.spyOn(window, 'open').mockReturnValue(null);
-    expect(radiationButton()).toBeDefined();
-    act(() => radiationButton()!.click());
-    expect(open).toHaveBeenCalledWith(`/api/radiation-impedance/${withArtifact.id}`, '_blank');
+    expect(radiationLink()?.getAttribute('href')).toBe(`/api/radiation-impedance/${withArtifact.id}`);
+    expect(radiationLink()?.hasAttribute('download')).toBe(true);
+    expect(radiationLink()?.hasAttribute('target')).toBe(false);
 
     // Retention can clean the archive up under a run that once had one.
     act(() => publishJobs([plain, { ...withArtifact, has_radiation_impedance_artifact: false }]));
-    expect(radiationButton()).toBeUndefined();
-    open.mockRestore();
+    expect(radiationLink()).toBeUndefined();
+  });
+
+  it('opens job logs in the in-app text dialog', async () => {
+    const completed = job(8, 'Logged run');
+    publishJobs([completed]);
+    compareSelection.setPrimary(completed.id);
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const fetchMock = vi.fn(async () => new Response('solver output\nfinished\n'));
+    vi.stubGlobal('fetch', fetchMock);
+    await act(async () => root.render(<JobsPanel/>));
+
+    const log = [...host.querySelectorAll<HTMLButtonElement>('.job-card footer button')]
+      .find((button) => button.textContent === 'Log')!;
+    await act(async () => {
+      log.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(open).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/jobs/${completed.id}/log`,
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(document.querySelector('[role="dialog"] pre')?.textContent).toContain('solver output');
   });
 
   it('says why a passive-cardioid run pauses on its extra campaign stage', async () => {

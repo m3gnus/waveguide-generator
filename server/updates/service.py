@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import hashlib
 import json
 import logging
 import math
@@ -20,15 +21,40 @@ from typing import Any
 import urllib.error
 import urllib.request
 
+from scripts.fetch_spa import SpaError, expected_digest
 from server.platform.process import background_process_kwargs
+from server.updates.bundle import (
+    BundleInstallError,
+    BundleUpdateInstaller,
+    GITHUB_REPOSITORY,
+    SmallFetcher,
+    archive_size_limit,
+    open_trusted_url,
+    trusted_asset_url,
+    updates_api_base,
+)
 
 
-REPOSITORY = "m3gnus/waveguide-generator"
+REPOSITORY = GITHUB_REPOSITORY
 LATEST_RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+RECENT_RELEASES_API = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=20"
+
+
+def latest_release_api() -> str:
+    return f"{updates_api_base()}/repos/{REPOSITORY}/releases/latest"
+
+
+def recent_releases_api() -> str:
+    return f"{updates_api_base()}/repos/{REPOSITORY}/releases?per_page=20"
+
+
 RELEASE_PAGE_ROOT = f"https://github.com/{REPOSITORY}/releases/tag"
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+RUNTIME_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 CACHE_SCHEMA = 1
 MAX_RESPONSE_BYTES = 1_000_000
+MAX_RELEASE_LIST_BYTES = 5_000_000
+MAX_MANIFEST_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 4.0
 MANUAL_REFRESH_FLOOR_SECONDS = 60.0
 CURRENT_TTL_SECONDS = 6 * 60 * 60
@@ -40,6 +66,7 @@ _CACHE_FIELDS = frozenset(
         "schemaVersion",
         "etag",
         "release",
+        "releaseMode",
         "availability",
         "lastAttemptEpoch",
         "checkedAtEpoch",
@@ -48,12 +75,9 @@ _CACHE_FIELDS = frozenset(
         "lastError",
     }
 )
-_RELEASE_CACHE_FIELDS = frozenset(
-    {"version", "tag", "url", "publishedAt", "assetsReady"}
-)
-_AVAILABILITY_VALUES = frozenset(
-    {"unknown", "incomplete", "available", "current", "ahead"}
-)
+_RELEASE_CACHE_FIELDS = frozenset({"version", "tag", "url", "publishedAt", "assetsReady"})
+_BUNDLE_RELEASE_CACHE_FIELDS = frozenset({"runtimeId", "bundleAssets"})
+_AVAILABILITY_VALUES = frozenset({"unknown", "incomplete", "available", "current", "ahead"})
 
 log = logging.getLogger("wg.updates")
 
@@ -68,6 +92,7 @@ class ReleaseResponse:
 
 
 ReleaseFetcher = Callable[[str | None], ReleaseResponse]
+RecentReleasesFetcher = Callable[[], list[dict[str, Any]]]
 Clock = Callable[[], float]
 
 
@@ -90,7 +115,9 @@ def _iso(timestamp: float | None) -> str | None:
 
 
 def _version(tag_or_version: str) -> tuple[int, int, int]:
-    match = TAG_RE.fullmatch(tag_or_version if tag_or_version.startswith("v") else f"v{tag_or_version}")
+    match = TAG_RE.fullmatch(
+        tag_or_version if tag_or_version.startswith("v") else f"v{tag_or_version}"
+    )
     if match is None:
         raise ValueError(f"Unsupported release version: {tag_or_version!r}")
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
@@ -109,8 +136,69 @@ def _cache_epoch(value: Any, field: str) -> float:
     return timestamp
 
 
+def _validated_bundle_asset(value: Any, *, release_tag: str) -> dict[str, Any]:
+    fields = {"name", "url", "sha256Url", "bytes", "sha256Bytes", "layer"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError("update-cache bundle asset has invalid fields")
+    name = value.get("name")
+    url = value.get("url")
+    checksum_url = value.get("sha256Url")
+    size = value.get("bytes")
+    checksum_size = value.get("sha256Bytes")
+    layer = value.get("layer")
+    if (
+        not isinstance(name, str)
+        or Path(name).name != name
+        or not isinstance(url, str)
+        or not trusted_asset_url(
+            url,
+            tag=(
+                release_tag
+                if isinstance(layer, str) and layer in {"app", "manifest", "installer"}
+                else None
+            ),
+            asset_name=name,
+        )
+        or not isinstance(checksum_url, str)
+        or not trusted_asset_url(
+            checksum_url,
+            tag=(
+                release_tag
+                if isinstance(layer, str) and layer in {"app", "manifest", "installer"}
+                else None
+            ),
+            asset_name=name + ".sha256",
+        )
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or size <= 0
+        or isinstance(checksum_size, bool)
+        or not isinstance(checksum_size, int)
+        or checksum_size <= 0
+        or not isinstance(layer, str)
+        or layer not in {"app", "runtime", "manifest", "installer"}
+        or (
+            layer in {"app", "runtime"}
+            and isinstance(size, int)
+            and size > archive_size_limit(layer)
+        )
+    ):
+        raise ValueError("update-cache bundle asset is invalid")
+    return {
+        "name": name,
+        "url": url,
+        "sha256Url": checksum_url,
+        "bytes": size,
+        "sha256Bytes": checksum_size,
+        "layer": layer,
+    }
+
+
 def _validated_cached_release(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != _RELEASE_CACHE_FIELDS:
+    if not isinstance(value, dict) or set(value) not in {
+        _RELEASE_CACHE_FIELDS,
+        _RELEASE_CACHE_FIELDS | _BUNDLE_RELEASE_CACHE_FIELDS,
+    }:
         raise ValueError("update-cache release has invalid fields")
     version = value.get("version")
     tag = value.get("tag")
@@ -133,13 +221,27 @@ def _validated_cached_release(value: Any) -> dict[str, Any]:
             raise ValueError("update-cache release publishedAt is invalid") from exc
         if parsed.utcoffset() is None:
             raise ValueError("update-cache release publishedAt is invalid")
-    return {
+    normalized = {
         "version": version,
         "tag": tag,
         "url": url,
         "publishedAt": published_at,
         "assetsReady": assets_ready,
     }
+    if "runtimeId" in value:
+        runtime_id = value.get("runtimeId")
+        bundle_assets = value.get("bundleAssets")
+        if (
+            not isinstance(runtime_id, str)
+            or RUNTIME_ID_RE.fullmatch(runtime_id) is None
+            or not isinstance(bundle_assets, list)
+        ):
+            raise ValueError("update-cache bundle release is invalid")
+        normalized["runtimeId"] = runtime_id
+        normalized["bundleAssets"] = [
+            _validated_bundle_asset(asset, release_tag=tag) for asset in bundle_assets
+        ]
+    return normalized
 
 
 def _validated_cache(value: Any) -> dict[str, Any]:
@@ -162,6 +264,11 @@ def _validated_cache(value: Any) -> dict[str, Any]:
         if not isinstance(availability, str) or availability not in _AVAILABILITY_VALUES:
             raise ValueError("update-cache availability is invalid")
         normalized["availability"] = availability
+    if "releaseMode" in value:
+        release_mode = value["releaseMode"]
+        if release_mode not in {"checkout", "bundle"}:
+            raise ValueError("update-cache releaseMode is invalid")
+        normalized["releaseMode"] = release_mode
     for field in ("lastAttemptEpoch", "checkedAtEpoch", "nextCheckEpoch"):
         if field in value:
             normalized[field] = _cache_epoch(value[field], field)
@@ -188,9 +295,13 @@ def fetch_latest_release(etag: str | None = None) -> ReleaseResponse:
     }
     if etag:
         headers["If-None-Match"] = etag
-    request = urllib.request.Request(LATEST_RELEASE_API, headers=headers)
+    request = urllib.request.Request(latest_release_api(), headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310 - fixed HTTPS URL
+        with open_trusted_url(
+            request,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            purpose="api",
+        ) as response:
             body = response.read(MAX_RESPONSE_BYTES + 1)
             if len(body) > MAX_RESPONSE_BYTES:
                 raise RuntimeError("GitHub release response exceeded the size limit")
@@ -218,6 +329,60 @@ def fetch_latest_release(etag: str | None = None) -> ReleaseResponse:
         raise RuntimeError(f"Could not check GitHub releases: {exc}") from exc
 
 
+def fetch_recent_releases() -> list[dict[str, Any]]:
+    """List recent releases only when a content-addressed runtime must be located."""
+
+    request = urllib.request.Request(
+        recent_releases_api(),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "WaveguideGenerator-UpdateCheck",
+        },
+    )
+    try:
+        with open_trusted_url(
+            request,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            purpose="api",
+        ) as response:
+            body = response.read(MAX_RELEASE_LIST_BYTES + 1)
+        if len(body) > MAX_RELEASE_LIST_BYTES:
+            raise RuntimeError("GitHub release list exceeded the size limit")
+        payload = json.loads(body.decode("utf-8"))
+        if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+            raise RuntimeError("GitHub release list was not an array of objects")
+        return payload
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not list GitHub releases: {exc}") from exc
+
+
+def fetch_small_release_asset(url: str, max_bytes: int) -> bytes:
+    """Fetch manifest/checksum metadata under the update check's short guard."""
+
+    if not trusted_asset_url(url):
+        raise RuntimeError("GitHub release asset URL is outside the trusted repository")
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/octet-stream",
+            "User-Agent": "WaveguideGenerator-UpdateCheck",
+        },
+    )
+    try:
+        with open_trusted_url(
+            request,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            purpose="asset",
+        ) as response:
+            body = response.read(max_bytes + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"Could not fetch release metadata: {exc}") from exc
+    if len(body) > max_bytes:
+        raise RuntimeError("GitHub release metadata exceeded the size limit")
+    return body
+
+
 def _run_git(repo_root: Path, *args: str) -> str | None:
     try:
         result = subprocess.run(
@@ -234,8 +399,69 @@ def _run_git(repo_root: Path, *args: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _installed_bundle_identity(app_layer: Path) -> tuple[str, str]:
+    try:
+        app_manifest = json.loads((app_layer / "APP-MANIFEST.json").read_text(encoding="utf-8"))
+        runtime_manifest = json.loads(
+            (app_layer.parent / "runtime" / "RUNTIME-MANIFEST.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read the installed bundle manifests: {exc}") from exc
+    if not isinstance(app_manifest, dict) or app_manifest.get("schemaVersion") != 1:
+        raise ValueError("The installed APP-MANIFEST.json is unsupported.")
+    if not isinstance(runtime_manifest, dict) or runtime_manifest.get("schemaVersion") != 1:
+        raise ValueError("The installed RUNTIME-MANIFEST.json is unsupported.")
+    version = app_manifest.get("version")
+    app_runtime_id = app_manifest.get("runtimeId")
+    runtime_id = runtime_manifest.get("runtimeId")
+    if not isinstance(version, str):
+        raise ValueError("The installed app manifest has no version.")
+    _version(version)
+    if (
+        not isinstance(app_runtime_id, str)
+        or RUNTIME_ID_RE.fullmatch(app_runtime_id) is None
+        or not isinstance(runtime_id, str)
+        or RUNTIME_ID_RE.fullmatch(runtime_id) is None
+    ):
+        raise ValueError("The installed bundle manifest has an invalid runtime id.")
+    if app_runtime_id != runtime_id:
+        raise ValueError("The installed app and runtime manifests do not match.")
+    return version, runtime_id
+
+
 def checkout_status(repo_root: Path, running_version: str) -> dict[str, Any]:
     """Classify local install safety without fetching or mutating Git state."""
+
+    if os.environ.get("WG2_BUNDLE") == "1":
+        try:
+            installed_version, runtime_id = _installed_bundle_identity(repo_root)
+        except ValueError as exc:
+            return {
+                "kind": "bundle",
+                "branch": None,
+                "head": None,
+                "atDeclaredTag": False,
+                "trackedChanges": False,
+                "aheadCount": None,
+                "behindCount": None,
+                "updateSupported": False,
+                "installedVersion": running_version,
+                "runtimeId": None,
+                "reason": str(exc),
+            }
+        return {
+            "kind": "bundle",
+            "branch": None,
+            "head": None,
+            "atDeclaredTag": False,
+            "trackedChanges": False,
+            "aheadCount": None,
+            "behindCount": None,
+            "updateSupported": True,
+            "installedVersion": installed_version,
+            "runtimeId": runtime_id,
+            "reason": None,
+        }
 
     if _run_git(repo_root, "rev-parse", "--is-inside-work-tree") != "true":
         return {
@@ -273,7 +499,9 @@ def checkout_status(repo_root: Path, running_version: str) -> dict[str, Any]:
 
     ahead: int | None = None
     behind: int | None = None
-    upstream = _run_git(repo_root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    upstream = _run_git(
+        repo_root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"
+    )
     if upstream:
         counts = _run_git(repo_root, "rev-list", "--left-right", "--count", f"HEAD...{upstream}")
         if counts:
@@ -283,13 +511,17 @@ def checkout_status(repo_root: Path, running_version: str) -> dict[str, Any]:
 
     if changed:
         kind = "modified"
-        reason = "Tracked files have local changes. Commit or stash them before installing a release."
+        reason = (
+            "Tracked files have local changes. Commit or stash them before installing a release."
+        )
     elif at_declared_tag:
         kind = "release"
         reason = None
     elif branch is None:
         kind = "detached"
-        reason = "This checkout is detached at a commit that does not match its declared release tag."
+        reason = (
+            "This checkout is detached at a commit that does not match its declared release tag."
+        )
     else:
         kind = "development"
         reason = "This checkout contains development commits beyond its declared product version."
@@ -311,11 +543,49 @@ def _powershell_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def update_action(repo_root: Path, platform_name: str, tag: str) -> dict[str, str]:
-    """Build a display/copy command from fixed local paths and a validated tag."""
+def update_action(
+    repo_root: Path,
+    platform_name: str,
+    tag: str,
+    *,
+    release: dict[str, Any] | None = None,
+    checkout: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the appropriate bundle download or checkout installer action."""
 
     if TAG_RE.fullmatch(tag) is None:
         raise ValueError("Refusing to build an update command from an invalid tag")
+    if checkout is not None and checkout.get("kind") == "bundle":
+        if release is None or not isinstance(release.get("bundleAssets"), list):
+            raise ValueError("The bundle release has no downloadable assets")
+        required_runtime = release.get("runtimeId")
+        installed_runtime = checkout.get("runtimeId")
+        assets: list[dict[str, object]] = []
+        for asset in release["bundleAssets"]:
+            if not isinstance(asset, dict):
+                continue
+            layer = asset.get("layer")
+            if layer == "app" or (layer == "runtime" and required_runtime != installed_runtime):
+                assets.append(
+                    {
+                        "name": asset["name"],
+                        "url": asset["url"],
+                        "sha256Url": asset["sha256Url"],
+                        "bytes": asset["bytes"],
+                        "layer": layer,
+                    }
+                )
+        if not any(asset["layer"] == "app" for asset in assets):
+            raise ValueError("The bundle release has no app layer")
+        if required_runtime != installed_runtime and not any(
+            asset["layer"] == "runtime" for asset in assets
+        ):
+            raise ValueError("The bundle release has no required runtime layer")
+        return {
+            "kind": "bundle_download",
+            "assets": assets,
+            "downloadBytes": sum(int(asset["bytes"]) for asset in assets),
+        }
     if platform_name == "win32":
         installer = repo_root / "installers" / "windows" / "install-and-update.bat"
         command = f"& {_powershell_quote(str(installer))} --tag {_powershell_quote(tag)}"
@@ -338,16 +608,21 @@ class UpdateService:
         data_dir: Path,
         repo_root: Path,
         fetcher: ReleaseFetcher = fetch_latest_release,
+        recent_releases_fetcher: RecentReleasesFetcher = fetch_recent_releases,
+        asset_fetcher: SmallFetcher = fetch_small_release_asset,
         clock: Clock = time.time,
         platform_name: str = sys.platform,
         checkout_probe: Callable[[Path, str], dict[str, Any]] = checkout_status,
         update_request_path: Path | None = None,
+        bundle_installer: BundleUpdateInstaller | None = None,
     ) -> None:
         _version(running_version)
         self.running_version = running_version
         self.data_dir = Path(data_dir)
         self.repo_root = Path(repo_root).resolve()
         self.fetcher = fetcher
+        self.recent_releases_fetcher = recent_releases_fetcher
+        self.asset_fetcher = asset_fetcher
         self.clock = clock
         self.platform_name = platform_name
         self.checkout_probe = checkout_probe
@@ -357,6 +632,15 @@ class UpdateService:
         self.cache_path = self.data_dir / "cache" / "update-status.json"
         self._lock = threading.Lock()
         self._cache: dict[str, Any] | None = None
+        self._recent_releases: list[dict[str, Any]] | None = None
+        self._runtime_asset_cache: dict[str, dict[str, Any] | None] = {}
+        self.bundle_installer = bundle_installer
+        if self.bundle_installer is None and self.update_request_path is not None:
+            self.bundle_installer = BundleUpdateInstaller(
+                data_dir=self.data_dir,
+                destination_app_dir=self.repo_root,
+                request_path=self.update_request_path,
+            )
 
     def _load_cache(self) -> dict[str, Any]:
         if self._cache is not None:
@@ -374,38 +658,214 @@ class UpdateService:
         temporary.write_text(json.dumps(cache, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         temporary.replace(self.cache_path)
 
-    def _parse_release(self, payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    @staticmethod
+    def _uploaded_assets(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        uploaded: dict[str, dict[str, Any]] = {}
+        assets = payload.get("assets")
+        if not isinstance(assets, list):
+            return uploaded
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            name = asset.get("name")
+            size = asset.get("size")
+            if (
+                isinstance(name, str)
+                and asset.get("state") == "uploaded"
+                and isinstance(size, int)
+                and not isinstance(size, bool)
+                and size > 0
+            ):
+                uploaded[name] = asset
+        return uploaded
+
+    @staticmethod
+    def _paired_asset(
+        uploaded: dict[str, dict[str, Any]], name: str, layer: str, *, tag: str
+    ) -> dict[str, Any] | None:
+        asset = uploaded.get(name)
+        checksum = uploaded.get(name + ".sha256")
+        if asset is None or checksum is None:
+            return None
+        url = asset.get("browser_download_url")
+        checksum_url = checksum.get("browser_download_url")
+        if (
+            not isinstance(url, str)
+            or not trusted_asset_url(url, tag=tag, asset_name=name)
+            or not isinstance(checksum_url, str)
+            or not trusted_asset_url(
+                checksum_url,
+                tag=tag,
+                asset_name=name + ".sha256",
+            )
+            or (
+                layer in {"app", "runtime"}
+                and int(asset["size"]) > archive_size_limit(layer)
+            )
+        ):
+            return None
+        return {
+            "name": name,
+            "url": url,
+            "sha256Url": checksum_url,
+            "bytes": int(asset["size"]),
+            "sha256Bytes": int(checksum["size"]),
+            "layer": layer,
+        }
+
+    def _bundle_platform(self) -> str:
+        if self.platform_name == "darwin":
+            return "macos-arm64"
+        if self.platform_name == "win32":
+            return "windows-x86_64"
+        return self.platform_name
+
+    def _bundle_installer_name(self, version: str) -> str | None:
+        platform_name = self._bundle_platform()
+        if self.platform_name == "darwin":
+            return f"Waveguide.Generator-{version}-{platform_name}.dmg"
+        if self.platform_name == "win32":
+            return f"Waveguide.Generator-{version}-{platform_name}.zip"
+        return None
+
+    def _manifest_runtime_id(
+        self,
+        manifest_asset: dict[str, Any],
+        version: str,
+    ) -> str:
+        if int(manifest_asset["bytes"]) > MAX_MANIFEST_BYTES:
+            raise RuntimeError("The release app manifest exceeds the size limit")
+        manifest_bytes = self.asset_fetcher(str(manifest_asset["url"]), MAX_MANIFEST_BYTES)
+        checksum_bytes = self.asset_fetcher(str(manifest_asset["sha256Url"]), MAX_MANIFEST_BYTES)
+        try:
+            wanted = expected_digest(
+                checksum_bytes.decode("utf-8", "replace"),
+                str(manifest_asset["name"]),
+            )
+        except SpaError as exc:
+            raise RuntimeError(f"The release app manifest checksum is invalid: {exc}") from exc
+        actual = hashlib.sha256(manifest_bytes).hexdigest()
+        if actual != wanted:
+            raise RuntimeError("The release app manifest does not match its checksum")
+        try:
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("The release app manifest is not valid JSON") from exc
+        runtime_id = manifest.get("runtimeId") if isinstance(manifest, dict) else None
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("schemaVersion") != 1
+            or manifest.get("version") != version
+            or not isinstance(runtime_id, str)
+            or RUNTIME_ID_RE.fullmatch(runtime_id) is None
+        ):
+            raise RuntimeError("The release app manifest has invalid bundle identity")
+        return runtime_id
+
+    def _earlier_runtime_asset(self, runtime_id: str) -> dict[str, Any] | None:
+        if runtime_id in self._runtime_asset_cache:
+            return self._runtime_asset_cache[runtime_id]
+        if self._recent_releases is None:
+            self._recent_releases = self.recent_releases_fetcher()
+        name = f"waveguide-generator-runtime-{self._bundle_platform()}-{runtime_id}.zip"
+        found: dict[str, Any] | None = None
+        for release in self._recent_releases:
+            tag = release.get("tag_name")
+            if not isinstance(tag, str) or TAG_RE.fullmatch(tag) is None:
+                continue
+            found = self._paired_asset(
+                self._uploaded_assets(release),
+                name,
+                "runtime",
+                tag=tag,
+            )
+            if found is not None:
+                break
+        self._runtime_asset_cache[runtime_id] = found
+        return found
+
+    def _parse_release(
+        self,
+        payload: dict[str, Any],
+        *,
+        checkout: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
         tag = payload.get("tag_name")
         if not isinstance(tag, str) or TAG_RE.fullmatch(tag) is None:
             raise RuntimeError("GitHub's latest release has an unsupported version tag")
         version = tag.removeprefix("v")
+        uploaded = self._uploaded_assets(payload)
+        if checkout is not None and checkout.get("kind") == "bundle":
+            app_name = f"waveguide-generator-app-{version}.zip"
+            manifest_name = f"waveguide-generator-app-{version}.manifest.json"
+            app_asset = self._paired_asset(uploaded, app_name, "app", tag=tag)
+            manifest_asset = self._paired_asset(uploaded, manifest_name, "manifest", tag=tag)
+            base_release = {
+                "version": version,
+                "tag": tag,
+                "url": f"{RELEASE_PAGE_ROOT}/{tag}",
+                "publishedAt": (
+                    payload.get("published_at")
+                    if isinstance(payload.get("published_at"), str)
+                    else None
+                ),
+                "assetsReady": False,
+            }
+            if manifest_asset is None:
+                return base_release, False
+            runtime_id = self._manifest_runtime_id(manifest_asset, version)
+            runtime_name = f"waveguide-generator-runtime-{self._bundle_platform()}-{runtime_id}.zip"
+            runtime_asset = self._paired_asset(uploaded, runtime_name, "runtime", tag=tag)
+            installed_runtime = checkout.get("runtimeId")
+            if runtime_asset is None and installed_runtime != runtime_id:
+                runtime_asset = self._earlier_runtime_asset(runtime_id)
+
+            installer_name = self._bundle_installer_name(version)
+            installer_asset = (
+                self._paired_asset(uploaded, installer_name, "installer", tag=tag)
+                if installer_name is not None
+                else None
+            )
+            bundle_assets = [
+                asset
+                for asset in (
+                    app_asset,
+                    manifest_asset,
+                    runtime_asset,
+                    installer_asset,
+                )
+                if asset is not None
+            ]
+            ready = (
+                app_asset is not None
+                and manifest_asset is not None
+                and (runtime_asset is not None or installed_runtime == runtime_id)
+            )
+            return (
+                base_release
+                | {
+                    "assetsReady": ready,
+                    "runtimeId": runtime_id,
+                    "bundleAssets": bundle_assets,
+                },
+                ready,
+            )
+
         archive = f"waveguide-generator-v2-spa-{version}.tar.gz"
         expected = {archive, f"{archive}.sha256"}
-        ready_assets: set[str] = set()
-        assets = payload.get("assets")
-        if isinstance(assets, list):
-            for asset in assets:
-                if not isinstance(asset, dict):
-                    continue
-                name = asset.get("name")
-                if (
-                    isinstance(name, str)
-                    and name in expected
-                    and asset.get("state") == "uploaded"
-                    and isinstance(asset.get("size"), int)
-                    and asset["size"] > 0
-                ):
-                    ready_assets.add(name)
+        ready_assets = set(uploaded) & expected
         release = {
             "version": version,
             "tag": tag,
             "url": f"{RELEASE_PAGE_ROOT}/{tag}",
-            "publishedAt": payload.get("published_at") if isinstance(payload.get("published_at"), str) else None,
+            "publishedAt": payload.get("published_at")
+            if isinstance(payload.get("published_at"), str)
+            else None,
             "assetsReady": ready_assets == expected,
         }
         return release, ready_assets == expected
 
-    def _availability(self, cache: dict[str, Any]) -> str:
+    def _availability(self, cache: dict[str, Any], *, installed_version: str | None = None) -> str:
         """Compare the cached release to *this process's* running version.
 
         The cache survives an update. Persisting an ``available`` verdict from
@@ -419,26 +879,40 @@ class UpdateService:
         if release.get("assetsReady") is not True:
             return "incomplete"
         latest = _version(release["version"])
-        current = _version(self.running_version)
+        current = _version(installed_version or self.running_version)
         if latest > current:
             return "available"
         if latest == current:
             return "current"
         return "ahead"
 
-    def _refresh(self, cache: dict[str, Any], now: float) -> None:
+    def _refresh(self, cache: dict[str, Any], now: float, checkout: dict[str, Any]) -> None:
         cache["lastAttemptEpoch"] = now
         try:
-            response = self.fetcher(cache.get("etag") if isinstance(cache.get("etag"), str) else None)
+            release_mode = "bundle" if checkout.get("kind") == "bundle" else "checkout"
+            cached_mode_mismatch = cache.get("releaseMode") != release_mode
+            response = self.fetcher(
+                cache.get("etag")
+                if isinstance(cache.get("etag"), str) and not cached_mode_mismatch
+                else None
+            )
             if response.not_modified:
                 if not isinstance(cache.get("release"), dict):
                     raise RuntimeError("GitHub returned not-modified before any release was cached")
             else:
                 if response.payload is None:
                     raise RuntimeError("GitHub returned no release payload")
-                release, _assets_ready = self._parse_release(response.payload)
+                release, _assets_ready = self._parse_release(response.payload, checkout=checkout)
                 cache["release"] = release
-                cache["availability"] = self._availability(cache)
+                cache["releaseMode"] = release_mode
+                cache["availability"] = self._availability(
+                    cache,
+                    installed_version=(
+                        str(checkout["installedVersion"])
+                        if isinstance(checkout.get("installedVersion"), str)
+                        else None
+                    ),
+                )
                 if response.etag:
                     cache["etag"] = response.etag
 
@@ -475,19 +949,36 @@ class UpdateService:
             cache = self._load_cache()
             # Re-evaluate persisted release facts against the version that is
             # running now; this process may be the result of an update.
-            cache["availability"] = self._availability(cache)
+            installed_version = (
+                str(checkout["installedVersion"])
+                if isinstance(checkout.get("installedVersion"), str)
+                else None
+            )
+            cache["availability"] = self._availability(cache, installed_version=installed_version)
             due = now >= float(cache.get("nextCheckEpoch") or 0)
-            floor_elapsed = now - float(cache.get("lastAttemptEpoch") or 0) >= MANUAL_REFRESH_FLOOR_SECONDS
+            release_mode = "bundle" if checkout.get("kind") == "bundle" else "checkout"
+            if cache.get("releaseMode") != release_mode:
+                due = True
+            floor_elapsed = (
+                now - float(cache.get("lastAttemptEpoch") or 0) >= MANUAL_REFRESH_FLOOR_SECONDS
+            )
             if due or (force and floor_elapsed):
-                self._refresh(cache, now)
+                self._refresh(cache, now, checkout)
                 try:
                     self._save_cache(cache)
                 except OSError as exc:
                     log.warning("Could not persist update status cache: %s", exc)
                 refreshed = True
 
-            release = cache.get("release") if isinstance(cache.get("release"), dict) else None
-            availability = str(cache.get("availability") or "unknown")
+            mode_matches = cache.get("releaseMode") == release_mode
+            release = (
+                cache.get("release")
+                if mode_matches and isinstance(cache.get("release"), dict)
+                else None
+            )
+            availability = (
+                str(cache.get("availability") or "unknown") if mode_matches else "unknown"
+            )
             checked_at = cache.get("checkedAtEpoch")
             last_error = cache.get("lastError") if isinstance(cache.get("lastError"), str) else None
             freshness = "unknown" if checked_at is None else "stale" if last_error else "fresh"
@@ -498,25 +989,46 @@ class UpdateService:
                 and release.get("assetsReady") is True
                 and checkout.get("updateSupported") is True
             ):
-                action = update_action(self.repo_root, self.platform_name, str(release["tag"]))
+                action = update_action(
+                    self.repo_root,
+                    self.platform_name,
+                    str(release["tag"]),
+                    release=release,
+                    checkout=checkout,
+                )
+
+            install_status = (
+                self.bundle_installer.status()
+                if checkout.get("kind") == "bundle" and self.bundle_installer is not None
+                else {
+                    "installState": "idle",
+                    "activeVersion": None,
+                    "downloadedBytes": 0,
+                    "totalBytes": 0,
+                    "error": None,
+                }
+            )
 
             return {
                 "schemaVersion": 1,
-                "runningVersion": self.running_version,
+                "runningVersion": installed_version or self.running_version,
                 "availability": availability,
                 "freshness": freshness,
                 "cached": not refreshed,
                 "release": release,
                 "checkedAt": _iso(float(checked_at)) if checked_at is not None else None,
-                "nextCheckAt": _iso(float(cache["nextCheckEpoch"])) if cache.get("nextCheckEpoch") is not None else None,
+                "nextCheckAt": _iso(float(cache["nextCheckEpoch"]))
+                if cache.get("nextCheckEpoch") is not None
+                else None,
                 "checkout": checkout,
                 "action": action,
                 "canInstall": action is not None and self.update_request_path is not None,
                 "lastError": last_error,
+                **install_status,
             }
 
     def request_install(self) -> dict[str, object]:
-        """Validate and atomically signal the status owner to install a release."""
+        """Start bundle staging or signal the checkout installer as appropriate."""
 
         request_path = self.update_request_path
         if request_path is None:
@@ -541,6 +1053,36 @@ class UpdateService:
         tag = str(release.get("tag") or "")
         if TAG_RE.fullmatch(tag) is None:
             raise UpdateInstallUnavailable("The offered release tag is invalid.")
+
+        if action.get("kind") == "bundle_download":
+            installer = self.bundle_installer
+            assets = action.get("assets")
+            version = release.get("version")
+            expected_runtime_id = release.get("runtimeId")
+            checkout = status.get("checkout")
+            installed_runtime_id = (
+                checkout.get("runtimeId") if isinstance(checkout, dict) else None
+            )
+            if (
+                installer is None
+                or not isinstance(assets, list)
+                or not isinstance(version, str)
+                or not isinstance(expected_runtime_id, str)
+                or not isinstance(installed_runtime_id, str)
+            ):
+                raise UpdateInstallUnavailable(
+                    "The bundle update installer is unavailable in this process."
+                )
+            try:
+                progress = installer.start(
+                    version,
+                    assets,
+                    expected_runtime_id=expected_runtime_id,
+                    installed_runtime_id=installed_runtime_id,
+                )
+            except BundleInstallError as exc:
+                raise UpdateInstallUnavailable(str(exc)) from exc
+            return {"accepted": True, "version": version, **progress}
 
         payload = {
             "schemaVersion": 1,

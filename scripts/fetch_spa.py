@@ -42,12 +42,28 @@ else:
     import fcntl
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# This script must stay runnable on its own: the shell installers call it in a
+# checkout whose application packages may be absent or broken (the installer
+# integrity tests stage exactly that), so the shared root helper is optional.
+_IMPORT_ROOT = (
+    Path(os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1])
+    .expanduser()
+    .resolve()
+)
+if (_IMPORT_ROOT / "server" / "platform" / "paths.py").is_file():
+    if str(_IMPORT_ROOT) not in sys.path:
+        sys.path.insert(0, str(_IMPORT_ROOT))
+    from server.platform.paths import app_root  # noqa: E402
+
+    REPO_ROOT = app_root()
+else:
+    REPO_ROOT = _IMPORT_ROOT
 DEFAULT_REPO = "m3gnus/waveguide-generator"
 DEFAULT_TIMEOUT = 60.0
 FRONTEND = REPO_ROOT / "frontend"
 DIST = FRONTEND / "dist"
 STAMP_NAME = ".wg2-spa.json"
+TREE_STAMP_NAME = ".wg2-spa-tree.sha256"
 STAGING_NAME = ".wg2-spa-staging"
 PREVIOUS_NAME = ".wg2-dist-previous"
 LOCK_NAME = ".wg2-spa-install.lock"
@@ -235,6 +251,29 @@ def file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+def tree_digest(root: Path) -> str:
+    """Hash the installed SPA's relative file names and bytes, excluding its stamp."""
+
+    digest = hashlib.sha256()
+    files = sorted(
+        (
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and path not in {root / STAMP_NAME, root / TREE_STAMP_NAME}
+        ),
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
+    for path in files:
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        payload = path.read_bytes()
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
 def verify_archive(path: Path, expected: str) -> str:
     """Return the archive's digest, or refuse loudly when it is not the expected one."""
 
@@ -356,6 +395,12 @@ def _install_archive_locked(
             "interface that serves nothing. Nothing was changed."
         )
 
+    installed_tree_digest = tree_digest(staged_dist)
+    (staged_dist / TREE_STAMP_NAME).write_text(
+        installed_tree_digest + "\n",
+        encoding="ascii",
+        newline="\n",
+    )
     (staged_dist / STAMP_NAME).write_text(
         json.dumps(
             {"version": version, "asset": archive.name, "sha256": digest, "source": source},
@@ -364,6 +409,7 @@ def _install_archive_locked(
         )
         + "\n",
         encoding="utf-8",
+        newline="\n",
     )
 
     if dist.exists():
@@ -503,7 +549,9 @@ def run(args: argparse.Namespace) -> int:
                 # Checksum first: it is a few dozen bytes, and fetching it before the
                 # archive means a release that was published without one fails before
                 # anything large is transferred.
-                checksum_text = _read_url(f"{source}.sha256", args.timeout).decode("utf-8", "replace")
+                checksum_text = _read_url(f"{source}.sha256", args.timeout).decode(
+                    "utf-8", "replace"
+                )
                 digest = expected_digest(checksum_text, name)
                 archive = Path(scratch) / name
                 archive.write_bytes(_read_url(source, args.timeout))
@@ -524,14 +572,28 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--version", help="release version to install (default: shared/version.json)")
-    parser.add_argument("--repo", default=DEFAULT_REPO, help="GitHub owner/name holding the release")
+    parser.add_argument(
+        "--version", help="release version to install (default: shared/version.json)"
+    )
+    parser.add_argument(
+        "--repo", default=DEFAULT_REPO, help="GitHub owner/name holding the release"
+    )
     parser.add_argument("--base-url", help="directory URL holding the asset and its .sha256")
-    parser.add_argument("--archive", type=Path, help="install this local archive instead of downloading")
-    parser.add_argument("--sha256", help="expected digest, or a path to a .sha256 file, for --archive")
-    parser.add_argument("--force", action="store_true", help="reinstall even when the version matches")
-    parser.add_argument("--check", action="store_true", help="report what is installed; install nothing")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="per-request timeout")
+    parser.add_argument(
+        "--archive", type=Path, help="install this local archive instead of downloading"
+    )
+    parser.add_argument(
+        "--sha256", help="expected digest, or a path to a .sha256 file, for --archive"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="reinstall even when the version matches"
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="report what is installed; install nothing"
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_TIMEOUT, help="per-request timeout"
+    )
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
     return parser
 

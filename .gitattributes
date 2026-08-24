@@ -1,4 +1,15 @@
+# The app layer ships the tracked files byte for byte, and the release
+# workflow asserts that the Windows-built layer is identical to the macOS one.
+# Leaving line endings to the checking-out user's core.autocrlf makes that
+# assertion depend on ambient configuration: on a machine with autocrlf=true
+# every text file arrives as CRLF and the layer differs. The runtime id is
+# worse -- it is a SHA-256 over the raw bytes of the two requirements files, so
+# a CRLF checkout mints a content-addressed id that no other platform will ever
+# produce, and both the "reuse a published runtime" release step and the
+# updater's "does the runtime need replacing" decision key on it.
+* text=auto eol=lf
+
 # Batch files are read by cmd.exe, which is not reliably tolerant of LF-only
 # line endings around labels and goto. Pin them regardless of the checking-out
-# user's core.autocrlf, and leave every other path to Git's defaults.
+# user's core.autocrlf.
 *.bat text eol=crlf

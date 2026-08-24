@@ -2,6 +2,16 @@
 
 Status: current overview, verified against the application on 2026-08-20.
 
+## Launching
+
+The platform launcher normally opens the compact status window, where **Open
+in browser** shows the interface and **Quit** stops the local server. On macOS
+and Windows, pass `--window` to the command launcher to show the same interface
+in a native desktop window instead; closing it also stops the server. Pass
+`--browser` to select the normal status-window workflow explicitly. Linux
+reports that the native window is unavailable in this release and falls back
+to the status window. `--no-gui` keeps the terminal-only mode on every platform.
+
 ## Design and preview
 
 Start with a new OSSE, R-OSSE, ICW, or FREEFORM design, or open an ATH-style

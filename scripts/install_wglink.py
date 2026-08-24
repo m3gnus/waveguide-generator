@@ -16,7 +16,16 @@ import tempfile
 import zipfile
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+_IMPORT_ROOT = Path(
+    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
+).expanduser().resolve()
+if str(_IMPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_ROOT))
+
+from server.platform.paths import app_root  # noqa: E402
+
+
+REPO_ROOT = app_root()
 BUILDER_PATH = REPO_ROOT / "scripts" / "build_wglink_package.py"
 RUNTIME_PARENT = REPO_ROOT / "integrations" / "wglink" / "runtime"
 RUNTIME_FILE = "wglink_runtime.json"

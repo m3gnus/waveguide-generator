@@ -6,13 +6,23 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 from pathlib import Path
 import re
 import sys
 from typing import Any
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+_IMPORT_ROOT = Path(
+    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
+).expanduser().resolve()
+if str(_IMPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_ROOT))
+
+from server.platform.paths import app_root  # noqa: E402
+
+
+REPO_ROOT = app_root()
 DEFAULT_PINS = REPO_ROOT / "pins.json"
 DEFAULT_OUTPUT = REPO_ROOT / "server" / "requirements-pins.txt"
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")

@@ -31,25 +31,23 @@ from server.platform.origin import (
     parse_extra_websocket_origins,
     request_origin_allowed,
 )
-from server.platform.paths import resolve_data_dir
+from server.platform.paths import app_root, default_runs_dir, resolve_data_dir
 from server.preview.service import mount_preview
 from server.settings import mount_settings
 from server.solver.symmetry import resolve_symmetry
-from server.platform.paths import default_runs_dir
 from server.workspace import mount_workspace
 from server.workspace.api import MAX_EXPORT_REQUEST_BODY_BYTES
 from server.updates import mount_updates
 
 
+APP_ROOT = app_root()
 VERSION = str(
     json.loads(
-        (Path(__file__).resolve().parents[1] / "shared" / "version.json").read_text(
-            encoding="utf-8"
-        )
+        (APP_ROOT / "shared" / "version.json").read_text(encoding="utf-8")
     )["version"]
 )
-FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
-LEGACY_WORKSPACE_DIR = Path(__file__).resolve().parents[1] / "output"
+FRONTEND_DIST = APP_ROOT / "frontend" / "dist"
+LEGACY_WORKSPACE_DIR = APP_ROOT / "output"
 request_log = logging.getLogger("wg.requests")
 DEFAULT_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
 MAX_REQUEST_BODY_BYTES = DEFAULT_MAX_REQUEST_BODY_BYTES
@@ -412,7 +410,7 @@ def create_app(
         application,
         running_version=VERSION,
         data_dir=resolved_data_dir,
-        repo_root=Path(__file__).resolve().parents[1],
+        repo_root=APP_ROOT,
         update_request_path=(
             Path(update_request_path) if update_request_path is not None else None
         ),

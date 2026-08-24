@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from server.integration import provenance as provenance_module
 from server.integration.provenance import enrich_result_contract
 from server.jobs.models import SolveRequest
 
@@ -66,6 +68,31 @@ def test_parametric_result_has_stable_identity_and_provenance() -> None:
         == provenance["execution_solve_options_sha256"]
     )
     assert provenance["request_sha256"] == provenance["effective_request_sha256"]
+
+
+def test_bundle_provenance_uses_the_shipped_generated_pin_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "server").mkdir()
+    (tmp_path / "shared" / "version.json").write_text(
+        '{"version":"1.2.3"}\n', encoding="utf-8"
+    )
+    (tmp_path / "server" / "requirements-pins.txt").write_text(
+        "git+https://github.com/m3gnus/hornlab-metal-bem.git@"
+        + "a" * 40
+        + "#egg=hornlab-metal-bem\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(provenance_module, "_REPOSITORY_ROOT", tmp_path)
+    provenance_module._release_identity.cache_clear()
+    try:
+        version, pins = provenance_module._release_identity()
+    finally:
+        provenance_module._release_identity.cache_clear()
+
+    assert version == "1.2.3"
+    assert pins == {"hornlab-metal-bem": "a" * 40}
 
 
 @pytest.mark.parametrize(

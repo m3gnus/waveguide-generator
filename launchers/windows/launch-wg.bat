@@ -1,7 +1,8 @@
 @echo off
 rem Double-click in Explorer, or run from a command prompt, to start Waveguide
 rem Generator v2. This is the Windows counterpart of
-rem launchers\macos\launch-wg.command. Pass --no-gui for terminal-only mode.
+rem launchers\macos\launch-wg.command. Pass --window for the native application
+rem window, or --no-gui for terminal-only mode.
 rem
 rem Unlike v1's install.bat this script never pulls over itself, so it does not
 rem need install-and-update.bat's copy-to-TEMP dance: cmd.exe tracks its position
@@ -68,7 +69,7 @@ if not exist "frontend\dist\index.html" goto :missing_frontend
 call :gui_mode_requested %*
 if errorlevel 1 goto :start_terminal
 call :select_pythonw
-echo Starting the Waveguide Generator status window...
+echo Starting Waveguide Generator...
 rem `start` returns as soon as the process is created, so this catches only a
 rem spawn failure -- a missing or unrunnable interpreter -- and never a crash in
 rem the application itself. It cannot: this script has already exited by then,
