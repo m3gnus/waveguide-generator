@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import { latestSolvedParametricJob } from '../jobs/showJobModel';
 import { preferencesStore } from '../prefs/preferences';
 import { useDocumentStore } from '../stores/document';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import type { ResultData } from '../api/results';
 import { splSubtitle } from './ResultsPanel';
 import { documentLabel, engineStatusLabel, solveSummary } from './StatusBar';
@@ -132,6 +134,52 @@ describe('frontend result and status labels', () => {
 
     expect(useDesignStore.getState().design.L).toBe(321);
     expect(useDocumentStore.getState().designName).toBe('keep-me');
+  });
+
+  // Clicking a parametric run used to replace the design without leaving CAD
+  // Link mode, so the restored model was invisible behind the CAD workspace.
+  it('returns the workspace to parametric when a parametric run is selected from CAD mode', () => {
+    workspaceModeStore.setMode('cad');
+    const selected = selectableJob(
+      'selected',
+      '260807_horn_v13',
+      { version: 1, design: serializeDesign(designForFamily('OSSE')) },
+    );
+
+    selectJob(selected);
+
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    workspaceModeStore.setMode('parametric');
+  });
+
+  it('stays in CAD mode when the selected run has no readable design', () => {
+    workspaceModeStore.setMode('cad');
+
+    selectJob(selectableJob('bare', '260807_horn_v14', null));
+
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    workspaceModeStore.setMode('parametric');
+  });
+
+  it('picks the newest readable solved parametric run as the working-design restore point', () => {
+    const readable = { version: 1, design: serializeDesign(designForFamily('OSSE')) };
+    const older = { ...selectableJob('older', 'older', readable), completed_at: '2026-08-07T00:00:00Z' };
+    const newest = { ...selectableJob('newest', 'newest', readable), completed_at: '2026-08-09T00:00:00Z' };
+    const newerButImported = {
+      ...selectableJob('imported', 'imported', readable),
+      completed_at: '2026-08-10T00:00:00Z',
+      config_summary: { geometry_type: 'imported' },
+    };
+    const newerButUnreadable = { ...selectableJob('unreadable', 'unreadable', null), completed_at: '2026-08-10T00:00:00Z' };
+    const newerButRunning = {
+      ...selectableJob('running', 'running', readable),
+      status: 'running' as const,
+      completed_at: null,
+      queued_at: '2026-08-10T00:00:00Z',
+    };
+
+    expect(latestSolvedParametricJob([older, newerButImported, newest, newerButUnreadable, newerButRunning])?.id).toBe('newest');
+    expect(latestSolvedParametricJob([newerButImported, newerButUnreadable])).toBeNull();
   });
 
   it('leaves the design name unchanged when a selected snapshot is unreadable', () => {
