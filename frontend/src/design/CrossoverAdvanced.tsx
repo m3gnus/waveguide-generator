@@ -1,5 +1,4 @@
-import { useId, type RefObject } from 'react';
-import { AnchoredPanel } from '../prefs/AnchoredPanel';
+import { useId } from 'react';
 import {
   driverXoMinNote,
   familyOrders,
@@ -19,7 +18,8 @@ import {
 import type { DriverPreset } from '../stores/cadReturn';
 
 /**
- * The per-channel crossover editor, shared by the rail and the results strip.
+ * The per-channel crossover editor, rendered inline as the Crossover section's
+ * Advanced view.
  *
  * The rail's pair fields describe a chain where both sides of every crossover
  * agree. This is where they stop having to: each channel owns its high-pass,
@@ -139,9 +139,7 @@ function AutoManualField({ label, unit, precision, step, mode, value, autoValue,
   </div>;
 }
 
-export function CrossoverAdvanced({ anchorRef, onClose, spec, resolved = NO_RESOLVED, memberLabel, presetFor, onChange }: {
-  anchorRef: RefObject<HTMLElement | null>;
-  onClose: () => void;
+export function CrossoverAdvanced({ spec, resolved = NO_RESOLVED, memberLabel, presetFor, onChange }: {
   spec: CrossoverSpec;
   /** The values the latest shown result resolved, so auto can show a number. */
   resolved?: Record<string, ResolvedChannel>;
@@ -152,7 +150,7 @@ export function CrossoverAdvanced({ anchorRef, onClose, spec, resolved = NO_RESO
   onChange: (spec: CrossoverSpec) => void;
 }) {
   const referenceId = useId();
-  return <AnchoredPanel anchorRef={anchorRef} onClose={onClose} className="crossover-advanced" label="Crossover advanced settings">
+  return <div className="crossover-advanced-inline" role="group" aria-label="Crossover advanced settings">
     <div className="crossover-advanced-head">
       <label className="crossover-reference" htmlFor={referenceId}>Reference
         <select
@@ -235,5 +233,5 @@ export function CrossoverAdvanced({ anchorRef, onClose, spec, resolved = NO_RESO
         </div>
       </section>;
     })}
-  </AnchoredPanel>;
+  </div>;
 }
