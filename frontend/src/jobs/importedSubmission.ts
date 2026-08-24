@@ -163,6 +163,8 @@ export function importedSubmissionNotices(
 ): string[] {
   const undriven = undrivenChannels(state);
   const driven = state.driveChannels.length - undriven.length;
+  const combining = combineEnabledEffective(state);
+  const members = new Set(combineSpecEffective(state)?.members ?? []);
   // Only the mixture is worth a word. A solve with no drivers at all is the
   // ordinary unit-acceleration solve this product did for years and still
   // does; saying "no power or current" about every channel of it would be
@@ -178,8 +180,7 @@ export function importedSubmissionNotices(
   // scaled to the cone acceleration its voltage produces; an undriven one is
   // left at unit acceleration. The two are not in the same units, and it is
   // level matching -- not physics -- that puts them on one chart.
-  if (combineEnabledEffective(state)) {
-    const members = new Set(combineSpecEffective(state)?.members ?? []);
+  if (combining) {
     const mixedMembers = undriven.filter((id) => members.has(id));
     if (mixedMembers.length) {
       notices.push(
