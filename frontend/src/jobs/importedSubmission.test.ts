@@ -124,6 +124,50 @@ describe('imported solve submission wire', () => {
   });
 });
 
+describe('an unfinished driver is refused, not dropped', () => {
+  beforeEach(() => { resetCadReturnStore(); resetSolveOptionsStore(); });
+
+  const ready = (driver: unknown) => useCadReturnStore.setState({
+    selectedBundle: bundle,
+    ingestRecord: record,
+    skippedSourceIds: ['source-lf'],
+    driveChannels: [
+      { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+      { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+    ],
+    channelDrivers: driver as never,
+    needsIngest: false,
+  });
+
+  it('names the channel and what it still needs', () => {
+    // A catalogue row can name a compression driver while carrying none of
+    // its T/S: Re and Bl arrive, Sd and the mass do not. That used to submit
+    // the channel unit-driven and the run came back with no power or current.
+    ready({ 'drive-hf': { enabled: true, fields: { re_ohm: 5.4, bl_t_m: 17.5 }, preset: null } });
+
+    const blocker = importedSubmissionBlocker();
+    expect(blocker).toContain('drive-hf');
+    expect(blocker).toContain('Sd');
+    expect(blocker).toContain('one of Mms/Mmd');
+    expect(blocker).toContain('one of Cms/Vas/Fs');
+    expect(buildImportedSubmission(useCadReturnStore.getState())
+      .geometry.drive_channels.find((channel) => channel.id === 'drive-hf')?.driver).toBeUndefined();
+  });
+
+  it('accepts a complete driver, and a channel that asked for none', () => {
+    ready({
+      'drive-hf': {
+        enabled: true,
+        fields: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620 },
+        preset: null,
+      },
+      'drive-mf': { enabled: false, fields: {}, preset: null },
+    });
+
+    expect(importedSubmissionBlocker()).toBeNull();
+  });
+});
+
 describe('widening a polar grid onto the ingestion derivation', () => {
   const derivation = (diagonalPinned: boolean) => ({
     axes: {

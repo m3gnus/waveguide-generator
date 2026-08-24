@@ -1,4 +1,4 @@
-import type { DriverFieldKey, PassiveCardioidNumberField } from '../stores/cadReturn';
+import { DRIVER_FIELD_LABELS, type DriverFieldKey, type PassiveCardioidNumberField } from '../stores/cadReturn';
 import type { ParameterTab } from './parameterRegistry';
 
 export const CAD_CONTROL_SECTIONS = {
@@ -220,14 +220,15 @@ export interface CadDriverFieldDescriptor extends CadControlDescriptor {
   step: number;
 }
 
+/** The label is `DRIVER_FIELD_LABELS`', so a field is named the same here, in
+ * the shortfall hint, and in the solve gate's refusal. */
 const driverField = (
   driverKey: DriverFieldKey,
-  label: string,
   unit: string,
   step: number,
 ): CadDriverFieldDescriptor => ({
   ...control(
-    `cad.driver.${driverKey}`, label, CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
+    `cad.driver.${driverKey}`, DRIVER_FIELD_LABELS[driverKey], CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
     ['driver', 'T/S', 'Thiele-Small', driverKey], 'ingested-return', 'cad.drive-channels',
   ),
   driverKey,
@@ -236,20 +237,20 @@ const driverField = (
 });
 
 export const CAD_DRIVER_FIELD_CONTROLS: readonly CadDriverFieldDescriptor[] = [
-  driverField('sd_cm2', 'Sd', 'cm²', 5),
-  driverField('bl_t_m', 'Bl', 'T·m', 0.5),
-  driverField('re_ohm', 'Re', 'Ω', 0.1),
-  driverField('le_mh', 'Le', 'mH', 0.05),
-  driverField('mmd_g', 'Mmd', 'g', 1),
-  driverField('mms_g', 'Mms', 'g', 1),
-  driverField('cms_m_per_n', 'Cms', 'm/N', 0.0001),
-  driverField('vas_l', 'Vas', 'L', 1),
-  driverField('fs_hz', 'Fs', 'Hz', 5),
-  driverField('qms', 'Qms', '', 0.1),
-  driverField('rms_kg_per_s', 'Rms', 'kg/s', 0.1),
-  driverField('xmax_mm', 'Xmax', 'mm', 0.5),
-  driverField('count', 'Count', '', 1),
-  driverField('rear_volume_l', 'Rear vol', 'L', 0.5),
+  driverField('sd_cm2', 'cm²', 5),
+  driverField('bl_t_m', 'T·m', 0.5),
+  driverField('re_ohm', 'Ω', 0.1),
+  driverField('le_mh', 'mH', 0.05),
+  driverField('mmd_g', 'g', 1),
+  driverField('mms_g', 'g', 1),
+  driverField('cms_m_per_n', 'm/N', 0.0001),
+  driverField('vas_l', 'L', 1),
+  driverField('fs_hz', 'Hz', 5),
+  driverField('qms', '', 0.1),
+  driverField('rms_kg_per_s', 'kg/s', 0.1),
+  driverField('xmax_mm', 'mm', 0.5),
+  driverField('count', '', 1),
+  driverField('rear_volume_l', 'L', 0.5),
 ];
 
 /**
