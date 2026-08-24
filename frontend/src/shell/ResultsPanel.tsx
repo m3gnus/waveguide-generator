@@ -1879,11 +1879,20 @@ export function ResultsPanel() {
 
   // Jobs arrive newest-first. A running solve becomes displayable as soon as
   // its first frequency arrives; before that, keep the last complete result.
+  const displayable = useCallback((job: JobItem) => (
+    (job.status === 'complete' && job.has_results)
+    || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id]))
+  ), [provisional]);
   const latest = useMemo(() => jobs.find((job) => (
-    runMatchesContext(job, coherenceContext) !== 'other-model'
-    && ((job.status === 'complete' && job.has_results)
-      || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id])))
-  )) ?? null, [coherenceContext.designFingerprint, coherenceContext.designId, coherenceContext.ingestId, coherenceContext.mode, jobs, provisional]);
+    runMatchesContext(job, coherenceContext) !== 'other-model' && displayable(job)
+  )) ?? null, [coherenceContext.designFingerprint, coherenceContext.designId, coherenceContext.ingestId, coherenceContext.mode, displayable, jobs]);
+  // The newest run that can be drawn at all, whatever model it belongs to.
+  // Only the opening selection falls back to this; see the effect below.
+  const newestDrawable = useMemo(
+    () => jobs.find(displayable) ?? null,
+    [displayable, jobs],
+  );
+  const openingSelection = useRef(true);
   useEffect(() => {
     // A solve the user started outranks a pinned comparison: the run submitted
     // for it takes the primary slot as soon as its results exist, and only
@@ -1913,10 +1922,35 @@ export function ResultsPanel() {
       && (held.has_results || Boolean(provisional.entries[held.id]))
       && (!selection.following || runMatchesContext(held, coherenceContext) !== 'other-model')
     ) return;
-    if ((latest?.id ?? null) !== selection.primary) compareSelection.followLatest(latest?.id ?? null);
+    // Opening the app is the one time an out-of-context run is better than an
+    // empty dock. A restored CAD project selects its return but does not
+    // prepare it, so there is no ingestion yet and every imported run reads as
+    // `other-model`: the dock used to sit on "Fetching the selected run" with
+    // nothing selected, for the whole session, until the user prepared a model
+    // by hand. The run it shows instead carries its own `other model` marker,
+    // so it is labelled rather than silently passed off as the current model.
+    // Every later selection follows the ordinary rules, which is what keeps
+    // leaving a model family from dragging some unrelated run onto the charts.
+    if (latest) {
+      openingSelection.current = false;
+      if (latest.id !== selection.primary) compareSelection.followLatest(latest.id);
+      return;
+    }
+    const opening = openingSelection.current ? newestDrawable : null;
+    if (opening) {
+      // Pinned rather than followed. The rule above releases a followed slot
+      // whose run belongs to a model family the workspace has left -- which is
+      // this run, every time, since there is no loaded model for it to match.
+      // Following it would hand it over on the next pass and put the dock
+      // straight back to showing nothing.
+      openingSelection.current = false;
+      compareSelection.setPrimary(opening.id);
+      return;
+    }
+    if (selection.primary !== null) compareSelection.followLatest(null);
   }, [
     coherenceContext.designFingerprint, coherenceContext.ingestId, coherenceContext.mode,
-    jobs, latest, provisional, selection.awaiting, selection.following, selection.primary,
+    jobs, latest, newestDrawable, provisional, selection.awaiting, selection.following, selection.primary,
   ]);
 
   const ids = useMemo(() => [selection.primary, ...selection.overlays].filter((id): id is string => Boolean(id)), [selection]);
@@ -2318,6 +2352,16 @@ export function ResultsPanel() {
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 'var(--text-micro)' }}>{error ?? exportStatus}{error && <button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}</div>}
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
-    {charts ?? <div className="empty-state" role="status"><b>{error ? 'Results unavailable' : 'Loading results'}</b><span>{error ? 'Retry above, or select another run in the Jobs rail.' : 'Fetching the selected run…'}</span></div>}
+    {/* Three different empty docks, said apart: a failed fetch, a fetch still
+        in flight, and nothing selected at all. The last used to claim it was
+        loading, which is how a dock with no selection looked like a hang. */}
+    {charts ?? <div className="empty-state" role="status">
+      <b>{error ? 'Results unavailable' : selection.primary ? 'Loading results' : 'No run selected'}</b>
+      <span>{error
+        ? 'Retry above, or select another run in the Jobs rail.'
+        : selection.primary
+          ? 'Fetching the selected run…'
+          : jobs.length ? 'Choose a run in the Jobs rail.' : 'Solve a design to see its results here.'}</span>
+    </div>}
   </div>;
 }

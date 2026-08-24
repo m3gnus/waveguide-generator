@@ -7,10 +7,10 @@ import {
   type DriverKind,
 } from '../api/drivers';
 import {
-  DRIVER_FIELD_KEYS,
   DRIVER_INSTALLATION_KEYS,
   driverEditedKeys,
-  driverMissingGroups,
+  driverBaseFromSpec,
+  driverShortfallText,
   driverValues,
   useCadReturnStore,
   type CadDriveChannel,
@@ -34,20 +34,6 @@ import {
 } from './cadControlRegistry';
 import { driverDerivedValues, driverValuesDisagree } from './driverDerived';
 
-const FIELD_LABELS = new Map(CAD_DRIVER_FIELD_CONTROLS.map((control) => [control.driverKey, control.label]));
-
-function fieldLabel(key: DriverFieldKey): string {
-  return FIELD_LABELS.get(key) ?? key;
-}
-
-/** "Sd, Bl, Re, one of Mms/Mmd, one of Cms/Vas/Fs" in the user's words. */
-function missingText(form: ChannelDriverForm | undefined): string {
-  return driverMissingGroups(form)
-    .map((group) => (group.length === 1
-      ? fieldLabel(group[0])
-      : `one of ${group.map(fieldLabel).join('/')}`))
-    .join(', ');
-}
 
 /**
  * Which half of the library a channel's search starts in.
@@ -75,11 +61,7 @@ export function driverHitLabel(hit: Pick<DriverHit, 'brand' | 'model'>): string 
 }
 
 function presetFromHit(hit: DriverHit): DriverPreset {
-  const base: Partial<Record<DriverFieldKey, number>> = {};
-  for (const key of DRIVER_FIELD_KEYS) {
-    const value = hit.spec[key];
-    if (typeof value === 'number' && Number.isFinite(value)) base[key] = value;
-  }
+  const base = driverBaseFromSpec(hit.spec);
   return {
     id: hit.id,
     label: driverHitLabel(hit),
@@ -130,7 +112,7 @@ function driverOwnValues(
 
 /** What the library could not tell us about a driver the user picked. */
 function shortfallText(form: ChannelDriverForm): string | null {
-  const missing = missingText(form);
+  const missing = driverShortfallText(form);
   return missing ? `Needs ${missing}` : null;
 }
 
@@ -158,7 +140,7 @@ export function DriverFields({ channel, form, onField }: {
   onField: (field: DriverFieldKey, value: number | null) => void;
 }) {
   const values = driverValues(form);
-  const missing = missingText(form);
+  const missing = driverShortfallText(form);
   return <div className="cad-driver-grid">
     {CAD_DRIVER_FIELD_CONTROLS.map(({ driverKey, label, unit, step, reveal }) => <label key={driverKey} className="cad-driver-field" data-control-reveal-id={reveal.id}>
       <span>{label}{unit ? ` (${unit})` : ''}</span>
@@ -574,7 +556,7 @@ function DriverSheet({ channel, form, onClose }: {
         {disagrees && <p className="field-warning" role="status">
           Fs, Mms and Vas disagree by {(100 * (derived.fsMismatch ?? 0)).toFixed(0)}%. One of the three is wrong; the solve uses them as typed.
         </p>}
-        {missingText(form) && <p className="cad-driver-hint">Still needed: {missingText(form)}.</p>}
+        {driverShortfallText(form) && <p className="cad-driver-hint">Still needed: {driverShortfallText(form)}.</p>}
       </div>
       <footer className="driver-sheet-actions">
         {/* Nothing to reset to: a hand-entered driver has no database row

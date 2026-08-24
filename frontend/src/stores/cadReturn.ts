@@ -12,7 +12,7 @@ import {
   type CrossoverWire,
   type FilterFamily,
 } from '../results/crossoverSpec';
-import { useDocumentStore, type DesignIdentity } from './document';
+import { useDocumentStore } from './document';
 import { namespaceStorage } from './durableSettings';
 
 export interface CadDriveChannel {
@@ -67,6 +67,14 @@ export interface DriverPreset {
    * the driver's source did not publish one. */
   xo_min_hz: number | null;
   base: Partial<Record<DriverFieldKey, number>>;
+}
+
+/** A driver's own numbers as the library states them now, with the id they
+ * were read for so a form whose driver changed underneath is left alone. */
+export interface DriverBaseUpdate {
+  presetId: string;
+  base: Partial<Record<DriverFieldKey, number>>;
+  xo_min_hz?: number | null;
 }
 
 export interface ChannelDriverForm {
@@ -173,15 +181,17 @@ interface CadReturnState {
   needsIngest: boolean;
   ingestedBundleIdentity: string | null;
   ingestStaleReason: string | null;
+  /** The CAD project whose saved solve settings this workspace is editing. */
+  projectLineageId: string | null;
   beginIngestIntent: () => number;
   isCurrentIngestIntent: (generation: number) => boolean;
-  selectBundle: (bundle: CadReturnBundle | null) => void;
+  selectBundle: (bundle: CadReturnBundle | null, projectLineageId?: string | null) => void;
   /** Select a newly arrived return. When it correlates with the current
    * selection — same source inventory by id, role, and required flag — the
    * user's mesh sizes, channel mapping, drivers, combine, and sweep survive.
    * `initial` means there was no current or saved setup, while `reset` means
    * an existing setup fell back to defaults. */
-  selectArrivedBundle: (bundle: CadReturnBundle) => 'initial' | 'carried' | 'reset';
+  selectArrivedBundle: (bundle: CadReturnBundle, projectLineageId?: string | null) => 'initial' | 'carried' | 'reset';
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
   markIngestStale: (reason: string) => void;
   applyIngest: (record: CadReturnIngestRecord, generation: number) => boolean;
@@ -219,13 +229,15 @@ interface CadReturnState {
   setChannelDriverPreset: (channelId: string, preset: DriverPreset | null, keepOverrides?: boolean) => void;
   /** *Reset to database values*: drop the edits, keep the driver. */
   clearChannelDriverOverrides: (channelId: string) => void;
+  /** Re-read picked drivers' own numbers from the library. See the action. */
+  refreshChannelDriverBases: (bases: Record<string, DriverBaseUpdate>) => string[];
   setDriveVoltage: (value: number) => void;
   setPassiveCardioid: (patch: Partial<PassiveCardioidForm>) => void;
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
 
 const solveProfileStorage = namespaceStorage('cadSolveProfiles');
-const SOLVE_PROFILE_STORAGE_VERSION = 3;
+const SOLVE_PROFILE_STORAGE_VERSION = 4;
 /**
  * Version 1 stored the combined output as a plain boolean whose `false` was
  * the old default rather than a decision. The combined output now defaults on
@@ -240,7 +252,16 @@ const LEGACY_SOLVE_PROFILE_VERSION = 1;
  * override instead; `combineSpecFromLegacy` is the one place that converts.
  */
 const LEGACY_COMBINE_FIELD_VERSIONS = new Set([1, 2]);
-const SUPPORTED_SOLVE_PROFILE_VERSIONS = new Set([1, 2, 3]);
+/**
+ * Versions 1 to 3 filed a profile under the open design's identity. For a
+ * project that only exists in CAD that identity belongs to whatever design
+ * happened to be open -- so the drivers picked for a Fusion document were
+ * stored against an unrelated parametric design and were gone the moment
+ * another one was opened. Version 4 files it under the project instead, and
+ * migrates an older entry to the design owner it already had.
+ */
+const LEGACY_DESIGN_OWNED_VERSIONS = new Set([1, 2, 3]);
+const SUPPORTED_SOLVE_PROFILE_VERSIONS = new Set([1, 2, 3, 4]);
 const MAX_SOLVE_PROFILES = 20;
 
 type PersistedSolveSettings = Pick<CadReturnState,
@@ -257,8 +278,8 @@ interface SourceInventoryEntry {
 
 interface StoredSolveProfile {
   key: string;
-  designId: string;
-  lineageId: string;
+  /** See `solveProfileOwner`: which project's settings these are. */
+  owner: string;
   inventory: SourceInventoryEntry[];
   settings: PersistedSolveSettings;
 }
@@ -565,8 +586,41 @@ function parseSolveSettings(
   return { ...settings, combineSpec: parseSpec(value.combineSpec ?? null) };
 }
 
-function solveProfileKey(identity: Pick<DesignIdentity, 'designId' | 'lineageId'>, inventory: SourceInventoryCarrier): string {
-  return JSON.stringify([identity.designId, identity.lineageId, sourceInventorySignature(inventory)]);
+/**
+ * Whose settings these are: one CAD project, or one parametric design.
+ *
+ * The CAD project's lineage owns them wherever there is one. It is the only
+ * identity that survives what a project actually does -- a Fusion rename, a
+ * new return, a new ingestion -- and for a project that exists only in CAD it
+ * is the *only* identity it has: the document store's is whatever design
+ * happened to be open, which is how a Fusion document's drivers came to be
+ * filed under an unrelated parametric design. A design-first project with no
+ * CAD project behind it keeps the design identity it always had.
+ */
+function solveProfileOwner(projectLineageId: string | null): string | null {
+  if (projectLineageId) return `cad:${projectLineageId}`;
+  const identity = useDocumentStore.getState().identity;
+  return identity?.designId && identity.lineageId
+    ? `design:${identity.designId}:${identity.lineageId}`
+    : null;
+}
+
+/**
+ * The project a newly selected bundle belongs to.
+ *
+ * Callers that know it say so -- the project switcher and the reopen-on-load
+ * both resolve the project before they select its return. The rest keep the
+ * one the workspace is already on, which is right for a new return of the
+ * project already open, and is corrected by `applyIngest` the moment the
+ * ingestion states the project itself.
+ */
+function resolvedProjectLineage(state: CadReturnState, projectLineageId?: string | null): string | null {
+  if (projectLineageId !== undefined) return projectLineageId;
+  return state.ingestRecord?.project?.lineage_id ?? state.projectLineageId;
+}
+
+function solveProfileKey(owner: string, inventory: SourceInventoryCarrier): string {
+  return JSON.stringify([owner, sourceInventorySignature(inventory)]);
 }
 
 function dropStoredSolveProfiles(): void {
@@ -587,11 +641,18 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
     }
     const version = parsed.version;
     const legacyCombineChoice = version === LEGACY_SOLVE_PROFILE_VERSION;
+    const designOwned = LEGACY_DESIGN_OWNED_VERSIONS.has(version);
     const profiles: StoredSolveProfile[] = [];
     for (const value of parsed.profiles) {
-      if (!isObject(value) || typeof value.key !== 'string'
-        || typeof value.designId !== 'string' || !value.designId
-        || typeof value.lineageId !== 'string' || !value.lineageId) {
+      // A migrated entry is re-keyed rather than re-validated against the key
+      // its own version wrote: the owner is the thing that changed.
+      const owner = designOwned
+        ? (typeof value.designId === 'string' && value.designId
+          && typeof value.lineageId === 'string' && value.lineageId
+          ? `design:${value.designId}:${value.lineageId}`
+          : null)
+        : (isObject(value) && typeof value.owner === 'string' && value.owner ? value.owner : null);
+      if (!isObject(value) || typeof value.key !== 'string' || !owner) {
         dropStoredSolveProfiles();
         return [];
       }
@@ -601,14 +662,14 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
         dropStoredSolveProfiles();
         return [];
       }
-      const identity = { designId: value.designId, lineageId: value.lineageId };
-      if (value.key !== solveProfileKey(identity, { readable: true, sources: inventory })) {
+      const key = solveProfileKey(owner, { readable: true, sources: inventory });
+      if (!designOwned && value.key !== key) {
         dropStoredSolveProfiles();
         return [];
       }
       profiles.push({
-        key: value.key,
-        ...identity,
+        key,
+        owner,
         inventory,
         settings: legacyCombineChoice && settings.combineEnabled === false
           ? { ...settings, combineEnabled: null }
@@ -635,17 +696,14 @@ function writeStoredSolveProfiles(profiles: StoredSolveProfile[]): void {
   } catch { /* persistence is best effort */ }
 }
 
-function currentSolveProfileKey(bundle: CadReturnBundle): string | null {
-  const identity = useDocumentStore.getState().identity;
-  return identity?.designId && identity.lineageId ? solveProfileKey(identity, bundle) : null;
+function currentSolveProfileKey(bundle: CadReturnBundle, projectLineageId: string | null): string | null {
+  const owner = solveProfileOwner(projectLineageId);
+  return owner ? solveProfileKey(owner, bundle) : null;
 }
 
-function hasSolveProfileForCurrentDesign(): boolean {
-  const identity = useDocumentStore.getState().identity;
-  if (!identity?.designId || !identity.lineageId) return false;
-  return readStoredSolveProfiles().some((profile) => (
-    profile.designId === identity.designId && profile.lineageId === identity.lineageId
-  ));
+function hasSolveProfileForCurrentOwner(projectLineageId: string | null): boolean {
+  const owner = solveProfileOwner(projectLineageId);
+  return owner !== null && readStoredSolveProfiles().some((profile) => profile.owner === owner);
 }
 
 function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
@@ -676,14 +734,18 @@ function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
 
 function saveSolveProfile(state: CadReturnState): void {
   const bundle = state.selectedBundle;
-  const identity = useDocumentStore.getState().identity;
-  if (!bundle?.readable || !identity?.designId || !identity.lineageId) return;
+  const owner = solveProfileOwner(state.projectLineageId);
+  // Readability is not the test -- a run recalled from the archive is not
+  // readable and its settings are still this project's, which is the whole of
+  // "I updated the drivers while looking at an old run". An inventory is: a
+  // bundle that could not be read states no sources, and filing that would
+  // overwrite the project's settings with an empty model.
+  if (!bundle || !owner || !bundle.sources.length) return;
   const inventory = bundle.sources.map(({ id, role, required }) => ({ id, role, required }));
-  const key = solveProfileKey(identity, bundle);
+  const key = solveProfileKey(owner, bundle);
   const profile: StoredSolveProfile = {
     key,
-    designId: identity.designId,
-    lineageId: identity.lineageId,
+    owner,
     inventory,
     settings: persistedSolveSettings(state),
   };
@@ -691,8 +753,28 @@ function saveSolveProfile(state: CadReturnState): void {
   selectedSolveProfileKey = key;
 }
 
-function restoreSolveProfile(bundle: CadReturnBundle): PersistedSolveSettings | null {
-  const key = currentSolveProfileKey(bundle);
+/**
+ * The drivers this project has picked, for a return with this inventory.
+ *
+ * Recalling an archived run reads them instead of the numbers that run was
+ * submitted with. A run stores what it solved -- the values, not which library
+ * row they came from -- so replaying it would re-solve with whatever the
+ * library held on the day, and a driver whose T/S have been filled in since
+ * could never be picked up. The project's own choice is the newer statement of
+ * "this channel is this driver", which is what a re-solve should use.
+ */
+export function projectChannelDrivers(
+  bundle: CadReturnBundle,
+  projectLineageId: string | null,
+): Record<string, ChannelDriverForm> | null {
+  const key = currentSolveProfileKey(bundle, projectLineageId);
+  if (!key) return null;
+  const profile = readStoredSolveProfiles().find((item) => item.key === key);
+  return profile ? profile.settings.channelDrivers : null;
+}
+
+function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string | null): PersistedSolveSettings | null {
+  const key = currentSolveProfileKey(bundle, projectLineageId);
   if (!key) return null;
   const profiles = readStoredSolveProfiles();
   const index = profiles.findIndex((profile) => profile.key === key);
@@ -781,6 +863,21 @@ function retainedChannelDrivers(
   }));
 }
 
+/**
+ * Fit a set of driver forms to a channel list they were not filled in against.
+ *
+ * The same rule `retainedChannelDrivers` applies to a listing revision, for the
+ * case where the forms come from the project rather than from the state being
+ * revised: a form is kept only where that channel still exists and can still
+ * carry a driver.
+ */
+export function driversForChannels(
+  drivers: Record<string, ChannelDriverForm>,
+  channels: CadDriveChannel[],
+): Record<string, ChannelDriverForm> {
+  return retainedChannelDrivers({ channelDrivers: drivers, driveChannels: [] }, channels);
+}
+
 function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: string; motion: 'normal' | 'axial' }>): CadDriveChannel[] {
   const grouped = new Map<string, CadDriveChannel>();
   sourceChannels.forEach(({ sourceId, channelId, motion }) => {
@@ -796,6 +893,7 @@ function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: stri
 export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   selectedBundle: null,
   ingestRecord: null,
+  projectLineageId: null,
   ...initialFromBundle(null),
   areaDriftSourceIds: [],
   exteriorOnly: false,
@@ -812,12 +910,14 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   ingestStaleReason: null,
   beginIngestIntent: supersedeIngestIntent,
   isCurrentIngestIntent: (generation) => generation === ingestIntentGeneration,
-  selectBundle: (selectedBundle) => {
+  selectBundle: (selectedBundle, projectLineageId) => {
     supersedeIngestIntent();
-    const restored = selectedBundle ? restoreSolveProfile(selectedBundle) : null;
-    selectedSolveProfileKey = selectedBundle ? currentSolveProfileKey(selectedBundle) : null;
+    const project = resolvedProjectLineage(get(), projectLineageId);
+    const restored = selectedBundle ? restoreSolveProfile(selectedBundle, project) : null;
+    selectedSolveProfileKey = selectedBundle ? currentSolveProfileKey(selectedBundle, project) : null;
     set({
       selectedBundle,
+      projectLineageId: project,
       ...initialFromBundle(selectedBundle),
       exteriorOnly: false,
       combineEnabled: null,
@@ -837,16 +937,18 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       ingestStaleReason: null,
     });
   },
-  selectArrivedBundle: (bundle) => {
+  selectArrivedBundle: (bundle, projectLineageId) => {
     const previous = get().selectedBundle;
-    const nextProfileKey = currentSolveProfileKey(bundle);
+    const project = resolvedProjectLineage(get(), projectLineageId);
+    const nextProfileKey = currentSolveProfileKey(bundle, project);
     if (!previous || !compatibleSourceInventory(previous, bundle)
       || selectedSolveProfileKey !== nextProfileKey) {
       supersedeIngestIntent();
-      const restored = restoreSolveProfile(bundle);
+      const restored = restoreSolveProfile(bundle, project);
       selectedSolveProfileKey = nextProfileKey;
       set({
         selectedBundle: bundle,
+        projectLineageId: project,
         ...initialFromBundle(bundle),
         exteriorOnly: false,
         combineEnabled: null,
@@ -866,11 +968,12 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         ingestStaleReason: null,
       });
       if (restored) return 'carried';
-      return previous || hasSolveProfileForCurrentDesign() ? 'reset' : 'initial';
+      return previous || hasSolveProfileForCurrentOwner(project) ? 'reset' : 'initial';
     }
     supersedeIngestIntent();
     set((state) => ({
       ...reconcileListing(state, bundle),
+      projectLineageId: project,
       // The new geometry needs its own ingest before its evidence is current.
       ingestRecord: null,
       areaDriftOverrides: [],
@@ -930,8 +1033,13 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       const source_ids = channel.source_ids.filter((id) => !skipped.has(id));
       return source_ids.length ? [{ ...channel, source_ids }] : [];
     });
+    // The ingestion is what finally states which project this geometry belongs
+    // to, so it is the authority on where these settings are filed -- whatever
+    // the selection had to assume before it existed.
+    const project = ingestRecord.project?.lineage_id ?? current.projectLineageId;
     set({
       ingestRecord,
+      projectLineageId: project,
       sourceSizesMm: { ...ingestRecord.mesh_sizes.source_size_mm },
       rigidSizeMm: ingestRecord.mesh_sizes.rigid_size_mm,
       transitionMm: ingestRecord.mesh_sizes.transition_mm,
@@ -945,6 +1053,9 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       ingestedBundleIdentity: current.selectedBundle ? bundleIdentity(current.selectedBundle) : null,
       ingestStaleReason: null,
     });
+    if (current.selectedBundle) {
+      selectedSolveProfileKey = currentSolveProfileKey(current.selectedBundle, project);
+    }
     saveSolveProfile(get());
     return true;
   },
@@ -1071,6 +1182,41 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     });
     saveSolveProfile(get());
   },
+  /**
+   * Re-read the picked drivers' own numbers from the library.
+   *
+   * A preset's `base` is a copy taken when the driver was picked, so a row
+   * that gains its T/S afterwards never reached the channel that named it:
+   * the form stayed incomplete, the driver was dropped on the way to the wire,
+   * and the run came back with no power, current or excursion. Nothing here
+   * touches `fields` -- an edit of the user's own outlives the row it was made
+   * against. Returns the channels whose numbers actually moved, because a
+   * simulation input changing on its own is worth saying out loud.
+   */
+  refreshChannelDriverBases: (bases) => {
+    const changed: string[] = [];
+    set((state) => {
+      const channelDrivers = { ...state.channelDrivers };
+      for (const [channelId, update] of Object.entries(bases)) {
+        const form = channelDrivers[channelId];
+        // Not the driver this was read for any more: the user has moved on.
+        if (!form?.preset || form.preset.id !== update.presetId) continue;
+        if (JSON.stringify(form.preset.base) === JSON.stringify(update.base)) continue;
+        changed.push(channelId);
+        channelDrivers[channelId] = {
+          ...form,
+          preset: {
+            ...form.preset,
+            base: { ...update.base },
+            xo_min_hz: update.xo_min_hz === undefined ? form.preset.xo_min_hz : update.xo_min_hz,
+          },
+        };
+      }
+      return changed.length ? { channelDrivers } : {};
+    });
+    if (changed.length) saveSolveProfile(get());
+    return changed;
+  },
   clearChannelDriverOverrides: (channelId) => {
     set((state) => {
       const current = state.channelDrivers[channelId];
@@ -1126,6 +1272,30 @@ export function driverEditedKeys(form: ChannelDriverForm | undefined): DriverFie
 }
 
 /**
+ * The datasheet symbol each driver field is known by.
+ *
+ * One source for every surface that has to name a field in a sentence -- the
+ * T/S sheet's inputs, the shortfall hint under them, and the solve gate's
+ * refusal -- so a field cannot be `Mms` in one and `mms_g` in another.
+ */
+export const DRIVER_FIELD_LABELS: Record<DriverFieldKey, string> = {
+  sd_cm2: 'Sd',
+  bl_t_m: 'Bl',
+  re_ohm: 'Re',
+  le_mh: 'Le',
+  mmd_g: 'Mmd',
+  mms_g: 'Mms',
+  cms_m_per_n: 'Cms',
+  vas_l: 'Vas',
+  fs_hz: 'Fs',
+  qms: 'Qms',
+  rms_kg_per_s: 'Rms',
+  xmax_mm: 'Xmax',
+  count: 'Count',
+  rear_volume_l: 'Rear vol',
+};
+
+/**
  * Which requirement groups are still unsatisfied, mirroring the server's
  * `DriverSpec.validate_completeness` rather than a flat list of keys: one mass
  * and one compliance source are enough, and which one is the user's choice.
@@ -1162,6 +1332,46 @@ export function channelDriverWire(
   }
   if (form.preset?.label) wire.label = form.preset.label;
   return wire;
+}
+
+/** The driver fields of a library row's spec, in the form a preset holds. */
+export function driverBaseFromSpec(spec: Record<string, number>): Partial<Record<DriverFieldKey, number>> {
+  const base: Partial<Record<DriverFieldKey, number>> = {};
+  for (const key of DRIVER_FIELD_KEYS) {
+    const value = spec[key];
+    if (typeof value === 'number' && Number.isFinite(value)) base[key] = value;
+  }
+  return base;
+}
+
+/** What a driver still needs, in the user's words: "Sd, one of Mms/Mmd". */
+export function driverShortfallText(form: ChannelDriverForm | undefined): string {
+  return driverMissingGroups(form)
+    .map((group) => (group.length === 1
+      ? DRIVER_FIELD_LABELS[group[0]]
+      : `one of ${group.map((key) => DRIVER_FIELD_LABELS[key]).join('/')}`))
+    .join(', ');
+}
+
+/**
+ * Channels whose driver was asked for but cannot be submitted.
+ *
+ * A driver reaches the wire only once it is complete, so an unfinished one
+ * used to be dropped on the way out: the solve ran, the channel came back
+ * unit-acceleration, and the first the user heard of it was a Power & Current
+ * chart saying this result has no drive -- after the BEM run, not before it.
+ * The library makes that easy to hit, since a catalogue row can name a driver
+ * while carrying none of its T/S.
+ */
+export function incompleteDriverChannels(
+  state: Pick<CadReturnState, 'driveChannels' | 'channelDrivers'>,
+): Array<{ channelId: string; missing: string }> {
+  return state.driveChannels.flatMap((channel) => {
+    const form = state.channelDrivers[channel.id];
+    if (!channelAcceptsDriver(channel) || !form?.enabled) return [];
+    if (channelDriverWire(form) !== undefined) return [];
+    return [{ channelId: channel.id, missing: driverShortfallText(form) }];
+  });
 }
 
 export const PASSIVE_CARDIOID_FIELD_LABELS: Record<PassiveCardioidNumberField, string> = {
@@ -1554,6 +1764,7 @@ export function resetCadReturnStore(): void {
   useCadReturnStore.setState({
     selectedBundle: null,
     ingestRecord: null,
+    projectLineageId: null,
     ...initialFromBundle(null),
     areaDriftSourceIds: [],
     exteriorOnly: false,
