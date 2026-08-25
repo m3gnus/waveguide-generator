@@ -28,6 +28,7 @@ class DriverDisplay(BaseModel):
     sd_cm2: float | None = None
     bl_t_m: float | None = None
     xmax_mm: float | None = None
+    power_w: float | None = None
     sensitivity_db: float | None = None
     price_eur: float | None = None
 

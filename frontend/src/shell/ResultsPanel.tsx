@@ -13,7 +13,7 @@ import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
 import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
-import { combineMetadataOf, type ResultPayload } from '../results/types';
+import { combinedChannelId, combineMetadataOf, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -2044,10 +2044,20 @@ export function ResultsPanel() {
   const shown = shownActiveChannel && shownRaw?.channels
     ? shownRaw.channels[shownActiveChannel] as ResultPayload
     : shownRaw;
-  const shownCombine = combineMetadataOf(shown);
   // The pre-solve rail shows what "auto" chose for gain and delay, and only a
   // solved result knows those numbers. The dock already holds one, so it hands
   // it over rather than making the rail fetch results of its own.
+  //
+  // Read from the run's combined channel rather than from the channel the dock
+  // happens to be displaying: looking at one member's excursion is no reason
+  // for the rail's automatic gains and delays to blank out, and the recombine
+  // this bridge carries has to name the combined channel in any case.
+  const shownCombinedChannel = shownRaw ? combinedChannelId(shownRaw) : null;
+  const shownCombine = combineMetadataOf(
+    shownCombinedChannel && shownRaw?.channels
+      ? shownRaw.channels[shownCombinedChannel] as ResultPayload
+      : shownRaw,
+  );
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
       ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }
@@ -2115,16 +2125,16 @@ export function ResultsPanel() {
     };
   }, [primaryIsProvisional, primaryJob, selectedJob, showPrimaryModel, shownCanApply]);
   useEffect(() => {
-    latestCombine.publish(shownCombine && shownActiveChannel && display ? {
+    latestCombine.publish(shownCombine && shownCombinedChannel && display ? {
       jobId: display.primaryId,
-      channelId: shownActiveChannel,
+      channelId: shownCombinedChannel,
       combine: shownCombine,
       canApply: shownCanApply,
       blockedReason: shownBlock?.reason ?? null,
       recall: shownBlock?.recall ?? null,
       onApplied: applyRecombined,
     } : null);
-  }, [shownCombine, shownActiveChannel, display, shownCanApply, shownBlock, applyRecombined]);
+  }, [shownCombine, shownCombinedChannel, display, shownCanApply, shownBlock, applyRecombined]);
   const provisionalMetadata = primaryRaw?.metadata?.provisional;
   const provisionalRecord = provisionalMetadata && typeof provisionalMetadata === 'object'
     ? provisionalMetadata as Record<string, unknown>

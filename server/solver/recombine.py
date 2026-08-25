@@ -20,6 +20,7 @@ from server.jobs.models import (
 
 from .acoustics import solver_sound_speed_m_per_s
 from .combine import combine_drive_channels, deserialize_channel_bases
+from .driver_limits import MemberLimits, member_limits_from_channel
 from .context import SolverContext
 from .errors import RecombineError
 from .result_mapping import build_solver_response
@@ -96,6 +97,19 @@ def recombine_stored_results(
             stored_metadata.get("role") if isinstance(stored_metadata, Mapping) else None
         )
 
+    # Maximum output is read from the stored member channels, not recomputed:
+    # a recombine changes the crossover, never the drivers or the voltage they
+    # were solved at, so the excursion and impedance the solve wrote still hold.
+    member_limits: dict[str, MemberLimits] = {}
+    for member in spec.members:
+        limits = member_limits_from_channel(
+            channels.get(member),
+            frequencies_hz=frequencies,
+            max_voltage_v=geometry.max_drive_voltage_v,
+        )
+        if limits is not None:
+            member_limits[member] = limits
+
     resolved = spec.resolved()
     combined_result, combine_payload = combine_drive_channels(
         bundle["results_by_id"],
@@ -104,6 +118,7 @@ def recombine_stored_results(
         reference=resolved["reference"],
         member_validity_hz=member_validity_hz,
         member_roles=member_roles,
+        member_limits=member_limits,
     )
 
     motions = {channel.motion for channel in geometry.drive_channels}
