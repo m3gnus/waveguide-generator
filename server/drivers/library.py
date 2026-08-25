@@ -60,14 +60,30 @@ class DriverRecord:
     def primary(self) -> DriverVariant:
         return self.variants[0]
 
-    def variant_for(self, z_ohm: float | None) -> DriverVariant:
+    def usable_variants(self) -> list[DriverVariant]:
+        """The windings that carry enough Thiele-Small data to be driven.
+
+        ``full`` is exactly ``DriverSpec``'s requirement -- Sd, Bl, Re, a mass
+        and a compliance -- so a variant outside this list cannot drive a
+        channel at all: WG drops it on the way to the wire and the run comes
+        back with no power, current or excursion.
+        """
+
+        return [variant for variant in self.variants if variant.completeness == "full"]
+
+    def variant_for(
+        self, z_ohm: float | None, *, among: list[DriverVariant] | None = None
+    ) -> DriverVariant | None:
+        candidates = self.variants if among is None else among
+        if not candidates:
+            return None
         if z_ohm is not None:
-            for variant in self.variants:
+            for variant in candidates:
                 if variant.z_ohm is not None and math.isclose(
                     variant.z_ohm, z_ohm, rel_tol=1e-6, abs_tol=1e-6
                 ):
                     return variant
-        return self.primary
+        return candidates[0]
 
 
 def _normalize_tokens(text: str) -> list[str]:
@@ -125,13 +141,25 @@ def _make_id(brand: str, model: str, z_ohm: float | None, used_ids: set[str]) ->
     return candidate
 
 
-def _hit_payload(record: DriverRecord, variant: DriverVariant) -> dict[str, object]:
+def _hit_payload(
+    record: DriverRecord,
+    variant: DriverVariant,
+    variants: list[DriverVariant] | None = None,
+) -> dict[str, object]:
+    """``variants`` narrows the impedance list the caller is offered.
+
+    The picker turns that list into its winding buttons, so a filtered search
+    has to filter it too -- otherwise the row says "8|16 ohm" and switching to
+    the 16 is switching to a driver the search just refused to show.
+    """
+
+    listed = record.variants if variants is None else variants
     return {
         "id": variant.id,
         "brand": record.brand,
         "model": record.model,
         "z_ohm": variant.z_ohm,
-        "variants": [{"id": v.id, "z_ohm": v.z_ohm} for v in record.variants],
+        "variants": [{"id": v.id, "z_ohm": v.z_ohm} for v in listed],
         "kind": record.kind,
         "size": record.size,
         "completeness": variant.completeness,
@@ -142,8 +170,12 @@ def _hit_payload(record: DriverRecord, variant: DriverVariant) -> dict[str, obje
     }
 
 
-def _detail_payload(record: DriverRecord, variant: DriverVariant) -> dict[str, object]:
-    payload = _hit_payload(record, variant)
+def _detail_payload(
+    record: DriverRecord,
+    variant: DriverVariant,
+    variants: list[DriverVariant] | None = None,
+) -> dict[str, object]:
+    payload = _hit_payload(record, variant, variants)
     payload["fields"] = dict(variant.fields)
     payload["extras"] = dict(variant.extras)
     return payload
@@ -284,11 +316,38 @@ class DriverLibrary:
         }
 
     def search(
-        self, *, q: str = "", kind: str = "all", z: float | None = None, limit: int = 20
+        self,
+        *,
+        q: str = "",
+        kind: str = "all",
+        z: float | None = None,
+        limit: int = 20,
+        complete: bool = False,
     ) -> list[dict[str, object]]:
+        page = self.search_page(q=q, kind=kind, z=z, limit=limit, complete=complete)
+        return page["items"]  # type: ignore[return-value]
+
+    def search_page(
+        self,
+        *,
+        q: str = "",
+        kind: str = "all",
+        z: float | None = None,
+        limit: int = 20,
+        complete: bool = False,
+    ) -> dict[str, object]:
+        """Ranked matches, plus how many were withheld for missing T/S data.
+
+        The count is what keeps ``complete`` from reading as a broken library:
+        most compression-driver rows are catalogue entries with no motor data
+        at all, so a filtered search over them comes back empty, and the caller
+        needs to be able to say why rather than just showing nothing.
+        """
+
         self.ensure_indexed()
         query_tokens = _normalize_tokens(q or "")
         ranked: list[tuple[tuple[float, bool, int, str, str], dict[str, object]]] = []
+        hidden = 0
         for record in self._records:
             if kind != "all" and record.kind != kind:
                 continue
@@ -296,7 +355,12 @@ class DriverLibrary:
             score = _match_score(query_tokens, driver_tokens)
             if score is None:
                 continue
-            variant = record.variant_for(z)
+            listed = record.usable_variants() if complete else None
+            variant = record.variant_for(z, among=listed)
+            if variant is None:
+                # Matched the query, but no winding of it can drive a channel.
+                hidden += 1
+                continue
             z_match = (
                 z is not None
                 and variant.z_ohm is not None
@@ -309,17 +373,28 @@ class DriverLibrary:
                 record.brand.casefold(),
                 record.model.casefold(),
             )
-            ranked.append((sort_key, _hit_payload(record, variant)))
+            ranked.append((sort_key, _hit_payload(record, variant, listed)))
         ranked.sort(key=lambda item: item[0])
-        return [payload for _, payload in ranked[:limit]]
+        return {
+            "items": [payload for _, payload in ranked[:limit]],
+            "hidden_incomplete": hidden,
+        }
 
-    def get(self, driver_id: str) -> dict[str, object] | None:
+    def get(self, driver_id: str, *, complete: bool = False) -> dict[str, object] | None:
         self.ensure_indexed()
         entry = self._by_id.get(driver_id)
         if entry is None:
             return None
         record, variant = entry
-        return _detail_payload(record, variant)
+        listed = None
+        if complete:
+            # The winding that was asked for by id stays listed whatever its
+            # own data looks like: it is already on a channel, and dropping it
+            # from its own variant list would leave the picker showing buttons
+            # with none of them selected.
+            usable = record.usable_variants()
+            listed = [v for v in record.variants if v is variant or v in usable]
+        return _detail_payload(record, variant, listed)
 
 
 __all__ = ["DriverLibrary", "DriverRecord", "DriverVariant"]

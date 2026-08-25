@@ -76,25 +76,48 @@ export interface DriverSearchQuery {
   kind?: DriverKind | 'all';
   z?: number | null;
   limit?: number;
+  /**
+   * Withhold rows the solve cannot use. Defaults on: a row without Sd, Bl, Re,
+   * a mass and a compliance is dropped on the way to the wire, so offering it
+   * is offering a driver that comes back with no power, current or excursion.
+   * Most compression-driver rows in a catalogue CSV are exactly that.
+   */
+  complete?: boolean;
+}
+
+export interface DriverSearchResult {
+  items: DriverHit[];
+  /** Matches the library holds but cannot drive a channel with. */
+  hiddenIncomplete: number;
 }
 
 export async function searchDrivers(
-  { q = '', kind = 'all', z = null, limit = 20 }: DriverSearchQuery = {},
+  { q = '', kind = 'all', z = null, limit = 20, complete = true }: DriverSearchQuery = {},
   fetcher: typeof fetch = fetch,
-): Promise<DriverHit[]> {
+): Promise<DriverSearchResult> {
   const params = new URLSearchParams({ q, kind, limit: String(limit) });
   if (z !== null && Number.isFinite(z)) params.set('z', String(z));
+  if (complete) params.set('complete', 'true');
   const response = await fetcher(`/api/drivers?${params.toString()}`);
   if (!response.ok) throw new Error(await errorMessage(response));
-  const body = await response.json() as { items?: DriverHit[] };
-  return Array.isArray(body.items) ? body.items : [];
+  const body = await response.json() as { items?: DriverHit[]; hidden_incomplete?: number };
+  return {
+    items: Array.isArray(body.items) ? body.items : [],
+    hiddenIncomplete: typeof body.hidden_incomplete === 'number' ? body.hidden_incomplete : 0,
+  };
 }
 
+/**
+ * One driver, with its impedance list narrowed to the windings that can drive
+ * a channel -- the same rule the search applies, so the sheet's winding
+ * buttons never offer a row the search would have withheld. The winding asked
+ * for by id is always listed, even if it is the incomplete one.
+ */
 export async function getDriver(
   driverId: string,
   fetcher: typeof fetch = fetch,
 ): Promise<DriverDetail> {
-  const response = await fetcher(`/api/drivers/${encodeURIComponent(driverId)}`);
+  const response = await fetcher(`/api/drivers/${encodeURIComponent(driverId)}?complete=true`);
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<DriverDetail>;
 }
