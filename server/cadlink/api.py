@@ -97,11 +97,18 @@ class CadReturnIngestRequest(BaseModel):
     symmetry_mode: Literal["auto", "full"] = Field(
         default="auto", alias="symmetryMode"
     )
+    # PARKED CANDIDATE field -- this branch is not the shipping one; the
+    # shipped dial is ``curvatureSegments``. See IMPORTED_SURFACE_DEVIATION_MM
+    # in ``server/mesh/imported.py`` for the measurements and for what would
+    # have to happen before this could ship (including regenerating the OpenAPI
+    # snapshot, which does not carry this alias).
+    #
     # Chord deviation each panel may have from the true CAD surface, in mm.
-    # Omitted means the server default (0.4 mm). This is the imported mesh's
-    # cost dial: it replaced a segments-per-2pi control, which spent triangles
-    # in proportion to curvature radius and so over-refined small fillets while
-    # under-refining large sweeps.
+    # Omitted means the server default, IMPORTED_SURFACE_DEVIATION_MM = 0.3 mm.
+    # This is the imported mesh's cost dial: it replaced a segments-per-2pi
+    # control, which spent triangles in proportion to curvature radius and so
+    # over-refined small fillets while under-refining large sweeps -- at a
+    # measured cost in peak, p95 and rms deviation, not for free.
     surface_deviation_mm: float | None = Field(
         default=None, alias="surfaceDeviationMm", ge=0.1, le=0.5
     )

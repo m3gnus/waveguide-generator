@@ -52,24 +52,79 @@ SYMMETRY_SNAP_TOLERANCE_MM = 1.0e-4
 # mirror tolerance so a recentring can never be looser than the test it feeds.
 VERTICAL_OFFSET_MIDPOINT_TOLERANCE_REL = 5.0e-4
 VERTICAL_OFFSET_MIDPOINT_TOLERANCE_MM = 0.05
-# OCC's linear target size alone can leave tight fillets and curved imported
-# baffles visibly faceted. This asks Gmsh for 24 elements around a full circle,
-# while the floor below prevents tiny CAD details from exploding solve cost.
+# Dead on this branch, deliberately kept. It used to be the solver path's
+# curvature dial -- OCC's linear target size alone can leave tight fillets and
+# curved imported baffles visibly faceted, so it asked Gmsh for 24 elements
+# around a full circle -- but the sagitta field below now supplies that sizing
+# and ``Mesh.MeshSizeFromCurvature`` is set to 0 for the solver mesh. Nothing
+# in the tree reads this constant any more. It stays because it names the
+# shipped rule any revival of this branch has to be measured against, and
+# because it is the value the CAD *viewport* path still effectively works in:
+# the viewport keeps meshing by segments-per-2pi
+# (``IMPORTED_VIEWPORT_CURVATURE_SEGMENTS`` below), so on this branch the
+# viewport and the solver mesh no longer spend curvature the same way. The
+# refinement limit under it is still live.
 IMPORTED_CURVATURE_SEGMENTS = 24
 IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
+# PARKED CANDIDATE. The decision was to keep the shipped segments-per-2pi dial
+# above; this branch is retained only as the record of what was measured, and
+# the numbers below are evidence, not a recommendation. Read them with the
+# branch commit message, which is the fuller log.
+#
 # Constant-sagitta sizing: every panel is allowed the same chord deviation from
-# the true surface, in millimetres. Measured on the reference return against
-# the segments-per-2pi default it replaced (10,252 triangles, peak 0.836 mm,
-# p95 0.233 mm), same 2500-triangle sampling of distance to the OCC model:
+# the true surface, in millimetres, via h = 2*sqrt(2*R*delta). Measured on the
+# 260627 PartyMEH v10 return, 2500-triangle sampling of distance to the OCC
+# model, against the segments-per-2pi default it would replace (segments=24:
+# 10,252 triangles, peak 0.836 mm, p95 0.233 mm, rms 0.116 mm, 4.1 s build).
 #
-#     0.2 mm ->  8,443 tris (-18%)  peak 0.609  p95 0.222  rms 0.114  <- better on every axis
-#     0.3 mm ->  6,748 tris (-34%)  peak 0.685  p95 0.302  rms 0.153  <- default
-#     0.4 mm ->  5,985 tris (-42%)  peak 0.870  p95 0.392  rms 0.184
+# What the implementation actually in this file produces -- the ``PostView``
+# background field built by ``_sagitta_background_view`` from a per-surface
+# parameter grid:
 #
-# 0.3 mm is the default because it still beats the old rule on peak deviation
-# -- the metric a faceted-looking shell is judged by -- while returning a third
-# of the triangles. 0.2 mm is the strictly-safe setting for anyone who wants no
-# fidelity trade at all.
+#     0.2 mm ->  7,028 tris (-31%)  peak 1.109  p95 0.256  rms 0.148   3.7 s
+#     0.3 mm ->  5,789 tris (-44%)  peak 1.047  p95 0.352  rms 0.202   3.7 s  <- default
+#
+# So the default is NOT a free win. Against the segments=24 baseline it is
+# worse on all three fidelity metrics at once -- peak 1.047 vs 0.836 is about
+# 25% worse, p95 and rms roughly 1.5-1.7x worse -- in exchange for 44% fewer
+# triangles, worth roughly 3x dense-solver RAM and 5x LU work. That is the
+# honest position: the dial trades deviation for triangle count, and 0.3 mm is
+# the default because it takes the larger share of that trade, not because it
+# beats the old rule on any fidelity axis. Neither measured delta is a
+# strictly-safe setting.
+#
+# Peak deviation is also NON-MONOTONIC in the dial (1.109 at 0.2 mm but 1.047
+# at 0.3 mm), so as implemented the dial does not actually control the quantity
+# its label names. See the reopening notes below.
+#
+# Rejected variants, kept because these numbers are the only record of them.
+# Both were tried and thrown away; neither is the code beneath this comment:
+#
+# * Size field sampled from a throwaway coarse MESH. Better fidelity at the
+#   same build speed --
+#
+#       0.2 mm ->  8,443 tris (-18%)  peak 0.609  p95 0.222  rms 0.114
+#       0.3 mm ->  6,748 tris (-34%)  peak 0.685  p95 0.302  rms 0.153
+#       0.4 mm ->  5,985 tris (-42%)  peak 0.870  p95 0.392  rms 0.184
+#
+#   -- and its 0.2 mm row does beat the segments=24 baseline on every axis.
+#   Rejected for breaking translation invariance: gmsh lays that coarse mesh
+#   out in world space, so the same body meshed before and after recentring
+#   came out with different triangle counts (188 vs 184, then 186 vs 194),
+#   which violates the invariant that moving a design cannot change its
+#   acoustics. ``_sagitta_background_view`` carries the full argument.
+# * Per-query ``setSizeCallback``. Reported -42% triangles at better peak AND
+#   rms, but every query needs an OCC inverse projection measured at 36
+#   us/point that barely vectorises (1.3x), costing roughly 18-22 s of extra
+#   build time. Rejected on build cost; no faster implementation reproduced its
+#   fidelity.
+#
+# One attribution caveat, so the table is not over-read: the three rows above
+# are tied to the coarse-mesh variant by the 0.685-at-0.3-mm figure the commit
+# message quotes for it. The -42% quoted for the setSizeCallback variant
+# coincides with the 0.4 mm row, but that row's peak of 0.870 is worse than the
+# baseline's 0.836, so it cannot be the "better peak" run. Which rows belong to
+# which rejected variant is not fully recoverable from what was written down.
 IMPORTED_SURFACE_DEVIATION_MM = 0.3
 IMPORTED_SURFACE_DEVIATION_MIN_MM = 0.1
 IMPORTED_SURFACE_DEVIATION_MAX_MM = 0.5
@@ -80,6 +135,53 @@ _SAGITTA_GRID_SAMPLES = 24
 # Size levels are snapped to a 5%-per-step geometric ladder so that sub-micron
 # coordinate differences cannot change which level a cell lands on.
 _SAGITTA_QUANTISE_LOG = math.log(1.05)
+#
+# WHAT WOULD REOPEN THIS BRANCH, in priority order. None of it has been run --
+# the measurement harness is not on this branch, and the sweep is about a
+# half-day:
+#
+# 1. Raise ``_SAGITTA_GRID_SAMPLES`` from 24 to 48 and 96 and re-measure peak.
+#    Peak deviation being non-monotonic in the dial points at the sampling grid
+#    missing curvature peaks between samples rather than at the sizing rule
+#    itself. If a finer grid makes peak monotonic and brings 0.2 mm under the
+#    segments=24 baseline on all three metrics, the whole objection above
+#    dissolves. Cheapest and highest-leverage; do this one first.
+# 2. An equal-quality Pareto sweep: segments {12,16,24,32,48} against delta
+#    {0.10,0.15,0.20,0.30,0.40} on the same reference return, triangle count
+#    plotted against peak/p95/rms on shared axes and read off at matched p95.
+#    The headline "31-44% fewer triangles" is quoted at an undisclosed quality
+#    reduction -- both measured delta values are worse than the baseline on all
+#    three metrics simultaneously, so no equal-quality comparison exists yet.
+#    Extrapolating the rows above puts the honest equal-quality win nearer
+#    20-27%.
+# 3. The wall frequency limit under the sagitta rule: report
+#    ``effective_max_valid_frequency_hz`` per source at each delta. It is
+#    probably clamp-dominated and unchanged -- the shipped commit saw the HF
+#    wall limit go 3620 -> 3685 Hz when segments went 24 -> 12, i.e. slightly
+#    UP as the mesh coarsened. If that holds, the candidate's only demonstrated
+#    cost is on a metric nothing in the pipeline consumes.
+#
+# WHAT WOULD HAVE TO BE FIXED BEFORE IT COULD SHIP, recorded so it is not
+# rediscovered:
+#
+# * The mesh cache key. ``IMPORT_MESH_PIPELINE_CONTRACT`` in
+#   ``server/cadlink/ingest.py`` is still "wg-import-solve-v5" here; this
+#   branch did not bump it. A mesh cached under the segment rule therefore
+#   keeps being served while a fresh ingest of the same body produces a sagitta
+#   mesh. It must be bumped.
+# * ``docs/reference/openapi.v1.json`` does not carry ``surfaceDeviationMm``,
+#   and ``scripts/tests/test_gen_openapi.py`` asserts byte equality against the
+#   live application, so the snapshot has to be regenerated. Note the snapshot
+#   does not carry ``curvatureSegments`` either -- that drift is inherited from
+#   the parent commit, not created here.
+#
+# THE ONE RESULT WORTH KEEPING whichever sizing rule eventually wins, if the
+# rest of this branch is ever dropped: sampling a size field from a throwaway
+# coarse mesh makes meshing decisions depend on sub-micron coordinate noise,
+# because that mesh is laid out in world space. That is why the surviving field
+# is sampled on an intrinsic parameter grid and quantised onto the ladder
+# above, and why a translate can no longer change a design's triangle count.
+#
 # The CAD viewport is a presentation artifact, not an acoustic discretisation.
 # Its sizing is therefore scale/curvature driven and explicitly capped for the
 # browser instead of inheriting source-frequency or rigid-wall solve targets.
@@ -1850,9 +1952,12 @@ def build_imported_mesh(
             gmsh.model.mesh.field.setNumber(threshold, "DistMin", 0.0)
             gmsh.model.mesh.field.setNumber(threshold, "DistMax", normalized_sizes["transition_mm"])
             fields.append(threshold)
-        # The sagitta view is built from a throwaway coarse mesh, so it has to
-        # be produced before the real sizing options are set and the real mesh
-        # is generated.
+        # The sagitta view samples each surface's own parameter grid and never
+        # meshes anything -- the throwaway-coarse-mesh route was tried and
+        # rejected for making the field depend on absolute position, as
+        # ``_sagitta_background_view`` explains. It is built here only because
+        # the ``PostView`` field has to exist before it can join the Min field
+        # below.
         sagitta_view = _sagitta_background_view(
             gmsh,
             deviation_mm=float(tessellation["surface_deviation_mm"]),
