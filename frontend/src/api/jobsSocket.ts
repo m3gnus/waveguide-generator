@@ -114,6 +114,7 @@ export interface CadSetup {
     align?: boolean;
   } | null;
   drive_voltage_v?: number;
+  max_drive_voltage_v?: number;
   mesh?: {
     rigid_size_mm?: number;
     transition_mm?: number;

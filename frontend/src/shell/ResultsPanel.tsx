@@ -12,8 +12,9 @@ export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
+import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf, memberLabelOf } from '../results/maxOutput';
 import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
-import { combineMetadataOf, type ResultPayload } from '../results/types';
+import { combinedChannelId, combineMetadataOf, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -993,6 +994,41 @@ export function excursionOverlayOption(items: NamedResult[], tokens: ChartTokens
   return lineOption(series, tokens, 'Excursion [mm peak]', density);
 }
 
+/**
+ * How loud the chain can be run, per frequency.
+ *
+ * The system ceiling is the headline and is drawn as such; each member's own
+ * ceiling sits behind it, lighter, because a single driver's capability is
+ * context rather than the answer. The shown response is dotted for the same
+ * reason the Xmax line is: it is where the run is now, not a maximum.
+ */
+export function maxOutputOption(
+  result: ResultPayload,
+  tokens: ChartTokens,
+  density: ChartDensity,
+  memberLabel?: (member: string) => string,
+): EChartsOption {
+  const traces = maxOutputChartSeries(result, memberLabel);
+  let memberIndex = 0;
+  const series = traces.map((trace) => {
+    const color = trace.role === 'system'
+      ? tokens.accent
+      : trace.role === 'shown'
+        ? tokens.muted
+        : tokens.series[memberIndex++ % tokens.series.length] ?? tokens.accent;
+    return {
+      ...trace,
+      lineStyle: {
+        color,
+        width: trace.role === 'system' ? 2.4 : 1.2,
+        ...(trace.role === 'shown' ? { type: 'dotted' as const } : {}),
+      },
+      itemStyle: { color },
+    };
+  });
+  return lineOption(series, tokens, 'SPL [dB]', density);
+}
+
 /** Cone excursion, with Xmax drawn flat across the sweep when the spec states it. */
 export function excursionOption(result: ResultPayload, tokens: ChartTokens, density: ChartDensity): EChartsOption {
   const series = excursionChartSeries(result).map((trace, index) => ({
@@ -1122,6 +1158,7 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   radiation_impedance: { short: 'Rad Z', long: 'Radiation load', unit: 'Pa·s/m³' },
   drive_power: { short: 'Power', long: 'Power & current', unit: 'W' },
   excursion: { short: 'Excursion', long: 'Cone excursion', unit: 'mm' },
+  max_output: { short: 'Max SPL', long: 'Maximum output', unit: 'dB' },
   summary: { short: 'Summary' },
 };
 
@@ -1587,6 +1624,12 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         ? <EChart option={option} label="Interactive HornLab cone excursion by frequency" live={live}/>
         : <ChartStub reason={excursionSeries(result) ? 'Cone Excursion could not be read from this result.' : driverChartMissingReason(result, 'Cone Excursion')}/>;
     }
+    if (chartType === 'max_output') {
+      const option = maxOutputOption(result, tokens, density, memberLabelOf(result));
+      return Array.isArray(option.series) && option.series.length
+        ? <EChart option={option} label="Interactive HornLab maximum on-axis SPL by frequency" live={live}/>
+        : <ChartStub reason={maxOutputMissingReason(result)}/>;
+    }
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
     if (chartType === 'impedance') {
       const option = impedanceOption(overlays, tokens, preferences.smoothing, density, preferences.impedanceDisplay);
@@ -1708,6 +1751,10 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     : chartType === 'power_response' ? powerResponseMethodCaption(result)
     : impedanceItems ? impedanceSubtitle(impedanceItems)
     : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
+    // Which member holds the system back is the fact the curves cannot state,
+    // and the small-signal caveat rides with it rather than being left for the
+    // reader to infer from a ceiling drawn as a confident line.
+    : chartType === 'max_output' ? limitingSummary(maxOutputOf(result), memberLabelOf(result))
     : null;
   const unit = chartUnit(chartType, result, impedanceItems, preferencesStore.getSnapshot().groupDelayUnit);
   const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
@@ -2044,10 +2091,20 @@ export function ResultsPanel() {
   const shown = shownActiveChannel && shownRaw?.channels
     ? shownRaw.channels[shownActiveChannel] as ResultPayload
     : shownRaw;
-  const shownCombine = combineMetadataOf(shown);
   // The pre-solve rail shows what "auto" chose for gain and delay, and only a
   // solved result knows those numbers. The dock already holds one, so it hands
   // it over rather than making the rail fetch results of its own.
+  //
+  // Read from the run's combined channel rather than from the channel the dock
+  // happens to be displaying: looking at one member's excursion is no reason
+  // for the rail's automatic gains and delays to blank out, and the recombine
+  // this bridge carries has to name the combined channel in any case.
+  const shownCombinedChannel = shownRaw ? combinedChannelId(shownRaw) : null;
+  const shownCombine = combineMetadataOf(
+    shownCombinedChannel && shownRaw?.channels
+      ? shownRaw.channels[shownCombinedChannel] as ResultPayload
+      : shownRaw,
+  );
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
       ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }
@@ -2095,15 +2152,36 @@ export function ResultsPanel() {
   const shownCanApply = selectedJob?.status === 'complete'
     && !primaryIsProvisional
     && shownIsActiveReturn;
+  const showPrimaryModel = useCallback(() => {
+    if (primaryJob) void showJobModel(primaryJob, coordinator.reportError);
+  }, [coordinator.reportError, primaryJob]);
+  // Why the rail may not repaint this run. Stated from the dock because the
+  // facts are the dock's -- run status, live preview, whose ingestion it is --
+  // and because only one of the three has an action attached to it.
+  const shownBlock = useMemo<{ reason: string; recall: (() => void) | null } | null>(() => {
+    if (shownCanApply) return null;
+    if (selectedJob && selectedJob.status !== 'complete') {
+      return { reason: 'The shown run is still solving; crossover changes apply once it finishes.', recall: null };
+    }
+    if (primaryIsProvisional) {
+      return { reason: 'The shown run is a live preview of a solve in progress; crossover changes apply to it once that solve finishes.', recall: null };
+    }
+    return {
+      reason: 'The shown run was solved from an ingestion this session has not loaded, so the rail is not its crossover yet. Load its model and the changes apply without re-solving.',
+      recall: primaryJob ? showPrimaryModel : null,
+    };
+  }, [primaryIsProvisional, primaryJob, selectedJob, showPrimaryModel, shownCanApply]);
   useEffect(() => {
-    latestCombine.publish(shownCombine && shownActiveChannel && display ? {
+    latestCombine.publish(shownCombine && shownCombinedChannel && display ? {
       jobId: display.primaryId,
-      channelId: shownActiveChannel,
+      channelId: shownCombinedChannel,
       combine: shownCombine,
       canApply: shownCanApply,
+      blockedReason: shownBlock?.reason ?? null,
+      recall: shownBlock?.recall ?? null,
       onApplied: applyRecombined,
     } : null);
-  }, [shownCombine, shownActiveChannel, display, shownCanApply, applyRecombined]);
+  }, [shownCombine, shownCombinedChannel, display, shownCanApply, shownBlock, applyRecombined]);
   const provisionalMetadata = primaryRaw?.metadata?.provisional;
   const provisionalRecord = provisionalMetadata && typeof provisionalMetadata === 'object'
     ? provisionalMetadata as Record<string, unknown>
@@ -2178,9 +2256,6 @@ export function ResultsPanel() {
     void coordinator.run(current.design, current.designRevision)
       .catch((reason) => coordinator.reportError(reason instanceof Error ? reason.message : String(reason)));
   }, [coordinator]);
-  const showPrimaryModel = useCallback(() => {
-    if (primaryJob) void showJobModel(primaryJob, coordinator.reportError);
-  }, [coordinator.reportError, primaryJob]);
   // Everything above keeps following the solve while this panel is covered --
   // results are still fetched, combined and labelled, so the panel is never
   // stale when it comes back. Only the drawing is held: a covered tab that is

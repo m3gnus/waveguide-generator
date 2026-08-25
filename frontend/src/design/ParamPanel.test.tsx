@@ -15,7 +15,7 @@ import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { FusionParameterDrift, ParamPanel, RealizedDimensionsSection, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
+import { FusionParameterDrift, ParamPanel, RealizedDimensionsSection, channelHeadingText, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
 /**
  * The panel reads capabilities and symmetry through React Query, exactly as
@@ -794,8 +794,11 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    expect(host.querySelector('.cad-channel[data-channel-id="drive-hf"] .cad-channel-summary')!.textContent)
-      .toContain('drive-hf · source-hf');
+    // `drive-hf · source-hf` said the same thing twice; the header names the
+    // channel, and leaves the source ids to the channels that combine several.
+    const summary = host.querySelector('.cad-channel[data-channel-id="drive-hf"] .cad-channel-summary')!;
+    expect(summary.querySelector('span')!.textContent).toBe('drive-hf');
+    expect(summary.textContent).not.toContain('source-hf');
     expect(host.querySelector('.cad-channel-row')).toBeNull();
     expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
     // Motion and the driver stay where they were; with no library stubbed the
@@ -1147,7 +1150,9 @@ const LIBRARY_HIT = {
  * and another for a stocked library whose search happens to answer nothing --
  * the case a driver that is not in any CSV actually presents.
  */
-function stubDriverApi({ files = 1, hits = files }: { files?: number; hits?: number } = {}) {
+function stubDriverApi(
+  { files = 1, hits = files, hiddenIncomplete = 0 }: { files?: number; hits?: number; hiddenIncomplete?: number } = {},
+) {
   const library = {
     folder: '/library/driver-databases',
     files: files ? [{ name: 'compression-drivers.csv', rows: 1 }] : [],
@@ -1158,13 +1163,25 @@ function stubDriverApi({ files = 1, hits = files }: { files?: number; hits?: num
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith('/api/drivers/library')) return json(library);
-    if (url.startsWith('/api/drivers?')) return json({ items: hits ? [LIBRARY_HIT] : [], total: hits });
+    if (url.startsWith('/api/drivers?')) {
+      return json({ items: hits ? [LIBRARY_HIT] : [], total: hits, hidden_incomplete: hiddenIncomplete });
+    }
     if (url.startsWith('/api/drivers/')) return json({ ...LIBRARY_HIT, fields: {}, extras: {} });
     return Promise.resolve(new Response('not found', { status: 404 }));
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
+
+describe('channelHeadingText', () => {
+  it('names the channel alone, and its sources only when it combines several', () => {
+    expect(channelHeadingText({ id: 'drive-mf', source_ids: ['source-mf'] })).toBe('drive-mf');
+    // Two sources on one channel is the case the ids actually carry something
+    // the channel name does not, so they stay.
+    expect(channelHeadingText({ id: 'drive-mf', source_ids: ['source-mf', 'source-mf2'] }))
+      .toBe('drive-mf · source-mf + source-mf2');
+  });
+});
 
 describe('driver picker', () => {
   let host: HTMLDivElement;
@@ -1205,7 +1222,7 @@ describe('driver picker', () => {
     vi.unstubAllGlobals();
   });
 
-  const mountWithLibrary = async (options?: { files?: number; hits?: number }) => {
+  const mountWithLibrary = async (options?: { files?: number; hits?: number; hiddenIncomplete?: number }) => {
     const fetchMock = stubDriverApi(options);
     act(() => {
       setCadReady();
@@ -1479,7 +1496,7 @@ describe('driver picker', () => {
 
     // And it is searchable: clearing the channel puts the search back, and the
     // saved driver answers its own name under the "mine" section.
-    act(() => document.querySelector<HTMLButtonElement>('.driver-sheet-actions button.primary')!.click());
+    act(() => sheetButton('Done')!.click());
     await settle();
     act(() => channelCard().querySelector<HTMLButtonElement>('.driver-clear-link')!.click());
     await settle();
@@ -1491,6 +1508,141 @@ describe('driver picker', () => {
     expect([...channelCard().querySelectorAll<HTMLElement>('[role="option"]')]
       .map((option) => option.querySelector('.driver-result-name')?.textContent))
       .toEqual(['Acme HD-1', 'Radian 745Neo (measured)', 'Enter T/S manually…']);
+  });
+
+  it('asks the library only for drivers the solve can actually use', async () => {
+    const fetchMock = await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+
+    // Rows without Sd, Bl, Re, a mass and a compliance are dropped on the way
+    // to the wire, so the picker never offers them in the first place.
+    const searched = fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.startsWith('/api/drivers?'));
+    expect(searched.length).toBeGreaterThan(0);
+    expect(searched.every((url) => url.includes('complete=true'))).toBe(true);
+  });
+
+  it('says how many matches were withheld for missing T/S data', async () => {
+    // What a compression-driver search over a catalogue CSV actually looks
+    // like: the library knows the driver, it just has no motor data for it.
+    await mountWithLibrary({ files: 1, hits: 0, hiddenIncomplete: 2 });
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'de250');
+    await settle();
+
+    const card = channelCard();
+    // Not "no driver matches that search": the library does know them.
+    expect(card.textContent).not.toContain('No driver matches that search.');
+    expect(card.textContent).toContain('2 more drivers match');
+    expect(card.textContent).toContain('cannot be driven');
+    // And the way out is still the last row.
+    expect(resultNames()).toEqual(['Enter T/S manually\u2026']);
+  });
+
+  it('expands the T/S sheet inside the channel card and folds it away again', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await press(input, 'Enter');
+    await settle();
+
+    const editButton = () => channelCard().querySelector<HTMLButtonElement>('.driver-edit-link')!;
+    expect(editButton().getAttribute('aria-expanded')).toBe('false');
+    act(() => editButton().click());
+    await settle();
+
+    // In place under the driver it belongs to, not a dialog over the rail.
+    const sheet = channelCard().querySelector<HTMLElement>('.driver-sheet')!;
+    expect(sheet).not.toBeNull();
+    expect(document.querySelector('.modal-backdrop')).toBeNull();
+    expect(sheet.getAttribute('aria-modal')).toBeNull();
+    expect(editButton().getAttribute('aria-expanded')).toBe('true');
+    expect(editButton().getAttribute('aria-controls')).toBe(sheet.id);
+    // A library driver's identity is the library's: no name and no nominal
+    // impedance to type over it.
+    expect(sheet.querySelector('.driver-name-input')).toBeNull();
+    expect(sheet.querySelector('[aria-label="Nominal impedance for drive-hf"]')).toBeNull();
+
+    act(() => editButton().click());
+    await settle();
+    expect(channelCard().querySelector('.driver-sheet')).toBeNull();
+    expect(editButton().textContent).toBe('Edit T/S\u2026');
+  });
+
+  it('offers hand entry without making the user open the search first', async () => {
+    await mountWithLibrary();
+    // Nothing focused and nothing typed, so the dropdown that carries the
+    // manual row does not exist yet -- which is the whole problem.
+    expect(channelCard().querySelector('[role="listbox"]')).toBeNull();
+
+    const link = channelCard().querySelector<HTMLButtonElement>('.driver-manual-link')!;
+    expect(link).not.toBeNull();
+    act(() => link.click());
+    await settle();
+
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset)
+      .toMatchObject({ label: 'Manual driver', source: 'manual', base: {} });
+    expect(channelCard().querySelector('.driver-sheet')).not.toBeNull();
+  });
+
+  it('takes a typed driver\u2019s nominal impedance and saves it with the driver', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'Radian 745Neo');
+    await settle();
+    act(() => manualRow()!.click());
+    await settle();
+
+    const impedance = document.querySelector<HTMLInputElement>('[aria-label="Nominal impedance for drive-hf"]')!;
+    await type(impedance, '16');
+    await settle();
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset!.z_ohm).toBe(16);
+
+    for (const [label, value] of [['Sd (cm\u00b2)', '26'], ['Bl (T\u00b7m)', '12.4'], ['Re (\u03a9)', '6.2'], ['Mms (g)', '2.4'], ['Fs (Hz)', '620']] as const) {
+      await type(sheetField(label), value);
+      await settle();
+    }
+    act(() => sheetButton('Save to My drivers')!.click());
+    await settle();
+    // The winding the driver is travels into My drivers, so the saved row can
+    // say which of a driver's impedance versions it holds.
+    expect(useDriverLibraryStore.getState().saved[0]).toMatchObject({ label: 'Radian 745Neo', z_ohm: 16 });
+    expect(channelCard().querySelector('.driver-chip.name')?.textContent).toBe('Radian 745Neo \u00b7 16 \u03a9');
+  });
+
+  it('forgets a saved driver without taking it off the channel that holds it', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'Radian 745Neo');
+    await settle();
+    act(() => manualRow()!.click());
+    await settle();
+    for (const [label, value] of [['Sd (cm\u00b2)', '26'], ['Bl (T\u00b7m)', '12.4'], ['Re (\u03a9)', '6.2'], ['Mms (g)', '2.4'], ['Fs (Hz)', '620']] as const) {
+      await type(sheetField(label), value);
+      await settle();
+    }
+    // Nothing to forget until it has been saved.
+    expect(sheetButton('Remove from My drivers')).toBeUndefined();
+    act(() => sheetButton('Save to My drivers')!.click());
+    await settle();
+
+    act(() => sheetButton('Remove from My drivers')!.click());
+    await settle();
+    expect(useDriverLibraryStore.getState().saved).toEqual([]);
+    // The channel keeps the driver: forgetting it only stops offering it to
+    // the next channel that searches.
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset)
+      .toMatchObject({ label: 'Radian 745Neo' });
+    expect(channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf']))
+      .toMatchObject({ sd_cm2: 26, fs_hz: 620 });
   });
 
   it('keeps a library driver’s name read-only', async () => {
