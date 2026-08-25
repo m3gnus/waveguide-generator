@@ -554,3 +554,36 @@ def test_mwg_dialect_keeps_the_applications_own_defaults() -> None:
     profile = design_to_mesher_config(parsed.design)["profile"]
     assert "a0" not in profile
     assert "s" not in profile
+
+
+ATH_OSSE_WITH_AZIMUTHAL_SLOT = """Throat.Profile = 1
+Throat.Diameter = 36
+Coverage.Angle = 62 - 10*sin(p)^2
+Length = 150
+Term.n = 3
+Term.q = 0.996
+Term.s = 0.9
+Slot.Length = 45 - 42*sin(2*p)^4
+"""
+
+
+def test_ath_import_carves_slot_length_out_of_length_like_ath_does() -> None:
+    """ATH's Length is the whole device depth, so Slot.Length comes out of it.
+
+    The application's own default adds the slot on top instead. An ATH file
+    with an azimuthally varying slot (ATH's m2-clone ships
+    `45 - 42*sin(2*p)^4`) then ends at a different z per azimuth, which tilts
+    the mouth out of plane and makes an infinite-baffle build fail outright.
+    """
+
+    profile = design_to_mesher_config(parse(ATH_OSSE_WITH_AZIMUTHAL_SLOT).design)["profile"]
+    assert profile["_athLengthMode"] == "total"
+    assert profile["slotLength"] == "45 - 42*sin(2*p)**4"
+
+
+def test_length_mode_is_ath_scoped_and_never_overrides_a_stated_mode() -> None:
+    mwg = parse("; Parameter config\n" + ATH_OSSE_WITH_AZIMUTHAL_SLOT)
+    assert "_athLengthMode" not in design_to_mesher_config(mwg.design)["profile"]
+
+    stated = parse(ATH_OSSE_WITH_AZIMUTHAL_SLOT + "Length.Mode = profile\n")
+    assert design_to_mesher_config(stated.design)["profile"]["_athLengthMode"] == "profile"

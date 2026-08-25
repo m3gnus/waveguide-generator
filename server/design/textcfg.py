@@ -656,6 +656,16 @@ def _build_payload(
             payload.setdefault("a0", 0)
             payload.setdefault("s", 0.7)
 
+    if dialect == "ath" and formula != "FREEFORM":
+        # ATH's Length is the nominal axial depth of the whole device, so
+        # Slot.Length is carved OUT of it; the application's own default treats
+        # Length as the flare alone and adds the slot on top. Without this an
+        # ATH import with a slot is built too long, and an azimuthally varying
+        # Slot.Length -- ATH's own m2-clone uses 45 - 42*sin(2*p)^4 -- tilts the
+        # mouth out of plane, which an infinite-baffle build rejects outright.
+        # hornlab_mesher.config_parser stamps the same mode on its ATH path.
+        payload.setdefault("length_mode", "total")
+
     enclosure = _enclosure(blocks)
     if enclosure is not None:
         payload["enclosure"] = enclosure
