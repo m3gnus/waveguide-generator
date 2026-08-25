@@ -23,6 +23,7 @@ export const CHART_TYPES = [
   { id: 'radiation_impedance', label: 'Radiation Matrix Load' },
   { id: 'drive_power', label: 'Power & Current Draw' },
   { id: 'excursion', label: 'Cone Excursion' },
+  { id: 'max_output', label: 'Maximum Output' },
   { id: 'summary', label: 'Simulation Summary' },
 ] as const;
 export type ChartType = typeof CHART_TYPES[number]['id'];
