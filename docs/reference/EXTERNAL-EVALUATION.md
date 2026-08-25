@@ -12,7 +12,7 @@ software remains a peer client and does not import WG, mesher, or solver interna
 
 | Resource | Purpose |
 |---|---|
-| `GET /api/capabilities` | engines and fast paths available on this machine |
+| `GET /api/capabilities` | engines and fast paths available on this machine, plus `dependencies` comparing the pinned module set against what is installed |
 | `GET /api/integration/v1/parameters` | stable parameter IDs, JSON paths, families, per-family defaults, units, editor bounds, enums, expression support, and declarative conditions |
 | `GET /api/integration/v1/design-schema` | Draft 2020-12 JSON Schema for the discriminated design family; `x-wg-schema-version` versions this discovery document |
 | `GET /openapi.json` | live HTTP schema |
@@ -54,7 +54,27 @@ resolved engine, and canonical SHA-256 hashes for both the effective request dur
 stored after AUTO resolution/backend defaults and the request shape actually passed to
 the solver after symmetry resolution. `request_identity: "execution"` and the explicit
 `execution_*` and `effective_*` fields make those scopes unambiguous; the original
-unqualified names remain aliases for the execution hashes. `GET /api/results/{job_id}` adds
+unqualified names remain aliases for the execution hashes.
+
+`dependency_shas` is what `pins.json` declares. It is not evidence about the machine.
+Two further fields describe the environment the solve actually ran in:
+
+- `installed_dependency_shas` — the commit pip recorded for each pinned module in its
+  `direct_url.json`, or `null` where it could not be measured (not installed, not a Git
+  install, unreadable record).
+- `dependency_drift` — sorted module names whose installed commit differs from the pin
+  or is unknown.
+
+**Treat `dependency_drift` as the signal.** `[]` is the only positive statement that a
+result came off the pinned stack. A non-empty list means the run describes something
+other than the pins, and its numbers belong to `installed_dependency_shas`. An *absent*
+`dependency_drift` means the producer never measured — it is not the same as `[]`, and a
+client comparing runs across WG versions should distinguish the two. Module version
+strings cannot substitute for this: they stay put across commits.
+`GET /api/capabilities` reports the same comparison for a host under `dependencies`
+(`pinned`, `installed`, `drift`).
+
+`GET /api/results/{job_id}` adds
 `ETag` and `X-WG-Results-SHA256` for the exact stored result bytes. Clients should key
 caches with these identities rather than an engine name or a hand-built parameter
 string.

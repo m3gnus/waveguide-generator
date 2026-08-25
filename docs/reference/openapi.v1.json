@@ -6329,6 +6329,20 @@
               }
             ]
           },
+          "dependency_drift": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dependency Drift"
+          },
           "dependency_shas": {
             "additionalProperties": {
               "type": "string"
@@ -6370,6 +6384,27 @@
             "pattern": "^[0-9a-f]{64}$",
             "title": "Geometry Sha256",
             "type": "string"
+          },
+          "installed_dependency_shas": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installed Dependency Shas"
           },
           "request_identity": {
             "const": "execution",

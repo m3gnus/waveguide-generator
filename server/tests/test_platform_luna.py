@@ -562,7 +562,12 @@ def test_capability_probe_runs_off_thread_and_is_cached(
 
     async def scenario() -> None:
         first, second = await asyncio.gather(endpoint(), endpoint())
-        assert first == second == {
+        assert first == second
+        # ``dependencies`` measures this host's venv, so its values are not a
+        # fixture. The equality above still holds it to being identical across
+        # both calls, which is the caching claim this test is about.
+        assert set(first["dependencies"]) == {"pinned", "installed", "drift"}
+        assert {key: value for key, value in first.items() if key != "dependencies"} == {
             "engines": [
                 {
                     "name": "mock",
