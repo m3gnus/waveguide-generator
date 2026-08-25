@@ -381,8 +381,125 @@ export function enterCadWorkspace(): void {
   workspaceNavigation.activate('cadlink');
 }
 
+interface FetchedMesh {
+  ok: boolean;
+  status: number;
+  text: string;
+}
+
+/** Mesh artifact fetches that have not settled yet, keyed by URL.
+ *
+ * Two independent triggers ask for the CAD scene the moment an ingestion
+ * lands — the coordinator, and the viewport's own workspace effect — and a
+ * display artifact is tens of megabytes. Sharing the in-flight request means
+ * one download instead of two; the entry is dropped as soon as it settles, so
+ * this coalesces concurrent callers without ever serving a stale body. */
+const inFlightMeshRequests = new Map<string, Promise<FetchedMesh>>();
+
+async function fetchMeshOnce(url: string, fetcher: typeof fetch): Promise<FetchedMesh> {
+  const existing = inFlightMeshRequests.get(url);
+  if (existing) return existing;
+  const request = (async (): Promise<FetchedMesh> => {
+    const response = await fetcher(url);
+    // 202 is "still being built", not a mesh; reading its body would only
+    // hand `parseMSH` an empty string to reject.
+    const text = response.ok && response.status !== 202 ? await response.text() : '';
+    return { ok: response.ok, status: response.status, text };
+  })();
+  inFlightMeshRequests.set(url, request);
+  try {
+    return await request;
+  } finally {
+    inFlightMeshRequests.delete(url);
+  }
+}
+
+const viewportMeshUrl = (ingestId: string): string =>
+  `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/viewport-mesh`;
+
+function cadDisplayScene(record: CadReturnIngestRecord, name: string, meshText: string) {
+  return createImportedMeshScene(
+    name,
+    parseMSH(meshText),
+    'cad',
+    record.ingest_id,
+    record.symmetry.cut_planes ?? [],
+    {
+      fullDomain: true,
+      solvedTriangleCount: record.mesh?.stats.triangle_count,
+      artifactToken: record.viewport_mesh?.content_sha256 ?? `${record.ingest_id}:viewport`,
+    },
+  );
+}
+
+/** Delays before each re-check of a deferred display tessellation. The first
+ * is short because the artifact is occasionally already on disk; the rest back
+ * off to the order of a real tessellation, which takes several seconds. */
+const DISPLAY_UPGRADE_DELAYS_MS = [250, 500, 1_000, 1_500, 2_000, 2_000, 3_000, 3_000, 3_000, 3_000, 3_000, 3_000];
+
+const displayUpgradesInFlight = new Set<string>();
+
+const wait = (ms: number): Promise<void> =>
+  new Promise((resolve) => { window.setTimeout(resolve, ms); });
+
+/** Swap the smooth display tessellation in behind an already-visible solve mesh.
+ *
+ * Deliberately not tied to the caller's intent generation. CAD Link
+ * re-publishes an equal record on every Fusion poll and each of those bumps the
+ * generation, so a wait that spans several seconds would be cancelled by
+ * routine polling and never finish. What actually matters is whether the slot
+ * still holds this ingestion, so that is what is checked — and the swap only
+ * takes the viewport if the CAD model view still owns it, leaving a user who
+ * switched to the solve-mesh view where they are. */
+function upgradeToDisplayMesh(
+  record: CadReturnIngestRecord,
+  name: string,
+  fetcher: typeof fetch,
+): void {
+  const ingestId = record.ingest_id;
+  if (displayUpgradesInFlight.has(ingestId)) return;
+  displayUpgradesInFlight.add(ingestId);
+  void (async () => {
+    try {
+      for (const delay of DISPLAY_UPGRADE_DELAYS_MS) {
+        await wait(delay);
+        if (importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) return;
+        let result: FetchedMesh;
+        try {
+          result = await fetchMeshOnce(viewportMeshUrl(ingestId), fetcher);
+        } catch {
+          continue;
+        }
+        if (result.status === 202) continue;
+        if (!result.ok) return;
+        if (importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) return;
+        try {
+          importedMeshStore.setCad(
+            cadDisplayScene(record, name, result.text),
+            importedMeshStore.beginIntent(),
+            workspaceModeStore.getSnapshot().mode === 'cad'
+              && importedMeshStore.getSnapshot().showing === 'cad',
+          );
+        } catch {
+          // The solve mesh already on screen is the same geometry.
+        }
+        return;
+      }
+    } finally {
+      displayUpgradesInFlight.delete(ingestId);
+    }
+  })();
+}
+
 /** Prefer the independently tessellated full CAD display artifact. Older
- * records and advisory display failures fall back to the exact solver mesh. */
+ * records and advisory display failures fall back to the exact solver mesh.
+ *
+ * A record may also publish before its display tessellation exists: that
+ * tessellation is two thirds of a cold ingestion's wall clock, so waiting for
+ * it would leave the viewport empty for several seconds after WG already knows
+ * the geometry. The solve mesh is complete at that point and is the same
+ * model, so it is shown immediately and quietly replaced when the smoother
+ * artifact lands. */
 export async function showIngestedMeshInViewport(
   record: CadReturnIngestRecord,
   name: string,
@@ -396,27 +513,20 @@ export async function showIngestedMeshInViewport(
     if (workspaceModeStore.getSnapshot().mode === 'cad') importedMeshStore.showCad(generation);
     return;
   }
+  let displayPending = false;
   try {
-    const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/viewport-mesh`);
+    const result = await fetchMeshOnce(viewportMeshUrl(ingestId), fetcher);
     if (!importedMeshStore.isCurrentGeneration(generation)) return;
-    if (response.ok) {
-      const meshText = await response.text();
-      if (!importedMeshStore.isCurrentGeneration(generation)) return;
-      importedMeshStore.setCad(createImportedMeshScene(
-        name,
-        parseMSH(meshText),
-        'cad',
-        ingestId,
-        record.symmetry.cut_planes ?? [],
-        {
-          fullDomain: true,
-          solvedTriangleCount: record.mesh?.stats.triangle_count,
-          artifactToken: record.viewport_mesh?.content_sha256 ?? `${ingestId}:viewport`,
-        },
-      ), generation, workspaceModeStore.getSnapshot().mode === 'cad');
+    if (result.status === 202) {
+      displayPending = true;
+    } else if (result.ok) {
+      importedMeshStore.setCad(
+        cadDisplayScene(record, name, result.text),
+        generation,
+        workspaceModeStore.getSnapshot().mode === 'cad',
+      );
       return;
-    }
-    if (response.status === 409) {
+    } else if (result.status === 409) {
       onNotice?.('The independent CAD viewport artifact failed verification. Showing the exact solver mesh instead.');
     }
   } catch {
@@ -424,13 +534,14 @@ export async function showIngestedMeshInViewport(
   }
   if (!importedMeshStore.isCurrentGeneration(generation)) return;
   try {
-    const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
-    if (response.ok && importedMeshStore.isCurrentGeneration(generation)) {
-      const meshText = await response.text();
-      if (!importedMeshStore.isCurrentGeneration(generation)) return;
+    const result = await fetchMeshOnce(
+      `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`,
+      fetcher,
+    );
+    if (result.ok && importedMeshStore.isCurrentGeneration(generation)) {
       importedMeshStore.setCad(createImportedMeshScene(
         name,
-        parseMSH(meshText),
+        parseMSH(result.text),
         'cad',
         ingestId,
         record.symmetry.cut_planes ?? [],
@@ -439,6 +550,7 @@ export async function showIngestedMeshInViewport(
           artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
         },
       ), generation, workspaceModeStore.getSnapshot().mode === 'cad');
+      if (displayPending) upgradeToDisplayMesh(record, name, fetcher);
       return;
     }
   } catch {
@@ -1502,13 +1614,17 @@ export function CadLinkCoordinator() {
     }
   }, [autoIngestSelected, bundles, ingestSelected]);
 
-  // Same cadence as the returns poll, and Fusion-only: Onshape has no marker.
+  // Faster than the returns poll, and Fusion-only: Onshape has no marker.
+  // This one reads a single small marker file rather than listing a workspace,
+  // and it sits at the head of everything the user is waiting for after they
+  // press Solve in Fusion, so the whole poll interval is dead time on the
+  // clock they are watching.
   useEffect(() => {
     if (onshape) return undefined;
     if (pageIsVisible()) void consumeSolveCommand();
     const timer = window.setInterval(() => {
       if (pageIsVisible()) void consumeSolveCommand();
-    }, 2_500);
+    }, 1_000);
     return () => window.clearInterval(timer);
   }, [consumeSolveCommand, onshape]);
 

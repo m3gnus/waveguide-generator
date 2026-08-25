@@ -104,7 +104,7 @@ vi.mock('../api/previewSocket', () => ({
   },
 }));
 
-import { cadViewportEmptyCopy, Viewport } from './Viewport';
+import { cadViewportEmptyCopy, refitsCamera, Viewport } from './Viewport';
 
 describe('CAD viewport empty-state copy', () => {
   it('reports automatic preparation progress with the selected bundle name', () => {
@@ -683,5 +683,28 @@ describe('Viewport geometry warnings', () => {
     render([UNREACHABLE], { error: 'ATH expression is unsupported' });
     expect(host.querySelector('.viewport-error-banner')).not.toBeNull();
     expect(host.querySelector<HTMLDetailsElement>('.viewport-warning')?.open).toBe(false);
+  });
+});
+
+describe('camera refit', () => {
+  const scene = (source: 'cad' | 'solver' | 'file', ingestId: string | null) =>
+    createImportedMeshScene('Speaker', parseMSH(meshFixture), source, ingestId);
+
+  it('re-frames for a new subject and holds the framing for a re-render of the same one', () => {
+    // Nothing on screen yet, or a genuinely different model: frame it.
+    expect(refitsCamera(null, scene('cad', 'wgi_a'))).toBe(true);
+    expect(refitsCamera(scene('cad', 'wgi_a'), scene('cad', 'wgi_b'))).toBe(true);
+    expect(refitsCamera(scene('file', null), scene('cad', 'wgi_a'))).toBe(true);
+
+    // A solver mesh rebuilt after a parametric edit is the same subject.
+    expect(refitsCamera(scene('solver', null), scene('solver', null))).toBe(false);
+
+    // So is a CAD return whose solve mesh is replaced by the display
+    // tessellation that finished building behind it.
+    expect(refitsCamera(scene('cad', 'wgi_a'), scene('cad', 'wgi_a'))).toBe(false);
+
+    // Two CAD scenes with no ingestion identity are not known to be the same
+    // model, so they keep the safe answer rather than pinning a stale framing.
+    expect(refitsCamera(scene('cad', null), scene('cad', null))).toBe(true);
   });
 });

@@ -42,6 +42,7 @@ import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 import { defaultFieldPlane, nearestFieldPlaneFrequencyIndex, useFieldPlaneStore } from './fieldPlaneStore';
 import type { FieldPlaneResponseId } from '../api/fieldPlane';
+import type { ImportedMeshScene } from './importedMesh';
 import { importedMeshStore, type ImportedMeshShowing } from './importedMeshStore';
 import { SolverMeshRefreshController, type SolverMeshRefreshState } from './solverMeshRefresh';
 import type { CameraDirection } from './cameraMath';
@@ -328,6 +329,26 @@ export function cadViewportEmptyCopy(options: {
     title: 'CAD return selected',
     detail: 'Select a return in CAD Link to prepare it automatically.',
   };
+}
+
+/** Whether replacing one viewport scene with another should re-frame the camera.
+ *
+ * Re-framing is right when the subject changes and wrong when the same subject
+ * is merely re-rendered: a refit the user did not ask for reads as the viewport
+ * jumping on its own, and both cases below happen repeatedly during ordinary
+ * work. A solver mesh rebuilds on every parametric edit, and a CAD return's
+ * solve mesh is replaced by its display tessellation the moment that finishes
+ * building -- same model, same scale, so the framing already on screen is
+ * still the right one.
+ */
+export function refitsCamera(
+  previous: ImportedMeshScene | null,
+  next: ImportedMeshScene | null,
+): boolean {
+  if (previous?.source === 'solver' && next?.source === 'solver') return false;
+  if (previous?.source === 'cad' && next?.source === 'cad'
+    && previous.ingestId !== null && previous.ingestId === next.ingestId) return false;
+  return true;
 }
 
 export function Viewport() {
@@ -695,10 +716,7 @@ export function Viewport() {
     const previous = lastImportedMesh.current;
     if (previous === importedMesh) return;
     lastImportedMesh.current = importedMesh;
-    // A solver-mesh rebuild replaces geometry inside the current view, exactly
-    // like a parametric edit; refitting the camera there would make every
-    // auto-refresh jump the framing.
-    if (previous?.source === 'solver' && importedMesh?.source === 'solver') return;
+    if (!refitsCamera(previous, importedMesh)) return;
     setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
   }, [importedMesh]);
 
