@@ -135,6 +135,15 @@ function storedAdvancedView(): boolean {
   try { return viewStorage.getItem('crossoverView') === 'advanced'; } catch { return false; }
 }
 
+/** Whether the rail's spec and the shown run name the same members, in the
+ * same order. A run combined from other channels is a different combine, and
+ * no crossover edit here can be applied to it. */
+function sameMembers(spec: CrossoverSpec, shown: ReturnType<typeof latestCombine.getSnapshot>): boolean {
+  const members = shown?.combine.members ?? [];
+  return spec.members.length === members.length
+    && spec.members.every((member, index) => member === members[index]);
+}
+
 /**
  * Apply the rail's crossover to the shown run as it is edited.
  *
@@ -160,9 +169,7 @@ function useLiveRecombine(
     if (!enabled || !spec || !shown?.canApply) { setBusy(false); setError(null); return; }
     const applied = fromResult(shown.combine);
     if (!applied) return;
-    const members = shown.combine.members ?? [];
-    if (spec.members.length !== members.length
-      || spec.members.some((member, index) => member !== members[index])) return;
+    if (!sameMembers(spec, shown)) return;
     if (sameSpec(spec, applied)) { setBusy(false); setError(null); return; }
     const timer = setTimeout(() => {
       void (async () => {
@@ -182,6 +189,37 @@ function useLiveRecombine(
     return () => clearTimeout(timer);
   }, [spec, enabled, shown]);
   return { live: Boolean(shown?.canApply), busy, error };
+}
+
+/**
+ * What the edit is doing to the run on screen, said in every case.
+ *
+ * A crossover change never needs a new solve -- the server recombines the
+ * stored per-channel fields -- but that only holds for a run the rail owns.
+ * When it does not, the reason is stated with the dock's own way out of it
+ * rather than left as an edit that appears to have been swallowed.
+ */
+function LiveNote({ shown, live, busy, error, members }: {
+  shown: NonNullable<ReturnType<typeof latestCombine.getSnapshot>>;
+  live: boolean;
+  busy: boolean;
+  error: string | null;
+  members: boolean;
+}) {
+  if (!live) {
+    return <p className="section-note warning" role="status" aria-live="polite">
+      {shown.blockedReason ?? 'Crossover changes cannot be applied to the shown run.'}
+      {shown.recall && <> <button type="button" className="crossover-recall" onClick={shown.recall}>Load this run's model</button></>}
+    </p>;
+  }
+  if (!members) {
+    return <p className="section-note warning" role="status" aria-live="polite">
+      The shown run combines {(shown.combine.members ?? []).join(' + ') || 'other channels'}, not the channels above, so these settings are not its crossover. Solve this return to combine it this way.
+    </p>;
+  }
+  return <p className={error ? 'section-note warning' : 'section-note'} role="status" aria-live="polite">
+    {error ?? (busy ? 'Updating the shown run…' : 'Changes apply to the shown combined result immediately — no new solve is needed.')}
+  </p>;
 }
 
 export function CadCrossover() {
@@ -261,9 +299,7 @@ export function CadCrossover() {
         presetFor={(member) => state.channelDrivers[member]?.preset ?? null}
         onChange={apply}
       />}
-      {live && <p className={liveError ? 'section-note warning' : 'section-note'} role="status" aria-live="polite">
-        {liveError ?? (busy ? 'Updating the shown run…' : 'Changes apply to the shown combined result immediately.')}
-      </p>}
+      {shown && <LiveNote shown={shown} live={live} busy={busy} error={liveError} members={sameMembers(spec, shown)}/>}
     </>}
   </>;
 }

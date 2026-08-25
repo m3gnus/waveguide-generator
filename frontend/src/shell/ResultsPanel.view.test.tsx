@@ -340,6 +340,7 @@ describe('results dock view switch', () => {
     expect(shown.jobId).toBe('primary');
     expect(shown.channelId).toBe('combined');
     expect(shown.canApply).toBe(true);
+    expect(shown.blockedReason).toBeNull();
     expect(shown.combine.members).toEqual(['drive-mf', 'drive-hf']);
 
     // The bridge's callback is the dock's own swap-in.
@@ -350,6 +351,20 @@ describe('results dock view switch', () => {
 
     await chooseView('HF');
     expect(latestCombine.getSnapshot()).toBeNull();
+  });
+
+  it('says why a reopened session may not recombine the run, and offers its model', async () => {
+    // A session that has not ingested is exactly what a browser refresh leaves
+    // behind: the project's settings are restored, but no ingestion owns them.
+    useCadReturnStore.setState({ ingestRecord: null });
+    publishJobs([job('primary', 1)]);
+    compareSelection.setPrimary('primary');
+    await render();
+
+    const shown = latestCombine.getSnapshot()!;
+    expect(shown.canApply).toBe(false);
+    expect(shown.blockedReason).toContain('without re-solving');
+    expect(shown.recall).not.toBeNull();
   });
 
   it('names the shown channel on the summary card', async () => {
