@@ -1776,6 +1776,11 @@
       },
       "DriverLibraryInfo": {
         "properties": {
+          "complete_drivers": {
+            "default": 0,
+            "title": "Complete Drivers",
+            "type": "integer"
+          },
           "files": {
             "items": {
               "$ref": "#/components/schemas/DriverLibraryFile"

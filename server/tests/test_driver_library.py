@@ -525,7 +525,50 @@ def test_library_info_reports_files_counts_and_last_scan(tmp_path: Path) -> None
     assert info["folder"] == str(tmp_path)
     assert info["files"] == [{"name": "counts.csv", "rows": 2}]
     assert info["total_drivers"] == 2
+    # Sd alone is not a driver anything can be solved with.
+    assert info["complete_drivers"] == 0
     assert info["last_scan"] is not None
+
+
+def test_library_info_separates_indexed_rows_from_drivable_ones(tmp_path: Path) -> None:
+    """The count Settings shows has to be the one the picker will honour.
+
+    A catalogue CSV indexes thousands of rows and can drive none of them, so
+    a lone total promises a library the Drivers rail cannot deliver.
+    """
+
+    _write_csv(
+        tmp_path,
+        "mixed.csv",
+        ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz"],
+        [
+            ["Acme", "Drivable", "300", "9.5", "6.0", "18", "40"],
+            ["Acme", "Catalogue", "", "", "", "", ""],
+            ["Acme", "Partial", "300", "", "6.0", "", ""],
+        ],
+    )
+    library = DriverLibrary(tmp_path)
+    info = library.rescan()
+    assert info["total_drivers"] == 3
+    assert info["complete_drivers"] == 1
+
+
+def test_library_info_counts_a_driver_once_for_any_drivable_winding(tmp_path: Path) -> None:
+    _write_csv(
+        tmp_path,
+        "windings.csv",
+        ["Brand", "Model", "Z_ohm", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz"],
+        [
+            ["Acme", "SplitLF", "8", "300", "9.5", "6.0", "18", "40"],
+            ["Acme", "SplitLF", "16", "", "", "", "", ""],
+        ],
+    )
+    library = DriverLibrary(tmp_path)
+    info = library.rescan()
+    # One driver, two windings, one of them drivable -- and the driver is
+    # offered, so it counts.
+    assert info["total_drivers"] == 1
+    assert info["complete_drivers"] == 1
 
 
 def test_library_creates_its_folder_on_first_use(tmp_path: Path) -> None:

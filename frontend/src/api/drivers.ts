@@ -60,6 +60,8 @@ export interface DriverLibraryInfo {
   folder: string;
   files: DriverLibraryFile[];
   total_drivers: number;
+  /** How many of them can actually drive a channel -- what a search offers. */
+  complete_drivers?: number;
   last_scan?: string | null;
 }
 
