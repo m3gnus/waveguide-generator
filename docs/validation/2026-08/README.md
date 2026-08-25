@@ -17,6 +17,14 @@ constraints stated inside them; they are not a current release status dashboard.
 - [Result and archive sizes](ARTIFACT-SIZES.md) — measured archive, retained
   artifact, and snapshot-wire sizes across the available local corpus on
   2026-08-20, with explicit evidence still required before hard limits.
+- [Pinned versus installed modules](PINNED-VS-INSTALLED.md) - four of six
+  HornLab modules in this box's venv are not the commits pins.json pins,
+  which is why two capabilities read as unavailable here; read before
+  trusting any measurement taken on this machine.
+- [First-solve initialization](FIRST-SOLVE-WARMUP.md) - check 12's cost
+  re-measured on 2026-08-25 and then removed by warming the solver worker
+  child; before/after at the solver boundary and end to end, plus what this
+  machine could not show.
 - [Wall-clearance acoustic replay note](WALL-CLEARANCE-ACOUSTICS.md) — a
   non-reproducible local run-101 observation from 2026-08-22; the committed
   snapshots support design identity only, while unpublished artifact hashes do
