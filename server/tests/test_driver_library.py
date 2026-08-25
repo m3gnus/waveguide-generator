@@ -828,6 +828,45 @@ def test_a_shipped_file_changing_reindexes_even_under_a_shared_name(tmp_path: Pa
     }
 
 
+def test_a_rewrite_inside_one_timestamp_tick_still_reindexes(tmp_path: Path) -> None:
+    """The change detector must not rest on mtime alone.
+
+    Windows CI failed exactly here: the rewrite below landed inside the same
+    filesystem timestamp tick as the first scan, ``st_mtime`` came back
+    identical, and ``ensure_indexed`` decided nothing had changed -- so the
+    library kept serving the old rows. This forces that collision on every
+    platform by stamping the new file with the old timestamp, which is also
+    what a coarse-granularity filesystem (FAT32 rounds to two seconds) or an
+    archiver that preserves mtimes does for real.
+    """
+
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    folder = tmp_path / "mine"
+    folder.mkdir()
+    _write_csv(bundled, "drivers.csv", ["Brand", "Model", "Sd_cm2"], [["Acme", "Shipped", "500"]])
+    library = DriverLibrary(folder, bundled=bundled)
+    assert library.rescan()["total_drivers"] == 1
+
+    shipped = bundled / "drivers.csv"
+    before = shipped.stat()
+    _write_csv(
+        bundled,
+        "drivers.csv",
+        ["Brand", "Model", "Sd_cm2"],
+        [["Acme", "Shipped", "500"], ["Acme", "AlsoShipped", "300"]],
+    )
+    # Put the clock back exactly where it was: mtime now carries no signal.
+    os.utime(shipped, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert shipped.stat().st_mtime_ns == before.st_mtime_ns
+    assert shipped.stat().st_size != before.st_size
+
+    library.ensure_indexed()
+    assert {hit["model"] for hit in library.search(q="", kind="all", z=None, limit=20)} == {
+        "Shipped", "AlsoShipped",
+    }
+
+
 def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> None:
     """The real file in this repo, not a fixture: it is a shipped artifact."""
 

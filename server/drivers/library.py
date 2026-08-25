@@ -309,7 +309,7 @@ class DriverLibrary:
         self._records: list[DriverRecord] = []
         self._by_id: dict[str, tuple[DriverRecord, DriverVariant]] = {}
         self._file_stats: list[dict[str, object]] = []
-        self._mtimes: dict[str, float] = {}
+        self._mtimes: dict[str, tuple[int, int]] = {}
         self._last_scan: str | None = None
         self._scanned_once = False
 
@@ -325,15 +325,28 @@ class DriverLibrary:
             folders.append(self.bundled)
         return folders
 
-    def _current_files(self) -> dict[str, float]:
-        """Every readable CSV and its mtime, keyed by full path.
+    def _current_files(self) -> dict[str, tuple[int, int]]:
+        """Every readable CSV and its change fingerprint, keyed by full path.
 
         Keyed by path rather than name so a file the user happens to call
         ``hornlab-drivers.csv`` cannot mask the shipped one out of the change
         detector and leave the index stale.
+
+        The fingerprint is ``(mtime_ns, size)``, not a float mtime. Two edits
+        inside one filesystem timestamp tick are indistinguishable by mtime
+        alone, and the tick is not always small: Windows CI reproduced this by
+        rewriting a shipped CSV immediately after the first scan and getting an
+        identical ``st_mtime`` back, so the rescan never fired and the index
+        silently served the old rows. FAT-family and some network filesystems
+        are coarser still -- two seconds on FAT32 -- and this app's data
+        directory is allowed to live on a network share. ``st_mtime_ns`` avoids
+        the float rounding, and the size catches a same-tick edit that changes
+        the file's length. A same-tick edit that preserves length exactly is
+        still missed; catching that needs content hashing, which is not worth
+        reading every CSV on every request.
         """
 
-        stats: dict[str, float] = {}
+        stats: dict[str, tuple[int, int]] = {}
         for folder in self._sources():
             if not folder.is_dir():
                 continue
@@ -344,9 +357,10 @@ class DriverLibrary:
             for path in entries:
                 if path.is_file() and path.suffix.lower() == ".csv":
                     try:
-                        stats[str(path)] = path.stat().st_mtime
+                        info = path.stat()
                     except OSError:
                         continue
+                    stats[str(path)] = (info.st_mtime_ns, info.st_size)
         return stats
 
     def ensure_indexed(self) -> None:
