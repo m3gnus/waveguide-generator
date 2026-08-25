@@ -132,6 +132,33 @@ def test_new_design_does_not_serialize_machine_solver_path() -> None:
     assert "Symmetry = quarter" in text
 
 
+def test_a_stated_solver_mode_is_reported_rather_than_accepted_and_ignored() -> None:
+    """A machine-local setting a design states must not disappear in silence.
+
+    Nothing reads ``Simulation.SolverMode`` out of a design -- the solve path
+    takes the solver mode from the request's options -- and export strips it,
+    so stating one used to be accepted, ignored, and quietly deleted on the way
+    back out. The value is still not honoured, because whether the axisymmetric
+    runner can run is a fact about the host rather than about the design; the
+    parse report now says so.
+    """
+
+    source = SOURCE + "Simulation.SolverMode = circsym\n"
+    parsed = parse(source)
+
+    assert parsed.design.root.simulation.solver_mode is None
+    assert parsed.migration_names == ["006_machine_solver_mode_not_portable"]
+    note = next(item.note for item in parsed.migrations)
+    assert "Simulation.SolverMode" in note and "Solve options" in note
+
+    # Opening a file is not editing it, so an untouched save still returns the
+    # author's own bytes; the report, not a rewrite, is what tells them.
+    assert serialize(parsed) == source
+
+    parsed.design.root.L = Expr(value=121)  # type: ignore[union-attr]
+    assert "SolverMode" not in serialize(parsed)
+
+
 def test_modified_legacy_design_drops_machine_solver_path_from_ordered_block() -> None:
     source = SOURCE + """WG.Solve = {
 ; portable settings remain ordered
