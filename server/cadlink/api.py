@@ -144,6 +144,14 @@ class CadReturnIngestRequest(BaseModel):
     symmetry_mode: Literal["auto", "full"] = Field(
         default="auto", alias="symmetryMode"
     )
+    # Segments per 2pi for the imported mesh's curvature refinement. Omitted
+    # means the server default (24). Halving it returned 45% of the triangles
+    # for 0.4 mm of peak chord error on the reference model, with the HF wall
+    # frequency limit unchanged -- worth reaching for on a model that is
+    # crowding the artifact triangle ceiling.
+    curvature_segments: int | None = Field(
+        default=None, alias="curvatureSegments", ge=8, le=64
+    )
 
 
 class FusionStatusRequest(BaseModel):
@@ -913,9 +921,18 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
             payload.skipped_source_ids,
             store,
             data_dir,
+            # Only carry the curvature override when it was actually asked
+            # for: prep_options is part of the mesh cache key, so writing an
+            # explicit null would invalidate every mesh cached before this
+            # option existed.
             prep_options={
                 "area_drift_overrides": payload.area_drift_overrides,
                 "symmetry_mode": payload.symmetry_mode,
+                **(
+                    {"curvature_segments": payload.curvature_segments}
+                    if payload.curvature_segments is not None
+                    else {}
+                ),
             },
             expected_design_id=payload.expected_design_id,
             expected_instance_id=payload.expected_instance_id,
