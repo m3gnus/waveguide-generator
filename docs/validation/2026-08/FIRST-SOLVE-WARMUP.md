@@ -165,7 +165,53 @@ time-to-healthy unchanged at 1.56 s — so on this host the duplicate probe cost
 nothing measurable. It is removed because two concurrent cold probes are wrong,
 not because this machine could feel them.
 
-## 7. Not verified on this hardware
+The macOS reviewer then settled the question the probe was proposed to answer,
+and the answer was no. Interleaved A/B against the parent commit, 7 launches
+each, cold discarded: 534.5 ms against 545.0 ms in one round and 538.7 ms
+against 535.0 ms in the next, disagreeing in sign, so there is no
+branch-versus-parent delta. The ~56 ms was their harness measured against
+MACOS-PERFORMANCE.md's 474.9 ms, which came through
+`launchers/macos/launch-wg2.command` rather than uvicorn directly, and it
+persists after the fix. They did reproduce the defect itself on macOS (2 probes
+to 1, same prewarm thread name), so it was real; it simply never cost
+wall-clock on either platform, because the two probes run concurrently and
+contend for CPU rather than adding serial latency.
+
+## 7. A force-killed launcher, and a measurement that was wrong
+
+The macOS reviewer pointed out that a signal outside the launcher's capture
+context bypasses the shutdown handler entirely, and that this matters more now
+that a worker can exist for a session that never solved. It does.
+
+The first attempt to measure it said the worker died 0.16 s after the parent
+was killed, uniformly, at every point in the warmup, including deep inside
+native code where the child is not reading its pipe at all. That uniformity was
+the tell: **the harness was killing its own process tree.** The server was a
+descendant of the measuring script, so a job object took the child down and the
+product was never tested.
+
+Re-run with the server detached from the measuring process tree, killed with
+`Stop-Process -Force`:
+
+| | Worker exited after |
+|---|---|
+| before | **22.8 s** |
+| after | 0.31 s / 0.30 s / 0.27 s |
+
+22.8 s is the rest of the warmup. The worker only learns the parent is gone at
+its next `recv()`, and a worker in the middle of its warmup does not reach one
+until the warmup ends. Before the boot prewarm this stranded only a worker that
+was mid-solve, at least finishing work somebody asked for. With the prewarm, a
+force-kill of a session that never solved could leave one warming for nothing.
+
+`_exit_when_parent_does()` arms a daemon thread that waits on the parent's
+sentinel and calls `os._exit`. Neither the wait nor the exit is blocked by what
+the main thread is doing in native code. It does not arm when there is no
+parent process, which is how the loop tests drive the worker in-process.
+
+End-to-end first solve after this change: 1.17 s, unchanged.
+
+## 8. Not verified on this hardware
 
 * **Metal.** This is a Windows VM; the Metal branch was not exercised. It is
   unchanged apart from its gate.
@@ -178,6 +224,12 @@ not because this machine could feel them.
 * **OpenCL "first ever".** The pyopencl on-disk program cache was already warm
   on this machine and was not cleared, so check 12's 24.5 s first-ever row has
   no counterpart here.
+* **Quit through the real launcher.** Both harnesses here drive uvicorn
+  directly. The macOS reviewer found that SIGTERM outside the launcher's
+  capture context skips the shutdown handler (rc=-15), which is why the
+  measurement above uses an outright force-kill, the worst case, rather than
+  the launcher's own path. The graceful path is covered by the `close()`
+  timings in section 5 and by macOS's rc=0 shutdown-handler run.
 * **A circular design through AUTO fails on this machine** before reaching
   BEMPP at all: the planner routes it to the axisymmetric engine and the
   installed axisymmetric package raises *"Installed axisymmetric solver lacks
