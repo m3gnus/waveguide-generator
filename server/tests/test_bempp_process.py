@@ -389,3 +389,57 @@ def test_a_failed_warmup_is_reported_rather_than_raised(
 
     assert outcome["warmed"] is False
     assert "no assembly backend" in outcome["detail"]
+
+
+def test_the_worker_watchdog_is_inert_without_a_parent_process() -> None:
+    """The loop tests drive _bempp_worker_main in-process; nothing may arm."""
+
+    assert multiprocessing.parent_process() is None
+    before = [thread for thread in threading.enumerate()]
+
+    bempp_process._exit_when_parent_does()
+
+    added = {thread.name for thread in threading.enumerate()} - {
+        thread.name for thread in before
+    }
+    assert "wg2-bempp-parent-watch" not in added
+
+
+def test_the_worker_leaves_when_its_parent_is_force_killed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A killed launcher runs no shutdown hook, so the worker must notice alone.
+
+    Detached from the measuring process tree so nothing else tore it down, a
+    worker whose parent was killed mid-warmup survived 22.8 s on the reference
+    Windows VM -- it only finds out at its next recv(), which it does not reach
+    until the warmup ends. With the watchdog it leaves in 0.27-0.31 s.
+    """
+
+    reader, writer = multiprocessing.get_context("spawn").Pipe(duplex=False)
+
+    class _FakeParent:
+        sentinel = reader
+
+    monkeypatch.setattr(multiprocessing, "parent_process", lambda: _FakeParent)
+    # os._exit is the point of the watchdog -- it does not wait for native code
+    # to unwind -- so it has to be intercepted rather than allowed to run here.
+    exits: list[int] = []
+    monkeypatch.setattr(bempp_process.os, "_exit", exits.append)
+
+    try:
+        bempp_process._exit_when_parent_does()
+        watchdog = next(
+            thread
+            for thread in threading.enumerate()
+            if thread.name == "wg2-bempp-parent-watch"
+        )
+
+        assert exits == []
+        writer.close()  # the parent goes away
+        watchdog.join(20.0)
+
+        assert not watchdog.is_alive()
+        assert exits == [bempp_process._PARENT_GONE_EXIT_CODE]
+    finally:
+        reader.close()

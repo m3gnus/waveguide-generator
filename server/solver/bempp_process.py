@@ -44,6 +44,7 @@ import atexit
 import asyncio
 import multiprocessing
 from multiprocessing.connection import Connection
+import os
 import threading
 import time
 import traceback
@@ -62,6 +63,11 @@ _JOIN_SECONDS = 0.5
 #: process target keeps the spawn plumbing -- and the ``target=`` seam the
 #: tests use -- untouched, and makes "is this worker warm yet" observable.
 _WARMUP_JOB_ID = "__warmup__"
+
+#: Exit status the worker uses when it leaves because the parent went away.
+#: Nothing reads it -- the parent is gone -- but it keeps the reason legible in
+#: a process monitor rather than looking like a clean exit or a crash.
+_PARENT_GONE_EXIT_CODE = 3
 
 
 class BemppWorkerError(RuntimeError):
@@ -96,9 +102,48 @@ def _warm_this_process() -> dict[str, Any]:
     return {"warmed": True, "seconds": round(time.monotonic() - began, 3)}
 
 
+def _exit_when_parent_does() -> None:
+    """Leave with the app, even from inside a native block.
+
+    A launcher force-killed with TerminateProcess (or SIGKILL) runs no atexit
+    hook and no lifespan shutdown, so nothing tells this worker to stop. It
+    would find out at its next ``recv()`` -- but a worker in the middle of its
+    warmup does not reach one until the warmup ends. Measured on the reference
+    Windows VM with the server detached from the measuring process tree: the
+    child kept burning CPU for **22.8 s** after the parent was killed. An
+    earlier measurement of 0.16 s was wrong; it was the harness's own job
+    object tearing the tree down, not this process noticing anything.
+
+    Before the boot prewarm this only stranded a worker that was mid-solve, so
+    it was at least finishing work somebody asked for. Now a worker exists from
+    startup, so a force-kill of a session that never solved could leave one
+    warming for nothing.
+
+    Waiting on the parent's sentinel from a thread is not blocked by whatever
+    the main thread is doing in native code, and ``os._exit`` does not wait for
+    it either. Returns without arming when there is no parent process, which is
+    how the tests drive this loop in-process.
+    """
+
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+
+    def wait_and_exit() -> None:
+        from multiprocessing.connection import wait
+
+        wait([parent.sentinel])
+        os._exit(_PARENT_GONE_EXIT_CODE)
+
+    threading.Thread(
+        target=wait_and_exit, name="wg2-bempp-parent-watch", daemon=True
+    ).start()
+
+
 def _bempp_worker_main(connection: Connection) -> None:
     """Serve native solves serially in one warm process."""
 
+    _exit_when_parent_does()
     from .bempp import solve_bempp_from_msh_text
 
     try:
