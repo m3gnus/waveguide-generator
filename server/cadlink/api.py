@@ -97,13 +97,13 @@ class CadReturnIngestRequest(BaseModel):
     symmetry_mode: Literal["auto", "full"] = Field(
         default="auto", alias="symmetryMode"
     )
-    # Segments per 2pi for the imported mesh's curvature refinement. Omitted
-    # means the server default (24). Halving it returned 45% of the triangles
-    # for 0.4 mm of peak chord error on the reference model, with the HF wall
-    # frequency limit unchanged -- worth reaching for on a model that is
-    # crowding the artifact triangle ceiling.
-    curvature_segments: int | None = Field(
-        default=None, alias="curvatureSegments", ge=8, le=64
+    # Chord deviation each panel may have from the true CAD surface, in mm.
+    # Omitted means the server default (0.4 mm). This is the imported mesh's
+    # cost dial: it replaced a segments-per-2pi control, which spent triangles
+    # in proportion to curvature radius and so over-refined small fillets while
+    # under-refining large sweeps.
+    surface_deviation_mm: float | None = Field(
+        default=None, alias="surfaceDeviationMm", ge=0.1, le=0.5
     )
 
 
@@ -877,8 +877,8 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
                 "area_drift_overrides": payload.area_drift_overrides,
                 "symmetry_mode": payload.symmetry_mode,
                 **(
-                    {"curvature_segments": payload.curvature_segments}
-                    if payload.curvature_segments is not None
+                    {"surface_deviation_mm": payload.surface_deviation_mm}
+                    if payload.surface_deviation_mm is not None
                     else {}
                 ),
             },

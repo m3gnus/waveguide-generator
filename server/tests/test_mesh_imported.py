@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from server.mesh.imported import (
+    IMPORTED_SURFACE_DEVIATION_MM,
     ImportedMeshError,
     RoleResolutionError,
     allocate_imported_tags,
@@ -55,7 +56,7 @@ def test_sizes_cover_exactly_non_skipped_sources() -> None:
         validate_imported_sizes(sources, {"rigid_size_mm": 10, "transition_mm": 20, "source_size_mm": {"a": 2}})
 
 
-def test_imported_tessellation_is_curvature_aware_but_bounded() -> None:
+def test_imported_tessellation_is_deviation_driven_but_bounded() -> None:
     settings = imported_tessellation_settings(
         {
             "rigid_size_mm": 12.0,
@@ -64,7 +65,7 @@ def test_imported_tessellation_is_curvature_aware_but_bounded() -> None:
         }
     )
     assert settings == {
-        "curvature_segments_per_2pi": 24,
+        "surface_deviation_mm": IMPORTED_SURFACE_DEVIATION_MM,
         "mesh_size_min_mm": 2.0,
         "mesh_size_max_mm": 12.0,
         "algorithm": 6,
