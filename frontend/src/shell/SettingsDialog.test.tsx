@@ -381,6 +381,33 @@ describe('SettingsDialog', () => {
     expect(section.textContent).toContain('The other 1,298 are catalogue entries');
   });
 
+  it('counts the shipped library apart from the files the user added', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/drivers/library')) {
+        return new Response(JSON.stringify({
+          folder: '/library/driver-databases',
+          files: [
+            { name: 'hornlab-drivers.csv', rows: 2_162, bundled: true },
+            { name: 'mine.csv', rows: 12, bundled: false },
+          ],
+          total_drivers: 2_170,
+          complete_drivers: 651,
+          last_scan: null,
+        }), { status: 200 });
+      }
+      throw new Error('offline');
+    }));
+    act(() => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    const section = host.querySelector<HTMLElement>('#settings-drivers')!;
+    expect(section.querySelector('.driver-library-counts')!.textContent)
+      .toBe('2 files (1 shipped) \u00b7 2,170 drivers indexed \u00b7 651 with Thiele-Small data');
+    // The old copy promised an empty application; it no longer is one.
+    expect(section.textContent).not.toContain('ships no driver data');
+    expect(section.textContent).toContain('ships with Waveguide Generator');
+  });
+
   it('says nothing about catalogue entries when every indexed driver is usable', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).startsWith('/api/drivers/library')) {

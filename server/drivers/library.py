@@ -16,6 +16,7 @@ import math
 from pathlib import Path
 import re
 
+from server.drivers.paths import bundled_library_dir
 from server.drivers.csv_loader import (
     build_display,
     build_source,
@@ -28,6 +29,9 @@ from server.drivers.csv_loader import (
 
 
 logger = logging.getLogger(__name__)
+
+#: "not given" for the bundled folder, which is different from "turned off".
+_UNSET: Path = Path("\x00unset")
 
 _COMPLETENESS_RANK = {"full": 0, "partial": 1, "catalogue": 2}
 _WORD_SPLIT = re.compile(r"\s+")
@@ -181,15 +185,41 @@ def _detail_payload(
     return payload
 
 
+@dataclass(frozen=True, slots=True)
+class _Row:
+    """One CSV line, with where it was read from."""
+
+    filename: str
+    bundled: bool
+    fields: dict[str, float | str | None]
+    extras: dict[str, str]
+
+
+def _user_rows_win(entries: list[_Row]) -> list[_Row]:
+    """Drop a shipped winding the user has a row of their own for.
+
+    Same brand, same model, same impedance is the same driver, and the copy
+    that matters is the one whose numbers this person has checked or corrected
+    -- otherwise picking their own driver means choosing between two identical
+    buttons, one of which quietly ignores their edits. Two rows in the *user's*
+    own files are left alone: duplicates there are theirs to keep.
+    """
+
+    owned = {
+        row.fields.get("z_ohm") for row in entries if not row.bundled
+    }
+    return [row for row in entries if not row.bundled or row.fields.get("z_ohm") not in owned]
+
+
 def _build_index(
-    folder: Path, filenames: list[str]
+    paths: list[Path], bundled: Path | None = None
 ) -> tuple[list[DriverRecord], list[dict[str, object]]]:
-    groups: dict[tuple[str, str], list[tuple[str, dict[str, float | str | None], dict[str, str]]]] = {}
+    groups: dict[tuple[str, str], list[_Row]] = {}
     display_names: dict[tuple[str, str], tuple[str, str]] = {}
     file_stats: list[dict[str, object]] = []
 
-    for filename in filenames:
-        path = folder / filename
+    for path in paths:
+        is_bundled = bundled is not None and path.parent == bundled
         rows = 0
         try:
             with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -202,18 +232,19 @@ def _build_index(
                     if not isinstance(brand, str) or not isinstance(model, str):
                         continue
                     key = (brand.casefold(), model.casefold())
-                    groups.setdefault(key, []).append((filename, fields, extras))
+                    groups.setdefault(key, []).append(_Row(path.name, is_bundled, fields, extras))
                     display_names.setdefault(key, (brand, model))
         except OSError as exc:
             logger.warning("Could not read driver library file %s: %s", path, exc)
-        file_stats.append({"name": filename, "rows": rows})
+        file_stats.append({"name": path.name, "rows": rows, "bundled": is_bundled})
 
     records: list[DriverRecord] = []
     used_ids: set[str] = set()
     for key, entries in groups.items():
         brand, model = display_names[key]
         variants: list[DriverVariant] = []
-        for filename, fields, extras in entries:
+        for row in _user_rows_win(entries):
+            filename, fields, extras = row.filename, row.fields, row.extras
             z_ohm = fields.get("z_ohm")
             z_value = float(z_ohm) if isinstance(z_ohm, (int, float)) else None
             variant_id = _make_id(brand, model, z_value, used_ids)
@@ -233,7 +264,7 @@ def _build_index(
                         if isinstance(fields.get("xo_min_hz"), (int, float))
                         else None
                     ),
-                    source=build_source(filename, fields),
+                    source={**build_source(filename, fields), "bundled": row.bundled},
                 )
             )
         variants.sort(key=lambda v: (v.z_ohm is None, v.z_ohm if v.z_ohm is not None else 0.0))
@@ -259,10 +290,22 @@ def _build_index(
 
 
 class DriverLibrary:
-    """The searchable index over one folder of driver CSV files."""
+    """The searchable index over the driver CSVs this installation can read.
 
-    def __init__(self, folder: Path) -> None:
+    Two sources, and only one of them is the user's: the folder they drop
+    files into, and the library that ships with the application. Both are
+    indexed together so a fresh install can pick a real driver instead of
+    meeting an empty search box, and ``folder`` still means the writable one --
+    it is the path Settings shows and offers to open.
+    """
+
+    def __init__(self, folder: Path, *, bundled: Path | None = _UNSET) -> None:
         self.folder = Path(folder)
+        # Explicit ``None`` turns the shipped library off, which is what a test
+        # of the user's own folder wants; the default finds whatever shipped.
+        self.bundled = bundled_library_dir() if bundled is _UNSET else (
+            None if bundled is None else Path(bundled)
+        )
         self._records: list[DriverRecord] = []
         self._by_id: dict[str, tuple[DriverRecord, DriverVariant]] = {}
         self._file_stats: list[dict[str, object]] = []
@@ -270,20 +313,40 @@ class DriverLibrary:
         self._last_scan: str | None = None
         self._scanned_once = False
 
+    def _sources(self) -> list[Path]:
+        """Where CSVs are read from, the user's folder first.
+
+        Order is the tie-breaker nothing else states: the first file to name a
+        brand and model owns how that driver is spelled on screen.
+        """
+
+        folders = [self.folder]
+        if self.bundled is not None and self.bundled != self.folder:
+            folders.append(self.bundled)
+        return folders
+
     def _current_files(self) -> dict[str, float]:
-        if not self.folder.is_dir():
-            return {}
+        """Every readable CSV and its mtime, keyed by full path.
+
+        Keyed by path rather than name so a file the user happens to call
+        ``hornlab-drivers.csv`` cannot mask the shipped one out of the change
+        detector and leave the index stale.
+        """
+
         stats: dict[str, float] = {}
-        try:
-            entries = sorted(self.folder.iterdir())
-        except OSError:
-            return {}
-        for path in entries:
-            if path.is_file() and path.suffix.lower() == ".csv":
-                try:
-                    stats[path.name] = path.stat().st_mtime
-                except OSError:
-                    continue
+        for folder in self._sources():
+            if not folder.is_dir():
+                continue
+            try:
+                entries = sorted(folder.iterdir())
+            except OSError:
+                continue
+            for path in entries:
+                if path.is_file() and path.suffix.lower() == ".csv":
+                    try:
+                        stats[str(path)] = path.stat().st_mtime
+                    except OSError:
+                        continue
         return stats
 
     def ensure_indexed(self) -> None:
@@ -296,7 +359,7 @@ class DriverLibrary:
         except OSError as exc:
             logger.warning("Could not create driver library folder %s: %s", self.folder, exc)
         current = self._current_files()
-        records, file_stats = _build_index(self.folder, sorted(current))
+        records, file_stats = _build_index([Path(name) for name in current], self.bundled)
         self._records = records
         self._by_id = {
             variant.id: (record, variant) for record in records for variant in record.variants

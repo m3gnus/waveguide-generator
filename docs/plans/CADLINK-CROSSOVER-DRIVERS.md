@@ -277,6 +277,22 @@ per-user library folder and exposes a search API.
 - User-saved drivers live in a `driverLibrary` durable-settings namespace
   with `based_on` (library id or `manual`) and the overridden fields.
 
+### The library that ships
+
+`server/drivers/bundled/hornlab-drivers.csv` is indexed beside the user's
+folder, so a fresh install can pick a real driver instead of meeting an empty
+search box. It is generated from the private masters by
+`hornlab-research/MEH-Lab/data/export_wg_driver_library.py`, which publishes
+every column WG's own alias table names and withholds the commercial half —
+prices, retailer URLs, store lists, working notes, programme power. Provenance
+(`Source_URL`) travels with the data because it is how a number gets checked.
+
+`DriverLibrary.folder` still means the *writable* folder: it is what Settings
+shows and offers to open. A row in the user's own files replaces the shipped
+row for the same brand, model and impedance, so correcting a datasheet by hand
+is the last word rather than a second identical winding button. Duplicates
+inside the user's own files are left alone — those are theirs to keep.
+
 ## 5. Driver picker UI
 
 - *Drive channels & drivers*: each channel card keeps its toggle; the

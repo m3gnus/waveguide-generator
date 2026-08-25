@@ -21,6 +21,9 @@ class DriverSource(BaseModel):
     file: str
     source_url: str | None = None
     price_eur: float | None = None
+    #: Read from the library that ships with the application rather than from
+    #: the user's own folder, so nothing offers to edit a file they do not have.
+    bundled: bool = False
 
 
 class DriverDisplay(BaseModel):
@@ -64,6 +67,7 @@ class DriverDetail(DriverHit):
 class DriverLibraryFile(BaseModel):
     name: str
     rows: int
+    bundled: bool = False
 
 
 class DriverLibraryInfo(BaseModel):
