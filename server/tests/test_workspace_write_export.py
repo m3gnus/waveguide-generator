@@ -5,6 +5,7 @@ import base64
 import json
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -198,11 +199,40 @@ def test_large_multipart_export_is_responsive_and_identical_retry_writes_nothing
 ) -> None:
     state, workspace = selected_state(tmp_path)
     content = b"x" * (64 * 1024 * 1024)
+    read_threads: set[str] = set()
+    write_threads: set[str] = set()
+
+    class RecordingUploadStream:
+        """A disk-backed upload source that reports which thread reads it.
+
+        No ``_rolled`` attribute, so Starlette classifies it exactly like the
+        real rolled-to-disk upload the route receives and routes ``read()``
+        through its threadpool -- unless someone puts the read back on the loop,
+        which is what the recorded thread names are here to catch.
+        """
+
+        def __init__(self) -> None:
+            self._file = tempfile.TemporaryFile()
+            self._file.write(content)
+            self._file.seek(0)
+
+        def read(self, size: int = -1) -> bytes:
+            read_threads.add(threading.current_thread().name)
+            return self._file.read(size)
+
+        def close(self) -> None:
+            self._file.close()
+
+    original_write_export_sync = workspace_api._write_export_sync
+
+    def recording_write_export_sync(*args: object, **kwargs: object) -> dict[str, object]:
+        write_threads.add(threading.current_thread().name)
+        return original_write_export_sync(*args, **kwargs)
+
+    monkeypatch.setattr(workspace_api, "_write_export_sync", recording_write_export_sync)
 
     def multipart_request() -> tuple[SimpleNamespace, object]:
-        stream = tempfile.TemporaryFile()
-        stream.write(content)
-        stream.seek(0)
+        stream = RecordingUploadStream()
         upload = UploadFile(stream, filename="large.bin")
         form = FormData(
             [
@@ -269,7 +299,18 @@ def test_large_multipart_export_is_responsive_and_identical_retry_writes_nothing
     assert destination.read_bytes() == content
     assert destination.stat().st_mtime_ns == initial_mtime
     assert staging_calls == []
-    assert largest_gap < 0.03
+    # What this test is really about: reading a 64 MiB multipart body or
+    # validating/hashing/writing it on the event loop stalled the loop. Assert
+    # the two structural properties the fix put in place -- Starlette's
+    # threadpool performs the upload read, and _write_export_sync runs via
+    # asyncio.to_thread rather than on the loop -- and keep only a coarse
+    # responsiveness bound. A wall-clock threshold tight enough to catch the
+    # regression is not separable from scheduling jitter on a shared CI
+    # runner, where this ticker missed the old 30 ms bound by 2.6 ms on
+    # Windows with the loop never blocked at all.
+    assert read_threads and "MainThread" not in read_threads
+    assert write_threads and "MainThread" not in write_threads
+    assert largest_gap < 1.0
 
 
 def test_multipart_transport_pairs_repeated_paths_with_binary_parts(tmp_path: Path) -> None:
