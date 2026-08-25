@@ -48,7 +48,8 @@ describe('live recombine from the rail', () => {
   let onApplied: ReturnType<typeof vi.fn<(jobId: string, updated: JobResults) => void>>;
 
   const publishShown = (overrides: Partial<ShownCombine> = {}) => act(() => latestCombine.publish({
-    jobId: 'job-1', channelId: 'combined', combine: shownCombineOf(), canApply: true, onApplied, ...overrides,
+    jobId: 'job-1', channelId: 'combined', combine: shownCombineOf(), canApply: true,
+    blockedReason: null, recall: null, onApplied, ...overrides,
   }));
 
   const render = () => act(() => root.render(<CadCrossover/>));
@@ -91,7 +92,7 @@ describe('live recombine from the rail', () => {
     recombineMocks.recombine.mockResolvedValue(updated);
     render();
     publishShown();
-    expect(host.textContent).toContain('Changes apply to the shown combined result immediately.');
+    expect(host.textContent).toContain('Changes apply to the shown combined result immediately');
 
     setSlope('2');
     expect(recombineMocks.recombine).not.toHaveBeenCalled();
@@ -111,11 +112,34 @@ describe('live recombine from the rail', () => {
     await act(async () => { vi.advanceTimersByTime(1_000); await Promise.resolve(); });
     expect(recombineMocks.recombine).not.toHaveBeenCalled();
 
-    publishShown({ canApply: false });
+    publishShown({ canApply: false, blockedReason: 'The shown run belongs to another ingestion.' });
     setSlope('2');
     await act(async () => { vi.advanceTimersByTime(1_000); await Promise.resolve(); });
     expect(recombineMocks.recombine).not.toHaveBeenCalled();
-    expect(host.textContent).not.toContain('Changes apply to the shown combined result immediately.');
+    expect(host.textContent).not.toContain('Changes apply to the shown combined result immediately');
+  });
+
+  it('says why an edit is not being applied, and offers the way out', async () => {
+    const recall = vi.fn();
+    render();
+    publishShown({
+      canApply: false,
+      blockedReason: 'The shown run was solved from an ingestion this session has not loaded.',
+      recall,
+    });
+    expect(host.textContent).toContain('this session has not loaded');
+
+    const button = [...host.querySelectorAll<HTMLButtonElement>('button.crossover-recall')][0];
+    expect(button).not.toBeUndefined();
+    act(() => button.click());
+    expect(recall).toHaveBeenCalledTimes(1);
+  });
+
+  it('says a run combined from other channels is not this crossover', async () => {
+    render();
+    publishShown({ combine: { ...shownCombineOf(), members: ['drive-lf', 'drive-hf'] } as CombineMetadata });
+    expect(host.textContent).toContain('drive-lf + drive-hf');
+    expect(host.textContent).not.toContain('Changes apply to the shown combined result immediately');
   });
 
   it('never touches a run combined from different channels', async () => {

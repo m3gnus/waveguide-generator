@@ -1139,3 +1139,7 @@ textarea:disabled { opacity: .48; }
 .crossover-auto-note { color: var(--fg4); }
 .crossover-reset { height: 19px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: transparent; color: var(--fg3); font-size: var(--text-micro); }
 .crossover-reset:hover { border-color: var(--hair-hi); color: var(--fg1); }
+/* Sits inside the section note, so it rides the note's own line rather than
+   opening a control row for one occasional action. */
+.crossover-recall { height: 17px; padding: 0 5px; border: 1px solid rgba(var(--amber-rgb), .38); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-micro); }
+.crossover-recall:hover { border-color: var(--amber); }

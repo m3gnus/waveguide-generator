@@ -2095,15 +2095,36 @@ export function ResultsPanel() {
   const shownCanApply = selectedJob?.status === 'complete'
     && !primaryIsProvisional
     && shownIsActiveReturn;
+  const showPrimaryModel = useCallback(() => {
+    if (primaryJob) void showJobModel(primaryJob, coordinator.reportError);
+  }, [coordinator.reportError, primaryJob]);
+  // Why the rail may not repaint this run. Stated from the dock because the
+  // facts are the dock's -- run status, live preview, whose ingestion it is --
+  // and because only one of the three has an action attached to it.
+  const shownBlock = useMemo<{ reason: string; recall: (() => void) | null } | null>(() => {
+    if (shownCanApply) return null;
+    if (selectedJob && selectedJob.status !== 'complete') {
+      return { reason: 'The shown run is still solving; crossover changes apply once it finishes.', recall: null };
+    }
+    if (primaryIsProvisional) {
+      return { reason: 'The shown run is a live preview of a solve in progress; crossover changes apply to it once that solve finishes.', recall: null };
+    }
+    return {
+      reason: 'The shown run was solved from an ingestion this session has not loaded, so the rail is not its crossover yet. Load its model and the changes apply without re-solving.',
+      recall: primaryJob ? showPrimaryModel : null,
+    };
+  }, [primaryIsProvisional, primaryJob, selectedJob, showPrimaryModel, shownCanApply]);
   useEffect(() => {
     latestCombine.publish(shownCombine && shownActiveChannel && display ? {
       jobId: display.primaryId,
       channelId: shownActiveChannel,
       combine: shownCombine,
       canApply: shownCanApply,
+      blockedReason: shownBlock?.reason ?? null,
+      recall: shownBlock?.recall ?? null,
       onApplied: applyRecombined,
     } : null);
-  }, [shownCombine, shownActiveChannel, display, shownCanApply, applyRecombined]);
+  }, [shownCombine, shownActiveChannel, display, shownCanApply, shownBlock, applyRecombined]);
   const provisionalMetadata = primaryRaw?.metadata?.provisional;
   const provisionalRecord = provisionalMetadata && typeof provisionalMetadata === 'object'
     ? provisionalMetadata as Record<string, unknown>
@@ -2178,9 +2199,6 @@ export function ResultsPanel() {
     void coordinator.run(current.design, current.designRevision)
       .catch((reason) => coordinator.reportError(reason instanceof Error ? reason.message : String(reason)));
   }, [coordinator]);
-  const showPrimaryModel = useCallback(() => {
-    if (primaryJob) void showJobModel(primaryJob, coordinator.reportError);
-  }, [coordinator.reportError, primaryJob]);
   // Everything above keeps following the solve while this panel is covered --
   // results are still fetched, combined and labelled, so the panel is never
   // stale when it comes back. Only the drawing is held: a covered tab that is
