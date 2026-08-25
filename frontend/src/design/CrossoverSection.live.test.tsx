@@ -26,11 +26,16 @@ const bundle = {
   ],
 } satisfies CadReturnBundle;
 
-/** The resolved payload of a run combined as LR4 at 1 kHz, auto everything. */
-function shownCombineOf(): CombineMetadata {
+/** The resolved payload of a run combined as LR4 at 1 kHz, auto everything.
+ * `resolved` overrides what the solver reported per member, which is how the
+ * automatic and maximum readouts get something to read. */
+function shownCombineOf(
+  resolved: Record<string, Record<string, unknown>> = {},
+): CombineMetadata {
   const wire = toWire(expandLegacy(['drive-mf', 'drive-hf'], [1_000]));
   return {
     members: ['drive-mf', 'drive-hf'],
+    member_roles: ['MF', 'HF'],
     reference: 'drive-hf',
     crossovers_hz: [1_000],
     channels: Object.fromEntries(['drive-mf', 'drive-hf'].map((member) => [member, {
@@ -38,6 +43,7 @@ function shownCombineOf(): CombineMetadata {
       gain_db: 0, gain_mode: 'auto', gain_auto_db: 0,
       delay_ms: 0, delay_mode: 'auto', delay_auto_ms: 0,
       inverted: false, invert_mode: 'auto',
+      ...(resolved[member] ?? {}),
     }])),
   } as unknown as CombineMetadata;
 }
@@ -182,6 +188,115 @@ describe('live recombine from the rail', () => {
     expect(localStorage.getItem(SETTINGS_NAMESPACES.crossoverView)).toBe('basic');
     expect(host.querySelector('.crossover-advanced-inline')).toBeNull();
     expect(host.querySelector('[aria-label="MF → HF slope"]')).not.toBeNull();
+  });
+
+
+  const setView = (label: string) => act(() => {
+    [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Crossover view"] button')]
+      .find((button) => button.textContent === label)!.click();
+  });
+
+  /** A run whose MF is level-matched down and delayed, and whose drivers have
+   * room left: the numbers the rail is supposed to read back. */
+  const resolvedRun = () => shownCombineOf({
+    'drive-mf': {
+      gain_auto_db: -12.11, delay_auto_ms: -0.53,
+      gain_max_db: 8.4, max_limit: 'xmax', max_limit_hz: 120,
+    },
+    'drive-hf': {
+      gain_auto_db: 21.48, delay_auto_ms: 0,
+      gain_max_db: 14.2, max_limit: 'power', max_limit_hz: 2_500,
+    },
+  });
+
+  it('reads back the gain and delay auto chose, without opening Advanced', () => {
+    render();
+    publishShown({ combine: resolvedRun() });
+
+    // Basic states both, per member, beside the mode they belong to.
+    expect(host.textContent).toContain('MF -12.11 dB');
+    expect(host.textContent).toContain('HF +21.48 dB');
+    expect(host.textContent).toContain('MF -0.53 ms');
+    expect(host.textContent).toContain('HF +0.00 ms');
+  });
+
+  it('offers Max, and says what stops the channel and where', () => {
+    render();
+    publishShown({ combine: resolvedRun() });
+    setView('Advanced');
+
+    const modes = host.querySelectorAll('[aria-label="Gain mode"]');
+    expect(modes.length).toBe(2);
+    const buttons = [...modes[0].querySelectorAll('button')].map((button) => button.textContent);
+    expect(buttons).toEqual(['Auto', 'Manual', 'Max']);
+    // The ceiling is stated whether or not the gain is set to it.
+    expect(host.textContent).toContain('Xmax at 120 Hz');
+    expect(host.textContent).toContain('max +8.40 dB');
+
+    act(() => {
+      [...modes[0].querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'Max')!.click();
+    });
+    const spec = useCadReturnStore.getState().combineSpec!;
+    expect(spec.channels['drive-mf'].gain).toEqual({ mode: 'max' });
+  });
+
+  it('offers no Max on a channel with no ceiling to reach', () => {
+    render();
+    publishShown({ combine: shownCombineOf() });
+    setView('Advanced');
+    const max = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Gain mode"] button')]
+      .filter((button) => button.textContent === 'Max');
+    expect(max.length).toBe(2);
+    expect(max.every((button) => button.disabled)).toBe(true);
+  });
+
+  it('reads the gain in volts and watts, and remembers which', () => {
+    useCadReturnStore.setState({
+      driveVoltageV: 2.83,
+      channelDrivers: {
+        'drive-mf': { fields: { re_ohm: 6.4, z_nom_ohm: 8 }, preset: null },
+        'drive-hf': { fields: { re_ohm: 6.4, z_nom_ohm: 8 }, preset: null },
+      },
+    });
+    render();
+    publishShown({ combine: resolvedRun() });
+    setView('Advanced');
+
+    const selectUnit = (value: string) => act(() => {
+      const select = host.querySelector<HTMLSelectElement>('.crossover-unit-select')!;
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    // Auto is -12.11 dB on 2.83 V, which is 0.7 V into 8 ohm: 0.061 W.
+    selectUnit('v');
+    expect(host.textContent).toContain('0.702 V');
+    selectUnit('w');
+    expect(host.textContent).toContain('0.0616 W');
+    expect(localStorage.getItem(SETTINGS_NAMESPACES.crossoverGainUnit)).toBe('w');
+
+    // A fresh mount reads it back, like the view does.
+    act(() => root.unmount());
+    host.remove();
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    render();
+    publishShown({ combine: resolvedRun() });
+    expect(host.querySelector<HTMLSelectElement>('.crossover-unit-select')!.value).toBe('w');
+  });
+
+  it('falls back to dB when the run cannot form the chosen unit', () => {
+    // No driver on the channels, so there is no impedance to divide by.
+    render();
+    publishShown({ combine: resolvedRun() });
+    setView('Advanced');
+    act(() => {
+      const select = host.querySelector<HTMLSelectElement>('.crossover-unit-select')!;
+      select.value = 'w';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    // The control still reads, in the unit it can form, rather than dashing out.
+    expect(host.textContent).toContain('-12.11 dB');
   });
 
   it('shows a failed recombine instead of pretending it applied', async () => {

@@ -12,6 +12,7 @@ export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
+import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf } from '../results/maxOutput';
 import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
 import { combinedChannelId, combineMetadataOf, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
@@ -993,6 +994,41 @@ export function excursionOverlayOption(items: NamedResult[], tokens: ChartTokens
   return lineOption(series, tokens, 'Excursion [mm peak]', density);
 }
 
+/**
+ * How loud the chain can be run, per frequency.
+ *
+ * The system ceiling is the headline and is drawn as such; each member's own
+ * ceiling sits behind it, lighter, because a single driver's capability is
+ * context rather than the answer. The shown response is dotted for the same
+ * reason the Xmax line is: it is where the run is now, not a maximum.
+ */
+export function maxOutputOption(
+  result: ResultPayload,
+  tokens: ChartTokens,
+  density: ChartDensity,
+  memberLabel?: (member: string) => string,
+): EChartsOption {
+  const traces = maxOutputChartSeries(result, memberLabel);
+  let memberIndex = 0;
+  const series = traces.map((trace) => {
+    const color = trace.role === 'system'
+      ? tokens.accent
+      : trace.role === 'shown'
+        ? tokens.muted
+        : tokens.series[memberIndex++ % tokens.series.length] ?? tokens.accent;
+    return {
+      ...trace,
+      lineStyle: {
+        color,
+        width: trace.role === 'system' ? 2.4 : 1.2,
+        ...(trace.role === 'shown' ? { type: 'dotted' as const } : {}),
+      },
+      itemStyle: { color },
+    };
+  });
+  return lineOption(series, tokens, 'SPL [dB]', density);
+}
+
 /** Cone excursion, with Xmax drawn flat across the sweep when the spec states it. */
 export function excursionOption(result: ResultPayload, tokens: ChartTokens, density: ChartDensity): EChartsOption {
   const series = excursionChartSeries(result).map((trace, index) => ({
@@ -1122,6 +1158,7 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   radiation_impedance: { short: 'Rad Z', long: 'Radiation load', unit: 'Pa·s/m³' },
   drive_power: { short: 'Power', long: 'Power & current', unit: 'W' },
   excursion: { short: 'Excursion', long: 'Cone excursion', unit: 'mm' },
+  max_output: { short: 'Max SPL', long: 'Maximum output', unit: 'dB' },
   summary: { short: 'Summary' },
 };
 
@@ -1587,6 +1624,12 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         ? <EChart option={option} label="Interactive HornLab cone excursion by frequency" live={live}/>
         : <ChartStub reason={excursionSeries(result) ? 'Cone Excursion could not be read from this result.' : driverChartMissingReason(result, 'Cone Excursion')}/>;
     }
+    if (chartType === 'max_output') {
+      const option = maxOutputOption(result, tokens, density);
+      return Array.isArray(option.series) && option.series.length
+        ? <EChart option={option} label="Interactive HornLab maximum on-axis SPL by frequency" live={live}/>
+        : <ChartStub reason={maxOutputMissingReason(result)}/>;
+    }
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
     if (chartType === 'impedance') {
       const option = impedanceOption(overlays, tokens, preferences.smoothing, density, preferences.impedanceDisplay);
@@ -1708,6 +1751,10 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     : chartType === 'power_response' ? powerResponseMethodCaption(result)
     : impedanceItems ? impedanceSubtitle(impedanceItems)
     : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
+    // Which member holds the system back is the fact the curves cannot state,
+    // and the small-signal caveat rides with it rather than being left for the
+    // reader to infer from a ceiling drawn as a confident line.
+    : chartType === 'max_output' ? limitingSummary(maxOutputOf(result))
     : null;
   const unit = chartUnit(chartType, result, impedanceItems, preferencesStore.getSnapshot().groupDelayUnit);
   const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
