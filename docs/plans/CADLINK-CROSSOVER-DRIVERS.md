@@ -94,6 +94,46 @@ passband, target = median of members, gain = target − median. Manual gain
 is applied verbatim. Mixed modes: compute the auto set, then override the
 manual channels.
 
+### Maximum output
+
+A third gain mode, `max`, means "as loud as this member's driver allows".
+It cannot be a number on the wire: it depends on the solved excursion and
+impedance, so the solver resolves it (`server/solver/driver_limits.py`).
+
+The channel's response is linear in the drive voltage, so each ceiling is
+one division against the arrays a driver-coupled solve already recorded:
+
+```
+s_x(f) = Xmax / x(f)               one-way peak displacement vs the rating
+s_p(f) = sqrt(P_rated / P(f))      real terminal power vs the rating
+s_v(f) = V_max / V(f)              generator EMF vs the amplifier
+```
+
+`P_rated` is `power_w * count` — parallel drivers share the channel's
+power the way they share its Re. `max` takes the smallest of the known
+ceilings over the band, evaluated against the crossover magnitude alone
+so it is an *absolute* gain: applying the mode twice must not creep.
+
+Three rules keep the answer honest, each of them learned from a real run:
+
+- A member with **no ceiling at all** is not free headroom. Wherever such
+  a member is one of the ones setting the level (within 20 dB of the
+  loudest), the system maximum is *unknown*, not unlimited.
+- A member's own ceiling is reported **only inside its band**, by the same
+  test. Two decades outside its passband a cone barely moves, so Xmax
+  permits an absurd drive.
+- A ceiling reached at an **end of the sweep** is flagged: the sweep never
+  saw the far side of it.
+
+### Gain units
+
+Stored in dB always. The rail reads it in dB, in volts
+(`V_drive · 10^(dB/20)`, exact), or in nominal watts (`V² / Z_nom`,
+falling back to Re, divided by `count`). Nominal — not solved Re(Z) —
+because a driver's power rating is itself quoted against nominal
+impedance, and that is the only form the two can be compared in. Real
+power against frequency is the drive-power chart's job.
+
 ### Alignment
 
 The legacy rule (filtered outputs 0° apart at fc) is correct only for LR4
@@ -153,7 +193,15 @@ type: "filtered_time_aligned_sum"
 members, member_roles, reference
 crossovers_hz            # per linked pair, null when unlinked
 channels: {id: {hp, lp, gain_db, gain_mode, gain_auto_db,
+                gain_max_db, max_limit, max_limit_hz, max_limit_at_band_edge,
                 delay_ms, delay_mode, delay_auto_ms, inverted, invert_mode}}
+max_output:              # absent when no member carries a driver model
+  frequencies
+  members: {id: {spl_max_db, headroom_db, limit,
+                 excursion_fraction, power_fraction, voltage_fraction}}
+  combined: {spl_max_db, headroom_db, limit, limiting_member}
+  unlimited_members      # members with no ceiling of any kind
+  caveat
 pairs: {"lf-mf": {eval_hz, fit_delay_ms, fit_residual_deg,
                   phase_error_at_fc_deg, reverse_null_db, points}}
 delays_ms, gains_db      # flattened aliases kept for one release
