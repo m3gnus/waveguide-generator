@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf } from './maxOutput';
+import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf, memberLabelOf } from './maxOutput';
 import type { MaxOutputMetadata, ResultPayload } from './types';
 
 const FREQUENCIES = [100, 1_000, 10_000];
@@ -69,9 +69,25 @@ describe('maximum output', () => {
   });
 
   it('says which member holds the system back, and on what', () => {
-    expect(limitingSummary(maxOutput())).toBe(
-      'drive-lf holds the system back over 67% of the band, on Xmax.',
-    );
+    expect(limitingSummary(maxOutput(), (member) => member.toUpperCase()))
+      .toBe('DRIVE-LF \u00b7 Xmax \u00b7 67% of band');
+  });
+
+  it('names an unrated member rather than leaving a gap in the curve', () => {
+    const record = maxOutput({ unlimited_members: ['drive-hf'] });
+    expect(limitingSummary(record, (member) => member.toUpperCase()))
+      .toBe('no ceiling known for DRIVE-HF');
+  });
+
+  it('labels a member by the band role the run recorded for it', () => {
+    const label = memberLabelOf(result(maxOutput()));
+    expect(label('drive-lf')).toBe('drive-lf');
+    const roled = result(maxOutput());
+    (roled.metadata!.combine as Record<string, unknown>).member_roles = ['LF', 'HF'];
+    expect(memberLabelOf(roled)('drive-hf')).toBe('HF');
+    // An unroled member keeps the id it was authored with rather than blanking.
+    (roled.metadata!.combine as Record<string, unknown>).member_roles = [null, null];
+    expect(memberLabelOf(roled)('drive-hf')).toBe('drive-hf');
   });
 
   it('says nothing rather than guessing when nothing limited the run', () => {

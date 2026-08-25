@@ -45,6 +45,9 @@ export interface CombineChannelMetadata {
   gain_max_db?: number | null;
   max_limit?: 'xmax' | 'power' | 'voltage' | null;
   max_limit_hz?: number | null;
+  /** The ceiling was reached at an end of the sweep, so the sweep never saw
+   * the far side of it -- the real limit may lie outside the solved band. */
+  max_limit_at_band_edge?: boolean;
   delay_ms?: number;
   delay_mode?: 'auto' | 'manual';
   delay_auto_ms?: number;
@@ -77,9 +80,13 @@ export interface MaxOutputMetadata {
   frequencies: number[];
   members: Record<string, MaxOutputMemberTrace>;
   combined: MaxOutputTrace & {
-    /** Which member holds the system back, per frequency. */
+    /** Which member holds the system back, per frequency. Null where the
+     * system maximum is not known at all. */
     limiting_member: Array<string | null>;
   };
+  /** Members with no ceiling of any kind. Wherever one of them sets the level
+   * the system maximum is unknown rather than unlimited. */
+  unlimited_members?: string[];
   caveat?: string;
 }
 
