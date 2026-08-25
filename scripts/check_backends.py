@@ -13,6 +13,14 @@ remedy when it was not.  It must be a file rather than an inline ``python -c``
 because cmd.exe mis-parses a quoted argument containing parentheses inside a
 parenthesised block -- v1 lost a healthy ``.venv`` on every Windows run to
 exactly that.
+
+It also compares ``pins.json`` against what is installed, because a probe can
+say "ready" about the wrong commit.  A drifted venv is what dropped coupled
+infinite baffle and axisymmetric cancellation off a Windows box while every
+module still reported version ``0.1.0``
+(``docs/validation/2026-08/PINNED-VS-INSTALLED.md``).  Drift is printed loudly
+but does not set the exit status: the host can still solve, and failing an
+install over it would be a different, harsher claim than this script makes.
 """
 
 from __future__ import annotations
@@ -44,6 +52,46 @@ def _report(label: str, status: dict[str, object]) -> bool:
     return available
 
 
+def report_dependency_drift() -> list[str]:
+    """Print declared-vs-installed for every pinned module; return the drift.
+
+    Kept ASCII-only and free of box drawing so a Windows console in any code
+    page renders it, for the same reason this is a file and not a ``-c``.
+    """
+
+    from server.integration.installed import measure_installed_stack
+    from server.integration.provenance import pinned_dependency_shas
+
+    pinned = pinned_dependency_shas()
+    if not pinned:
+        return []
+    installed, drift = measure_installed_stack(pinned)
+
+    print()
+    print("Pinned dependencies:")
+    width = max(len(name) for name in pinned)
+    for name in sorted(pinned):
+        measured = installed.get(name)
+        if measured is None:
+            state = "NOT MEASURED (not installed from Git, or unreadable)"
+        elif measured == pinned[name]:
+            state = f"{measured[:9]} matches"
+        else:
+            state = f"{measured[:9]} INSTALLED, {pinned[name][:9]} PINNED -- DRIFTED"
+        print(f"  {name.ljust(width)}  {state}")
+
+    if drift:
+        print()
+        print(f"WARNING: {len(drift)} of {len(pinned)} pinned modules do not match what")
+        print("         this environment has installed, so solve results from this")
+        print("         host describe a stack it is not running. Capability probes")
+        print("         and package version strings cannot see this.")
+        print(f"         Drifted: {', '.join(drift)}")
+        print("         Reinstall the pinned set:")
+        print("           python -m pip install -r server/requirements-pins.txt")
+    return drift
+
+
 def main() -> int:
     from server.solver.bempp import _missing_windows_runtime_dlls, bempp_status
     from server.solver.beat import beat_status
@@ -55,6 +103,8 @@ def main() -> int:
     metal = _report("Metal (Apple Silicon)", metal_status())
     beat = _report("BEAT (CUDA/ROCm)", beat_status())
     bempp = _report("bempp (cross-platform)", bempp_status())
+
+    report_dependency_drift()
 
     if axisym or metal or beat or bempp:
         return 0
