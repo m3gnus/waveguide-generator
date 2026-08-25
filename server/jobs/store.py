@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.paths import data_paths
+from server.platform.sqlite import JournalModeStatus, configure_connection
 from server.solver.field_traces_store import (
     ArtifactMissing,
     FieldTraceArtifact,
@@ -242,6 +243,8 @@ class JobStore:
         self._connections: set[sqlite3.Connection] = set()
         self._connections_lock = threading.Lock()
         self._closed = False
+        # Set on the first connection; the mode SQLite granted, not the one asked for.
+        self.journal_mode_status: JournalModeStatus | None = None
 
     @classmethod
     def for_data_dir(cls, data_dir: str | Path, **kwargs: Any) -> "JobStore":
@@ -1926,7 +1929,9 @@ class JobStore:
         commits but cannot corrupt the database. For a local design tool whose
         durable product is the exported file, that is the right trade; the
         alternative was paying a device-cache flush every 150 ms for progress
-        bars.
+        bars. That trade is only available when WAL is actually granted, so
+        ``configure_connection`` reads the mode back and drops to
+        ``synchronous=FULL`` when the filesystem refuses it.
 
         Per thread rather than one shared connection because SQLite connection
         objects serialize internally and the solver thread, the event loop and
@@ -1943,13 +1948,9 @@ class JobStore:
             return existing
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = NORMAL")
-        # Without this any contention raises "database is locked" immediately.
-        # The RLock makes that unreachable today, which is precisely why it
-        # should not be the only thing standing between us and that error.
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA foreign_keys = ON")
+        self.journal_mode_status = configure_connection(
+            conn, db_path=str(self.db_path), label="Jobs database"
+        )
         self._local.conn = conn
         with self._connections_lock:
             self._connections.add(conn)

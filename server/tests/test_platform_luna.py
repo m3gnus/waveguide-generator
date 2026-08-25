@@ -562,7 +562,11 @@ def test_capability_probe_runs_off_thread_and_is_cached(
 
     async def scenario() -> None:
         first, second = await asyncio.gather(endpoint(), endpoint())
-        assert first == second == {
+        assert first == second
+        # The storage probes report whichever SQLite stores this process has
+        # opened, which is not this test's subject; the engine report is.
+        assert isinstance(first["storage"], list)
+        assert {key: value for key, value in first.items() if key != "storage"} == {
             "engines": [
                 {
                     "name": "mock",
