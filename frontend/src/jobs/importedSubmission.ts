@@ -255,7 +255,13 @@ export function buildImportedSubmission(
         return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
       }),
       ...(state.driveChannels.some((channel) => submittedDriver(state, channel))
-        ? { drive_voltage_v: state.driveVoltageV }
+        ? {
+          drive_voltage_v: state.driveVoltageV,
+          // Only ever a ceiling for the maximum-output pass, so it rides
+          // along with the voltage it is a ceiling on and is omitted when
+          // there is no amplifier to state.
+          ...(state.maxDriveVoltageV ? { max_drive_voltage_v: state.maxDriveVoltageV } : {}),
+        }
         : {}),
       mesh: {
         rigid_size_mm: state.rigidSizeMm,

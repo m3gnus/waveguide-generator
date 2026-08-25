@@ -34,6 +34,7 @@ from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
 from .combine import combine_drive_channels, serialize_channel_bases
+from .driver_limits import MemberLimits, member_limits_from_channel
 from .driver_lem import (
     channel_drive_scaling,
     hornlab_driver,
@@ -1255,6 +1256,7 @@ def _combined_channel_response(
     kwargs: Mapping[str, Any],
     per_source_validity: Mapping[str, Any],
     channel_identity: Mapping[str, Mapping[str, Any]],
+    member_channels: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Package the filtered time-aligned sum as one more contract-shaped channel."""
 
@@ -1272,6 +1274,22 @@ def _combined_channel_response(
         if limits:
             member_validity_hz[member] = min(limits)
 
+    # The channels were built a moment ago and hold the driver model each
+    # member was solved with, so the maximum-output ceilings come from the same
+    # arrays the excursion and impedance charts draw -- no second LEM pass.
+    frequencies_hz = np.asarray(
+        sorted_results[spec.members[0]].frequencies_hz, dtype=np.float64
+    ).reshape(-1)
+    member_limits: dict[str, MemberLimits] = {}
+    for member in spec.members:
+        limits = member_limits_from_channel(
+            member_channels.get(member),
+            frequencies_hz=frequencies_hz,
+            max_voltage_v=geometry.max_drive_voltage_v,
+        )
+        if limits is not None:
+            member_limits[member] = limits
+
     resolved = spec.resolved()
     combined_result, combine_payload = combine_drive_channels(
         sorted_results,
@@ -1283,6 +1301,7 @@ def _combined_channel_response(
             member: channel_identity.get(member, {}).get("role")
             for member in spec.members
         },
+        member_limits=member_limits,
     )
     source_ids = [
         source_id
@@ -1840,6 +1859,7 @@ def solve_imported_metal_from_msh_text(
             kwargs=kwargs,
             per_source_validity=per_source_validity,
             channel_identity=channel_identity,
+            member_channels=channels,
         )
         channels[geometry.combine.id] = combined_response
         channel_order.append(geometry.combine.id)

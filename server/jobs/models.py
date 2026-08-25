@@ -275,6 +275,15 @@ class DriverSpec(JobModel):
     rms_kg_per_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     qms: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     xmax_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    #: Rated continuous power for ONE driver, watts, as the datasheet quotes it
+    #: (AES for the library's compression drivers). ``count`` drivers share the
+    #: channel, so the channel's ceiling is ``power_w * count`` -- the same
+    #: parallel reduction ``hornlab-sim`` applies to Re.
+    power_w: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    #: Nominal impedance, ohms. Only ever a stated figure: it is what the power
+    #: rating is quoted against, so it is the one honest divisor for turning a
+    #: drive voltage into the watts a datasheet can be compared with.
+    z_nom_ohm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     count: int = Field(default=1, ge=1, le=64)
     rear_volume_l: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     #: A human name for this driver (e.g. from the driver library, or typed by
@@ -370,9 +379,18 @@ class FilterSpec(JobModel):
 
 
 class GainSpec(JobModel):
-    """A channel's level: matched automatically, or stated in dB."""
+    """A channel's level: matched automatically, stated in dB, or driven to
+    the driver's own ceiling.
 
-    mode: Literal["auto", "manual"] = "auto"
+    ``max`` is resolved by the solver, not here: it means "the loudest this
+    channel's driver can be run before excursion, rated power or the amplifier
+    binds", which needs the solved excursion and impedance and so cannot be a
+    number on the wire. A channel whose members carry no driver model has no
+    ceiling to find, and the solver reports that as a warning and falls back to
+    0 dB rather than inventing one.
+    """
+
+    mode: Literal["auto", "manual", "max"] = "auto"
     db: float | None = Field(default=None, allow_inf_nan=False)
 
     @model_validator(mode="after")
@@ -732,6 +750,10 @@ class ImportedGeometrySource(JobModel):
     combine: ChannelCombineSpec | None = None
     drive_voltage_v: float = Field(default=2.83, gt=0, allow_inf_nan=False)
     rg_ohm: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    #: Amplifier ceiling, RMS volts of generator EMF, shared by every channel.
+    #: ``None`` means the drivers are the only limit, which is what a solve
+    #: that has never been told about an amplifier should assume.
+    max_drive_voltage_v: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     mesh: ImportedMeshSizes
     acknowledged_findings: list[str] = Field(default_factory=list)
     skipped_source_ids: list[str] = Field(default_factory=list)

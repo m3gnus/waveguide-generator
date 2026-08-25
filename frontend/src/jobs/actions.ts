@@ -62,6 +62,7 @@ export interface ImportedGeometrySubmission {
     align?: boolean;
   };
   drive_voltage_v?: number;
+  max_drive_voltage_v?: number;
   rg_ohm?: number;
   mesh: { rigid_size_mm: number; transition_mm: number; source_size_mm: Record<string, number> };
   acknowledged_findings: string[];

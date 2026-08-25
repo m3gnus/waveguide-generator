@@ -37,13 +37,63 @@ export interface CombineChannelMetadata {
   hp?: CombineFilterSection | null;
   lp?: CombineFilterSection | null;
   gain_db?: number;
-  gain_mode?: 'auto' | 'manual';
+  gain_mode?: 'auto' | 'manual' | 'max';
   gain_auto_db?: number;
+  /** The gain at which this member's own driver first stops it, whatever mode
+   * the gain is in: a level is only readable next to the ceiling it spends.
+   * Null when the member carries no driver model, or no rating to check. */
+  gain_max_db?: number | null;
+  max_limit?: 'xmax' | 'power' | 'voltage' | null;
+  max_limit_hz?: number | null;
+  /** The ceiling was reached at an end of the sweep, so the sweep never saw
+   * the far side of it -- the real limit may lie outside the solved band. */
+  max_limit_at_band_edge?: boolean;
   delay_ms?: number;
   delay_mode?: 'auto' | 'manual';
   delay_auto_ms?: number;
   inverted?: boolean;
   invert_mode?: 'auto' | 'manual';
+}
+
+/** What stopped a channel: its excursion rating, its power rating, or the
+ * amplifier. Null at a frequency where nothing did. */
+export type MaxOutputLimit = 'xmax' | 'power' | 'voltage';
+
+export interface MaxOutputTrace {
+  /** On-axis SPL at the ceiling, dB. Null where nothing limits this trace. */
+  spl_max_db: Array<number | null>;
+  /** How far above the shown level that ceiling sits, dB. */
+  headroom_db: Array<number | null>;
+  limit: Array<MaxOutputLimit | null>;
+}
+
+export interface MaxOutputMemberTrace extends MaxOutputTrace {
+  /** Peak fraction of each rating the member actually uses, 1.0 being at it. */
+  excursion_fraction?: number | null;
+  power_fraction?: number | null;
+  voltage_fraction?: number | null;
+  /** The ratings those fractions are of, so the pair can be shown whole. The
+   * power one is REAL power, which at an impedance peak is nothing like the
+   * nominal watts a gain stated in W is. */
+  xmax_mm?: number | null;
+  rated_power_w?: number | null;
+  max_voltage_v?: number | null;
+}
+
+/** Maximum output, per member and for the sum. Absent when no member carries a
+ * driver model the ceilings could be read from. */
+export interface MaxOutputMetadata {
+  frequencies: number[];
+  members: Record<string, MaxOutputMemberTrace>;
+  combined: MaxOutputTrace & {
+    /** Which member holds the system back, per frequency. Null where the
+     * system maximum is not known at all. */
+    limiting_member: Array<string | null>;
+  };
+  /** Members with no ceiling of any kind. Wherever one of them sets the level
+   * the system maximum is unknown rather than unlimited. */
+  unlimited_members?: string[];
+  caveat?: string;
 }
 
 /** Per-pair alignment evidence, keyed `"<lower>-<upper>"`. */
@@ -72,6 +122,9 @@ export interface CombineMetadata {
   /** The server also records the target and the per-member gains it applied. */
   level_match?: { enabled?: boolean; [key: string]: unknown };
   align?: boolean;
+  /** How loud the chain can be run. Absent on runs solved before it existed,
+   * and on runs whose members carry no driver model. */
+  max_output?: MaxOutputMetadata;
   warnings?: string[];
 }
 
