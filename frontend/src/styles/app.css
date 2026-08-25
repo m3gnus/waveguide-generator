@@ -1114,6 +1114,8 @@ textarea:disabled { opacity: .48; }
 .crossover-segment button:first-child { border-left: 0; }
 .crossover-segment button:hover:not(.on) { background: var(--ov3); color: var(--fg1); }
 .crossover-segment button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
+.crossover-segment button:disabled { color: var(--fg4); cursor: not-allowed; }
+.crossover-segment button:disabled:hover { background: transparent; color: var(--fg4); }
 /* The Advanced view lives inline in the rail, so everything below must lay
    out at ~253px: rows wrap rather than widen, and nothing may force the
    section past the rail (the dockview container clips overflow). */
@@ -1137,6 +1139,9 @@ textarea:disabled { opacity: .48; }
 /* Dashed: the number is real, it just was not typed. */
 .crossover-auto-value { min-width: 66px; height: 19px; padding: 0 4px; border: 1px dashed var(--hair-hi); border-radius: var(--r3); color: var(--fg3); font: var(--text-micro) var(--mono); line-height: 19px; }
 .crossover-auto-note { color: var(--fg4); }
+/* Narrow enough that the three modes, the value and the unit still fit one
+   rail-width row before the notes wrap onto the next. */
+.crossover-unit-select { flex: none; height: 19px; min-width: 0; padding: 0 2px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg2); font-size: var(--text-micro); }
 .crossover-reset { height: 19px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: transparent; color: var(--fg3); font-size: var(--text-micro); }
 .crossover-reset:hover { border-color: var(--hair-hi); color: var(--fg1); }
 /* Sits inside the section note, so it rides the note's own line rather than

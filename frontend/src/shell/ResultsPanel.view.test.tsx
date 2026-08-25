@@ -328,7 +328,7 @@ describe('results dock view switch', () => {
     expect(seriesNames(SPL_CHART)).toEqual(['#1 · primary · MF']);
   });
 
-  it('publishes the shown combine to the rail bridge, only in the combined view', async () => {
+  it('publishes the shown combine to the rail bridge, whichever channel is on screen', async () => {
     publishJobs([job('primary', 1)]);
     compareSelection.setPrimary('primary');
     await render();
@@ -349,8 +349,13 @@ describe('results dock view switch', () => {
     act(() => shown.onApplied('primary', applied as never));
     expect((latestCombine.getSnapshot()!.combine.crossovers_hz)).toEqual([1_400]);
 
+    // Looking at one member's own curve is no reason for the rail's automatic
+    // gains and delays to blank out: the run still has a combined channel, and
+    // that is what a crossover edit would recombine.
     await chooseView('HF');
-    expect(latestCombine.getSnapshot()).toBeNull();
+    const member = latestCombine.getSnapshot()!;
+    expect(member.channelId).toBe('combined');
+    expect(member.combine.members).toEqual(['drive-mf', 'drive-hf']);
   });
 
   it('says why a reopened session may not recombine the run, and offers its model', async () => {

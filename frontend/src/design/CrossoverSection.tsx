@@ -11,7 +11,9 @@ import {
   familyOrders,
   FILTER_FAMILIES,
   FILTER_FAMILY_LABELS,
+  gainText,
   isSimple,
+  nominalImpedanceOhm,
   pairsOf,
   resolvedChannels,
   sharedDelayMode,
@@ -23,10 +25,12 @@ import {
   withPair,
   type CrossoverSpec,
   type FilterFamily,
+  type GainUnit,
   fromResult,
   sameSpec,
   toWire,
 } from '../results/crossoverSpec';
+import { driverValues } from '../stores/cadReturn';
 import {
   combineChain,
   combineEnabledEffective,
@@ -55,20 +59,30 @@ export function combinePairHint(pair: CombinePair): string {
 
 /** Auto/Manual as one exclusive control. A mixed chain presses neither, so the
  * rail never claims one mode for a spec that holds two. */
-function ModeRow({ label, help, revealId, mode, onSelect }: {
+function ModeRow({ label, help, revealId, mode, values, onSelect }: {
   label: string;
   help: string;
   revealId: string;
   mode: 'auto' | 'manual' | null;
+  /** What the shown run resolved, one entry per member, already formatted.
+   * Empty until a solved combined result is on screen. */
+  values: Array<{ member: string; text: string }>;
   onSelect: (mode: 'auto' | 'manual') => void;
 }) {
-  return <div className="crossover-mode-row" data-control-reveal-id={revealId} title={help}>
-    <span>{label}</span>
-    <div className="crossover-segment" role="group" aria-label={`${label} mode`}>
-      <button type="button" aria-pressed={mode === 'auto'} className={mode === 'auto' ? 'on' : ''} onClick={() => onSelect('auto')}>Auto</button>
-      <button type="button" aria-pressed={mode === 'manual'} className={mode === 'manual' ? 'on' : ''} onClick={() => onSelect('manual')}>Manual</button>
+  return <>
+    <div className="crossover-mode-row" data-control-reveal-id={revealId} title={help}>
+      <span>{label}</span>
+      <div className="crossover-segment" role="group" aria-label={`${label} mode`}>
+        <button type="button" aria-pressed={mode === 'auto'} className={mode === 'auto' ? 'on' : ''} onClick={() => onSelect('auto')}>Auto</button>
+        <button type="button" aria-pressed={mode === 'manual'} className={mode === 'manual' ? 'on' : ''} onClick={() => onSelect('manual')}>Manual</button>
+      </div>
     </div>
-  </div>;
+    {/* Auto is not a black box once a run has been solved: the numbers it
+        chose are right here, without having to open Advanced to read them. */}
+    {values.length > 0 && <p className="section-note">
+      {values.map(({ member, text }) => `${member} ${text}`).join(' \u00b7 ')}
+    </p>}
+  </>;
 }
 
 function PairRow({ pair, spec, preset, onChange }: {
@@ -133,6 +147,18 @@ const viewStorage = namespaceStorage('crossoverView');
 
 function storedAdvancedView(): boolean {
   try { return viewStorage.getItem('crossoverView') === 'advanced'; } catch { return false; }
+}
+
+/** Which unit the Advanced gain fields are read in, remembered the same way
+ * and in its own namespace: one namespace holds one value, and sharing the
+ * view's would clobber it. */
+const gainUnitStorage = namespaceStorage('crossoverGainUnit');
+
+function storedGainUnit(): GainUnit {
+  try {
+    const stored = gainUnitStorage.getItem('crossoverGainUnit');
+    return stored === 'v' || stored === 'w' ? stored : 'db';
+  } catch { return 'db'; }
 }
 
 /** Whether the rail's spec and the shown run name the same members, in the
@@ -225,9 +251,14 @@ function LiveNote({ shown, live, busy, error, members }: {
 export function CadCrossover() {
   const state = useCadReturnStore();
   const [advanced, setAdvanced] = useState(storedAdvancedView);
+  const [gainUnit, setGainUnit] = useState<GainUnit>(storedGainUnit);
   const selectView = (next: boolean) => {
     setAdvanced(next);
     try { viewStorage.setItem('crossoverView', next ? 'advanced' : 'basic'); } catch { /* storage is optional */ }
+  };
+  const selectGainUnit = (next: GainUnit) => {
+    setGainUnit(next);
+    try { gainUnitStorage.setItem('crossoverGainUnit', next); } catch { /* storage is optional */ }
   };
   const shown = useSyncExternalStore(latestCombine.subscribe, latestCombine.getSnapshot, latestCombine.getSnapshot);
   const enabled = combineEnabledEffective(state);
@@ -236,7 +267,30 @@ export function CadCrossover() {
   if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
   const apply = (next: CrossoverSpec) => state.setCombineSpec(next);
   const resolved = resolvedChannels(shown?.combine);
+  const maxOutput = shown?.combine.max_output ?? null;
   const { live, busy, error: liveError } = liveState;
+  /** A member's short name for the Basic readouts: its band role when the
+   * return gave it one, and its channel id when it did not. */
+  const shortLabel = (member: string): string => {
+    const pair = combineChain(state).find((item) => item.lower === member || item.upper === member);
+    return (pair?.lower === member ? pair.lowerRole : pair?.upperRole) ?? member;
+  };
+  /** The nominal impedance a member's watts are stated into: what the driver
+   * says, falling back to Re, divided across parallel drivers. */
+  const impedanceFor = (member: string): number | null => {
+    const form = state.channelDrivers[member];
+    const values = driverValues(form);
+    return nominalImpedanceOhm({
+      z_nom_ohm: values.z_nom_ohm ?? form?.preset?.z_ohm ?? null,
+      re_ohm: values.re_ohm ?? null,
+      count: values.count ?? null,
+    });
+  };
+  const autoReadout = (pick: (member: string) => string | null) => (spec?.members ?? [])
+    .flatMap((member) => {
+      const text = pick(member);
+      return text === null ? [] : [{ member: shortLabel(member), text }];
+    });
   return <>
     <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append a filtered, time-aligned crossover sum of the drive channels as one more result channel. On by default for a return with two or more drive channels; the chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
     {enabled && spec && <>
@@ -274,6 +328,10 @@ export function CadCrossover() {
           revealId={CAD_CONTROLS.levelMatch.reveal.id}
           help="Equalise member band levels before summing. Manual keeps the gain each channel is given in Advanced; auto defaults off when every member carries a driver model, because real voltage-driven levels should not be re-equalised."
           mode={sharedGainMode(spec)}
+          values={autoReadout((member) => {
+            const db = resolved[member]?.gainAutoDb;
+            return db === null || db === undefined ? null : gainText(db, 'db');
+          })}
           onSelect={(mode) => apply(withGainMode(spec, mode, Object.fromEntries(
             Object.entries(resolved).map(([id, channel]) => [id, channel.gainAutoDb]),
           )))}
@@ -283,6 +341,10 @@ export function CadCrossover() {
           revealId={CAD_CONTROLS.timeAlign.reveal.id}
           help="Delay each member so the crossover sums the way its filter pair says it should, fitted from the phase of the solved fields across the pair's overlap. Manual keeps the delay each channel is given in Advanced."
           mode={sharedDelayMode(spec)}
+          values={autoReadout((member) => {
+            const ms = resolved[member]?.delayAutoMs;
+            return ms === null || ms === undefined ? null : `${ms >= 0 ? '+' : ''}${ms.toFixed(2)} ms`;
+          })}
           onSelect={(mode) => apply(withDelayMode(spec, mode, Object.fromEntries(
             Object.entries(resolved).map(([id, channel]) => [id, channel.delayAutoMs]),
           )))}
@@ -297,6 +359,11 @@ export function CadCrossover() {
           return role ? `${role} · ${member}` : member;
         }}
         presetFor={(member) => state.channelDrivers[member]?.preset ?? null}
+        gainUnit={gainUnit}
+        onGainUnit={selectGainUnit}
+        driveVoltageV={state.driveVoltageV}
+        impedanceFor={impedanceFor}
+        usageFor={(member) => maxOutput?.members?.[member] ?? null}
         onChange={apply}
       />}
       {shown && <LiveNote shown={shown} live={live} busy={busy} error={liveError} members={sameMembers(spec, shown)}/>}

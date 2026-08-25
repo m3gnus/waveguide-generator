@@ -99,6 +99,11 @@ export const CAD_CONTROLS = {
     'cad.driver.voltage', 'Drive voltage', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
     ['RMS', 'volts', '2.83 V', 'driveVoltageV'], 'ingested-return', 'cad.drive-channels',
   ),
+  maxDriveVoltage: control(
+    'cad.driver.max-voltage', 'Amplifier limit', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
+    ['amplifier', 'headroom', 'maximum output', 'max SPL', 'clipping', 'maxDriveVoltageV'],
+    'ingested-return', 'cad.drive-channels',
+  ),
   crossover: control(
     'cad.crossover', 'Crossover', CAD_CONTROL_SECTIONS.crossover, 'simulation',
     ['combined output', 'LR4', 'sum', 'adjacent bands'],
@@ -241,6 +246,8 @@ export const CAD_DRIVER_FIELD_CONTROLS: readonly CadDriverFieldDescriptor[] = [
   driverField('qms', '', 0.1),
   driverField('rms_kg_per_s', 'kg/s', 0.1),
   driverField('xmax_mm', 'mm', 0.5),
+  driverField('power_w', 'W', 10),
+  driverField('z_nom_ohm', 'Ω', 1),
   driverField('count', '', 1),
   driverField('rear_volume_l', 'L', 0.5),
 ];
@@ -255,7 +262,7 @@ export const CAD_DRIVER_FIELD_CONTROLS: readonly CadDriverFieldDescriptor[] = [
  */
 export const CAD_DRIVER_SHEET_FIELDS: readonly CadDriverFieldDescriptor[] = [
   'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mms_g', 'fs_hz', 'vas_l', 'qms', 'xmax_mm',
-  'count', 'rear_volume_l',
+  'power_w', 'z_nom_ohm', 'count', 'rear_volume_l',
 ].map((key) => CAD_DRIVER_FIELD_CONTROLS.find((control) => control.driverKey === key)!);
 
 export interface CadCardioidFieldDescriptor extends CadControlDescriptor {

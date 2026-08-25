@@ -901,7 +901,25 @@ function CadDriveChannels() {
       })}
     </div>
     {state.driveChannels.some((channel) => channelAcceptsDriver(channel) && channelDriverPresent(state.channelDrivers[channel.id]))
-      && <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>}
+      && <>
+        <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>
+        {/* A ceiling, not a drive: it changes nothing about the response and
+            only ever caps the maximum output the crossover section reports.
+            Left empty, the drivers themselves are the only limit. */}
+        <NumberField
+          label={CAD_CONTROLS.maxDriveVoltage.label}
+          revealId={CAD_CONTROLS.maxDriveVoltage.reveal.id}
+          unit="V"
+          value={state.maxDriveVoltageV ?? undefined}
+          min={0.01}
+          step={1}
+          precision={1}
+          optional
+          onClear={() => state.setMaxDriveVoltage(null)}
+          description="Most RMS volts the amplifier can swing. Caps the maximum output the Crossover section reports; leave empty when the drivers are the only limit."
+          onCommit={state.setMaxDriveVoltage}
+        />
+      </>}
     {/* Said here, beside the drivers, and before the solve rather than after
         it: a channel with no driver is a good solve with consequences that are
         otherwise invisible until a chart has nothing to draw. */}
