@@ -33,7 +33,13 @@ async def _request_with_headers(
                 "body": json.dumps(body).encode() if body is not None else b"",
                 "more_body": False,
             }
-        return {"type": "http.disconnect"}
+        # A live connection's receive() blocks until the client actually goes
+        # away. Returning http.disconnect here instead lets starlette's
+        # disconnect listener race a StreamingResponse and sometimes cancel it
+        # before http.response.start -- "No response returned" on a loaded
+        # runner.
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
 
     async def send(message: dict[str, Any]) -> None:
         sent.append(message)
