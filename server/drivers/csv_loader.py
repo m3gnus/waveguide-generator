@@ -76,6 +76,12 @@ SPEC_FIELD_MAP: dict[str, str] = {
     "qms": "qms",
     "xmax_mm": "xmax_mm",
     "rms_kg_per_s": "rms_kg_per_s",
+    # Neither drives the LEM: both are ceilings, read only when a channel is
+    # asked how loud it can go. ``z_ohm`` is the nominal impedance the power
+    # rating is quoted against, which is the only honest divisor for turning a
+    # drive voltage into watts that can be compared with that rating.
+    "power_w": "power_w",
+    "z_ohm": "z_nom_ohm",
 }
 
 _ALIAS_LOOKUP: dict[str, str] = {
@@ -188,6 +194,7 @@ def build_display(fields: dict[str, float | str | None]) -> dict[str, float | No
         "sd_cm2": fields.get("sd_cm2"),
         "bl_t_m": fields.get("bl_t_m"),
         "xmax_mm": fields.get("xmax_mm"),
+        "power_w": fields.get("power_w"),
         "sensitivity_db": fields.get("sensitivity_db"),
         "price_eur": fields.get("price_avg_eur"),
     }
