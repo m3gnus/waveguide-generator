@@ -513,6 +513,28 @@ def _migrate_freeform_normalized_axis(payload: Payload) -> None:
         profile["points"] = points
 
 
+def _has_stated_solver_mode(payload: Payload) -> bool:
+    simulation = payload.get("simulation")
+    return isinstance(simulation, Mapping) and simulation.get("solver_mode") is not None
+
+
+def _migrate_stated_solver_mode(payload: Payload) -> None:
+    """Drop a design-stated solver path, and let the report say so.
+
+    The solver path is a machine-local execution choice: whether the
+    axisymmetric meridian runner or a full-3D backend can run at all depends on
+    the host, which is why it travels in solve options and why design export
+    strips it (``docs/reference/SYMMETRY-CONTRACT.md``). Nothing has ever read
+    ``Simulation.SolverMode`` out of a design, so a file that stated one was
+    accepted, ignored, and returned without the line. Removing it here keeps
+    that contract and makes the drop something the open report can name.
+    """
+
+    simulation = payload.get("simulation")
+    if isinstance(simulation, dict):
+        simulation.pop("solver_mode", None)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         name="001_corner_ratio_to_corner_grid",
@@ -557,6 +579,18 @@ MIGRATIONS: tuple[Migration, ...] = (
         note=(
             "Normalized FREEFORM meridian anchors from absolute z millimetres to "
             "the shared t axis and moved length to the top-level design."
+        ),
+    ),
+    Migration(
+        name="006_machine_solver_mode_not_portable",
+        applies_if=_has_stated_solver_mode,
+        transform=_migrate_stated_solver_mode,
+        note=(
+            "Dropped Simulation.SolverMode. The solver path (Auto, Full 3D, or "
+            "Axisymmetric meridian) depends on what this machine can run, so it "
+            "is chosen in Solve options and is never taken from a design file. "
+            "The stated value has been ignored; set the solver path in Solve "
+            "options if you want a formulation other than Auto."
         ),
     ),
 )
