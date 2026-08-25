@@ -287,6 +287,20 @@ every column WG's own alias table names and withholds the commercial half —
 prices, retailer URLs, store lists, working notes, programme power. Provenance
 (`Source_URL`) travels with the data because it is how a number gets checked.
 
+Only rows that satisfy `DriverSpec` are published: 1,047 drivers, every one of
+them solvable, 1,038 carrying a power rating. Catalogue rows are withheld
+because the picker never offers them and counting them would make the library
+promise what the Drivers rail cannot deliver — which is why `total_drivers` and
+`complete_drivers` are equal for the shipped set.
+
+**It is cone drivers almost exclusively.** Compression-driver manufacturers
+publish a throat, a rating and a sensitivity but no moving mass, compliance or
+diaphragm area — verified against B&C, Beyma, 18Sound, Faital and Eminence, and
+across 292 fetched product pages that yielded none of the three. A lumped model
+of a compression driver therefore cannot be built from published data, and the
+one CD in the shipped library is there because Tymphany publishes T/S where the
+pro-audio brands do not. Hand entry in *Drivers* is the route for the rest.
+
 `DriverLibrary.folder` still means the *writable* folder: it is what Settings
 shows and offers to open. A row in the user's own files replaces the shipped
 row for the same brand, model and impedance, so correcting a datasheet by hand

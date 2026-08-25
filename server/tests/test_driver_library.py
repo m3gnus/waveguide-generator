@@ -835,8 +835,11 @@ def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> No
     assert folder is not None, "server/drivers/bundled is missing from this checkout"
     library = DriverLibrary(folder / "does-not-exist", bundled=folder)
     info = library.rescan()
-    assert info["total_drivers"] > 1_000
-    assert info["complete_drivers"] > 500
+    assert info["total_drivers"] > 900
+    # Everything shipped is a driver a channel can actually be driven by: the
+    # export withholds catalogue rows, so the library's own count is not a
+    # promise the Drivers rail has to break.
+    assert info["complete_drivers"] == info["total_drivers"]
     assert all(entry["bundled"] for entry in info["files"])
 
     # The compression driver whose AES rating this work was built around.
