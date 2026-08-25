@@ -46,6 +46,9 @@ function DriverLibrarySettings() {
     <h3 id="settings-drivers-title">Driver library</h3>
     <p className={`workspace-settings-path ${info?.folder ? '' : 'not-selected'}`} title={info?.folder ?? undefined}>{info?.folder ?? 'Not resolved yet'}</p>
     <p className="cad-settings-note">A driver library ships with Waveguide Generator. Put your own CSV files in this folder to add to it — for a driver and winding you supply yourself, your row is the one <b>Drivers</b> offers.</p>
+    {/* Otherwise a fruitless search for a compression driver reads as a broken
+        search rather than as the state of the world's datasheets. */}
+    <p className="cad-settings-note">It holds cone drivers almost exclusively. Compression-driver manufacturers publish a throat, a power rating and a sensitivity but no moving mass or compliance, so a driver model cannot be built from their data — enter one by hand in <b>Drivers</b> if you have measured it.</p>
     <div className="driver-library-counts">
       <span>{files.toLocaleString()} file{files === 1 ? '' : 's'}{shipped > 0 && <> ({shipped === files ? 'shipped' : `${shipped.toLocaleString()} shipped`})</>} · {indexed.toLocaleString()} driver{indexed === 1 ? '' : 's'} indexed · {drivable.toLocaleString()} with Thiele-Small data</span>
     </div>
