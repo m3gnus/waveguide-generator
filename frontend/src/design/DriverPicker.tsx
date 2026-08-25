@@ -26,7 +26,6 @@ import {
   useDriverLibraryStore,
   type SavedDriver,
 } from '../stores/driverLibrary';
-import { trapDialogFocus } from '../shell/dialogFocus';
 import { Icon } from '../shell/icons';
 import {
   CAD_CONTROLS,
@@ -366,6 +365,18 @@ function DriverSearch({ channel, roleHint, onPick }: {
       />
       <KindToggle kind={kind} channelId={channel.id} onChange={setKind}/>
     </div>
+    {/* The dropdown carries hand entry as its last row, but that row only
+        exists once the field has been opened. A user whose driver is not in
+        the library has no reason to open it, so the way in is also stated
+        where it can be seen without searching first. */}
+    <p className="driver-manual-line">
+      Driver not in the library?
+      <button
+        type="button"
+        className="driver-manual-link"
+        onClick={() => { setOpen(false); onPick(manualDriverPreset(query, kind), { edit: true }); }}
+      >Enter its T/S by hand</button>
+    </p>
     {open && <div id={listId} className="driver-results" role="listbox" aria-label={`Driver matches for ${channel.id}`}>
       {error && <p className="cad-driver-hint" role="status">{error}</p>}
       {!error && !matches.length && <p className="cad-driver-hint" role="status">No driver matches that search.</p>}
@@ -387,13 +398,18 @@ function DerivedRow({ label, value, unit }: { label: string; value: string; unit
  * The T/S sheet: the picked driver's numbers, what the user changed, and what
  * those numbers imply.
  *
+ * It expands in place under the channel it belongs to rather than opening a
+ * dialog. The numbers are one channel's, and a sheet that covers the rail
+ * hides both the channel it was opened from and the other channels its
+ * crossover has to agree with.
+ *
  * Every input writes an override rather than the value itself, so *Reset to
  * database values* is always available and an edit is always visible as one.
  *
  * A hand-entered driver goes through the same sheet with nothing underneath
- * it: the overrides are the whole driver, so there is no edit count, no reset,
- * and the name is the user's to set because *My drivers* has nothing else to
- * list it under.
+ * it: the overrides are the whole driver, so there is no edit count and no
+ * reset, and the name and nominal impedance are the user's to set because *My
+ * drivers* has nothing else to list it under.
  */
 function DriverSheet({ channel, form, onClose }: {
   channel: CadDriveChannel;
@@ -402,30 +418,24 @@ function DriverSheet({ channel, form, onClose }: {
 }) {
   const state = useCadReturnStore();
   const saveMine = useDriverLibraryStore((store) => store.save);
+  const removeMine = useDriverLibraryStore((store) => store.remove);
   const savedDrivers = useDriverLibraryStore((store) => store.saved);
-  const dialog = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   const [detail, setDetail] = useState<DriverDetail | null>(null);
   const [savedAs, setSavedAs] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [impedanceDraft, setImpedanceDraft] = useState<string | null>(null);
   const preset = form.preset;
 
   useEffect(() => {
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
-      trapDialogFocus(dialog, event);
-    };
-    document.addEventListener('keydown', keydown);
     // The T/S grid, not the name field a hand-entered driver puts above it:
     // the name is already what the user typed to get here, the numbers are not.
     const frame = requestAnimationFrame(() => {
-      const grid = dialog.current?.querySelector<HTMLElement>('.driver-sheet-grid input');
-      (grid ?? dialog.current?.querySelector<HTMLElement>('input'))?.focus();
+      const grid = panel.current?.querySelector<HTMLElement>('.driver-sheet-grid input');
+      (grid ?? panel.current?.querySelector<HTMLElement>('input'))?.focus();
     });
-    return () => {
-      document.removeEventListener('keydown', keydown);
-      cancelAnimationFrame(frame);
-    };
-  }, [onClose]);
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   const presetId = preset?.source === 'database' ? preset.id : null;
   useEffect(() => {
@@ -457,7 +467,8 @@ function DriverSheet({ channel, form, onClose }: {
   // The name is the only thing *My drivers* will list a hand-entered driver
   // under, so it is the user's to set -- but a database driver's name is the
   // library's, and renaming it would break the trail back to the row it came
-  // from.
+  // from. The nominal impedance travels with the name for the same reason: the
+  // library states which winding a row is, a typed driver has to be told.
   const nameEditable = preset !== null && preset.source !== 'database';
   // A driver whose numbers are the user's own gets the whole grid, Mmd and Cms
   // included: those are what a datasheet without Mms or Vas prints, and hand
@@ -466,7 +477,8 @@ function DriverSheet({ channel, form, onClose }: {
   // invitation to state two (`channelDriverWire` sends only one either way).
   const sheetFields = nameEditable ? CAD_DRIVER_FIELD_CONTROLS : CAD_DRIVER_SHEET_FIELDS;
   const savedId = preset === null ? null : preset.source === 'mine' ? preset.id : `mine:${preset.id}`;
-  const saved = savedId !== null && savedAs === `${savedId}\u0000${preset!.label}`;
+  const saved = savedId !== null && savedAs === `${savedId}::${preset!.label}`;
+  const inMyDrivers = savedId !== null && savedDrivers.some((driver) => driver.id === savedId);
 
   const rename = (text: string) => {
     if (!preset) return;
@@ -474,6 +486,18 @@ function DriverSheet({ channel, form, onClose }: {
     // An empty field is a name in progress, not a driver with no name: the
     // stored label always stays something a reloaded profile can parse.
     state.setChannelDriverPreset(channel.id, { ...preset, label: text.trim() || MANUAL_DRIVER_LABEL }, true);
+  };
+
+  // The winding a typed driver is, which the library would otherwise have
+  // stated. It names the driver rather than feeding the solve -- Re is the
+  // number the motor model reads -- so it lives beside the name, not in the
+  // T/S grid.
+  const setImpedance = (text: string) => {
+    if (!preset) return;
+    setImpedanceDraft(text);
+    const parsed = text.trim() === '' ? null : Number(text);
+    const z = typeof parsed === 'number' && Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    state.setChannelDriverPreset(channel.id, { ...preset, z_ohm: z }, true);
   };
 
   const saveToMine = () => {
@@ -499,96 +523,136 @@ function DriverSheet({ channel, form, onClose }: {
     // The saved copy is now what the channel holds, so saving again updates it
     // instead of leaving a second entry behind under a `mine:` id.
     if (manual) state.setChannelDriverPreset(channel.id, { ...preset, id: savedId, source: 'mine', base });
-    setSavedAs(`${savedId}\u0000${preset.label}`);
+    setSavedAs(`${savedId}::${preset.label}`);
+  };
+
+  // Forgetting a saved driver leaves this channel holding it: the numbers on
+  // screen are still the driver this solve uses, they are only no longer
+  // offered to the next channel that searches.
+  const forget = () => {
+    if (!savedId) return;
+    removeMine(savedId);
+    setSavedAs(null);
   };
 
   const provenance = preset?.source === 'mine'
     ? 'My drivers'
     : detail?.source.file ?? (manual ? 'Typed by hand' : null);
+  const zText = impedanceText(preset?.z_ohm);
 
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div ref={dialog} className="settings-dialog driver-sheet" role="dialog" aria-modal="true" aria-labelledby={`driver-sheet-title-${channel.id}`}>
-      <header>
-        <div>
-          <h2 id={`driver-sheet-title-${channel.id}`}>{nameEditable
-            ? <input
-                type="text"
-                className="driver-name-input"
-                aria-label={`Driver name for ${channel.id}`}
-                placeholder={MANUAL_DRIVER_LABEL}
-                value={nameDraft ?? preset.label}
-                onChange={(event) => rename(event.target.value)}
-              />
-            : preset?.label ?? `Driver · ${channel.id}`}</h2>
-          <p>{channel.id}{impedanceText(preset?.z_ohm) ? ` · ${impedanceText(preset?.z_ohm)}` : ''}</p>
-        </div>
-        <div className="driver-sheet-chips">
-          {provenance && <span className="driver-chip">{provenance}</span>}
-          {edited.length > 0 && <span className="driver-chip accent">{edited.length} edited</span>}
-        </div>
-        <button className="dialog-close" aria-label="Close driver sheet" onClick={onClose}><Icon name="close"/></button>
-      </header>
-      <div className="settings-scroll">
-        {variants.length > 1 && <div className="driver-variants" role="group" aria-label="Impedance variant">
-          {variants.map((variant) => <button
-            key={variant.id}
-            type="button"
-            className={variant.id === preset?.id ? 'on' : ''}
-            aria-pressed={variant.id === preset?.id}
-            onClick={() => void chooseVariant(variant.id)}
-          >{impedanceText(variant.z_ohm) ?? 'unknown Ω'}</button>)}
-        </div>}
-        <div className="cad-driver-grid driver-sheet-grid" data-control-reveal-id={CAD_CONTROLS.driverEdit.reveal.id}>
-          {sheetFields.map(({ driverKey, label, unit, step, reveal }) => <label
-            key={driverKey}
-            className={`cad-driver-field${edited.includes(driverKey) ? ' edited' : ''}`}
-            data-control-reveal-id={reveal.id}
-          >
-            <span>{label}{unit ? ` (${unit})` : ''}</span>
-            <input
-              type="number"
-              min={0}
-              step={step}
-              value={values[driverKey] ?? ''}
-              aria-label={`${label} for ${channel.id}`}
-              onChange={(event) => state.setChannelDriverField(
-                channel.id,
-                driverKey,
-                event.target.value === '' ? null : Number(event.target.value),
-              )}
-            />
-          </label>)}
-        </div>
-        <div className="driver-derived" aria-label="Derived values">
-          <DerivedRow label="Cms" value={derived.cmsMPerN === undefined ? '—' : derived.cmsMPerN.toExponential(3)} unit="m/N"/>
-          <DerivedRow label="Qes" value={derived.qes === undefined ? '—' : formatNumber(derived.qes, 3)}/>
-          <DerivedRow label="Qts" value={derived.qts === undefined ? '—' : formatNumber(derived.qts, 3)}/>
-          <DerivedRow label="Sensitivity" value={derived.sensitivityDb === undefined ? '—' : derived.sensitivityDb.toFixed(1)} unit="dB 1 W/1 m"/>
-        </div>
-        {disagrees && <p className="field-warning" role="status">
-          Fs, Mms and Vas disagree by {(100 * (derived.fsMismatch ?? 0)).toFixed(0)}%. One of the three is wrong; the solve uses them as typed.
-        </p>}
-        {driverShortfallText(form) && <p className="cad-driver-hint">Still needed: {driverShortfallText(form)}.</p>}
+  return <div
+    ref={panel}
+    id={`driver-sheet-${channel.id}`}
+    className="driver-sheet"
+    role="group"
+    data-channel-id={channel.id}
+    aria-labelledby={`driver-sheet-title-${channel.id}`}
+    onKeyDown={(event) => {
+      // Esc collapses the sheet. Every number is already stored as it was
+      // typed, so there is nothing to discard and nothing to confirm.
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    }}
+  >
+    <header>
+      <h2 id={`driver-sheet-title-${channel.id}`}>{nameEditable
+        ? <input
+            type="text"
+            className="driver-name-input"
+            aria-label={`Driver name for ${channel.id}`}
+            placeholder={MANUAL_DRIVER_LABEL}
+            value={nameDraft ?? preset.label}
+            onChange={(event) => rename(event.target.value)}
+          />
+        : preset?.label ?? `Driver for ${channel.id}`}</h2>
+      <div className="driver-sheet-chips">
+        {!nameEditable && zText && <span className="driver-chip">{zText}</span>}
+        {provenance && <span className="driver-chip">{provenance}</span>}
+        {edited.length > 0 && <span className="driver-chip accent">{edited.length} edited</span>}
       </div>
-      <footer className="driver-sheet-actions">
-        {/* Nothing to reset to: a hand-entered driver has no database row
-            behind it, so the button is absent rather than permanently dead. */}
-        {!manual && <button
+      <button className="dialog-close" aria-label="Close driver sheet" onClick={onClose}><Icon name="close"/></button>
+    </header>
+    <div className="driver-sheet-body">
+      {variants.length > 1 && <div className="driver-variants" role="group" aria-label="Impedance variant">
+        {variants.map((variant) => <button
+          key={variant.id}
           type="button"
-          disabled={!preset || edited.length === 0}
-          onClick={() => state.clearChannelDriverOverrides(channel.id)}
-        >Reset to database values</button>}
-        <button type="button" disabled={!preset || saved} onClick={saveToMine}>{saved ? 'Saved' : 'Save to My drivers'}</button>
-        <button type="button" className="primary" onClick={onClose}>Done</button>
-      </footer>
+          className={variant.id === preset?.id ? 'on' : ''}
+          aria-pressed={variant.id === preset?.id}
+          onClick={() => void chooseVariant(variant.id)}
+        >{impedanceText(variant.z_ohm) ?? 'unknown Ω'}</button>)}
+      </div>}
+      {nameEditable && <label className="cad-driver-field driver-sheet-impedance">
+        <span>Nominal Z (Ω)</span>
+        <input
+          type="number"
+          min={0}
+          step={0.5}
+          value={impedanceDraft ?? (preset.z_ohm === null ? '' : String(preset.z_ohm))}
+          aria-label={`Nominal impedance for ${channel.id}`}
+          onChange={(event) => setImpedance(event.target.value)}
+        />
+        <small>Which winding this driver is, for the saved list. The solve reads Re.</small>
+      </label>}
+      <div className="cad-driver-grid driver-sheet-grid" data-control-reveal-id={CAD_CONTROLS.driverEdit.reveal.id}>
+        {sheetFields.map(({ driverKey, label, unit, step, reveal }) => <label
+          key={driverKey}
+          className={`cad-driver-field${edited.includes(driverKey) ? ' edited' : ''}`}
+          data-control-reveal-id={reveal.id}
+        >
+          <span>{label}{unit ? ` (${unit})` : ''}</span>
+          <input
+            type="number"
+            min={0}
+            step={step}
+            value={values[driverKey] ?? ''}
+            aria-label={`${label} for ${channel.id}`}
+            onChange={(event) => state.setChannelDriverField(
+              channel.id,
+              driverKey,
+              event.target.value === '' ? null : Number(event.target.value),
+            )}
+          />
+        </label>)}
+      </div>
+      <div className="driver-derived" aria-label="Derived values">
+        <DerivedRow label="Cms" value={derived.cmsMPerN === undefined ? '—' : derived.cmsMPerN.toExponential(3)} unit="m/N"/>
+        <DerivedRow label="Qes" value={derived.qes === undefined ? '—' : formatNumber(derived.qes, 3)}/>
+        <DerivedRow label="Qts" value={derived.qts === undefined ? '—' : formatNumber(derived.qts, 3)}/>
+        <DerivedRow label="Sensitivity" value={derived.sensitivityDb === undefined ? '—' : derived.sensitivityDb.toFixed(1)} unit="dB 1 W/1 m"/>
+      </div>
+      {disagrees && <p className="field-warning" role="status">
+        Fs, Mms and Vas disagree by {(100 * (derived.fsMismatch ?? 0)).toFixed(0)}%. One of the three is wrong; the solve uses them as typed.
+      </p>}
+      {driverShortfallText(form) && <p className="cad-driver-hint">Still needed: {driverShortfallText(form)}.</p>}
     </div>
+    <footer className="driver-sheet-actions">
+      {/* Nothing to reset to: a hand-entered driver has no database row
+          behind it, so the button is absent rather than permanently dead. */}
+      {!manual && <button
+        type="button"
+        disabled={!preset || edited.length === 0}
+        onClick={() => state.clearChannelDriverOverrides(channel.id)}
+      >Reset to database values</button>}
+      {inMyDrivers && <button type="button" onClick={forget}>Remove from My drivers</button>}
+      <button
+        type="button"
+        className={saved ? '' : 'primary'}
+        disabled={!preset || saved}
+        onClick={saveToMine}
+      >{saved ? 'Saved' : 'Save to My drivers'}</button>
+      <button type="button" onClick={onClose}>Done</button>
+    </footer>
   </div>;
 }
 
 /** The picked driver, as the channel card shows it. */
-function DriverSummary({ channel, form, onEdit, onClear }: {
+function DriverSummary({ channel, form, sheetOpen, onEdit, onClear }: {
   channel: CadDriveChannel;
   form: ChannelDriverForm;
+  sheetOpen: boolean;
   onEdit: () => void;
   onClear: () => void;
 }) {
@@ -606,9 +670,11 @@ function DriverSummary({ channel, form, onEdit, onClear }: {
       <button
         type="button"
         className="driver-edit-link"
+        aria-expanded={sheetOpen}
+        aria-controls={`driver-sheet-${channel.id}`}
         data-control-reveal-id={CAD_CONTROLS.driverEdit.reveal.id}
         onClick={onEdit}
-      >Edit T/S…</button>
+      >{sheetOpen ? 'Hide T/S' : 'Edit T/S…'}</button>
       <button type="button" className="driver-clear-link" aria-label={`Clear driver for ${channel.id}`} onClick={onClear}>Clear</button>
     </div>
     <div className="driver-summary-facts">
@@ -626,7 +692,8 @@ function DriverSummary({ channel, form, onEdit, onClear }: {
 }
 
 /**
- * One channel's driver: search, the picked driver, and the T/S sheet.
+ * One channel's driver: search, the picked driver, and the T/S sheet that
+ * expands under it.
  *
  * With no library folder there is nothing to search, so the card falls back to
  * the manual grid it has always shown rather than offering a field that can
@@ -678,9 +745,17 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
       : <DriverSummary
           channel={channel}
           form={form!}
-          onEdit={() => setSheetOpen(true)}
-          onClear={() => state.setChannelDriverPreset(channel.id, null)}
+          sheetOpen={sheetOpen}
+          onEdit={() => setSheetOpen((open) => !open)}
+          onClear={() => {
+            // The sheet belongs to the driver that was cleared: leaving it
+            // expanded would show an empty grid under a channel that is back
+            // to its search field.
+            setSheetOpen(false);
+            state.setChannelDriverPreset(channel.id, null);
+          }}
         />}
-    {sheetOpen && form && <DriverSheet channel={channel} form={form} onClose={() => setSheetOpen(false)}/>}
+    {sheetOpen && preset !== null && form
+      && <DriverSheet channel={channel} form={form} onClose={() => setSheetOpen(false)}/>}
   </div>;
 }
