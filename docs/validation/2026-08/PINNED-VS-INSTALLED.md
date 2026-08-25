@@ -66,3 +66,34 @@ turns on at least two capabilities that are currently reported as unavailable
 (axisymmetric cancellation, bempp coupled infinite baffle), and changes the
 mesher — so it needs its own re-validation pass rather than being folded into
 an unrelated branch.
+
+## The other side of the comparison: the Mac, 2026-08-25
+
+Same method, run on the macOS development host the Metal numbers come from.
+**All six modules match `pins.json` exactly.**
+
+| Module | Pinned | Installed | |
+|---|---|---|---|
+| hornlab-beat-bem | `c20713913` | `c20713913` | match |
+| hornlab-bempp-bem | `3fcb785ff` | `3fcb785ff` | match |
+| hornlab-metal-bem | `f89765be2` | `f89765be2` | match |
+| hornlab-plots | `a3befffc1` | `a3befffc1` | match |
+| hornlab-sim | `f47e70566` | `f47e70566` | match |
+| hornlab-waveguide-mesher | `50a8d7e1a` | `50a8d7e1a` | match |
+
+So the two hosts were **not** running the same stack, and the asymmetry has a
+direction: the Mac is on pins and the Windows box is behind it. That settles the
+open question in the section above — the axisymmetric cancellation failure there
+is this box being stale, not a missing upstream feature — and it means that
+where Mac and Windows figures disagree, the Mac side is the one measured against
+the stack this repository actually declares.
+
+**Read the `Pinned` column above as of this branch, not as of `main`.** WG's
+pins moved in the 2026-08-25 integration batch: `hornlab-bempp-bem` to
+`3fcb785`, `hornlab-metal-bem` to `f89765b`, `hornlab-plots` to `a3befff`, and
+the mesher forward off the Windows-broken rollback. The Windows table's
+`Pinned` values are the ones that branch carried when the drift was measured;
+they are evidence, not a current manifest. A future reader comparing that table
+against `pins.json` will find it disagrees, and that is expected.
+
+The drift itself is unfixed on that machine, deliberately — see **Not done**.
