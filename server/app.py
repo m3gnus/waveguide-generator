@@ -26,6 +26,8 @@ from server.drivers import mount_drivers
 from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.integration import mount_integration
+from server.integration.installed import measure_installed_stack
+from server.integration.provenance import pinned_dependency_shas
 from server.mesh.api import mount_solver_mesh
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
@@ -424,6 +426,12 @@ def create_app(
             (name for name in ("metal", "beat", "bempp", "dryrun") if name in available),
             None,
         )
+        # "What can this host do" is incomplete without "and is this host the
+        # stack it claims to be". A drifted module changes what the probes above
+        # report while every version string stays put, so the comparison belongs
+        # next to them rather than only in a solve result nobody reads twice.
+        pinned = pinned_dependency_shas()
+        installed, drift = measure_installed_stack(pinned)
         return {
             "engines": capabilities_cache,
             "engineSelection": {
@@ -431,6 +439,11 @@ def create_app(
                 "resolvedDefault": resolved,
                 "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
                 "axisymmetricRunner": "axisym",
+            },
+            "dependencies": {
+                "pinned": pinned,
+                "installed": installed,
+                "drift": drift,
             },
         }
 

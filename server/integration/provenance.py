@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from server.jobs.models import SolveRequest
 
 from .contracts import PROVENANCE_CONTRACT_VERSION
+from .installed import measure_installed_stack
 
 
 _REPOSITORY_ROOT = app_root()
@@ -61,6 +62,17 @@ def _release_identity() -> tuple[str, dict[str, str]]:
     return str(version), dependency_shas
 
 
+def pinned_dependency_shas() -> dict[str, str]:
+    """The SHAs this checkout declares it should run, from ``pins.json``.
+
+    This is a declaration, not a measurement. Pair it with
+    :func:`server.integration.installed.measure_installed_stack` before
+    treating it as a description of the environment.
+    """
+
+    return dict(_release_identity()[1])
+
+
 def enrich_result_contract(
     results: Mapping[str, Any],
     request: "SolveRequest",
@@ -96,6 +108,9 @@ def enrich_result_contract(
         effective_request.options.model_dump(mode="json")
     )
     wg_version, dependency_shas = _release_identity()
+    installed_dependency_shas, dependency_drift = measure_installed_stack(
+        dependency_shas
+    )
 
     enriched["result_kind"] = result_kind
     enriched["result_contract_version"] = result_version
@@ -105,6 +120,14 @@ def enrich_result_contract(
         "schema_version": PROVENANCE_CONTRACT_VERSION,
         "wg_version": wg_version,
         "dependency_shas": dependency_shas,
+        # ``dependency_shas`` is what the checkout declares. These two are what
+        # ran: the commit pip actually installed for each pinned module (null
+        # where it could not be measured), and the sorted names where the two
+        # disagree. An empty ``dependency_drift`` is the only positive claim
+        # that this result came off the pinned stack; a consumer reading a
+        # result that predates the measurement sees the field absent, not empty.
+        "installed_dependency_shas": installed_dependency_shas,
+        "dependency_drift": dependency_drift,
         # The original v1 names hash the execution-shaped request, including
         # the symmetry-resolved mesh domain. Keep those aliases stable while
         # naming both that identity and the normalized, durably stored request.
@@ -144,4 +167,8 @@ def enrich_result_contract(
     return enriched
 
 
-__all__ = ["canonical_json_sha256", "enrich_result_contract"]
+__all__ = [
+    "canonical_json_sha256",
+    "enrich_result_contract",
+    "pinned_dependency_shas",
+]
