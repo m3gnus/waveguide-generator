@@ -79,3 +79,22 @@ def test_import_report_is_dry_run_and_invalid_text_has_parse_detail() -> None:
     assert caught.value.status_code == 422
     assert caught.value.detail["type"] == "parse_error"
     assert "could not find" in caught.value.detail["message"]
+
+
+def test_open_report_names_the_machine_solver_mode_it_refused_to_honour() -> None:
+    """The one thing a stated solver mode must not do is vanish without a word.
+
+    It is not honoured -- which formulation this host can run is a machine
+    fact, so the mode travels in solve options and export strips it -- so the
+    open report has to carry the refusal.
+    """
+
+    source = "; Parameter config\nOSSE = {\nL = 120\na = 45\n}\nSimulation.SolverMode = circsym\n"
+
+    result = asyncio.run(open_design(source))
+
+    assert result["design"]["simulation"]["solver_mode"] is None
+    applied = result["migrationsApplied"]
+    assert [item["name"] for item in applied] == ["006_machine_solver_mode_not_portable"]
+    assert "Simulation.SolverMode" in applied[0]["note"]
+    assert "Solve options" in applied[0]["note"]

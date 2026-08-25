@@ -37,6 +37,7 @@ from server.platform.origin import (
     request_origin_allowed,
 )
 from server.platform.paths import app_root, default_runs_dir, resolve_data_dir
+from server.platform.sqlite import journal_mode_statuses
 from server.preview.service import mount_preview
 from server.settings import mount_settings
 from server.solver.symmetry import resolve_symmetry
@@ -445,6 +446,9 @@ def create_app(
                 "installed": installed,
                 "drift": drift,
             },
+            # A store whose filesystem refused write-ahead logging still works,
+            # just slowly, so it is reported here rather than refused at boot.
+            "storage": journal_mode_statuses(),
         }
 
     @application.post("/api/design/symmetry")
