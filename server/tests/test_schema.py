@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from server.design.migrate import apply_migrations
 from server.design.schema import DesignConfig, Expr, FreeformConfig, ICWConfig, OSSEConfig, ROSSEConfig
 
 
@@ -471,12 +472,27 @@ def test_v1_sim_type_convention_has_named_schema_values() -> None:
     assert free.root.simulation.sim_type == "freestanding"
 
 
-def test_solver_mode_is_normalized_and_rejects_unknown_backend_dependent_values() -> None:
-    design = DesignConfig.model_validate(
-        {"formula": "OSSE", "simulation": {"solver_mode": " FULL_3D "}}
+@pytest.mark.parametrize("stated", [" FULL_3D ", "circsym", "auto", "fastest"])
+def test_a_design_stated_solver_mode_is_dropped_and_reported(stated: str) -> None:
+    """No design may set the solver path, and none may lose it quietly.
+
+    Which formulation this host can run is a machine fact, so the value lives
+    in solve options and export strips it. Nothing read it out of the design,
+    which made a stated mode a silent no-op. Every spelling is now treated the
+    same -- dropped, with a note the open report and ``wg validate`` show --
+    including one that is not a valid mode at all, because no spelling of it
+    was ever going to be honoured.
+    """
+
+    migrated, applied = apply_migrations(
+        {"formula": "OSSE", "simulation": {"solver_mode": stated}}
     )
-    assert design.root.simulation.solver_mode == "full_3d"
-    with pytest.raises(ValidationError, match="auto|full_3d|circsym"):
-        DesignConfig.model_validate(
-            {"formula": "OSSE", "simulation": {"solver_mode": "fastest"}}
-        )
+
+    assert "solver_mode" not in migrated["simulation"]
+    assert [item.name for item in applied] == ["006_machine_solver_mode_not_portable"]
+    assert "Solve options" in applied[0].note
+
+    design = DesignConfig.model_validate(
+        {"formula": "OSSE", "simulation": {"solver_mode": stated}}
+    )
+    assert design.root.simulation.solver_mode is None
