@@ -8,6 +8,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 ERROR_CONTRACT_VERSION = 1
+# Deliberately still 1 after ``installed_dependency_shas``/``dependency_drift``
+# were added. Both are optional additions to an ``extra="allow"`` document, and
+# their *presence* already distinguishes a producer that measured the installed
+# stack from one that never did -- which is the only thing a version bump would
+# have bought. Bumping is not free here: ``ResultProvenance.schema_version`` is
+# ``Literal[1]``, the frontend envelope guard tests ``schema_version === 1``,
+# and the published OpenAPI snapshot declares ``"const": 1``, so a 2 would make
+# every already-shipped client refuse every new result.
 PROVENANCE_CONTRACT_VERSION = 1
 
 

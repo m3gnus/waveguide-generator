@@ -18,11 +18,14 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 from types import ModuleType
 
 import pytest
+
+from scripts.frontend_freshness import frontend_freshness, vite_executable
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -285,3 +288,73 @@ def test_the_requested_version_is_the_one_the_checkout_declares():
     assert fetch_spa.declared_version(ROOT) == declared
     assert fetch_spa.asset_name(declared) == f"waveguide-generator-v2-spa-{declared}.tar.gz"
     assert fetch_spa.release_base_url("m3gnus/waveguide-generator", declared).endswith(f"/v{declared}")
+
+
+def _make_sources_newer_than(checkout: Path) -> None:
+    """The mtime ordering every real release install actually has.
+
+    The archive keeps the times CI built it with; the checkout around it is
+    written when the user installs. So the sources are always newer than the
+    interface, and the mtime fallback in frontend_freshness would call a
+    correct install stale.
+    """
+
+    source = checkout / "frontend" / "src" / "main.tsx"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("export {};\n", encoding="utf-8")
+    os.utime(checkout / "frontend" / "dist" / "index.html", ns=(1_000_000_000, 1_000_000_000))
+    os.utime(source, ns=(2_000_000_000, 2_000_000_000))
+
+
+def test_a_verified_release_interface_is_never_reported_stale(checkout, release):
+    release()
+    assert _install(checkout, release) == 0
+    _make_sources_newer_than(checkout)
+
+    fresh, reason = frontend_freshness(checkout)
+
+    assert fresh, reason
+    assert "2.0.0" in reason
+
+
+def test_an_interface_from_another_release_names_both_versions(checkout, release):
+    release()
+    assert _install(checkout, release) == 0
+    (checkout / "shared" / "version.json").write_text('{"version": "2.0.1"}\n', encoding="utf-8")
+
+    fresh, reason = frontend_freshness(checkout)
+
+    assert not fresh
+    assert "v2.0.0" in reason and "v2.0.1" in reason
+
+
+def test_an_edited_release_interface_stops_being_trusted(checkout, release):
+    release()
+    assert _install(checkout, release) == 0
+    (checkout / "frontend" / "dist" / "assets" / "app.js").write_text("//\n", encoding="utf-8")
+
+    fresh, reason = frontend_freshness(checkout)
+
+    assert not fresh
+    assert "checksum" in reason
+
+
+def test_a_checkout_that_can_build_is_still_judged_on_its_sources(checkout, release):
+    """A developer who fetched a release SPA and then edited the interface.
+
+    The release stamp still verifies -- nothing touched dist -- so trusting it
+    unconditionally would tell them their edits are being served when they are
+    not. Owning a Vite binary is what separates the two cases.
+    """
+
+    release()
+    assert _install(checkout, release) == 0
+    _make_sources_newer_than(checkout)
+    vite = vite_executable(checkout)
+    vite.parent.mkdir(parents=True)
+    vite.write_text("", encoding="utf-8")
+
+    fresh, reason = frontend_freshness(checkout)
+
+    assert not fresh
+    assert "source is newer" in reason

@@ -30,10 +30,13 @@ from server.cadlink.identity import SaveIdentity
 from server.cadlink.ingest import (
     IngestRefusal,
     _canonical,
+    build_deferred_viewport,
     compute_freshness,
+    deferred_viewport_lookup_key,
     evaluate_instance_freshness,
     ingest_bundle,
     instance_identity_inventory,
+    resolve_deferred_viewport,
     validate_registry_echoes,
 )
 from server.mesh.imported import ImportedMeshDependencyError, polar_grid_from_symmetry
@@ -697,6 +700,99 @@ def test_viewport_mesh_endpoint_distinguishes_absence_and_corruption(
     assert response.body == b"visual"
 
 
+def _write_deferred_viewport_cas(
+    data_dir: Path, lookup_key: str, msh_text: str, geometry_hash: str
+) -> str:
+    """Publish one display artifact the way the deferred build does."""
+
+    viewports = data_dir / "imports" / "viewports"
+    (viewports / "index").mkdir(parents=True, exist_ok=True)
+    cache_key = mesh_text_sha256(msh_text).removeprefix("sha256:")
+    (viewports / f"{cache_key}.msh").write_text(msh_text, encoding="utf-8")
+    (viewports / f"{cache_key}.json").write_bytes(
+        _canonical(
+            {
+                "content_sha256": f"sha256:{cache_key}",
+                "transformed_geometry_hash": geometry_hash,
+                "healing_mode": "none",
+                "healing_options": [],
+                "stats": {},
+                "metadata": {},
+            }
+        )
+        + b"\n"
+    )
+    (viewports / "index" / f"{lookup_key}.txt").write_text(cache_key + "\n", encoding="ascii")
+    return cache_key
+
+
+def test_deferred_viewport_resolves_only_a_self_consistent_artifact(tmp_path: Path) -> None:
+    lookup_key = "a" * 64
+    geometry_hash = "sha256:" + "b" * 64
+    record = {
+        "ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C",
+        "transformed_geometry_hash": geometry_hash,
+        "viewport_mesh": {"available": False, "pending": True, "lookup_key": lookup_key},
+    }
+    assert deferred_viewport_lookup_key(record) == lookup_key
+    # Nothing published yet: pending is not the same as broken.
+    assert resolve_deferred_viewport(record, tmp_path) is None
+
+    _write_deferred_viewport_cas(tmp_path, lookup_key, "visual", geometry_hash)
+    resolved = resolve_deferred_viewport(record, tmp_path)
+    assert resolved is not None
+    assert resolved["msh_text"] == "visual"
+
+    # The sealed record cannot vouch for an artifact built after it, so the
+    # normalized geometry the artifact names is the link that has to hold.
+    foreign = {**record, "transformed_geometry_hash": "sha256:" + "c" * 64}
+    assert resolve_deferred_viewport(foreign, tmp_path) is None
+
+    # A record that never deferred must not start resolving by lookup key.
+    settled = {**record, "viewport_mesh": {"available": False, "reason": "unavailable"}}
+    assert deferred_viewport_lookup_key(settled) is None
+    assert resolve_deferred_viewport(settled, tmp_path) is None
+
+
+def test_viewport_endpoint_answers_202_while_a_deferred_tessellation_is_building(
+    monkeypatch, tmp_path: Path
+) -> None:
+    ingest_id = "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C"
+    lookup_key = "a" * 64
+    geometry_hash = "sha256:" + "b" * 64
+    record = {
+        "ingest_id": ingest_id,
+        "transformed_geometry_hash": geometry_hash,
+        "viewport_mesh": {"available": False, "pending": True, "lookup_key": lookup_key},
+    }
+    app = SimpleNamespace(
+        state=SimpleNamespace(cadlink_store=object(), data_dir=str(tmp_path))
+    )
+
+    async def fake_to_thread(function, *args, **kwargs):
+        if function.__name__ == "get_ingestion_record":
+            return record
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr("server.cadlink.api.asyncio.to_thread", fake_to_thread)
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        "server.cadlink.api._schedule_deferred_viewport",
+        lambda published, data_dir: scheduled.append(str(published["ingest_id"])),
+    )
+
+    pending = asyncio.run(get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app)))
+    assert pending.status_code == 202
+    # Nothing was in flight, so asking restarted the build rather than leaving
+    # the caller to wait for an artifact no one is producing.
+    assert scheduled == [ingest_id]
+
+    _write_deferred_viewport_cas(tmp_path, lookup_key, "visual", geometry_hash)
+    ready = asyncio.run(get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app)))
+    assert ready.status_code == 200
+    assert ready.body == b"visual"
+
+
 def test_canonical_json_coerces_numpy_values() -> None:
     assert json.loads(_canonical({"scalar": np.int64(3), "array": np.array([1.5])})) == {
         "array": [1.5],
@@ -1184,6 +1280,28 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
     assert third["viewport_mesh"]["cache_hit"] is True
     assert first["viewport_mesh"]["content_sha256"] == third["viewport_mesh"]["content_sha256"]
     assert first["viewport_mesh"]["store_path"] != first["mesh_store_path"]
+
+    # Deferring the display tessellation must move it, not change it: the same
+    # bundle ingested into an empty cache publishes as soon as the solve mesh
+    # exists, and the artifact built behind that record is the same bytes the
+    # in-line path produced.
+    deferred_dir = tmp_path / "deferred-data"
+    deferred_store = CadLinkStore(deferred_dir / "cadlink.db")
+    deferred = _run_in_gmsh_session(
+        ingest_bundle, bundle, sizes, [], deferred_store, deferred_dir, defer_viewport=True
+    )
+    assert deferred["viewport_mesh"]["available"] is False
+    assert deferred["viewport_mesh"]["pending"] is True
+    assert deferred["mesh_content_sha256"] == first["mesh_content_sha256"]
+    assert resolve_deferred_viewport(deferred, deferred_dir) is None
+    built = build_deferred_viewport(deferred, deferred_dir)
+    assert built is not None
+    assert built["content_sha256"] == first["viewport_mesh"]["content_sha256"]
+    assert built["transformed_geometry_hash"] == deferred["transformed_geometry_hash"]
+    # A second call is the restart path: it finds the published artifact rather
+    # than tessellating the same geometry again.
+    assert build_deferred_viewport(deferred, deferred_dir)["msh_text"] == built["msh_text"]
+    assert resolve_deferred_viewport(deferred, deferred_dir) is not None
     assert first["normalisation"]["assembly_frame_is_solver_frame"] is True
     assert set(first["tag_map"]) == {"1", "101", "102", "103"}
     assert first["symmetry"]["planes"]["x0"]["accepted"] is False

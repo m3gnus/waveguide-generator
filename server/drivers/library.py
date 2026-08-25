@@ -16,6 +16,7 @@ import math
 from pathlib import Path
 import re
 
+from server.drivers.paths import bundled_library_dir
 from server.drivers.csv_loader import (
     build_display,
     build_source,
@@ -28,6 +29,9 @@ from server.drivers.csv_loader import (
 
 
 logger = logging.getLogger(__name__)
+
+#: "not given" for the bundled folder, which is different from "turned off".
+_UNSET: Path = Path("\x00unset")
 
 _COMPLETENESS_RANK = {"full": 0, "partial": 1, "catalogue": 2}
 _WORD_SPLIT = re.compile(r"\s+")
@@ -60,14 +64,30 @@ class DriverRecord:
     def primary(self) -> DriverVariant:
         return self.variants[0]
 
-    def variant_for(self, z_ohm: float | None) -> DriverVariant:
+    def usable_variants(self) -> list[DriverVariant]:
+        """The windings that carry enough Thiele-Small data to be driven.
+
+        ``full`` is exactly ``DriverSpec``'s requirement -- Sd, Bl, Re, a mass
+        and a compliance -- so a variant outside this list cannot drive a
+        channel at all: WG drops it on the way to the wire and the run comes
+        back with no power, current or excursion.
+        """
+
+        return [variant for variant in self.variants if variant.completeness == "full"]
+
+    def variant_for(
+        self, z_ohm: float | None, *, among: list[DriverVariant] | None = None
+    ) -> DriverVariant | None:
+        candidates = self.variants if among is None else among
+        if not candidates:
+            return None
         if z_ohm is not None:
-            for variant in self.variants:
+            for variant in candidates:
                 if variant.z_ohm is not None and math.isclose(
                     variant.z_ohm, z_ohm, rel_tol=1e-6, abs_tol=1e-6
                 ):
                     return variant
-        return self.primary
+        return candidates[0]
 
 
 def _normalize_tokens(text: str) -> list[str]:
@@ -125,13 +145,25 @@ def _make_id(brand: str, model: str, z_ohm: float | None, used_ids: set[str]) ->
     return candidate
 
 
-def _hit_payload(record: DriverRecord, variant: DriverVariant) -> dict[str, object]:
+def _hit_payload(
+    record: DriverRecord,
+    variant: DriverVariant,
+    variants: list[DriverVariant] | None = None,
+) -> dict[str, object]:
+    """``variants`` narrows the impedance list the caller is offered.
+
+    The picker turns that list into its winding buttons, so a filtered search
+    has to filter it too -- otherwise the row says "8|16 ohm" and switching to
+    the 16 is switching to a driver the search just refused to show.
+    """
+
+    listed = record.variants if variants is None else variants
     return {
         "id": variant.id,
         "brand": record.brand,
         "model": record.model,
         "z_ohm": variant.z_ohm,
-        "variants": [{"id": v.id, "z_ohm": v.z_ohm} for v in record.variants],
+        "variants": [{"id": v.id, "z_ohm": v.z_ohm} for v in listed],
         "kind": record.kind,
         "size": record.size,
         "completeness": variant.completeness,
@@ -142,22 +174,52 @@ def _hit_payload(record: DriverRecord, variant: DriverVariant) -> dict[str, obje
     }
 
 
-def _detail_payload(record: DriverRecord, variant: DriverVariant) -> dict[str, object]:
-    payload = _hit_payload(record, variant)
+def _detail_payload(
+    record: DriverRecord,
+    variant: DriverVariant,
+    variants: list[DriverVariant] | None = None,
+) -> dict[str, object]:
+    payload = _hit_payload(record, variant, variants)
     payload["fields"] = dict(variant.fields)
     payload["extras"] = dict(variant.extras)
     return payload
 
 
+@dataclass(frozen=True, slots=True)
+class _Row:
+    """One CSV line, with where it was read from."""
+
+    filename: str
+    bundled: bool
+    fields: dict[str, float | str | None]
+    extras: dict[str, str]
+
+
+def _user_rows_win(entries: list[_Row]) -> list[_Row]:
+    """Drop a shipped winding the user has a row of their own for.
+
+    Same brand, same model, same impedance is the same driver, and the copy
+    that matters is the one whose numbers this person has checked or corrected
+    -- otherwise picking their own driver means choosing between two identical
+    buttons, one of which quietly ignores their edits. Two rows in the *user's*
+    own files are left alone: duplicates there are theirs to keep.
+    """
+
+    owned = {
+        row.fields.get("z_ohm") for row in entries if not row.bundled
+    }
+    return [row for row in entries if not row.bundled or row.fields.get("z_ohm") not in owned]
+
+
 def _build_index(
-    folder: Path, filenames: list[str]
+    paths: list[Path], bundled: Path | None = None
 ) -> tuple[list[DriverRecord], list[dict[str, object]]]:
-    groups: dict[tuple[str, str], list[tuple[str, dict[str, float | str | None], dict[str, str]]]] = {}
+    groups: dict[tuple[str, str], list[_Row]] = {}
     display_names: dict[tuple[str, str], tuple[str, str]] = {}
     file_stats: list[dict[str, object]] = []
 
-    for filename in filenames:
-        path = folder / filename
+    for path in paths:
+        is_bundled = bundled is not None and path.parent == bundled
         rows = 0
         try:
             with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -170,18 +232,19 @@ def _build_index(
                     if not isinstance(brand, str) or not isinstance(model, str):
                         continue
                     key = (brand.casefold(), model.casefold())
-                    groups.setdefault(key, []).append((filename, fields, extras))
+                    groups.setdefault(key, []).append(_Row(path.name, is_bundled, fields, extras))
                     display_names.setdefault(key, (brand, model))
         except OSError as exc:
             logger.warning("Could not read driver library file %s: %s", path, exc)
-        file_stats.append({"name": filename, "rows": rows})
+        file_stats.append({"name": path.name, "rows": rows, "bundled": is_bundled})
 
     records: list[DriverRecord] = []
     used_ids: set[str] = set()
     for key, entries in groups.items():
         brand, model = display_names[key]
         variants: list[DriverVariant] = []
-        for filename, fields, extras in entries:
+        for row in _user_rows_win(entries):
+            filename, fields, extras = row.filename, row.fields, row.extras
             z_ohm = fields.get("z_ohm")
             z_value = float(z_ohm) if isinstance(z_ohm, (int, float)) else None
             variant_id = _make_id(brand, model, z_value, used_ids)
@@ -201,7 +264,7 @@ def _build_index(
                         if isinstance(fields.get("xo_min_hz"), (int, float))
                         else None
                     ),
-                    source=build_source(filename, fields),
+                    source={**build_source(filename, fields), "bundled": row.bundled},
                 )
             )
         variants.sort(key=lambda v: (v.z_ohm is None, v.z_ohm if v.z_ohm is not None else 0.0))
@@ -227,31 +290,77 @@ def _build_index(
 
 
 class DriverLibrary:
-    """The searchable index over one folder of driver CSV files."""
+    """The searchable index over the driver CSVs this installation can read.
 
-    def __init__(self, folder: Path) -> None:
+    Two sources, and only one of them is the user's: the folder they drop
+    files into, and the library that ships with the application. Both are
+    indexed together so a fresh install can pick a real driver instead of
+    meeting an empty search box, and ``folder`` still means the writable one --
+    it is the path Settings shows and offers to open.
+    """
+
+    def __init__(self, folder: Path, *, bundled: Path | None = _UNSET) -> None:
         self.folder = Path(folder)
+        # Explicit ``None`` turns the shipped library off, which is what a test
+        # of the user's own folder wants; the default finds whatever shipped.
+        self.bundled = bundled_library_dir() if bundled is _UNSET else (
+            None if bundled is None else Path(bundled)
+        )
         self._records: list[DriverRecord] = []
         self._by_id: dict[str, tuple[DriverRecord, DriverVariant]] = {}
         self._file_stats: list[dict[str, object]] = []
-        self._mtimes: dict[str, float] = {}
+        self._mtimes: dict[str, tuple[int, int]] = {}
         self._last_scan: str | None = None
         self._scanned_once = False
 
-    def _current_files(self) -> dict[str, float]:
-        if not self.folder.is_dir():
-            return {}
-        stats: dict[str, float] = {}
-        try:
-            entries = sorted(self.folder.iterdir())
-        except OSError:
-            return {}
-        for path in entries:
-            if path.is_file() and path.suffix.lower() == ".csv":
-                try:
-                    stats[path.name] = path.stat().st_mtime
-                except OSError:
-                    continue
+    def _sources(self) -> list[Path]:
+        """Where CSVs are read from, the user's folder first.
+
+        Order is the tie-breaker nothing else states: the first file to name a
+        brand and model owns how that driver is spelled on screen.
+        """
+
+        folders = [self.folder]
+        if self.bundled is not None and self.bundled != self.folder:
+            folders.append(self.bundled)
+        return folders
+
+    def _current_files(self) -> dict[str, tuple[int, int]]:
+        """Every readable CSV and its change fingerprint, keyed by full path.
+
+        Keyed by path rather than name so a file the user happens to call
+        ``hornlab-drivers.csv`` cannot mask the shipped one out of the change
+        detector and leave the index stale.
+
+        The fingerprint is ``(mtime_ns, size)``, not a float mtime. Two edits
+        inside one filesystem timestamp tick are indistinguishable by mtime
+        alone, and the tick is not always small: Windows CI reproduced this by
+        rewriting a shipped CSV immediately after the first scan and getting an
+        identical ``st_mtime`` back, so the rescan never fired and the index
+        silently served the old rows. FAT-family and some network filesystems
+        are coarser still -- two seconds on FAT32 -- and this app's data
+        directory is allowed to live on a network share. ``st_mtime_ns`` avoids
+        the float rounding, and the size catches a same-tick edit that changes
+        the file's length. A same-tick edit that preserves length exactly is
+        still missed; catching that needs content hashing, which is not worth
+        reading every CSV on every request.
+        """
+
+        stats: dict[str, tuple[int, int]] = {}
+        for folder in self._sources():
+            if not folder.is_dir():
+                continue
+            try:
+                entries = sorted(folder.iterdir())
+            except OSError:
+                continue
+            for path in entries:
+                if path.is_file() and path.suffix.lower() == ".csv":
+                    try:
+                        info = path.stat()
+                    except OSError:
+                        continue
+                    stats[str(path)] = (info.st_mtime_ns, info.st_size)
         return stats
 
     def ensure_indexed(self) -> None:
@@ -264,7 +373,7 @@ class DriverLibrary:
         except OSError as exc:
             logger.warning("Could not create driver library folder %s: %s", self.folder, exc)
         current = self._current_files()
-        records, file_stats = _build_index(self.folder, sorted(current))
+        records, file_stats = _build_index([Path(name) for name in current], self.bundled)
         self._records = records
         self._by_id = {
             variant.id: (record, variant) for record in records for variant in record.variants
@@ -280,15 +389,48 @@ class DriverLibrary:
             "folder": str(self.folder),
             "files": list(self._file_stats),
             "total_drivers": len(self._records),
+            # What the picker will actually offer. A catalogue CSV can index
+            # thousands of rows and still be able to drive nothing, so a lone
+            # total reads as a library that works when it does not.
+            "complete_drivers": sum(
+                1 for record in self._records if record.usable_variants()
+            ),
             "last_scan": self._last_scan,
         }
 
     def search(
-        self, *, q: str = "", kind: str = "all", z: float | None = None, limit: int = 20
+        self,
+        *,
+        q: str = "",
+        kind: str = "all",
+        z: float | None = None,
+        limit: int = 20,
+        complete: bool = False,
     ) -> list[dict[str, object]]:
+        page = self.search_page(q=q, kind=kind, z=z, limit=limit, complete=complete)
+        return page["items"]  # type: ignore[return-value]
+
+    def search_page(
+        self,
+        *,
+        q: str = "",
+        kind: str = "all",
+        z: float | None = None,
+        limit: int = 20,
+        complete: bool = False,
+    ) -> dict[str, object]:
+        """Ranked matches, plus how many were withheld for missing T/S data.
+
+        The count is what keeps ``complete`` from reading as a broken library:
+        most compression-driver rows are catalogue entries with no motor data
+        at all, so a filtered search over them comes back empty, and the caller
+        needs to be able to say why rather than just showing nothing.
+        """
+
         self.ensure_indexed()
         query_tokens = _normalize_tokens(q or "")
         ranked: list[tuple[tuple[float, bool, int, str, str], dict[str, object]]] = []
+        hidden = 0
         for record in self._records:
             if kind != "all" and record.kind != kind:
                 continue
@@ -296,7 +438,12 @@ class DriverLibrary:
             score = _match_score(query_tokens, driver_tokens)
             if score is None:
                 continue
-            variant = record.variant_for(z)
+            listed = record.usable_variants() if complete else None
+            variant = record.variant_for(z, among=listed)
+            if variant is None:
+                # Matched the query, but no winding of it can drive a channel.
+                hidden += 1
+                continue
             z_match = (
                 z is not None
                 and variant.z_ohm is not None
@@ -309,17 +456,28 @@ class DriverLibrary:
                 record.brand.casefold(),
                 record.model.casefold(),
             )
-            ranked.append((sort_key, _hit_payload(record, variant)))
+            ranked.append((sort_key, _hit_payload(record, variant, listed)))
         ranked.sort(key=lambda item: item[0])
-        return [payload for _, payload in ranked[:limit]]
+        return {
+            "items": [payload for _, payload in ranked[:limit]],
+            "hidden_incomplete": hidden,
+        }
 
-    def get(self, driver_id: str) -> dict[str, object] | None:
+    def get(self, driver_id: str, *, complete: bool = False) -> dict[str, object] | None:
         self.ensure_indexed()
         entry = self._by_id.get(driver_id)
         if entry is None:
             return None
         record, variant = entry
-        return _detail_payload(record, variant)
+        listed = None
+        if complete:
+            # The winding that was asked for by id stays listed whatever its
+            # own data looks like: it is already on a channel, and dropping it
+            # from its own variant list would leave the picker showing buttons
+            # with none of them selected.
+            usable = record.usable_variants()
+            listed = [v for v in record.variants if v is variant or v in usable]
+        return _detail_payload(record, variant, listed)
 
 
 __all__ = ["DriverLibrary", "DriverRecord", "DriverVariant"]

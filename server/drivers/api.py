@@ -24,9 +24,14 @@ def create_drivers_router(library: DriverLibrary) -> APIRouter:
         kind: Literal["lf", "cd", "all"] = Query(default="all"),
         z: float | None = Query(default=None, gt=0),
         limit: int = Query(default=20, ge=1, le=100),
+        complete: bool = Query(default=False),
     ) -> dict[str, object]:
-        items = library.search(q=q, kind=kind, z=z, limit=limit)
-        return {"items": items, "total": len(items)}
+        page = library.search_page(q=q, kind=kind, z=z, limit=limit, complete=complete)
+        return {
+            "items": page["items"],
+            "total": len(page["items"]),
+            "hidden_incomplete": page["hidden_incomplete"],
+        }
 
     # Static paths ("/library", "/library/rescan") must be declared before the
     # dynamic "/{driver_id}" catch-all below, or FastAPI would try to resolve
@@ -41,8 +46,11 @@ def create_drivers_router(library: DriverLibrary) -> APIRouter:
         return library.rescan()
 
     @router.get("/{driver_id}", response_model=DriverDetail)
-    async def get_driver(driver_id: str) -> dict[str, object]:
-        record = library.get(driver_id)
+    async def get_driver(
+        driver_id: str,
+        complete: bool = Query(default=False),
+    ) -> dict[str, object]:
+        record = library.get(driver_id, complete=complete)
         if record is None:
             raise HTTPException(status_code=404, detail=f"Unknown driver id {driver_id!r}")
         return record

@@ -25,6 +25,29 @@ symmetry-domain resolution. `request_identity: "execution"` and the explicit
 unqualified names remain aliases for the execution hashes. The result HTTP response
 supplies an ETag and exact stored-byte SHA-256.
 
+### Declared versus installed dependencies
+
+| Field | Meaning |
+|---|---|
+| `dependency_shas` | what `pins.json` **declares** this release should run, one commit per module. A declaration only — it is read from the checkout and is true of the repository, not of the machine |
+| `installed_dependency_shas` | what **actually ran**: the commit pip recorded in each distribution's `direct_url.json` (PEP 610). `null` for a module that is missing, was not installed from Git, or whose record could not be read |
+| `dependency_drift` | sorted module names where the installed commit differs from the pin or is unknown |
+
+`dependency_drift` is the trustworthy signal, and the only one. `[]` means every
+pinned module was measured and every measurement matched. A non-empty list means the
+result describes a stack the host was not running, so any conclusion drawn from it is
+about the installed commits, not the pinned ones. A *missing* `dependency_drift` field
+means the producer predates the measurement and made no claim either way — do not read
+its absence as agreement. These modules do not encode their commit in their version
+string (several sit at `0.1.0` indefinitely), so neither the version nor a capability
+probe can substitute for this comparison.
+
+Measurement never fails a solve. If the environment cannot be read at all, every entry
+degrades to `null` and every module is listed as drifted, which is a reported unknown
+rather than a silent claim of agreement. `scripts/check_backends.py` prints the same
+comparison for a host, and `GET /api/capabilities` returns it as `dependencies`
+(`pinned`, `installed`, `drift`).
+
 ## Parametric envelope and axes
 
 Every completed native solve maps to one JSON shape before charts or exports consume

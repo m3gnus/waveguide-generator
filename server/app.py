@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import asdict
 import json
 import logging
@@ -25,6 +26,8 @@ from server.drivers import mount_drivers
 from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.integration import mount_integration
+from server.integration.installed import measure_installed_stack
+from server.integration.provenance import pinned_dependency_shas
 from server.mesh.api import mount_solver_mesh
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
@@ -34,6 +37,7 @@ from server.platform.origin import (
     request_origin_allowed,
 )
 from server.platform.paths import app_root, default_runs_dir, resolve_data_dir
+from server.platform.sqlite import journal_mode_statuses
 from server.preview.service import mount_preview
 from server.settings import mount_settings
 from server.solver.symmetry import resolve_symmetry
@@ -167,6 +171,30 @@ async def prewarm_solver() -> None:
     start_solver_warmup()
 
 
+async def bempp_worker_prewarm(engine_registry: EngineRegistry) -> None:
+    """Warm the killable BEMPP worker once AUTO's answer is known.
+
+    Takes the answer from the registry rather than probing for it. An earlier
+    revision called ``resolve_auto_engine()`` on its own thread and so ran a
+    second ``detect_engines()`` 2 ms after ``EngineRegistry.prewarm`` began the
+    first -- two concurrent cold probes, because ``lru_cache`` does not
+    serialise a miss and ``circsym_status`` is not cached at all.
+    ``capabilities()`` is guarded by an ``asyncio.Lock``, so awaiting it here
+    joins the one probe instead of racing it.
+    """
+
+    from server.solver.warmup import prewarm_bempp_worker_for_engine
+
+    try:
+        engine = await engine_registry.resolve("auto", solver_mode=None)
+    except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
+        logging.getLogger("wg.solver.warmup").info(
+            "BEMPP worker prewarm could not resolve AUTO: %s", exc
+        )
+        return
+    await asyncio.to_thread(prewarm_bempp_worker_for_engine, engine)
+
+
 class _HashedAssetStaticFiles(StaticFiles):
     """Serve the SPA with cache lifetimes that match how Vite names files.
 
@@ -262,6 +290,46 @@ def create_app(
     # Likewise the engine probe: it is the page load's slowest request, and
     # leaving it lazy made it contend with the first symmetry resolution.
     application.router.add_event_handler("startup", engine_registry.prewarm)
+    # The BEMPP worker's own initialization is the single largest thing between
+    # a server start and a user's first result, and it is paid in a process the
+    # parent can kill. Warm it by default; ``prewarm_solver`` below stays an
+    # opt-in because it warms in-process, where shutdown cannot bound the wait.
+    async def prewarm_bempp_worker() -> None:
+        """Schedule the worker prewarm. Startup runs before the socket is served.
+
+        Unlike ``prewarm_solver`` this is registered by default. Every BEMPP
+        solve runs in that worker child, the child's one-off initialization is
+        25-61 s on the reference Windows VM, and a child -- unlike an
+        in-process warmup thread -- can be killed without its native code
+        cooperating, so warming it costs shutdown nothing.
+        ``WG2_SOLVER_WARMUP=0`` switches it off; the suite sets that in
+        ``server/tests/conftest.py``.
+        """
+
+        application.state.bempp_prewarm_task = asyncio.create_task(
+            bempp_worker_prewarm(engine_registry)
+        )
+
+    async def shutdown_bempp_worker() -> None:
+        """Stop the prewarm and the worker with the app, not at interpreter exit.
+
+        ``bempp_process`` registers an ``atexit`` hook, but a launcher killed
+        with TerminateProcess never runs one, and the prewarm means a worker
+        can be alive even for a session that never solved. Closing here bounds
+        the wait at ``_JOIN_SECONDS`` and then terminates -- which is the
+        property that lets the worker be warmed by default at all.
+        """
+
+        task = getattr(application.state, "bempp_prewarm_task", None)
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        from server.solver.bempp_process import shutdown_bempp_process
+
+        await asyncio.to_thread(shutdown_bempp_process)
+
+    application.router.add_event_handler("startup", prewarm_bempp_worker)
     if solver_warmup:
         application.router.add_event_handler("startup", prewarm_solver)
 
@@ -359,6 +427,12 @@ def create_app(
             (name for name in ("metal", "beat", "bempp", "dryrun") if name in available),
             None,
         )
+        # "What can this host do" is incomplete without "and is this host the
+        # stack it claims to be". A drifted module changes what the probes above
+        # report while every version string stays put, so the comparison belongs
+        # next to them rather than only in a solve result nobody reads twice.
+        pinned = pinned_dependency_shas()
+        installed, drift = measure_installed_stack(pinned)
         return {
             "engines": capabilities_cache,
             "engineSelection": {
@@ -367,6 +441,14 @@ def create_app(
                 "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
                 "axisymmetricRunner": "axisym",
             },
+            "dependencies": {
+                "pinned": pinned,
+                "installed": installed,
+                "drift": drift,
+            },
+            # A store whose filesystem refused write-ahead logging still works,
+            # just slowly, so it is reported here rather than refused at boot.
+            "storage": journal_mode_statuses(),
         }
 
     @application.post("/api/design/symmetry")
@@ -423,6 +505,7 @@ def create_app(
     application.router.add_event_handler("shutdown", shutdown_mesher_prewarm)
     application.router.add_event_handler("shutdown", engine_registry.shutdown_prewarm)
     application.router.add_event_handler("shutdown", shutdown_gmsh_worker)
+    application.router.add_event_handler("shutdown", shutdown_bempp_worker)
     application.mount(
         "/", _HashedAssetStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend"
     )

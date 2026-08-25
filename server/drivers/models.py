@@ -21,6 +21,9 @@ class DriverSource(BaseModel):
     file: str
     source_url: str | None = None
     price_eur: float | None = None
+    #: Read from the library that ships with the application rather than from
+    #: the user's own folder, so nothing offers to edit a file they do not have.
+    bundled: bool = False
 
 
 class DriverDisplay(BaseModel):
@@ -28,6 +31,7 @@ class DriverDisplay(BaseModel):
     sd_cm2: float | None = None
     bl_t_m: float | None = None
     xmax_mm: float | None = None
+    power_w: float | None = None
     sensitivity_db: float | None = None
     price_eur: float | None = None
 
@@ -50,6 +54,9 @@ class DriverHit(BaseModel):
 class DriverSearchResponse(BaseModel):
     items: list[DriverHit]
     total: int
+    #: Matches withheld because no winding of them carries enough T/S data to
+    #: drive a channel. Always 0 unless the request asked for ``complete``.
+    hidden_incomplete: int = 0
 
 
 class DriverDetail(DriverHit):
@@ -60,12 +67,16 @@ class DriverDetail(DriverHit):
 class DriverLibraryFile(BaseModel):
     name: str
     rows: int
+    bundled: bool = False
 
 
 class DriverLibraryInfo(BaseModel):
     folder: str
     files: list[DriverLibraryFile]
     total_drivers: int
+    #: How many of them carry enough Thiele-Small data to drive a channel, and
+    #: so are the ones a ``complete`` search will offer.
+    complete_drivers: int = 0
     last_scan: str | None = None
 
 

@@ -18,7 +18,15 @@ class ResultProvenance(BaseModel):
 
     schema_version: Literal[1]
     wg_version: str
+    #: What ``pins.json`` declares this release should run.
     dependency_shas: dict[str, str]
+    #: What was actually installed when the solve ran: the commit pip recorded
+    #: for each pinned module, ``None`` where it could not be measured. Absent
+    #: on results produced before the environment was ever measured.
+    installed_dependency_shas: dict[str, str | None] | None = None
+    #: Sorted pinned modules whose installed commit differs from the pin or is
+    #: unknown. ``[]`` means measured and clean; absent means never measured.
+    dependency_drift: list[str] | None = None
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

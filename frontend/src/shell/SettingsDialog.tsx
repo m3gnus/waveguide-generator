@@ -35,13 +35,24 @@ function DriverLibrarySettings() {
   useEffect(() => { void load(); }, [load]);
 
   const files = info?.files.length ?? 0;
+  const shipped = info?.files.filter((file) => file.bundled).length ?? 0;
+  const indexed = info?.total_drivers ?? 0;
+  // A catalogue CSV indexes thousands of rows and can drive none of them, so
+  // the count that matters is the second one: a driver without Sd, Bl, Re, a
+  // mass and a compliance is never offered, and a lone total would promise a
+  // library the Drivers rail cannot deliver.
+  const drivable = info?.complete_drivers ?? indexed;
   return <section id="settings-drivers" className="settings-theme driver-library-settings" aria-labelledby="settings-drivers-title" tabIndex={-1}>
     <h3 id="settings-drivers-title">Driver library</h3>
     <p className={`workspace-settings-path ${info?.folder ? '' : 'not-selected'}`} title={info?.folder ?? undefined}>{info?.folder ?? 'Not resolved yet'}</p>
-    <p className="cad-settings-note">Waveguide Generator ships no driver data. Put CSV files in this folder and their drivers become searchable in <b>Drivers</b>.</p>
+    <p className="cad-settings-note">A driver library ships with Waveguide Generator. Put your own CSV files in this folder to add to it — for a driver and winding you supply yourself, your row is the one <b>Drivers</b> offers.</p>
+    {/* Otherwise a fruitless search for a compression driver reads as a broken
+        search rather than as the state of the world's datasheets. */}
+    <p className="cad-settings-note">It holds cone drivers almost exclusively. Compression-driver manufacturers publish a throat, a power rating and a sensitivity but no moving mass or compliance, so a driver model cannot be built from their data — enter one by hand in <b>Drivers</b> if you have measured it.</p>
     <div className="driver-library-counts">
-      <span>{files.toLocaleString()} file{files === 1 ? '' : 's'} · {(info?.total_drivers ?? 0).toLocaleString()} driver{info?.total_drivers === 1 ? '' : 's'}</span>
+      <span>{files.toLocaleString()} file{files === 1 ? '' : 's'}{shipped > 0 && <> ({shipped === files ? 'shipped' : `${shipped.toLocaleString()} shipped`})</>} · {indexed.toLocaleString()} driver{indexed === 1 ? '' : 's'} indexed · {drivable.toLocaleString()} with Thiele-Small data</span>
     </div>
+    {indexed > drivable && <p className="cad-settings-note">The other {(indexed - drivable).toLocaleString()} are catalogue entries: without Sd, Bl, Re, a mass and a compliance they cannot drive a channel, so <b>Drivers</b> does not offer them. Type such a driver&rsquo;s values in by hand there instead.</p>}
     <div className="settings-theme-options">
       <button disabled={status === 'loading'} onClick={() => void rescan()}>{status === 'loading' ? 'Rescanning…' : 'Rescan'}</button>
     </div>

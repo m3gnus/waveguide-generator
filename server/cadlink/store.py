@@ -11,6 +11,7 @@ import threading
 from typing import Any
 
 from server.platform.paths import data_paths
+from server.platform.sqlite import JournalModeStatus, configure_connection
 from server.workspace.archive import archive_folder_slug
 
 from .identity import (
@@ -232,6 +233,8 @@ class CadLinkStore:
         self._connections: set[sqlite3.Connection] = set()
         self._connections_lock = threading.Lock()
         self._initialized = False
+        # Set on the first connection; the mode SQLite granted, not the one asked for.
+        self.journal_mode_status: JournalModeStatus | None = None
 
     @classmethod
     def for_data_dir(cls, data_dir: str | Path) -> CadLinkStore:
@@ -1213,10 +1216,9 @@ class CadLinkStore:
             return existing
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA foreign_keys = ON")
+        self.journal_mode_status = configure_connection(
+            conn, db_path=str(self.db_path), label="CAD Link database"
+        )
         self._local.conn = conn
         with self._connections_lock:
             self._connections.add(conn)

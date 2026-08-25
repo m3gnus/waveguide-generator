@@ -120,6 +120,14 @@ is, and a value that cannot be read as written is dropped rather than guessed
 at. `SweepPoints = list` is honoured only alongside a `Frequencies` list that
 parses, so a hand-edited file cannot leave WG in a mode that refuses to solve.
 
+Two settings are deliberately not portable, because they describe the machine
+rather than the design: which backend runs the solve, and which formulation it
+uses. `Engine` and `SolverMode` in a `WG.Solve` block, and the legacy top-level
+`Simulation.SolverMode`, are therefore not honoured on any host and are stripped
+from a design WG writes. `Simulation.SolverMode` reports itself when dropped —
+see [SYMMETRY-CONTRACT.md](SYMMETRY-CONTRACT.md) — so stating one cannot be
+mistaken for setting one.
+
 Exporting a config from a finished run writes that run's own recorded solve
 options, never the settings currently on screen.
 
