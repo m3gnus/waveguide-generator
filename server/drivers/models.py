@@ -69,6 +69,9 @@ class DriverLibraryInfo(BaseModel):
     folder: str
     files: list[DriverLibraryFile]
     total_drivers: int
+    #: How many of them carry enough Thiele-Small data to drive a channel, and
+    #: so are the ones a ``complete`` search will offer.
+    complete_drivers: int = 0
     last_scan: str | None = None
 
 

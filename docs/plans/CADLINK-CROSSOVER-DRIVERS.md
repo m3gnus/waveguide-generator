@@ -221,6 +221,9 @@ per-user library folder and exposes a search API.
   the winding the id named, so a driver already on a channel keeps its own
   button in the sheet.
 - `GET /api/drivers/library` — folder, files, counts; `POST .../rescan`.
+  `total_drivers` is every indexed row; `complete_drivers` is how many of
+  them a `complete` search will offer. Settings shows both, because a
+  catalogue CSV indexes thousands of rows and can drive none of them.
 - Variants: rows that differ only in impedance group into one driver with
   a variant list.
 - User-saved drivers live in a `driverLibrary` durable-settings namespace

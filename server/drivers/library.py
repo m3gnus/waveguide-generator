@@ -312,6 +312,12 @@ class DriverLibrary:
             "folder": str(self.folder),
             "files": list(self._file_stats),
             "total_drivers": len(self._records),
+            # What the picker will actually offer. A catalogue CSV can index
+            # thousands of rows and still be able to drive nothing, so a lone
+            # total reads as a library that works when it does not.
+            "complete_drivers": sum(
+                1 for record in self._records if record.usable_variants()
+            ),
             "last_scan": self._last_scan,
         }
 
