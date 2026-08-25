@@ -135,7 +135,37 @@ branch does not.
 the `atexit` hook alone, which a launcher killed with `TerminateProcess` never
 runs.
 
-## 6. Not verified on this hardware
+## 6. One duplicate probe, found on the macOS review
+
+The first revision of this change resolved AUTO by calling
+`resolve_auto_engine()` on its own daemon thread. That ran a **second**
+`detect_engines()` at boot, 2 ms after `EngineRegistry.prewarm` started the
+first, on a different thread — counted directly during a real server boot:
+
+```
+PROBE_COUNT 2 [('wg2-bempp-worker-prewarm', 1.156), ('asyncio_0', 1.158)]
+```
+
+Neither cache absorbs that. `lru_cache` does not serialise its miss path, so
+two threads arriving 2 ms apart both run the probe body, and `circsym_status()`
+has no cache at all. On this Windows VM the cost was inside the noise of a
+1.56 s time-to-healthy and nothing showed it; the macOS reviewer's startup A/B
+is what made it worth looking for.
+
+The handler now awaits `EngineRegistry.capabilities()`, which is guarded by an
+`asyncio.Lock` behind a cache, and hands the answer to
+`prewarm_bempp_worker_for_engine`. Re-counted on the same boot path:
+
+```
+PROBE_COUNT 1 [('asyncio_0', 0.895)]
+```
+
+End-to-end first solve after the change: 1.17 s against 1.13 s before it, and
+time-to-healthy unchanged at 1.56 s — so on this host the duplicate probe cost
+nothing measurable. It is removed because two concurrent cold probes are wrong,
+not because this machine could feel them.
+
+## 7. Not verified on this hardware
 
 * **Metal.** This is a Windows VM; the Metal branch was not exercised. It is
   unchanged apart from its gate.

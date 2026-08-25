@@ -218,30 +218,14 @@ def test_the_bempp_worker_prewarm_is_registered_by_default(tmp_path: Path) -> No
 def test_the_bempp_worker_prewarm_can_be_switched_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from server.solver import warmup as solver_warmup
+    from server.solver import bempp_process, warmup as solver_warmup
 
+    monkeypatch.setattr(
+        bempp_process, "prewarm_bempp_process", lambda: pytest.fail("must not warm")
+    )
     monkeypatch.setenv("WG2_SOLVER_WARMUP", "0")
-    assert solver_warmup.start_bempp_worker_prewarm() is None
 
-
-def test_the_bempp_worker_prewarm_handler_never_blocks_startup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Startup runs before the listen socket is served, so this only schedules."""
-
-    from server.solver import warmup as solver_warmup
-
-    started = 0
-
-    def fake_start() -> None:
-        nonlocal started
-        started += 1
-
-    monkeypatch.setattr(solver_warmup, "start_bempp_worker_prewarm", fake_start)
-    from server.app import prewarm_bempp_worker
-
-    asyncio.run(prewarm_bempp_worker())
-    assert started == 1
+    assert solver_warmup.prewarm_bempp_worker_for_engine("bempp") is False
 
 
 def test_the_bempp_worker_prewarm_skips_hosts_auto_solves_elsewhere(
@@ -249,21 +233,88 @@ def test_the_bempp_worker_prewarm_skips_hosts_auto_solves_elsewhere(
 ) -> None:
     """A Metal or GPU host must not spend a process on an unreachable fallback."""
 
-    from server.engines import registry
     from server.solver import bempp_process, warmup as solver_warmup
 
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     prewarmed: list[str] = []
     monkeypatch.setattr(
         bempp_process, "prewarm_bempp_process", lambda: prewarmed.append("bempp")
     )
 
-    monkeypatch.setattr(registry, "resolve_auto_engine", lambda: "metal")
-    solver_warmup._run_bempp_worker_prewarm()
+    assert solver_warmup.prewarm_bempp_worker_for_engine("metal") is False
+    assert solver_warmup.prewarm_bempp_worker_for_engine(None) is False
     assert prewarmed == []
 
-    monkeypatch.setattr(registry, "resolve_auto_engine", lambda: "bempp")
-    solver_warmup._run_bempp_worker_prewarm()
+    assert solver_warmup.prewarm_bempp_worker_for_engine("bempp") is True
     assert prewarmed == ["bempp"]
+
+
+def test_the_bempp_worker_prewarm_takes_auto_from_the_registrys_one_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Probing separately ran a second cold detect_engines() racing the first.
+
+    ``EngineRegistry.prewarm`` and this handler started 2 ms apart on different
+    threads, and neither ``lru_cache`` nor the uncached ``circsym_status``
+    serialises a miss, so both did the full probe. Awaiting ``capabilities()``
+    joins the one snapshot instead.
+    """
+
+    from server.app import bempp_worker_prewarm
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    probes = 0
+
+    def detector() -> list[EngineInfo]:
+        nonlocal probes
+        probes += 1
+        return [EngineInfo("bempp", True, "test", "0.1.0")]
+
+    engines: list[str | None] = []
+    monkeypatch.setattr(
+        solver_warmup,
+        "prewarm_bempp_worker_for_engine",
+        lambda engine: engines.append(engine) or True,
+    )
+
+    registry = EngineRegistry(detector=detector)
+
+    async def exercise() -> None:
+        await registry.prewarm()
+        await bempp_worker_prewarm(registry)
+        await registry.shutdown_prewarm()
+
+    asyncio.run(exercise())
+
+    assert engines == ["bempp"]
+    assert probes == 1
+
+
+def test_the_bempp_worker_prewarm_never_blocks_startup(tmp_path: Path) -> None:
+    """The handler only schedules; the registry probe it needs is not awaited here."""
+
+    application = create_app(data_dir=tmp_path)
+    handler = next(
+        item
+        for item in application.router.on_startup
+        if item.__name__ == "prewarm_bempp_worker"
+    )
+
+    async def exercise() -> float:
+        started = time.perf_counter()
+        await handler()
+        elapsed = time.perf_counter() - started
+        task = application.state.bempp_prewarm_task
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return elapsed
+
+    assert asyncio.run(exercise()) < 0.05
 
 
 def test_the_bempp_warmup_targets_the_process_that_actually_solves(

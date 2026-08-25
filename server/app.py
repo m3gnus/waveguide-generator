@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import asdict
 import json
 import logging
@@ -166,37 +167,28 @@ async def prewarm_solver() -> None:
     start_solver_warmup()
 
 
-async def shutdown_bempp_worker() -> None:
-    """Stop the BEMPP worker with the app rather than at interpreter exit.
+async def bempp_worker_prewarm(engine_registry: EngineRegistry) -> None:
+    """Warm the killable BEMPP worker once AUTO's answer is known.
 
-    ``bempp_process`` registers an ``atexit`` hook, but a launcher killed with
-    TerminateProcess never runs one, and the prewarm means a worker can now be
-    alive even for a session that never solved. Closing it here bounds the wait
-    at ``_JOIN_SECONDS`` and then terminates -- which is the property that lets
-    the worker be warmed by default in the first place.
+    Takes the answer from the registry rather than probing for it. An earlier
+    revision called ``resolve_auto_engine()`` on its own thread and so ran a
+    second ``detect_engines()`` 2 ms after ``EngineRegistry.prewarm`` began the
+    first -- two concurrent cold probes, because ``lru_cache`` does not
+    serialise a miss and ``circsym_status`` is not cached at all.
+    ``capabilities()`` is guarded by an ``asyncio.Lock``, so awaiting it here
+    joins the one probe instead of racing it.
     """
 
-    from server.solver.bempp_process import shutdown_bempp_process
+    from server.solver.warmup import prewarm_bempp_worker_for_engine
 
-    await asyncio.to_thread(shutdown_bempp_process)
-
-
-async def prewarm_bempp_worker() -> None:
-    """Start the killable BEMPP worker so the first solve does not pay its JIT.
-
-    Unlike ``prewarm_solver`` this is registered by default. Every BEMPP solve
-    runs in that worker child, the child's one-off initialization is 25-61 s on
-    the reference Windows VM, and a child -- unlike an in-process warmup thread
-    -- can be killed without its native code cooperating, so warming it costs
-    shutdown nothing. ``WG2_SOLVER_WARMUP=0`` switches it off; the suite sets
-    that in ``server/tests/conftest.py``.
-
-    Only schedules: startup handlers run before the socket is served.
-    """
-
-    from server.solver.warmup import start_bempp_worker_prewarm
-
-    start_bempp_worker_prewarm()
+    try:
+        engine = await engine_registry.resolve("auto", solver_mode=None)
+    except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
+        logging.getLogger("wg.solver.warmup").info(
+            "BEMPP worker prewarm could not resolve AUTO: %s", exc
+        )
+        return
+    await asyncio.to_thread(prewarm_bempp_worker_for_engine, engine)
 
 
 class _HashedAssetStaticFiles(StaticFiles):
@@ -298,6 +290,41 @@ def create_app(
     # a server start and a user's first result, and it is paid in a process the
     # parent can kill. Warm it by default; ``prewarm_solver`` below stays an
     # opt-in because it warms in-process, where shutdown cannot bound the wait.
+    async def prewarm_bempp_worker() -> None:
+        """Schedule the worker prewarm. Startup runs before the socket is served.
+
+        Unlike ``prewarm_solver`` this is registered by default. Every BEMPP
+        solve runs in that worker child, the child's one-off initialization is
+        25-61 s on the reference Windows VM, and a child -- unlike an
+        in-process warmup thread -- can be killed without its native code
+        cooperating, so warming it costs shutdown nothing.
+        ``WG2_SOLVER_WARMUP=0`` switches it off; the suite sets that in
+        ``server/tests/conftest.py``.
+        """
+
+        application.state.bempp_prewarm_task = asyncio.create_task(
+            bempp_worker_prewarm(engine_registry)
+        )
+
+    async def shutdown_bempp_worker() -> None:
+        """Stop the prewarm and the worker with the app, not at interpreter exit.
+
+        ``bempp_process`` registers an ``atexit`` hook, but a launcher killed
+        with TerminateProcess never runs one, and the prewarm means a worker
+        can be alive even for a session that never solved. Closing here bounds
+        the wait at ``_JOIN_SECONDS`` and then terminates -- which is the
+        property that lets the worker be warmed by default at all.
+        """
+
+        task = getattr(application.state, "bempp_prewarm_task", None)
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        from server.solver.bempp_process import shutdown_bempp_process
+
+        await asyncio.to_thread(shutdown_bempp_process)
+
     application.router.add_event_handler("startup", prewarm_bempp_worker)
     if solver_warmup:
         application.router.add_event_handler("startup", prewarm_solver)

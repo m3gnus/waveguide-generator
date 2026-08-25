@@ -27,7 +27,8 @@ here, so warming this interpreter warmed one that never solves. Measured on
 the reference Windows VM: ``WG2_SOLVER_WARMUP=1`` spent 24.2 s in the parent
 and the first child solve still took 24.3 s, indistinguishable from no warmup
 at all. ``_warm_bempp`` now hands the work to the child, and
-``start_bempp_worker_prewarm`` does the same from boot without an opt-in.
+``server.app`` does the same from boot without an opt-in, through
+``prewarm_bempp_worker_for_engine``.
 
 That relocation is also what answers the objection below. The warmup is a real,
 non-cancellable native solve with no fast shutdown hook, so a daemon thread
@@ -55,11 +56,12 @@ will. The engine must match AUTO resolution. Apple Silicon normally resolves
 to Metal; warming the fallback BEMPP engine there wastes several seconds and
 does not remove Metal's smaller first-solve cost.
 
-Both entry points use a plain daemon thread rather than ``asyncio.to_thread``.
-The default executor's threads are joined during interpreter shutdown, and for
-the in-process Metal path that would hold Quit open for the remainder of the
-native initialization block. The worker-prewarm thread only spawns a process
-and writes one command to a pipe, so it is short-lived either way.
+``start_solver_warmup`` uses a plain daemon thread rather than
+``asyncio.to_thread``. The default executor's threads are joined during
+interpreter shutdown, and for the in-process Metal path that would hold Quit
+open for the remainder of the native initialization block. The worker prewarm
+has no such problem -- it only spawns a process and writes one command to a
+pipe -- so it runs as an ordinary task the app can cancel.
 """
 
 from __future__ import annotations
@@ -91,10 +93,8 @@ WARMUP_FREQUENCY_HZ = 1000.0
 
 _lock = threading.Lock()
 _thread: threading.Thread | None = None
-_worker_prewarm_thread: threading.Thread | None = None
 
 WARMUP_THREAD_NAME = "wg2-solver-warmup"
-WORKER_PREWARM_THREAD_NAME = "wg2-bempp-worker-prewarm"
 
 
 class _QuietWarmupFilter(logging.Filter):
@@ -278,61 +278,37 @@ def start_solver_warmup() -> threading.Thread | None:
         return _thread
 
 
-def _run_bempp_worker_prewarm() -> None:
-    """Spawn and warm the BEMPP worker, but only where AUTO would use it."""
+def prewarm_bempp_worker_for_engine(engine: str | None) -> bool:
+    """Warm the BEMPP worker child, but only where AUTO would reach it.
 
+    ``engine`` is AUTO's already-resolved answer, passed in rather than probed
+    for. Probing here instead cost a second, concurrent ``detect_engines()`` at
+    boot: this ran on its own thread 2 ms after ``EngineRegistry.prewarm``
+    started the same work, and neither ``lru_cache`` nor ``circsym_status``
+    (which has no cache at all) serialises a miss, so both threads did the full
+    probe. The registry already owns one snapshot behind an ``asyncio.Lock``;
+    the caller awaits that and hands the answer over.
+
+    Returns whether a worker was warmed, for tests and diagnostics.
+    """
+
+    if os.environ.get("WG2_SOLVER_WARMUP") == "0":
+        log.info("BEMPP worker prewarm disabled by WG2_SOLVER_WARMUP=0")
+        return False
+    if engine != "bempp":
+        # A Metal or GPU-BEAT host would spend a process and several seconds on
+        # a fallback its first solve never reaches. Users who then pick BEMPP by
+        # hand pay the cost on that solve, as before.
+        log.debug("BEMPP worker prewarm skipped: AUTO resolves to %s", engine)
+        return False
     try:
-        from server.engines.registry import resolve_auto_engine
-
-        engine = resolve_auto_engine()
-        if engine != "bempp":
-            # A Metal or GPU-BEAT host would spend a process and several
-            # seconds on a fallback its first solve never reaches. Users who
-            # then pick BEMPP by hand pay the cost on that solve, as before.
-            log.debug("BEMPP worker prewarm skipped: AUTO resolves to %s", engine)
-            return
-        from server.solver.bempp_process import prewarm_bempp_process
+        from .bempp_process import prewarm_bempp_process
 
         prewarm_bempp_process()
     except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
         log.info("BEMPP worker prewarm did not start: %s", exc)
-
-
-def start_bempp_worker_prewarm() -> threading.Thread | None:
-    """Start the killable BEMPP worker at boot. Never blocks, never raises.
-
-    On by default, unlike ``start_solver_warmup``. The reason that one is
-    opt-in is that it warms in-process, where an abandoned daemon thread inside
-    native code can hold Quit open for the rest of the initialization block.
-    This path warms the worker child instead, and a child is killed with
-    ``TerminateProcess``/``SIGKILL`` without its native code cooperating -- so
-    the objection that kept warming off does not apply to it.
-
-    The probe it needs (``resolve_auto_engine``) can take most of a second, and
-    startup handlers run before the listen socket is served, so this only ever
-    starts a thread. ``WG2_SOLVER_WARMUP=0`` still switches it off.
-    """
-
-    global _worker_prewarm_thread
-    if os.environ.get("WG2_SOLVER_WARMUP") == "0":
-        log.info("BEMPP worker prewarm disabled by WG2_SOLVER_WARMUP=0")
-        return None
-    with _lock:
-        if _worker_prewarm_thread is not None and _worker_prewarm_thread.is_alive():
-            return _worker_prewarm_thread
-        _worker_prewarm_thread = threading.Thread(
-            target=_run_bempp_worker_prewarm,
-            name=WORKER_PREWARM_THREAD_NAME,
-            daemon=True,
-        )
-        _worker_prewarm_thread.start()
-        return _worker_prewarm_thread
-
-
-def bempp_worker_prewarm_thread() -> threading.Thread | None:
-    """The live worker-prewarm thread, for tests and diagnostics."""
-
-    return _worker_prewarm_thread
+        return False
+    return True
 
 
 def solver_warmup_thread() -> threading.Thread | None:
@@ -344,9 +320,8 @@ def solver_warmup_thread() -> threading.Thread | None:
 __all__ = [
     "WARMUP_FREQUENCY_HZ",
     "WARMUP_MESH",
-    "bempp_worker_prewarm_thread",
+    "prewarm_bempp_worker_for_engine",
     "solver_warmup_thread",
-    "start_bempp_worker_prewarm",
     "start_solver_warmup",
     "warm_bempp_in_this_process",
 ]
