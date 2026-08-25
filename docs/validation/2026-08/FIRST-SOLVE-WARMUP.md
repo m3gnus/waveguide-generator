@@ -211,7 +211,39 @@ parent process, which is how the loop tests drive the worker in-process.
 
 End-to-end first solve after this change: 1.17 s, unchanged.
 
-## 8. Not verified on this hardware
+## 8. The real launcher's graceful path
+
+Sections 5 and 7 cover `close()` directly and an outright force-kill. Neither
+went through `launch/serve.py`, which was the last place a shutdown claim
+rested on inference.
+
+That launcher's own docstring says SIGBREAK is the only stop signal that can be
+sent to a specific process group on Windows, and so the only way to exercise
+its graceful path from another process. Started in its own process group with
+`CREATE_NEW_PROCESS_GROUP`, left for 8 s so the boot prewarm had a worker
+mid-warmup, **with no solve ever submitted**, then Ctrl+Break:
+
+| Run | Launcher rc | Launcher exited | BEMPP worker gone | Survivors |
+|---|---|---|---|---|
+| 1 | 0 | 1.03 s | 1.11 s | none |
+| 2 | 0 | 0.55 s | 0.62 s | none |
+| 3 | 0 | 0.55 s | 0.63 s | none |
+
+Both log markers present every time: `Received SIGBREAK; finishing active
+requests and shutting down` and `Shutdown complete; instance lock released`.
+The worker was identified by command line (`multiprocessing.spawn_main`), not
+by assuming which child it was — the first attempt at this test reported a
+descendant that turned out to be the server process itself.
+
+One observation left unexplained: the descendant walk consistently shows a
+second process with `serve.py`'s exact command line, port included, as a child
+of the launcher. `serve.py` contains no `execv`, `Popen` or `subprocess` call,
+and the venv's `python.exe` is a real 254 kB interpreter rather than a
+redirector, so the usual explanations do not fit. It does not affect the
+result — everything in the tree exits and no worker survives — but it is
+recorded rather than guessed at.
+
+## 9. Not verified on this hardware
 
 * **Metal.** This is a Windows VM; the Metal branch was not exercised. It is
   unchanged apart from its gate.
@@ -224,16 +256,17 @@ End-to-end first solve after this change: 1.17 s, unchanged.
 * **OpenCL "first ever".** The pyopencl on-disk program cache was already warm
   on this machine and was not cleared, so check 12's 24.5 s first-ever row has
   no counterpart here.
-* **Quit through the real launcher.** Both harnesses here drive uvicorn
-  directly. The macOS reviewer found that SIGTERM outside the launcher's
-  capture context skips the shutdown handler (rc=-15), which is why the
-  measurement above uses an outright force-kill, the worst case, rather than
-  the launcher's own path. The graceful path is covered by the `close()`
-  timings in section 5 and by macOS's rc=0 shutdown-handler run.
+* **The venv is not running what `pins.json` pins.** Four of six HornLab
+  modules are at different commits, including `hornlab-bempp-bem`. See
+  [PINNED-VS-INSTALLED.md](PINNED-VS-INSTALLED.md). Everything above was
+  measured on the installed stack; the finding survives that (the cost removed
+  lives in `bempp-cl`, identical in both) but the absolute seconds may not.
 * **A circular design through AUTO fails on this machine** before reaching
   BEMPP at all: the planner routes it to the axisymmetric engine and the
   installed axisymmetric package raises *"Installed axisymmetric solver lacks
   intra-frequency cancellation"* (`server/solver/circsym.py:491`, the
   `should_continue` branch). That is a pinned-dependency problem predating this
-  work and untouched by it; the end-to-end measurements above therefore ask for
-  `engine=bempp, solver_mode=full_3d` explicitly.
+  work and untouched by it. It is **not** a pins gap, as first reported: the
+  pinned commit has `should_continue` and this venv is simply behind it. The
+  end-to-end measurements above therefore ask for `engine=bempp,
+  solver_mode=full_3d` explicitly.
