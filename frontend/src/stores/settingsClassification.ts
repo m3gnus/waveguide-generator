@@ -65,6 +65,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   // Which face of the crossover section is shown; the spec itself lives in
   // the return store and is unchanged by flipping the view.
   crossoverView: 'inert',
+  crossoverGainUnit: 'inert',
   paramHelp: 'inert',
   paramSections: 'inert',
   cadSolveProfiles: 'inert',

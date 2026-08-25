@@ -562,7 +562,18 @@ def test_capability_probe_runs_off_thread_and_is_cached(
 
     async def scenario() -> None:
         first, second = await asyncio.gather(endpoint(), endpoint())
-        assert first == second == {
+        assert first == second
+        # Two blocks here describe the host rather than the mocked engine, so
+        # neither can be a fixture: ``dependencies`` measures this venv, and
+        # ``storage`` reports whichever SQLite stores this process has opened.
+        # The equality above still holds both to being identical across the two
+        # calls, which is the caching claim this test is about.
+        assert set(first["dependencies"]) == {"pinned", "installed", "drift"}
+        assert isinstance(first["storage"], list)
+        _host_scoped = {"dependencies", "storage"}
+        assert {
+            key: value for key, value in first.items() if key not in _host_scoped
+        } == {
             "engines": [
                 {
                     "name": "mock",

@@ -18,6 +18,7 @@ import {
   PASSIVE_CARDIOID_CHANNEL_ID,
   passiveCardioidBlocker,
   useCadReturnStore,
+  type CadDriveChannel,
   type PortAreaSource,
 } from '../stores/cadReturn';
 import { ChannelDriverPicker } from './DriverPicker';
@@ -846,6 +847,17 @@ function CadFrequencySweep() {
 }
 
 /**
+ * What a drive-channel header names.
+ *
+ * A channel and the single source feeding it say the same thing twice --
+ * `drive-mf · source-mf` -- so the source ids are named only when they carry
+ * something the channel id does not: a channel driven by more than one source.
+ */
+export function channelHeadingText(channel: Pick<CadDriveChannel, 'id' | 'source_ids'>): string {
+  return channel.source_ids.length > 1 ? `${channel.id} · ${channel.source_ids.join(' + ')}` : channel.id;
+}
+
+/**
  * Per-channel driver setup.
  *
  * One card per drive channel, each carrying its motion and its driver picker.
@@ -876,7 +888,7 @@ function CadDriveChannels() {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
         return <div className="cad-channel" data-channel-id={channel.id} key={channel.id}>
-          <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
+          <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channelHeadingText(channel)}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
             .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
@@ -889,7 +901,25 @@ function CadDriveChannels() {
       })}
     </div>
     {state.driveChannels.some((channel) => channelAcceptsDriver(channel) && channelDriverPresent(state.channelDrivers[channel.id]))
-      && <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>}
+      && <>
+        <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>
+        {/* A ceiling, not a drive: it changes nothing about the response and
+            only ever caps the maximum output the crossover section reports.
+            Left empty, the drivers themselves are the only limit. */}
+        <NumberField
+          label={CAD_CONTROLS.maxDriveVoltage.label}
+          revealId={CAD_CONTROLS.maxDriveVoltage.reveal.id}
+          unit="V"
+          value={state.maxDriveVoltageV ?? undefined}
+          min={0.01}
+          step={1}
+          precision={1}
+          optional
+          onClear={() => state.setMaxDriveVoltage(null)}
+          description="Most RMS volts the amplifier can swing. Caps the maximum output the Crossover section reports; leave empty when the drivers are the only limit."
+          onCommit={state.setMaxDriveVoltage}
+        />
+      </>}
     {/* Said here, beside the drivers, and before the solve rather than after
         it: a channel with no driver is a good solve with consequences that are
         otherwise invisible until a chart has nothing to draw. */}

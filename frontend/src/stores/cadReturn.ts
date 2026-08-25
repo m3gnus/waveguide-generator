@@ -32,7 +32,8 @@ export interface CadDriveChannel {
  */
 export const DRIVER_FIELD_KEYS = [
   'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mmd_g', 'mms_g', 'cms_m_per_n',
-  'vas_l', 'fs_hz', 'qms', 'rms_kg_per_s', 'xmax_mm', 'count', 'rear_volume_l',
+  'vas_l', 'fs_hz', 'qms', 'rms_kg_per_s', 'xmax_mm', 'power_w', 'z_nom_ohm',
+  'count', 'rear_volume_l',
 ] as const;
 export type DriverFieldKey = typeof DRIVER_FIELD_KEYS[number];
 /** Always required, whatever else is supplied (`DriverSpec`, non-null fields). */
@@ -174,6 +175,9 @@ interface CadReturnState {
   channelDrivers: Record<string, ChannelDriverForm>;
   passiveCardioid: PassiveCardioidForm;
   driveVoltageV: number;
+  /** Amplifier ceiling in RMS volts, shared by every channel, or null when the
+   * drivers are the only limit. Only ever read by the maximum-output pass. */
+  maxDriveVoltageV: number | null;
   frequencyStartHz: number;
   frequencyEndHz: number;
   frequencyCount: number;
@@ -230,6 +234,8 @@ interface CadReturnState {
   /** Re-read picked drivers' own numbers from the library. See the action. */
   refreshChannelDriverBases: (bases: Record<string, DriverBaseUpdate>) => string[];
   setDriveVoltage: (value: number) => void;
+  /** Null, or a cleared field, means no amplifier ceiling. */
+  setMaxDriveVoltage: (value: number | null) => void;
   setPassiveCardioid: (patch: Partial<PassiveCardioidForm>) => void;
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
@@ -265,7 +271,7 @@ const MAX_SOLVE_PROFILES = 20;
 type PersistedSolveSettings = Pick<CadReturnState,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds' | 'driveChannels'
   | 'exteriorOnly' | 'combineEnabled' | 'combineSpec'
-  | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV'
+  | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV' | 'maxDriveVoltageV'
   | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
 
 interface SourceInventoryEntry {
@@ -574,6 +580,12 @@ function parseSolveSettings(
     channelDrivers,
     passiveCardioid,
     driveVoltageV: value.driveVoltageV,
+    // Absent is a profile stored before an amplifier could be stated, which
+    // means the drivers were the only ceiling -- exactly what null says.
+    maxDriveVoltageV: typeof value.maxDriveVoltageV === 'number'
+      && Number.isFinite(value.maxDriveVoltageV) && value.maxDriveVoltageV > 0
+      ? value.maxDriveVoltageV
+      : null,
     frequencyStartHz: value.frequencyStartHz,
     frequencyEndHz: value.frequencyEndHz,
     frequencyCount: value.frequencyCount,
@@ -729,6 +741,7 @@ function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
     ])),
     passiveCardioid: { ...state.passiveCardioid },
     driveVoltageV: state.driveVoltageV,
+    maxDriveVoltageV: state.maxDriveVoltageV,
     frequencyStartHz: state.frequencyStartHz,
     frequencyEndHz: state.frequencyEndHz,
     frequencyCount: state.frequencyCount,
@@ -905,6 +918,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   channelDrivers: {},
   passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
   driveVoltageV: 2.83,
+  maxDriveVoltageV: null,
   frequencyStartHz: 200,
   frequencyEndHz: 20_000,
   frequencyCount: 24,
@@ -928,6 +942,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       channelDrivers: {},
       passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
       driveVoltageV: 2.83,
+      maxDriveVoltageV: null,
       frequencyStartHz: 200,
       frequencyEndHz: 20_000,
       frequencyCount: 24,
@@ -959,6 +974,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         channelDrivers: {},
         passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
         driveVoltageV: 2.83,
+        maxDriveVoltageV: null,
         frequencyStartHz: 200,
         frequencyEndHz: 20_000,
         frequencyCount: 24,
@@ -1227,6 +1243,10 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     saveSolveProfile(get());
   },
   setDriveVoltage: (driveVoltageV) => { set({ driveVoltageV }); saveSolveProfile(get()); },
+  setMaxDriveVoltage: (maxDriveVoltageV) => {
+    set({ maxDriveVoltageV: maxDriveVoltageV && maxDriveVoltageV > 0 ? maxDriveVoltageV : null });
+    saveSolveProfile(get());
+  },
   setPassiveCardioid: (patch) => {
     set((state) => ({ passiveCardioid: normalizePassiveCardioid({ ...state.passiveCardioid, ...patch }) }));
     saveSolveProfile(get());
@@ -1287,6 +1307,8 @@ export const DRIVER_FIELD_LABELS: Record<DriverFieldKey, string> = {
   qms: 'Qms',
   rms_kg_per_s: 'Rms',
   xmax_mm: 'Xmax',
+  power_w: 'Power',
+  z_nom_ohm: 'Z nom',
   count: 'Count',
   rear_volume_l: 'Rear vol',
 };
@@ -1785,6 +1807,7 @@ export function resetCadReturnStore(): void {
     channelDrivers: {},
     passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
     driveVoltageV: 2.83,
+    maxDriveVoltageV: null,
     frequencyStartHz: 200,
     frequencyEndHz: 20_000,
     frequencyCount: 24,

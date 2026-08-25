@@ -287,6 +287,62 @@ describe('CadLinkPanel', () => {
     expect(events[2]).toContain(`/${record.ingest_id}/mesh`);
   });
 
+  it('shows the solve mesh at once when the display tessellation is still building, then swaps it in', async () => {
+    const requests: string[] = [];
+    let displayReady = false;
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requests.push(path);
+      if (!path.endsWith('/viewport-mesh')) return new Response(meshFixture, { status: 200 });
+      return displayReady
+        ? new Response(meshFixture, { status: 200 })
+        : new Response('', { status: 202 });
+    }) as typeof fetch;
+
+    workspaceModeStore.setMode('cad');
+    await showIngestedMeshInViewport(
+      { ...record, viewport_mesh: { available: false, pending: true, lookup_key: 'a'.repeat(64) } },
+      'Speaker',
+      undefined,
+      fetcher,
+    );
+
+    // Visible immediately, on the artifact that already exists.
+    expect(importedMeshStore.getSnapshot().cad?.artifactToken).toBe(`${record.ingest_id}:solver`);
+    expect(requests).toEqual([
+      `/api/cadlink/ingest/${record.ingest_id}/viewport-mesh`,
+      `/api/cadlink/ingest/${record.ingest_id}/mesh`,
+    ]);
+
+    displayReady = true;
+    await vi.waitFor(() => {
+      expect(importedMeshStore.getSnapshot().cad?.artifactToken).toBe(`${record.ingest_id}:viewport`);
+    }, { timeout: 4_000 });
+    // The upgrade replaced the scene in place rather than opening a second view.
+    expect(importedMeshStore.getSnapshot().showing).toBe('cad');
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  });
+
+  it('shares one artifact request between the two triggers that both want the CAD scene', async () => {
+    const requests: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const fetcher = (async (input: RequestInfo | URL) => {
+      requests.push(String(input));
+      await gate;
+      return new Response(meshFixture, { status: 200 });
+    }) as typeof fetch;
+
+    workspaceModeStore.setMode('cad');
+    // The coordinator and the viewport effect both fire on the same ingestion.
+    const first = showIngestedMeshInViewport(record, 'Speaker', undefined, fetcher);
+    const second = showIngestedMeshInViewport(record, 'Speaker', undefined, fetcher);
+    release();
+    await Promise.all([first, second]);
+
+    expect(requests).toEqual([`/api/cadlink/ingest/${record.ingest_id}/viewport-mesh`]);
+  });
+
   it('does not publish a viewport scene superseded while the response body is read', async () => {
     let resolveText!: (text: string) => void;
     const text = new Promise<string>((resolve) => { resolveText = resolve; });

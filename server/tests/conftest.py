@@ -18,15 +18,24 @@ while Linux and macOS stayed green, because ctypes.windll does not exist there
 and the best-effort except around each call swallowed the AttributeError.
 Injecting the reporter at each call site is the real fix; this is the net that
 catches the next one that forgets.
+
+BEMPP worker prewarm: ``create_app`` warms the native solver worker at startup
+by default, which is a real 25-61 s native solve in a spawned child. The suite
+builds hundreds of apps and several of its assertions are wall-clock bounds, so
+it opts out through the same switch an operator would use. Tests that need the
+prewarm re-enable it explicitly.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 
 import pytest
 
 from server.platform.signal_rearm import restore_sigpipe_ignore
+
+os.environ.setdefault("WG2_SOLVER_WARMUP", "0")
 
 
 @pytest.fixture(autouse=True)

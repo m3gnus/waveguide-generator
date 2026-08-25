@@ -57,8 +57,17 @@ chooses a full-3D backend:
 all supported operating systems, with optional Metal acceleration where present.
 The backend selector therefore chooses the *full-3D fallback*, not the
 axisymmetric implementation. `Simulation.SolverMode` in legacy design text is a
-machine setting: import may recognize it for compatibility, but design export
-strips it. Result/job symmetry metadata records `solver_plan` with the chosen
+machine setting, not a portable one, so it is never read from a design and
+design export never writes it. A file that states one still opens: the value is
+dropped during import and the drop is reported as migration
+`006_machine_solver_mode_not_portable`, which the file-open report and
+`wg validate --json` both carry. Any spelling is treated the same way, including
+one that is not a valid mode, because no spelling of it was going to be
+honoured. Opening a file is not editing it, so an untouched save returns the
+author's bytes unchanged and the line survives there; the first real edit
+serializes canonically and removes it.
+
+Result/job symmetry metadata records `solver_plan` with the chosen
 formulation, engine, reason, and eligibility reasons. Axisymmetric AUTO plans
 also include `cost_evidence`: deterministic counts from the frequency-refined
 meridian (unknowns, azimuthal quadrature work, matrix memory, and a revolved
