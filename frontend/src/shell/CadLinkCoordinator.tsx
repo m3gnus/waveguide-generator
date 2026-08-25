@@ -195,7 +195,8 @@ type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds'
   | 'driveChannels' | 'exteriorOnly' | 'combineEnabled' | 'combineSpec'
   | 'channelDrivers' | 'passiveCardioid'
-  | 'driveVoltageV' | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
+  | 'driveVoltageV' | 'maxDriveVoltageV'
+  | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -341,6 +342,7 @@ export function cadHistorySetup(
     channelDrivers: savedChannelDrivers(setup, driveChannels),
     passiveCardioid: savedPassiveCardioid(setup),
     driveVoltageV: finite(setup?.drive_voltage_v) ?? 2.83,
+    maxDriveVoltageV: finite(setup?.max_drive_voltage_v) ?? null,
     frequencyStartHz: explicitFrequencies[0] ?? fallbackRange[0],
     frequencyEndHz: explicitFrequencies.at(-1) ?? fallbackRange[1],
     frequencyCount: explicitFrequencies.length || Number(job.solve_options.num_frequencies) || 1,
