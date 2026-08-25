@@ -18,6 +18,7 @@ import {
   PASSIVE_CARDIOID_CHANNEL_ID,
   passiveCardioidBlocker,
   useCadReturnStore,
+  type CadDriveChannel,
   type PortAreaSource,
 } from '../stores/cadReturn';
 import { ChannelDriverPicker } from './DriverPicker';
@@ -846,6 +847,17 @@ function CadFrequencySweep() {
 }
 
 /**
+ * What a drive-channel header names.
+ *
+ * A channel and the single source feeding it say the same thing twice --
+ * `drive-mf · source-mf` -- so the source ids are named only when they carry
+ * something the channel id does not: a channel driven by more than one source.
+ */
+export function channelHeadingText(channel: Pick<CadDriveChannel, 'id' | 'source_ids'>): string {
+  return channel.source_ids.length > 1 ? `${channel.id} · ${channel.source_ids.join(' + ')}` : channel.id;
+}
+
+/**
  * Per-channel driver setup.
  *
  * One card per drive channel, each carrying its motion and its driver picker.
@@ -876,7 +888,7 @@ function CadDriveChannels() {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
         return <div className="cad-channel" data-channel-id={channel.id} key={channel.id}>
-          <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
+          <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channelHeadingText(channel)}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
             .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}

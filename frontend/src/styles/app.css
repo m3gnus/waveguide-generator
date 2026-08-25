@@ -1072,21 +1072,36 @@ textarea:disabled { opacity: .48; }
 .driver-clear-link { color: var(--fg3); }
 .driver-edit-link:hover, .driver-clear-link:hover { text-decoration: underline; }
 
-/* The Edit T/S sheet reuses the Settings dialog shell. */
-.driver-sheet .driver-sheet-chips { display: flex; gap: 4px; margin-left: 12px; }
-.driver-sheet h2 .driver-name-input { width: 100%; max-width: 260px; padding: 1px 5px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: inherit; font: inherit; }
+/* Edit T/S expands in place under the driver it belongs to, so the numbers
+   stay beside the channel they are for instead of covering the rail. */
+.driver-sheet { display: grid; gap: 6px; margin-top: 2px; padding: 6px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--ov1); }
+.driver-sheet > header { display: flex; align-items: center; gap: 6px; }
+.driver-sheet h2 { flex: 1; min-width: 0; margin: 0; overflow: hidden; color: var(--fg1); font-size: var(--text-micro); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.driver-sheet .driver-sheet-chips { display: flex; flex: none; flex-wrap: wrap; gap: 4px; }
+.driver-sheet h2 .driver-name-input { width: 100%; max-width: 260px; padding: 1px 5px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: inherit; font: inherit; }
 .driver-sheet h2 .driver-name-input:focus { border-color: rgba(var(--acc-rgb), .5); outline: none; }
-.driver-sheet .settings-scroll { display: grid; gap: 8px; padding: 12px 16px; }
+.driver-sheet .dialog-close { width: 18px; height: 18px; flex: none; margin-left: 0; font-size: 13px; }
+.driver-sheet-body { display: grid; gap: 6px; }
+.driver-sheet-impedance { max-width: 220px; }
+.driver-sheet-impedance small { color: var(--fg3); font-size: var(--text-micro); }
+/* The way into hand entry, stated where a search that will not help is. */
+.driver-manual-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; margin: 0; color: var(--fg3); font-size: var(--text-micro); }
+.driver-manual-link { height: 16px; padding: 0; border: 0; background: transparent; color: var(--acc); font-size: var(--text-micro); }
+.driver-manual-link:hover { text-decoration: underline; }
 .driver-variants { display: flex; gap: 4px; }
 .driver-variants button { height: 22px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font-size: var(--text-micro); }
 .driver-variants button.on { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); color: var(--acc); }
 .driver-sheet-grid { padding: 0; }
 .cad-driver-field.edited input { border-color: rgba(var(--acc-rgb), .55); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .12); }
 .driver-derived { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 4px 8px; padding: 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); }
-.driver-derived-row { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: var(--text-micro); }
+.driver-derived-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 6px; font-size: var(--text-micro); }
 .driver-derived-row span { color: var(--fg3); }
-.driver-derived-row b { color: var(--fg1); font: var(--text-micro) var(--mono); }
-.driver-sheet-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 10px 16px; border-top: 1px solid var(--hair); }
+.driver-derived-row b { color: var(--fg1); font: var(--text-micro) var(--mono); white-space: nowrap; }
+.driver-sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; padding: 6px 0 0; border-top: 1px solid var(--hair); }
+.driver-sheet-actions button { height: 20px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: var(--text-micro); }
+.driver-sheet-actions button:hover:not(:disabled) { border-color: var(--hair-hi); color: var(--fg1); }
+.driver-sheet-actions button:disabled { opacity: .45; }
+.driver-sheet-actions button.primary { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .14); color: var(--acc); }
 .driver-library-counts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 
 /* ---- Crossover editors -------------------------------------------------
