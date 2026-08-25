@@ -406,3 +406,94 @@ def test_max_output_arrays_hold_no_infinities() -> None:
             assert all(
                 value is None or np.isfinite(value) for value in block[key]
             ), f"{key} must be JSON-safe"
+
+
+def test_an_unrated_member_makes_the_system_maximum_unknown_where_it_plays() -> None:
+    freqs = _freqs()
+    results = {
+        "lf": _member(np.ones(freqs.size, dtype=np.complex128)),
+        "hf": _member(np.ones(freqs.size, dtype=np.complex128)),
+    }
+    channels = {
+        "lf": {
+            "hp": None,
+            "lp": {"family": "lr", "order": 4, "fc_hz": 1000.0},
+            "gain": {"mode": "manual", "db": 0.0},
+            "delay": {"mode": "manual", "ms": 0.0},
+            "invert": False,
+        },
+        "hf": {
+            "hp": {"family": "lr", "order": 4, "fc_hz": 1000.0},
+            "lp": None,
+            "gain": {"mode": "manual", "db": 0.0},
+            "delay": {"mode": "manual", "ms": 0.0},
+            "invert": False,
+        },
+    }
+    # A compression driver with no Xmax and no rated power, which is what the
+    # driver library actually publishes for most of them.
+    limits = {
+        "lf": _flat_limits(freqs.size, excursion_mm=1.0, xmax_mm=4.0, rated_power_w=None),
+    }
+    _, payload = combine_drive_channels(
+        results, members=["lf", "hf"], channels=channels,
+        reference="hf", member_limits=limits,
+    )
+    combined = payload["max_output"]["combined"]
+    headroom_db = np.asarray(
+        [np.nan if value is None else value for value in combined["headroom_db"]],
+        dtype=float,
+    )
+    low = freqs < 300.0
+    high = freqs > 3000.0
+    # Below the crossover the rated woofer carries it and the answer is known.
+    assert np.all(np.isfinite(headroom_db[low]))
+    assert {combined["limiting_member"][i] for i in np.flatnonzero(low)} == {"lf"}
+    # Above it the unrated driver sets the level, so there is no answer -- and
+    # emphatically not the enormous one an out-of-band woofer would give.
+    assert np.all(np.isnan(headroom_db[high]))
+    assert {combined["limit"][i] for i in np.flatnonzero(high)} == {None}
+    assert payload["max_output"]["unlimited_members"] == ["hf"]
+    assert any("maximum output is unknown" in warning for warning in payload["warnings"])
+
+
+def test_a_member_trace_stops_where_the_member_stops_playing() -> None:
+    freqs = _freqs()
+    results = {
+        "lf": _member(np.ones(freqs.size, dtype=np.complex128)),
+        "hf": _member(np.ones(freqs.size, dtype=np.complex128)),
+    }
+    channels = {
+        "lf": {
+            "hp": None,
+            "lp": {"family": "lr", "order": 4, "fc_hz": 1000.0},
+            "gain": {"mode": "manual", "db": 0.0},
+            "delay": {"mode": "manual", "ms": 0.0},
+            "invert": False,
+        },
+        "hf": {
+            "hp": {"family": "lr", "order": 4, "fc_hz": 1000.0},
+            "lp": None,
+            "gain": {"mode": "manual", "db": 0.0},
+            "delay": {"mode": "manual", "ms": 0.0},
+            "invert": False,
+        },
+    }
+    limits = {
+        "lf": _flat_limits(freqs.size, excursion_mm=1.0, xmax_mm=4.0, rated_power_w=None),
+        "hf": _flat_limits(freqs.size, excursion_mm=1.0, xmax_mm=4.0, rated_power_w=None),
+    }
+    _, payload = combine_drive_channels(
+        results, members=["lf", "hf"], channels=channels,
+        reference="hf", member_limits=limits,
+    )
+    lf = payload["max_output"]["members"]["lf"]
+    values = np.asarray(
+        [np.nan if value is None else value for value in lf["spl_max_db"]], dtype=float
+    )
+    # Inside its own band the woofer's ceiling is a number.
+    assert np.all(np.isfinite(values[freqs < 300.0]))
+    # Two decades above its low-pass the cone barely moves, so the arithmetic
+    # would grant it an absurd level. It is not reported at all.
+    assert np.all(np.isnan(values[freqs > 5_000.0]))
+    assert {lf["limit"][i] for i in np.flatnonzero(freqs > 5_000.0)} == {None}

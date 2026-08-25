@@ -162,8 +162,8 @@ function AutoManualField({ label, unit, precision, step, mode, value, autoValue,
  * which is the only impedance that makes the two comparable.
  */
 function GainField({
-  mode, db, autoDb, maxDb, maxLimit, maxLimitHz, usage, unit, driveVoltageV, impedanceOhm,
-  onUnit, onMode, onValue,
+  mode, db, autoDb, maxDb, maxLimit, maxLimitHz, maxLimitAtBandEdge, usage, unit,
+  driveVoltageV, impedanceOhm, onUnit, onMode, onValue,
 }: {
   mode: 'auto' | 'manual' | 'max';
   db: number;
@@ -171,6 +171,7 @@ function GainField({
   maxDb: number | null;
   maxLimit: 'xmax' | 'power' | 'voltage' | null;
   maxLimitHz: number | null;
+  maxLimitAtBandEdge: boolean;
   usage: MaxOutputMemberTrace | null;
   unit: GainUnit;
   driveVoltageV: number | null;
@@ -190,7 +191,7 @@ function GainField({
   const value = shown === unit ? inUnit(db) : db;
   const autoText = gainText(shown === unit ? inUnit(autoDb) : autoDb, shown);
   const maxText = maxDb === null ? null : gainText(shown === unit ? inUnit(maxDb) : maxDb, shown);
-  const limitNote = maxLimitNote(maxLimit, maxLimitHz);
+  const limitNote = maxLimitNote(maxLimit, maxLimitHz, maxLimitAtBandEdge);
   return <>
     <div className="crossover-band">
       <label className="crossover-band-name" htmlFor={id}>Gain</label>
@@ -346,6 +347,7 @@ export function CrossoverAdvanced({
           maxDb={state?.gainMaxDb ?? null}
           maxLimit={state?.maxLimit ?? null}
           maxLimitHz={state?.maxLimitHz ?? null}
+          maxLimitAtBandEdge={state?.maxLimitAtBandEdge ?? false}
           usage={usageFor?.(member) ?? null}
           unit={gainUnit}
           driveVoltageV={driveVoltageV ?? null}

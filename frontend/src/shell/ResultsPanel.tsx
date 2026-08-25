@@ -12,7 +12,7 @@ export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
-import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf } from '../results/maxOutput';
+import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf, memberLabelOf } from '../results/maxOutput';
 import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
 import { combinedChannelId, combineMetadataOf, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
@@ -1625,7 +1625,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason={excursionSeries(result) ? 'Cone Excursion could not be read from this result.' : driverChartMissingReason(result, 'Cone Excursion')}/>;
     }
     if (chartType === 'max_output') {
-      const option = maxOutputOption(result, tokens, density);
+      const option = maxOutputOption(result, tokens, density, memberLabelOf(result));
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab maximum on-axis SPL by frequency" live={live}/>
         : <ChartStub reason={maxOutputMissingReason(result)}/>;
@@ -1754,7 +1754,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     // Which member holds the system back is the fact the curves cannot state,
     // and the small-signal caveat rides with it rather than being left for the
     // reader to infer from a ceiling drawn as a confident line.
-    : chartType === 'max_output' ? limitingSummary(maxOutputOf(result))
+    : chartType === 'max_output' ? limitingSummary(maxOutputOf(result), memberLabelOf(result))
     : null;
   const unit = chartUnit(chartType, result, impedanceItems, preferencesStore.getSnapshot().groupDelayUnit);
   const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';

@@ -299,6 +299,9 @@ export interface ResolvedChannel {
   gainMaxDb: number | null;
   maxLimit: MaxOutputLimit | null;
   maxLimitHz: number | null;
+  /** Whether that frequency is an end of the sweep, which makes the ceiling a
+   * lower bound rather than the ceiling. */
+  maxLimitAtBandEdge: boolean;
   delayMs: number | null;
   delayMode: 'auto' | 'manual';
   delayAutoMs: number | null;
@@ -334,6 +337,7 @@ export function resolvedChannels(combine: CombinePayload | null | undefined): Re
       gainMaxDb: finite(record.gain_max_db),
       maxLimit: isMaxOutputLimit(record.max_limit) ? record.max_limit : null,
       maxLimitHz: finite(record.max_limit_hz),
+      maxLimitAtBandEdge: record.max_limit_at_band_edge === true,
       delayMs: finite(record.delay_ms),
       delayMode: record.delay_mode === 'manual' ? 'manual' as const : 'auto' as const,
       delayAutoMs: finite(record.delay_auto_ms),
@@ -741,9 +745,16 @@ export function gainText(value: number | null, unit: GainUnit): string {
   return `${sign}${formatGain(value, unit)} ${GAIN_UNIT_LABELS[unit]}`;
 }
 
-/** "Xmax at 62 Hz" -- what stopped a channel, and where. */
-export function maxLimitNote(limit: MaxOutputLimit | null, atHz: number | null): string | null {
+/** "Xmax at 62 Hz" -- what stopped a channel, and where. A ceiling reached at
+ * an end of the sweep says so: the sweep never saw the far side of it, so the
+ * real limit may sit outside the solved band and the number is a best case. */
+export function maxLimitNote(
+  limit: MaxOutputLimit | null,
+  atHz: number | null,
+  atBandEdge = false,
+): string | null {
   if (!limit) return null;
   const where = atHz === null || !Number.isFinite(atHz) ? null : frequencyText(atHz);
-  return where ? `${MAX_LIMIT_LABELS[limit]} at ${where}` : MAX_LIMIT_LABELS[limit];
+  const base = where ? `${MAX_LIMIT_LABELS[limit]} at ${where}` : MAX_LIMIT_LABELS[limit];
+  return atBandEdge ? `${base}, the edge of the sweep — the real limit may lie beyond it` : base;
 }

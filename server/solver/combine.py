@@ -641,6 +641,27 @@ def _json_floats(values: np.ndarray) -> list[float | None]:
     return [float(value) if math.isfinite(value) else None for value in array]
 
 
+#: How far below the loudest member a member may sit before it stops setting
+#: the level. Twenty decibels is a tenth of the voltage, which cannot move the
+#: sum by a decibel -- and cannot, therefore, be what a system maximum is
+#: waiting on.
+_CONTRIBUTION_FLOOR_DB = -20.0
+
+
+def _carrying(member_pressure_eng: Mapping[str, np.ndarray], members: list[str]) -> dict[str, np.ndarray]:
+    """Which members are actually setting the level, per frequency.
+
+    A member outside its own passband has enormous headroom for the simple
+    reason that it is not playing, and neither its room nor its lack of a
+    rating says anything about how loud the system can go there.
+    """
+
+    magnitudes = {name: np.abs(member_pressure_eng[name]) for name in members}
+    loudest = np.maximum.reduce([magnitudes[name] for name in members])
+    floor = loudest * (10.0 ** (_CONTRIBUTION_FLOOR_DB / 20.0))
+    return {name: magnitudes[name] >= floor for name in members}
+
+
 def _max_output_payload(
     freqs: np.ndarray,
     members: list[str],
@@ -658,12 +679,31 @@ def _max_output_payload(
     whole chain scales together, so it is lifted by the *smallest* headroom any
     member still has at that frequency, and the member holding it back is named
     so the limiting driver is visible rather than inferred.
+
+    Both traces stop where the member stops setting the level. Far outside its
+    passband a cone barely moves, so Xmax permits an enormous drive and the
+    arithmetic reports a mid driver playing 180 dB at 20 kHz -- true of the
+    filter, false of the driver, and precisely the kind of number a maximum-
+    output chart must not print.
+
+    A member with no ceiling at all is not free headroom either. Wherever such
+    a member is one of the ones setting the level, the system maximum is simply
+    not known, and it is reported as unknown -- a three-way whose compression
+    driver has no rating has no system maximum above its crossover, and saying
+    one anyway is how an unrated tweeter came to promise 324 dB.
     """
 
     known = [name for name in members if name in limits]
     if not known:
         return None
     reference_pa = 20.0e-6
+    carrying = _carrying(member_pressure_eng, list(members))
+    # Where the answer cannot be known, because something that is playing has
+    # nothing to be measured against.
+    unknown = np.zeros(freqs.shape, dtype=bool)
+    for name in members:
+        if name not in limits:
+            unknown |= carrying[name]
     system_scale = np.full(freqs.shape, float("inf"), dtype=np.float64)
     system_member = np.full(freqs.shape, "", dtype=object)
     system_reason = np.full(freqs.shape, "", dtype=object)
@@ -676,10 +716,14 @@ def _max_output_payload(
                 np.maximum(np.abs(member_pressure_eng[name]), 1.0e-30) / reference_pa
             )
             lift_db = 20.0 * np.log10(np.where(np.isfinite(room.scale), room.scale, np.nan))
+        in_band = carrying[name]
         member_payload[name] = {
-            "spl_max_db": _json_floats(level_db + lift_db),
-            "headroom_db": _json_floats(lift_db),
-            "limit": [str(value) or None for value in room.reason],
+            "spl_max_db": _json_floats(np.where(in_band, level_db + lift_db, np.nan)),
+            "headroom_db": _json_floats(np.where(in_band, lift_db, np.nan)),
+            "limit": [
+                str(value) or None if playing else None
+                for value, playing in zip(room.reason, in_band, strict=True)
+            ],
             "excursion_fraction": room.excursion_fraction,
             "power_fraction": room.power_fraction,
             "voltage_fraction": room.voltage_fraction,
@@ -690,8 +734,9 @@ def _max_output_payload(
         system_reason[binds] = room.reason[binds]
     with np.errstate(divide="ignore", invalid="ignore"):
         system_lift_db = 20.0 * np.log10(
-            np.where(np.isfinite(system_scale), system_scale, np.nan)
+            np.where(np.isfinite(system_scale) & ~unknown, system_scale, np.nan)
         )
+    unlimited = sorted(name for name in members if name not in limits)
     return {
         "frequencies": freqs.tolist(),
         "reference": "one_way_peak_excursion_and_real_terminal_power",
@@ -699,9 +744,18 @@ def _max_output_payload(
         "combined": {
             "spl_max_db": _json_floats(combined_on_axis_spl_db + system_lift_db),
             "headroom_db": _json_floats(system_lift_db),
-            "limit": [str(value) or None for value in system_reason],
-            "limiting_member": [str(value) or None for value in system_member],
+            "limit": [
+                None if blank else str(value) or None
+                for value, blank in zip(system_reason, unknown, strict=True)
+            ],
+            "limiting_member": [
+                None if blank else str(value) or None
+                for value, blank in zip(system_member, unknown, strict=True)
+            ],
         },
+        # Named rather than left as a gap in a curve: the fix is to give these
+        # channels' drivers a rating, and the user cannot do that unknowingly.
+        "unlimited_members": unlimited,
         "caveat": (
             "small-signal swept-sine ceilings: no thermal compression, no "
             "voice-coil heating, no inductance nonlinearity, no programme "
@@ -845,17 +899,20 @@ def combine_drive_channels(
     max_gains_db: dict[str, float | None] = {}
     max_limit: dict[str, str | None] = {}
     max_limit_hz: dict[str, float | None] = {}
+    max_limit_edge: dict[str, bool] = {}
     for name in members:
         member_limit = limits.get(name)
         if member_limit is None:
             max_gains_db[name] = None
             max_limit[name] = None
             max_limit_hz[name] = None
+            max_limit_edge[name] = False
             continue
         ceiling_db, reason, index = gain_ceiling_db(member_limit, np.abs(bands[name]))
         max_gains_db[name] = ceiling_db
         max_limit[name] = reason
         max_limit_hz[name] = None if index is None else float(freqs[index])
+        max_limit_edge[name] = index in (0, freqs.size - 1)
     for name in members:
         if settings[name].gain_mode == "max" and max_gains_db[name] is None:
             warnings.append(
@@ -1108,6 +1165,12 @@ def combine_drive_channels(
                 "gain_max_db": max_gains_db[name],
                 "max_limit": max_limit[name],
                 "max_limit_hz": max_limit_hz[name],
+                # A ceiling reached at the edge of the sweep is a ceiling the
+                # sweep did not see the far side of: a woofer's real excursion
+                # limit usually sits below the lowest solved frequency, and a
+                # number that does not say so reads as more headroom than the
+                # driver has.
+                "max_limit_at_band_edge": max_limit_edge[name],
             }
             for name in members
         },
@@ -1142,4 +1205,10 @@ def combine_drive_channels(
     )
     if max_output is not None:
         payload["max_output"] = max_output
+        if max_output["unlimited_members"]:
+            named = ", ".join(repr(name) for name in max_output["unlimited_members"])
+            warnings.append(
+                f"maximum output is unknown wherever {named} sets the level: "
+                "no Xmax, rated power or amplifier ceiling is known for it"
+            )
     return combined, payload
