@@ -194,7 +194,6 @@ function DriverResultRow({ hit, active, onPick, onHover, id }: {
     <span className="driver-result-name">{driverHitLabel(hit)}</span>
     <span className="driver-result-facts">{facts}</span>
     {zBadge && <span className="driver-chip">{zBadge}</span>}
-    {hit.completeness !== 'full' && <span className="driver-chip warn">{hit.completeness === 'catalogue' ? 'catalogue only' : 'partial'}</span>}
   </button>;
 }
 
@@ -265,6 +264,10 @@ function DriverSearch({ channel, roleHint, onPick }: {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [hits, setHits] = useState<DriverHit[]>([]);
+  // Matches the library has but cannot drive a channel with. Without this
+  // number a search for a catalogue-only compression driver comes back empty
+  // and reads as a broken library rather than as missing datasheet numbers.
+  const [hiddenIncomplete, setHiddenIncomplete] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
@@ -273,10 +276,16 @@ function DriverSearch({ channel, roleHint, onPick }: {
     if (!open) return;
     const request = ++generation.current;
     void searchDrivers({ q: query, kind, limit: 40 }).then(
-      (items) => { if (request === generation.current) { setHits(items); setError(null); } },
+      (result) => {
+        if (request !== generation.current) return;
+        setHits(result.items);
+        setHiddenIncomplete(result.hiddenIncomplete);
+        setError(null);
+      },
       (reason: unknown) => {
         if (request !== generation.current) return;
         setHits([]);
+        setHiddenIncomplete(0);
         setError(reason instanceof Error ? reason.message : String(reason));
       },
     );
@@ -379,7 +388,12 @@ function DriverSearch({ channel, roleHint, onPick }: {
     </p>
     {open && <div id={listId} className="driver-results" role="listbox" aria-label={`Driver matches for ${channel.id}`}>
       {error && <p className="cad-driver-hint" role="status">{error}</p>}
-      {!error && !matches.length && <p className="cad-driver-hint" role="status">No driver matches that search.</p>}
+      {!error && !matches.length && hiddenIncomplete === 0
+        && <p className="cad-driver-hint" role="status">No driver matches that search.</p>}
+      {!error && hiddenIncomplete > 0 && <p className="cad-driver-hint" role="status">{hiddenIncomplete === 1
+        ? 'One more driver matches, but the library lists no Thiele-Small data for it, so it cannot be driven.'
+        : `${hiddenIncomplete} more drivers match, but the library lists no Thiele-Small data for them, so they cannot be driven.`
+      } Enter the values by hand instead.</p>}
       {candidates.map((candidate, index) => candidate.render({
         active: index === activeIndex,
         id: `${listId}-${index}`,

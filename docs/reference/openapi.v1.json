@@ -1813,6 +1813,11 @@
       },
       "DriverSearchResponse": {
         "properties": {
+          "hidden_incomplete": {
+            "default": 0,
+            "title": "Hidden Incomplete",
+            "type": "integer"
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/DriverHit"
@@ -8267,6 +8272,16 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "complete",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Complete",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -8350,6 +8365,16 @@
             "schema": {
               "title": "Driver Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "complete",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Complete",
+              "type": "boolean"
             }
           }
         ],

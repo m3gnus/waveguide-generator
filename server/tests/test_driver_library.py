@@ -225,6 +225,120 @@ def test_completeness_levels(tmp_path: Path) -> None:
     assert completeness_of("Catalogue1") == "catalogue"
 
 
+def test_complete_filter_withholds_rows_that_cannot_drive_a_channel(tmp_path: Path) -> None:
+    """``complete`` offers only what ``DriverSpec`` will accept.
+
+    A partial or catalogue row is dropped on the way to the wire, so a channel
+    filled in from one solves undriven -- no power, current or excursion. The
+    picker asks for this filter so the choice cannot be made at all.
+    """
+
+    _write_csv(
+        tmp_path,
+        "mixed.csv",
+        ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Throat_in"],
+        [
+            ["Acme", "DrivableCD", "26", "12.4", "6.2", "2.4", "620", "1"],
+            ["Acme", "CatalogueCD", "", "", "", "", "", "1"],
+            ["Acme", "PartialCD", "26", "", "6.2", "", "", "1"],
+        ],
+    )
+    library = DriverLibrary(tmp_path)
+    library.rescan()
+
+    everything = library.search(q="Acme", kind="cd", z=None, limit=20)
+    assert sorted(hit["model"] for hit in everything) == ["CatalogueCD", "DrivableCD", "PartialCD"]
+
+    page = library.search_page(q="Acme", kind="cd", z=None, limit=20, complete=True)
+    assert [hit["model"] for hit in page["items"]] == ["DrivableCD"]
+    # The two it withheld are counted rather than silently absent: a search
+    # that answers nothing has to be able to say why.
+    assert page["hidden_incomplete"] == 2
+
+
+def test_complete_filter_keeps_a_driver_for_its_usable_windings_only(tmp_path: Path) -> None:
+    """A driver whose 8-ohm row has T/S and whose 16-ohm row does not.
+
+    The record stays offered, but only through the winding that can be driven
+    -- including in the ``variants`` list the picker turns into its winding
+    buttons, so switching impedance cannot land on the empty row.
+    """
+
+    _write_csv(
+        tmp_path,
+        "windings.csv",
+        ["Brand", "Model", "Z_ohm", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz"],
+        [
+            ["Acme", "SplitLF", "8", "300", "9.5", "6.0", "18", "40"],
+            ["Acme", "SplitLF", "16", "", "", "", "", ""],
+        ],
+    )
+    library = DriverLibrary(tmp_path)
+    library.rescan()
+
+    page = library.search_page(q="Acme SplitLF", kind="all", z=None, limit=5, complete=True)
+    assert page["hidden_incomplete"] == 0
+    hit = page["items"][0]
+    assert hit["z_ohm"] == 8.0
+    assert [variant["z_ohm"] for variant in hit["variants"]] == [8.0]
+    # Unfiltered, both windings are still there.
+    unfiltered = library.search(q="Acme SplitLF", kind="all", z=None, limit=5)[0]
+    assert [variant["z_ohm"] for variant in unfiltered["variants"]] == [8.0, 16.0]
+
+
+def test_get_complete_always_lists_the_winding_it_was_asked_for(tmp_path: Path) -> None:
+    """An incomplete winding already on a channel keeps its own button.
+
+    Dropping it from its own variant list would leave the sheet showing
+    winding buttons with none of them selected.
+    """
+
+    _write_csv(
+        tmp_path,
+        "windings.csv",
+        ["Brand", "Model", "Z_ohm", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz"],
+        [
+            ["Acme", "SplitLF", "8", "300", "9.5", "6.0", "18", "40"],
+            ["Acme", "SplitLF", "16", "", "", "", "", ""],
+        ],
+    )
+    library = DriverLibrary(tmp_path)
+    library.rescan()
+
+    detail = library.get("Acme::SplitLF::16", complete=True)
+    assert detail is not None
+    assert detail["z_ohm"] == 16.0
+    assert [variant["z_ohm"] for variant in detail["variants"]] == [8.0, 16.0]
+
+    usable = library.get("Acme::SplitLF::8", complete=True)
+    assert usable is not None
+    assert [variant["z_ohm"] for variant in usable["variants"]] == [8.0]
+
+
+def test_router_search_reports_withheld_matches(tmp_path: Path) -> None:
+    _write_csv(
+        tmp_path,
+        "mixed.csv",
+        ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Throat_in"],
+        [
+            ["Acme", "DrivableCD", "26", "12.4", "6.2", "2.4", "620", "1"],
+            ["Acme", "CatalogueCD", "", "", "", "", "", "1"],
+        ],
+    )
+    library = DriverLibrary(tmp_path)
+    router = create_drivers_router(library)
+    search = _routes(router)[("/api/drivers", ("GET",))].endpoint
+
+    unfiltered = asyncio.run(search(q="Acme", kind="cd", z=None, limit=20, complete=False))
+    assert unfiltered["total"] == 2
+    assert unfiltered["hidden_incomplete"] == 0
+
+    filtered = asyncio.run(search(q="Acme", kind="cd", z=None, limit=20, complete=True))
+    assert filtered["total"] == 1
+    assert filtered["items"][0]["model"] == "DrivableCD"
+    assert filtered["hidden_incomplete"] == 1
+
+
 def test_cms_mm_per_n_converts_to_si_m_per_n(tmp_path: Path) -> None:
     _write_csv(
         tmp_path,

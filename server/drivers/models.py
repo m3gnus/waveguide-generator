@@ -50,6 +50,9 @@ class DriverHit(BaseModel):
 class DriverSearchResponse(BaseModel):
     items: list[DriverHit]
     total: int
+    #: Matches withheld because no winding of them carries enough T/S data to
+    #: drive a channel. Always 0 unless the request asked for ``complete``.
+    hidden_incomplete: int = 0
 
 
 class DriverDetail(DriverHit):

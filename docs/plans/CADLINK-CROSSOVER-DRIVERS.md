@@ -202,14 +202,24 @@ per-user library folder and exposes a search API.
   `Sensitivity_dB`, `Power_W|Power_AES_W`, `XO_min_Hz`, `Freq_low_Hz`,
   `Price_avg_EUR|Price_EUR`, `Source_URL|URL`. Unknown columns are kept
   as opaque extras. Never invent a value for a missing column.
-- `GET /api/drivers?q=&kind=lf|cd|all&z=&limit=` — ranked by token prefix
-  match on brand + model, then impedance match, then completeness. Each hit:
-  `id` (`Brand::Model::Z`), `brand`, `model`, `z_ohm`, `kind`, `size`,
-  `completeness` (`full` when Sd, Bl, Re, one mass and one compliance source
-  are present; `partial`; `catalogue`), `spec` (the `DriverSpec`-ready
+- `GET /api/drivers?q=&kind=lf|cd|all&z=&limit=&complete=` — ranked by token
+  prefix match on brand + model, then impedance match, then completeness.
+  Each hit: `id` (`Brand::Model::Z`), `brand`, `model`, `z_ohm`, `kind`,
+  `size`, `completeness` (`full` when Sd, Bl, Re, one mass and one compliance
+  source are present; `partial`; `catalogue`), `spec` (the `DriverSpec`-ready
   fields it can fill), `display` (Fs, Sd, Bl, Xmax, sensitivity, price),
   `xo_min_hz`, `source`.
-- `GET /api/drivers/{id}` — the full record with provenance.
+- `complete=true` offers only windings classified `full`, and narrows each
+  hit's `variants` list to those. Anything less cannot fill a `DriverSpec`,
+  so a channel filled in from one solves undriven — no power, current or
+  excursion — which is why the picker always asks for it. The response's
+  `hidden_incomplete` counts the matches withheld, so a search over a
+  catalogue-only CSV can say why it answered nothing instead of reading as a
+  broken library.
+- `GET /api/drivers/{id}?complete=` — the full record with provenance.
+  `complete=true` applies the same narrowing to `variants`, but always keeps
+  the winding the id named, so a driver already on a channel keeps its own
+  button in the sheet.
 - `GET /api/drivers/library` — folder, files, counts; `POST .../rescan`.
 - Variants: rows that differ only in impedance group into one driver with
   a variant list.

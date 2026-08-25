@@ -1150,7 +1150,9 @@ const LIBRARY_HIT = {
  * and another for a stocked library whose search happens to answer nothing --
  * the case a driver that is not in any CSV actually presents.
  */
-function stubDriverApi({ files = 1, hits = files }: { files?: number; hits?: number } = {}) {
+function stubDriverApi(
+  { files = 1, hits = files, hiddenIncomplete = 0 }: { files?: number; hits?: number; hiddenIncomplete?: number } = {},
+) {
   const library = {
     folder: '/library/driver-databases',
     files: files ? [{ name: 'compression-drivers.csv', rows: 1 }] : [],
@@ -1161,7 +1163,9 @@ function stubDriverApi({ files = 1, hits = files }: { files?: number; hits?: num
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith('/api/drivers/library')) return json(library);
-    if (url.startsWith('/api/drivers?')) return json({ items: hits ? [LIBRARY_HIT] : [], total: hits });
+    if (url.startsWith('/api/drivers?')) {
+      return json({ items: hits ? [LIBRARY_HIT] : [], total: hits, hidden_incomplete: hiddenIncomplete });
+    }
     if (url.startsWith('/api/drivers/')) return json({ ...LIBRARY_HIT, fields: {}, extras: {} });
     return Promise.resolve(new Response('not found', { status: 404 }));
   });
@@ -1218,7 +1222,7 @@ describe('driver picker', () => {
     vi.unstubAllGlobals();
   });
 
-  const mountWithLibrary = async (options?: { files?: number; hits?: number }) => {
+  const mountWithLibrary = async (options?: { files?: number; hits?: number; hiddenIncomplete?: number }) => {
     const fetchMock = stubDriverApi(options);
     act(() => {
       setCadReady();
@@ -1504,6 +1508,38 @@ describe('driver picker', () => {
     expect([...channelCard().querySelectorAll<HTMLElement>('[role="option"]')]
       .map((option) => option.querySelector('.driver-result-name')?.textContent))
       .toEqual(['Acme HD-1', 'Radian 745Neo (measured)', 'Enter T/S manually…']);
+  });
+
+  it('asks the library only for drivers the solve can actually use', async () => {
+    const fetchMock = await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+
+    // Rows without Sd, Bl, Re, a mass and a compliance are dropped on the way
+    // to the wire, so the picker never offers them in the first place.
+    const searched = fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.startsWith('/api/drivers?'));
+    expect(searched.length).toBeGreaterThan(0);
+    expect(searched.every((url) => url.includes('complete=true'))).toBe(true);
+  });
+
+  it('says how many matches were withheld for missing T/S data', async () => {
+    // What a compression-driver search over a catalogue CSV actually looks
+    // like: the library knows the driver, it just has no motor data for it.
+    await mountWithLibrary({ files: 1, hits: 0, hiddenIncomplete: 2 });
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'de250');
+    await settle();
+
+    const card = channelCard();
+    // Not "no driver matches that search": the library does know them.
+    expect(card.textContent).not.toContain('No driver matches that search.');
+    expect(card.textContent).toContain('2 more drivers match');
+    expect(card.textContent).toContain('cannot be driven');
+    // And the way out is still the last row.
+    expect(resultNames()).toEqual(['Enter T/S manually\u2026']);
   });
 
   it('expands the T/S sheet inside the channel card and folds it away again', async () => {
