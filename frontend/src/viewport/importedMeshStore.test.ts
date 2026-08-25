@@ -17,6 +17,7 @@ describe('importedMeshStore', () => {
 
     expect(importedMeshStore.getSnapshot()).toEqual({
       cad: cadScene,
+      cadSolver: null,
       file: fileScene,
       solver: null,
       showing: 'cad',
@@ -25,6 +26,7 @@ describe('importedMeshStore', () => {
     importedMeshStore.setFile(secondFileScene);
     expect(importedMeshStore.getSnapshot()).toEqual({
       cad: cadScene,
+      cadSolver: null,
       file: secondFileScene,
       solver: null,
       showing: 'file',
@@ -59,13 +61,33 @@ describe('importedMeshStore', () => {
     importedMeshStore.showParametric();
 
     expect(importedMeshStore.setCad(cadScene, generation)).toBe(false);
-    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: null, solver: null, showing: 'parametric' });
+    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, cadSolver: null, file: null, solver: null, showing: 'parametric' });
   });
 
   it('can fill the CAD slot without stealing a parametric viewport', () => {
     const generation = importedMeshStore.beginIntent();
     expect(importedMeshStore.setCad(cadScene, generation, false)).toBe(true);
-    expect(importedMeshStore.getSnapshot()).toEqual({ cad: cadScene, file: null, solver: null, showing: 'parametric' });
+    expect(importedMeshStore.getSnapshot()).toEqual({ cad: cadScene, cadSolver: null, file: null, solver: null, showing: 'parametric' });
+  });
+
+  it('drops the CAD solve mesh with the CAD geometry it belongs to', () => {
+    const cadSolverScene = { ...cadScene, name: 'ingested solve mesh' };
+    importedMeshStore.setFile(fileScene);
+    importedMeshStore.setCad(cadScene);
+    importedMeshStore.setCadSolver(cadSolverScene);
+    expect(importedMeshStore.getSnapshot().showing).toBe('cadSolver');
+
+    // Both artifacts describe one ingestion; a superseded return must not
+    // leave its solve mesh behind claiming to describe the new geometry.
+    importedMeshStore.clear('cad');
+    expect(importedMeshStore.getSnapshot()).toEqual({
+      cad: null, cadSolver: null, file: fileScene, solver: null, showing: 'parametric',
+    });
+  });
+
+  it('lets the CAD mesh view be selected before its artifact is fetched', () => {
+    importedMeshStore.showCadSolver();
+    expect(importedMeshStore.getSnapshot().showing).toBe('cadSolver');
   });
 
   it('keeps the snapshot reference stable across no-op calls', () => {
@@ -85,12 +107,12 @@ describe('importedMeshStore', () => {
     importedMeshStore.setCad(cadScene);
     importedMeshStore.clear('cad');
 
-    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: fileScene, solver: null, showing: 'parametric' });
+    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, cadSolver: null, file: fileScene, solver: null, showing: 'parametric' });
     importedMeshStore.showFile();
     expect(importedMeshStore.getSnapshot().showing).toBe('file');
 
     importedMeshStore.clear();
-    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: null, solver: null, showing: 'parametric' });
+    expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, cadSolver: null, file: null, solver: null, showing: 'parametric' });
   });
 
   it('lets the solver view be selected before its scene exists', () => {

@@ -454,6 +454,58 @@ export async function showIngestedMeshInViewport(
   }
 }
 
+/** Load the exact ingested solve mesh a CAD return will be solved on.
+ *
+ * The counterpart to `showIngestedMeshInViewport`: that one prefers the
+ * independently tessellated display artifact, this one asks for the solver
+ * artifact itself, so the mesh view shows the triangles the solver assembles
+ * rather than a smooth stand-in. The record is immutable, so the fetched
+ * scene is cached in its own slot and re-serves every later activation.
+ */
+export async function showIngestedSolverMeshInViewport(
+  record: CadReturnIngestRecord,
+  name: string,
+  fetcher: typeof fetch = fetch,
+  generation = importedMeshStore.beginIntent(),
+): Promise<string | null> {
+  const ingestId = record.ingest_id;
+  const available = importedMeshStore.getSnapshot().cadSolver;
+  if (available?.ingestId === ingestId) {
+    if (workspaceModeStore.getSnapshot().mode === 'cad') importedMeshStore.showCadSolver(generation);
+    return null;
+  }
+  let response: Response;
+  try {
+    response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (!importedMeshStore.isCurrentGeneration(generation)) return null;
+  if (!response.ok) {
+    return response.status === 409
+      ? 'The ingested solve mesh failed verification and cannot be displayed.'
+      : `Could not read the ingested solve mesh (${response.status}).`;
+  }
+  try {
+    const meshText = await response.text();
+    if (!importedMeshStore.isCurrentGeneration(generation)) return null;
+    importedMeshStore.setCadSolver(createImportedMeshScene(
+      name,
+      parseMSH(meshText),
+      'cad',
+      ingestId,
+      record.symmetry.cut_planes ?? [],
+      {
+        solvedTriangleCount: record.mesh?.stats.triangle_count,
+        artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
+      },
+    ), generation, importedMeshStore.getSnapshot().showing === 'cadSolver');
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 /**
  * Recall the immutable ingestion behind an archived CAD run.
  *
