@@ -241,6 +241,33 @@ describe('live recombine from the rail', () => {
     expect(spec.channels['drive-mf'].gain).toEqual({ mode: 'max' });
   });
 
+  it('reads a rating as the two numbers it came from, not just a percentage', () => {
+    render();
+    publishShown({
+      combine: {
+        ...resolvedRun(),
+        max_output: {
+          frequencies: [1_000],
+          members: {
+            'drive-mf': {
+              spl_max_db: [120], headroom_db: [8], limit: ['power'],
+              excursion_fraction: 0.31, xmax_mm: 7,
+              power_fraction: 0.31, rated_power_w: 400,
+              voltage_fraction: null, max_voltage_v: null,
+            },
+          },
+          combined: { spl_max_db: [120], headroom_db: [8], limit: ['power'], limiting_member: ['drive-mf'] },
+          unlimited_members: [],
+        },
+      } as unknown as CombineMetadata,
+    });
+    setView('Advanced');
+    expect(host.textContent).toContain('Xmax 31% (2.17 of 7 mm)');
+    expect(host.textContent).toContain('power 31% (124 of 400 W)');
+    // An unset amplifier limit is not reported as 0 V of nothing.
+    expect(host.textContent).not.toContain('amplifier');
+  });
+
   it('offers no Max on a channel with no ceiling to reach', () => {
     render();
     publishShown({ combine: shownCombineOf() });

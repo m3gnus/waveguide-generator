@@ -230,6 +230,14 @@ function GainField({
         className="crossover-unit-select"
         aria-label="Gain unit"
         value={unit}
+        // Watts here are nominal -- voltage squared over the driver's nominal
+        // impedance, the form a power rating is quoted in. The power actually
+        // going into the cone varies across the band with the real impedance,
+        // and is the figure the headroom line below states.
+        title={'Read the gain as dB, as the RMS volts the amplifier must swing, '
+          + 'or as nominal watts (V\u00b2 into the driver\u2019s nominal impedance, '
+          + 'the form a power rating is quoted in \u2014 not the real power at any '
+          + 'one frequency).'}
         onChange={(event) => onUnit(event.target.value as GainUnit)}
       >{GAIN_UNITS.map((option) => <option key={option} value={option}>{GAIN_UNIT_LABELS[option]}</option>)}</select>
       {mode !== 'auto' && <span className="crossover-auto-note">auto {autoText}</span>}
@@ -252,13 +260,23 @@ function GainField({
  * settings already spend, so the headroom is a fact rather than a promise. */
 function ratingsText(usage: MaxOutputMemberTrace): string | null {
   const parts = [
-    ['Xmax', usage.excursion_fraction],
-    ['rated power', usage.power_fraction],
-    ['amplifier', usage.voltage_fraction],
+    ['Xmax', usage.excursion_fraction, usage.xmax_mm, 'mm'],
+    ['power', usage.power_fraction, usage.rated_power_w, 'W'],
+    ['amplifier', usage.voltage_fraction, usage.max_voltage_v, 'V'],
   ] as const;
   const shown = parts
     .filter(([, fraction]) => typeof fraction === 'number' && Number.isFinite(fraction))
-    .map(([label, fraction]) => `${label} ${(100 * (fraction as number)).toFixed(0)}%`);
+    .map(([label, fraction, rating, unit]) => {
+      const used = fraction as number;
+      // The two numbers the percentage came from, whenever the rating is at
+      // hand: "124 W of 400 W" is an answer where "31%" is only a ratio. The
+      // watts here are the REAL power the solve computed, which at an
+      // impedance peak is nothing like a gain stated in nominal watts.
+      const absolute = typeof rating === 'number' && Number.isFinite(rating)
+        ? ` (${Number((used * rating).toPrecision(3))} of ${Number(rating.toPrecision(3))} ${unit})`
+        : '';
+      return `${label} ${(100 * used).toFixed(0)}%${absolute}`;
+    });
   return shown.length ? `At the shown level: ${shown.join(' \u00b7 ')}.` : null;
 }
 
