@@ -56,6 +56,8 @@ VERTICAL_OFFSET_MIDPOINT_TOLERANCE_MM = 0.05
 # baffles visibly faceted. This asks Gmsh for 24 elements around a full circle,
 # while the floor below prevents tiny CAD details from exploding solve cost.
 IMPORTED_CURVATURE_SEGMENTS = 24
+IMPORTED_CURVATURE_SEGMENTS_MIN = 8
+IMPORTED_CURVATURE_SEGMENTS_MAX = 64
 IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 # The CAD viewport is a presentation artifact, not an acoustic discretisation.
 # Its sizing is therefore scale/curvature driven and explicitly capped for the
@@ -136,18 +138,34 @@ def validate_imported_sizes(
     }
 
 
-def imported_tessellation_settings(sizes: Mapping[str, Any]) -> dict[str, float | int]:
+def imported_tessellation_settings(
+    sizes: Mapping[str, Any], *, curvature_segments: int | None = None
+) -> dict[str, float | int]:
     """Bounded curvature-aware OCC tessellation derived from validated sizes.
 
     Curvature may refine to half the finest explicit target, never arbitrarily
     towards zero on a small decorative fillet. The user's rigid target remains
     the global maximum edge-size request.
+
+    ``curvature_segments`` is the cost dial. Measured on a representative
+    return (rigid 30 / hf 4 / mf 15 / lf 30 mm), chordal deviation sampled
+    against the OCC model:
+
+        off  ->  3,479 tris, chord max 5.49 mm  (visibly faceted)
+        12   ->  5,671 tris, chord max 1.24 mm
+        24   -> 10,252 tris, chord max 0.84 mm  (default)
+
+    Halving the default costs 0.4 mm of peak chord error and returns 45% of the
+    triangles, which on that model left the HF wall frequency limit unchanged
+    while cutting dense-solver RAM about 3x and LU work about 5.7x.
     """
 
     values = [float(sizes["rigid_size_mm"]), *map(float, sizes["source_size_mm"].values())]
     finest = min(values)
     return {
-        "curvature_segments_per_2pi": IMPORTED_CURVATURE_SEGMENTS,
+        "curvature_segments_per_2pi": (
+            IMPORTED_CURVATURE_SEGMENTS if curvature_segments is None else int(curvature_segments)
+        ),
         "mesh_size_min_mm": finest / IMPORTED_CURVATURE_REFINEMENT_LIMIT,
         "mesh_size_max_mm": float(sizes["rigid_size_mm"]),
         "algorithm": 6,
@@ -1086,6 +1104,62 @@ def build_imported_viewport_mesh(
         gmsh.clear()
 
 
+def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
+    """Surface any component whose global orientation is still a guess.
+
+    The source-cap anchor abstains on a component that was not cut on exactly
+    two principal planes, and the mesher now falls back to the signed volume
+    about the origin -- valid there because a symmetry-reduced component's free
+    edges all lie on coordinate planes through the origin. What that fallback
+    cannot settle is a component of zero signed volume. Nothing else in the
+    pipeline notices an inverted open component, so say so rather than shipping
+    a mesh whose source phase may be reversed.
+
+    Read defensively: an older pinned mesher does not report these keys.
+    """
+
+    warnings: list[str] = []
+    unresolved = int(repair.get("unresolved_symmetry_components") or 0)
+    if unresolved:
+        warnings.append(
+            f"{unresolved} symmetry-reduced component(s) have no usable orientation "
+            "anchor and zero signed volume; their outward direction was left as "
+            "imported and may be inverted"
+        )
+    flipped = int(repair.get("symmetry_volume_fallback_flipped") or 0)
+    if flipped:
+        warnings.append(
+            f"{flipped} symmetry-reduced component(s) were re-oriented from their "
+            "signed volume because no tagged source cap could anchor them"
+        )
+    return warnings
+
+
+def _validated_curvature_segments(value: Any) -> int | None:
+    """Read the optional per-ingest curvature-segment override.
+
+    Bounded rather than free: below the floor the shell facets visibly (12
+    already costs 1.24 mm of peak chord error on the reference model), and above
+    the ceiling the triangle count runs at the artifact limit for no measurable
+    fidelity left to buy.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ImportedMeshError("mesh.curvatureSegments must be an integer number of segments per 2pi")
+    number = float(value)
+    if not math.isfinite(number) or number != int(number):
+        raise ImportedMeshError("mesh.curvatureSegments must be a whole number of segments per 2pi")
+    segments = int(number)
+    if not IMPORTED_CURVATURE_SEGMENTS_MIN <= segments <= IMPORTED_CURVATURE_SEGMENTS_MAX:
+        raise ImportedMeshError(
+            "mesh.curvatureSegments must be between "
+            f"{IMPORTED_CURVATURE_SEGMENTS_MIN} and {IMPORTED_CURVATURE_SEGMENTS_MAX}"
+        )
+    return segments
+
+
 def build_imported_mesh(
     assembly_path: str | Path,
     manifest: Mapping[str, Any],
@@ -1108,6 +1182,7 @@ def build_imported_mesh(
             Region,
             auto_cut_occ_geometry,
             estimate_mesh_cost,
+            estimate_solve_cost,
         )
         from hornlab_mesher.step_import import (
             StepFaceGroup,
@@ -1137,9 +1212,12 @@ def build_imported_mesh(
     if required_skips:
         raise ImportedMeshError(f"role resolution: required sources cannot be skipped: {sorted(required_skips)}")
     normalized_sizes = validate_imported_sizes(source_list, sizes, skipped_source_ids=skipped)
-    tessellation = imported_tessellation_settings(normalized_sizes)
     allocation = allocate_imported_tags(source_list, skipped_source_ids=skipped)
     options = dict(options or {})
+    tessellation = imported_tessellation_settings(
+        normalized_sizes,
+        curvature_segments=_validated_curvature_segments(options.get("curvature_segments")),
+    )
     symmetry_mode = str(options.get("symmetry_mode") or "auto")
     if symmetry_mode not in {"auto", "full"}:
         raise ImportedMeshError("symmetry: symmetryMode must be 'auto' or 'full'")
@@ -1813,7 +1891,19 @@ def build_imported_mesh(
         for spec in step_specs:
             for surface in cut_groups[spec.name]:
                 regions.append(Region(float(gmsh.model.occ.getMass(2, surface)), spec.resolution_mm, label=spec.name, role="source"))
+        # estimate_mesh_cost is an area/h^2 model whose 2.33 constant was
+        # validated on the parametric point-grid path, which meshes with
+        # curvature sizing OFF. This path runs Mesh.MeshSizeFromCurvature, so
+        # the number is a floor rather than a forecast: on a representative
+        # return it read 2,825 triangles against 10,252 actual, and 0.128 GB
+        # against 2.38 GB -- 3.6x out on triangles and ~19x out on RAM, in the
+        # optimistic direction. The mesh already exists by this point, so
+        # publish the measured cost beside the floor and mark which is which.
         sizing_estimate = estimate_mesh_cost(regions).to_dict()
+        sizing_estimate["basis"] = "area-over-h-squared"
+        sizing_estimate["curvature_aware"] = False
+        sizing_estimate["is_lower_bound"] = True
+        sizing_estimate["measured"] = estimate_solve_cost(int(len(triangles))).to_dict()
         state.update(
             {
                 "msh_text": msh_text,
@@ -1846,6 +1936,7 @@ def build_imported_mesh(
                     "warnings": [
                         *list(frequency.get("warnings") or []),
                         *_self_intersection_warnings(integrity["self_intersection"]),
+                        *_orientation_warnings(repair),
                     ],
                     "integrity": integrity,
                 },
