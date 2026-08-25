@@ -194,6 +194,105 @@ def test_create_app_registers_every_prewarm(tmp_path: Path) -> None:
     shutdown = {handler.__name__ for handler in application.router.on_shutdown}
     assert {"prewarm_gmsh_worker", "prewarm_mesher", "prewarm"} <= startup
     assert {"shutdown_mesher_prewarm", "shutdown_prewarm"} <= shutdown
+    # The BEMPP worker is warmed at boot, so it must also be stopped with the
+    # app: an atexit hook does not run when a launcher is TerminateProcess'd.
+    assert "prewarm_bempp_worker" in startup
+    assert "shutdown_bempp_worker" in shutdown
+
+
+def test_the_bempp_worker_prewarm_is_registered_by_default(tmp_path: Path) -> None:
+    """The largest gap between a server start and a first result closes itself.
+
+    The BEMPP worker's own initialization measured 25.4 s (OpenCL) and 61.4 s
+    (numba) on the reference Windows VM, and it is paid in a child the parent
+    can kill outright -- so unlike the in-process warmup below, warming it
+    costs shutdown nothing and does not need an opt-in.
+    """
+
+    startup = {
+        handler.__name__ for handler in create_app(data_dir=tmp_path).router.on_startup
+    }
+    assert "prewarm_bempp_worker" in startup
+
+
+def test_the_bempp_worker_prewarm_can_be_switched_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.setenv("WG2_SOLVER_WARMUP", "0")
+    assert solver_warmup.start_bempp_worker_prewarm() is None
+
+
+def test_the_bempp_worker_prewarm_handler_never_blocks_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup runs before the listen socket is served, so this only schedules."""
+
+    from server.solver import warmup as solver_warmup
+
+    started = 0
+
+    def fake_start() -> None:
+        nonlocal started
+        started += 1
+
+    monkeypatch.setattr(solver_warmup, "start_bempp_worker_prewarm", fake_start)
+    from server.app import prewarm_bempp_worker
+
+    asyncio.run(prewarm_bempp_worker())
+    assert started == 1
+
+
+def test_the_bempp_worker_prewarm_skips_hosts_auto_solves_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Metal or GPU host must not spend a process on an unreachable fallback."""
+
+    from server.engines import registry
+    from server.solver import bempp_process, warmup as solver_warmup
+
+    prewarmed: list[str] = []
+    monkeypatch.setattr(
+        bempp_process, "prewarm_bempp_process", lambda: prewarmed.append("bempp")
+    )
+
+    monkeypatch.setattr(registry, "resolve_auto_engine", lambda: "metal")
+    solver_warmup._run_bempp_worker_prewarm()
+    assert prewarmed == []
+
+    monkeypatch.setattr(registry, "resolve_auto_engine", lambda: "bempp")
+    solver_warmup._run_bempp_worker_prewarm()
+    assert prewarmed == ["bempp"]
+
+
+def test_the_bempp_warmup_targets_the_process_that_actually_solves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression this whole path exists to close.
+
+    warmup.py used to run its BEMPP warmup solve in the API process. Every
+    BEMPP solve runs in the worker child, and bempp-cl's hot numba kernels
+    carry no ``cache=True``, so the JIT ran again in the child regardless:
+    measured on the reference Windows VM, an in-parent warmup spent 24.2 s and
+    left the first child solve at 24.3 s, unchanged.
+    """
+
+    from server.solver import bempp_process, warmup as solver_warmup
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        bempp_process, "prewarm_bempp_process", lambda: calls.append("worker")
+    )
+    monkeypatch.setattr(
+        solver_warmup,
+        "warm_bempp_in_this_process",
+        lambda _status: calls.append("in-parent"),
+    )
+
+    solver_warmup._warm_bempp({"available": True, "assembly_backend": "opencl"})
+
+    assert calls == ["worker"]
 
 
 def test_the_solver_warmup_is_opt_in(tmp_path: Path) -> None:

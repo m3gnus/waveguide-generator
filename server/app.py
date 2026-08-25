@@ -166,6 +166,39 @@ async def prewarm_solver() -> None:
     start_solver_warmup()
 
 
+async def shutdown_bempp_worker() -> None:
+    """Stop the BEMPP worker with the app rather than at interpreter exit.
+
+    ``bempp_process`` registers an ``atexit`` hook, but a launcher killed with
+    TerminateProcess never runs one, and the prewarm means a worker can now be
+    alive even for a session that never solved. Closing it here bounds the wait
+    at ``_JOIN_SECONDS`` and then terminates -- which is the property that lets
+    the worker be warmed by default in the first place.
+    """
+
+    from server.solver.bempp_process import shutdown_bempp_process
+
+    await asyncio.to_thread(shutdown_bempp_process)
+
+
+async def prewarm_bempp_worker() -> None:
+    """Start the killable BEMPP worker so the first solve does not pay its JIT.
+
+    Unlike ``prewarm_solver`` this is registered by default. Every BEMPP solve
+    runs in that worker child, the child's one-off initialization is 25-61 s on
+    the reference Windows VM, and a child -- unlike an in-process warmup thread
+    -- can be killed without its native code cooperating, so warming it costs
+    shutdown nothing. ``WG2_SOLVER_WARMUP=0`` switches it off; the suite sets
+    that in ``server/tests/conftest.py``.
+
+    Only schedules: startup handlers run before the socket is served.
+    """
+
+    from server.solver.warmup import start_bempp_worker_prewarm
+
+    start_bempp_worker_prewarm()
+
+
 class _HashedAssetStaticFiles(StaticFiles):
     """Serve the SPA with cache lifetimes that match how Vite names files.
 
@@ -261,6 +294,11 @@ def create_app(
     # Likewise the engine probe: it is the page load's slowest request, and
     # leaving it lazy made it contend with the first symmetry resolution.
     application.router.add_event_handler("startup", engine_registry.prewarm)
+    # The BEMPP worker's own initialization is the single largest thing between
+    # a server start and a user's first result, and it is paid in a process the
+    # parent can kill. Warm it by default; ``prewarm_solver`` below stays an
+    # opt-in because it warms in-process, where shutdown cannot bound the wait.
+    application.router.add_event_handler("startup", prewarm_bempp_worker)
     if solver_warmup:
         application.router.add_event_handler("startup", prewarm_solver)
 
@@ -421,6 +459,7 @@ def create_app(
     application.router.add_event_handler("shutdown", shutdown_mesher_prewarm)
     application.router.add_event_handler("shutdown", engine_registry.shutdown_prewarm)
     application.router.add_event_handler("shutdown", shutdown_gmsh_worker)
+    application.router.add_event_handler("shutdown", shutdown_bempp_worker)
     application.mount(
         "/", _HashedAssetStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend"
     )
