@@ -1769,6 +1769,11 @@
       },
       "DriverLibraryFile": {
         "properties": {
+          "bundled": {
+            "default": false,
+            "title": "Bundled",
+            "type": "boolean"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -1855,6 +1860,11 @@
       },
       "DriverSource": {
         "properties": {
+          "bundled": {
+            "default": false,
+            "title": "Bundled",
+            "type": "boolean"
+          },
           "file": {
             "title": "File",
             "type": "string"

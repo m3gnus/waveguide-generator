@@ -1,10 +1,10 @@
 /**
  * The driver library's REST surface (CADLINK-CROSSOVER-DRIVERS.md section 4).
  *
- * Waveguide Generator ships no driver data: these routes read whatever CSV
- * files the user dropped into their own library folder. An installation with
- * no such folder is the normal case, not an error, so every caller here has to
- * treat "no files" as an answer rather than a failure.
+ * Two sources, and only one of them is the user's: the library that ships with
+ * the application, and whatever CSV files they dropped into their own folder.
+ * A user with no folder of their own is the normal case, not an error, and a
+ * row of theirs replaces the shipped one for the same driver and winding.
  */
 
 export type DriverKind = 'lf' | 'cd' | 'unknown';
@@ -19,6 +19,9 @@ export interface DriverSource {
   file: string;
   source_url?: string | null;
   price_eur?: number | null;
+  /** Read from the library that ships with the application, so it is not a
+   * file in the user's folder and nothing should offer to edit it there. */
+  bundled?: boolean;
 }
 
 export interface DriverDisplay {
@@ -54,6 +57,7 @@ export interface DriverDetail extends DriverHit {
 export interface DriverLibraryFile {
   name: string;
   rows: number;
+  bundled?: boolean;
 }
 
 export interface DriverLibraryInfo {

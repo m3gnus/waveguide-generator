@@ -20,6 +20,7 @@ from server.drivers.csv_loader import parse_numeric
 from server.drivers.library import DriverLibrary
 from server.drivers.paths import (
     DRIVER_LIBRARY_DIR_ENV,
+    bundled_library_dir,
     ensure_driver_library_dir,
     resolve_driver_library_dir,
 )
@@ -67,7 +68,7 @@ def test_alias_columns_case_insensitive_and_blanks_are_missing(tmp_path: Path) -
         ["brand", "MODEL", "sd", "bl", "RE_OHM", "mms", "fs_hz", "xmax", "some_unknown"],
         [["Acme", "8LF", "300", "9.5", "6.0", "18", "", "5.5", "widget"]],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     hits = library.search(q="Acme 8LF", kind="all", z=None, limit=20)
     assert len(hits) == 1
@@ -94,7 +95,7 @@ def test_unknown_columns_are_kept_verbatim_as_extras(tmp_path: Path) -> None:
         ["Brand", "Model", "Magnet_Type", "Basket_Material"],
         [["Radian", "Sample1", "Ferrite", "Cast"]],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     hit = library.search(q="Radian Sample1", kind="all", z=None, limit=20)[0]
     detail = library.get(hit["id"])
@@ -117,7 +118,7 @@ def test_impedance_variants_group_into_one_driver(tmp_path: Path) -> None:
             ["Vector", "10FX", "8 Ohm", "300", "6.2"],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     hits = library.search(q="Vector 10FX", kind="all", z=None, limit=20)
     assert len(hits) == 1
@@ -141,7 +142,7 @@ def test_row_missing_brand_or_model_is_dropped(tmp_path: Path) -> None:
         ["Brand", "Model", "Sd_cm2"],
         [["", "Ghost", "300"], ["Ghost Co", "", "300"], ["Acme", "OK1", "300"]],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     hits = library.search(q="", kind="all", z=None, limit=100)
     assert [h["model"] for h in hits] == ["OK1"]
@@ -178,7 +179,7 @@ def test_kind_classification_lf_cd_and_unknown(tmp_path: Path) -> None:
             ["Acme", "Mystery", "", "", "", "", ""],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
 
     def kind_of(model: str) -> str:
@@ -212,7 +213,7 @@ def test_completeness_levels(tmp_path: Path) -> None:
             ["Acme", "Catalogue1", "", "", "", "", "", ""],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
 
     def completeness_of(model: str) -> str:
@@ -243,7 +244,7 @@ def test_complete_filter_withholds_rows_that_cannot_drive_a_channel(tmp_path: Pa
             ["Acme", "PartialCD", "26", "", "6.2", "", "", "1"],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
 
     everything = library.search(q="Acme", kind="cd", z=None, limit=20)
@@ -273,7 +274,7 @@ def test_complete_filter_keeps_a_driver_for_its_usable_windings_only(tmp_path: P
             ["Acme", "SplitLF", "16", "", "", "", "", ""],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
 
     page = library.search_page(q="Acme SplitLF", kind="all", z=None, limit=5, complete=True)
@@ -302,7 +303,7 @@ def test_get_complete_always_lists_the_winding_it_was_asked_for(tmp_path: Path) 
             ["Acme", "SplitLF", "16", "", "", "", "", ""],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
 
     detail = library.get("Acme::SplitLF::16", complete=True)
@@ -325,7 +326,7 @@ def test_router_search_reports_withheld_matches(tmp_path: Path) -> None:
             ["Acme", "CatalogueCD", "", "", "", "", "", "1"],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     router = create_drivers_router(library)
     search = _routes(router)[("/api/drivers", ("GET",))].endpoint
 
@@ -346,7 +347,7 @@ def test_cms_mm_per_n_converts_to_si_m_per_n(tmp_path: Path) -> None:
         ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Cms_mm_per_N"],
         [["Acme", "CmsCheck", "300", "9.5", "6.0", "18", "300"]],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     hit = library.search(q="Acme CmsCheck", kind="all", z=None, limit=5)[0]
     assert hit["spec"]["cms_m_per_n"] == pytest.approx(0.3)
@@ -359,7 +360,7 @@ def test_mmd_and_mms_never_both_emitted(tmp_path: Path) -> None:
         ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Mmd_g", "Fs_Hz"],
         [["Acme", "BothMasses", "300", "9.5", "6.0", "18", "16", "40"]],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     hit = library.search(q="Acme BothMasses", kind="all", z=None, limit=5)[0]
     assert hit["spec"]["mms_g"] == 18.0
@@ -386,7 +387,7 @@ def _ranking_fixture(tmp_path: Path) -> DriverLibrary:
             ["Other Co", "9XY", "8", "300"],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     return library
 
@@ -422,7 +423,7 @@ def test_search_ranks_impedance_match_above_others(tmp_path: Path) -> None:
             ["Acme", "Twin8", "8", "300"],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     hits = library.search(q="Acme Twin", kind="all", z=8.0, limit=20)
     assert [h["model"] for h in hits] == ["Twin8", "Twin4"]
@@ -440,7 +441,7 @@ def test_search_ranks_completeness_as_final_tiebreak(tmp_path: Path) -> None:
             ["Acme", "RankPartial", "300", "", "6.0", "", ""],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     hits = library.search(q="Acme Rank", kind="all", z=None, limit=20)
     assert [h["completeness"] for h in hits] == ["full", "partial", "catalogue"]
@@ -453,7 +454,7 @@ def test_search_kind_filter(tmp_path: Path) -> None:
         ["Brand", "Model", "Size_in", "Throat_in"],
         [["Acme", "Woofer1", "12", ""], ["Acme", "Comp1", "", "1"]],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     lf_hits = library.search(q="Acme", kind="lf", z=None, limit=20)
     cd_hits = library.search(q="Acme", kind="cd", z=None, limit=20)
@@ -468,7 +469,7 @@ def test_search_limit_is_respected(tmp_path: Path) -> None:
         ["Brand", "Model", "Sd_cm2"],
         [["Acme", f"M{i}", "300"] for i in range(5)],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     hits = library.search(q="Acme", kind="all", z=None, limit=3)
     assert len(hits) == 3
@@ -479,7 +480,7 @@ def test_search_limit_is_respected(tmp_path: Path) -> None:
 
 def test_reindex_triggers_on_file_mtime_change(tmp_path: Path) -> None:
     path = _write_csv(tmp_path, "live.csv", ["Brand", "Model", "Sd_cm2"], [["Acme", "V1", "300"]])
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     assert [h["model"] for h in library.search(q="", kind="all", z=None, limit=20)] == ["V1"]
 
     # Touch the mtime forward and rewrite with different content; a plain
@@ -493,7 +494,7 @@ def test_reindex_triggers_on_file_mtime_change(tmp_path: Path) -> None:
 
 def test_reindex_triggers_on_new_file_added(tmp_path: Path) -> None:
     _write_csv(tmp_path, "first.csv", ["Brand", "Model", "Sd_cm2"], [["Acme", "First", "300"]])
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.search(q="", kind="all", z=None, limit=20)  # force the first scan
 
     _write_csv(tmp_path, "second.csv", ["Brand", "Model", "Sd_cm2"], [["Acme", "Second", "300"]])
@@ -503,7 +504,7 @@ def test_reindex_triggers_on_new_file_added(tmp_path: Path) -> None:
 
 def test_rescan_reflects_a_removed_file(tmp_path: Path) -> None:
     path = _write_csv(tmp_path, "gone.csv", ["Brand", "Model", "Sd_cm2"], [["Acme", "Gone", "300"]])
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     path.unlink()
     library.rescan()
@@ -520,10 +521,10 @@ def test_library_info_reports_files_counts_and_last_scan(tmp_path: Path) -> None
         ["Brand", "Model", "Sd_cm2"],
         [["Acme", "A1", "300"], ["Acme", "A2", "300"]],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     info = library.rescan()
     assert info["folder"] == str(tmp_path)
-    assert info["files"] == [{"name": "counts.csv", "rows": 2}]
+    assert info["files"] == [{"name": "counts.csv", "rows": 2, "bundled": False}]
     assert info["total_drivers"] == 2
     # Sd alone is not a driver anything can be solved with.
     assert info["complete_drivers"] == 0
@@ -547,7 +548,7 @@ def test_library_info_separates_indexed_rows_from_drivable_ones(tmp_path: Path) 
             ["Acme", "Partial", "300", "", "6.0", "", ""],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     info = library.rescan()
     assert info["total_drivers"] == 3
     assert info["complete_drivers"] == 1
@@ -563,7 +564,7 @@ def test_library_info_counts_a_driver_once_for_any_drivable_winding(tmp_path: Pa
             ["Acme", "SplitLF", "16", "", "", "", "", ""],
         ],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     info = library.rescan()
     # One driver, two windings, one of them drivable -- and the driver is
     # offered, so it counts.
@@ -574,7 +575,7 @@ def test_library_info_counts_a_driver_once_for_any_drivable_winding(tmp_path: Pa
 def test_library_creates_its_folder_on_first_use(tmp_path: Path) -> None:
     folder = tmp_path / "not-yet-created" / "driver-databases"
     assert not folder.exists()
-    library = DriverLibrary(folder)
+    library = DriverLibrary(folder, bundled=None)
     library.ensure_indexed()
     assert folder.is_dir()
     assert library.search(q="", kind="all", z=None, limit=20) == []
@@ -584,13 +585,13 @@ def test_library_creates_its_folder_on_first_use(tmp_path: Path) -> None:
 
 
 def test_get_unknown_id_returns_none(tmp_path: Path) -> None:
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     assert library.get("Nobody::Nothing::8") is None
 
 
 def test_router_404s_for_an_unknown_id(tmp_path: Path) -> None:
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     library.rescan()
     router = create_drivers_router(library)
     routes = _routes(router)
@@ -607,7 +608,7 @@ def test_router_search_and_get_round_trip(tmp_path: Path) -> None:
         ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz"],
         [["Acme", "RoundTrip", "300", "9.5", "6.0", "18", "40"]],
     )
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     router = create_drivers_router(library)
     routes = _routes(router)
     search = routes[("/api/drivers", ("GET",))]
@@ -624,7 +625,7 @@ def test_router_search_and_get_round_trip(tmp_path: Path) -> None:
 
 def test_router_library_and_rescan_routes(tmp_path: Path) -> None:
     _write_csv(tmp_path, "lib.csv", ["Brand", "Model", "Sd_cm2"], [["Acme", "Lib1", "300"]])
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     router = create_drivers_router(library)
     routes = _routes(router)
     library_info = routes[("/api/drivers/library", ("GET",))]
@@ -704,7 +705,147 @@ def test_search_matches_mid_word_fragments_below_prefix_hits(tmp_path: Path) -> 
         ["Acme", "NDL99", "8", "522", "19.7", "5.1", "64", "52", "6.1"],
         ["Acme", "12XW76", "8", "522", "19.7", "5.1", "64", "52", "6.1"],
     ])
-    library = DriverLibrary(tmp_path)
+    library = DriverLibrary(tmp_path, bundled=None)
     hits = library.search(q="ndl", kind="all", z=None, limit=10)
     assert [hit["model"] for hit in hits] == ["NDL99", "12NDL76"]
     assert library.search(q="12nd", kind="all", z=None, limit=10)[0]["model"] == "12NDL76"
+
+
+# --- the library that ships with the application ------------------------------
+
+
+def test_the_bundled_library_is_indexed_beside_the_user_folder(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    _write_csv(
+        bundled,
+        "shipped.csv",
+        ["Brand", "Model", "Z_ohm", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Power_W"],
+        [["Acme", "Shipped12", "8", "500", "18", "6.8", "90", "35", "400"]],
+    )
+    folder = tmp_path / "mine"
+    folder.mkdir()
+    _write_csv(
+        folder,
+        "mine.csv",
+        ["Brand", "Model", "Z_ohm", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz"],
+        [["Acme", "Mine8", "8", "220", "12", "5.3", "28", "66"]],
+    )
+    library = DriverLibrary(folder, bundled=bundled)
+    info = library.rescan()
+
+    # The writable folder is still the one Settings names and offers to open.
+    assert info["folder"] == str(folder)
+    assert info["total_drivers"] == 2
+    assert sorted(info["files"], key=lambda entry: entry["name"]) == [
+        {"name": "mine.csv", "rows": 1, "bundled": False},
+        {"name": "shipped.csv", "rows": 1, "bundled": True},
+    ]
+    found = {hit["model"]: hit for hit in library.search(q="", kind="all", z=None, limit=20)}
+    assert found["Shipped12"]["source"]["bundled"] is True
+    assert found["Mine8"]["source"]["bundled"] is False
+    # A shipped driver is a real driver: it carries its rating like any other.
+    assert found["Shipped12"]["spec"]["power_w"] == 400.0
+
+
+def test_a_users_own_row_wins_over_the_shipped_one(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    _write_csv(
+        bundled,
+        "shipped.csv",
+        ["Brand", "Model", "Z_ohm", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz"],
+        [
+            ["Acme", "A1", "8", "220", "12", "5.3", "28", "66"],
+            ["Acme", "A1", "16", "220", "15", "10.6", "26", "70"],
+        ],
+    )
+    folder = tmp_path / "mine"
+    folder.mkdir()
+    # The same winding, measured rather than taken from a datasheet.
+    _write_csv(
+        folder,
+        "mine.csv",
+        ["Brand", "Model", "Z_ohm", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz"],
+        [["Acme", "A1", "8", "225", "12.4", "5.1", "29", "63"]],
+    )
+    library = DriverLibrary(folder, bundled=bundled)
+    library.ensure_indexed()
+
+    hits = library.search(q="A1", kind="all", z=None, limit=20)
+    assert len(hits) == 1
+    # One button per winding, not two identical 8 ohm ones.
+    assert sorted(v["z_ohm"] for v in hits[0]["variants"]) == [8.0, 16.0]
+    eight = library.get(next(v["id"] for v in hits[0]["variants"] if v["z_ohm"] == 8.0))
+    assert eight is not None
+    assert eight["source"]["bundled"] is False
+    assert eight["spec"]["bl_t_m"] == 12.4
+    # The winding the user did not override still comes from the shipped file.
+    sixteen = library.get(next(v["id"] for v in hits[0]["variants"] if v["z_ohm"] == 16.0))
+    assert sixteen is not None
+    assert sixteen["source"]["bundled"] is True
+
+
+def test_the_shipped_library_can_be_turned_off(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    _write_csv(
+        bundled,
+        "shipped.csv",
+        ["Brand", "Model", "Sd_cm2"],
+        [["Acme", "Shipped12", "500"]],
+    )
+    library = DriverLibrary(tmp_path / "mine", bundled=None)
+    assert library.rescan()["total_drivers"] == 0
+
+
+def test_a_shipped_file_changing_reindexes_even_under_a_shared_name(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    folder = tmp_path / "mine"
+    folder.mkdir()
+    for parent, model in ((bundled, "Shipped"), (folder, "Mine")):
+        _write_csv(
+            parent,
+            "drivers.csv",
+            ["Brand", "Model", "Sd_cm2"],
+            [["Acme", model, "500"]],
+        )
+    library = DriverLibrary(folder, bundled=bundled)
+    assert library.rescan()["total_drivers"] == 2
+
+    # Same file name in both folders: keying the change detector by name alone
+    # would let one hide the other and leave the index stale.
+    _write_csv(
+        bundled,
+        "drivers.csv",
+        ["Brand", "Model", "Sd_cm2"],
+        [["Acme", "Shipped", "500"], ["Acme", "AlsoShipped", "300"]],
+    )
+    library.ensure_indexed()
+    assert {hit["model"] for hit in library.search(q="", kind="all", z=None, limit=20)} == {
+        "Mine", "Shipped", "AlsoShipped",
+    }
+
+
+def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> None:
+    """The real file in this repo, not a fixture: it is a shipped artifact."""
+
+    folder = bundled_library_dir()
+    assert folder is not None, "server/drivers/bundled is missing from this checkout"
+    library = DriverLibrary(folder / "does-not-exist", bundled=folder)
+    info = library.rescan()
+    assert info["total_drivers"] > 1_000
+    assert info["complete_drivers"] > 500
+    assert all(entry["bundled"] for entry in info["files"])
+
+    # The compression driver whose AES rating this work was built around.
+    hits = library.search(q="DFM-2544R00-08", kind="all", z=None, limit=5)
+    assert hits, "the bundled library should contain the Peerless DFM-2544R00-08"
+    detail = library.get(hits[0]["id"])
+    assert detail is not None
+    assert detail["spec"]["power_w"] == 55.0
+    assert detail["spec"]["z_nom_ohm"] == 8.0
+    # Nothing commercial travels with a public file.
+    assert detail["source"]["price_eur"] is None
+    assert not any(key.lower().startswith("price") for key in detail["extras"])
