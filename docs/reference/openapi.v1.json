@@ -4946,6 +4946,20 @@
             ],
             "title": "Client Request Id"
           },
+          "frequencies": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequencies"
+          },
           "metadata": {
             "additionalProperties": true,
             "title": "Metadata",
@@ -6727,6 +6741,31 @@
           "geometry"
         ],
         "title": "SolveRequest",
+        "type": "object"
+      },
+      "SolverMeshRequest": {
+        "description": "The design exactly as a solve submission would carry it.",
+        "properties": {
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "symmetry": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "full",
+              "half_xz",
+              "half_yz",
+              "quarter"
+            ],
+            "title": "Symmetry",
+            "type": "string"
+          }
+        },
+        "required": [
+          "design"
+        ],
+        "title": "SolverMeshRequest",
         "type": "object"
       },
       "SourceConfig": {
@@ -9570,6 +9609,46 @@
           }
         },
         "summary": "Plan Solve"
+      }
+    },
+    "/api/solver-mesh": {
+      "post": {
+        "operationId": "solver_mesh_api_solver_mesh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SolverMeshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Solver Mesh Api Solver Mesh Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Solver Mesh"
       }
     },
     "/api/status/{job_id}": {
