@@ -727,6 +727,14 @@ def _max_output_payload(
             "excursion_fraction": room.excursion_fraction,
             "power_fraction": room.power_fraction,
             "voltage_fraction": room.voltage_fraction,
+            # The ratings themselves, so a fraction can be read as the two
+            # numbers it came from. "31% of rated power" is a percentage;
+            # "124 W of 400 W" is an answer -- and it is *real* power, which
+            # at an impedance peak is nothing like the nominal watts a gain
+            # in W is stated in.
+            "xmax_mm": limits[name].xmax_mm,
+            "rated_power_w": limits[name].rated_power_w,
+            "max_voltage_v": limits[name].max_voltage_v,
         }
         binds = np.isfinite(room.scale) & (room.scale < system_scale)
         system_scale[binds] = room.scale[binds]

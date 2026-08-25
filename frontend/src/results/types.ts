@@ -72,6 +72,12 @@ export interface MaxOutputMemberTrace extends MaxOutputTrace {
   excursion_fraction?: number | null;
   power_fraction?: number | null;
   voltage_fraction?: number | null;
+  /** The ratings those fractions are of, so the pair can be shown whole. The
+   * power one is REAL power, which at an impedance peak is nothing like the
+   * nominal watts a gain stated in W is. */
+  xmax_mm?: number | null;
+  rated_power_w?: number | null;
+  max_voltage_v?: number | null;
 }
 
 /** Maximum output, per member and for the sum. Absent when no member carries a
