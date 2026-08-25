@@ -81,6 +81,13 @@ Same method, run on the macOS development host the Metal numbers come from.
 | hornlab-sim | `f47e70566` | `f47e70566` | match |
 | hornlab-waveguide-mesher | `50a8d7e1a` | `50a8d7e1a` | match |
 
+That reading was taken against `main`'s `pins.json` (`a1a5deef`). **This branch
+moves the mesher pin forward** off the Windows-broken rollback, to `e562e89`, so
+a venv still holding `50a8d7e1` now reads as drifted from here until it is
+reinstalled from `server/requirements-pins.txt`. That is not a contradiction of
+the table above — it is the same mechanism, caught the moment the pin moved
+rather than weeks later, which is the entire point of measuring it.
+
 So the two hosts were **not** running the same stack, and the asymmetry has a
 direction: the Mac is on pins and the Windows box is behind it. That settles the
 open question in the section above — the axisymmetric cancellation failure there
