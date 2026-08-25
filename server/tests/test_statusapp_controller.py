@@ -429,3 +429,75 @@ def test_close_cannot_orphan_a_descendant_process(tmp_path: Path) -> None:
     stopped_heartbeat = heartbeat.read_text(encoding="utf-8")
     time.sleep(0.15)
     assert heartbeat.read_text(encoding="utf-8") == stopped_heartbeat
+
+
+def test_a_dependency_print_is_not_reported_as_the_reason_the_server_died(
+    tmp_path: Path,
+) -> None:
+    """The failure line wins over whatever happened to be written last.
+
+    bempp prints a notice about a missing optional Gmsh executable on every
+    start. With stdout and stderr merged, a block-buffered print like that can
+    flush at exit -- after the logging that says what actually went wrong --
+    and the window then blames the wrong thing entirely.
+    """
+
+    server = tmp_path / "noisy_failure.py"
+    server.write_text(
+        "import sys\n"
+        "print('2026-08-25T18:02:03+0000 ERROR wg.launch: the data directory "
+        "is not writable', file=sys.stderr)\n"
+        "sys.stderr.flush()\n"
+        "print('Could not find Gmsh.Interactive plotting and shapes module "
+        "not available.')\n"
+        "sys.stdout.flush()\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    controller = _controller(
+        tmp_path, server_command=(sys.executable, str(server))
+    )
+    controller.start()
+    try:
+        snapshot = _wait_for(
+            lambda: (
+                controller.poll()
+                if controller.poll().backend.state is ServiceState.ERROR
+                else None
+            )
+        )
+    finally:
+        controller.close()
+
+    assert "the data directory is not writable" in snapshot.backend.reason
+    assert "Gmsh" not in snapshot.backend.reason
+    assert "server.log" in snapshot.backend.reason
+
+
+def test_a_clean_exit_with_no_error_says_so_rather_than_quoting_stdout(
+    tmp_path: Path,
+) -> None:
+    server = tmp_path / "quiet_exit.py"
+    server.write_text(
+        "print('Could not find Gmsh.Interactive plotting and shapes module "
+        "not available.')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    controller = _controller(
+        tmp_path, server_command=(sys.executable, str(server))
+    )
+    controller.start()
+    try:
+        snapshot = _wait_for(
+            lambda: (
+                controller.poll()
+                if controller.poll().backend.state is ServiceState.ERROR
+                else None
+            )
+        )
+    finally:
+        controller.close()
+
+    assert "without reporting an error" in snapshot.backend.reason
+    assert "Gmsh" not in snapshot.backend.reason
