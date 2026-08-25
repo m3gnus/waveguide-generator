@@ -206,7 +206,9 @@ describe('Viewport preview errors', () => {
   it('cycles display modes from one compact toolbar control', () => {
     const mode = host.querySelector<HTMLButtonElement>('.display-mode-tools button');
     expect(host.querySelectorAll('.display-mode-tools button')).toHaveLength(1);
-    expect(host.querySelectorAll('.viewport-tools button')).toHaveLength(6);
+    // Six view controls plus the two-way Geometry/Mesh source switch.
+    expect(host.querySelectorAll('.viewport-tools button')).toHaveLength(8);
+    expect(host.querySelectorAll('.mesh-source-tools button')).toHaveLength(2);
     expect(host.querySelector('.viewport-tools [aria-label="Import Gmsh 2.2 mesh"]')).toBeNull();
     expect(host.querySelector('.viewport-tools [aria-label="View presets"]')).toBeNull();
     expect(mode?.getAttribute('aria-label')).toContain('Display mode: Clay');
@@ -494,12 +496,117 @@ describe('Viewport preview errors', () => {
     });
     expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
 
+    expect(host.querySelector('.mesh-source-tools')).not.toBeNull();
+
     act(() => workspaceModeStore.setMode('cad'));
     expect(host.querySelector('.viewport-title b')?.textContent).toBe('Speaker CAD');
-    expect(host.querySelector('.imported-mesh-badge')).toBeNull();
+    // This return carries no independent display artifact, so the geometry on
+    // screen already is the solve mesh and there is nothing to switch between.
+    expect(host.querySelector('.mesh-source-tools')).toBeNull();
 
     act(() => workspaceModeStore.setMode('parametric'));
     expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
+  });
+
+  it('shows the ingested solve mesh in CAD Link when a display artifact exists', async () => {
+    const ingestId = 'wgi_viewport_cadmesh';
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      expect(String(input)).toBe(`/api/cadlink/ingest/${ingestId}/mesh`);
+      return new Response(meshFixture, { status: 200 });
+    });
+    act(() => {
+      useCadReturnStore.setState({
+        ingestRecord: {
+          ingest_id: ingestId,
+          symmetry: { cut_planes: [] },
+          viewport_mesh: { available: true },
+        } as unknown as CadReturnIngestRecord,
+        selectedBundle: { documentName: 'Speaker CAD', name: 'speaker.wgreturn' } as never,
+      });
+      importedMeshStore.setCad(createImportedMeshScene('Speaker CAD', parseMSH(meshFixture), 'cad', ingestId));
+      workspaceModeStore.setMode('cad');
+    });
+
+    const buttons = () => [...host.querySelectorAll<HTMLButtonElement>('.mesh-source-tools button')];
+    expect(buttons().map((button) => button.textContent)).toEqual(['Geometry', 'Mesh']);
+    expect(buttons()[0].getAttribute('aria-pressed')).toBe('true');
+
+    await act(async () => {
+      buttons()[1].click();
+      await Promise.resolve();
+    });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(buttons()[1].getAttribute('aria-pressed')).toBe('true');
+    expect(importedMeshStore.getSnapshot().cadSolver?.ingestId).toBe(ingestId);
+
+    // The artifact is immutable: reselecting it must re-serve the cached scene
+    // rather than fetching the same mesh again.
+    await act(async () => {
+      buttons()[0].click();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      buttons()[1].click();
+      await Promise.resolve();
+    });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+
+    fetchSpy.mockRestore();
+    act(() => {
+      workspaceModeStore.setMode('parametric');
+      importedMeshStore.clear();
+      resetCadReturnStore();
+    });
+  });
+
+  it('keeps the CAD mesh view through the record refreshes CAD Link polls out', async () => {
+    const ingestId = 'wgi_viewport_cadpoll';
+    // CAD Link re-publishes an equal record while it polls the CAD
+    // application. Keying the fetch on the record object made every poll
+    // cancel it, so the view sat on "loading solve mesh…" forever.
+    const record = () => ({
+      ingest_id: ingestId,
+      symmetry: { cut_planes: [] },
+      viewport_mesh: { available: true },
+    } as unknown as CadReturnIngestRecord);
+    let release: (() => void) | null = null;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return new Response(meshFixture, { status: 200 });
+    });
+    act(() => {
+      useCadReturnStore.setState({
+        ingestRecord: record(),
+        selectedBundle: { documentName: 'Speaker CAD', name: 'speaker.wgreturn' } as never,
+      });
+      importedMeshStore.setCad(createImportedMeshScene('Speaker CAD', parseMSH(meshFixture), 'cad', ingestId));
+      workspaceModeStore.setMode('cad');
+    });
+    const buttons = () => [...host.querySelectorAll<HTMLButtonElement>('.mesh-source-tools button')];
+    act(() => buttons()[1].click());
+    expect(host.querySelector('.viewport-live')?.textContent).toContain('loading solve mesh');
+
+    // Three polls land while the fetch is still open.
+    act(() => useCadReturnStore.setState({ ingestRecord: record() }));
+    act(() => useCadReturnStore.setState({ ingestRecord: record() }));
+    act(() => useCadReturnStore.setState({ ingestRecord: record() }));
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(buttons()[1].getAttribute('aria-pressed')).toBe('true');
+
+    await act(async () => {
+      release!();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(importedMeshStore.getSnapshot().cadSolver?.ingestId).toBe(ingestId);
+    expect(host.querySelector('.viewport-live')?.textContent).toContain('ingested solve mesh');
+
+    fetchSpy.mockRestore();
+    act(() => {
+      workspaceModeStore.setMode('parametric');
+      importedMeshStore.clear();
+      resetCadReturnStore();
+    });
   });
 });
 
