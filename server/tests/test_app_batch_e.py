@@ -187,6 +187,31 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
     assert enabled[0].available is True
 
 
+def test_capabilities_reports_the_journal_mode_sqlite_actually_granted(tmp_path: Path) -> None:
+    """A store degraded to a rollback journal is readable off the running app.
+
+    ``PRAGMA journal_mode = WAL`` is a request, and a data directory on a share
+    that cannot support it leaves the store in ``delete`` mode. It is reported
+    beside the backend probes rather than refused, because the app is correct
+    on a rollback journal -- only slower.
+    """
+
+    from server.platform.sqlite import reset_journal_mode_statuses
+
+    reset_journal_mode_statuses()
+    client = TestClient(create_app(data_dir=tmp_path))
+    assert client.get("/api/jobs").status_code == 200
+
+    storage = client.get("/api/capabilities").json()["storage"]
+    assert all(
+        set(item) == {"name", "path", "journalMode", "available", "reason"} for item in storage
+    )
+    jobs = next(item for item in storage if item["name"] == "Jobs database")
+    assert jobs["journalMode"] == "wal"
+    assert jobs["available"] is True
+    assert jobs["reason"]
+
+
 def test_origin_guard_requires_own_authority_or_allowlisted_loopback(
     tmp_path: Path, monkeypatch
 ) -> None:
