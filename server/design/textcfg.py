@@ -606,7 +606,12 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
     return result
 
 
-def _build_payload(flat_source: Mapping[str, str], blocks: Mapping[str, _RawBlock]) -> dict[str, Any]:
+def _build_payload(
+    flat_source: Mapping[str, str],
+    blocks: Mapping[str, _RawBlock],
+    *,
+    dialect: Literal["mwg", "ath"],
+) -> dict[str, Any]:
     flat = dict(flat_source)
     formula = _formula(flat, blocks)
     consumed_blocks = _legacy_sections(flat, blocks)
@@ -640,6 +645,26 @@ def _build_payload(flat_source: Mapping[str, str], blocks: Mapping[str, _RawBloc
         if "Throat.Diameter" in flat:
             payload["r0"] = _numeric_or_expression_divide_by_two(flat["Throat.Diameter"])
             consumed_keys.add("Throat.Diameter")
+        if dialect == "ath":
+            # ATH's own defaults for OSSE keys the file may omit (Ath 4.8.2 User
+            # Guide 4.1.1), matching hornlab_mesher.config_parser. Leaving them
+            # unset instead falls through to the mesher's native-config defaults
+            # (a0 = 15.5, s = 0), which silently rebuilds the throat at a
+            # different opening angle -- and with it the auto source cap, whose
+            # radius is r0/sin(a0). ATH's Throat.Angle = 0 makes that radius
+            # infinite, i.e. a flat source; 15.5 domes it by ~1.7 mm.
+            payload.setdefault("a0", 0)
+            payload.setdefault("s", 0.7)
+
+    if dialect == "ath" and formula != "FREEFORM":
+        # ATH's Length is the nominal axial depth of the whole device, so
+        # Slot.Length is carved OUT of it; the application's own default treats
+        # Length as the flare alone and adds the slot on top. Without this an
+        # ATH import with a slot is built too long, and an azimuthally varying
+        # Slot.Length -- ATH's own m2-clone uses 45 - 42*sin(2*p)^4 -- tilts the
+        # mouth out of plane, which an infinite-baffle build rejects outright.
+        # hornlab_mesher.config_parser stamps the same mode on its ATH path.
+        payload.setdefault("length_mode", "total")
 
     enclosure = _enclosure(blocks)
     if enclosure is not None:
@@ -693,7 +718,8 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             )
         except (TypeError, ValueError, ValidationError) as exc:
             raise TextConfigError(f"invalid CadLink block: {exc}") from exc
-    payload = _build_payload(flat, blocks)
+    dialect: Literal["mwg", "ath"] = "mwg" if _MWG_SNIFF.search(text) else "ath"
+    payload = _build_payload(flat, blocks, dialect=dialect)
     applications: list[MigrationApplication] = []
     if migrate:
         try:
@@ -706,7 +732,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         raise TextConfigError(str(exc)) from exc
     return ParsedDesign(
         design=design,
-        dialect="mwg" if _MWG_SNIFF.search(text) else "ath",
+        dialect=dialect,
         migrations=applications,
         comments=comments,
         raw_values=raw_values,
