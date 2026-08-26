@@ -83,7 +83,18 @@ def _outbound(tmp_path: Path) -> tuple[dict, bytes]:
             for item in product.manifest["parameters"]
             if item["name"].endswith("_throat_dia")
         )
-        gmsh.model.occ.addDisk(*throat, diameter / 2.0, diameter / 2.0)
+        # Seat the membrane slightly proud of the bore instead of exactly on
+        # it. A real edited Part Studio caps the throat with a face that MEETS
+        # the wall; a disk of the nominal throat diameter is only tangent to
+        # it, and whether that tangency reads as an overlap or as a crossing
+        # depends on which side of nominal the fitted bore rim happens to sit.
+        # Under the mesher's compatibility pole fit the rim hangs ~0.085 mm
+        # inside nominal, so the nominal disk always overhung it; under the
+        # interpolating fit the rim IS nominal to sub-micron, the two edges
+        # cross, and the import meshed 8 non-manifold and 16 open edges out of
+        # the tangency. The overlap is what the fixture always meant.
+        radius = diameter / 2.0 + max(diameter * 1.0e-3, 1.0e-3)
+        gmsh.model.occ.addDisk(*throat, radius, radius)
         gmsh.model.occ.synchronize()
         gmsh.write(str(path))
         return path.read_bytes()
