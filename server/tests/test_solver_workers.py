@@ -23,21 +23,34 @@ import pytest
 from server.solver import bempp
 
 
-def test_the_sweep_defaults_to_the_engines_auto_mode(monkeypatch):
-    """The default is the fastest mode, not the serial one.
+def test_the_sweep_defaults_to_the_single_process_path(monkeypatch):
+    """The default is the one with no failure mode, not the fastest one.
 
-    Serial was the default only because Stop could not cancel a frequency
-    already running in a worker process. ``server/solver/bempp_process.py`` and
-    ``server/platform/process_tree.py`` make Stop kill the whole solve tree, so
-    that reason is gone. Auto -- not a fixed count -- keeps short sweeps in one
-    process, because the engine splits only when every worker earns at least
-    ``_ENGINE_MIN_FREQUENCIES_PER_WORKER`` frequencies.
+    Auto was the default from 463cab0e and never worked: the same batch shipped
+    it without the commit letting the worker have children, so every sweep long
+    enough to split died. Once that was fixed the choice became live for the
+    first time, and auto does not survive it -- the 1.33x is from a single
+    M1 Max, no bandwidth-bound desktop part has ever been measured, and
+    ``solve_workers`` reported the auto sentinel rather than a count, so the
+    instrument for the claim was broken for as long as the claim existed.
+
+    Splitting is also the only way to get sweep workers, and a launcher killed
+    without cleanup strands them on POSIX. A sweep under 80 frequencies never
+    splits, so those users would have taken the exposure with none of the
+    upside.
+
+    Auto is one variable away and is still fully supported.
     """
 
     monkeypatch.delenv("WG2_SOLVE_WORKERS", raising=False)
 
+    assert bempp._resolved_workers() == 1
+    assert bempp.DEFAULT_SOLVE_WORKERS == 1
+    # A default sweep must not split, at any length.
+    assert bempp._sweep_will_split(bempp.DEFAULT_SOLVE_WORKERS, 400) is False
+    # And auto remains reachable, unchanged.
+    monkeypatch.setenv("WG2_SOLVE_WORKERS", "0")
     assert bempp._resolved_workers() == 0
-    assert bempp.DEFAULT_SOLVE_WORKERS == 0
 
 
 def test_one_still_pins_the_single_process_path(monkeypatch):
