@@ -9,8 +9,9 @@ import {
 } from 'echarts/components';
 import * as echarts from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EChartsOption } from 'echarts';
+import { chartGutter, inAxisGutter, rulerLabel } from './chartRuler';
 
 echarts.use([
   LineChart,
@@ -39,9 +40,13 @@ export function chartPixelRatio(deviceRatio = globalThis.devicePixelRatio || 1):
   return Math.min(3, Math.max(2, deviceRatio));
 }
 
+interface AxisRuler { y: number; left: number; width: number; text: string | null }
+
 export function EChartRenderer({ option, label, live = false }: { option: EChartsOption; label: string; live?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
+  const [ruler, setRuler] = useState<AxisRuler | null>(null);
 
   useEffect(() => {
     if (!host.current) return;
@@ -50,7 +55,13 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
       useDirtyRect: true,
       devicePixelRatio: chartPixelRatio(),
     });
-    const observer = new ResizeObserver(() => chart.current?.resize());
+    // A ruler drawn for the old card size would keep its pixel row while the
+    // axis under it moves, which is worse than no ruler: the next pointer move
+    // restores it against the axis it actually belongs to.
+    const observer = new ResizeObserver(() => {
+      chart.current?.resize();
+      setRuler(null);
+    });
     observer.observe(host.current);
     return () => {
       observer.disconnect();
@@ -78,5 +89,39 @@ export function EChartRenderer({ option, label, live = false }: { option: EChart
     chart.current?.setOption(renderedOption, { notMerge: true, lazyUpdate: true });
   }, [live, option]);
 
-  return <div ref={host} role="img" aria-label={label} style={{ width: '100%', height: '100%', minHeight: 0 }} />;
+  // The gutter ruler. `convertFromPixel` is the chart's own axis mapping, so a
+  // zoomed or auto-extended axis reads correctly without tracking its extent
+  // here; on the mocked instance the interactive tests use it is simply absent,
+  // and the line then draws without a readout rather than throwing.
+  const track = useCallback((event: { clientX: number; clientY: number }) => {
+    const element = frame.current;
+    if (!element) return;
+    const bounds = element.getBoundingClientRect();
+    const x = event.clientX - bounds.left;
+    const y = event.clientY - bounds.top;
+    const gutter = chartGutter(option, bounds.width, bounds.height);
+    if (!gutter || !inAxisGutter(gutter, x, y)) {
+      setRuler((current) => (current ? null : current));
+      return;
+    }
+    const instance = chart.current;
+    const text = instance?.convertFromPixel
+      ? rulerLabel(option, gutter, y, (pixel) => instance.convertFromPixel({ yAxisIndex: 0 }, pixel) as number | null)
+      : null;
+    setRuler({ y, left: gutter.left, width: gutter.right - gutter.left, text });
+  }, [option]);
+
+  return <div
+    ref={frame}
+    className="chart-frame"
+    data-ruler={ruler ? 'on' : undefined}
+    style={{ position: 'relative', width: '100%', height: '100%', minHeight: 0 }}
+    onMouseMove={track}
+    onMouseLeave={() => setRuler(null)}
+  >
+    <div ref={host} role="img" aria-label={label} style={{ width: '100%', height: '100%', minHeight: 0 }} />
+    {ruler && <div className="chart-ruler" style={{ top: ruler.y, left: ruler.left, width: Math.max(0, ruler.width) }}>
+      {ruler.text && <span>{ruler.text}</span>}
+    </div>}
+  </div>;
 }

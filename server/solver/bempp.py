@@ -39,6 +39,7 @@ from .frequency_sweep import (
 from .field_traces_store import (
     BEMPP_FIELD_TRACE_BACKEND,
     build_field_trace_artifact,
+    describe_retention_refusal,
     field_trace_retention_plan,
 )
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
@@ -89,13 +90,14 @@ def _version() -> str | None:
         return None
 
 
-#: The sweep runs in one cancellable process unless the operator asks for more.
+#: The sweep uses every core it can profitably use, in a tree Stop can kill.
 #:
-#: ``WG2_SOLVE_WORKERS=0`` selects the engine's own auto mode, which splits a
-#: sweep across processes once each worker would get at least 40 frequencies;
-#: any positive integer forces that count. Auto was the default until it was
-#: measured on an M1 Max (10 cores, macOS 15.5), 766-triangle quarter-domain
-#: OSSE mesh, numba assembly backend, wall clock as mean over 3 repeats:
+#: ``WG2_SOLVE_WORKERS=0`` selects the engine's own auto mode -- the default --
+#: which splits a sweep across processes once each worker would get at least 40
+#: frequencies; any positive integer forces that count, and ``1`` pins the
+#: single-process path. Measured on an M1 Max (10 cores, macOS 15.5),
+#: 766-triangle quarter-domain OSSE mesh, numba assembly backend, wall clock as
+#: mean over 3 repeats:
 #:
 #:   frequencies   workers=1          auto              workers=4
 #:   79            64.1 s (sd 4.4)    66.3 s (1 proc)   59.7 s (sd 3.3)
@@ -109,26 +111,50 @@ def _version() -> str | None:
 #: -- where auto first splits -- the difference was inside the run-to-run
 #: spread.
 #:
-#: What it costs is Stop. The parent can only raise between progress events and
-#: must then join every sibling chunk, so a cancelled 200-frequency sweep
-#: returned after 88 s instead of 0.3 s, having solved the whole sweep anyway;
-#: and because each spawned worker re-JITs bempp-cl's kernels, the first
-#: cancellable moment moves from 0.6 s to 21 s, re-creating the cold-start
-#: window ``server/solver/warmup.py`` exists to keep off the user's solve.
-#: Charging 88 s to the user who just said the remaining time was not worth it,
-#: to save 55 s for the user who did not, is the wrong way round.
+#: What it used to cost was Stop. The parent could only raise between progress
+#: events and then had to join every sibling chunk, so a cancelled
+#: 200-frequency sweep returned after 88 s instead of 0.3 s, having solved the
+#: whole sweep anyway. On that basis the default was 1, and the override was
+#: ignored outright inside the killable worker -- so the measurements above
+#: described a mode no user could reach.
+#:
+#: That reasoning predates ``server/solver/bempp_process.py``. The sweep now
+#: runs in a child the parent can kill outright, and
+#: ``server/platform/process_tree.py`` makes that kill reach the sweep's own
+#: worker processes (Windows job object; POSIX process group). Stop is bounded
+#: by process termination rather than by cooperative cancellation, so the
+#: trade-off that justified serial no longer exists and the default is the
+#: engine's auto mode.
+#:
+#: Auto -- not a fixed count -- because the split is only worth its cost on a
+#: long sweep: the engine splits solely when every worker would get at least
+#: ``_ENGINE_MIN_FREQUENCIES_PER_WORKER`` frequencies, so short sweeps still run
+#: in one process and never pay the re-JIT.
+#:
+#: Two caveats, both real:
+#:
+#: * Each spawned worker re-JITs bempp-cl's kernels, so a split sweep re-creates
+#:   part of the cold-start window ``server/solver/warmup.py`` exists to remove.
+#:   It is amortised over >= 40 frequencies per worker, not over one.
+#: * Every worker holds its own dense matrix. The figures above are from an
+#:   M1 Max, which has several times the memory bandwidth of a mainstream
+#:   desktop part; on a bandwidth-bound host a split sweep can be *busier
+#:   without being faster*. ``solve_workers`` and ``total_time_seconds`` are
+#:   reported in the response metadata so this is measurable per host rather
+#:   than assumed. Set ``WG2_SOLVE_WORKERS=1`` to pin the serial path.
 #:
 #: Results themselves are not at stake: serial and parallel payloads for the
 #: same design and sweep were byte-identical in compact JSON at both 80 and 200
 #: frequencies, once per-frequency wall-clock timings were excluded.
-DEFAULT_SOLVE_WORKERS = 1
+DEFAULT_SOLVE_WORKERS = 0
 
 
 def _resolved_workers() -> int:
     """How many processes the frequency sweep may use.
 
-    Zero means the engine's own auto mode; see ``DEFAULT_SOLVE_WORKERS`` for
-    what it was measured to cost and why it is not the default.
+    Zero means the engine's own auto mode, which is the default; ``1`` pins the
+    single-process path. See ``DEFAULT_SOLVE_WORKERS`` for what each was
+    measured to cost.
     """
 
     raw = os.environ.get("WG2_SOLVE_WORKERS", "").strip()
@@ -519,6 +545,16 @@ def solve_bempp_from_msh_text(
             cap_bytes=field_trace_cap_bytes,
         )
     )
+    # Say what was dropped and why. Crossing the cap is a cliff a user reaches
+    # by adding frequencies or refining the mesh, and without this the only
+    # symptom is that the field plane quietly stops being offered.
+    retention_detail = describe_retention_refusal(
+        trace_reason, trace_estimated_bytes, trace_cap_bytes
+    )
+    if retention_detail is not None and trace_reason == "size_cap_exceeded":
+        logger.warning("%s", retention_detail)
+        if stage_callback:
+            stage_callback("setup", 0.0, retention_detail)
     backend = status.get("assembly_backend") or PREFERRED_ASSEMBLY_BACKEND
     started = time.time()
     if status.get("warning"):
@@ -575,10 +611,12 @@ def solve_bempp_from_msh_text(
         else requested_workers
     )
     if force_serial and requested_workers != 1:
+        # ``force_serial`` is now only set by callers that genuinely cannot
+        # split -- not by the killable worker, which used to set it for every
+        # solve and so made this override unreachable.
         message = (
-            f"Ignoring WG2_SOLVE_WORKERS={requested_workers} inside the killable "
-            "BEMPP worker. WG keeps one warm serial native process so Stop can "
-            "terminate the complete solve tree promptly."
+            f"Ignoring WG2_SOLVE_WORKERS={requested_workers}: this solve path "
+            "runs one native process."
         )
         logger.warning("%s", message)
         if stage_callback:
@@ -716,11 +754,20 @@ def solve_bempp_from_msh_text(
         "verbose": context.verbose,
         "performance": {
             "total_time_seconds": time.time() - started,
+            # Report the sweep's shape next to its wall clock. Whether splitting
+            # the sweep actually pays is a property of the host's memory
+            # bandwidth, not of the code, so it has to be measurable from a
+            # user's own result rather than inferred from our benchmark host.
+            "solve_workers": workers,
+            "solve_workers_requested": requested_workers,
+            "sweep_split": _sweep_will_split(workers, context.num_frequencies),
             "native_timings": json_safe_native_value(dict(getattr(result, "timings", {}) or {})),
         },
         "field_trace_retention": {
             "estimated_bytes": trace_estimated_bytes,
             "cap_bytes": trace_cap_bytes,
+            "reason": trace_reason,
+            "detail": retention_detail,
         },
         "bempp": {
             "native_symmetry_plane": getattr(config, "native_symmetry_plane", None),

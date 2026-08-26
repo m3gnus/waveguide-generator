@@ -675,3 +675,65 @@ def test_freeform_morph_reshapes_the_preview_mouth() -> None:
     # A target no engine defines is now refused by name instead of building.
     with pytest.raises(ValueError, match="valid values 0, 1, 2, or 3"):
         half_extents({**base, "morph": {"target_shape": 99}})
+
+
+# =====================================================================================
+# Acoustic surface fit
+# =====================================================================================
+
+
+_FREEFORM_PAYLOAD: dict[str, object] = {
+    "formula": "FREEFORM",
+    "length": 120,
+    "profile_h": {"points": [{"t": 0, "r": 12.7}, {"t": 1, "r": 100}]},
+    "profile_v": {"points": [{"t": 0, "r": 12.7}, {"t": 1, "r": 80}]},
+    "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+}
+
+
+def test_the_acoustic_wall_asks_for_the_interpolating_fit() -> None:
+    """The mesher's default fit reads the sampled grid as B-spline *poles*.
+
+    A pole fit does not pass through its samples, so the meshed wall hangs
+    inside the designed one and refining the mesh converges onto that bias
+    rather than onto the design -- while the live preview, drawn from the
+    analytic parameterisation, shows the design. Asking for the interpolating
+    fit removes the bias and makes the two agree.
+    """
+
+    config = _translate({"formula": "OSSE", "L": 120, "a": 45, "r0": 12.7, "a0": 10})
+    assert config["mesh"]["surfaceFit"] == "interpolate"
+
+
+def test_a_freeform_design_keeps_the_compatibility_fit() -> None:
+    """FREEFORM creases make the interpolating patch unmeshable.
+
+    The mesher refuses the combination outright rather than letting Gmsh grind
+    on it, so the translation must not hand it one.
+    """
+
+    config = _translate(_FREEFORM_PAYLOAD)
+    assert config["mesh"]["surfaceFit"] == "approximate"
+
+
+@pytest.mark.parametrize("formula", ["OSSE", "R-OSSE", "ICW", "FREEFORM"])
+def test_every_formula_translates_to_a_fit_the_mesher_accepts(formula: str) -> None:
+    """Whatever the guard decides, the mesher must not reject the answer."""
+
+    from hornlab_mesher.builders._occ import SURFACE_FIT_MODES
+
+    payloads: dict[str, dict[str, object]] = {
+        "OSSE": {"formula": "OSSE", "L": 120, "a": 45, "r0": 12.7, "a0": 10},
+        "R-OSSE": {
+            "formula": "R-OSSE", "R": 140, "r0": 12.7, "a0": 15.5, "a": 25,
+            "k": 2, "m": 0.85, "b": 0.2, "r": 0.4, "q": 3.4, "tmax": 1,
+        },
+        "ICW": {"formula": "ICW", "L": 120, "R": 110, "r0": 12.7, "a0": 18},
+        "FREEFORM": _FREEFORM_PAYLOAD,
+    }
+    config = _translate(payloads[formula])
+    fit = config["mesh"]["surfaceFit"]
+    assert fit in SURFACE_FIT_MODES
+    # build_geometry_params runs the mesher's own validation of the key.
+    parameters, _formula, _mode = build_geometry_params(config)
+    assert parameters is not None
