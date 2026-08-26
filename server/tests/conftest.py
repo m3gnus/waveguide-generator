@@ -39,6 +39,43 @@ os.environ.setdefault("WG2_SOLVER_WARMUP", "0")
 
 
 @pytest.fixture(autouse=True)
+def _no_test_inherits_a_claimed_session():
+    """Stop one test's session claim from letting a later test SIGKILL the run.
+
+    ``adopt_process_group`` records the claiming pid in a module global, and
+    ``kill_own_process_group`` fires only when that global equals the *current*
+    pid. In production the pair is safe: both run in the BEMPP worker child, and
+    nothing else ever claims a session.
+
+    In the suite they are not paired. ``test_bempp_process.py`` drives
+    ``_bempp_worker_main`` in-process -- that is how it tests the loop -- and its
+    first act is ``adopt_process_group()``. Under pytest that ``setsid()``
+    succeeds, because pytest is a child of the shell and so not a group leader.
+    So the pytest process becomes its own session leader and records *its own*
+    pid as the claimant. Any later ``kill_own_process_group()`` then passes the
+    guard and SIGKILLs the whole run: measured as ``EXIT=137`` at 3% with
+    ``test_bempp_process.py`` and ``test_process_tree_posix.py`` in one run, and
+    it does not reproduce when either runs alone.
+
+    It also hides under ``setsid``: a runner that is already a session leader
+    makes the in-process ``setsid()`` fail, the global stays unset, and the suite
+    passes -- which is why this survived a green local run. CI invokes pytest as
+    a plain child, which is the failing shape.
+
+    Restoring the global cannot undo the ``setsid``, and does not need to. What
+    matters is that no test inherits a claim it did not make.
+    """
+
+    from server.platform import process_tree
+
+    claimed = process_tree._adopted_session_pid
+    try:
+        yield
+    finally:
+        process_tree._adopted_session_pid = claimed
+
+
+@pytest.fixture(autouse=True)
 def _sigpipe_stays_ignored():
     restore_sigpipe_ignore()
     try:
