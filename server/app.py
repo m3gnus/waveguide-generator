@@ -37,6 +37,7 @@ from server.platform.origin import (
     request_origin_allowed,
 )
 from server.platform.paths import app_root, default_runs_dir, resolve_data_dir
+from shared.build_identity import build_identity, build_label
 from server.platform.sqlite import journal_mode_statuses
 from server.preview.service import mount_preview
 from server.settings import mount_settings
@@ -52,6 +53,12 @@ VERSION = str(
         (APP_ROOT / "shared" / "version.json").read_text(encoding="utf-8")
     )["version"]
 )
+#: ``VERSION`` names the last release tag, not this build: the installer tracks
+#: a branch, so hundreds of commits share one version string. Report BUILD
+#: wherever a human might quote it back to us in a bug report. See
+#: ``shared/build_identity.py``.
+BUILD = build_label(APP_ROOT)
+BUILD_IDENTITY = build_identity(APP_ROOT)
 FRONTEND_DIST = APP_ROOT / "frontend" / "dist"
 LEGACY_WORKSPACE_DIR = APP_ROOT / "output"
 request_log = logging.getLogger("wg.requests")
@@ -248,7 +255,7 @@ def create_app(
     )
     engine_registry = EngineRegistry(detector=detect_engines)
     application.state.engine_registry = engine_registry
-    logging.getLogger("wg").info("Waveguide Generator v%s application initialized", VERSION)
+    logging.getLogger("wg").info("Waveguide Generator %s application initialized", BUILD)
     # The SPA is 2.27 MB of JavaScript and 187 kB of CSS.  Even on loopback that
     # is worth compressing: it gzips to roughly a quarter of the bytes, and the
     # same middleware covers the multi-hundred-kB results payloads.  500 bytes
@@ -409,6 +416,8 @@ def create_app(
     async def health() -> dict[str, object]:
         return {
             "version": VERSION,
+            "build": BUILD,
+            "commit": BUILD_IDENTITY["commit"],
             "uptime": max(0.0, time.monotonic() - started),
             "data_dir": str(resolved_data_dir),
         }
