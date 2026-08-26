@@ -253,7 +253,20 @@ class BemppProcessHost:
             target=self._target,
             args=(child,),
             name="hornlab-bempp-worker",
-            daemon=True,
+            # NOT daemon. A daemonic multiprocessing process is forbidden from
+            # having children at all -- ``start()`` asserts on it -- and the
+            # native sweep splits with a ProcessPoolExecutor. With daemon=True
+            # every split sweep dies with "daemonic processes are not allowed to
+            # have children", which made the parallel default unusable for
+            # exactly the long sweeps it was meant to speed up.
+            #
+            # What daemon=True bought was teardown when the parent exits, and
+            # three mechanisms already cover that better: atexit -> _HOST.close()
+            # for a normal exit (registered after multiprocessing's own hook, so
+            # it runs first and terminates rather than joins), the sentinel
+            # watchdog in _exit_when_parent_does for a force-kill, and the job
+            # object / process group for the workers underneath.
+            daemon=False,
         )
         process.start()
         child.close()
