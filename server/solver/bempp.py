@@ -175,6 +175,34 @@ def _resolved_workers() -> int:
 _ENGINE_MIN_FREQUENCIES_PER_WORKER = 40
 
 
+def _effective_workers(workers: int, num_frequencies: int) -> int | None:
+    """How many processes this sweep will really use, resolving auto.
+
+    ``0`` is the engine's *auto* sentinel, not a count. Reporting it verbatim
+    made the metadata useless for the one thing it exists for: whether splitting
+    a sweep pays is a property of the host's memory bandwidth, so a user has to
+    be able to read the worker count off their own result. Under the default it
+    always read ``0`` -- measured on a 10-core host running an 80-frequency
+    sweep that demonstrably span up two workers.
+
+    Returns ``None`` when auto cannot be resolved, so the caller can say
+    "unknown" rather than assert a number it did not get from the engine.
+    """
+
+    if workers != 0:
+        return workers
+    try:
+        package = importlib.import_module("hornlab_bempp_bem")
+        resolve_worker_count = getattr(package, "_resolve_worker_count")
+    except (ImportError, OSError, AttributeError):
+        return None
+    # Deliberately unguarded. A resolver whose signature has changed under the
+    # pin must fail loudly rather than be reported as "unknown": that is a pin
+    # mismatch, and test_an_importable_but_incompatible_engine_worker_resolver_
+    # fails_loudly pins the same contract for the split prediction.
+    return int(resolve_worker_count(0, num_frequencies))
+
+
 def _sweep_will_split(workers: int, num_frequencies: int) -> bool:
     """Will this sweep really run in more than one process?
 
@@ -187,12 +215,12 @@ def _sweep_will_split(workers: int, num_frequencies: int) -> bool:
 
     if workers != 0:
         return workers > 1
-    try:
-        package = importlib.import_module("hornlab_bempp_bem")
-        resolve_worker_count = getattr(package, "_resolve_worker_count")
-    except (ImportError, OSError, AttributeError):
+    resolved = _effective_workers(workers, num_frequencies)
+    if resolved is None:
+        # The engine could not be asked. Fall back to its documented rule rather
+        # than claiming a split that may not happen.
         return num_frequencies >= 2 * _ENGINE_MIN_FREQUENCIES_PER_WORKER
-    return resolve_worker_count(0, num_frequencies) > 1
+    return resolved > 1
 
 
 def _load_api() -> bool:
@@ -758,7 +786,10 @@ def solve_bempp_from_msh_text(
             # the sweep actually pays is a property of the host's memory
             # bandwidth, not of the code, so it has to be measurable from a
             # user's own result rather than inferred from our benchmark host.
-            "solve_workers": workers,
+            # The count actually used, with the auto sentinel resolved. Reporting
+            # the raw ``0`` here made a split sweep indistinguishable from a
+            # serial one in the very field that exists to tell them apart.
+            "solve_workers": _effective_workers(workers, context.num_frequencies),
             "solve_workers_requested": requested_workers,
             "sweep_split": _sweep_will_split(workers, context.num_frequencies),
             "native_timings": json_safe_native_value(dict(getattr(result, "timings", {}) or {})),

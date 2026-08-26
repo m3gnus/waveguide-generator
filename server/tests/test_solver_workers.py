@@ -186,3 +186,43 @@ def test_explicit_frequency_lists_are_reported_as_the_serial_sweeps_they_are(
     assert response["metadata"]["bempp"]["workers"] == 1
     assert not any("splits this sweep" in message for _, _, message in stages)
     assert any("Ignoring WG2_SOLVE_WORKERS=4" in message for _, _, message in stages)
+
+
+def test_the_reported_worker_count_resolves_auto(monkeypatch):
+    """``solve_workers`` must be a count, not the auto sentinel.
+
+    Whether splitting a sweep pays is a property of the host's memory bandwidth,
+    not of the code, so the field exists for a user to read the real worker count
+    off their own result. Reporting the raw ``0`` made a split sweep and a serial
+    one identical in the one field meant to tell them apart -- measured on a
+    10-core host where an 80-frequency sweep reported ``solve_workers: 0`` while
+    demonstrably running two workers and a manager as grandchildren of the
+    killable BEMPP child.
+    """
+
+    monkeypatch.setattr(
+        hornlab_bempp_bem, "_resolve_worker_count", lambda requested, count: 2
+    )
+
+    assert bempp._effective_workers(0, 80) == 2
+    # An explicit count is honoured by the engine over its own arithmetic, so it
+    # is reported back verbatim rather than re-derived.
+    assert bempp._effective_workers(1, 80) == 1
+    assert bempp._effective_workers(4, 80) == 4
+
+
+def test_an_unresolvable_auto_count_is_reported_as_unknown(monkeypatch):
+    """Better an honest ``None`` than a number the engine never gave us.
+
+    ``_sweep_will_split`` still falls back to the engine's documented rule,
+    because a wrong split claim costs Stop its guarantee -- but the *count* has
+    no safe guess, and inventing one would put a fabricated measurement in front
+    of a user tuning their own host.
+    """
+
+    monkeypatch.delattr(hornlab_bempp_bem, "_resolve_worker_count", raising=False)
+
+    assert bempp._effective_workers(0, 80) is None
+    # The split claim still resolves, from the documented threshold.
+    assert bempp._sweep_will_split(0, 80) is True
+    assert bempp._sweep_will_split(0, 79) is False
