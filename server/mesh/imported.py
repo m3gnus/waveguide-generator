@@ -174,14 +174,32 @@ IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 #
 # The mask alone, isolated at delta=0.2, is worth 14-20% on all three metrics:
 # 7,542 tris / peak 1.0787 / p95 0.1799 / rms 0.0963 with it reverted, against
-# 8,334 / 0.9112 / 0.1547 / 0.0772 with it. It costs 10.5% more triangles, and
-# WHY it costs them is not established: a masked-away cell cannot coarsen
-# anything, because the view joins a ``Min``. Probing confirms an uncovered
-# point returns no value at all rather than zero, so holes fall through to the
-# other fields and are safe -- which leaves how gmsh resolves two OVERLAPPING
-# ``ST`` cells as the open question. It was not pinned down. The fidelity
-# direction is unambiguous and is the one that matters; the mechanism behind
-# the triangle count is a loose end.
+# 8,334 / 0.9112 / 0.1547 / 0.0772 with it -- for 10.5% MORE triangles, which
+# looks backwards until you know how a ``PostView`` resolves overlap.
+#
+# It does not take the minimum. Where two ``ST`` cells cover the same point,
+# ``gmsh.view.probe`` returns the LAST one added, whatever its value: two cells
+# on one footprint carrying 30 and 2 probe as 2.0 in that order and 30.0 when
+# the order is reversed (gmsh 4.15.2). The view is built by iterating
+# ``getEntities(2)``, so before the mask a coarse OUT-OF-TRIM cell from a
+# later-iterated surface silently overrode the correct fine sizing of an
+# earlier one -- and which surface won was decided by OCC entity order, a
+# property of how the CAD system happened to emit the STEP, not of the
+# geometry. That is the real shape of the bug. It was not merely sampling
+# outside the trim; it was coarsening real geometry by an arbitrary rule.
+#
+# So the extra triangles are the cost of no longer being wrongly coarsened, and
+# the fidelity gain is the same fact seen from the other side: the overridden
+# regions were where deviation was worst. Uncovered points are safe either way
+# -- probing returns no value at all rather than zero, so a hole falls through
+# to the other fields and to ``Mesh.MeshSizeMax``.
+#
+# A residual, for whoever ships this: masking removes nearly all overlap, but
+# adjacent faces can still overlap slightly at a shared edge, and there the
+# same order-dependence applies in miniature. The order-independent form is to
+# give each surface its OWN ``PostView`` field and let the ``Min`` field
+# resolve them, which is the semantics this wanted in the first place. Not done
+# here: it is a design change, and it should be measured, not assumed.
 #
 # What that changes: peak deviation is now MONOTONIC in the dial. The parking
 # decision's first and strongest ground was that it was not (1.109 mm at 0.2,
