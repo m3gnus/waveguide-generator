@@ -200,19 +200,6 @@
             "title": "Bundlepath",
             "type": "string"
           },
-          "curvatureSegments": {
-            "anyOf": [
-              {
-                "maximum": 64.0,
-                "minimum": 8.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Curvaturesegments"
-          },
           "expectedDesignId": {
             "anyOf": [
               {
