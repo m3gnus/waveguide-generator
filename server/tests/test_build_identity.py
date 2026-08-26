@@ -165,3 +165,42 @@ def test_a_manifest_without_a_commit_falls_through(tmp_path):
     )
 
     assert identity.build_identity(root)["source"] == "unavailable"
+
+
+def test_a_live_probe_still_beats_a_manifest(tmp_path, monkeypatch):
+    """The top of the ranking, which nothing else pins.
+
+    A manifest cannot go stale relative to the app layer it sits in, but a
+    developer checkout that happens to contain one is still a checkout, and the
+    probe is the only source that reflects a HEAD moved after packaging. Without
+    this, the order could invert unnoticed: every other test here would still
+    pass with the manifest consulted first.
+    """
+
+    root = _tree(tmp_path, version="0.2.5")
+    (root / "APP-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "commit": "6070dab6" + "0" * 32}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        identity, "_probed_identity", lambda base: ("abcdef1234", False, "git")
+    )
+
+    assert identity.build_identity(root)["source"] == "git"
+    assert identity.build_label(root) == "0.2.5+gabcdef12"
+
+
+def test_a_corrupt_manifest_degrades_instead_of_raising(tmp_path):
+    """A half-written manifest must not stop the app from starting.
+
+    The stamp already has this guard. The manifest needs its own: it is written
+    during bundle assembly, which can be interrupted, and it is now consulted on
+    every start of every packaged build -- the widest exposure of the three
+    sources.
+    """
+
+    root = _tree(tmp_path, version="0.2.5")
+    (root / "APP-MANIFEST.json").write_text("{not json", encoding="utf-8")
+
+    assert identity.build_label(root) == "0.2.5+unknown"
+    assert identity.build_identity(root)["source"] == "unavailable"
