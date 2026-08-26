@@ -104,11 +104,13 @@ class CadReturnIngestRequest(BaseModel):
     # snapshot, which does not carry this alias).
     #
     # Chord deviation each panel may have from the true CAD surface, in mm.
-    # Omitted means the server default, IMPORTED_SURFACE_DEVIATION_MM = 0.2 mm.
+    # Omitted means the server default, IMPORTED_SURFACE_DEVIATION_MM = 0.15 mm.
     # This is the imported mesh's cost dial: it replaced a segments-per-2pi
     # control, which spent triangles in proportion to curvature radius and so
-    # over-refined small fillets while under-refining large sweeps. Measured,
-    # it buys 14-21% of the triangles at matched quality.
+    # over-refined small fillets while under-refining large sweeps. Measured
+    # across five geometries, the default is better than the rule it replaces on
+    # peak, p95 and rms at a slightly lower triangle count, and raises the HF
+    # wall frequency limit 3620 -> 5347 Hz on the reference return.
     #
     # The band stops at 0.35 rather than going higher because above it the
     # request is coarser than the user's rigid target, ``Mesh.MeshSizeMax``
@@ -881,10 +883,20 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
             payload.skipped_source_ids,
             store,
             Path(request.app.state.data_dir),
-            # Only carry the curvature override when it was actually asked
+            # Only carry the deviation override when it was actually asked
             # for: prep_options is part of the mesh cache key, so writing an
             # explicit null would invalidate every mesh cached before this
             # option existed.
+            #
+            # This dict is an allowlist by construction, and that is load-
+            # bearing rather than incidental: ``build_imported_mesh`` also
+            # accepts ``sizing_rule``, ``sagitta_grid_samples`` and
+            # ``measure_deviation``, which are measurement scaffolding for
+            # ``scripts/measure_imported_mesh_deviation.py``. ``sizing_rule``
+            # would silently restore the superseded sizing rule and
+            # ``measure_deviation`` costs about half a build again. None of
+            # them may become reachable from a request; keep this literal, and
+            # never splat a payload into it.
             prep_options={
                 "area_drift_overrides": payload.area_drift_overrides,
                 "symmetry_mode": payload.symmetry_mode,

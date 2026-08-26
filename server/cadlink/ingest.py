@@ -36,7 +36,12 @@ from .wgreturn import WgReturnBundle, read_wgreturn
 # artifact for the same inputs and must not be served from the cache.
 # v5: the meshing stage now records a geometric self-intersection report, so a
 # v4 sidecar would be reused without one and its mesh would go unchecked.
-IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v5"
+# v6: element sizing moved from a segments-per-2pi curvature rule to a
+# constant-sagitta field (``IMPORTED_SURFACE_DEVIATION_MM``). Every cached mesh
+# is a different artifact for the same inputs, and without this bump a project
+# would keep being served its v5 mesh while a fresh ingest of the same body
+# produced a sagitta one -- two meshes, two sets of acoustics, one design.
+IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v6"
 IMPORT_VIEWPORT_PIPELINE_CONTRACT = "wg-import-viewport-v1"
 
 

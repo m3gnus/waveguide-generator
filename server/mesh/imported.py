@@ -83,8 +83,8 @@ IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 #   segments=32     13,177   0.8215   0.1087   0.0653
 #   segments=48     17,510   0.6210   0.0760   0.0416
 #   delta=0.10      13,748   0.4474   0.0819   0.0428
-#   delta=0.15      10,086   0.7384   0.1226   0.0615
-#   delta=0.20       8,334   0.9112   0.1547   0.0772   <- default
+#   delta=0.15      10,086   0.7384   0.1226   0.0615   <- default
+#   delta=0.20       8,334   0.9112   0.1547   0.0772
 #   delta=0.25       7,442   1.2125   0.1917   0.0922
 #   delta=0.30       6,783   1.2125   0.2233   0.1042
 #   delta=0.40       6,005   1.5365   0.2805   0.1248
@@ -99,10 +99,53 @@ IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 # once claimed, because that figure was quoted at an undisclosed loss of
 # quality.
 #
-# The default is 0.20 mm: 19% fewer triangles than segments=24 at a better peak
-# and a better rms, with p95 within 7%. It is not 0.30 mm, which this branch
-# proposed before the two defects below were found and which sits inside the
-# saturated region described next.
+# The default is 0.15 mm, the point that is not worse than the rule it replaces
+# on anything: against segments=24 it is 25% better on peak, 16% on p95 and 25%
+# on rms while using 1.6% FEWER triangles. Bumping the cache key re-meshes every
+# existing project, and a forced re-mesh is defensible when it hands everyone a
+# better mesh; 0.20 would hand them a cheaper worse one, and anyone who wants
+# that 19% triangle saving can turn the dial down. It is not 0.30, which this
+# branch proposed before the two defects below were found and which sits inside
+# the saturated region described next.
+#
+# It also buys BANDWIDTH, which is the part nobody expected. The wall frequency
+# limit was predicted here to be "probably clamp-dominated and unchanged", and
+# it is neither -- per source, on the reference return:
+#
+#   segments=24    lf 1525   mf 1846   hf 3620 Hz
+#   delta=0.15     lf 1757   mf 2119   hf 5347 Hz     +48% on HF
+#   delta=0.20     lf 1484   mf 1870   hf 3944 Hz
+#   delta=0.30     lf 1665   mf 2002   hf 3116 Hz
+#
+# ``effective_max_valid_frequency_hz`` is consumed by the pipeline, unlike peak
+# deviation, so this is the dial's most concrete benefit and the one that most
+# nearly justifies the change on its own. Only the HF row responds cleanly;
+# lf/mf bounce because their limits are set by the largest facet on a
+# size-clamped source patch.
+#
+# CONFIRMED ON FIVE GEOMETRIES from the bundle store, not one -- the earlier
+# rounds each rested on a single model. delta=0.15 against segments=24:
+#
+#   PartyMEH v10 (10,252 tris)  -1.6% tris   peak -25%   p95 -16%   rms -25%
+#   PartyMEH v10 b (10,238)     -1.5% tris   peak -18%   p95 -18%   rms -26%
+#   201x208x130 (7,160)        +11.4% tris   peak -73%   p95  -3%   rms -17%
+#   49x44 rigid=4 (6,502)        dial inert, see below
+#   27x27 (172)                +17.4% tris   peak -45%   p95 -37%   rms -32%
+#
+# The 201x208x130 model is the clearest case for the change: segments=24 leaves
+# a 2.54 mm worst facet on it against a 15 mm rigid target, which the sagitta
+# rule cuts to 0.69 mm. That is the failure mode the rule was designed for --
+# segments-per-2pi under-refines large-radius sweeps -- and it is far worse in
+# the wild than on the model this branch was developed against. On that model
+# even delta=0.20 is strictly better than segments=24: FEWER triangles and 64%
+# less peak.
+#
+# WHERE THE DIAL IS INERT. On a model whose rigid target is already fine, the
+# sagitta request exceeds ``Mesh.MeshSizeMax`` everywhere and the user's own
+# target sets the whole mesh: the 49x44 model at rigid 4 mm produces byte-
+# identical output at 0.10, 0.15 and 0.20. That is correct -- an explicit size
+# request should win -- but it means the dial's authority is model-dependent,
+# and a UI must not promise a knob that does nothing on half the models.
 #
 # WHERE THE DIAL STOPS WORKING. Peak deviation saturates: 1.2125 mm at both
 # delta=0.25 and 0.30, then 1.5365 mm at both 0.40 and 0.50 -- and 1.5365 is
@@ -186,7 +229,7 @@ IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 #   until ``measure_surface_deviation`` below. A sizing rule was asked for a
 #   deviation and never once asked what it delivered, which is how a table
 #   describing a discarded variant survived two commits unchallenged.
-IMPORTED_SURFACE_DEVIATION_MM = 0.2
+IMPORTED_SURFACE_DEVIATION_MM = 0.15
 IMPORTED_SURFACE_DEVIATION_MIN_MM = 0.1
 IMPORTED_SURFACE_DEVIATION_MAX_MM = 0.35
 _SAGITTA_FLAT_CURVATURE = 1.0e-9

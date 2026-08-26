@@ -233,6 +233,19 @@
             "title": "Skippedsourceids",
             "type": "array"
           },
+          "surfaceDeviationMm": {
+            "anyOf": [
+              {
+                "maximum": 0.35,
+                "minimum": 0.1,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surfacedeviationmm"
+          },
           "symmetryMode": {
             "default": "auto",
             "enum": [
