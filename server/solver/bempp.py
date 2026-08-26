@@ -139,14 +139,36 @@ def _version() -> str | None:
 #: * Every worker holds its own dense matrix. The figures above are from an
 #:   M1 Max, which has several times the memory bandwidth of a mainstream
 #:   desktop part; on a bandwidth-bound host a split sweep can be *busier
-#:   without being faster*. ``solve_workers`` and ``total_time_seconds`` are
-#:   reported in the response metadata so this is measurable per host rather
-#:   than assumed. Set ``WG2_SOLVE_WORKERS=1`` to pin the serial path.
+#:   without being faster*.
 #:
 #: Results themselves are not at stake: serial and parallel payloads for the
 #: same design and sweep were byte-identical in compact JSON at both 80 and 200
 #: frequencies, once per-frequency wall-clock timings were excluded.
-DEFAULT_SOLVE_WORKERS = 0
+#:
+#: **The default is serial again as of 0.2.5, and the second caveat is why.**
+#: Auto shipped as the default in 463cab0e and never once worked: the same batch
+#: merged it without the commit that lets the worker have children, so every
+#: sweep long enough to split died outright. Fixing that made the choice live for
+#: the first time, and it does not survive the look:
+#:
+#: * The 1.33x was measured on one M1 Max. Nobody has measured a bandwidth-bound
+#:   desktop part, which is what the user base runs.
+#: * ``solve_workers`` was supposed to make that measurable per host. It reported
+#:   the auto sentinel rather than a count, so it read ``0`` for every sweep on
+#:   the default path -- the instrument for the claim was broken for as long as
+#:   the claim existed. 0.2.5 is the first build where it reports a number.
+#: * Splitting is the only way to get sweep workers, and a launcher killed
+#:   without cleanup strands them on POSIX. Normal Stop and shutdown reap the
+#:   group (``bempp_process._terminate_sync``); a force-kill does not, and the
+#:   fix for that is not in this release. Serial has no workers to strand.
+#:
+#: So an unproven speedup is not worth a new failure mode for the users who would
+#: not benefit from it -- a sweep under 80 frequencies never splits, and would
+#: have taken the exposure without the upside. Auto stays one variable away:
+#: ``WG2_SOLVE_WORKERS=0`` selects it, ``2`` or more pins a count. With a working
+#: ``solve_workers`` a user can now A/B both on their own host, which is better
+#: evidence than shipping one arm of the experiment as the default.
+DEFAULT_SOLVE_WORKERS = 1
 
 
 def _resolved_workers() -> int:
