@@ -29,6 +29,13 @@ PREWARM_MODULES: tuple[str, ...] = (
     "hornlab_mesher.viewport",
     "hornlab_mesher.normals",
     "hornlab_mesher.tags",
+    # The interpolating acoustic surface fit (``translate.acoustic_surface_fit``)
+    # imports ``scipy.interpolate`` lazily inside the fit itself, so without this
+    # the very first solve or export mesh of a process pays 0.30 s that has
+    # nothing to do with the geometry. Warm, that fit is 0.386 s against the
+    # compatibility fit's 0.443 s on a stock OSSE -- it is the cold import, not
+    # the fit, that is expensive.
+    "scipy.interpolate",
 )
 
 
