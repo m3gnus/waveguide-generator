@@ -368,6 +368,11 @@ def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monk
     assert response["metadata"]["field_trace_retention"] == {
         "estimated_bytes": 384,
         "cap_bytes": 256 * 1024 * 1024,
+        # Nothing was refused, so there is nothing to explain. Both keys are
+        # always present so a consumer never has to distinguish "retained" from
+        # "this build predates the explanation".
+        "reason": None,
+        "detail": None,
     }
     assert response["_field_traces"].backend == "bempp"
     ib_response = bempp.solve_bempp_from_msh_text(

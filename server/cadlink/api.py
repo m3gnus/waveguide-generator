@@ -25,7 +25,6 @@ from server.mesh.artifact import (
     read_verified_import_mesh,
     read_verified_import_viewport_mesh,
 )
-from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.platform.process import background_process_kwargs
 from server.workspace.api import (
     CadWorkspaceState,
@@ -50,7 +49,14 @@ from .solve_command import (
     read_solve_command,
     record_outcome,
 )
-from .ingest import IngestRefusal, get_ingestion_record, ingest_bundle
+from .ingest import (
+    IngestRefusal,
+    build_deferred_viewport,
+    deferred_viewport_lookup_key,
+    get_ingestion_record,
+    ingest_bundle,
+    resolve_deferred_viewport,
+)
 from .roles import canonical_source_role
 from .store import CadLinkStore
 from .wgreturn import WgReturnError
@@ -64,6 +70,47 @@ _RETURN_INVENTORY_CACHE: dict[
     tuple[str, int, int], tuple[dict[str, Any], Mapping[str, Any] | None]
 ] = {}
 _RETURN_INVENTORY_CACHE_LOCK = threading.Lock()
+
+#: Display tessellations currently being built for an already-published record,
+#: keyed by the record's viewport lookup key. This only answers "is it still
+#: coming?" -- the artifact itself is content-addressed on disk, so a restart
+#: that empties this map costs one rebuild, never a wrong answer.
+_DEFERRED_VIEWPORTS: dict[str, asyncio.Task[Any]] = {}
+
+#: asyncio keeps only a weak reference to a running task, so a fire-and-forget
+#: task that nobody holds can be collected mid-flight. This is that holder.
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _spawn_background(coroutine: Any) -> asyncio.Task[Any]:
+    task = asyncio.create_task(coroutine)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
+
+def _schedule_deferred_viewport(record: Mapping[str, Any], data_dir: Path) -> None:
+    """Start the display tessellation the ingestion response did not wait for."""
+
+    lookup_key = deferred_viewport_lookup_key(record)
+    if lookup_key is None or lookup_key in _DEFERRED_VIEWPORTS:
+        return
+
+    async def build() -> None:
+        try:
+            await asyncio.to_thread(build_deferred_viewport, record, data_dir)
+        except Exception as exc:  # noqa: BLE001
+            # Advisory by construction: the solve mesh is already on screen and
+            # is what the solve uses. A failure here costs display fidelity.
+            logger.warning(
+                "Deferred CAD viewport tessellation failed for %s: %s",
+                record.get("ingest_id"),
+                exc,
+            )
+        finally:
+            _DEFERRED_VIEWPORTS.pop(lookup_key, None)
+
+    _DEFERRED_VIEWPORTS[lookup_key] = asyncio.create_task(build())
 
 
 def _parse_return_manifest(path: Path) -> Mapping[str, Any]:
@@ -875,14 +922,19 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
         "transition_mm": payload.mesh.transition_mm,
         "source_size_mm": payload.mesh.source_size_mm,
     }
+    data_dir = Path(request.app.state.data_dir)
     try:
-        record = await run_on_gmsh_worker(
+        # Deliberately not on the gmsh worker: every mesh this runs happens in
+        # a disposable child process, so holding the one in-process gmsh
+        # session here would queue parametric previews behind a CAD ingestion
+        # for the whole of its wall clock without doing any gmsh work.
+        record = await asyncio.to_thread(
             ingest_bundle,
             bundle_path,
             mesh,
             payload.skipped_source_ids,
             store,
-            Path(request.app.state.data_dir),
+            data_dir,
             # Only carry the deviation override when it was actually asked
             # for: prep_options is part of the mesh cache key, so writing an
             # explicit null would invalidate every mesh cached before this
@@ -908,17 +960,31 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
             },
             expected_design_id=payload.expected_design_id,
             expected_instance_id=payload.expected_instance_id,
+            defer_viewport=True,
         )
     except HTTPException:
         raise
     except Exception as exc:
         raise _ingest_error(exc) from exc
-    await _archive_cad_document(request, store, bundle_path, record)
+    _schedule_deferred_viewport(record, data_dir)
+    # Filing the captured document is the user's archive, not this response's
+    # subject, and it copies tens of megabytes out of a possibly cloud-synced
+    # folder. Answering first is what puts the geometry on screen sooner.
+    _spawn_background(
+        _archive_cad_document(
+            getattr(request.app.state, "workspace", None),
+            getattr(request.app.state, "cad_workspace", None),
+            store,
+            bundle_path,
+            record,
+        )
+    )
     return record
 
 
 async def _archive_cad_document(
-    request: Request,
+    runs: WorkspaceState | None,
+    cad_workspace: CadWorkspaceState | None,
     store: CadLinkStore,
     bundle_path: Path,
     record: Mapping[str, Any],
@@ -927,15 +993,12 @@ async def _archive_cad_document(
 
     The document is the user's own copy of the geometry a run was solved from,
     not evidence WG depends on, so a failure here must never cost them an
-    otherwise good ingestion.
+    otherwise good ingestion. It takes app state rather than the request
+    because it outlives the response it used to block.
     """
 
-    runs: WorkspaceState | None = getattr(request.app.state, "workspace", None)
     if runs is None:
         return
-    cad_workspace: CadWorkspaceState | None = getattr(
-        request.app.state, "cad_workspace", None
-    )
     if cad_workspace is not None and cad_workspace.capture_mode == "off":
         return
     anchor = record.get("anchor")
@@ -1016,18 +1079,42 @@ async def get_ingest_viewport_mesh(
     if record is None:
         raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
     viewport = record.get("viewport_mesh")
-    if not isinstance(viewport, dict) or viewport.get("available") is not True:
-        raise HTTPException(
-            status_code=404,
-            detail="This ingestion record has no independent CAD viewport artifact",
+    if isinstance(viewport, dict) and viewport.get("available") is True:
+        try:
+            msh_text = await asyncio.to_thread(
+                read_verified_import_viewport_mesh, record
+            )
+        except ImportedMeshArtifactError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return PlainTextResponse(msh_text, media_type="text/plain; charset=utf-8")
+
+    lookup_key = deferred_viewport_lookup_key(record)
+    if lookup_key is not None:
+        data_dir = Path(request.app.state.data_dir)
+        artifact = await asyncio.to_thread(resolve_deferred_viewport, record, data_dir)
+        if artifact is not None:
+            return PlainTextResponse(
+                str(artifact["msh_text"]), media_type="text/plain; charset=utf-8"
+            )
+        if lookup_key in _DEFERRED_VIEWPORTS:
+            # Still being tessellated. The caller already has the solve mesh on
+            # screen, so this is "ask again", not a failure.
+            return PlainTextResponse(
+                "", status_code=202, media_type="text/plain; charset=utf-8"
+            )
+        # Nothing in flight and nothing on disk: the build failed, or this
+        # process was restarted since the record was published. Either way the
+        # inputs are all still there, so start it again rather than answering
+        # with a permanent 404 for an artifact that is merely absent.
+        _schedule_deferred_viewport(record, data_dir)
+        return PlainTextResponse(
+            "", status_code=202, media_type="text/plain; charset=utf-8"
         )
-    try:
-        msh_text = await asyncio.to_thread(
-            read_verified_import_viewport_mesh, record
-        )
-    except ImportedMeshArtifactError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return PlainTextResponse(msh_text, media_type="text/plain; charset=utf-8")
+
+    raise HTTPException(
+        status_code=404,
+        detail="This ingestion record has no independent CAD viewport artifact",
+    )
 
 
 _RETURN_STATE_HASH = re.compile(r"[A-Za-z0-9:._-]{1,128}")

@@ -200,6 +200,19 @@
             "title": "Bundlepath",
             "type": "string"
           },
+          "curvatureSegments": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 8.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curvaturesegments"
+          },
           "expectedDesignId": {
             "anyOf": [
               {
@@ -1621,6 +1634,17 @@
             ],
             "title": "Fs Hz"
           },
+          "power_w": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power W"
+          },
           "price_eur": {
             "anyOf": [
               {
@@ -1771,6 +1795,11 @@
       },
       "DriverLibraryFile": {
         "properties": {
+          "bundled": {
+            "default": false,
+            "title": "Bundled",
+            "type": "boolean"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -1789,6 +1818,11 @@
       },
       "DriverLibraryInfo": {
         "properties": {
+          "complete_drivers": {
+            "default": 0,
+            "title": "Complete Drivers",
+            "type": "integer"
+          },
           "files": {
             "items": {
               "$ref": "#/components/schemas/DriverLibraryFile"
@@ -1826,6 +1860,11 @@
       },
       "DriverSearchResponse": {
         "properties": {
+          "hidden_incomplete": {
+            "default": 0,
+            "title": "Hidden Incomplete",
+            "type": "integer"
+          },
           "items": {
             "items": {
               "$ref": "#/components/schemas/DriverHit"
@@ -1847,6 +1886,11 @@
       },
       "DriverSource": {
         "properties": {
+          "bundled": {
+            "default": false,
+            "title": "Bundled",
+            "type": "boolean"
+          },
           "file": {
             "title": "File",
             "type": "string"
@@ -1962,6 +2006,18 @@
             ],
             "title": "Mms G"
           },
+          "power_w": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Power W"
+          },
           "qms": {
             "anyOf": [
               {
@@ -2031,6 +2087,18 @@
               }
             ],
             "title": "Xmax Mm"
+          },
+          "z_nom_ohm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Z Nom Ohm"
           }
         },
         "required": [
@@ -2898,7 +2966,7 @@
       },
       "GainSpec": {
         "additionalProperties": false,
-        "description": "A channel's level: matched automatically, or stated in dB.",
+        "description": "A channel's level: matched automatically, stated in dB, or driven to\nthe driver's own ceiling.\n\n``max`` is resolved by the solver, not here: it means \"the loudest this\nchannel's driver can be run before excursion, rated power or the amplifier\nbinds\", which needs the solved excursion and impedance and so cannot be a\nnumber on the wire. A channel whose members carry no driver model has no\nceiling to find, and the solver reports that as a warning and falls back to\n0 dB rather than inventing one.",
         "properties": {
           "db": {
             "anyOf": [
@@ -2915,7 +2983,8 @@
             "default": "auto",
             "enum": [
               "auto",
-              "manual"
+              "manual",
+              "max"
             ],
             "title": "Mode",
             "type": "string"
@@ -3421,6 +3490,18 @@
           "manifest_sha256": {
             "title": "Manifest Sha256",
             "type": "string"
+          },
+          "max_drive_voltage_v": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drive Voltage V"
           },
           "mesh": {
             "$ref": "#/components/schemas/ImportedMeshSizes"
@@ -6261,6 +6342,20 @@
               }
             ]
           },
+          "dependency_drift": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dependency Drift"
+          },
           "dependency_shas": {
             "additionalProperties": {
               "type": "string"
@@ -6302,6 +6397,27 @@
             "pattern": "^[0-9a-f]{64}$",
             "title": "Geometry Sha256",
             "type": "string"
+          },
+          "installed_dependency_shas": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installed Dependency Shas"
           },
           "request_identity": {
             "const": "execution",
@@ -8280,6 +8396,16 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "complete",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Complete",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -8363,6 +8489,16 @@
             "schema": {
               "title": "Driver Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "complete",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Complete",
+              "type": "boolean"
             }
           }
         ],

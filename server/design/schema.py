@@ -617,6 +617,11 @@ class SimulationConfig(StrictModel):
     f2: Expr | None = None
     num_frequencies: Expr | None = None
     sim_type: Literal["freestanding", "infinite-baffle"] | None = None
+    # A compatibility slot, never a portable setting. Legacy files carry
+    # ``Simulation.SolverMode``, but the solver path depends on what the host
+    # machine can run, so it belongs to solve options; migration
+    # ``006_machine_solver_mode_not_portable`` clears any stated value before
+    # validation and reports the drop, and design export never writes it.
     solver_mode: Literal["auto", "full_3d", "circsym"] | None = None
 
     @field_validator("sim_type", mode="before")

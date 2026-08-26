@@ -10,7 +10,20 @@
  * a single shape instead of asking each one to handle two.
  */
 
+import type { MaxOutputLimit } from './types';
+
 export type FilterFamily = 'lr' | 'butterworth' | 'bessel' | 'linear_phase';
+
+function isMaxOutputLimit(value: unknown): value is MaxOutputLimit {
+  return value === 'xmax' || value === 'power' || value === 'voltage';
+}
+
+/** What a limit is called where a designer reads it. */
+export const MAX_LIMIT_LABELS: Record<MaxOutputLimit, string> = {
+  xmax: 'Xmax',
+  power: 'rated power',
+  voltage: 'amplifier',
+};
 
 /** The one table of what a family is offered in; mirrors `FAMILY_ORDERS` in
  * `server/solver/filters.py`, which is what actually evaluates it. */
@@ -44,7 +57,10 @@ export interface FilterSection {
   fcHz: number;
 }
 
-export type GainSetting = { mode: 'auto' } | { mode: 'manual'; db: number };
+/** `max` carries no number: it means "as loud as this member's own driver
+ * allows", which only the solver can answer, and it answers it fresh on every
+ * recombine so a crossover change moves the ceiling with it. */
+export type GainSetting = { mode: 'auto' } | { mode: 'manual'; db: number } | { mode: 'max' };
 export type DelaySetting = { mode: 'auto' } | { mode: 'manual'; ms: number };
 
 export interface CrossoverChannel {
@@ -191,6 +207,10 @@ export function isSimple(spec: CrossoverSpec): boolean {
   if (channels.length !== members.length) return false;
   const gainMode = channels[0].gain.mode;
   const delayMode = channels[0].delay.mode;
+  // A maximum-output gain is a per-channel decision by definition -- it is the
+  // channel's own driver that sets it -- so Basic cannot state it, whether or
+  // not every member happens to share it.
+  if (gainMode === 'max') return false;
   return channels.every((channel) => channel.gain.mode === gainMode
     && channel.delay.mode === delayMode
     && channel.invert === null);
@@ -214,7 +234,11 @@ export function toWire(spec: CrossoverSpec): CrossoverWire {
       return [member, {
         hp: sectionWire(channel?.hp ?? null),
         lp: sectionWire(channel?.lp ?? null),
-        gain: channel?.gain.mode === 'manual' ? { mode: 'manual' as const, db: channel.gain.db } : { mode: 'auto' as const },
+        gain: channel?.gain.mode === 'manual'
+          ? { mode: 'manual' as const, db: channel.gain.db }
+          : channel?.gain.mode === 'max'
+            ? { mode: 'max' as const }
+            : { mode: 'auto' as const },
         delay: channel?.delay.mode === 'manual' ? { mode: 'manual' as const, ms: channel.delay.ms } : { mode: 'auto' as const },
         invert: channel?.invert ?? null,
       }];
@@ -269,8 +293,15 @@ function sectionFromWire(value: unknown): FilterSection | null {
 /** What one resolved channel of `metadata.combine` says. */
 export interface ResolvedChannel {
   gainDb: number | null;
-  gainMode: 'auto' | 'manual';
+  gainMode: 'auto' | 'manual' | 'max';
   gainAutoDb: number | null;
+  /** The gain this member's own driver stops at, reported in every mode. */
+  gainMaxDb: number | null;
+  maxLimit: MaxOutputLimit | null;
+  maxLimitHz: number | null;
+  /** Whether that frequency is an end of the sweep, which makes the ceiling a
+   * lower bound rather than the ceiling. */
+  maxLimitAtBandEdge: boolean;
   delayMs: number | null;
   delayMode: 'auto' | 'manual';
   delayAutoMs: number | null;
@@ -299,8 +330,14 @@ export function resolvedChannels(combine: CombinePayload | null | undefined): Re
     const record = value as Record<string, unknown>;
     return [[id, {
       gainDb: finite(record.gain_db),
-      gainMode: record.gain_mode === 'manual' ? 'manual' as const : 'auto' as const,
+      gainMode: record.gain_mode === 'manual'
+        ? 'manual' as const
+        : record.gain_mode === 'max' ? 'max' as const : 'auto' as const,
       gainAutoDb: finite(record.gain_auto_db),
+      gainMaxDb: finite(record.gain_max_db),
+      maxLimit: isMaxOutputLimit(record.max_limit) ? record.max_limit : null,
+      maxLimitHz: finite(record.max_limit_hz),
+      maxLimitAtBandEdge: record.max_limit_at_band_edge === true,
       delayMs: finite(record.delay_ms),
       delayMode: record.delay_mode === 'manual' ? 'manual' as const : 'auto' as const,
       delayAutoMs: finite(record.delay_auto_ms),
@@ -351,7 +388,9 @@ export function fromResult(combine: CombinePayload | null | undefined): Crossove
         lp: sectionFromWire(record.lp),
         gain: state?.gainMode === 'manual'
           ? { mode: 'manual' as const, db: state.gainDb ?? 0 }
-          : { mode: 'auto' as const },
+          : state?.gainMode === 'max'
+            ? { mode: 'max' as const }
+            : { mode: 'auto' as const },
         delay: state?.delayMode === 'manual'
           ? { mode: 'manual' as const, ms: state.delayMs ?? 0 }
           : { mode: 'auto' as const },
@@ -451,10 +490,12 @@ export function withReference(spec: CrossoverSpec, reference: string): Crossover
     : spec;
 }
 
-/** The mode shared by every channel, or null when they differ. */
+/** The mode shared by every channel, or null when they differ. Basic offers
+ * two of the three, so a chain on `max` reads there as neither. */
 export function sharedGainMode(spec: CrossoverSpec): 'auto' | 'manual' | null {
   const modes = new Set(spec.members.map((member) => spec.channels[member]?.gain.mode));
-  return modes.size === 1 ? [...modes][0] ?? null : null;
+  const shared = modes.size === 1 ? [...modes][0] ?? null : null;
+  return shared === 'max' ? null : shared;
 }
 
 export function sharedDelayMode(spec: CrossoverSpec): 'auto' | 'manual' | null {
@@ -570,6 +611,7 @@ function parseGain(value: unknown): GainSetting | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   if (record.mode === 'auto') return { mode: 'auto' };
+  if (record.mode === 'max') return { mode: 'max' };
   if (record.mode !== 'manual') return null;
   const db = finite(record.db);
   return db === null ? null : { mode: 'manual', db };
@@ -590,4 +632,129 @@ export const SPEED_OF_SOUND_M_S = 343;
 
 export function delayDistanceMm(ms: number): number {
   return ms * SPEED_OF_SOUND_M_S;
+}
+
+
+/**
+ * A channel gain in the units an amplifier is bought in.
+ *
+ * The stored value is always dB, because that is what the crossover applies
+ * and the only form that survives a change of drive voltage. The other two are
+ * views of it against the voltage the solve was run at:
+ *
+ *   V = V_drive * 10^(dB/20)          exact, and what the amplifier must swing
+ *   W = V^2 / Z_nom                   nominal, and what a datasheet rates
+ *
+ * Watts need an impedance, and the honest one is the *nominal* impedance
+ * rather than the solved Re(Z): a driver's power rating is itself quoted
+ * against nominal, so nominal watts is the only figure that can be compared
+ * with the rating it is meant to be checked against. Real power varies across
+ * the band by a factor of several and is charted separately, where it can be
+ * seen as a curve instead of collapsed into one misleading number.
+ */
+export type GainUnit = 'db' | 'v' | 'w';
+
+export const GAIN_UNITS: readonly GainUnit[] = ['db', 'v', 'w'];
+
+export const GAIN_UNIT_LABELS: Record<GainUnit, string> = { db: 'dB', v: 'V', w: 'W' };
+
+/** The drive a gain amounts to, or null when the reference is unknown. */
+export function gainToVolts(db: number, driveVoltageV: number | null | undefined): number | null {
+  if (!Number.isFinite(db) || !driveVoltageV || !Number.isFinite(driveVoltageV) || driveVoltageV <= 0) return null;
+  return driveVoltageV * 10 ** (db / 20);
+}
+
+export function voltsToGain(volts: number, driveVoltageV: number | null | undefined): number | null {
+  if (!(volts > 0) || !driveVoltageV || !(driveVoltageV > 0)) return null;
+  return 20 * Math.log10(volts / driveVoltageV);
+}
+
+export function gainToWatts(
+  db: number,
+  driveVoltageV: number | null | undefined,
+  impedanceOhm: number | null | undefined,
+): number | null {
+  const volts = gainToVolts(db, driveVoltageV);
+  if (volts === null || !impedanceOhm || !(impedanceOhm > 0)) return null;
+  return (volts * volts) / impedanceOhm;
+}
+
+export function wattsToGain(
+  watts: number,
+  driveVoltageV: number | null | undefined,
+  impedanceOhm: number | null | undefined,
+): number | null {
+  if (!(watts > 0) || !impedanceOhm || !(impedanceOhm > 0)) return null;
+  return voltsToGain(Math.sqrt(watts * impedanceOhm), driveVoltageV);
+}
+
+/**
+ * The impedance a nominal wattage is stated against.
+ *
+ * The nominal figure when the driver carries one, and Re otherwise -- a
+ * datasheet that omits nominal impedance is quoting its power against
+ * something within a few tenths of Re, and saying "into 6.2 ohm" beats
+ * refusing to say anything. `count` drivers in parallel share the load, which
+ * is the same reduction the solve applies to Re.
+ */
+export function nominalImpedanceOhm(
+  spec: { z_nom_ohm?: number | null; re_ohm?: number | null; count?: number | null } | null | undefined,
+): number | null {
+  const one = Number(spec?.z_nom_ohm) || Number(spec?.re_ohm);
+  if (!Number.isFinite(one) || one <= 0) return null;
+  const count = Number(spec?.count);
+  return one / (Number.isFinite(count) && count >= 1 ? count : 1);
+}
+
+/** A gain in the requested unit, or null when that unit cannot be formed. */
+export function gainInUnit(
+  db: number,
+  unit: GainUnit,
+  driveVoltageV: number | null | undefined,
+  impedanceOhm: number | null | undefined,
+): number | null {
+  if (unit === 'db') return Number.isFinite(db) ? db : null;
+  if (unit === 'v') return gainToVolts(db, driveVoltageV);
+  return gainToWatts(db, driveVoltageV, impedanceOhm);
+}
+
+/** The inverse of `gainInUnit`: what the user typed, back in dB. */
+export function gainFromUnit(
+  value: number,
+  unit: GainUnit,
+  driveVoltageV: number | null | undefined,
+  impedanceOhm: number | null | undefined,
+): number | null {
+  if (unit === 'db') return Number.isFinite(value) ? value : null;
+  if (unit === 'v') return voltsToGain(value, driveVoltageV);
+  return wattsToGain(value, driveVoltageV, impedanceOhm);
+}
+
+/** How many decimals a unit reads naturally in. Volts and watts span decades,
+ * so they get significant figures rather than a fixed place. */
+export function formatGain(value: number | null, unit: GainUnit): string {
+  if (value === null || !Number.isFinite(value)) return '\u2014';
+  if (unit === 'db') return value.toFixed(2);
+  return String(Number(value.toPrecision(3)));
+}
+
+/** "12.1 V", "26 W", "+8.40 dB" -- a gain said whole. */
+export function gainText(value: number | null, unit: GainUnit): string {
+  if (value === null || !Number.isFinite(value)) return '\u2014';
+  const sign = unit === 'db' && value > 0 ? '+' : '';
+  return `${sign}${formatGain(value, unit)} ${GAIN_UNIT_LABELS[unit]}`;
+}
+
+/** "Xmax at 62 Hz" -- what stopped a channel, and where. A ceiling reached at
+ * an end of the sweep says so: the sweep never saw the far side of it, so the
+ * real limit may sit outside the solved band and the number is a best case. */
+export function maxLimitNote(
+  limit: MaxOutputLimit | null,
+  atHz: number | null,
+  atBandEdge = false,
+): string | null {
+  if (!limit) return null;
+  const where = atHz === null || !Number.isFinite(atHz) ? null : frequencyText(atHz);
+  const base = where ? `${MAX_LIMIT_LABELS[limit]} at ${where}` : MAX_LIMIT_LABELS[limit];
+  return atBandEdge ? `${base}, the edge of the sweep — the real limit may lie beyond it` : base;
 }

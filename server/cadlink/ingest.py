@@ -558,6 +558,69 @@ def _write_viewport_cache(
     return {**metadata, "msh_text": msh_text}
 
 
+def _viewport_paths(imports_root: Path, cache_key: str) -> tuple[Path, Path]:
+    root = imports_root / "viewports"
+    return root / f"{cache_key}.msh", root / f"{cache_key}.json"
+
+
+def _viewport_index_path(imports_root: Path, lookup_key: str) -> Path:
+    return imports_root / "viewports" / "index" / f"{lookup_key}.txt"
+
+
+def _read_cas_index(index_path: Path) -> str | None:
+    """The 64-hex content key an index entry names, or None if unusable."""
+
+    try:
+        indexed = index_path.read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    if len(indexed) == 64 and all(character in "0123456789abcdef" for character in indexed):
+        return indexed
+    return None
+
+
+def _write_cas_index(index_path: Path, cache_key: str) -> None:
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = index_path.with_name(f".{index_path.name}.{os.getpid()}.tmp")
+    temporary.write_text(cache_key + "\n", encoding="ascii")
+    os.replace(temporary, index_path)
+
+
+def _publish_viewport_artifact(
+    imports_root: Path,
+    generated: Mapping[str, Any],
+    *,
+    transformed_geometry_hash: str,
+    healing: Mapping[str, Any],
+    lookup_key: str,
+) -> tuple[dict[str, Any], str, Path]:
+    """Store one display tessellation under its own content digest.
+
+    The digest is the file name, so a reader that finds this artifact through
+    the lookup index can prove it read the bytes that were written without
+    consulting any record. That is what lets the deferred build publish into a
+    record that was already sealed.
+    """
+
+    digest = mesh_text_sha256(str(generated["msh_text"]))
+    cache_key = digest.removeprefix("sha256:")
+    mesh_path, metadata_path = _viewport_paths(imports_root, cache_key)
+    artifact = _write_viewport_cache(
+        mesh_path,
+        metadata_path,
+        generated,
+        transformed_geometry_hash=transformed_geometry_hash,
+        healing=healing,
+    )
+    try:
+        _write_cas_index(_viewport_index_path(imports_root, lookup_key), cache_key)
+    except OSError:
+        # The content-addressed artifact and record remain valid; a later
+        # ingest can simply regenerate the lookup index.
+        pass
+    return artifact, cache_key, mesh_path
+
+
 def _resolve_project(
     store: CadLinkStore,
     design_id: str | None,
@@ -607,8 +670,17 @@ def ingest_bundle(
     expected_design_id: str | None = None,
     expected_instance_id: str | None = None,
     recompute_freshness: Callable[[Mapping[str, Any]], str] | None = None,
+    defer_viewport: bool = False,
 ) -> dict[str, Any]:
-    """Run the nine ingestion stages and persist the immutable WG verdict."""
+    """Run the nine ingestion stages and persist the immutable WG verdict.
+
+    ``defer_viewport`` publishes the record as soon as the solver mesh exists,
+    leaving the display tessellation to :func:`build_deferred_viewport`. That
+    tessellation is two thirds of a cold ingestion's wall clock and nothing
+    downstream of the record needs it, so waiting for it only delays the moment
+    the user can see the geometry they asked WG to solve. A cached display
+    artifact is still adopted here: it costs a file read, not a mesh.
+    """
 
     try:
         bundle = read_wgreturn(bundle_path)
@@ -690,27 +762,10 @@ def ingest_bundle(
     viewport_lookup_key = _viewport_cache_lookup_key(
         bundle, manifest, skipped_source_ids, options
     )
-    viewport_index_path = (
-        imports_root / "viewports" / "index" / f"{viewport_lookup_key}.txt"
-    )
-    viewport_cache_key: str | None = None
-    try:
-        indexed_viewport = viewport_index_path.read_text(encoding="ascii").strip()
-        if len(indexed_viewport) == 64 and all(
-            character in "0123456789abcdef" for character in indexed_viewport
-        ):
-            viewport_cache_key = indexed_viewport
-    except OSError:
-        pass
-    viewport_mesh_path = (
-        imports_root / "viewports" / f"{viewport_cache_key}.msh"
-        if viewport_cache_key
-        else imports_root / "viewports" / ".pending.msh"
-    )
-    viewport_metadata_path = (
-        imports_root / "viewports" / f"{viewport_cache_key}.json"
-        if viewport_cache_key
-        else imports_root / "viewports" / ".pending.json"
+    viewport_index_path = _viewport_index_path(imports_root, viewport_lookup_key)
+    viewport_cache_key = _read_cas_index(viewport_index_path)
+    viewport_mesh_path, viewport_metadata_path = _viewport_paths(
+        imports_root, viewport_cache_key or ".pending"
     )
     viewport_artifact = (
         _load_cached_viewport_mesh(viewport_mesh_path, viewport_metadata_path)
@@ -722,13 +777,7 @@ def ingest_bundle(
         bundle, manifest, normalized_mesh, skipped_source_ids, options
     )
     index_path = imports_root / "meshes" / "index" / f"{lookup_key}.txt"
-    cache_key: str | None = None
-    try:
-        indexed = index_path.read_text(encoding="ascii").strip()
-        if len(indexed) == 64 and all(character in "0123456789abcdef" for character in indexed):
-            cache_key = indexed
-    except OSError:
-        pass
+    cache_key = _read_cas_index(index_path)
     mesh_path = imports_root / "meshes" / f"{cache_key}.msh" if cache_key else imports_root / "meshes" / ".pending.msh"
     metadata_path = imports_root / "meshes" / f"{cache_key}.json" if cache_key else imports_root / "meshes" / ".pending.json"
     built = _load_cached_mesh(mesh_path, metadata_path) if cache_key else None
@@ -764,7 +813,7 @@ def ingest_bundle(
                 normalized_mesh,
                 skipped_source_ids=skipped_source_ids,
                 options=options,
-                include_viewport_mesh=viewport_artifact is None,
+                include_viewport_mesh=viewport_artifact is None and not defer_viewport,
                 expected_sha256=bundle.artifact_sha256,
                 expected_size_bytes=bundle.artifact_size_bytes,
             )
@@ -805,15 +854,15 @@ def ingest_bundle(
         mesh_path = imports_root / "meshes" / f"{cache_key}.msh"
         metadata_path = imports_root / "meshes" / f"{cache_key}.json"
         _write_cache(mesh_path, metadata_path, built)
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_index = index_path.with_name(f".{index_path.name}.{os.getpid()}.tmp")
-        temporary_index.write_text(cache_key + "\n", encoding="ascii")
-        os.replace(temporary_index, index_path)
+        _write_cas_index(index_path, cache_key)
     assert built is not None
     assert cache_key is not None
 
     viewport_failure_reason: str | None = None
-    if viewport_artifact is None:
+    viewport_deferred = False
+    if viewport_artifact is None and defer_viewport:
+        viewport_deferred = True
+    elif viewport_artifact is None:
         generated_viewport: dict[str, Any] | None = None
         if built.get("viewport_msh_text") is not None:
             generated_viewport = {
@@ -835,35 +884,21 @@ def ingest_bundle(
             except Exception as exc:
                 viewport_failure_reason = f"{type(exc).__name__}: {exc}"
         if generated_viewport is not None:
-            viewport_digest = mesh_text_sha256(str(generated_viewport["msh_text"]))
-            viewport_cache_key = viewport_digest.removeprefix("sha256:")
-            viewport_mesh_path = imports_root / "viewports" / f"{viewport_cache_key}.msh"
-            viewport_metadata_path = imports_root / "viewports" / f"{viewport_cache_key}.json"
             try:
-                viewport_artifact = _write_viewport_cache(
+                (
+                    viewport_artifact,
+                    viewport_cache_key,
                     viewport_mesh_path,
-                    viewport_metadata_path,
+                ) = _publish_viewport_artifact(
+                    imports_root,
                     generated_viewport,
                     transformed_geometry_hash=str(built["transformed_geometry_hash"]),
                     healing=built["healing"],
+                    lookup_key=viewport_lookup_key,
                 )
             except Exception as exc:
                 viewport_artifact = None
                 viewport_failure_reason = f"{type(exc).__name__}: {exc}"
-            if viewport_artifact is not None:
-                try:
-                    viewport_index_path.parent.mkdir(parents=True, exist_ok=True)
-                    temporary_viewport_index = viewport_index_path.with_name(
-                        f".{viewport_index_path.name}.{os.getpid()}.tmp"
-                    )
-                    temporary_viewport_index.write_text(
-                        viewport_cache_key + "\n", encoding="ascii"
-                    )
-                    os.replace(temporary_viewport_index, viewport_index_path)
-                except OSError:
-                    # The content-addressed artifact and record remain valid;
-                    # a later ingest can simply regenerate the lookup index.
-                    pass
         elif viewport_failure_reason is None:
             viewport_state = built.get("viewport_mesh")
             if isinstance(viewport_state, Mapping):
@@ -1018,6 +1053,18 @@ def ingest_bundle(
                 if viewport_artifact is not None
                 else {
                     "available": False,
+                    # The lookup key is derived from the bundle and the prep
+                    # options alone, so it is knowable before the tessellation
+                    # exists. Recording it is what lets a sealed record point at
+                    # an artifact built after it was sealed, without the record
+                    # ever being rewritten.
+                    "pending": True,
+                    "lookup_key": viewport_lookup_key,
+                    "reason": "visual tessellation is still being prepared",
+                }
+                if viewport_deferred
+                else {
+                    "available": False,
                     "reason": viewport_failure_reason
                     or "visual tessellation unavailable",
                 }
@@ -1122,12 +1169,109 @@ def get_ingestion_record(store: CadLinkStore, ingest_id: str) -> dict[str, Any] 
     return json.loads(str(row["record_json"]))
 
 
+def deferred_viewport_lookup_key(record: Mapping[str, Any]) -> str | None:
+    """The lookup key of a record whose display artifact is still coming."""
+
+    viewport = record.get("viewport_mesh")
+    if not isinstance(viewport, Mapping) or viewport.get("pending") is not True:
+        return None
+    key = viewport.get("lookup_key")
+    return str(key) if isinstance(key, str) and len(key) == 64 else None
+
+
+def resolve_deferred_viewport(
+    record: Mapping[str, Any], data_dir: str | Path
+) -> dict[str, Any] | None:
+    """Read a deferred display artifact, or None while it does not exist yet.
+
+    The record cannot vouch for this artifact -- it was sealed before the
+    artifact was built -- so the two independent facts that make it trustworthy
+    are checked here instead: the file name is the digest of its own bytes, and
+    its sidecar names the same normalized geometry the solve mesh was cut from.
+    """
+
+    lookup_key = deferred_viewport_lookup_key(record)
+    if lookup_key is None:
+        return None
+    imports_root = data_paths(data_dir).root / "imports"
+    cache_key = _read_cas_index(_viewport_index_path(imports_root, lookup_key))
+    if cache_key is None:
+        return None
+    artifact = _load_cached_viewport_mesh(*_viewport_paths(imports_root, cache_key))
+    if artifact is None:
+        return None
+    if artifact.get("content_sha256") != f"sha256:{cache_key}":
+        return None
+    expected_geometry = str(record.get("transformed_geometry_hash") or "")
+    if not expected_geometry or artifact.get("transformed_geometry_hash") != expected_geometry:
+        return None
+    return {**artifact, "cache_key": cache_key}
+
+
+def build_deferred_viewport(
+    record: Mapping[str, Any], data_dir: str | Path
+) -> dict[str, Any] | None:
+    """Tessellate the display mesh for an already-published record.
+
+    Everything this needs was written down before the record was sealed: the
+    staged bundle holds the STEP and its manifest, and the solve mesh's sidecar
+    holds the recipe, the tag allocation and the geometry hash the tessellation
+    must reproduce. So this reads the same inputs the in-line path used and
+    produces a byte-identical artifact -- it is the same build, moved.
+    """
+
+    lookup_key = deferred_viewport_lookup_key(record)
+    if lookup_key is None:
+        return None
+    imports_root = data_paths(data_dir).root / "imports"
+    existing = resolve_deferred_viewport(record, data_dir)
+    if existing is not None:
+        return existing
+
+    bundle_root = Path(str(record.get("bundle_store_path") or ""))
+    try:
+        manifest = json.loads((bundle_root / "wgreturn.json").read_text(encoding="utf-8"))
+        sidecar = json.loads(
+            Path(str(record["mesh_store_path"])).with_suffix(".json").read_text(encoding="utf-8")
+        )
+    except (KeyError, OSError, ValueError) as exc:
+        raise IngestRefusal("stage 7 meshing", f"deferred viewport inputs are unreadable: {exc}") from exc
+    recipe = sidecar.get("viewport_recipe")
+    if not isinstance(recipe, Mapping):
+        raise IngestRefusal(
+            "stage 7 meshing",
+            "the cached solve mesh carries no viewport recipe; re-ingest the CAD return",
+        )
+    assembly_path = bundle_root / str(manifest["assembly"]["file"])
+    assembly_record = manifest["files"][str(manifest["assembly"]["file"])]
+    generated = build_imported_viewport_mesh_isolated(
+        assembly_path,
+        manifest,
+        recipe,
+        expected_geometry_hash=str(record["transformed_geometry_hash"]),
+        tag_allocation=sidecar["tag_allocation"],
+        expected_sha256=str(assembly_record["sha256"]),
+        expected_size_bytes=int(assembly_record["size_bytes"]),
+    )
+    artifact, cache_key, _ = _publish_viewport_artifact(
+        imports_root,
+        generated,
+        transformed_geometry_hash=str(record["transformed_geometry_hash"]),
+        healing=sidecar.get("healing") or {},
+        lookup_key=lookup_key,
+    )
+    return {**artifact, "cache_key": cache_key}
+
+
 __all__ = [
     "IngestRefusal",
+    "build_deferred_viewport",
     "compute_freshness",
+    "deferred_viewport_lookup_key",
     "evaluate_instance_freshness",
     "get_ingestion_record",
     "ingest_bundle",
+    "resolve_deferred_viewport",
     "validate_registry_echoes",
     "validate_scope_inventory",
 ]

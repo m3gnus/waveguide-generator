@@ -509,6 +509,18 @@ update_from_git() {
 step "Checking for code updates..."
 update_from_git
 
+# Record the commit now that the code has settled, whether or not the update
+# moved it: without this the app can only report its last release tag, which
+# hundreds of builds share. Tested for rather than required, because
+# verification runs before the update and a checkout older than this script
+# must still be allowed to fast-forward to it.
+step "Recording the build..."
+if [[ -f "$ROOT/scripts/write_build_stamp.py" ]]; then
+    "$BOOTSTRAP_PYTHON" "$ROOT/scripts/write_build_stamp.py" --root "$ROOT" || true
+else
+    echo "  Skipped: this checkout predates build stamping."
+fi
+
 # ── The prebuilt interface ────────────────────────────────────────────────────
 # Before the environment, not after: fetch_spa.py is standard library only so it
 # can run on the interpreter found above, and a missing or corrupted release

@@ -94,6 +94,46 @@ passband, target = median of members, gain = target − median. Manual gain
 is applied verbatim. Mixed modes: compute the auto set, then override the
 manual channels.
 
+### Maximum output
+
+A third gain mode, `max`, means "as loud as this member's driver allows".
+It cannot be a number on the wire: it depends on the solved excursion and
+impedance, so the solver resolves it (`server/solver/driver_limits.py`).
+
+The channel's response is linear in the drive voltage, so each ceiling is
+one division against the arrays a driver-coupled solve already recorded:
+
+```
+s_x(f) = Xmax / x(f)               one-way peak displacement vs the rating
+s_p(f) = sqrt(P_rated / P(f))      real terminal power vs the rating
+s_v(f) = V_max / V(f)              generator EMF vs the amplifier
+```
+
+`P_rated` is `power_w * count` — parallel drivers share the channel's
+power the way they share its Re. `max` takes the smallest of the known
+ceilings over the band, evaluated against the crossover magnitude alone
+so it is an *absolute* gain: applying the mode twice must not creep.
+
+Three rules keep the answer honest, each of them learned from a real run:
+
+- A member with **no ceiling at all** is not free headroom. Wherever such
+  a member is one of the ones setting the level (within 20 dB of the
+  loudest), the system maximum is *unknown*, not unlimited.
+- A member's own ceiling is reported **only inside its band**, by the same
+  test. Two decades outside its passband a cone barely moves, so Xmax
+  permits an absurd drive.
+- A ceiling reached at an **end of the sweep** is flagged: the sweep never
+  saw the far side of it.
+
+### Gain units
+
+Stored in dB always. The rail reads it in dB, in volts
+(`V_drive · 10^(dB/20)`, exact), or in nominal watts (`V² / Z_nom`,
+falling back to Re, divided by `count`). Nominal — not solved Re(Z) —
+because a driver's power rating is itself quoted against nominal
+impedance, and that is the only form the two can be compared in. Real
+power against frequency is the drive-power chart's job.
+
 ### Alignment
 
 The legacy rule (filtered outputs 0° apart at fc) is correct only for LR4
@@ -153,7 +193,15 @@ type: "filtered_time_aligned_sum"
 members, member_roles, reference
 crossovers_hz            # per linked pair, null when unlinked
 channels: {id: {hp, lp, gain_db, gain_mode, gain_auto_db,
+                gain_max_db, max_limit, max_limit_hz, max_limit_at_band_edge,
                 delay_ms, delay_mode, delay_auto_ms, inverted, invert_mode}}
+max_output:              # absent when no member carries a driver model
+  frequencies
+  members: {id: {spl_max_db, headroom_db, limit,
+                 excursion_fraction, power_fraction, voltage_fraction}}
+  combined: {spl_max_db, headroom_db, limit, limiting_member}
+  unlimited_members      # members with no ceiling of any kind
+  caveat
 pairs: {"lf-mf": {eval_hz, fit_delay_ms, fit_residual_deg,
                   phase_error_at_fc_deg, reverse_null_db, points}}
 delays_ms, gains_db      # flattened aliases kept for one release
@@ -202,19 +250,62 @@ per-user library folder and exposes a search API.
   `Sensitivity_dB`, `Power_W|Power_AES_W`, `XO_min_Hz`, `Freq_low_Hz`,
   `Price_avg_EUR|Price_EUR`, `Source_URL|URL`. Unknown columns are kept
   as opaque extras. Never invent a value for a missing column.
-- `GET /api/drivers?q=&kind=lf|cd|all&z=&limit=` — ranked by token prefix
-  match on brand + model, then impedance match, then completeness. Each hit:
-  `id` (`Brand::Model::Z`), `brand`, `model`, `z_ohm`, `kind`, `size`,
-  `completeness` (`full` when Sd, Bl, Re, one mass and one compliance source
-  are present; `partial`; `catalogue`), `spec` (the `DriverSpec`-ready
+- `GET /api/drivers?q=&kind=lf|cd|all&z=&limit=&complete=` — ranked by token
+  prefix match on brand + model, then impedance match, then completeness.
+  Each hit: `id` (`Brand::Model::Z`), `brand`, `model`, `z_ohm`, `kind`,
+  `size`, `completeness` (`full` when Sd, Bl, Re, one mass and one compliance
+  source are present; `partial`; `catalogue`), `spec` (the `DriverSpec`-ready
   fields it can fill), `display` (Fs, Sd, Bl, Xmax, sensitivity, price),
   `xo_min_hz`, `source`.
-- `GET /api/drivers/{id}` — the full record with provenance.
+- `complete=true` offers only windings classified `full`, and narrows each
+  hit's `variants` list to those. Anything less cannot fill a `DriverSpec`,
+  so a channel filled in from one solves undriven — no power, current or
+  excursion — which is why the picker always asks for it. The response's
+  `hidden_incomplete` counts the matches withheld, so a search over a
+  catalogue-only CSV can say why it answered nothing instead of reading as a
+  broken library.
+- `GET /api/drivers/{id}?complete=` — the full record with provenance.
+  `complete=true` applies the same narrowing to `variants`, but always keeps
+  the winding the id named, so a driver already on a channel keeps its own
+  button in the sheet.
 - `GET /api/drivers/library` — folder, files, counts; `POST .../rescan`.
+  `total_drivers` is every indexed row; `complete_drivers` is how many of
+  them a `complete` search will offer. Settings shows both, because a
+  catalogue CSV indexes thousands of rows and can drive none of them.
 - Variants: rows that differ only in impedance group into one driver with
   a variant list.
 - User-saved drivers live in a `driverLibrary` durable-settings namespace
   with `based_on` (library id or `manual`) and the overridden fields.
+
+### The library that ships
+
+`server/drivers/bundled/hornlab-drivers.csv` is indexed beside the user's
+folder, so a fresh install can pick a real driver instead of meeting an empty
+search box. It is generated from the private masters by
+`hornlab-research/MEH-Lab/data/export_wg_driver_library.py`, which publishes
+every column WG's own alias table names and withholds the commercial half —
+prices, retailer URLs, store lists, working notes, programme power. Provenance
+(`Source_URL`) travels with the data because it is how a number gets checked.
+
+Only rows that satisfy `DriverSpec` are published: 1,047 drivers, every one of
+them solvable, 1,038 carrying a power rating. Catalogue rows are withheld
+because the picker never offers them and counting them would make the library
+promise what the Drivers rail cannot deliver — which is why `total_drivers` and
+`complete_drivers` are equal for the shipped set.
+
+**It is cone drivers almost exclusively.** Compression-driver manufacturers
+publish a throat, a rating and a sensitivity but no moving mass, compliance or
+diaphragm area — verified against B&C, Beyma, 18Sound, Faital and Eminence, and
+across 292 fetched product pages that yielded none of the three. A lumped model
+of a compression driver therefore cannot be built from published data, and the
+one CD in the shipped library is there because Tymphany publishes T/S where the
+pro-audio brands do not. Hand entry in *Drivers* is the route for the rest.
+
+`DriverLibrary.folder` still means the *writable* folder: it is what Settings
+shows and offers to open. A row in the user's own files replaces the shipped
+row for the same brand, model and impedance, so correcting a datasheet by hand
+is the last word rather than a second identical winding button. Duplicates
+inside the user's own files are left alone — those are theirs to keep.
 
 ## 5. Driver picker UI
 

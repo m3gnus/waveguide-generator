@@ -102,6 +102,9 @@ export function projectSubmittedImport(
   // solved levels just as surely as a driver spec does. Keeping them beside
   // drive_channels prevents a voltage-only edit from reusing the old run name.
   if (geometry.drive_voltage_v !== undefined) projectedGeometry.drive_voltage_v = geometry.drive_voltage_v;
+  if (geometry.max_drive_voltage_v !== undefined) {
+    projectedGeometry.max_drive_voltage_v = geometry.max_drive_voltage_v;
+  }
   if (geometry.rg_ohm !== undefined) projectedGeometry.rg_ohm = geometry.rg_ohm;
   if (geometry.combine !== undefined) projectedGeometry.combine = geometry.combine;
   return {

@@ -12,7 +12,7 @@ import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { cadLinkCoordinatorBridge, showIngestedMeshInViewport } from '../shell/CadLinkCoordinator';
+import { cadLinkCoordinatorBridge, showIngestedMeshInViewport, showIngestedSolverMeshInViewport } from '../shell/CadLinkCoordinator';
 import { Icon } from '../shell/icons';
 import { readChartTokens } from '../results/EChart';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
@@ -42,7 +42,8 @@ import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 import { defaultFieldPlane, nearestFieldPlaneFrequencyIndex, useFieldPlaneStore } from './fieldPlaneStore';
 import type { FieldPlaneResponseId } from '../api/fieldPlane';
-import { importedMeshStore } from './importedMeshStore';
+import type { ImportedMeshScene } from './importedMesh';
+import { importedMeshStore, type ImportedMeshShowing } from './importedMeshStore';
 import { SolverMeshRefreshController, type SolverMeshRefreshState } from './solverMeshRefresh';
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
@@ -330,6 +331,26 @@ export function cadViewportEmptyCopy(options: {
   };
 }
 
+/** Whether replacing one viewport scene with another should re-frame the camera.
+ *
+ * Re-framing is right when the subject changes and wrong when the same subject
+ * is merely re-rendered: a refit the user did not ask for reads as the viewport
+ * jumping on its own, and both cases below happen repeatedly during ordinary
+ * work. A solver mesh rebuilds on every parametric edit, and a CAD return's
+ * solve mesh is replaced by its display tessellation the moment that finishes
+ * building -- same model, same scale, so the framing already on screen is
+ * still the right one.
+ */
+export function refitsCamera(
+  previous: ImportedMeshScene | null,
+  next: ImportedMeshScene | null,
+): boolean {
+  if (previous?.source === 'solver' && next?.source === 'solver') return false;
+  if (previous?.source === 'cad' && next?.source === 'cad'
+    && previous.ingestId !== null && previous.ingestId === next.ingestId) return false;
+  return true;
+}
+
 export function Viewport() {
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
@@ -438,15 +459,29 @@ export function Viewport() {
   const cadMesh = cadRecord && importedMeshState.cad?.ingestId === cadRecord.ingest_id
     ? importedMeshState.cad
     : null;
+  const cadSolverMesh = cadRecord && importedMeshState.cadSolver?.ingestId === cadRecord.ingest_id
+    ? importedMeshState.cadSolver
+    : null;
   const solverViewSelected = workspaceMode === 'parametric' && importedMeshState.showing === 'solver';
+  const cadSolverViewSelected = workspaceMode === 'cad' && importedMeshState.showing === 'cadSolver';
   const importedMesh = workspaceMode === 'cad'
-    ? cadMesh
+    // While the solve artifact is still being fetched the tessellated display
+    // mesh stays on screen rather than blanking the viewport, exactly as the
+    // parametric view keeps its smooth preview until the build lands.
+    ? (cadSolverViewSelected ? cadSolverMesh ?? cadMesh : cadMesh)
     : importedMeshState.showing === 'file'
       ? importedMeshState.file
       : solverViewSelected
         ? importedMeshState.solver
         : null;
   const availableFileMesh = importedMeshState.file;
+  const [cadSolverLoading, setCadSolverLoading] = useState(false);
+  const [cadSolverError, setCadSolverError] = useState<string | null>(null);
+  const [cadSolverRetry, setCadSolverRetry] = useState(0);
+  // Without an independently tessellated display artifact the CAD geometry on
+  // screen already *is* the solve mesh, so there is nothing to switch between.
+  const cadHasSeparateViewportMesh = cadRecord?.viewport_mesh?.available === true;
+  const cadIngestId = cadRecord?.ingest_id ?? null;
   const [solverMeshState, setSolverMeshState] = useState<SolverMeshRefreshState>({
     building: false, stale: false, staleReason: null, error: null,
   });
@@ -597,6 +632,33 @@ export function Viewport() {
     importedMeshStore.showParametric();
   };
 
+  /** Which artifact the viewport is drawing, as the source switch sees it. */
+  const activeMeshSource: ImportedMeshShowing = workspaceMode === 'cad'
+    ? cadSolverViewSelected ? 'cadSolver' : 'cad'
+    : importedMeshState.showing === 'file'
+      ? 'file'
+      : solverViewSelected ? 'solver' : 'parametric';
+
+  /** The switch between the smooth display model and the real solve triangles.
+   * Both workspaces offer it; only the artifacts behind it differ. CAD Link
+   * omits it when the return carries no independent display artifact, because
+   * the geometry already on screen is then the solve mesh itself. */
+  const meshSources: { key: ImportedMeshShowing; label: string; title: string; select: () => void }[] =
+    workspaceMode === 'cad'
+      ? cadRecord && cadHasSeparateViewportMesh
+        ? [
+          { key: 'cad', label: 'Geometry', title: 'Show the tessellated CAD display model', select: () => importedMeshStore.showCad() },
+          { key: 'cadSolver', label: 'Mesh', title: 'Show the exact triangles this CAD return will be solved on', select: () => importedMeshStore.showCadSolver() },
+        ]
+        : []
+      : [
+        { key: 'parametric', label: 'Geometry', title: 'Show the smooth parametric preview model', select: showParametric },
+        { key: 'solver', label: 'Mesh', title: 'Show the real solver mesh triangles instead of the smooth preview', select: () => importedMeshStore.showSolver() },
+        ...(availableFileMesh
+          ? [{ key: 'file' as const, label: 'Imported', title: `Show the imported mesh ${availableFileMesh.name}`, select: () => importedMeshStore.showFile() }]
+          : []),
+      ];
+
   // A lost context is recoverable: mounting a fresh Canvas asks for a new one.
   // Clearing the failure is what lets that happen, and re-probing covers the
   // case where the whole WebGL2 capability went away and has since come back.
@@ -617,12 +679,23 @@ export function Viewport() {
       return;
     }
     previousWorkspaceMode.current = workspaceMode;
-    const generation = importedMeshStore.beginIntent();
     if (!cadRecord) {
+      importedMeshStore.beginIntent();
       importedMeshStore.clear('cad');
       return;
     }
-    const cached = importedMeshStore.getSnapshot().cad;
+    const snapshot = importedMeshStore.getSnapshot();
+    // The CAD Link panel re-publishes its record while it polls the CAD
+    // application, so this effect re-runs constantly for one unchanged
+    // ingestion. A refresh must not throw the user out of the mesh view they
+    // chose -- and decisively must not reach `beginIntent` below, which would
+    // cancel the solve-mesh fetch running for exactly this record. Only a
+    // genuinely different ingestion resets the source.
+    if (snapshot.showing === 'cadSolver'
+      && (snapshot.cadSolver?.ingestId === cadRecord.ingest_id
+        || snapshot.cad?.ingestId === cadRecord.ingest_id)) return;
+    const generation = importedMeshStore.beginIntent();
+    const cached = snapshot.cad;
     if (cached?.ingestId === cadRecord.ingest_id) {
       importedMeshStore.showCad(generation);
       return;
@@ -643,10 +716,7 @@ export function Viewport() {
     const previous = lastImportedMesh.current;
     if (previous === importedMesh) return;
     lastImportedMesh.current = importedMesh;
-    // A solver-mesh rebuild replaces geometry inside the current view, exactly
-    // like a parametric edit; refitting the camera there would make every
-    // auto-refresh jump the framing.
-    if (previous?.source === 'solver' && importedMesh?.source === 'solver') return;
+    if (!refitsCamera(previous, importedMesh)) return;
     setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
   }, [importedMesh]);
 
@@ -668,6 +738,35 @@ export function Viewport() {
   useEffect(() => {
     if (!solveRunningOrQueued) solverRefresh.solveSettled();
   }, [solveRunningOrQueued, solverRefresh]);
+
+  // CAD mesh view: the ingestion record is immutable, so the solve artifact is
+  // fetched once per ingestion and re-served from its slot after that. There
+  // is no refresh policy to run -- nothing the user edits in CAD mode can
+  // change the mesh a completed return will be solved on. A failed fetch is
+  // not retried on its own; `cadSolverRetry` is what the banner's Retry moves.
+  //
+  // Keyed on the ingestion id rather than the record object: CAD Link
+  // re-publishes an equal record on every poll, and restarting the fetch each
+  // time would leave it permanently loading.
+  useEffect(() => {
+    if (!cadSolverViewSelected || cadIngestId === null) return undefined;
+    setMode('solid-wire');
+    if (cadSolverMesh !== null) return undefined;
+    const record = useCadReturnStore.getState().ingestRecord;
+    if (record === null || record.ingest_id !== cadIngestId) return undefined;
+    let cancelled = false;
+    setCadSolverLoading(true);
+    setCadSolverError(null);
+    void showIngestedSolverMeshInViewport(record, cadName).then((error) => {
+      if (cancelled) return;
+      setCadSolverLoading(false);
+      setCadSolverError(error);
+    });
+    return () => {
+      cancelled = true;
+      setCadSolverLoading(false);
+    };
+  }, [cadIngestId, cadName, cadSolverMesh, cadSolverRetry, cadSolverViewSelected]);
 
   // The axisymmetric formulation never integrates over this 3D mesh, so say so
   // while it is what the solve plan resolves to.
@@ -824,17 +923,6 @@ export function Viewport() {
         : workspaceMode === 'cad' ? (cadCoordinator.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadCoordinator.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design)}</span>
     </div>
     <div className="viewport-live">
-      {workspaceMode === 'parametric' && <span className="imported-mesh-badge" aria-label="Viewport mesh source">
-        <button type="button" className={!importedMesh && !solverViewSelected ? 'active' : ''} aria-pressed={!importedMesh && !solverViewSelected} onClick={showParametric}>Parametric</button>
-        <button
-          type="button"
-          className={solverViewSelected ? 'active' : ''}
-          aria-pressed={solverViewSelected}
-          title="Display the real solver mesh triangles instead of the smooth preview"
-          onClick={() => importedMeshStore.showSolver()}
-        >Simulation mesh</button>
-        {availableFileMesh && <button type="button" className={importedMesh?.source === 'file' ? 'active' : ''} aria-pressed={importedMesh?.source === 'file'} onClick={() => importedMeshStore.showFile()}>Imported mesh</button>}
-      </span>}
       {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
       {workspaceMode === 'parametric' && behindDesign && !importedMesh && <button
         type="button"
@@ -852,7 +940,11 @@ export function Viewport() {
               ? solverMeshState.stale ? 'solver mesh out of date' : 'solver mesh current'
               : 'solver mesh pending'}</span>
           : <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
-        : <span>CAD Link workspace</span>}
+        : cadSolverViewSelected
+          ? <span>{cadSolverLoading
+            ? 'loading solve mesh…'
+            : cadSolverMesh ? 'ingested solve mesh' : 'solve mesh unavailable'}</span>
+          : <span>CAD Link workspace</span>}
     </div>
 
     {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">
@@ -883,6 +975,11 @@ export function Viewport() {
             ? <b>auto-rebuild paused — the last build was slow</b>
             : null}
       <button type="button" disabled={solverMeshState.building} onClick={() => solverRefresh.refresh()}>Refresh</button>
+    </div>}
+    {cadSolverViewSelected && cadSolverError !== null && <div className="viewport-connection-banner solver-mesh-banner" role="status">
+      <span><i />Solve mesh unavailable</span>
+      <b title={cadSolverError}>{cadSolverError}</b>
+      <button type="button" disabled={cadSolverLoading} onClick={() => setCadSolverRetry((value) => value + 1)}>Retry</button>
     </div>}
     {solverViewSelected && axisymPlanned && <div className="solver-axisym-note" role="note">
       Axisymmetric solve planned: the solver uses a meridian discretisation of the profile, not these 3D triangles.
@@ -1081,6 +1178,19 @@ export function Viewport() {
     {fieldEnabled && <FieldPlaneProbeTooltip fieldMaxSplDb={fieldMaxSplDb}/>}
 
     <div className="viewport-tools">
+      {meshSources.length > 1 && <>
+        <div className="viewport-tool-group viewport-tool-segment mesh-source-tools" role="group" aria-label="Viewport mesh source">
+          {meshSources.map((source) => <button
+            key={source.key}
+            type="button"
+            className={`viewport-tool-text${source.key === activeMeshSource ? ' on' : ''}`}
+            title={source.title}
+            aria-pressed={source.key === activeMeshSource}
+            onClick={source.select}
+          >{source.label}</button>)}
+        </div>
+        <i className="wg2-tool-divider" />
+      </>}
       <div className="viewport-tool-group display-mode-tools">
         <button
           className="on"

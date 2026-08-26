@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../prefs/preferences';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
+import { resetDriverLibraryStore } from '../stores/driverLibrary';
 import { SettingsDialog, type Theme } from './SettingsDialog';
 
 function Harness() {
@@ -22,7 +23,7 @@ describe('SettingsDialog', () => {
   let root: Root;
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    localStorage.clear(); preferencesStore.resetForTests(); resetWorkspaceFolderStore();
+    localStorage.clear(); preferencesStore.resetForTests(); resetWorkspaceFolderStore(); resetDriverLibraryStore();
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     act(() => root.render(<Harness/>));
@@ -352,6 +353,81 @@ describe('SettingsDialog', () => {
     expect(section.textContent).toContain('My account → Developer → API keys');
     expect(section.textContent).toContain('/home/x/.config/hornlab/onshape.env');
     expect(section.querySelector('.cad-setup-steps input')).toBeNull();
+  });
+
+  it('separates the rows it indexed from the drivers it can actually offer', async () => {
+    // What a catalogue CSV really looks like: thousands of rows indexed, a
+    // fraction of them carrying enough T/S to drive anything.
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/drivers/library')) {
+        return new Response(JSON.stringify({
+          folder: '/library/driver-databases',
+          files: [{ name: 'lf.csv', rows: 1_803 }],
+          total_drivers: 1_803,
+          complete_drivers: 505,
+          last_scan: null,
+        }), { status: 200 });
+      }
+      throw new Error('offline');
+    }));
+    act(() => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    const section = host.querySelector<HTMLElement>('#settings-drivers')!;
+    expect(section.querySelector('.driver-library-counts')!.textContent)
+      .toBe('1 file \u00b7 1,803 drivers indexed \u00b7 505 with Thiele-Small data');
+    // And it says what the difference means, because 1,298 of them will never
+    // appear in a search however hard the user looks.
+    expect(section.textContent).toContain('The other 1,298 are catalogue entries');
+  });
+
+  it('counts the shipped library apart from the files the user added', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/drivers/library')) {
+        return new Response(JSON.stringify({
+          folder: '/library/driver-databases',
+          files: [
+            { name: 'hornlab-drivers.csv', rows: 2_162, bundled: true },
+            { name: 'mine.csv', rows: 12, bundled: false },
+          ],
+          total_drivers: 2_170,
+          complete_drivers: 651,
+          last_scan: null,
+        }), { status: 200 });
+      }
+      throw new Error('offline');
+    }));
+    act(() => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    const section = host.querySelector<HTMLElement>('#settings-drivers')!;
+    expect(section.querySelector('.driver-library-counts')!.textContent)
+      .toBe('2 files (1 shipped) \u00b7 2,170 drivers indexed \u00b7 651 with Thiele-Small data');
+    // The old copy promised an empty application; it no longer is one.
+    expect(section.textContent).not.toContain('ships no driver data');
+    expect(section.textContent).toContain('ships with Waveguide Generator');
+  });
+
+  it('says nothing about catalogue entries when every indexed driver is usable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/drivers/library')) {
+        return new Response(JSON.stringify({
+          folder: '/library/driver-databases',
+          files: [{ name: 'lf.csv', rows: 2 }],
+          total_drivers: 2,
+          complete_drivers: 2,
+          last_scan: null,
+        }), { status: 200 });
+      }
+      throw new Error('offline');
+    }));
+    act(() => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    const section = host.querySelector<HTMLElement>('#settings-drivers')!;
+    expect(section.querySelector('.driver-library-counts')!.textContent)
+      .toBe('1 file \u00b7 2 drivers indexed \u00b7 2 with Thiele-Small data');
+    expect(section.textContent).not.toContain('catalogue entries');
   });
 
   it('warns when the Onshape key file is readable by other accounts', async () => {
