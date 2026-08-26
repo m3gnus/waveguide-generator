@@ -16,7 +16,7 @@
         "profileV": {"points": [[0.0, 10.0], [100.0, 40.0]]},
         "crossSections": [{"t": 0.0, "shape": "ellipse"}, {"t": 1.0, "shape": "ellipse"}]
       },
-      "mesh": {"quadrants": 1234, "wallThickness": 5.0, "scaleToMetres": true},
+      "mesh": {"quadrants": 1234, "wallThickness": 5.0, "surfaceFit": "approximate", "scaleToMetres": true},
       "cross_section": {"exponent": 2.0, "aspectRatio": 1.0},
       "morph": {},
       "gcurve": {},
@@ -51,7 +51,7 @@
         ],
         "inflectionPolicy": "warn"
       },
-      "mesh": {"quadrants": 1234, "wallThickness": 7.5, "scaleToMetres": true},
+      "mesh": {"quadrants": 1234, "wallThickness": 7.5, "surfaceFit": "approximate", "scaleToMetres": true},
       "cross_section": {"exponent": 2.0, "aspectRatio": 1.0},
       "morph": {},
       "gcurve": {},
@@ -77,7 +77,7 @@
         "profileV": {"points": [[0.0, 4.0], [45.0, 15.0, -10.0], [75.0, 22.5]]},
         "crossSections": [{"t": 0.0, "shape": "ellipse"}, {"t": 1.0, "shape": "ellipse"}]
       },
-      "mesh": {"quadrants": 1234, "wallThickness": 1.5, "verticalOffset": 2.0, "scaleToMetres": true},
+      "mesh": {"quadrants": 1234, "wallThickness": 1.5, "verticalOffset": 2.0, "surfaceFit": "approximate", "scaleToMetres": true},
       "cross_section": {"exponent": 2.0, "aspectRatio": 1.0},
       "morph": {},
       "gcurve": {},
