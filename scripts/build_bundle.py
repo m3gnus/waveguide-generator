@@ -236,8 +236,20 @@ def tree_digest(root: Path, *, exclude: frozenset[str] = frozenset()) -> str:
     archive to be stored uncompressed, which cost ten times the download on
     every update, and it would still be defeated by any difference in the
     compressor. This digest covers what actually has to match -- the set of
-    paths, the executable bit, and the bytes of each file -- so the archive is
-    free to be compressed.
+    paths, symlink targets, and the bytes of each file -- so the archive is free
+    to be compressed.
+
+    It deliberately does **not** cover the executable bit. Windows cannot
+    represent one and CPython fabricates it from the file extension, so reading
+    it back made the digest depend on the build host; see
+    :func:`_executable_flag`. The app layer carries no executable files, and
+    :func:`assert_app_layer_is_not_executable` keeps it that way on the platform
+    that can observe modes, which is where the release builds its reference
+    layer.
+
+    The runtime layer is unaffected: it is described by RUNTIME-MANIFEST.json
+    with a per-file digest of its own, so the real executables it ships keep
+    their coverage.
     """
 
     digest = hashlib.sha256()
@@ -270,12 +282,30 @@ def _executable_flag(path: Path) -> str:
     ``scripts/uninstall.bat``) were enough to make the Windows and macOS layers
     disagree, with byte-identical contents on both.
 
-    The app layer has no executable files. Every entry is written by
-    ``copy_tracked_app_files`` with ``write_bytes``, which does not carry Git's
-    mode, so all 288 tracked files land at ``0o644``; the SPA and the Windows
-    bootstrap are written the same way. ``assert_app_layer_is_not_executable``
-    holds the builder to that on the platform that can observe it, so this is a
-    recorded invariant rather than an assumption.
+    The app layer has no executable files. ``copy_tracked_app_files`` writes
+    every entry with ``write_bytes``, which does not carry Git's mode, so all
+    288 tracked files land at ``0o644``; the SPA and the Windows bootstrap are
+    written the same way. ``assert_app_layer_is_not_executable`` holds the
+    builder to that on the platform that can observe modes, so it is a recorded
+    invariant rather than an assumption.
+
+    Note that this is the *materialized* layer, not Git's view of it: seven
+    tracked app files are 100755 in the tree, including ``scripts/install.sh``
+    and ``launchers/linux/launch-wg.sh``, and they all ship non-executable. That
+    is pre-existing and separate from this digest -- the bundles do not depend on
+    it, because the macOS ``.app`` launcher that actually runs is written fresh
+    by ``write_launcher_stub`` and chmod'd there -- but whether the layer ought
+    to carry Git's modes at all is a real question this comment should not
+    pretend is settled.
+
+    Deriving the flag from Git's mode instead of the filesystem would keep a
+    genuine executable-bit check and agree across platforms by construction. It
+    is not done here for two reasons: ``tree_digest`` runs over the assembled
+    layer, which also contains the SPA and the Windows bootstrap -- files that
+    were never Git blobs and have no mode to read -- and with the materializer
+    dropping modes, digesting those seven as executable would describe an intent
+    the shipped layer does not have. Worth revisiting together with the
+    materializer, not before it.
     """
 
     if os.name == "nt":
