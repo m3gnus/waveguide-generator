@@ -11,11 +11,19 @@ attributed to any of them -- nor could two installs that disagreed be told apart
 This module resolves the commit alongside the version so both are always
 reported together. Resolution order:
 
-1. ``shared/build.json``, written by the installer at update time. This is
-   authoritative: a bundled or copied install may have no ``.git`` at all, and a
-   stamp recorded at install time cannot drift the way a live probe can.
-2. A ``git`` probe of the source tree, for developer checkouts with no stamp.
+1. A ``git`` probe of the source tree. An install *is* a checkout -- the
+   installer fast-forwards it -- so the probe is ground truth and cannot go
+   stale.
+2. ``shared/build.json``, written by the installer at update time, for the case
+   the probe cannot answer: a bundled or copied install with no ``.git`` at all.
 3. ``None`` -- reported honestly as ``unknown`` rather than guessed.
+
+The stamp is deliberately the *fallback*, not the preference. A stamp records
+where the tree was when the installer last ran; anything that moves HEAD
+afterwards (a developer checkout, a manual fetch, a rolled-back update) leaves
+it describing a commit the running code no longer is. Trusting it over a
+working probe would reintroduce exactly the misreporting this module exists to
+remove, just with more precision and therefore more credibility.
 
 The version alone stays available as ``version()`` because release-matching
 logic (``launch/serve.py`` comparing the SPA stamp against the backend tree)
@@ -97,7 +105,7 @@ def build_identity(root: Path | None = None) -> dict[str, Any]:
     raw_version = manifest.get("version")
     version = str(raw_version) if isinstance(raw_version, str) and raw_version else "unknown"
 
-    resolved = _stamped_identity(base) or _probed_identity(base)
+    resolved = _probed_identity(base) or _stamped_identity(base)
     if resolved is None:
         return {
             "version": version,

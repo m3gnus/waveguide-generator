@@ -86,6 +86,23 @@ def test_a_corrupt_stamp_degrades_instead_of_raising(tmp_path):
     assert identity.build_label(root).startswith("1.2.3+")
 
 
+def test_a_live_probe_beats_a_stale_stamp(tmp_path, monkeypatch):
+    """The stamp records where the tree was when the installer last ran. Anything
+    that moves HEAD afterwards leaves it naming a commit this code is not, and
+    believing it would reintroduce the misreporting with more credibility."""
+
+    root = _tree(tmp_path)
+    (root / "shared" / "build.json").write_text(
+        json.dumps({"commit": "0000000000stale", "dirty": False}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        identity, "_probed_identity", lambda base: ("abcdef1234", False, "git")
+    )
+
+    assert identity.build_label(root) == "1.2.3+gabcdef12"
+    assert identity.build_identity(root)["source"] == "git"
+
+
 def test_a_stamp_without_a_commit_is_not_a_stamp(tmp_path):
     root = _tree(tmp_path)
     (root / "shared" / "build.json").write_text(
