@@ -14,9 +14,16 @@ reported together. Resolution order:
 1. A ``git`` probe of the source tree. An install *is* a checkout -- the
    installer fast-forwards it -- so the probe is ground truth and cannot go
    stale.
-2. ``shared/build.json``, written by the installer at update time, for the case
-   the probe cannot answer: a bundled or copied install with no ``.git`` at all.
-3. ``None`` -- reported honestly as ``unknown`` rather than guessed.
+2. ``APP-MANIFEST.json``, written into the app root by
+   ``scripts/build_bundle.py``. A packaged build has no ``.git`` at all -- its
+   files are materialized from git blobs into a fresh directory -- so without
+   this the whole feature is inert for precisely the artifact most users
+   install, which is the population whose bug reports could not be attributed
+   in the first place. The bundler calls ``require_clean_worktree`` before
+   recording it, so a manifest commit is never dirty.
+3. ``shared/build.json``, written by the installer at update time, for a copied
+   or hand-assembled install that has neither a repo nor a manifest.
+4. ``None`` -- reported honestly as ``unknown`` rather than guessed.
 
 The stamp is deliberately the *fallback*, not the preference. A stamp records
 where the tree was when the installer last ran; anything that moves HEAD
@@ -41,6 +48,9 @@ from typing import Any
 
 #: Written by the installer next to ``version.json``; absent in a bare checkout.
 BUILD_STAMP_NAME = "build.json"
+
+#: Written into the app root by ``scripts/build_bundle.py`` for packaged builds.
+APP_MANIFEST_NAME = "APP-MANIFEST.json"
 
 #: A git probe must never delay startup on a slow or networked filesystem.
 _GIT_TIMEOUT_SECONDS = 5.0
@@ -85,6 +95,20 @@ def _stamped_identity(root: Path) -> tuple[str | None, bool, str] | None:
     return commit.strip(), bool(stamp.get("dirty", False)), "stamp"
 
 
+def _manifest_identity(root: Path) -> tuple[str | None, bool, str] | None:
+    """Read the commit ``scripts/build_bundle.py`` stamped into the app root."""
+
+    manifest = _read_json(root / APP_MANIFEST_NAME)
+    if manifest is None:
+        return None
+    commit = manifest.get("commit")
+    if not isinstance(commit, str) or not commit.strip():
+        return None
+    # The bundler refuses to build from a dirty worktree, so a manifest commit
+    # describes the tree exactly; there is no dirty state to carry.
+    return commit.strip(), False, "manifest"
+
+
 def _probed_identity(root: Path) -> tuple[str | None, bool, str] | None:
     commit = _git(root, "rev-parse", "HEAD")
     if commit is None:
@@ -105,7 +129,11 @@ def build_identity(root: Path | None = None) -> dict[str, Any]:
     raw_version = manifest.get("version")
     version = str(raw_version) if isinstance(raw_version, str) and raw_version else "unknown"
 
-    resolved = _probed_identity(base) or _stamped_identity(base)
+    resolved = (
+        _probed_identity(base)
+        or _manifest_identity(base)
+        or _stamped_identity(base)
+    )
     if resolved is None:
         return {
             "version": version,
@@ -147,6 +175,7 @@ def build_label(root: Path | None = None) -> str:
 
 
 __all__ = [
+    "APP_MANIFEST_NAME",
     "BUILD_STAMP_NAME",
     "build_identity",
     "build_label",
