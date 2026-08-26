@@ -24,6 +24,13 @@ export interface ShownCombine {
   /** Whether the shown run accepts a live recombine: complete, and not a
    * provisional live view that a running solve is still revising. */
   canApply: boolean;
+  /** Why it does not, in a sentence the rail can show. Silence would read as
+   * "the edit was applied", which is the one thing it must not read as. */
+  blockedReason: string | null;
+  /** The dock's own "show this run's model", offered when loading it is what
+   * unblocks the edit -- the case a reopened session lands in, where the run
+   * on screen is this project's but no ingestion is loaded to own it. */
+  recall: (() => void) | null;
   onApplied: (jobId: string, updated: JobResults) => void;
 }
 

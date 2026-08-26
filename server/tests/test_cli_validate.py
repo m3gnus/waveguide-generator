@@ -332,3 +332,34 @@ def test_validate_no_mesh_skips_worker_and_compilation(
     assert exit_code == 0
     assert report["mesh"] is None
     assert report["refusals"] == []
+
+
+def test_validate_reports_a_design_stated_solver_mode_it_will_not_honour(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Headless callers get the same word about it that the interface does."""
+
+    path = _design_path(tmp_path, source=VALID_MWG + "Simulation.SolverMode = circsym\n")
+
+    async def unexpected(*_args, **_kwargs):
+        raise AssertionError("--no-mesh must not touch the gmsh lifecycle")
+
+    monkeypatch.setattr("server.cli.validate.prewarm_gmsh_worker", unexpected)
+    monkeypatch.setattr("server.cli.validate.build_solver_mesh", unexpected)
+    monkeypatch.setattr("server.cli.validate.shutdown_gmsh_worker", unexpected)
+
+    exit_code = main(
+        ["validate", str(path), "--json", "--no-mesh"],
+        engine_registry=_registry(),
+    )
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert report["refusals"] == []
+    assert [item["name"] for item in report["migrationsApplied"]] == [
+        "006_machine_solver_mode_not_portable"
+    ]
+    # The mode a design cannot set is still the one the request options own.
+    assert report["solvePath"]["predicted"] == "full-3d"

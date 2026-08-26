@@ -364,6 +364,11 @@ class StatusController:
             self._update_request_path = Path(self._temporary_directory.name) / "update.json"
             environment = dict(self.environ)
             environment["WG2_NO_BROWSER"] = "1"
+            # stdout and stderr are merged into one pipe, where stdout is block
+            # buffered and stderr is not, so a dependency's start-up print
+            # otherwise lands after the logging that explains a failure. This
+            # keeps the collected output in the order it was written.
+            environment["PYTHONUNBUFFERED"] = "1"
             popen_options: dict[str, object] = {
                 "cwd": str(self.repo_root),
                 "env": environment,
@@ -431,9 +436,53 @@ class StatusController:
                 self._registered_atexit = True
             return self._snapshot
 
+    def _diagnostic_line(self) -> str | None:
+        """The last line the server wrote that actually reports a failure.
+
+        Taking the last line of the merged stream is wrong, and reliably so.
+        The child's stdout is a pipe, so ``print`` from any imported package is
+        block-buffered and flushes when the process exits -- after every log
+        record, which goes to stderr unbuffered. A dependency's harmless
+        start-up notice therefore arrives last no matter when it was written,
+        and gets reported as the reason the server died. bempp announces a
+        missing optional Gmsh executable that way on every start.
+
+        So look for a line that claims to be a failure: the level field of the
+        server's own log format, or one of the plain messages ``launch/serve``
+        prints to stderr before logging exists.
+        """
+
+        for line in reversed(self._output):
+            if " ERROR " in line or " CRITICAL " in line:
+                return line
+            if line.startswith("Waveguide Generator did not start"):
+                return line
+        return None
+
     def _exit_reason(self, return_code: int) -> str:
-        detail = self._output[-1] if self._output else "no diagnostic output"
-        return f"Server exited with code {return_code}: {detail}"
+        detail = self._diagnostic_line()
+        if detail is None and return_code == 0:
+            # Exit 0 is a clean shutdown. Naming an arbitrary output line here
+            # would attribute the stop to whatever happened to be on stdout.
+            detail = "the server shut down without reporting an error"
+        elif detail is None:
+            detail = self._output[-1] if self._output else "no diagnostic output"
+        return f"Server exited with code {return_code}: {detail}. {self._log_location()}"
+
+    def _log_location(self) -> str:
+        """Where the whole story is, spelled out rather than described.
+
+        A user told only that the server exited should not also have to work
+        out where their platform keeps the log that says why.
+        """
+
+        try:
+            from server.platform.logging_setup import LOG_FILENAME
+            from server.platform.paths import data_paths
+
+            return f"The full log is at {data_paths(self._data_dir()).logs / LOG_FILENAME}"
+        except (ImportError, OSError, ValueError):  # pragma: no cover - unnameable path
+            return "The full log is in server.log in the Waveguide Generator log folder"
 
     def _already_running_url(self) -> str | None:
         for line in reversed(self._output):

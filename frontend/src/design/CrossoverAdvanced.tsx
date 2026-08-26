@@ -4,6 +4,12 @@ import {
   familyOrders,
   FILTER_FAMILIES,
   FILTER_FAMILY_LABELS,
+  gainFromUnit,
+  gainInUnit,
+  gainText,
+  GAIN_UNIT_LABELS,
+  GAIN_UNITS,
+  maxLimitNote,
   nearestOrder,
   relinkPairs,
   slopeLabel,
@@ -13,8 +19,10 @@ import {
   type CrossoverSpec,
   type FilterFamily,
   type FilterSection,
+  type GainUnit,
   type ResolvedChannel,
 } from '../results/crossoverSpec';
+import type { MaxOutputMemberTrace } from '../results/types';
 import type { DriverPreset } from '../stores/cadReturn';
 
 /**
@@ -139,7 +147,151 @@ function AutoManualField({ label, unit, precision, step, mode, value, autoValue,
   </div>;
 }
 
-export function CrossoverAdvanced({ spec, resolved = NO_RESOLVED, memberLabel, presetFor, onChange }: {
+/**
+ * How hard one member is driven, in the unit the question is being asked in.
+ *
+ * Three modes and three units, and the number the other two would have chosen
+ * stays on screen in all of them. Auto is the level match; Max is the loudest
+ * this member's own driver can be run, solved against the crossover it has;
+ * Manual is whatever the user types. Taking a mode over should never begin by
+ * hiding what it replaced, and never by moving the curve.
+ *
+ * dB is what is stored and what the crossover applies. Volts and watts are
+ * views of it against the drive voltage the run was solved at -- volts exactly,
+ * watts into the nominal impedance the driver's power rating is quoted against,
+ * which is the only impedance that makes the two comparable.
+ */
+function GainField({
+  mode, db, autoDb, maxDb, maxLimit, maxLimitHz, maxLimitAtBandEdge, usage, unit,
+  driveVoltageV, impedanceOhm, onUnit, onMode, onValue,
+}: {
+  mode: 'auto' | 'manual' | 'max';
+  db: number;
+  autoDb: number | null;
+  maxDb: number | null;
+  maxLimit: 'xmax' | 'power' | 'voltage' | null;
+  maxLimitHz: number | null;
+  maxLimitAtBandEdge: boolean;
+  usage: MaxOutputMemberTrace | null;
+  unit: GainUnit;
+  driveVoltageV: number | null;
+  impedanceOhm: number | null;
+  onUnit: (unit: GainUnit) => void;
+  onMode: (mode: 'auto' | 'manual' | 'max') => void;
+  onValue: (db: number) => void;
+}) {
+  const id = useId();
+  const inUnit = (value: number | null) => (
+    value === null ? null : gainInUnit(value, unit, driveVoltageV, impedanceOhm)
+  );
+  // A unit the run cannot form -- no drive voltage, or a driver with no
+  // impedance to divide by -- would show every field as a dash. Fall back to
+  // dB rather than blanking the control the user came here to read.
+  const shown = unit === 'db' || inUnit(db) !== null ? unit : 'db';
+  const value = shown === unit ? inUnit(db) : db;
+  const autoText = gainText(shown === unit ? inUnit(autoDb) : autoDb, shown);
+  const maxText = maxDb === null ? null : gainText(shown === unit ? inUnit(maxDb) : maxDb, shown);
+  const limitNote = maxLimitNote(maxLimit, maxLimitHz, maxLimitAtBandEdge);
+  return <>
+    <div className="crossover-band">
+      <label className="crossover-band-name" htmlFor={id}>Gain</label>
+      <div className="crossover-segment" role="group" aria-label="Gain mode">
+        <button type="button" aria-pressed={mode === 'auto'} className={mode === 'auto' ? 'on' : ''} onClick={() => onMode('auto')}>Auto</button>
+        <button type="button" aria-pressed={mode === 'manual'} className={mode === 'manual' ? 'on' : ''} onClick={() => onMode('manual')}>Manual</button>
+        <button
+          type="button"
+          aria-pressed={mode === 'max'}
+          className={mode === 'max' ? 'on' : ''}
+          disabled={maxDb === null}
+          title={maxDb === null
+            ? 'This channel has no driver limit to reach: give its driver an Xmax or a rated power, or set an amplifier ceiling.'
+            : `Drive this channel as loud as its driver allows${limitNote ? ` (${limitNote})` : ''}`}
+          onClick={() => onMode('max')}
+        >Max</button>
+      </div>
+      {mode === 'manual'
+        ? <input
+            id={id}
+            type="number"
+            step={shown === 'db' ? 0.1 : 'any'}
+            value={value ?? 0}
+            aria-label={`Gain in ${GAIN_UNIT_LABELS[shown]}`}
+            onChange={(event) => {
+              if (event.target.value.trim() === '') { onMode('auto'); return; }
+              const typed = Number(event.target.value);
+              if (!Number.isFinite(typed)) return;
+              const next = gainFromUnit(typed, shown, driveVoltageV, impedanceOhm);
+              if (next !== null && Number.isFinite(next)) onValue(next);
+            }}
+          />
+        // Dashed and read-only: the number is real, it just was not typed.
+        : <output id={id} className="crossover-auto-value">{gainText(value, shown)}</output>}
+      <select
+        className="crossover-unit-select"
+        aria-label="Gain unit"
+        value={unit}
+        // Watts here are nominal -- voltage squared over the driver's nominal
+        // impedance, the form a power rating is quoted in. The power actually
+        // going into the cone varies across the band with the real impedance,
+        // and is the figure the headroom line below states.
+        title={'Read the gain as dB, as the RMS volts the amplifier must swing, '
+          + 'or as nominal watts (V\u00b2 into the driver\u2019s nominal impedance, '
+          + 'the form a power rating is quoted in \u2014 not the real power at any '
+          + 'one frequency).'}
+        onChange={(event) => onUnit(event.target.value as GainUnit)}
+      >{GAIN_UNITS.map((option) => <option key={option} value={option}>{GAIN_UNIT_LABELS[option]}</option>)}</select>
+      {mode !== 'auto' && <span className="crossover-auto-note">auto {autoText}</span>}
+      {mode !== 'max' && maxText && <span className="crossover-auto-note">max {maxText}</span>}
+      {mode !== 'auto' && <button
+        type="button"
+        className="crossover-reset"
+        title={`Go back to the automatic gain (${autoText}); clearing the field does the same`}
+        onClick={() => onMode('auto')}
+      >Reset to auto</button>}
+    </div>
+    {(limitNote || usage) && <p className="crossover-advanced-note">
+      {limitNote && <>Ceiling: {limitNote}. </>}
+      {usage && ratingsText(usage)}
+    </p>}
+  </>;
+}
+
+/** "Xmax 62% \u00b7 rated power 31%" -- how much of each rating the shown
+ * settings already spend, so the headroom is a fact rather than a promise. */
+function ratingsText(usage: MaxOutputMemberTrace): string | null {
+  const parts = [
+    ['Xmax', usage.excursion_fraction, usage.xmax_mm, 'mm'],
+    ['power', usage.power_fraction, usage.rated_power_w, 'W'],
+    ['amplifier', usage.voltage_fraction, usage.max_voltage_v, 'V'],
+  ] as const;
+  const shown = parts
+    .filter(([, fraction]) => typeof fraction === 'number' && Number.isFinite(fraction))
+    .map(([label, fraction, rating, unit]) => {
+      const used = fraction as number;
+      // The two numbers the percentage came from, whenever the rating is at
+      // hand: "124 W of 400 W" is an answer where "31%" is only a ratio. The
+      // watts here are the REAL power the solve computed, which at an
+      // impedance peak is nothing like a gain stated in nominal watts.
+      const absolute = typeof rating === 'number' && Number.isFinite(rating)
+        ? ` (${Number((used * rating).toPrecision(3))} of ${Number(rating.toPrecision(3))} ${unit})`
+        : '';
+      return `${label} ${(100 * used).toFixed(0)}%${absolute}`;
+    });
+  return shown.length ? `At the shown level: ${shown.join(' \u00b7 ')}.` : null;
+}
+
+export function CrossoverAdvanced({
+  spec,
+  resolved = NO_RESOLVED,
+  memberLabel,
+  presetFor,
+  gainUnit = 'db',
+  onGainUnit = () => {},
+  driveVoltageV = null,
+  impedanceFor,
+  usageFor,
+  onChange,
+}: {
   spec: CrossoverSpec;
   /** The values the latest shown result resolved, so auto can show a number. */
   resolved?: Record<string, ResolvedChannel>;
@@ -147,6 +299,18 @@ export function CrossoverAdvanced({ spec, resolved = NO_RESOLVED, memberLabel, p
   /** The driver picked for a member's channel, if any — read for the
    * high-pass minimum-crossover note. */
   presetFor?: (member: string) => DriverPreset | null;
+  /** Which unit the gain fields are read and typed in, and how to change it.
+   * One choice for the whole section: comparing members across three different
+   * units is not a comparison. */
+  gainUnit?: GainUnit;
+  onGainUnit?: (unit: GainUnit) => void;
+  /** The voltage the run was solved at, which is what a gain in volts or watts
+   * is measured from. */
+  driveVoltageV?: number | null;
+  /** The nominal impedance a member's watts are stated into. */
+  impedanceFor?: (member: string) => number | null;
+  /** How much of each rating a member already spends at the shown level. */
+  usageFor?: (member: string) => MaxOutputMemberTrace | null;
   onChange: (spec: CrossoverSpec) => void;
 }) {
   const referenceId = useId();
@@ -190,18 +354,34 @@ export function CrossoverAdvanced({ spec, resolved = NO_RESOLVED, memberLabel, p
           section={channel.lp}
           onChange={(lp) => onChange(withChannel(spec, member, { lp }))}
         />
-        <AutoManualField
-          label="Gain"
-          unit="dB"
-          precision={2}
-          step={0.1}
+        <GainField
           mode={channel.gain.mode}
-          value={channel.gain.mode === 'manual' ? channel.gain.db : state?.gainAutoDb ?? 0}
-          autoValue={state?.gainAutoDb ?? null}
+          db={
+            channel.gain.mode === 'manual'
+              ? channel.gain.db
+              : (channel.gain.mode === 'max' ? state?.gainMaxDb : state?.gainAutoDb) ?? 0
+          }
+          autoDb={state?.gainAutoDb ?? null}
+          maxDb={state?.gainMaxDb ?? null}
+          maxLimit={state?.maxLimit ?? null}
+          maxLimitHz={state?.maxLimitHz ?? null}
+          maxLimitAtBandEdge={state?.maxLimitAtBandEdge ?? false}
+          usage={usageFor?.(member) ?? null}
+          unit={gainUnit}
+          driveVoltageV={driveVoltageV ?? null}
+          impedanceOhm={impedanceFor?.(member) ?? null}
+          onUnit={onGainUnit}
           onMode={(mode) => onChange(withChannel(spec, member, {
             gain: mode === 'manual'
-              ? { mode: 'manual', db: channel.gain.mode === 'manual' ? channel.gain.db : state?.gainAutoDb ?? 0 }
-              : { mode: 'auto' },
+              // Manual starts from whatever is on screen, so taking the level
+              // over never begins by moving it.
+              ? {
+                mode: 'manual',
+                db: channel.gain.mode === 'manual'
+                  ? channel.gain.db
+                  : (channel.gain.mode === 'max' ? state?.gainMaxDb : state?.gainAutoDb) ?? 0,
+              }
+              : mode === 'max' ? { mode: 'max' } : { mode: 'auto' },
           }))}
           onValue={(db) => onChange(withChannel(spec, member, { gain: { mode: 'manual', db } }))}
         />

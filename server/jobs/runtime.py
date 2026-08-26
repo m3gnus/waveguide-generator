@@ -527,6 +527,26 @@ async def resolve_submission(
                 "eligibility_reasons": [],
                 "cost_evidence": plan_cost,
             }
+            # Say so. Swapping the backend under a user who asked for AUTO
+            # changes their wall clock *and* their numbers, and until this line
+            # existed the only way to find out was to call the plan endpoint or
+            # read the result metadata. A support question of the form "the
+            # solver got faster and the results moved" was unanswerable from a
+            # server log. This is engine selection, not per-frequency detail,
+            # so it is not gated behind WG.Solve.Verbose.
+            if not forced_axisym:
+                # Not a design key: a design-stated solver mode is stripped by
+                # migration 006_machine_solver_mode_not_portable, because
+                # whether the meridian runner can run at all is a property of
+                # the host. The override lives in solve options.
+                logger.info(
+                    "AUTO selected the axisymmetric meridian runner instead of "
+                    "the full-3D backend: this design is a closed body of "
+                    "revolution. It is solved by a different formulation than a "
+                    "full-3D solve of the same design, so results will not match "
+                    "one exactly. Choose the full-3D solver mode in the solve "
+                    "options to keep the full-3D backend.",
+                )
     if engine_name != "axisym":
         resolution = await asyncio.to_thread(resolve_symmetry, request.design)
         try:

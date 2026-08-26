@@ -23,21 +23,30 @@ import pytest
 from server.solver import bempp
 
 
-def test_the_sweep_is_serial_unless_asked(monkeypatch):
-    """The default has to be the cancellable one."""
+def test_the_sweep_defaults_to_the_engines_auto_mode(monkeypatch):
+    """The default is the fastest mode, not the serial one.
+
+    Serial was the default only because Stop could not cancel a frequency
+    already running in a worker process. ``server/solver/bempp_process.py`` and
+    ``server/platform/process_tree.py`` make Stop kill the whole solve tree, so
+    that reason is gone. Auto -- not a fixed count -- keeps short sweeps in one
+    process, because the engine splits only when every worker earns at least
+    ``_ENGINE_MIN_FREQUENCIES_PER_WORKER`` frequencies.
+    """
 
     monkeypatch.delenv("WG2_SOLVE_WORKERS", raising=False)
 
-    assert bempp._resolved_workers() == 1
-    assert bempp.DEFAULT_SOLVE_WORKERS == 1
-
-
-def test_zero_still_selects_the_engines_auto_mode(monkeypatch):
-    """Turning parallel sweeps back on must not require a code change."""
-
-    monkeypatch.setenv("WG2_SOLVE_WORKERS", "0")
-
     assert bempp._resolved_workers() == 0
+    assert bempp.DEFAULT_SOLVE_WORKERS == 0
+
+
+def test_one_still_pins_the_single_process_path(monkeypatch):
+    """The escape hatch matters: a split sweep can be slower on a
+    bandwidth-bound host, so pinning serial must stay a one-variable change."""
+
+    monkeypatch.setenv("WG2_SOLVE_WORKERS", "1")
+
+    assert bempp._resolved_workers() == 1
 
 
 @pytest.mark.parametrize("raw, expected", [("1", 1), ("2", 2), ("8", 8), (" 4 ", 4)])

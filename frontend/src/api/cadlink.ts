@@ -192,6 +192,10 @@ export interface CadMeshTriangleStats extends Record<string, unknown> {
 
 export interface CadViewportMeshMetadata {
   available: boolean;
+  /** The display tessellation is being built behind the published record. The
+   * solve mesh is complete and shows the same geometry until it arrives. */
+  pending?: boolean;
+  lookup_key?: string;
   content_sha256?: string;
   cache_key?: string;
   cache_hit?: boolean;

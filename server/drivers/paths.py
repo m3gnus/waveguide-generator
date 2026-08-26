@@ -18,6 +18,11 @@ from typing import Mapping
 DRIVER_LIBRARY_DIR_ENV = "WG2_DRIVER_LIBRARY_DIR"
 VENDOR_DIRECTORY = "HornLab"
 LIBRARY_SUBDIRECTORY = "driver-databases"
+#: Ships with the application, beside this module, so a fresh install can pick
+#: a real driver instead of meeting an empty search box. Read-only: the user's
+#: own folder is where their edits live, and a row they have entered themselves
+#: wins over the one shipped under the same name.
+BUNDLED_SUBDIRECTORY = "bundled"
 
 
 def resolve_driver_library_dir(
@@ -58,6 +63,18 @@ def resolve_driver_library_dir(
     return (root / VENDOR_DIRECTORY / LIBRARY_SUBDIRECTORY).expanduser().absolute()
 
 
+def bundled_library_dir() -> Path | None:
+    """The shipped driver library, or ``None`` when this tree has none.
+
+    Absent is not an error: a source checkout that has never run the export,
+    or a build that deliberately left it out, simply has one fewer place to
+    read drivers from.
+    """
+
+    folder = Path(__file__).resolve().parent / BUNDLED_SUBDIRECTORY
+    return folder if folder.is_dir() else None
+
+
 def ensure_driver_library_dir(
     override: str | os.PathLike[str] | None = None,
     *,
@@ -73,9 +90,11 @@ def ensure_driver_library_dir(
 
 
 __all__ = [
+    "BUNDLED_SUBDIRECTORY",
     "DRIVER_LIBRARY_DIR_ENV",
     "LIBRARY_SUBDIRECTORY",
     "VENDOR_DIRECTORY",
+    "bundled_library_dir",
     "ensure_driver_library_dir",
     "resolve_driver_library_dir",
 ]
