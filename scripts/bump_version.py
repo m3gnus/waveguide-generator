@@ -46,6 +46,10 @@ REPO_ROOT = app_root()
 VERSION_FILE = REPO_ROOT / "shared" / "version.json"
 PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
 PACKAGE_LOCK = REPO_ROOT / "frontend" / "package-lock.json"
+#: Regenerated from the live application rather than rewritten, because the
+#: snapshot has a "version" key on many schemas and only one of them is the
+#: product's. It is still a copy of the version, so it still drifts on a bump.
+OPENAPI_SNAPSHOT = REPO_ROOT / "docs" / "reference" / "openapi.v1.json"
 APP_PLIST = (
     REPO_ROOT
     / "launchers"
@@ -103,7 +107,23 @@ def declared_versions() -> dict[str, str]:
         'frontend/package-lock.json packages[""]': root_package.get("version"),
         "macOS app CFBundleShortVersionString": app.get("CFBundleShortVersionString"),
         "macOS app CFBundleVersion": app.get("CFBundleVersion"),
+        "docs/reference/openapi.v1.json": _openapi_version(),
     }
+
+
+def _openapi_version() -> str | None:
+    """The product version recorded in the committed OpenAPI snapshot.
+
+    Missing rather than fatal when the file is absent: the snapshot is a
+    documentation artifact, and a checkout without it should still be able to
+    move its version.
+    """
+
+    try:
+        info = _read_json(OPENAPI_SNAPSHOT).get("info")
+    except VersionError:
+        return None
+    return info.get("version") if isinstance(info, dict) else None
 
 
 def check() -> list[str]:
@@ -199,7 +219,12 @@ def main(argv: list[str] | None = None) -> int:
         was = current()
         write(new)
         print(f"{was} -> {new}")
-        print(f"next: git commit, then git tag v{new} && git push origin v{new}")
+        # The snapshot is generated from the live app, so this script cannot
+        # move it. Saying so here is the difference between noticing now and
+        # noticing when all three server jobs go red on the release commit,
+        # which is how 0.2.5 found out.
+        print("next: python scripts/gen_openapi.py --write")
+        print(f"      git commit, then git tag v{new} && git push origin v{new}")
         return 0
     except VersionError as exc:
         print(f"error: {exc}", file=sys.stderr)
