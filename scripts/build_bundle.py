@@ -253,8 +253,19 @@ def tree_digest(root: Path, *, exclude: frozenset[str] = frozenset()) -> str:
     """
 
     digest = hashlib.sha256()
+    # Sorted by the POSIX relative path, never by Path objects. Comparing
+    # PurePath instances uses the platform's casing rule, and on Windows that is
+    # case-insensitive -- so a layer holding LICENSE and README.md beside
+    # lowercase directories enumerates in a different order there than on macOS,
+    # and an order-dependent digest then differs on byte-identical content. It
+    # cost the 0.2.5 and 0.2.6 release builds, and it is invisible to a per-file
+    # comparison: the two layers have the same 308 paths with the same bytes,
+    # diverging at the very first entry (macOS "LICENSE", Windows "docs/...").
+    # scripts/fetch_spa.py's own tree_digest already keys on as_posix() for this
+    # reason.
     entries = sorted(
-        path for path in root.rglob("*") if path.name not in exclude and not path.is_dir()
+        (path for path in root.rglob("*") if path.name not in exclude and not path.is_dir()),
+        key=lambda path: path.relative_to(root).as_posix(),
     )
     for path in entries:
         relative = PurePosixPath(path.relative_to(root).as_posix())
