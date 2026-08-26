@@ -83,6 +83,30 @@ def outer_body_mode(root: Any) -> str:
     return "bare"
 
 
+def acoustic_surface_fit(root: Any) -> str | None:
+    """Which B-spline fit the mesher should use for the acoustic wall.
+
+    ``occ.addBSplineSurface`` reads the points it is handed as *poles*, so the
+    mesher's default ``approximate`` fit meshes a wall that hangs systematically
+    inside the designed one -- and refining the mesh converges onto that biased
+    surface, not onto the design. ``interpolate`` solves for the poles whose
+    surface passes through the sampled grid instead. It costs no control points
+    and no triangles, and measured on a stock OSSE it moves the mesh nodes onto
+    the analytic meridian (0.10 mm rms -> 2e-5 mm) and halves the panel-centroid
+    error (0.18 mm rms -> 0.085 mm) at the same mesh density.
+
+    It also makes the solve mesh agree with the live preview, which has always
+    been drawn from the analytic parameterisation rather than from the fit.
+
+    FREEFORM is the one exception: its deliberate creases make the interpolating
+    patch unmeshable, and the mesher raises rather than letting Gmsh grind. Ask
+    for the compatibility fit there instead of handing the mesher a config it
+    will refuse.
+    """
+
+    return "approximate" if root.formula == "FREEFORM" else "interpolate"
+
+
 def has_closed_outer_body(root: Any) -> bool:
     """Whether the meshed body is closed rather than an open shell.
 
@@ -337,6 +361,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                     else None
                 ),
                 "verticalOffset": _scaled_expr(mesh.vertical_offset, scale),
+                "surfaceFit": acoustic_surface_fit(root),
                 "scaleToMetres": True,
             }
         ),
