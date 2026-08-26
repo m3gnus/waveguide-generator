@@ -53,6 +53,7 @@ import uuid
 
 from server.platform.process_tree import (
     adopt_process_group,
+    kill_own_process_group,
     confine_to_windows_job,
     kill_process_group,
     resolve_process_group,
@@ -130,6 +131,13 @@ def _exit_when_parent_does() -> None:
     the main thread is doing in native code, and ``os._exit`` does not wait for
     it either. Returns without arming when there is no parent process, which is
     how the tests drive this loop in-process.
+
+    Leaving is no longer enough on POSIX. Now that the sweep may split, this
+    process has children of its own, and ``os._exit`` does not terminate them;
+    they survive as orphans burning every core the launcher's death was
+    supposed to free. ``kill_own_process_group`` closes that, and only for a
+    session this process actually claimed. Windows needs nothing here: the
+    parent's job object is ``KILL_ON_JOB_CLOSE``, so the tree dies with it.
     """
 
     parent = multiprocessing.parent_process()
@@ -140,6 +148,13 @@ def _exit_when_parent_does() -> None:
         from multiprocessing.connection import wait
 
         wait([parent.sentinel])
+        # Take the sweep's workers with us. ``os._exit`` runs no multiprocessing
+        # cleanup, so without this they outlive the launcher -- and since this
+        # process claimed its own session, the launcher's own group kill cannot
+        # reach them either. No-op unless this process really did adopt a
+        # session, so it cannot fire inside a test or on Windows, where the
+        # parent's job object already tears the tree down.
+        kill_own_process_group()
         os._exit(_PARENT_GONE_EXIT_CODE)
 
     threading.Thread(
