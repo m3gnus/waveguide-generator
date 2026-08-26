@@ -104,13 +104,18 @@ class CadReturnIngestRequest(BaseModel):
     # snapshot, which does not carry this alias).
     #
     # Chord deviation each panel may have from the true CAD surface, in mm.
-    # Omitted means the server default, IMPORTED_SURFACE_DEVIATION_MM = 0.3 mm.
+    # Omitted means the server default, IMPORTED_SURFACE_DEVIATION_MM = 0.2 mm.
     # This is the imported mesh's cost dial: it replaced a segments-per-2pi
     # control, which spent triangles in proportion to curvature radius and so
-    # over-refined small fillets while under-refining large sweeps -- at a
-    # measured cost in peak, p95 and rms deviation, not for free.
+    # over-refined small fillets while under-refining large sweeps. Measured,
+    # it buys 14-21% of the triangles at matched quality.
+    #
+    # The band stops at 0.35 rather than going higher because above it the
+    # request is coarser than the user's rigid target, ``Mesh.MeshSizeMax``
+    # sets the peak instead, and the field would stop controlling the quantity
+    # its name promises.
     surface_deviation_mm: float | None = Field(
-        default=None, alias="surfaceDeviationMm", ge=0.1, le=0.5
+        default=None, alias="surfaceDeviationMm", ge=0.1, le=0.35
     )
 
 
