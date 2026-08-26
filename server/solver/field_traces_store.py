@@ -229,6 +229,33 @@ def field_trace_retention_plan(
     return True, None, estimated, cap
 
 
+def describe_retention_refusal(
+    reason: str | None,
+    estimated_bytes: int | None,
+    cap_bytes: int,
+) -> str | None:
+    """A sentence a user can act on, or ``None`` when nothing was refused.
+
+    ``size_cap_exceeded`` is the one refusal a user can hit by doing something
+    ordinary -- adding frequencies, or refining the mesh -- and the machine
+    token alone gives them no way to tell how far over they are or what to
+    change. The threshold is a cliff: one step past it the field plane simply
+    stops being offered, with no other visible difference in the solve.
+    """
+
+    if reason is None:
+        return None
+    if reason != "size_cap_exceeded" or estimated_bytes is None:
+        return f"Field-plane surface traces were not retained ({reason})."
+    return (
+        "Field-plane surface traces were not retained: this sweep would hold "
+        f"{estimated_bytes / 1048576:.0f} MB of them, over the "
+        f"{cap_bytes / 1048576:.0f} MB cap. The solve itself is unaffected. "
+        "Reduce the frequency count or the mesh density, or raise "
+        f"{FIELD_TRACES_MAX_BYTES_ENV}."
+    )
+
+
 def build_field_trace_artifact(
     msh_text: str,
     channel_results: Sequence[tuple[str, Any]],
