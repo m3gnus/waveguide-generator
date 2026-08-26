@@ -519,6 +519,13 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .chart-stub button:disabled { opacity: .55; cursor: wait; }
 .chart-placeholder svg { position: absolute; inset: 4px 0; width: 100%; height: calc(100% - 8px); }
 .chart-placeholder path { fill: none; stroke: var(--acc); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+/* Hovering the value labels rules a straightedge across the plot, so a level
+   between gridlines can be sighted along -- flat directivity is the case this
+   exists for. The in-grid cross axisPointer draws the same line but brings the
+   tooltip with it, over the curve being read. */
+.chart-frame[data-ruler="on"] { cursor: row-resize; }
+.chart-ruler { position: absolute; z-index: 3; border-top: 1px solid color-mix(in srgb, var(--chart-fg) 46%, transparent); pointer-events: none; }
+.chart-ruler span { position: absolute; top: 0; left: 3px; padding: 0 3px; border-radius: var(--r3); background: var(--chart-bg); color: var(--chart-muted); font: var(--text-micro) var(--mono); white-space: nowrap; transform: translateY(-50%); }
 .canonical-plot { position: absolute; inset: 0; display: grid; min-width: 0; min-height: 0; place-items: stretch; overflow: hidden; background: var(--bg); }
 .canonical-plot-fallback { position: absolute; inset: 0; }
 .canonical-plot-image { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; }
