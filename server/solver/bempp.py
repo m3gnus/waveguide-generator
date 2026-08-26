@@ -139,14 +139,36 @@ def _version() -> str | None:
 #: * Every worker holds its own dense matrix. The figures above are from an
 #:   M1 Max, which has several times the memory bandwidth of a mainstream
 #:   desktop part; on a bandwidth-bound host a split sweep can be *busier
-#:   without being faster*. ``solve_workers`` and ``total_time_seconds`` are
-#:   reported in the response metadata so this is measurable per host rather
-#:   than assumed. Set ``WG2_SOLVE_WORKERS=1`` to pin the serial path.
+#:   without being faster*.
 #:
 #: Results themselves are not at stake: serial and parallel payloads for the
 #: same design and sweep were byte-identical in compact JSON at both 80 and 200
 #: frequencies, once per-frequency wall-clock timings were excluded.
-DEFAULT_SOLVE_WORKERS = 0
+#:
+#: **The default is serial again as of 0.2.5, and the second caveat is why.**
+#: Auto shipped as the default in 463cab0e and never once worked: the same batch
+#: merged it without the commit that lets the worker have children, so every
+#: sweep long enough to split died outright. Fixing that made the choice live for
+#: the first time, and it does not survive the look:
+#:
+#: * The 1.33x was measured on one M1 Max. Nobody has measured a bandwidth-bound
+#:   desktop part, which is what the user base runs.
+#: * ``solve_workers`` was supposed to make that measurable per host. It reported
+#:   the auto sentinel rather than a count, so it read ``0`` for every sweep on
+#:   the default path -- the instrument for the claim was broken for as long as
+#:   the claim existed. 0.2.5 is the first build where it reports a number.
+#: * Splitting is the only way to get sweep workers, and a launcher killed
+#:   without cleanup strands them on POSIX. Normal Stop and shutdown reap the
+#:   group (``bempp_process._terminate_sync``); a force-kill does not, and the
+#:   fix for that is not in this release. Serial has no workers to strand.
+#:
+#: So an unproven speedup is not worth a new failure mode for the users who would
+#: not benefit from it -- a sweep under 80 frequencies never splits, and would
+#: have taken the exposure without the upside. Auto stays one variable away:
+#: ``WG2_SOLVE_WORKERS=0`` selects it, ``2`` or more pins a count. With a working
+#: ``solve_workers`` a user can now A/B both on their own host, which is better
+#: evidence than shipping one arm of the experiment as the default.
+DEFAULT_SOLVE_WORKERS = 1
 
 
 def _resolved_workers() -> int:
@@ -175,6 +197,34 @@ def _resolved_workers() -> int:
 _ENGINE_MIN_FREQUENCIES_PER_WORKER = 40
 
 
+def _effective_workers(workers: int, num_frequencies: int) -> int | None:
+    """How many processes this sweep will really use, resolving auto.
+
+    ``0`` is the engine's *auto* sentinel, not a count. Reporting it verbatim
+    made the metadata useless for the one thing it exists for: whether splitting
+    a sweep pays is a property of the host's memory bandwidth, so a user has to
+    be able to read the worker count off their own result. Under the default it
+    always read ``0`` -- measured on a 10-core host running an 80-frequency
+    sweep that demonstrably span up two workers.
+
+    Returns ``None`` when auto cannot be resolved, so the caller can say
+    "unknown" rather than assert a number it did not get from the engine.
+    """
+
+    if workers != 0:
+        return workers
+    try:
+        package = importlib.import_module("hornlab_bempp_bem")
+        resolve_worker_count = getattr(package, "_resolve_worker_count")
+    except (ImportError, OSError, AttributeError):
+        return None
+    # Deliberately unguarded. A resolver whose signature has changed under the
+    # pin must fail loudly rather than be reported as "unknown": that is a pin
+    # mismatch, and test_an_importable_but_incompatible_engine_worker_resolver_
+    # fails_loudly pins the same contract for the split prediction.
+    return int(resolve_worker_count(0, num_frequencies))
+
+
 def _sweep_will_split(workers: int, num_frequencies: int) -> bool:
     """Will this sweep really run in more than one process?
 
@@ -187,12 +237,12 @@ def _sweep_will_split(workers: int, num_frequencies: int) -> bool:
 
     if workers != 0:
         return workers > 1
-    try:
-        package = importlib.import_module("hornlab_bempp_bem")
-        resolve_worker_count = getattr(package, "_resolve_worker_count")
-    except (ImportError, OSError, AttributeError):
+    resolved = _effective_workers(workers, num_frequencies)
+    if resolved is None:
+        # The engine could not be asked. Fall back to its documented rule rather
+        # than claiming a split that may not happen.
         return num_frequencies >= 2 * _ENGINE_MIN_FREQUENCIES_PER_WORKER
-    return resolve_worker_count(0, num_frequencies) > 1
+    return resolved > 1
 
 
 def _load_api() -> bool:
@@ -758,7 +808,10 @@ def solve_bempp_from_msh_text(
             # the sweep actually pays is a property of the host's memory
             # bandwidth, not of the code, so it has to be measurable from a
             # user's own result rather than inferred from our benchmark host.
-            "solve_workers": workers,
+            # The count actually used, with the auto sentinel resolved. Reporting
+            # the raw ``0`` here made a split sweep indistinguishable from a
+            # serial one in the very field that exists to tell them apart.
+            "solve_workers": _effective_workers(workers, context.num_frequencies),
             "solve_workers_requested": requested_workers,
             "sweep_split": _sweep_will_split(workers, context.num_frequencies),
             "native_timings": json_safe_native_value(dict(getattr(result, "timings", {}) or {})),
