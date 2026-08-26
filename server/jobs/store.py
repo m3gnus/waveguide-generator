@@ -19,8 +19,9 @@ import threading
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
-from server.platform.paths import data_paths
+from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
 from server.platform.sqlite import JournalModeStatus, configure_connection
+from shared.build_identity import build_label
 from server.solver.field_traces_store import (
     ArtifactMissing,
     FieldTraceArtifact,
@@ -205,6 +206,19 @@ _SCHEMA_STATEMENTS = (
     # paid to maintain it. Dropped rather than merely not created, so existing
     # installations stop paying too.
     "DROP INDEX IF EXISTS idx_job_events_id",
+    # Who last opened this database. One user account has one data directory,
+    # but it can have several install roots pointed at it, and a schema upgrade
+    # by any one of them locks all the older ones out permanently. Without a
+    # record of which install did it, the refusal below can only say "upgrade",
+    # which is useless advice to someone whose newer install is the problem and
+    # is sitting in another folder.
+    """CREATE TABLE IF NOT EXISTS wg_install_provenance (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      opened_at TEXT NOT NULL,
+      build TEXT NOT NULL,
+      app_root TEXT NOT NULL,
+      schema_version INTEGER NOT NULL
+    )""",
 )
 
 
@@ -258,6 +272,63 @@ class JobStore:
             **kwargs,
         )
 
+    def _schema_too_new_message(self, conn: Any, schema_version: int) -> str:
+        """Name the install that locked this database, not just the fact.
+
+        A schema upgrade is one-way: the newer build raises ``user_version`` in
+        place and every older install sharing the data directory then refuses to
+        start, permanently. Telling that user to "upgrade" is unhelpful when
+        they already have the upgrade -- in a different folder -- and cannot
+        tell which folder that is. Reading the provenance row costs one query on
+        a path that is about to fail anyway.
+        """
+
+        culprit = ""
+        try:
+            row = conn.execute(
+                "SELECT build, app_root, opened_at FROM wg_install_provenance "
+                "WHERE id = 1"
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is not None:
+            culprit = (
+                f" It was last opened by {row['build']} at {row['app_root']} "
+                f"({row['opened_at']})."
+            )
+        return (
+            f"Database {self.db_path} was created by a newer version of "
+            f"Waveguide Generator (schema {schema_version}); this version "
+            f"({build_label()}) supports schemas up to "
+            f"{SUPPORTED_SCHEMA_VERSION}.{culprit} Two installs sharing one data "
+            "directory cannot use different schema versions: run the newer "
+            "install, or give this one its own data directory by setting "
+            f"{DATA_DIR_ENV}."
+        )
+
+    def _record_provenance(self, conn: Any, schema_version: int) -> None:
+        """Record which install owns the current schema. Never fatal."""
+
+        try:
+            conn.execute(
+                "INSERT INTO wg_install_provenance "
+                "(id, opened_at, build, app_root, schema_version) "
+                "VALUES (1, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "opened_at = excluded.opened_at, build = excluded.build, "
+                "app_root = excluded.app_root, "
+                "schema_version = excluded.schema_version",
+                (
+                    _now_iso(),
+                    build_label(),
+                    str(app_root()),
+                    int(schema_version),
+                ),
+            )
+        except sqlite3.Error as exc:
+            # Provenance is diagnostic. Losing it must never stop a solve.
+            logger.warning("Could not record install provenance: %s", exc)
+
     def initialize(self) -> None:
         """Create the v1 migration targets plus additive v2 tables and identities."""
 
@@ -266,10 +337,7 @@ class JobStore:
             schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if schema_version > SUPPORTED_SCHEMA_VERSION:
                 raise RuntimeError(
-                    f"Database {self.db_path} was created by a newer version of "
-                    "Waveguide Generator "
-                    f"(schema {schema_version}); this version supports schemas up to "
-                    f"{SUPPORTED_SCHEMA_VERSION}. Upgrade Waveguide Generator to open it."
+                    self._schema_too_new_message(conn, schema_version)
                 )
             for statement in _SCHEMA_STATEMENTS:
                 conn.execute(statement)
@@ -291,6 +359,9 @@ class JobStore:
                 conn.execute("ALTER TABLE simulation_results ADD COLUMN results_sha256 TEXT")
             self._backfill_job_identity(conn)
             conn.execute(f"PRAGMA user_version = {SUPPORTED_SCHEMA_VERSION}")
+            # After the schema settles, so the row always describes the build
+            # that owns the version now stamped on the file.
+            self._record_provenance(conn, SUPPORTED_SCHEMA_VERSION)
 
     def backfill_job_identity(self) -> None:
         """Assign identities to unnumbered jobs deterministically and idempotently.

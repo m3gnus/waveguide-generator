@@ -51,6 +51,13 @@ import traceback
 from typing import Any, Callable, Mapping
 import uuid
 
+from server.platform.process_tree import (
+    adopt_process_group,
+    confine_to_windows_job,
+    kill_process_group,
+    resolve_process_group,
+)
+
 from .base import CancelCallback, ResultCallback, StageCallback
 from .context import SolverContext
 
@@ -141,8 +148,12 @@ def _exit_when_parent_does() -> None:
 
 
 def _bempp_worker_main(connection: Connection) -> None:
-    """Serve native solves serially in one warm process."""
+    """Serve native solves in one warm process, one job at a time."""
 
+    # Claim a POSIX session before any sweep worker is forked, so Stop can kill
+    # this process *and* its workers as one group. No-op on Windows, where the
+    # parent's job object contains the tree instead.
+    adopt_process_group()
     _exit_when_parent_does()
     from .bempp import solve_bempp_from_msh_text
 
@@ -183,7 +194,13 @@ def _bempp_worker_main(connection: Connection) -> None:
                     field_trace_cap_bytes=payload.get("field_trace_cap_bytes"),
                     stage_callback=stage,
                     result_callback=result,
-                    force_serial=True,
+                    # Not forced serial any more. The original reason was that
+                    # Stop could not cancel a frequency already inside a worker
+                    # process -- but that predates this module. Stop now kills
+                    # this child, and ``server/platform/process_tree.py`` makes
+                    # that reach the sweep workers too, so the sweep can use
+                    # every core without giving up a bounded cancel.
+                    force_serial=False,
                 )
             except BaseException as exc:  # noqa: BLE001 - report native failures
                 connection.send(
@@ -219,6 +236,9 @@ class BemppProcessHost:
         self._connection: Connection | None = None
         self._process: multiprocessing.Process | None = None
         self._active_job_id: str | None = None
+        #: Windows containment for the worker and its sweep workers; None
+        #: elsewhere, where the POSIX process group serves the same purpose.
+        self._job: Any = None
         self._warm_requested = False
         self._state_lock = threading.Lock()
 
@@ -237,6 +257,9 @@ class BemppProcessHost:
         )
         process.start()
         child.close()
+        # Contain the tree before any work reaches the child: a parallel sweep
+        # forks its own workers, and Stop must reclaim all of them.
+        self._job = confine_to_windows_job(process.pid) if process.pid else None
         self._connection = parent
         self._process = process
         return parent
@@ -244,6 +267,7 @@ class BemppProcessHost:
     def _terminate_sync(self) -> None:
         connection, self._connection = self._connection, None
         process, self._process = self._process, None
+        job, self._job = self._job, None
         self._warm_requested = False
         if connection is not None:
             try:
@@ -251,13 +275,28 @@ class BemppProcessHost:
             except OSError:
                 pass
         if process is None:
+            if job is not None:
+                job.terminate()
+                job.close()
             return
+        # Resolve the group while the child is still reapable: once it has been
+        # joined, ``getpgid`` can no longer find it and the workers would be
+        # unreachable.
+        group = resolve_process_group(process.pid) if job is None and process.pid else None
         if process.is_alive():
             process.terminate()
             process.join(_JOIN_SECONDS)
         if process.is_alive() and hasattr(process, "kill"):
             process.kill()
             process.join(_JOIN_SECONDS)
+        # The direct child is gone, but a parallel sweep's workers are not its
+        # children by then -- they are siblings under the same job/group.
+        # Reaching them is what keeps Stop honest once workers > 1.
+        if job is not None:
+            job.terminate()
+            job.close()
+        else:
+            kill_process_group(group)
         if not process.is_alive():
             process.join()
 
