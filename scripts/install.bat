@@ -191,6 +191,19 @@ goto updates_done
 echo   Code already updated; continuing with the updated installer.
 :updates_done
 
+rem Record the commit now that the code has settled, whether or not the update
+rem moved it. Without this the app can only report its last release tag, which
+rem hundreds of builds share. Guarded by `if exist` rather than listed as a
+rem required file: verification runs before the update, so a checkout older
+rem than this script must still be allowed to fast-forward to it.
+echo.
+echo Recording the build...
+if exist "%WG_ROOT%\scripts\write_build_stamp.py" (
+  "%BOOTSTRAP_PYTHON%" "%WG_ROOT%\scripts\write_build_stamp.py" --root "%WG_ROOT%"
+) else (
+  echo   Skipped: this checkout predates build stamping.
+)
+
 rem The interface comes before the environment on purpose: fetch_spa.py is
 rem standard library only, so it runs on the interpreter found above and a
 rem missing or corrupted release asset fails in seconds instead of after a
