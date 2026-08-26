@@ -26,7 +26,7 @@ if str(_IMPORT_ROOT) not in sys.path:
 
 import uvicorn  # noqa: E402 - the checkout root must be importable first
 
-from server.app import VERSION, create_app  # noqa: E402
+from server.app import BUILD, create_app  # noqa: E402
 from server.platform.console import harden_console  # noqa: E402
 from server.platform.instance import (  # noqa: E402
     InstanceAlreadyRunning,
@@ -382,9 +382,11 @@ def main(argv: list[str] | None = None) -> int:
                 daemon=True,
             ).start()
 
+        # The build label, not the bare version: a user quoting this line back
+        # to us must be quoting a specific commit (``shared/build_identity.py``).
         logging.getLogger("wg.launch").info(
-            "Starting Waveguide Generator v%s at http://%s:%d/ (pid %d)",
-            VERSION,
+            "Starting Waveguide Generator %s at http://%s:%d/ (pid %d)",
+            BUILD,
             HOST,
             port,
             os.getpid(),
