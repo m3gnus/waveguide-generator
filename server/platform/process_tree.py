@@ -42,6 +42,19 @@ _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 
 
+#: The pid that successfully called :func:`adopt_process_group`, if any.
+#:
+#: :func:`kill_own_process_group` refuses to signal a session this process did
+#: not create, and "did we create it?" cannot be re-derived after the fact:
+#: ``getpgid(0) == getpid()`` is also true of any job-control group leader --
+#: which is what ``pytest`` is when it is run from a terminal -- so a check
+#: like that would let a test run SIGKILL the developer's shell job. Recording
+#: the adoption is the only guard that distinguishes the session we made from
+#: one we merely lead. The pid is stored rather than a bool so a fork cannot
+#: inherit the flag and act on its parent's session.
+_adopted_session_pid: int | None = None
+
+
 def adopt_process_group() -> None:
     """Claim a new POSIX session so this process and its children are one group.
 
@@ -49,10 +62,13 @@ def adopt_process_group() -> None:
     object created by the parent provides containment instead.
     """
 
+    global _adopted_session_pid
+
     if os.name != "posix":
         return
     with contextlib.suppress(OSError):
         os.setsid()
+        _adopted_session_pid = os.getpid()
 
 
 class WindowsJob:
@@ -219,10 +235,44 @@ def kill_process_group(group: int | None) -> bool:
     return True
 
 
+def kill_own_process_group() -> bool:
+    """SIGKILL the session this process claimed in :func:`adopt_process_group`.
+
+    For the one case the rest of this module cannot reach: the *parent* is
+    force-killed. The child notices through its parent-sentinel watchdog and
+    leaves via ``os._exit``, which runs no ``multiprocessing`` cleanup -- so a
+    parallel sweep's workers are not terminated by that exit. They used to be
+    reachable anyway, because the child shared the launcher's process group;
+    ``adopt_process_group`` deliberately took it out of that group, so nothing
+    else can reap them either. Measured on macOS 15 before this existed: three
+    sweep workers reparented to init and kept burning ~9% CPU each, their
+    counters still climbing five seconds after the launcher died.
+
+    Only ever signals a session this process created. ``killpg`` includes the
+    caller, so this does not return on success -- callers keep their ``os._exit``
+    as the path taken when containment does not apply (Windows, or a ``setsid``
+    that failed). Nothing observes the exit code in the case this fires: the
+    only process that could read it is the parent, whose death is the trigger.
+    """
+
+    if os.name != "posix" or _adopted_session_pid != os.getpid():
+        return False
+    try:
+        if os.getsid(0) != os.getpid():
+            # We recorded an adoption but are not the session leader any more,
+            # so the group is no longer ours to kill.
+            return False
+        os.killpg(0, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+    return True
+
+
 __all__ = [
     "WindowsJob",
     "adopt_process_group",
     "confine_to_windows_job",
+    "kill_own_process_group",
     "kill_process_group",
     "resolve_process_group",
 ]
