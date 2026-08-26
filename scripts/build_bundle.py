@@ -251,9 +251,61 @@ def tree_digest(root: Path, *, exclude: frozenset[str] = frozenset()) -> str:
         if path.is_symlink():
             digest.update(f"l\x00{relative}\x00{os.readlink(path)}\x00".encode())
             continue
-        executable = "x" if path.stat().st_mode & 0o111 else "-"
-        digest.update(f"f{executable}\x00{relative}\x00{file_sha256(path)}\x00".encode())
+        digest.update(
+            f"f{_executable_flag(path)}\x00{relative}\x00{file_sha256(path)}\x00".encode()
+        )
     return digest.hexdigest()
+
+
+def _executable_flag(path: Path) -> str:
+    """The executable bit, in a form both build platforms can agree on.
+
+    NTFS has no POSIX executable bit, so CPython fabricates one from the file
+    extension: ``.bat``, ``.cmd``, ``.exe`` and ``.com`` read back with
+    ``S_IEXEC`` set on Windows and as plain ``0o644`` everywhere else. Reading
+    the bit back off the filesystem therefore makes this digest depend on which
+    host built the layer -- the precise thing it exists to rule out. It cost the
+    0.2.5 release build: three ``.bat`` files in the app layer
+    (``launchers/windows/launch-wg.bat``, ``scripts/install.bat``,
+    ``scripts/uninstall.bat``) were enough to make the Windows and macOS layers
+    disagree, with byte-identical contents on both.
+
+    The app layer has no executable files. Every entry is written by
+    ``copy_tracked_app_files`` with ``write_bytes``, which does not carry Git's
+    mode, so all 288 tracked files land at ``0o644``; the SPA and the Windows
+    bootstrap are written the same way. ``assert_app_layer_is_not_executable``
+    holds the builder to that on the platform that can observe it, so this is a
+    recorded invariant rather than an assumption.
+    """
+
+    if os.name == "nt":
+        return "-"
+    return "x" if path.stat().st_mode & 0o111 else "-"
+
+
+def assert_app_layer_is_not_executable(app_root: Path) -> None:
+    """Fail the build if anything in the app layer carries an executable bit.
+
+    :func:`_executable_flag` digests the layer as non-executable on every
+    platform. That is true today and cheap to keep true, but if a file ever
+    arrives with ``+x`` on POSIX the digest would quietly stop describing it --
+    and the cross-platform gate would not catch it, because both sides would
+    agree on the same wrong answer. Windows cannot check this; POSIX can, and
+    the release builds the reference layer on macOS.
+    """
+
+    if os.name == "nt":
+        return
+    executable = sorted(
+        path.relative_to(app_root).as_posix()
+        for path in app_root.rglob("*")
+        if not path.is_dir() and not path.is_symlink() and path.stat().st_mode & 0o111
+    )
+    if executable:
+        raise BundleError(
+            "The app layer is digested as non-executable on every platform, but "
+            "these entries carry an executable bit: " + ", ".join(executable)
+        )
 
 
 def write_app_manifest(
@@ -263,6 +315,7 @@ def write_app_manifest(
     commit: str,
     runtime_id: str,
 ) -> dict[str, object]:
+    assert_app_layer_is_not_executable(app_root)
     payload: dict[str, object] = {
         "schemaVersion": 1,
         "version": version,
