@@ -216,9 +216,16 @@ def resolve_process_group(pid: int) -> int | None:
         group = os.getpgid(int(pid))
     except (ProcessLookupError, PermissionError, OSError):
         return None
-    if group == os.getpgid(0):
-        # The child never got its own session, so its "group" is ours; killing
-        # it would take the server down too.
+    if group != int(pid):
+        # Not a group this child leads, so not one adopt_process_group made.
+        # Asking "is it ours?" instead of "is it not the server's?" is the same
+        # correction applied in kill_own_process_group: a negative comparison
+        # only rules out the failure it names. It rules out the child never
+        # having got its own session -- where the "group" is the server's and
+        # killing it would take the server down -- but it says nothing about a
+        # child sitting in some third group, which it would happily kill.
+        # Leading the group is the invariant setsid actually establishes, so
+        # test for that.
         return None
     return group
 

@@ -124,3 +124,64 @@ def test_killing_the_claimed_session_reaps_the_sweep_workers(
         if child.is_alive():
             child.kill()
             child.join(_TIMEOUT)
+
+
+def _beat_leading_its_own_group(beat_path: str) -> None:
+    """A worker that leads a group, so someone else can join it."""
+
+    os.setpgid(0, 0)
+    _beat(beat_path)
+
+
+def _third_group_child(ready_path: str) -> None:
+    """A child in a group it does not lead, and that is not the parent's."""
+
+    worker = multiprocessing.get_context("spawn").Process(
+        target=_beat_leading_its_own_group, args=(ready_path,)
+    )
+    worker.start()
+    # Only joinable once the worker has actually created the group.
+    deadline = time.monotonic() + _TIMEOUT
+    while time.monotonic() < deadline:
+        try:
+            if os.getpgid(worker.pid) == worker.pid:
+                break
+        except ProcessLookupError:
+            pass
+        time.sleep(0.01)
+    os.setpgid(0, worker.pid)   # leads neither its own group nor the parent's
+    pathlib.Path(ready_path + ".ready").write_text(str(worker.pid))
+    time.sleep(_SAFETY)
+
+
+def test_resolve_refuses_a_group_the_child_does_not_lead(tmp_path: pathlib.Path) -> None:
+    """The case a "not the server's group" test cannot see.
+
+    A child in some third group is neither the server's group nor one that
+    adopt_process_group created, but comparing against the server's group calls
+    it resolvable and hands it to killpg. Leading the group is the invariant
+    setsid establishes, so that is what gets tested.
+    """
+
+    beat = tmp_path / "beat"
+    child = multiprocessing.get_context("spawn").Process(
+        target=_third_group_child, args=(str(beat),)
+    )
+    child.start()
+    try:
+        deadline = time.monotonic() + _TIMEOUT
+        while time.monotonic() < deadline and not (tmp_path / "beat.ready").exists():
+            time.sleep(0.02)
+        assert (tmp_path / "beat.ready").exists(), "child never reached its third group"
+
+        assert os.getpgid(child.pid) != child.pid, "child should not lead its group"
+        assert os.getpgid(child.pid) != os.getpgid(0), "and it is not the parent's either"
+        assert process_tree.resolve_process_group(child.pid) is None
+    finally:
+        worker_pid = int((tmp_path / "beat.ready").read_text())
+        for pid in (worker_pid, child.pid):
+            try:
+                os.kill(pid, 9)
+            except ProcessLookupError:
+                pass
+        child.join(_TIMEOUT)
