@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import multiprocessing
 import os
 import signal
 from typing import Any
@@ -65,6 +66,17 @@ def adopt_process_group() -> None:
     global _adopted_session_pid
 
     if os.name != "posix":
+        return
+    if multiprocessing.parent_process() is None:
+        # Not a spawned child, so not the process this containment is for.
+        # ``_bempp_worker_main`` is driven in-process by the loop tests, and
+        # under a test runner that is not already a session leader the setsid
+        # below SUCCEEDS -- recording the runner's own pid as an adopted
+        # session and handing kill_own_process_group a live target. The runner
+        # then kills itself mid-suite: measured as pytest exiting 137 with no
+        # test named, and invisible to any runner that leads its own session.
+        # ``_exit_when_parent_does`` already declines on exactly this test,
+        # two lines below the call to this function; it is the same question.
         return
     with contextlib.suppress(OSError):
         os.setsid()
