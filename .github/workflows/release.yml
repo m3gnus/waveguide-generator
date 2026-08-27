@@ -453,3 +453,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "$RELEASE_TAG" --draft=false
+
+      - name: The published tag must be the annotated one, on the release commit
+        # Publishing a draft whose tag does not exist makes GitHub create a
+        # LIGHTWEIGHT tag at target_commitish - the default branch's HEAD, not
+        # necessarily this release's commit. So a skipped or failed tag step does
+        # not fail the release; it silently ships a tag of the wrong kind and
+        # possibly of the wrong commit. v0.2.3 in this repository is lightweight,
+        # which is how that path is known to be reachable.
+        #
+        # Cheap to assert, and it is the last thing that can still be wrong once
+        # the assets are known good.
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          kind="$(git cat-file -t "$(git rev-parse "$RELEASE_TAG")")"
+          if [ "$kind" != "tag" ]; then
+            echo "$RELEASE_TAG is a $kind, not an annotated tag object." >&2
+            exit 1
+          fi
+          tagged="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          if [ "$tagged" != "$RELEASE_SHA" ]; then
+            echo "$RELEASE_TAG points at $tagged, not the release commit $RELEASE_SHA." >&2
+            exit 1
+          fi
+          echo "$RELEASE_TAG is annotated and points at $RELEASE_SHA."

@@ -55,3 +55,24 @@ def test_release_instructions_are_two_phases_that_tag_last() -> None:
     assert bump < publish
     assert "nothing is tagged\nand no version is spent" in release
     assert "then** creates the annotated\ntag" in release
+
+
+def test_the_published_tag_is_asserted_annotated_and_on_the_release_commit() -> None:
+    """The hole left by creating the tag ourselves.
+
+    Publishing a draft whose tag does not exist makes GitHub create a LIGHTWEIGHT
+    tag at ``target_commitish`` -- the default branch's HEAD, not necessarily the
+    release commit. So a skipped or failed tag step would not fail the release; it
+    would silently ship a tag of the wrong kind and possibly of the wrong commit.
+    ``v0.2.3`` in this repository is lightweight, which is how that path is known
+    to be reachable rather than merely conceivable.
+    """
+
+    create_tag = WORKFLOW.index("Create the annotated tag now that every asset exists")
+    publish = WORKFLOW.index("Publish only after every upload succeeded")
+    assert_tag = WORKFLOW.index("The published tag must be the annotated one")
+    assert create_tag < publish < assert_tag
+
+    assert 'kind="$(git cat-file -t "$(git rev-parse "$RELEASE_TAG")")"' in WORKFLOW
+    assert 'if [ "$kind" != "tag" ]; then' in WORKFLOW
+    assert 'if [ "$tagged" != "$RELEASE_SHA" ]; then' in WORKFLOW
