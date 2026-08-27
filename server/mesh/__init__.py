@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     from .builder import build_solver_mesh, clear_solver_mesh_cache, solver_mesh_cache_info
     from .gmsh_worker import run_on_gmsh_worker, shutdown_gmsh_worker
-    from .integrity import mesh_integrity_report
+    from .integrity import mesh_element_quality_report, mesh_integrity_report
 
 
 _EXPORTS = {
@@ -26,6 +26,7 @@ _EXPORTS = {
     "solver_mesh_cache_info": ".builder",
     "run_on_gmsh_worker": ".gmsh_worker",
     "shutdown_gmsh_worker": ".gmsh_worker",
+    "mesh_element_quality_report": ".integrity",
     "mesh_integrity_report": ".integrity",
 }
 
@@ -48,6 +49,7 @@ def __dir__() -> list[str]:
 __all__ = [
     "build_solver_mesh",
     "clear_solver_mesh_cache",
+    "mesh_element_quality_report",
     "mesh_integrity_report",
     "run_on_gmsh_worker",
     "shutdown_gmsh_worker",
