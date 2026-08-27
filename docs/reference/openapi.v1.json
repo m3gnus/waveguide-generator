@@ -7124,7 +7124,7 @@
   },
   "info": {
     "title": "Waveguide Generator",
-    "version": "0.2.7"
+    "version": "0.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
