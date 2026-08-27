@@ -641,35 +641,48 @@ def substitute_info_plist(template: Path, output: Path, version: str) -> None:
         plistlib.dump(payload, handle, sort_keys=False)
 
 
-def launcher_stub() -> str:
-    return """#!/bin/bash
-set -u
-
-# LaunchServices can start a script bundle through a translated shell. Re-exec
-# natively so the bundled arm64 interpreter loads only arm64 extensions.
-if [[ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" == "1" ]]; then
-    exec arch -arm64 "$0" "$@"
-fi
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESOURCES="$(cd "$SCRIPT_DIR/../Resources" && pwd)"
-export WG2_BUNDLE=1
-export WG2_APP_ROOT="$RESOURCES/app"
-
-# The bundle is code-signed and must stay byte-identical after it runs, so
-# bytecode and numba kernel caches go to the user's cache directory instead of
-# beside the sources they belong to.
-CACHE_ROOT="$HOME/Library/Caches/WaveguideGenerator"
-export PYTHONPYCACHEPREFIX="$CACHE_ROOT/pycache"
-export NUMBA_CACHE_DIR="$CACHE_ROOT/numba"
-
-cd "$WG2_APP_ROOT"
-exec "../runtime/bin/python3.13" -m launchers.desktop "$@"
-"""
+MACOS_LAUNCHER_SOURCE = "launchers/macos/launcher.c"
 
 
-def write_launcher_stub(path: Path) -> None:
-    path.write_text(launcher_stub(), encoding="utf-8", newline="\n")
+def write_launcher_stub(path: Path, *, repo_root: Path, runner: RunCallable = subprocess.run) -> None:
+    """Compile the bundle's main executable. It must be Mach-O, not a script.
+
+    A shell-script main executable makes the bundle a "script bundle" -- codesign
+    reports ``Format=app bundle with generic`` -- and Gatekeeper does not give
+    one the ordinary unsigned-app treatment. Measured against a locally built
+    .dmg with a quarantine attribute applied: launched directly it was SIGKILLed
+    (exit 137), through ``open`` it was blocked with no process, and it ran only
+    once the quarantine was cleared. The app was therefore unopenable exactly as
+    downloaded, which is the only way a user ever receives it.
+
+    Failing loudly when no compiler is present is deliberate. Falling back to the
+    script would produce a bundle that builds, signs, uploads and installs, and
+    then cannot be opened -- the failure this exists to remove.
+    """
+
+    source = repo_root / MACOS_LAUNCHER_SOURCE
+    if not source.is_file():
+        raise BundleError(f"The macOS launcher source is missing: {source}")
+    result = runner(
+        [
+            "cc",
+            "-arch",
+            "arm64",
+            "-O2",
+            "-Wall",
+            "-Werror",
+            "-o",
+            str(path),
+            str(source),
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        stderr = os.fsdecode(result.stderr or b"").strip()
+        raise BundleError(
+            f"Could not compile the macOS launcher: {stderr or f'cc exit {result.returncode}'}"
+        )
     path.chmod(0o755)
 
 
@@ -1482,7 +1495,11 @@ class BundleBuilder:
         resources = contents / "Resources"
         shutil.copytree(runtime_root, resources / "runtime", symlinks=True)
         shutil.copytree(app_root, resources / "app", symlinks=True)
-        write_launcher_stub(contents / "MacOS" / "Waveguide Generator")
+        write_launcher_stub(
+            contents / "MacOS" / "Waveguide Generator",
+            repo_root=self.repo_root,
+            runner=self.runner,
+        )
         self.run_command(["codesign", "--force", "--deep", "--sign", "-", str(destination)])
 
     def assemble_windows_bundle(
