@@ -5,11 +5,16 @@ name: CI
 # gates link to. What runs here is everything that is deterministic on a hosted
 # runner -- suites, build, and the drift gates that keep generated files honest.
 
+# `next` is the standing integration branch: work lands there and `main` is
+# merged from it only at a release, so every commit on `main` is a shipped
+# version. `next` therefore needs the same gates as `main` -- without this it
+# would accumulate a whole release cycle of unverified commits and only be
+# checked at merge time, which is strictly worse than gating each change.
 on:
   push:
-    branches: [v2, main]
+    branches: [v2, main, next]
   pull_request:
-    branches: [v2, main]
+    branches: [v2, main, next]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -69,8 +74,18 @@ jobs:
       # PR #29 shipped a capability's consumer without its enabler and broke
       # every default solve of 80 or more frequencies on main. Review and CI
       # both passed, because the test that catches it was on the unmerged tail.
+      # Work merges into `next` first, so a short merge appears there a whole
+      # release cycle before it would appear on `main`. Checking `main` alone
+      # would leave the guard blind for exactly that window -- which is the
+      # window PR #29 broke. Falls back to `main` before `next` exists.
       - name: Check for partially merged branches
-        run: python scripts/check_partial_merges.py
+        run: |
+          upstream=origin/main
+          if git rev-parse --verify --quiet origin/next >/dev/null; then
+            upstream=origin/next
+          fi
+          echo "checking against $upstream"
+          python scripts/check_partial_merges.py --upstream "$upstream"
 
   drift:
     name: Generated-file drift
