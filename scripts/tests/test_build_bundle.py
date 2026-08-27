@@ -36,6 +36,7 @@ from scripts.build_bundle import (
     WINDOWS_PTH_NAME,
     WINDOWS_PRUNE_RELATIVE_PATHS,
     WINDOWS_PYVENV_NAME,
+    WINDOWS_README_NAME,
     WINDOWS_RUNTIME_PTH_NAME,
     build,
     copy_tracked_app_files,
@@ -717,6 +718,63 @@ def test_windows_distribution_zip_retains_the_enclosing_folder(tmp_path: Path) -
         ]
 
 
+def test_windows_instructions_sit_outside_the_folder_so_they_precede_extraction(
+    tmp_path: Path,
+) -> None:
+    """Both Windows walls are hit before the app is ever launched.
+
+    Explorer copies the download mark onto everything it extracts, so an
+    extracted launcher is refused by SmartScreen behind a dialog whose only
+    visible button is "Don't run"; and an install root over ~127 characters
+    fails partway through extraction. Instructions inside the folder would be
+    read only after both have already happened, so they go at the archive root.
+    """
+
+    source = tmp_path / "Waveguide Generator"
+    (source / "app").mkdir(parents=True)
+    (source / "Waveguide Generator.exe").write_bytes(b"launcher")
+    archive = tmp_path / "Waveguide Generator-1.2.3-windows-x86_64.zip"
+    readme = BundleBuilder(tmp_path).windows_readme()
+
+    deterministic_zip(
+        source,
+        archive,
+        archive_root=source.name,
+        extra_root_files={WINDOWS_README_NAME: readme},
+    )
+
+    with zipfile.ZipFile(archive) as handle:
+        assert WINDOWS_README_NAME in handle.namelist()
+        raw = handle.read(WINDOWS_README_NAME)
+
+    # Notepad is the default handler for .txt and shows a lone LF as one line.
+    assert raw.count(b"\r\n") == raw.count(b"\n")
+    text = raw.decode("utf-8")
+    # Unblock is the whole point: it is done on the .zip, before extracting, and
+    # it stops the mark reaching the launcher at all. Naming only the recovery
+    # path ("More info" > "Run anyway") would leave the dead end in place.
+    assert "Unblock" in text
+    assert "Windows protected your PC" in text
+    # The length limit has to arrive with a destination that satisfies it.
+    assert "C:\\wg" in text
+
+
+def test_windows_readme_is_deterministic_like_the_rest_of_the_archive(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "Waveguide Generator"
+    source.mkdir()
+    (source / "Waveguide Generator.exe").write_bytes(b"launcher")
+    extras = {WINDOWS_README_NAME: BundleBuilder(tmp_path).windows_readme()}
+
+    first = tmp_path / "first.zip"
+    second = tmp_path / "second.zip"
+    for output in (first, second):
+        deterministic_zip(source, output, archive_root=source.name, extra_root_files=extras)
+
+    assert first.read_bytes() == second.read_bytes()
+
+
 def test_checksum_sidecar_names_the_final_dotted_public_asset(tmp_path: Path) -> None:
     asset = tmp_path / "Waveguide.Generator-1.2.3-macos-arm64.dmg"
     asset.write_bytes(b"installer")
@@ -752,6 +810,25 @@ def test_release_workflow_publishes_one_complete_draft_inventory() -> None:
     assert "Validated seven release asset pairs." in workflow
     assert "Waveguide.Generator-*-macos-arm64.dmg" in workflow
     assert "Waveguide.Generator-*-windows-x86_64.zip" in workflow
+
+
+def test_release_notes_give_both_platforms_their_first_launch_wall() -> None:
+    """The notes are the only instructions someone sees before downloading.
+
+    macOS has carried its Gatekeeper paragraph since the first bundle; Windows
+    shipped with only the path-length note, so the SmartScreen refusal - the
+    same shape of dead end, and the one that stops a launch outright - reached
+    users undocumented.
+    """
+
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "xattr -dr com.apple.quarantine" in workflow
+    assert "Unblock" in workflow
+    assert "Windows protected your PC" in workflow
+    assert "C:\\wg" in workflow
 
 
 @pytest.mark.parametrize(("runtime_only", "app_only"), ((True, False), (False, True)))
