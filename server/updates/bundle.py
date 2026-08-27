@@ -56,6 +56,33 @@ VolumeProbe = Callable[[Path], object]
 FreeSpaceProbe = Callable[[Path], int]
 
 
+def _valid_proof(
+    digest: object,
+    checksum_url: object,
+    *,
+    version: str,
+    layer: object,
+    safe_name: str,
+) -> bool:
+    """An asset must carry exactly one usable proof of its contents.
+
+    GitHub serves a ``digest`` on every release asset, which is preferred: it
+    arrives in the same authenticated response as the download URL, so there is
+    no separate file to be stale or missing. The ``.sha256`` sidecar remains
+    accepted for releases published before that, so a client installed from one
+    of them can still move off it.
+    """
+
+    if isinstance(digest, str) and digest:
+        lowered = digest.lower()
+        return len(lowered) == 64 and all(c in "0123456789abcdef" for c in lowered)
+    return isinstance(checksum_url, str) and trusted_asset_url(
+        checksum_url,
+        tag=f"v{version}" if layer == "app" else None,
+        asset_name=safe_name + ".sha256",
+    )
+
+
 class BundleInstallError(RuntimeError):
     """A bundle update could not be downloaded or staged safely."""
 
@@ -700,7 +727,7 @@ class BundleUpdateInstaller:
                     str(asset["layer"]),
                     str(asset["name"]),
                     str(asset["url"]),
-                    str(asset["sha256Url"]),
+                    str(asset.get("sha256") or asset.get("sha256Url")),
                     int(asset["bytes"]),
                 )
                 for asset in assets
@@ -747,6 +774,7 @@ class BundleUpdateInstaller:
             name = asset.get("name")
             url = asset.get("url")
             checksum_url = asset.get("sha256Url")
+            digest = asset.get("sha256")
             size = asset.get("bytes")
             layer = asset.get("layer")
             try:
@@ -763,11 +791,12 @@ class BundleUpdateInstaller:
                     tag=f"v{version}" if layer == "app" else None,
                     asset_name=safe_name,
                 )
-                or not isinstance(checksum_url, str)
-                or not trusted_asset_url(
+                or not _valid_proof(
+                    digest,
                     checksum_url,
-                    tag=f"v{version}" if layer == "app" else None,
-                    asset_name=safe_name + ".sha256",
+                    version=version,
+                    layer=layer,
+                    safe_name=safe_name,
                 )
                 or isinstance(size, bool)
                 or not isinstance(size, int)
@@ -778,15 +807,17 @@ class BundleUpdateInstaller:
             ):
                 raise BundleInstallError("The bundle update action contains an invalid asset.")
             layers.add(str(layer))
-            normalized.append(
-                {
-                    "name": name,
-                    "url": url,
-                    "sha256Url": checksum_url,
-                    "bytes": size,
-                    "layer": layer,
-                }
-            )
+            entry: dict[str, object] = {
+                "name": name,
+                "url": url,
+                "bytes": size,
+                "layer": layer,
+            }
+            if isinstance(digest, str) and digest:
+                entry["sha256"] = digest.lower()
+            else:
+                entry["sha256Url"] = checksum_url
+            normalized.append(entry)
         if "app" not in layers:
             raise BundleInstallError("The bundle update action contains no app layer.")
         return tuple(normalized)
@@ -821,11 +852,21 @@ class BundleUpdateInstaller:
             self._set_state(installState="verifying")
             for asset in assets:
                 archive = archives[str(asset["layer"])]
-                checksum = self.small_fetcher(str(asset["sha256Url"]), MAX_CHECKSUM_BYTES)
-                try:
-                    wanted = expected_digest(checksum.decode("utf-8", "replace"), archive.name)
-                except SpaError as exc:
-                    raise BundleInstallError(str(exc)) from exc
+                if asset.get("sha256"):
+                    # GitHub's own digest for the asset, delivered in the same
+                    # authenticated release response as the download URL. There is
+                    # no second file to fetch, and therefore none to be stale.
+                    wanted = str(asset["sha256"]).lower()
+                else:
+                    checksum = self.small_fetcher(
+                        str(asset["sha256Url"]), MAX_CHECKSUM_BYTES
+                    )
+                    try:
+                        wanted = expected_digest(
+                            checksum.decode("utf-8", "replace"), archive.name
+                        )
+                    except SpaError as exc:
+                        raise BundleInstallError(str(exc)) from exc
                 actual = file_digest(archive)
                 if actual != wanted:
                     archive.unlink(missing_ok=True)
