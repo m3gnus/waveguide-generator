@@ -658,6 +658,21 @@ def _finite_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+#: How far past the elements-per-wavelength limit normalised shape -- the
+#: directivity pattern and the response's shape -- stays trustworthy.
+#:
+#: The elements-per-wavelength rule is an *amplitude* criterion, and reporting
+#: it as though every metric died at the same frequency was wrong: two mesh
+#: ladders in this workspace both put shape convergence far above it. An OSSE
+#: freestanding ladder held a 2611 Hz-limit mesh within 0.57 dB of the next
+#: level's normalised polar shape all the way to 16 kHz (6.1x its limit), with
+#: -6 dB beamwidth inside 2.0 deg; the CAFMEH-P3 ladder recovered a real
+#: interference dip's frequency to 1.8% from a mesh solved 1.37x beyond its own
+#: limit, while that same solve got the dip's *depth* wrong by 12 dB. 3x is
+#: deliberately the conservative end of what both measured.
+_SHAPE_LIMIT_MULTIPLIER = 3.0
+
+
 def _mesh_resolution_warning(
     *,
     suspect_frequencies: list[float],
@@ -666,7 +681,15 @@ def _mesh_resolution_warning(
     max_edge_m: float | None,
     min_elements_per_wavelength: float | None,
 ) -> str:
-    """One aggregated line naming the mesh's validity ceiling and the band above it."""
+    """Name the mesh's two ceilings and which of them this sweep crosses.
+
+    A single ceiling cannot describe the failure, because absolute level and
+    normalised shape stop being trustworthy at very different frequencies --
+    see ``_SHAPE_LIMIT_MULTIPLIER``. Saying "SPL/DI are unreliable" above the
+    amplitude limit overstates it by roughly 3x for the directivity and
+    response-shape comparisons this tool is mostly used for, and an overstated
+    warning gets ignored, which is worse than a calibrated one.
+    """
 
     finite = sorted(f for f in suspect_frequencies if math.isfinite(f))
     count = len(suspect_frequencies)
@@ -675,23 +698,42 @@ def _mesh_resolution_warning(
     )
     frequency_noun = "frequency" if diagnosed_count == 1 else "frequencies"
     band = f" ({finite[0]:.0f}-{finite[-1]:.0f} Hz)" if finite else ""
-    if limit_hz is not None:
-        rule = ""
-        if max_edge_m is not None and min_elements_per_wavelength is not None:
-            rule = (
-                f" ({min_elements_per_wavelength:g} elements per wavelength on the "
-                f"worst {max_edge_m * 1000.0:.1f} mm edge)"
-            )
-        head = (
-            "Mesh resolution supports this solve only up to about "
-            f"{limit_hz:.0f} Hz{rule}"
+    if limit_hz is None:
+        return (
+            "Mesh resolution is insufficient for part of this sweep; "
+            f"{scope} solved {frequency_noun}{band} are affected. Absolute SPL is "
+            "the first casualty; confirm against a finer mesh before trusting it."
+        )
+    rule = ""
+    if max_edge_m is not None and min_elements_per_wavelength is not None:
+        rule = (
+            f" ({min_elements_per_wavelength:g} elements per wavelength on the "
+            f"worst {max_edge_m * 1000.0:.1f} mm edge)"
+        )
+    shape_limit_hz = limit_hz * _SHAPE_LIMIT_MULTIPLIER
+    above_shape = [f for f in finite if f > shape_limit_hz]
+    head = (
+        f"Mesh resolution supports absolute SPL to about {limit_hz:.0f} Hz{rule}, "
+        f"and normalised directivity and response shape to roughly "
+        f"{shape_limit_hz:.0f} Hz"
+    )
+    if above_shape:
+        tail = (
+            f"; {scope} solved {frequency_noun}{band} exceed the SPL limit and "
+            f"{len(above_shape)} of them ({above_shape[0]:.0f}-{above_shape[-1]:.0f} Hz) "
+            "also exceed the shape limit. Refine the mesh or lower the sweep's "
+            "upper frequency before comparing anything up there"
         )
     else:
-        head = "Mesh resolution is insufficient for part of this sweep"
+        tail = (
+            f"; {scope} solved {frequency_noun}{band} exceed the SPL limit but stay "
+            "within the shape limit, so normalised directivity and response shape "
+            "remain usable there while absolute level should be confirmed against "
+            "a finer mesh"
+        )
     return (
-        f"{head}; {scope} solved {frequency_noun}{band} exceed the limit and their "
-        "SPL/DI are unreliable. Refine the mesh's mm resolutions or lower the "
-        "sweep's upper frequency."
+        f"{head}{tail}. Null depth does not converge at any resolution -- compare "
+        "dip frequency and -6 dB beamwidth, never depth."
     )
 
 

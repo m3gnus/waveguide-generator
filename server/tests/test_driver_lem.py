@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from server.jobs.models import DriveChannel, DriverSpec
 from server.solver.driver_lem import (
     channel_drive_scaling,
+    source_area_warning,
     hornlab_driver,
     one_way_peak_excursion_mm,
     self_impedance_from_surface_average,
@@ -38,6 +39,36 @@ def test_hornresp_units_convert_to_si() -> None:
     assert driver.Re == pytest.approx(5.3)
     derived = driver.derive()
     assert derived.Cms is not None and derived.Fs is not None
+
+
+def test_source_area_warning_names_the_driver_count_a_patch_implies() -> None:
+    """A patch holding two cones while count says one radiates half the volume
+    velocity it should -- about 6 dB down, with the shape still looking right.
+
+    Numbers are the PartyMEH v10 MF channel as solved: the ingest record's
+    source-mf carries both cones (482.4 cm2, two connected components) while
+    the spec said count=1.
+    """
+
+    warning = source_area_warning(482.4e-4, _spec(sd_cm2=220.0, count=1))
+
+    assert warning is not None
+    assert "2.19x" in warning
+    assert "set count=2" in warning
+    # Correcting the count silences it: 2 x 220 vs a 482 cm2 patch is the
+    # ordinary geometric-versus-effective gap, not a missing driver.
+    assert source_area_warning(482.4e-4, _spec(sd_cm2=220.0, count=2)) is None
+
+
+def test_source_area_warning_stays_quiet_on_legitimate_area_mismatches() -> None:
+    """Only an oversized patch is a missing driver. The two other real shapes
+    from the same run must not cry wolf."""
+
+    # A cone's geometric surface always exceeds its effective piston area.
+    assert source_area_warning(641.8e-4, _spec(sd_cm2=552.0)) is None
+    # A 45 mm compression diaphragm on a 1" throat: a 3:1 area step is exactly
+    # right, because volume velocity is what crosses the junction.
+    assert source_area_warning(5.1e-4, _spec(sd_cm2=16.0)) is None
 
 
 def test_spec_requires_exactly_one_mass_and_one_stiffness() -> None:
