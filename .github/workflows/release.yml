@@ -432,9 +432,20 @@ jobs:
             developer identity to offer an exception for - a missing Apple signature,
             not a finding about the app. Notarization needs a paid Apple Developer ID.
 
-            Windows must be extracted to a short path such as `C:\wg`. The bundle's
-            internal paths reach 133 characters, so an install root longer than about
-            127 characters fails to extract.
+            **Windows: right-click the .zip → Properties → tick "Unblock" before you
+            extract it.** Explorer copies the download mark onto every file it extracts,
+            and the unsigned launcher then meets "Windows protected your PC", whose only
+            visible button is "Don't run" - proceeding is behind an unlabelled "More
+            info". Clearing the mark once on the .zip means SmartScreen never runs. It
+            is the counterpart of the macOS command above; the app is unsigned because
+            an Authenticode certificate is a paid, identity-verified purchase.
+
+            Extract to a short path such as `C:\wg`. The bundle's internal paths reach
+            132 characters, so an install root longer than about 127 characters fails
+            partway through extraction.
+
+            Both instructions ship as `READ ME FIRST.txt` beside the folder inside the
+            .zip, readable before extracting.
 
             **Updating from 0.2.x is not possible in-app.** v0.2.2 to v0.2.4 published
             only the prebuilt frontend, with no application bundle, and v0.2.7 was

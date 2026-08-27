@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 import hashlib
 import json
 import os
@@ -124,6 +124,7 @@ WINDOWS_PTH_NAME = "Waveguide Generator._pth"
 WINDOWS_PYVENV_NAME = "pyvenv.cfg"
 WINDOWS_RUNTIME_PTH_NAME = "python._pth"
 WINDOWS_ICON_NAME = "WaveguideGenerator.ico"
+WINDOWS_README_NAME = "READ ME FIRST.txt"
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
 # A bare launch has to start the interpreter, import the app layer and let the
@@ -1141,8 +1142,15 @@ def deterministic_zip(
     canonical_modes: bool = False,
     compression: int = zipfile.ZIP_DEFLATED,
     archive_root: str | None = None,
+    extra_root_files: Mapping[str, str] | None = None,
 ) -> None:
-    """Archive a layer in stable path order without unsafe link members."""
+    """Archive a layer in stable path order without unsafe link members.
+
+    ``extra_root_files`` maps a member name to its text and writes it beside
+    ``archive_root`` rather than inside it. It exists so the Windows .zip can
+    carry instructions that have to be read before extracting, without copying
+    a 200 MB bundle into a staging directory to gain one text file.
+    """
 
     output.parent.mkdir(parents=True, exist_ok=True)
     source_root = source.resolve()
@@ -1152,6 +1160,13 @@ def deterministic_zip(
         compression=compression,
         compresslevel=9,
     ) as archive:
+        for member, text in sorted((extra_root_files or {}).items()):
+            info = zipfile.ZipInfo(member, ZIP_TIMESTAMP)
+            info.create_system = 3
+            info.compress_type = compression
+            info.external_attr = 0o100644 << 16
+            # Notepad is the default handler and renders a lone LF as one line.
+            archive.writestr(info, "\r\n".join(text.splitlines()) + "\r\n")
         for path, member in _iter_zip_entries(source, archive_root=archive_root):
             if path.is_symlink():
                 resolved = path.resolve()
@@ -1530,6 +1545,96 @@ class BundleBuilder:
             windows_pyvenv_cfg(), encoding="utf-8", newline="\n"
         )
         icon_writer(destination / WINDOWS_ICON_NAME)
+
+    # Windows has the same shape of first-launch wall as macOS, and it is just
+    # as much of a dead end when you meet it cold. The launcher is unsigned --
+    # an Authenticode certificate is a paid, identity-verified purchase, the
+    # same trade as the Apple Developer ID -- so an extracted copy that still
+    # carries the download mark gets SmartScreen's "Windows protected your PC",
+    # whose visible button is "Don't run"; proceeding is behind an unlabelled
+    # "More info". Measured 2026-08-27 on Windows 11: Explorer's Extract All
+    # copies the Zone.Identifier stream onto every file it writes, so the mark
+    # reaches the .exe -- but clearing it on the .zip first leaves the whole
+    # extraction unmarked and SmartScreen never runs. That makes Unblock the
+    # Windows counterpart of `xattr -dr com.apple.quarantine`, and a better one:
+    # it is a checkbox in a Properties dialog, it is done before extracting
+    # rather than after a refusal, and it needs no terminal. It only works if
+    # the user is told before they extract, which is why this sits at the root
+    # of the .zip, beside the folder, and not inside the installed app.
+    def windows_readme(self) -> str:
+        """Instructions read from inside the .zip, before anything is extracted."""
+
+        return r"""Waveguide Generator - installing on Windows
+==========================================
+
+Steps 1 and 2 have to happen BEFORE you extract this .zip. Both take one
+click, and skipping either one produces a confusing failure rather than a
+clear one.
+
+
+1. UNBLOCK THE ZIP
+------------------
+
+Right-click the downloaded .zip > Properties. At the bottom of the General
+tab, tick "Unblock", then OK.
+
+If you skip this, Windows copies its "downloaded from the internet" mark onto
+every extracted file, and the first launch is refused with:
+
+    Windows protected your PC
+    Microsoft Defender SmartScreen prevented an unrecognised app from starting
+
+The only button on that dialog is "Don't run". You can still proceed - click
+"More info", then "Run anyway" - but nothing on the dialog says so, which is
+why it is easier to clear the mark once, up front, on the .zip.
+
+This app is not signed with an Authenticode certificate, which is a paid,
+identity-verified purchase. Unsigned is why SmartScreen has nothing to
+recognise. It is a statement about a missing certificate, not a finding about
+this app.
+
+
+2. EXTRACT TO A SHORT PATH
+--------------------------
+
+Extract to something like C:\wg - NOT into Downloads, and not onto a Desktop
+that OneDrive has redirected.
+
+Paths inside this bundle reach 132 characters. Windows still limits many
+operations to 260, so an install folder longer than about 127 characters
+fails partway through extraction, with an error that names one deep file and
+gives no hint that length is the problem.
+
+C:\wg leaves the whole budget free. The app can live anywhere; only the
+length matters.
+
+
+3. RUN IT
+---------
+
+Open the extracted "Waveguide Generator" folder and double-click
+"Waveguide Generator.exe".
+
+The first start takes a few seconds longer than later ones. It should not
+raise a Windows Firewall prompt: the server listens only on 127.0.0.1, which
+never leaves your machine. If something does ask for network access, you can
+refuse it and the app still works.
+
+
+WHAT IT SHOULD DO
+-----------------
+
+Waveguide Generator starts a local server on 127.0.0.1 and opens its
+interface in a window. Nothing is sent anywhere; it runs entirely on your
+machine.
+
+
+UNINSTALLING
+------------
+
+Delete the folder you extracted. Nothing is written outside it except a
+cache under %LOCALAPPDATA%\WaveguideGenerator, which is safe to delete too.
+"""
 
     #: Put the first-launch instruction where the wall is, not on a web page the
     #: user has already left. macOS refuses this app on first launch and offers
@@ -2056,6 +2161,7 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                     bundle,
                     installer_asset,
                     archive_root=bundle.name,
+                    extra_root_files={WINDOWS_README_NAME: builder.windows_readme()},
                 )
                 output_bundle = output / bundle.name
                 if output_bundle.exists() or output_bundle.is_symlink():
