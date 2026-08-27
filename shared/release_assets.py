@@ -51,6 +51,20 @@ def installer_name(platform: str, version: str) -> str | None:
     return None
 
 
+def windows_setup_name(version: str) -> str:
+    """The Windows installer, and the file the release page points Windows at.
+
+    It exists beside the .zip rather than replacing it because they fail
+    differently: the installer writes its own payload, so nothing it installs
+    carries the download mark that makes Explorer-extracted copies meet
+    SmartScreen, and it can refuse an over-long install root before writing
+    anything. The .zip stays for people who want a portable copy and are
+    willing to do both by hand.
+    """
+
+    return f"Waveguide.Generator-{version}-{WINDOWS_PLATFORM}-setup.exe"
+
+
 def app_layer_name(version: str) -> str:
     """The platform-neutral application layer, rebuilt every release."""
 

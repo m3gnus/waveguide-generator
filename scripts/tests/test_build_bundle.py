@@ -37,11 +37,14 @@ from scripts.build_bundle import (
     WINDOWS_PRUNE_RELATIVE_PATHS,
     WINDOWS_PYVENV_NAME,
     WINDOWS_README_NAME,
+    INNO_COMPILER_ENV,
     WINDOWS_RUNTIME_PTH_NAME,
     build,
     copy_tracked_app_files,
     deterministic_zip,
     install_spa_layer,
+    locate_inno_compiler,
+    max_payload_depth,
     is_x64_pe,
     locate_msvc_runtime_dlls,
     pe_file_version,
@@ -759,6 +762,84 @@ def test_windows_instructions_sit_outside_the_folder_so_they_precede_extraction(
     assert "C:\\wg" in text
 
 
+def test_installer_path_budget_is_measured_from_the_bundle_not_hardcoded(
+    tmp_path: Path,
+) -> None:
+    """A number written into the .iss would rot the first time a dep got deeper.
+
+    bempp's kernel filenames currently set this. Pruning the macOS Metal package
+    moves it by one character, so nothing about it is stable enough to copy.
+    """
+
+    bundle = tmp_path / "Waveguide Generator"
+    (bundle / "runtime" / "Lib").mkdir(parents=True)
+    (bundle / "Waveguide Generator.exe").write_bytes(b"launcher")
+    deep = bundle / "runtime" / "Lib" / ("k" * 60)
+    deep.write_bytes(b"kernel")
+
+    measured = max_payload_depth(bundle)
+
+    assert measured == len(deep.relative_to(bundle).as_posix())
+    # Directories must not count: an empty one deeper than every file would
+    # shrink the allowed install root for no reason.
+    (bundle / "runtime" / "Lib" / ("d" * 90)).mkdir()
+    assert max_payload_depth(bundle) == measured
+
+
+def test_a_bundle_with_no_files_is_refused_rather_than_measured_as_zero(
+    tmp_path: Path,
+) -> None:
+    """Zero would hand the installer the whole 259 characters and guarantee a
+    mid-extraction failure it was written to prevent."""
+
+    empty = tmp_path / "Waveguide Generator"
+    (empty / "runtime").mkdir(parents=True)
+
+    with pytest.raises(BundleError, match="no files to measure"):
+        max_payload_depth(empty)
+
+
+def test_inno_compiler_override_is_validated_before_the_build_starts(
+    tmp_path: Path,
+) -> None:
+    real = tmp_path / "ISCC.exe"
+    real.write_bytes(b"compiler")
+
+    assert locate_inno_compiler({INNO_COMPILER_ENV: str(real)}) == real
+
+    missing = tmp_path / "absent" / "ISCC.exe"
+    with pytest.raises(BundleError, match="does not name a file"):
+        locate_inno_compiler({INNO_COMPILER_ENV: str(missing)})
+
+
+def test_installer_script_pins_the_per_user_install_that_the_updater_needs() -> None:
+    """launchers/apply_update.py renames directories in place with no elevation
+    path, so a Program Files install breaks in-app updates for every non-admin
+    user -- and breaks them later, at update time, far from the installer.
+
+    PrivilegesRequiredOverridesAllowed must stay empty too: without it /ALLUSERS
+    or an elevated launch puts the tree back under Program Files.
+    """
+
+    script = (
+        Path(__file__).resolve().parents[2] / "installers" / "windows" / "bundle-setup.iss"
+    ).read_text(encoding="utf-8")
+
+    assert "PrivilegesRequired=lowest" in script
+    assert "PrivilegesRequiredOverridesAllowed=\n" in script
+    assert "DefaultDirName={localappdata}\\Programs\\Waveguide Generator" in script
+
+    # A silent run must fail with an exit code rather than sit on a modal box
+    # that /SUPPRESSMSGBOXES does not cover. InitializeSetup owns that path.
+    assert "function InitializeSetup(): Boolean;" in script
+    assert "WizardSilent()" in script
+    assert "{param:DIR|}" in script
+
+    # The budget is supplied by the build, never written here.
+    assert "#ifndef MaxPayloadDepth" in script
+    assert "#error MaxPayloadDepth must be defined by the build" in script
+
+
 def test_windows_readme_is_deterministic_like_the_rest_of_the_archive(
     tmp_path: Path,
 ) -> None:
@@ -807,9 +888,14 @@ def test_release_workflow_publishes_one_complete_draft_inventory() -> None:
     assert "draft: true" in workflow
     assert 'gh release edit "$RELEASE_TAG" --draft=false' in workflow
     assert "Reuse a runtime already published" not in workflow
-    assert "Validated seven release asset pairs." in workflow
+    # The count is derived from the spec list rather than spelled out. Adding the
+    # Windows installer made a hardcoded "seven" wrong, and a message that has to
+    # be edited in step with the list is one that eventually is not.
+    assert 'print(f"Validated {len(specs)} release asset pairs.")' in workflow
     assert "Waveguide.Generator-*-macos-arm64.dmg" in workflow
     assert "Waveguide.Generator-*-windows-x86_64.zip" in workflow
+    assert "Waveguide.Generator-*-windows-x86_64-setup.exe" in workflow
+    assert "release_assets.windows_setup_name(version)" in workflow
 
 
 def test_release_notes_give_both_platforms_their_first_launch_wall() -> None:

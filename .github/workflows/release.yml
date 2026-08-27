@@ -242,6 +242,23 @@ jobs:
           name: standalone-app-layer
           path: build/app-reference
 
+      - name: Install the pinned Inno Setup
+        shell: pwsh
+        # Not part of the windows runner image, unlike most of what this job
+        # uses. Pinned like uv and the actions above so a compiler update cannot
+        # arrive unannounced in a release build; if the pin ever goes missing the
+        # failure is loud and the fix is this one line.
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup --version=6.7.3 -y --no-progress
+          $iscc = "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            $iscc = (Get-ChildItem -Path "$env:ProgramFiles","${env:ProgramFiles(x86)}" -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1 -ExpandProperty FullName)
+          }
+          if (-not $iscc) { throw "Inno Setup installed but ISCC.exe was not found." }
+          "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Build and verify the standalone app
         shell: pwsh
         run: |
@@ -282,6 +299,8 @@ jobs:
         with:
           name: standalone-windows-assets
           path: |
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe.sha256
             build/bundle/Waveguide.Generator-*-windows-x86_64.zip
             build/bundle/Waveguide.Generator-*-windows-x86_64.zip.sha256
             build/bundle/update-runtime-windows-x86_64-*.zip
@@ -345,6 +364,7 @@ jobs:
               ("macos", re.escape(release_assets.app_layer_name(version))),
               ("macos", re.escape(release_assets.app_manifest_name(version))),
               ("macos", rf"{re.escape(release_assets.UPDATE_PREFIX)}-runtime-macos-arm64-[0-9a-f]{{12}}\.zip"),
+              ("windows", re.escape(release_assets.windows_setup_name(version))),
               ("windows", re.escape(release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))),
               ("windows", rf"{re.escape(release_assets.UPDATE_PREFIX)}-runtime-windows-x86_64-[0-9a-f]{{12}}\.zip"),
           )
@@ -384,8 +404,10 @@ jobs:
               extra = sorted(str(path) for path in actual_paths - expected_paths)
               raise SystemExit(f"Release inventory mismatch; missing={missing}, extra={extra}")
           if len(list(destination.iterdir())) != len(specs) * 2:
-              raise SystemExit("Release staging did not produce exactly seven asset pairs")
-          print("Validated seven release asset pairs.")
+              raise SystemExit(
+                  f"Release staging did not produce exactly {len(specs)} asset pairs"
+              )
+          print(f"Validated {len(specs)} release asset pairs.")
           PY
 
       - name: Refuse to overwrite a published release
@@ -416,7 +438,7 @@ jobs:
             | Platform | File |
             |---|---|
             | macOS (Apple silicon) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-macos-arm64.dmg` |
-            | Windows (x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64.zip` |
+            | Windows (x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64-setup.exe` |
 
             **macOS: the first launch is refused, and there is no button to allow it.**
             You will see "Apple could not verify ... is free of malware", offering only
@@ -432,20 +454,23 @@ jobs:
             developer identity to offer an exception for - a missing Apple signature,
             not a finding about the app. Notarization needs a paid Apple Developer ID.
 
-            **Windows: right-click the .zip → Properties → tick "Unblock" before you
-            extract it.** Explorer copies the download mark onto every file it extracts,
-            and the unsigned launcher then meets "Windows protected your PC", whose only
-            visible button is "Don't run" - proceeding is behind an unlabelled "More
-            info". Clearing the mark once on the .zip means SmartScreen never runs. It
-            is the counterpart of the macOS command above; the app is unsigned because
-            an Authenticode certificate is a paid, identity-verified purchase.
+            **Windows: run the installer and click through one dialog.** It is unsigned,
+            so the first run shows "Windows protected your PC" - click **More info**,
+            then **Run anyway**. Like the macOS refusal above, that is a missing
+            code-signing certificate, not a finding about the app. You see it once: the
+            installer writes its payload itself, so nothing it installs carries the
+            download mark, and the app never raises SmartScreen again.
 
-            Extract to a short path such as `C:\wg`. The bundle's internal paths reach
-            132 characters, so an install root longer than about 127 characters fails
-            partway through extraction.
+            It installs to `%LOCALAPPDATA%\Programs` for the current user, with no
+            elevation. That is deliberate rather than a limitation - the in-app updater
+            replaces files in place and cannot elevate, so a Program Files install would
+            break every later update. It also refuses an over-long install folder up
+            front instead of failing partway through.
 
-            Both instructions ship as `READ ME FIRST.txt` beside the folder inside the
-            .zip, readable before extracting.
+            Prefer a portable copy? The `.zip` is still published. Right-click it →
+            Properties → tick **Unblock** before extracting, then extract to a short path
+            such as `C:\wg`; `READ ME FIRST.txt` inside it explains both. The installer
+            exists because doing neither by hand is the easier path.
 
             **Updating from 0.2.x is not possible in-app.** v0.2.2 to v0.2.4 published
             only the prebuilt frontend, with no application bundle, and v0.2.7 was
