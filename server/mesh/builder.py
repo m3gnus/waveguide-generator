@@ -67,6 +67,13 @@ def _dense_solver_memory_limit_bytes() -> int:
     machine gets *less* than before, and to 64 GiB so a very large host cannot
     talk the preflight into approving a mesh nothing will finish solving.
     ``WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES`` overrides it outright.
+
+    A raised ceiling is permission, not advice. It stops the preflight
+    refusing meshes the host can afford; it is not a reason to spend the DOFs.
+    Measured ladders put normalised directivity and response shape converging
+    3-10x past the elements-per-wavelength limit, so refining to satisfy that
+    rule can cost an order of magnitude for charts that already matched. The
+    large-mesh advisory above is what carries that cost warning.
     """
 
     override = os.environ.get("WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES")
@@ -455,13 +462,34 @@ def _large_mesh_warnings(
         if dominant and isinstance(dominant_mm, (int, float))
         else ""
     )
+    # Dense assembly is O(N^2) storage and the factorisation O(N^3), so quote
+    # the cube rather than leaving "significantly longer" to the imagination.
+    # It predicts well: a measured ladder step of 2.21x the DOFs cost 9.8x the
+    # solve time, against 10.8x from this estimate -- and produced normalised
+    # directivity matching the coarser level within 0.57 dB to 16 kHz.
+    cost_ratio = (
+        (float(full_domain_count) / float(budget_full_domain)) ** 3
+        if budget_full_domain
+        else 0.0
+    )
+    cost = (
+        f" At a cubic factorisation that is roughly {cost_ratio:.0f}x the solve "
+        "time of a mesh at the threshold."
+        if cost_ratio >= 2.0
+        else ""
+    )
     return [
         "Large solve mesh: "
         f"{triangle_count:,} triangles against a warning threshold of "
         f"{effective_budget:,} ({full_domain_count:,} vs {budget_full_domain:,} "
         "full-domain equivalent). The solve will continue, but may take "
         "significantly longer and use more memory."
-        f"{advice} Coarsen that mm resolution or raise mesh.max_triangles."
+        f"{cost}"
+        f"{advice} Coarsen that mm resolution or raise mesh.max_triangles. "
+        "Before refining to chase a frequency limit, ladder two levels and "
+        "compare: normalised directivity and response shape converge far "
+        "earlier than the elements-per-wavelength rule suggests, so the finer "
+        "mesh often costs many times more for charts that match."
     ]
 
 

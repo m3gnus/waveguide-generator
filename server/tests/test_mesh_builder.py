@@ -225,6 +225,39 @@ def test_build_solver_mesh_continues_past_user_budget_and_preserves_warning(
     assert "solve will continue" in warning
 
 
+def test_large_mesh_warning_quantifies_the_cubic_factorisation_cost() -> None:
+    """"Significantly longer" left the cost to the imagination, and the cost is
+    the whole argument for laddering instead of refining.
+
+    The estimate is checked against a measured ladder step: 11,130 DOF against
+    5,041 is 2.21x, which cost 9.8x the solve time and produced normalised
+    directivity matching the coarser level within 0.57 dB to 16 kHz. A cubic
+    estimate gives 11x -- close enough to steer a decision.
+    """
+
+    warning = mesh_builder._large_mesh_warnings(
+        triangle_count=7_173,
+        full_domain_count=11_130,
+        budget_full_domain=5_041,
+        domain_multiplier=2.0,
+        metadata={},
+    )[0]
+
+    assert "roughly 11x the solve time" in warning
+    assert "ladder two levels" in warning
+
+    # Just over the threshold is not worth a cost estimate; only the advice.
+    modest = mesh_builder._large_mesh_warnings(
+        triangle_count=7_173,
+        full_domain_count=5_500,
+        budget_full_domain=5_041,
+        domain_multiplier=2.0,
+        metadata={},
+    )[0]
+    assert "the solve time of a mesh at the threshold" not in modest
+    assert "ladder two levels" in modest
+
+
 def test_actual_domain_artifact_ceiling_is_enforced_post_build() -> None:
     _enforce_artifact_triangle_ceiling(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES)
     with pytest.raises(RuntimeError, match="solver-artifact sanity ceiling"):
