@@ -138,22 +138,26 @@ jobs:
       - name: Package and verify the SPA
         run: |
           set -euo pipefail
-          name="$(python -c 'import sys; from shared import release_assets; print(release_assets.spa_archive_name(sys.argv[1]))' "${{ env.version }}")"
-          tar -czf "$name.tar.gz" -C frontend dist
-          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
-          echo "artifact=$name" >> "$GITHUB_ENV"
-          tar -tzf "$name.tar.gz" | sed -n '1,5p'
+          # spa_archive_name returns the COMPLETE filename, extension included.
+          # The line this replaced held a stem and let the shell append .tar.gz,
+          # and keeping that habit produced update-spa-<version>.tar.gz.tar.gz --
+          # which the macOS job then could not find. Use the name as given.
+          archive="$(python -c 'import sys; from shared import release_assets; print(release_assets.spa_archive_name(sys.argv[1]))' "${{ env.version }}")"
+          tar -czf "$archive" -C frontend dist
+          sha256sum "$archive" > "$archive.sha256"
+          echo "artifact=$archive" >> "$GITHUB_ENV"
+          tar -tzf "$archive" | sed -n '1,5p'
           # Do not use grep -q: closing the pipe early turns tar's success into
           # SIGPIPE under pipefail.
-          tar -tzf "$name.tar.gz" | grep -Fx "dist/index.html"
+          tar -tzf "$archive" | grep -Fx "dist/index.html"
 
       - name: Share the SPA with bundle and publisher jobs
         uses: actions/upload-artifact@v4
         with:
           name: release-spa
           path: |
-            ${{ env.artifact }}.tar.gz
-            ${{ env.artifact }}.tar.gz.sha256
+            ${{ env.artifact }}
+            ${{ env.artifact }}.sha256
           if-no-files-found: error
 
   macos-bundle:
