@@ -25,13 +25,30 @@ Then run the installer for your platform:
 
 For a self-contained macOS install, download the release's
 **Waveguide.Generator-&lt;version&gt;-macos-arm64.dmg**, open it, and drag **Waveguide Generator** to
-Applications. The app is ad-hoc signed rather than notarized, so on first launch
-macOS may require **System Settings → Privacy & Security → Open Anyway** and a
-confirmation; later launches work normally.
+Applications.
+
+**The first launch is refused, and that is expected.** macOS reports *"Apple could
+not verify 'Waveguide Generator' is free of malware that may harm your Mac or
+compromise your privacy."* The app is ad-hoc signed (`codesign --sign -`) and has
+not been through Apple notarization, which is what that check looks for — it is a
+statement about a missing Apple Developer signature, not about the app. To open
+it, click **Done**, then open **System Settings → Privacy & Security**, scroll to
+**Security**, and click **Open Anyway** beside Waveguide Generator. Confirm once
+and every later launch is normal.
+
+Control-clicking and choosing Open no longer bypasses this; Apple removed that
+path in macOS Sequoia, so Privacy & Security is the only route. The warning
+disappears for everyone once the app is signed with a Developer ID certificate
+and notarized, which needs a paid Apple Developer account and is not yet set up.
 
 For a self-contained Windows install, download
 **Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip**, extract the complete **Waveguide Generator**
-folder, and double-click **Waveguide Generator.exe** inside it. The executable is
+folder, and double-click **Waveguide Generator.exe** inside it. **Extract it to a
+short path such as `C:\wg`.** The bundle's deepest internal path is 133
+characters, so an install root longer than roughly 127 characters exceeds
+Windows' 260-character limit and extraction fails with a flood of "cannot find
+path" errors rather than one clear message. `C:\Program Files\...` is fine; a
+OneDrive-redirected Documents folder with a long company name may not be. The executable is
 not publisher-signed, so Microsoft Defender SmartScreen may require **More info →
 Run anyway** on first launch. The native window requires the **Microsoft Edge
 WebView2 Evergreen Runtime (x64)**, which is normally present on current Windows
