@@ -315,6 +315,7 @@ jobs:
       contents: write
     env:
       RELEASE_TAG: ${{ needs.spa.outputs.tag }}
+      UPDATES_TAG: ${{ needs.spa.outputs.tag }}-updates
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
       - uses: actions/checkout@v4
@@ -357,6 +358,8 @@ jobs:
           root = Path("build/publish-inputs")
           destination = Path("build/release-assets")
           destination.mkdir()
+          machinery = Path("build/update-assets")
+          machinery.mkdir()
           version = json.loads(Path("shared/version.json").read_text(encoding="utf-8"))["version"]
           specs = (
               ("spa", re.escape(release_assets.spa_archive_name(version))),
@@ -395,19 +398,52 @@ jobs:
               if sidecar.read_text(encoding="ascii") != expected_line:
                   raise SystemExit(f"Invalid checksum sidecar for {asset.name}")
               expected_paths.update((asset, sidecar))
-              shutil.copy2(asset, destination / asset.name)
-              shutil.copy2(sidecar, destination / sidecar.name)
+              # Two destinations: the release page a person lands on holds only
+              # installers, and everything the updater consumes goes to the
+              # companion pre-release. Splitting here rather than at upload time
+              # keeps one inventory check over both sets.
+              target = (
+                  destination
+                  if name.startswith(release_assets.INSTALLER_PREFIX)
+                  else machinery
+              )
+              shutil.copy2(asset, target / asset.name)
+              shutil.copy2(sidecar, target / sidecar.name)
 
           actual_paths = {path for path in root.rglob("*") if path.is_file()}
           if actual_paths != expected_paths:
               missing = sorted(str(path) for path in expected_paths - actual_paths)
               extra = sorted(str(path) for path in actual_paths - expected_paths)
               raise SystemExit(f"Release inventory mismatch; missing={missing}, extra={extra}")
-          if len(list(destination.iterdir())) != len(specs) * 2:
+          downloads = sorted(path.name for path in destination.iterdir())
+          layers = sorted(path.name for path in machinery.iterdir())
+          if len(downloads) + len(layers) != len(specs) * 2:
               raise SystemExit(
-                  f"Release staging did not produce exactly {len(specs)} asset pairs"
+                  f"Release staging did not produce exactly {len(specs)} asset pairs; "
+                  f"downloads={downloads}, layers={layers}"
               )
-          print(f"Validated {len(specs)} release asset pairs.")
+          # The split is asserted, not assumed. Counting the two directories would
+          # pass a release that staged the right number of files into the wrong
+          # halves, and the failure mode of that is the one this whole change
+          # exists to avoid: an updater pointed at a release with nothing on it.
+          prefix = release_assets.INSTALLER_PREFIX
+          strays = sorted(name for name in downloads if not name.startswith(prefix))
+          hidden = sorted(name for name in layers if name.startswith(prefix))
+          if strays or hidden:
+              raise SystemExit(
+                  "Release split is wrong; machinery on the user-facing release="
+                  f"{strays}, downloads hidden on the companion release={hidden}"
+              )
+          if not downloads or not layers:
+              raise SystemExit(
+                  f"Release split is empty on one side; downloads={downloads}, "
+                  f"layers={layers}"
+              )
+          print(
+              f"Validated {len(specs)} release asset pairs: "
+              f"{len(downloads) // 2} installer(s) on the user-facing release, "
+              f"{len(layers) // 2} layer(s) on the companion pre-release."
+          )
           PY
 
       - name: Refuse to overwrite a published release
@@ -421,6 +457,34 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Publish the update layers as a companion pre-release
+        # Published BEFORE the user-facing release, so the layers already exist
+        # by the time anything can look for them. Flagged as a pre-release so it
+        # is never "Latest" and is demoted in the releases list; the assets stay
+        # in this repository, so trusted_asset_url keeps rejecting anything served
+        # from elsewhere.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: ${{ env.UPDATES_TAG }}
+          target_commitish: ${{ inputs.sha }}
+          prerelease: true
+          draft: false
+          overwrite_files: true
+          files: build/update-assets/*
+          fail_on_unmatched_files: true
+          name: "Update layers for ${{ env.RELEASE_TAG }}"
+          body: |
+            Machinery for the in-app updater. **This is not a download.**
+
+            Install Waveguide Generator from
+            [${{ env.RELEASE_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.RELEASE_TAG }})
+            instead.
+
+            These files exist so an update fetches only the layer that changed —
+            usually about 4 MB rather than the whole application. The runtime
+            layer is addressed by content, so releases that do not change the
+            interpreter share one.
 
       - name: Upload the validated inventory to a draft release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
@@ -480,9 +544,12 @@ jobs:
             on macOS re-signs and clears quarantine, so an update will not put you back
             behind the first-launch dialog.
 
-            <details><summary>The other files are used by the in-app updater, not by people</summary>
+            <details><summary>Where the in-app updater's files went</summary>
 
-            Everything named `update-…` is machinery. `update-app-*.zip` and its
+            This page holds only installers. Everything named `update-…` is
+            machinery, and it is published to
+            [${{ env.UPDATES_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.UPDATES_TAG }}),
+            a pre-release you do not need to visit: `update-app-*.zip` and its
             manifest are the platform-neutral application layer;
             `update-runtime-*-<id>.zip` are the two runtime layers, addressed by
             content so releases that do not change the interpreter share one and
@@ -490,7 +557,7 @@ jobs:
             prebuilt frontend, so a source install needs no Node runtime.
 
             There is no Linux build. Linux installs from source — see the README.
-            The `.tar.gz` above is the frontend, not a Linux binary.
+            That `.tar.gz` is the frontend, not a Linux binary.
 
             </details>
 
