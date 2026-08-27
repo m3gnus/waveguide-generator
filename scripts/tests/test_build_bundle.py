@@ -943,7 +943,7 @@ def test_release_workflow_publishes_one_complete_draft_inventory() -> None:
     # The count is derived from the spec list rather than spelled out. Adding the
     # Windows installer made a hardcoded "seven" wrong, and a message that has to
     # be edited in step with the list is one that eventually is not.
-    assert 'f"Validated {len(specs)} release asset pairs: "' in workflow
+    assert 'f"Validated {len(specs)} release assets and one SPA sidecar: "' in workflow
     assert "Waveguide.Generator-*-macos-arm64.dmg" in workflow
     assert "Waveguide.Generator-*-windows-x86_64.zip" in workflow
     assert "Waveguide.Generator-*-windows-x86_64-setup.exe" in workflow
