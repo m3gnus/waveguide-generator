@@ -17,7 +17,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from scripts.check_partial_merges import absorbed_prefix, main  # noqa: E402
+from scripts.check_partial_merges import (  # noqa: E402
+    absorbed_prefix,
+    acknowledged,
+    main,
+)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -101,3 +105,35 @@ def test_a_branch_that_merged_main_into_itself_is_not_flagged(repo: Path) -> Non
 
     assert absorbed_prefix("feature", "main") is None
     assert main(["feature", "--upstream", "main"]) == 0
+
+
+def test_a_deliberate_partial_merge_can_be_acknowledged(repo: Path) -> None:
+    """Allowed, but it has to be said, and said somewhere reviewable."""
+
+    _git(repo, "checkout", "-b", "feature")
+    consumer = _commit(repo, "consumer")
+    _commit(repo, "held-back")
+    _git(repo, "checkout", "main")
+    _git(repo, "merge", "--no-ff", "-m", "Merge feature (partially)", consumer)
+
+    note = repo / "partial-merges.txt"
+    assert main(["feature", "--upstream", "main", "--acknowledged", str(note)]) == 1
+
+    note.write_text(
+        "# held out of a release cut deliberately\n"
+        "feature: the tail is a no-op in production and lands next release\n",
+        encoding="utf-8",
+    )
+    assert acknowledged(note) == {
+        "feature": "the tail is a no-op in production and lands next release"
+    }
+    assert main(["feature", "--upstream", "main", "--acknowledged", str(note)]) == 0
+
+
+def test_an_acknowledgement_without_a_reason_is_refused(repo: Path) -> None:
+    """A bare branch name would make the escape hatch a rubber stamp."""
+
+    note = repo / "partial-merges.txt"
+    note.write_text("feature\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="<branch>: <reason>"):
+        acknowledged(note)
