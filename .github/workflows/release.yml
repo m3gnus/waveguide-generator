@@ -432,6 +432,14 @@ jobs:
             internal paths reach 133 characters, so an install root longer than about
             127 characters fails to extract.
 
+            **Updating from 0.2.x is not possible in-app.** v0.2.2 to v0.2.4 published
+            only the prebuilt frontend, with no application bundle, and v0.2.7 was
+            withdrawn - so no installed copy has a path to this release. Install this
+            one directly. From here on the in-app updater works normally: it downloads
+            only the layer that changed, verifies its checksum, swaps it atomically, and
+            on macOS re-signs and clears quarantine, so an update will not put you back
+            behind the first-launch dialog.
+
             <details><summary>The other files are used by the in-app updater, not by people</summary>
 
             Everything named `update-…` is machinery. `update-app-*.zip` and its
