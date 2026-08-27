@@ -4,6 +4,7 @@ import base64
 
 import hornlab_plots
 import matplotlib
+import pytest
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -80,6 +81,54 @@ def test_pinned_renderer_emits_png_with_reference_overlay_path_enabled() -> None
         reference_frequencies=frequencies,
         reference_directivity=directivity,
         reference_label="baseline",
+    )
+
+    assert encoded is not None
+    assert base64.b64decode(encoded).startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_zero_interval_draws_no_guides() -> None:
+    # 0 is the shipped default: the map keeps only the renderer's own lines.
+    figure, axis = plt.subplots()
+    axis.set_ylabel("Angle [deg]")
+    axis.set_ylim(-90, 90)
+    axis.axhline(0, color="black")
+
+    add_angle_guides(figure, _Theme(), angle_guide_step=0)
+
+    assert _horizontal_values(axis) == {0.0}
+    assert len(axis.lines) == 1
+    plt.close(figure)
+
+
+def test_non_finite_interval_is_rejected() -> None:
+    figure, axis = plt.subplots()
+    axis.set_ylabel("Angle [deg]")
+    try:
+        with pytest.raises(ValueError):
+            add_angle_guides(figure, _Theme(), angle_guide_step=float("nan"))
+    finally:
+        plt.close(figure)
+
+
+def test_png_renders_with_the_graticule_turned_off() -> None:
+    # The PNG export renders this map before any chart is saved, so a step of 0
+    # must not fail the whole format.
+    frequencies = [500.0, 1_000.0, 2_000.0]
+    directivity = {
+        "horizontal": [
+            [[-90.0, -12.0], [0.0, 0.0], [90.0, -12.0]]
+            for _frequency in frequencies
+        ]
+    }
+
+    encoded = render_directivity_heatmap_b64(
+        hornlab_plots,
+        frequencies,
+        directivity,
+        reference_level=-6.0,
+        theme="console",
+        angle_guide_step=0.0,
     )
 
     assert encoded is not None

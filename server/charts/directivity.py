@@ -36,10 +36,18 @@ def add_angle_guides(
     angle_guide_step: float = DEFAULT_ANGLE_GUIDE_STEP_DEG,
     grid_kwargs: Callable[..., dict[str, Any]] | None = None,
 ) -> None:
-    """Fill missing angular guides without duplicating HornLab's own lines."""
+    """Fill missing angular guides without duplicating HornLab's own lines.
 
-    if not math.isfinite(angle_guide_step) or angle_guide_step <= 0:
-        raise ValueError("Directivity angle guide step must be a positive finite number")
+    A step of 0 (or any non-positive value) draws nothing.
+    """
+
+    if not math.isfinite(angle_guide_step):
+        raise ValueError("Directivity angle guide step must be a finite number")
+    # 0 is the shipped default and means "no graticule": the heatmap already
+    # carries the renderer's own faint angular lines. Rejecting it here made
+    # every PNG export fail, because the export renders this map first.
+    if angle_guide_step <= 0:
+        return
 
     style = (
         grid_kwargs(theme, linewidth=0.5)

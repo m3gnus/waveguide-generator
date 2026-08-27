@@ -125,7 +125,7 @@ class DirectivityRenderRequest(ChartModel):
     reference_directivity: dict[str, Any] | None = None
     reference_label: str | None = None
     reference_level: float = -6.0
-    # 0 means no graticule; ``directivity.py`` already treats <= 0 as off.
+    # 0 means no graticule: ``directivity.py`` draws none for a step <= 0.
     angle_guide_step: float = Field(default=10.0, ge=0.0, le=180.0)
     theme: str = DEFAULT_CHART_THEME
 
