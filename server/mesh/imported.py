@@ -52,13 +52,214 @@ SYMMETRY_SNAP_TOLERANCE_MM = 1.0e-4
 # mirror tolerance so a recentring can never be looser than the test it feeds.
 VERTICAL_OFFSET_MIDPOINT_TOLERANCE_REL = 5.0e-4
 VERTICAL_OFFSET_MIDPOINT_TOLERANCE_MM = 0.05
-# OCC's linear target size alone can leave tight fillets and curved imported
-# baffles visibly faceted. This asks Gmsh for 24 elements around a full circle,
-# while the floor below prevents tiny CAD details from exploding solve cost.
+# Not the solver path's dial any more -- the sagitta field below supplies that
+# sizing, and ``Mesh.MeshSizeFromCurvature`` is 0 for the solver mesh unless
+# the measurement scaffold asks for this rule back. It survives as the shipped
+# rule's value, which is what the sweep below measures against, and it is still
+# the number the CAD *viewport* path works in: the viewport keeps meshing by
+# segments-per-2pi (``IMPORTED_VIEWPORT_CURVATURE_SEGMENTS`` below), so on this
+# branch the viewport and the solver mesh no longer spend curvature the same
+# way. It used to mean: OCC's linear target size alone can leave tight fillets
+# and curved imported baffles visibly faceted, so ask Gmsh for 24 elements
+# around a full circle. The refinement limit under it is still live.
 IMPORTED_CURVATURE_SEGMENTS = 24
-IMPORTED_CURVATURE_SEGMENTS_MIN = 8
-IMPORTED_CURVATURE_SEGMENTS_MAX = 64
 IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
+# Constant-sagitta sizing: every panel is allowed the same chord deviation from
+# the true surface, in millimetres, via h = 2*sqrt(2*R*delta). This replaced
+# ``Mesh.MeshSizeFromCurvature``, a segments-per-2pi rule (h ~= 2*pi*R/N) that
+# spends element size in proportion to curvature radius, over-refining small
+# fillets while under-refining large sweeps.
+#
+# MEASURED on the 260627 PartyMEH v10 return at rigid 30 / hf 4 / mf 15 / lf 30
+# mm, every facet of every mesh projected onto the OCC face it was meshed from,
+# by ``scripts/measure_imported_mesh_deviation.py`` -- which is committed, so
+# these rows can be reproduced rather than believed. Both rules are meshed and
+# measured through that one path.
+#
+#   rule              tris     peak     p95      rms
+#   segments=12      5,671   1.5365   0.2975   0.1458
+#   segments=16      6,989   1.2542   0.2312   0.1221
+#   segments=24     10,252   0.9872   0.1451   0.0816   <- the shipped default
+#   segments=32     13,177   0.8215   0.1087   0.0653
+#   segments=48     17,510   0.6210   0.0760   0.0416
+#   delta=0.10      13,748   0.4474   0.0819   0.0428
+#   delta=0.15      10,086   0.7384   0.1226   0.0615   <- default
+#   delta=0.20       8,334   0.9112   0.1547   0.0772
+#   delta=0.25       7,442   1.2125   0.1917   0.0922
+#   delta=0.30       6,783   1.2125   0.2233   0.1042
+#   delta=0.40       6,005   1.5365   0.2805   0.1248
+#   delta=0.50       5,505   1.5365   0.3437   0.1448
+#
+# The sagitta rule dominates the segments rule over the whole useful range, and
+# the margin widens as the mesh refines. The cleanest single comparison is
+# delta=0.15 against the shipped segments=24: at 1.6% FEWER triangles it is 25%
+# better on peak, 16% on p95 and 25% on rms. Matching quality instead of cost,
+# the triangle saving against segments=24 is 14% at equal p95, 21% at equal rms
+# and 21% at equal peak -- a real win, and smaller than the 31-44% this branch
+# once claimed, because that figure was quoted at an undisclosed loss of
+# quality.
+#
+# The default is 0.15 mm, the point that is not worse than the rule it replaces
+# on anything: against segments=24 it is 25% better on peak, 16% on p95 and 25%
+# on rms while using 1.6% FEWER triangles. Bumping the cache key re-meshes every
+# existing project, and a forced re-mesh is defensible when it hands everyone a
+# better mesh; 0.20 would hand them a cheaper worse one, and anyone who wants
+# that 19% triangle saving can turn the dial down. It is not 0.30, which this
+# branch proposed before the two defects below were found and which sits inside
+# the saturated region described next.
+#
+# It also buys BANDWIDTH, which is the part nobody expected. The wall frequency
+# limit was predicted here to be "probably clamp-dominated and unchanged", and
+# it is neither -- per source, on the reference return:
+#
+#   segments=24    lf 1525   mf 1846   hf 3620 Hz
+#   delta=0.15     lf 1757   mf 2119   hf 5347 Hz     +48% on HF
+#   delta=0.20     lf 1484   mf 1870   hf 3944 Hz
+#   delta=0.30     lf 1665   mf 2002   hf 3116 Hz
+#
+# ``effective_max_valid_frequency_hz`` is consumed by the pipeline, unlike peak
+# deviation, so this is the dial's most concrete benefit and the one that most
+# nearly justifies the change on its own. Only the HF row responds cleanly;
+# lf/mf bounce because their limits are set by the largest facet on a
+# size-clamped source patch.
+#
+# CONFIRMED ON FIVE GEOMETRIES from the bundle store, not one -- the earlier
+# rounds each rested on a single model. delta=0.15 against segments=24:
+#
+#   PartyMEH v10 (10,252 tris)  -1.6% tris   peak -25%   p95 -16%   rms -25%
+#   PartyMEH v10 b (10,238)     -1.5% tris   peak -18%   p95 -18%   rms -26%
+#   201x208x130 (7,160)        +11.4% tris   peak -73%   p95  -3%   rms -17%
+#   49x44 rigid=4 (6,502)        dial inert, see below
+#   27x27 (172)                +17.4% tris   peak -45%   p95 -37%   rms -32%
+#
+# The 201x208x130 model is the clearest case for the change: segments=24 leaves
+# a 2.54 mm worst facet on it against a 15 mm rigid target, which the sagitta
+# rule cuts to 0.69 mm. That is the failure mode the rule was designed for --
+# segments-per-2pi under-refines large-radius sweeps -- and it is far worse in
+# the wild than on the model this branch was developed against. On that model
+# even delta=0.20 is strictly better than segments=24: FEWER triangles and 64%
+# less peak.
+#
+# WHERE THE DIAL IS INERT. On a model whose rigid target is already fine, the
+# sagitta request exceeds ``Mesh.MeshSizeMax`` everywhere and the user's own
+# target sets the whole mesh: the 49x44 model at rigid 4 mm produces byte-
+# identical output at 0.10, 0.15 and 0.20. That is correct -- an explicit size
+# request should win -- but it means the dial's authority is model-dependent,
+# and a UI must not promise a knob that does nothing on half the models.
+#
+# WHERE THE DIAL STOPS WORKING. Peak deviation saturates: 1.2125 mm at both
+# delta=0.25 and 0.30, then 1.5365 mm at both 0.40 and 0.50 -- and 1.5365 is
+# also, to every digit, the peak of segments=12. It is the same facet every
+# time, on the same surface, with a longest edge of ~35.9 mm. Above roughly
+# 0.35 mm both rules are asking for elements coarser than the user's rigid
+# target, so ``Mesh.MeshSizeMax`` sets the peak and the deviation dial has no
+# authority over the quantity it is named after. That is why the band stops at
+# 0.35 rather than at 0.5: inside the band the label is honest.
+#
+# TWO DEFECTS, both found by measuring rather than by reading, and both fixed
+# here. Every number this branch recorded before them is void, including the
+# two grounds it was parked on:
+#
+# * The trim mask never ran. ``gmsh.model.isInside`` returns the NUMBER of
+#   points inside, one integer, not a flag per point; read as an array it is
+#   length 1, so the shape guard under it fell back to "all inside" on every
+#   face it was ever given. See ``_parametric_trim_mask``.
+# * The size field was not piecewise-constant. Each cell corner was quantised
+#   separately and gmsh interpolated between the three, so the field varied
+#   continuously across a cell -- the exact behaviour the ladder exists to
+#   prevent. A cell now takes the finest of its corners and carries one level.
+#   Taking the finest is a choice, not a recovery: the comment said one value
+#   per cell without saying which, and the finest is the reading that cannot
+#   silently coarsen a corner that asked for detail.
+#
+# The mask alone, isolated at delta=0.2, is worth 14-20% on all three metrics:
+# 7,542 tris / peak 1.0787 / p95 0.1799 / rms 0.0963 with it reverted, against
+# 8,334 / 0.9112 / 0.1547 / 0.0772 with it -- for 10.5% MORE triangles, which
+# looks backwards until you know how a ``PostView`` resolves overlap.
+#
+# It does not take the minimum. Where two ``ST`` cells cover the same point,
+# ``gmsh.view.probe`` returns the LAST one added, whatever its value: two cells
+# on one footprint carrying 30 and 2 probe as 2.0 in that order and 30.0 when
+# the order is reversed (gmsh 4.15.2). The view is built by iterating
+# ``getEntities(2)``, so before the mask a coarse OUT-OF-TRIM cell from a
+# later-iterated surface silently overrode the correct fine sizing of an
+# earlier one -- and which surface won was decided by OCC entity order, a
+# property of how the CAD system happened to emit the STEP, not of the
+# geometry. That is the real shape of the bug. It was not merely sampling
+# outside the trim; it was coarsening real geometry by an arbitrary rule.
+#
+# So the extra triangles are the cost of no longer being wrongly coarsened, and
+# the fidelity gain is the same fact seen from the other side: the overridden
+# regions were where deviation was worst. Uncovered points are safe either way
+# -- probing returns no value at all rather than zero, so a hole falls through
+# to the other fields and to ``Mesh.MeshSizeMax``.
+#
+# A residual, for whoever ships this: masking removes nearly all overlap, but
+# adjacent faces can still overlap slightly at a shared edge, and there the
+# same order-dependence applies in miniature. The order-independent form is to
+# give each surface its OWN ``PostView`` field and let the ``Min`` field
+# resolve them, which is the semantics this wanted in the first place. Not done
+# here: it is a design change, and it should be measured, not assumed.
+#
+# What that changes: peak deviation is now MONOTONIC in the dial. The parking
+# decision's first and strongest ground was that it was not (1.109 mm at 0.2,
+# 1.047 at 0.3) and that the dial therefore did not govern its own quantity.
+# That was an artifact of these two defects plus the saturation above, not a
+# property of constant-sagitta sizing.
+#
+# CLOSED, so it is not attempted again: raising the parameter-grid resolution
+# was recorded here as the cheapest and highest-leverage thing to try next, on
+# the theory that the sampling grid was missing curvature peaks between
+# samples. Measured at 12 / 24 / 48 / 96 samples, it is not. 12 is genuinely
+# too coarse (peak 1.100 at delta=0.2 against 0.911 at 24), 24 to 48 is flat --
+# identical peak at both deltas, ~1% fewer triangles for 32% more build time --
+# and 96 is WORSE (peak 1.018 at delta=0.2) for triple the build time. 24 is
+# already at the knee.
+#
+# EVERY BLOCKER THAT ONCE STOOD HERE IS CLOSED. Kept as a list because each one
+# resolved differently, and two resolved opposite to the prediction written
+# beside them:
+#
+# * The mesh cache key. ``IMPORT_MESH_PIPELINE_CONTRACT`` deliberately stays at
+#   "wg-import-solve-v5" -- see the reasoning at its definition. A bump would
+#   re-mesh every existing CAD project on its next ingest and move acoustics
+#   nobody asked to have moved; Magnus chose to leave them alone (2026-08-27).
+#   The mix stays visible because ``occ_tessellation`` below records which rule
+#   built each mesh.
+# * ``docs/reference/openapi.v1.json`` is regenerated and carries
+#   ``surfaceDeviationMm``. Regenerating it AFTER merging main mattered: the
+#   textual merge of a generated file had left the document advertising both
+#   dials at once.
+# * The wall frequency limit per delta is measured, and the prediction that it
+#   was "probably clamp-dominated and unchanged" was wrong in the useful
+#   direction: lf 1525 -> 1757, mf 1846 -> 2119, hf 3620 -> 5347 Hz. Unlike
+#   peak deviation, ``effective_max_valid_frequency_hz`` is consumed by the
+#   pipeline, so this is the dial's largest real effect.
+# * ``sizing_rule`` in ``build_imported_mesh`` remains measurement scaffolding
+#   and does not reach the API. ``post_ingest`` builds ``prep_options`` as a
+#   literal allowlist for exactly this reason.
+#
+# TWO RESULTS WORTH KEEPING whichever rule eventually wins:
+#
+# * Sampling a size field from a throwaway coarse mesh makes meshing decisions
+#   depend on sub-micron coordinate noise, because gmsh lays that mesh out in
+#   world space: the same body meshed before and after recentring came out with
+#   different triangle counts (188 vs 184, then 186 vs 194). That is why the
+#   surviving field is sampled on an intrinsic parameter grid and quantised.
+# * Nothing in this pipeline measured the geometric fidelity of a solver mesh
+#   until ``measure_surface_deviation`` below. A sizing rule was asked for a
+#   deviation and never once asked what it delivered, which is how a table
+#   describing a discarded variant survived two commits unchallenged.
+IMPORTED_SURFACE_DEVIATION_MM = 0.15
+IMPORTED_SURFACE_DEVIATION_MIN_MM = 0.1
+IMPORTED_SURFACE_DEVIATION_MAX_MM = 0.35
+_SAGITTA_FLAT_CURVATURE = 1.0e-9
+# Parameter-grid resolution per surface for the size field. Measured at the
+# knee: see the sweep above.
+_SAGITTA_GRID_SAMPLES = 24
+# Size levels are snapped to a 5%-per-step geometric ladder so that sub-micron
+# coordinate differences cannot change which level a cell lands on.
+_SAGITTA_QUANTISE_LOG = math.log(1.05)
 # The CAD viewport is a presentation artifact, not an acoustic discretisation.
 # Its sizing is therefore scale/curvature driven and explicitly capped for the
 # browser instead of inheriting source-frequency or rigid-wall solve targets.
@@ -139,32 +340,21 @@ def validate_imported_sizes(
 
 
 def imported_tessellation_settings(
-    sizes: Mapping[str, Any], *, curvature_segments: int | None = None
+    sizes: Mapping[str, Any], *, deviation_mm: float | None = None
 ) -> dict[str, float | int]:
-    """Bounded curvature-aware OCC tessellation derived from validated sizes.
+    """Bounded constant-sagitta OCC tessellation derived from validated sizes.
 
-    Curvature may refine to half the finest explicit target, never arbitrarily
-    towards zero on a small decorative fillet. The user's rigid target remains
-    the global maximum edge-size request.
-
-    ``curvature_segments`` is the cost dial. Measured on a representative
-    return (rigid 30 / hf 4 / mf 15 / lf 30 mm), chordal deviation sampled
-    against the OCC model:
-
-        off  ->  3,479 tris, chord max 5.49 mm  (visibly faceted)
-        12   ->  5,671 tris, chord max 1.24 mm
-        24   -> 10,252 tris, chord max 0.84 mm  (default)
-
-    Halving the default costs 0.4 mm of peak chord error and returns 45% of the
-    triangles, which on that model left the HF wall frequency limit unchanged
-    while cutting dense-solver RAM about 3x and LU work about 5.7x.
+    ``surface_deviation_mm`` is the dial: the chord deviation every panel is
+    allowed from the true surface. Sizing may still refine to half the finest
+    explicit target and never exceeds the user's rigid target, so a decorative
+    fillet cannot drag the whole mesh down.
     """
 
     values = [float(sizes["rigid_size_mm"]), *map(float, sizes["source_size_mm"].values())]
     finest = min(values)
     return {
-        "curvature_segments_per_2pi": (
-            IMPORTED_CURVATURE_SEGMENTS if curvature_segments is None else int(curvature_segments)
+        "surface_deviation_mm": (
+            IMPORTED_SURFACE_DEVIATION_MM if deviation_mm is None else float(deviation_mm)
         ),
         "mesh_size_min_mm": finest / IMPORTED_CURVATURE_REFINEMENT_LIMIT,
         "mesh_size_max_mm": float(sizes["rigid_size_mm"]),
@@ -1104,6 +1294,285 @@ def build_imported_viewport_mesh(
         gmsh.clear()
 
 
+def _parametric_trim_mask(gmsh: Any, surface: int, uv: np.ndarray) -> np.ndarray:
+    """Per-sample in-trim mask for a face, given concatenated (u, v) pairs.
+
+    ``gmsh.model.isInside`` reads like a predicate but is not one: it returns
+    *how many* of the points handed to it fall inside the trimmed entity, a
+    single integer, not one flag per point. Treating its result as an array
+    yields a length-1 array, which is why the guard this replaces silently fell
+    back to "everything is inside" on every face it was ever given.
+
+    The batch answer is still worth asking for first, because it settles the
+    two common cases outright -- an untrimmed face returns ``n``, a face whose
+    parameter rectangle misses it entirely returns ``0`` -- and only a
+    genuinely partial face has to pay for the per-point loop.
+    """
+
+    count = len(uv) // 2
+    if count <= 0:
+        return np.ones(0, dtype=bool)
+    try:
+        total = int(gmsh.model.isInside(2, surface, uv.tolist(), parametric=True))
+    except Exception:
+        # A representation that cannot classify its own points is not evidence
+        # that the samples are outside it; keep the face rather than drop it.
+        return np.ones(count, dtype=bool)
+    if total >= count:
+        return np.ones(count, dtype=bool)
+    if total <= 0:
+        return np.zeros(count, dtype=bool)
+    pairs = uv.reshape(-1, 2)
+    mask = np.zeros(count, dtype=bool)
+    for index in range(count):
+        try:
+            mask[index] = bool(
+                gmsh.model.isInside(2, surface, pairs[index].tolist(), parametric=True)
+            )
+        except Exception:
+            mask[index] = True
+    return mask
+
+
+def _sagitta_background_view(
+    gmsh: Any,
+    *,
+    deviation_mm: float,
+    size_min_mm: float,
+    size_max_mm: float,
+    samples: int = _SAGITTA_GRID_SAMPLES,
+) -> int:
+    """Build a background size view giving every panel the same chord sagitta.
+
+    ``Mesh.MeshSizeFromCurvature = N`` is a segments-per-2pi rule: it targets
+    h ~= 2*pi*R/N, so element size scales with the curvature radius and chord
+    error grows linearly with R. That over-refines small fillets (an R=5 mm
+    fillet gets ~0.04 mm of sagitta) while under-refining large sweeps (R~115 mm
+    gets ~0.84 mm), and on the reference return it put 52% of the triangles on
+    1.6% of the area. A constant-sagitta rule, h = 2*sqrt(2*R*delta), equalises
+    the chord error instead.
+
+    The size field is sampled on each surface's own parameter grid, which
+    matters for two independent reasons:
+
+    * Cost. The obvious implementation, a per-query ``setSizeCallback``, needs
+      the surface parameters at an arbitrary xyz; that inverse projection
+      measures 36 us/point and barely vectorises (1.3x), costing ~18 s of extra
+      build time. Going forward from (u,v) instead is free, and
+      ``getPrincipalCurvatures`` is 0.7 us/point when handed the whole array.
+    * Determinism. Sampling a throwaway coarse *mesh* instead would make the
+      field depend on absolute position, because gmsh lays that mesh out in
+      world space. A CAD return meshed before recentring then came out with a
+      different triangle count than the same body meshed after it, which breaks
+      the invariant that moving a design cannot change its acoustics. A
+      parameter grid is intrinsic to the surface and carries no such dependency.
+    """
+
+    view = gmsh.view.add("sagitta_size")
+    payloads: list[np.ndarray] = []
+    for _, surface in gmsh.model.getEntities(2):
+        lower, upper = gmsh.model.getParametrizationBounds(2, surface)
+        if len(lower) < 2 or len(upper) < 2:
+            continue
+        u_lo, v_lo = float(lower[0]), float(lower[1])
+        u_hi, v_hi = float(upper[0]), float(upper[1])
+        if not all(math.isfinite(value) for value in (u_lo, u_hi, v_lo, v_hi)):
+            continue
+        if u_hi <= u_lo or v_hi <= v_lo:
+            continue
+        u = np.linspace(u_lo, u_hi, samples)
+        v = np.linspace(v_lo, v_hi, samples)
+        uu, vv = np.meshgrid(u, v, indexing="ij")
+        uv = np.column_stack([uu.ravel(), vv.ravel()]).ravel()
+        xyz = np.asarray(gmsh.model.getValue(2, surface, uv.tolist()), dtype=float).reshape(-1, 3)
+        cmax, cmin, _, _ = gmsh.model.getPrincipalCurvatures(surface, uv.tolist())
+        curvature = np.maximum(np.abs(np.asarray(cmax)), np.abs(np.asarray(cmin)))
+        sizes = np.where(
+            curvature < _SAGITTA_FLAT_CURVATURE,
+            size_max_mm,
+            2.0 * np.sqrt(2.0 * deviation_mm / np.maximum(curvature, _SAGITTA_FLAT_CURVATURE)),
+        )
+        sizes = np.clip(sizes, size_min_mm, size_max_mm)
+
+        # A trimmed face's parameter rectangle extends past the face itself.
+        # Those out-of-trim samples still sit on the underlying surface, but
+        # they sit over whatever geometry actually occupies that region, and
+        # the view joins a ``Min`` field -- so a sample from a tightly curved
+        # face that projects outside its own trim can only pull its neighbour's
+        # size DOWN, spending triangles on a surface that never asked for them.
+        inside = _parametric_trim_mask(gmsh, surface, uv)
+
+        grid_xyz = xyz.reshape(samples, samples, 3)
+        grid_size = sizes.reshape(samples, samples)
+        grid_inside = inside.reshape(samples, samples)
+        # Two triangles per parameter cell. Trimmed-away corners still lie on
+        # the underlying surface and carry that surface's own sizing, so a
+        # trimmed face is covered rather than left with holes in its field.
+        a = (slice(0, -1), slice(0, -1))
+        b = (slice(1, None), slice(0, -1))
+        c = (slice(1, None), slice(1, None))
+        d = (slice(0, -1), slice(1, None))
+        for corners in ((a, b, c), (a, c, d)):
+            pts = [grid_xyz[i].reshape(-1, 3) for i in corners]
+            vals = [grid_size[i].reshape(-1) for i in corners]
+            # One quantised value per cell rather than three interpolated
+            # corner values. Translating a body cannot be bit-exact, and a
+            # linearly interpolated field turns that sub-micron coordinate
+            # noise into occasional different meshing decisions -- the same
+            # design came out with a different triangle count purely for having
+            # been recentred. A piecewise-constant field snapped to discrete
+            # levels is flat over each cell, so the noise has nothing to tip.
+            # See below for why one value per cell is not the same thing as
+            # quantising each corner.
+            keep = np.logical_and.reduce([grid_inside[i].reshape(-1) for i in corners])
+            if not keep.any():
+                continue
+            pts = [point[keep] for point in pts]
+            vals = [value[keep] for value in vals]
+            # The cell takes the finest of its own corners before quantising,
+            # so a curvature peak caught at one corner is not averaged away by
+            # its flatter neighbours, and the three vertices then carry the
+            # same value -- which is what makes the field flat over the cell.
+            # Quantising each corner separately instead (as this did) leaves
+            # three different levels on a cell whose curvature varies, and gmsh
+            # interpolates across them, reintroducing exactly the continuous
+            # response to sub-micron coordinate noise the ladder exists to
+            # remove.
+            cell = np.minimum.reduce(vals)
+            level = np.clip(
+                size_min_mm
+                * np.exp(
+                    np.floor(np.log(cell / size_min_mm) / _SAGITTA_QUANTISE_LOG)
+                    * _SAGITTA_QUANTISE_LOG
+                ),
+                size_min_mm,
+                size_max_mm,
+            )
+            payloads.append(
+                np.column_stack(
+                    [pts[0][:, 0], pts[1][:, 0], pts[2][:, 0],
+                     pts[0][:, 1], pts[1][:, 1], pts[2][:, 1],
+                     pts[0][:, 2], pts[1][:, 2], pts[2][:, 2],
+                     level, level, level]
+                )
+            )
+
+    if not payloads:
+        raise ImportedMeshError("mesh sizing: no surface could be sampled for the size field")
+    data = np.vstack(payloads)
+    gmsh.view.addListData(view, "ST", len(data), data.ravel().tolist())
+    return int(view)
+
+
+# Barycentric sample lattice for deviation measurement, vertices excluded --
+# a mesh vertex lies on the surface by construction, so it measures nothing.
+# Edge midpoints and the centroid are where a flat facet departs furthest from
+# a curved face, so a small lattice already finds the peak.
+_DEVIATION_BARYCENTRIC = (
+    (0.5, 0.5, 0.0),
+    (0.0, 0.5, 0.5),
+    (0.5, 0.0, 0.5),
+    (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+    (2.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0),
+    (1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0),
+    (1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0),
+)
+
+
+def measure_surface_deviation(
+    gmsh: Any, *, triangle_budget: int = 0
+) -> dict[str, Any]:
+    """Measure how far the generated facets sit from the CAD surfaces they came from.
+
+    This is the achieved value beside the requested one. Nothing else in the
+    pipeline measures the geometric fidelity of a solver mesh at all: a sizing
+    rule is asked for a deviation and never asked what it delivered.
+
+    Each triangle is projected onto the OCC face it was meshed from -- gmsh
+    still holds both, so the association is exact and no nearest-surface search
+    is needed. Points are sampled inside the facet, never at its vertices,
+    which are on the surface by construction.
+
+    Called with the model still loaded, immediately after ``generate(2)``.
+    ``triangle_budget`` of 0 measures every facet, which is what a comparison
+    between sizing rules needs: a per-surface stride costs each face at least
+    one sample, so it over-weights the many small well-resolved faces, and two
+    rules that distribute triangles differently are then biased differently.
+    A budget strides deterministically for when the cost matters.
+    """
+
+    _, coordinates, _ = gmsh.model.mesh.getNodes()
+    nodes = np.asarray(coordinates, dtype=float).reshape(-1, 3)
+    tags, _, _ = gmsh.model.mesh.getNodes()
+    index = {int(tag): position for position, tag in enumerate(np.asarray(tags).ravel())}
+
+    per_surface: list[tuple[int, np.ndarray]] = []
+    total = 0
+    for _, surface in gmsh.model.getEntities(2):
+        kinds, _, connectivity = gmsh.model.mesh.getElements(2, surface)
+        for kind, nodes_flat in zip(kinds, connectivity):
+            if int(kind) != 2:  # 3-node triangles only
+                continue
+            facets = np.asarray(nodes_flat, dtype=np.int64).reshape(-1, 3)
+            if facets.size:
+                per_surface.append((int(surface), facets))
+                total += len(facets)
+    if not total:
+        return {"triangle_count": 0, "sampled_triangle_count": 0}
+
+    stride = 1 if triangle_budget <= 0 else max(1, total // triangle_budget)
+    distances: list[np.ndarray] = []
+    worst: tuple[float, int, float] | None = None
+    sampled = 0
+    for surface, facets in per_surface:
+        chosen = facets[::stride]
+        if not len(chosen):
+            continue
+        sampled += len(chosen)
+        corners = np.stack(
+            [nodes[[index[int(tag)] for tag in chosen[:, column]]] for column in range(3)]
+        )
+        points = np.concatenate(
+            [
+                weights[0] * corners[0] + weights[1] * corners[1] + weights[2] * corners[2]
+                for weights in _DEVIATION_BARYCENTRIC
+            ]
+        )
+        projected = np.asarray(
+            gmsh.model.getClosestPoint(2, surface, points.ravel().tolist())[0], dtype=float
+        ).reshape(-1, 3)
+        gaps = np.linalg.norm(points - projected, axis=1)
+        distances.append(gaps)
+        # Remember the facet that produced this surface's worst sample, so the
+        # report can say whether the peak was the sizing rule's doing or the
+        # size cap's. A facet already at ``Mesh.MeshSizeMax`` is as fine as the
+        # user's rigid target allows, and no deviation dial can improve it.
+        local = int(np.argmax(gaps))
+        if worst is None or gaps[local] > worst[0]:
+            facet = corners[:, local % len(chosen)]
+            edges = [
+                float(np.linalg.norm(facet[0] - facet[1])),
+                float(np.linalg.norm(facet[1] - facet[2])),
+                float(np.linalg.norm(facet[2] - facet[0])),
+            ]
+            worst = (float(gaps[local]), int(surface), max(edges))
+
+    if not distances:
+        return {"triangle_count": total, "sampled_triangle_count": 0}
+    everything = np.concatenate(distances)
+    return {
+        "triangle_count": int(total),
+        "sampled_triangle_count": int(sampled),
+        "sample_count": int(everything.size),
+        "peak_mm": float(np.max(everything)),
+        "p95_mm": float(np.percentile(everything, 95.0)),
+        "rms_mm": float(np.sqrt(np.mean(np.square(everything)))),
+        "mean_mm": float(np.mean(everything)),
+        "peak_surface": None if worst is None else worst[1],
+        "peak_facet_longest_edge_mm": None if worst is None else worst[2],
+    }
+
+
 def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
     """Surface any component whose global orientation is still a guess.
 
@@ -1135,29 +1604,22 @@ def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
     return warnings
 
 
-def _validated_curvature_segments(value: Any) -> int | None:
-    """Read the optional per-ingest curvature-segment override.
-
-    Bounded rather than free: below the floor the shell facets visibly (12
-    already costs 1.24 mm of peak chord error on the reference model), and above
-    the ceiling the triangle count runs at the artifact limit for no measurable
-    fidelity left to buy.
-    """
+def _validated_surface_deviation(value: Any) -> float | None:
+    """Read the optional per-ingest max-surface-deviation override, in mm."""
 
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ImportedMeshError("mesh.curvatureSegments must be an integer number of segments per 2pi")
+        raise ImportedMeshError("mesh.surfaceDeviationMm must be a deviation in millimetres")
     number = float(value)
-    if not math.isfinite(number) or number != int(number):
-        raise ImportedMeshError("mesh.curvatureSegments must be a whole number of segments per 2pi")
-    segments = int(number)
-    if not IMPORTED_CURVATURE_SEGMENTS_MIN <= segments <= IMPORTED_CURVATURE_SEGMENTS_MAX:
+    if not math.isfinite(number):
+        raise ImportedMeshError("mesh.surfaceDeviationMm must be a finite deviation in millimetres")
+    if not IMPORTED_SURFACE_DEVIATION_MIN_MM <= number <= IMPORTED_SURFACE_DEVIATION_MAX_MM:
         raise ImportedMeshError(
-            "mesh.curvatureSegments must be between "
-            f"{IMPORTED_CURVATURE_SEGMENTS_MIN} and {IMPORTED_CURVATURE_SEGMENTS_MAX}"
+            "mesh.surfaceDeviationMm must be between "
+            f"{IMPORTED_SURFACE_DEVIATION_MIN_MM} and {IMPORTED_SURFACE_DEVIATION_MAX_MM} mm"
         )
-    return segments
+    return number
 
 
 def build_imported_mesh(
@@ -1216,7 +1678,7 @@ def build_imported_mesh(
     options = dict(options or {})
     tessellation = imported_tessellation_settings(
         normalized_sizes,
-        curvature_segments=_validated_curvature_segments(options.get("curvature_segments")),
+        deviation_mm=_validated_surface_deviation(options.get("surface_deviation_mm")),
     )
     symmetry_mode = str(options.get("symmetry_mode") or "auto")
     if symmetry_mode not in {"auto", "full"}:
@@ -1720,17 +2182,46 @@ def build_imported_mesh(
             gmsh.model.mesh.field.setNumber(threshold, "DistMin", 0.0)
             gmsh.model.mesh.field.setNumber(threshold, "DistMax", normalized_sizes["transition_mm"])
             fields.append(threshold)
-        if fields:
-            minimum = gmsh.model.mesh.field.add("Min")
-            gmsh.model.mesh.field.setNumbers(minimum, "FieldsList", fields)
-            gmsh.model.mesh.field.setAsBackgroundMesh(minimum)
+        # The sagitta view samples each surface's own parameter grid and never
+        # meshes anything -- the throwaway-coarse-mesh route was tried and
+        # rejected for making the field depend on absolute position, as
+        # ``_sagitta_background_view`` explains. It is built here only because
+        # the ``PostView`` field has to exist before it can join the Min field
+        # below.
+        # MEASUREMENT SCAFFOLD, candidate branch only. The two rules have to be
+        # meshed and measured through one code path or the comparison is
+        # between a pipeline and a memory of a pipeline -- which is how this
+        # branch's original table came to describe a variant that had already
+        # been thrown away. ``segments`` restores the shipped
+        # ``Mesh.MeshSizeFromCurvature`` rule so both can be swept here.
+        sizing_rule = str(options.get("sizing_rule") or "sagitta")
+        if sizing_rule not in {"sagitta", "segments"}:
+            raise ImportedMeshError("mesh.sizingRule must be 'sagitta' or 'segments'")
+        if sizing_rule == "sagitta":
+            sagitta_view = _sagitta_background_view(
+                gmsh,
+                deviation_mm=float(tessellation["surface_deviation_mm"]),
+                size_min_mm=float(tessellation["mesh_size_min_mm"]),
+                size_max_mm=float(tessellation["mesh_size_max_mm"]),
+                samples=int(options.get("sagitta_grid_samples") or _SAGITTA_GRID_SAMPLES),
+            )
+            sagitta_field = gmsh.model.mesh.field.add("PostView")
+            gmsh.model.mesh.field.setNumber(sagitta_field, "ViewTag", sagitta_view)
+            fields.append(sagitta_field)
+        minimum = gmsh.model.mesh.field.add("Min")
+        gmsh.model.mesh.field.setNumbers(minimum, "FieldsList", fields)
+        gmsh.model.mesh.field.setAsBackgroundMesh(minimum)
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
         gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
         gmsh.option.setNumber("Mesh.MeshSizeMin", tessellation["mesh_size_min_mm"])
         gmsh.option.setNumber("Mesh.MeshSizeMax", tessellation["mesh_size_max_mm"])
         gmsh.option.setNumber(
             "Mesh.MeshSizeFromCurvature",
-            tessellation["curvature_segments_per_2pi"],
+            # Superseded by the sagitta field above, unless the scaffold asked
+            # for the shipped rule instead.
+            0
+            if sizing_rule == "sagitta"
+            else int(options.get("curvature_segments") or IMPORTED_CURVATURE_SEGMENTS),
         )
         gmsh.option.setNumber("Mesh.Algorithm", tessellation["algorithm"])
 
@@ -1739,7 +2230,11 @@ def build_imported_mesh(
             gmsh.model.mesh.generate(2)
         except Exception as exc:  # only this failure is entitled to healing
             mesh_error = exc
+        deviation: dict[str, Any] | None = None
+        if mesh_error is None and options.get("measure_deviation"):
+            deviation = measure_surface_deviation(gmsh)
         state = {
+            "surface_deviation": deviation,
             "mesh_generation_error": mesh_error,
             "surface_order_reference": geometries,
             "surface_order": ordered_surfaces,

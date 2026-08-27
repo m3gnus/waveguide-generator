@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 import hashlib
+import inspect
 import math
 import os
 from pathlib import Path
@@ -28,7 +29,10 @@ from server.cadlink.api import (
 )
 from server.cadlink.identity import SaveIdentity
 from server.cadlink.ingest import (
+    IMPORT_MESH_PIPELINE_CONTRACT,
     IngestRefusal,
+    _cache_key,
+    _cache_lookup_key,
     _canonical,
     build_deferred_viewport,
     compute_freshness,
@@ -39,7 +43,14 @@ from server.cadlink.ingest import (
     resolve_deferred_viewport,
     validate_registry_echoes,
 )
-from server.mesh.imported import ImportedMeshDependencyError, polar_grid_from_symmetry
+from server.mesh.imported import (
+    IMPORTED_SURFACE_DEVIATION_MAX_MM,
+    imported_tessellation_settings,
+    IMPORTED_SURFACE_DEVIATION_MIN_MM,
+    IMPORTED_SURFACE_DEVIATION_MM,
+    ImportedMeshDependencyError,
+    polar_grid_from_symmetry,
+)
 from server.mesh.artifact import mesh_text_sha256
 from server.cadlink.wgreturn import WgReturnBundle
 from server.cadlink.store import CadLinkStore
@@ -263,6 +274,93 @@ def test_endpoint_validates_workspace_and_returns_pipeline_record(monkeypatch, t
     assert captured["expected_instance_id"] == "instance-a"
     with pytest.raises(ValidationError, match="extra_forbidden"):
         CadReturnIngestRequest.model_validate({"bundlePath": "wgreturn/speaker.wgreturn", "mesh": {"rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {}}, "unexpected": True})
+
+
+def test_mesh_measurement_scaffolding_cannot_be_reached_from_a_request() -> None:
+    """The sizing scaffold stays in the harness, not in the API.
+
+    ``build_imported_mesh`` accepts three options that exist only for
+    ``scripts/measure_imported_mesh_deviation.py``: ``sizing_rule`` would
+    silently restore the superseded segments-per-2pi rule for one ingest,
+    ``sagitta_grid_samples`` would change the size field, and
+    ``measure_deviation`` costs roughly half a build again. All three are also
+    part of the mesh cache key, so a request that set one would poison the
+    cache for the body it meshed. Two things keep them out -- the request model
+    forbids unknown fields, and the handler builds ``prep_options`` as a
+    literal -- and this pins both.
+    """
+
+    base = {
+        "bundlePath": "wgreturn/speaker.wgreturn",
+        "mesh": {"rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {"source-hf": 4}},
+    }
+    for scaffold in ("sizingRule", "sizing_rule", "sagittaGridSamples", "measureDeviation"):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            CadReturnIngestRequest.model_validate({**base, scaffold: "segments"})
+
+    source = inspect.getsource(post_ingest)
+    options = source[source.index("prep_options={") : source.index("expected_design_id=payload")]
+    for scaffold in ("sizing_rule", "sagitta_grid_samples", "measure_deviation"):
+        assert scaffold not in options, f"{scaffold} reached the ingest options"
+    assert "**payload" not in options, "prep_options must stay a literal, not a splat"
+
+
+def test_the_sizing_change_does_not_re_mesh_existing_projects() -> None:
+    """A sizing-rule change that leaves the cache key alone, deliberately.
+
+    Bumping ``IMPORT_MESH_PIPELINE_CONTRACT`` would invalidate every cached mesh
+    and silently re-mesh every existing CAD project on its next ingest, moving
+    acoustics whose owners did not ask for a new mesh. Magnus chose to leave
+    them alone (2026-08-27): the sagitta rule governs from the next ingest of
+    changed inputs onward.
+
+    That is only safe because the two rules stay distinguishable per mesh rather
+    than behind one shared version string -- a segments mesh records
+    ``curvature_segments`` in ``occ_tessellation`` and a sagitta mesh records
+    ``surface_deviation_mm``. If a future change makes the rules
+    indistinguishable in the artifact, this decision has to be revisited and the
+    contract bumped, so both halves are pinned here together.
+    """
+
+    assert IMPORT_MESH_PIPELINE_CONTRACT == "wg-import-solve-v5"
+
+    sizes = {"rigid_size_mm": 20.0, "source_size_mm": {"source-hf": 4.0}}
+    sagitta = imported_tessellation_settings(sizes)
+    assert "surface_deviation_mm" in sagitta
+    assert "curvature_segments" not in sagitta
+
+    # The key is a pure function of its inputs, so an unchanged project keeps
+    # resolving to the mesh it already has.
+    for key_function in (_cache_key, _cache_lookup_key):
+        source = inspect.getsource(key_function)
+        assert '"import_pipeline_contract": IMPORT_MESH_PIPELINE_CONTRACT' in source
+
+
+def test_surface_deviation_is_bounded_to_the_band_where_the_dial_has_authority() -> None:
+    """Outside the band the label stops being true, so the band is the contract.
+
+    Below the floor the triangle count runs away for fidelity the solver cannot
+    use. Above the ceiling the request is coarser than the user's own rigid
+    target, ``Mesh.MeshSizeMax`` sets the peak instead, and the mesh stops
+    responding to the dial at all -- measured, peak deviation is identical at
+    0.40 and 0.50 mm on the reference return.
+    """
+
+    base = {
+        "bundlePath": "wgreturn/speaker.wgreturn",
+        "mesh": {"rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {"source-hf": 4}},
+    }
+    for accepted in (IMPORTED_SURFACE_DEVIATION_MIN_MM, IMPORTED_SURFACE_DEVIATION_MM, IMPORTED_SURFACE_DEVIATION_MAX_MM):
+        payload = CadReturnIngestRequest.model_validate({**base, "surfaceDeviationMm": accepted})
+        assert payload.surface_deviation_mm == pytest.approx(accepted)
+
+    for refused in (0.0, -0.1, IMPORTED_SURFACE_DEVIATION_MIN_MM / 2, IMPORTED_SURFACE_DEVIATION_MAX_MM * 2):
+        with pytest.raises(ValidationError):
+            CadReturnIngestRequest.model_validate({**base, "surfaceDeviationMm": refused})
+
+    # Omitted must stay omitted rather than becoming an explicit default: it is
+    # part of the mesh cache key.
+    assert CadReturnIngestRequest.model_validate(base).surface_deviation_mm is None
 
 
 def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: Path) -> None:

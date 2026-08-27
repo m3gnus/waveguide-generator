@@ -36,6 +36,23 @@ from .wgreturn import WgReturnBundle, read_wgreturn
 # artifact for the same inputs and must not be served from the cache.
 # v5: the meshing stage now records a geometric self-intersection report, so a
 # v4 sidecar would be reused without one and its mesh would go unchecked.
+# Element sizing moved from a segments-per-2pi curvature rule to a constant-
+# sagitta field (``IMPORTED_SURFACE_DEVIATION_MM``) WITHOUT a contract bump, and
+# that is a deliberate decision rather than an oversight.
+#
+# A bump would be the conservative choice: it would invalidate every cached mesh
+# so that no design could hold one mesh from each rule. It would also silently
+# re-mesh every existing CAD project on its next ingest and move its acoustics,
+# for projects whose owners did not ask for a new mesh. Magnus chose to leave
+# existing projects alone and have the new rule govern from the next ingest
+# onwards (2026-08-27).
+#
+# What makes that safe rather than merely cheap is that the two rules are
+# already distinguishable per mesh: ``build_imported_mesh`` records its OCC
+# settings under ``occ_tessellation``, where a segments mesh carries
+# ``curvature_segments`` and a sagitta mesh carries ``surface_deviation_mm``.
+# The mix is visible in the artifact, not hidden behind a shared version string.
+# Anything that changes a project's inputs re-keys it into the new rule anyway.
 IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v5"
 IMPORT_VIEWPORT_PIPELINE_CONTRACT = "wg-import-viewport-v1"
 
