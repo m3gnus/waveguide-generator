@@ -238,6 +238,8 @@ export const CAD_DRIVER_FIELD_CONTROLS: readonly CadDriverFieldDescriptor[] = [
   driverField('bl_t_m', 'T·m', 0.5),
   driverField('re_ohm', 'Ω', 0.1),
   driverField('le_mh', 'mH', 0.05),
+  driverField('le2_mh', 'mH', 0.05),
+  driverField('re2_ohm', 'Ω', 0.5),
   driverField('mmd_g', 'g', 1),
   driverField('mms_g', 'g', 1),
   driverField('cms_m_per_n', 'm/N', 0.0001),

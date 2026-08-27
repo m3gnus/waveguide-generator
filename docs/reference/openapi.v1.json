@@ -1913,7 +1913,7 @@
       },
       "DriverSpec": {
         "additionalProperties": false,
-        "description": "Thiele-Small driver model for one drive channel, Hornresp units.\n\nThe wire keeps Hornresp's units (Sd cm\u00b2, Le mH, Mmd/Mms g, Cms m/N,\nVas L, Rms kg/s, Xmax mm) exactly as the Fusion add-in documents them;\nconversion to SI happens once, in ``server/solver/driver_lem.py``.",
+        "description": "Thiele-Small driver model for one drive channel, Hornresp units.\n\nThe wire keeps Hornresp's units (Sd cm\u00b2, Le/Le2 mH, Mmd/Mms g, Cms m/N,\nVas L, Rms kg/s, Xmax mm) exactly as the Fusion add-in documents them;\nconversion to SI happens once, in ``server/solver/driver_lem.py``.",
         "properties": {
           "bl_t_m": {
             "exclusiveMinimum": 0.0,
@@ -1962,6 +1962,18 @@
               }
             ],
             "title": "Label"
+          },
+          "le2_mh": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Le2 Mh"
           },
           "le_mh": {
             "default": 0.0,
@@ -2016,6 +2028,18 @@
               }
             ],
             "title": "Qms"
+          },
+          "re2_ohm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Re2 Ohm"
           },
           "re_ohm": {
             "exclusiveMinimum": 0.0,

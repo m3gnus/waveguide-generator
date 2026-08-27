@@ -31,9 +31,9 @@ export interface CadDriveChannel {
  * key order of a hand-entered Mmd/Cms driver is byte-for-byte what it was.
  */
 export const DRIVER_FIELD_KEYS = [
-  'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mmd_g', 'mms_g', 'cms_m_per_n',
-  'vas_l', 'fs_hz', 'qms', 'rms_kg_per_s', 'xmax_mm', 'power_w', 'z_nom_ohm',
-  'count', 'rear_volume_l',
+  'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'le2_mh', 're2_ohm', 'mmd_g', 'mms_g',
+  'cms_m_per_n', 'vas_l', 'fs_hz', 'qms', 'rms_kg_per_s', 'xmax_mm', 'power_w',
+  'z_nom_ohm', 'count', 'rear_volume_l',
 ] as const;
 export type DriverFieldKey = typeof DRIVER_FIELD_KEYS[number];
 /** Always required, whatever else is supplied (`DriverSpec`, non-null fields). */
@@ -43,6 +43,9 @@ export const DRIVER_REQUIRED_KEYS: readonly DriverFieldKey[] = ['sd_cm2', 'bl_t_
 export const DRIVER_MASS_KEYS: readonly DriverFieldKey[] = ['mms_g', 'mmd_g'];
 /** At least one of these is required; the solver derives the rest. */
 export const DRIVER_COMPLIANCE_KEYS: readonly DriverFieldKey[] = ['cms_m_per_n', 'vas_l', 'fs_hz'];
+/** Optional, but all-or-nothing: `DriverSpec.validate_completeness` refuses a
+ * spec carrying one half of the semi-inductance branch without the other. */
+export const DRIVER_LR2_KEYS: readonly DriverFieldKey[] = ['le2_mh', 're2_ohm'];
 /** WG's own inputs. They describe the installation, not the driver, so they
  * are never part of a preset's base values and never count as an edit of one. */
 export const DRIVER_INSTALLATION_KEYS: readonly DriverFieldKey[] = ['count', 'rear_volume_l'];
@@ -1299,6 +1302,8 @@ export const DRIVER_FIELD_LABELS: Record<DriverFieldKey, string> = {
   bl_t_m: 'Bl',
   re_ohm: 'Re',
   le_mh: 'Le',
+  le2_mh: 'Le2',
+  re2_ohm: 'Re2',
   mmd_g: 'Mmd',
   mms_g: 'Mms',
   cms_m_per_n: 'Cms',
@@ -1324,6 +1329,11 @@ export function driverMissingGroups(form: ChannelDriverForm | undefined): Driver
   for (const key of DRIVER_REQUIRED_KEYS) if (values[key] === undefined) groups.push([key]);
   if (DRIVER_MASS_KEYS.every((key) => values[key] === undefined)) groups.push([...DRIVER_MASS_KEYS]);
   if (DRIVER_COMPLIANCE_KEYS.every((key) => values[key] === undefined)) groups.push([...DRIVER_COMPLIANCE_KEYS]);
+  // The LR-2 pair is optional, so it is missing only once the user has started
+  // it: one half typed makes the other half required rather than ignored.
+  if (DRIVER_LR2_KEYS.some((key) => values[key] !== undefined)) {
+    for (const key of DRIVER_LR2_KEYS) if (values[key] === undefined) groups.push([key]);
+  }
   return groups;
 }
 

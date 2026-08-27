@@ -206,6 +206,40 @@ def test_coupled_cardioid_allows_a_combine_that_omits_the_mf_channel() -> None:
     assert metal._cardioid_combine_refusal(mf_channel, None) is None
 
 
+def test_coupled_cardioid_refuses_an_mf_driver_that_also_states_a_rear_volume() -> None:
+    """The coupled path applies passive_cardioid_rear_volume_l and never reads
+    DriverSpec.rear_volume_l, so accepting both silently solved the wrong
+    chamber."""
+
+    mf_channel = SimpleNamespace(
+        id="mf", driver=SimpleNamespace(rear_volume_l=6.0)
+    )
+
+    refusal = metal._cardioid_rear_volume_refusal(mf_channel)
+
+    assert refusal is not None
+    assert "'mf'" in refusal
+    assert "rear_volume_l" in refusal
+    assert "passive_cardioid_rear_volume_l" in refusal
+
+
+def test_coupled_cardioid_rear_volume_refusal_ignores_everything_else() -> None:
+    """Only the channel the campaign actually owns loses its rear volume, so
+    refusing any other configuration would reject a legitimate sealed box."""
+
+    assert metal._cardioid_rear_volume_refusal(None) is None
+    assert (
+        metal._cardioid_rear_volume_refusal(SimpleNamespace(id="mf", driver=None))
+        is None
+    )
+    assert (
+        metal._cardioid_rear_volume_refusal(
+            SimpleNamespace(id="mf", driver=SimpleNamespace(rear_volume_l=None))
+        )
+        is None
+    )
+
+
 def test_passive_cardioid_aperture_mapping_resolves_imported_lr_names() -> None:
     aperture_tags, port_names, mf_source_id = metal._passive_cardioid_apertures(
         {"PORT_EXIT_L": 10, "PORT_EXIT_R": 11, "source-mf": 101},
