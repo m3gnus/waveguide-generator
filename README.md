@@ -27,19 +27,32 @@ For a self-contained macOS install, download the release's
 **Waveguide.Generator-&lt;version&gt;-macos-arm64.dmg**, open it, and drag **Waveguide Generator** to
 Applications.
 
-**The first launch is refused, and that is expected.** macOS reports *"Apple could
-not verify 'Waveguide Generator' is free of malware that may harm your Mac or
-compromise your privacy."* The app is ad-hoc signed (`codesign --sign -`) and has
-not been through Apple notarization, which is what that check looks for — it is a
-statement about a missing Apple Developer signature, not about the app. To open
-it, click **Done**, then open **System Settings → Privacy & Security**, scroll to
-**Security**, and click **Open Anyway** beside Waveguide Generator. Confirm once
-and every later launch is normal.
+**The first launch is refused, and there is no button to allow it.** macOS reports
+*"Apple could not verify 'Waveguide Generator' is free of malware that may harm
+your Mac or compromise your privacy"*, offering only **Done** and **Move to Bin** —
+and **System Settings → Privacy & Security will not show an "Open Anyway" entry.**
+That is expected, and it is a statement about a missing Apple signature rather
+than a finding about the app.
 
-Control-clicking and choosing Open no longer bypasses this; Apple removed that
-path in macOS Sequoia, so Privacy & Security is the only route. The warning
-disappears for everyone once the app is signed with a Developer ID certificate
-and notarized, which needs a paid Apple Developer account and is not yet set up.
+To open it, run this once in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"
+```
+
+Then open the app normally. The same instruction ships inside the disk image as
+`READ ME FIRST.txt`.
+
+**Why there is no "Open Anyway".** Apps distributed outside the App Store need a
+paid Apple Developer ID to be notarized. This build is signed *ad-hoc* instead,
+which lets it execute but gives Gatekeeper no developer identity to attach an
+exception to — measured, an ad-hoc bundle assesses with no source at all, while
+an unsigned one reports `source=no usable signature` and *would* be offered an
+override. Unsigned is not an option either: an unsigned arm64 binary cannot
+execute on Apple silicon. Removing the quarantine attribute is therefore the only
+route that works without an Apple Developer ID, and it is what comparable
+un-notarized projects ship. Control-clicking and choosing Open does not help;
+Apple removed that bypass in macOS Sequoia.
 
 For a self-contained Windows install, download
 **Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip**, extract the complete **Waveguide Generator**
