@@ -29,12 +29,21 @@ absorbed prefix never appears in its output at all. That is why this check reads
 the graph instead. Against a squash merge the remaining defence is the rule
 itself: merge a branch at its tip, or name the commits left behind.
 
+A branch may be left partially merged deliberately -- a commit held back out of
+a release cut, say. That is allowed, but it has to be *said*, which is the rule
+GIT-WORKFLOW section 2 states as "merge the branch at its tip, or name the
+commits you are leaving behind and why each is safe to leave". Listing the branch
+in ``.github/partial-merges.txt`` with a reason turns that from prose in a pull
+request body into a reviewable artifact, and downgrades the failure to a warning
+for that branch alone.
+
 Run with no arguments to check every remote branch, or pass branch names.
 """
 
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import subprocess
 import sys
 
@@ -43,6 +52,28 @@ def _git(*args: str) -> str:
     return subprocess.run(
         ["git", *args], capture_output=True, text=True, check=True
     ).stdout
+
+
+ACKNOWLEDGED_PATH = Path(".github/partial-merges.txt")
+
+
+def acknowledged(path: Path) -> dict[str, str]:
+    """Branches whose partial merge is deliberate, mapped to the stated reason."""
+
+    if not path.is_file():
+        return {}
+    entries: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        branch, separator, reason = stripped.partition(":")
+        if not separator or not reason.strip():
+            raise SystemExit(
+                f"{path}: every entry must be '<branch>: <reason>', got {stripped!r}"
+            )
+        entries[branch.strip()] = reason.strip()
+    return entries
 
 
 def remote_branches(upstream: str) -> list[str]:
@@ -74,7 +105,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("branches", nargs="*", help="default: every origin branch")
     parser.add_argument("--upstream", default="origin/main")
+    parser.add_argument("--acknowledged", type=Path, default=ACKNOWLEDGED_PATH)
     args = parser.parse_args(argv)
+    excused = acknowledged(args.acknowledged)
 
     branches = args.branches or remote_branches(args.upstream)
     if not branches:
@@ -87,17 +120,23 @@ def main(argv: list[str] | None = None) -> int:
         if found is None:
             continue
         base, left = found
-        failures += 1
+        reason = excused.get(branch) or excused.get(branch.split("/", 1)[-1])
+        if reason is None:
+            failures += 1
         subject = _git("log", "-1", "--format=%s", base).strip()
-        print(f"{branch} is partially merged into {args.upstream}.")
+        verdict = "deliberately" if reason else ""
+        print(f"{branch} is {verdict}partially merged into {args.upstream}.".replace("  ", " "))
         print(f"  {args.upstream} holds this branch up to {base[:8]}  {subject}")
         print(f"  {len(left)} commit(s) left behind:")
         for commit in left:
             print(f"    {commit[:8]}  {_git('log', '-1', '--format=%s', commit).strip()}")
-        print(
-            "  Merge the branch at its tip, or say in the pull request body why each "
-            "commit above is safe to leave behind."
-        )
+        if reason:
+            print(f"  Acknowledged in {args.acknowledged}: {reason}")
+        else:
+            print(
+                f"  Merge the branch at its tip, or record it in {args.acknowledged} "
+                "as '<branch>: <why each commit above is safe to leave behind>'."
+            )
 
     if failures:
         print(f"\n{failures} partially merged branch(es).", file=sys.stderr)
