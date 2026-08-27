@@ -289,32 +289,39 @@ python scripts/bump_version.py patch
 and `--check` proves every copy agrees. CI runs `--check` on every push; so does
 `server/tests/test_version_consistency.py`.
 
-Create the release commit on `main`, push `main`, and wait for CI to finish
-successfully on that exact commit. Only then tag that same commit and push the
-tag; the branch and tag pushes are deliberately separate operations:
+Releases are two deliberate commands, and **the tag is created last, by CI**:
 
 ```bash
-git push origin main
-# Wait for CI to be green on: git rev-parse HEAD
-git tag v0.2.1
-git push origin v0.2.1
+../release.sh waveguide-generator patch   # bump, commit, push main, wait for CI
+../release.sh waveguide-generator publish # build, validate, tag, publish
 ```
 
-The tag fires `.github/workflows/release.yml`, which **refuses to build when the
-tag disagrees with `shared/version.json`, the tagged commit is not reachable
-from `origin/main`, or CI did not succeed for that exact commit** — a build that
-misreports itself is worse than a failed release. Its SPA job attaches
-`waveguide-generator-v2-spa-<version>.tar.gz`; the macOS job builds the canonical
-platform-neutral app ZIP and manifest, the macOS runtime ZIP, and
-`Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job
-checks its independently built app ZIP byte-for-byte against the canonical one and
-builds the Windows runtime ZIP plus
-`Waveguide.Generator-<version>-windows-x86_64.zip`. Every attached file has a
-`.sha256` sidecar. A final publisher job validates the exact seven asset pairs, uploads
-them to a draft, and makes the release public only after all three build jobs succeed.
-Installer filenames use dots because those are the names GitHub serves; the installed
-application and extracted Windows folder retain spaces. The prebuilt SPA means
-installing Waveguide Generator needs no Node runtime.
+Phase 1 stops once CI is green on the exact release commit; nothing is tagged
+and no version is spent. Phase 2 dispatches
+`.github/workflows/release.yml` against that **commit**, which **refuses to run
+when `shared/version.json` does not move forward past every published tag, the
+commit is not reachable from `origin/main`, or CI did not succeed for that exact
+commit** — a build that misreports itself is worse than a failed release.
+
+Its SPA job attaches `waveguide-generator-v2-spa-<version>.tar.gz`; the macOS job
+builds the canonical platform-neutral app ZIP and manifest, the macOS runtime ZIP,
+and `Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job checks its
+independently built app ZIP against the canonical one by content digest and builds
+the Windows runtime ZIP plus `Waveguide.Generator-<version>-windows-x86_64.zip`.
+Every attached file has a `.sha256` sidecar. A final publisher job validates the
+exact seven asset pairs, uploads them to a draft, **then** creates the annotated
+tag and makes the release public.
+
+That order is deliberate. The tag used to be pushed by hand and was what
+triggered the build, so the version was committed to before anything was known
+to build. When a cross-platform gate failed twice on 2026-08-26, `v0.2.5` and
+`v0.2.6` became permanently dead tags with no assets and the work shipped as
+`v0.2.7`. A draft release does not create a git ref, so a failure now costs
+nothing and the same version is retried.
+
+Installer filenames use dots because those are the names GitHub serves; the
+installed application and extracted Windows folder retain spaces. The prebuilt
+SPA means installing Waveguide Generator needs no Node runtime.
 
 Pre-release and build-metadata suffixes are deliberately unsupported: the tag is
 built as `v` + this string, and the installer and update check compare it.

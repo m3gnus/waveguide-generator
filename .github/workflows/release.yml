@@ -1,16 +1,21 @@
 name: Release
 
-# Build every release component before creating a public release. The final job
-# validates the exact asset inventory and checksums, uploads it to a draft, and
-# only then publishes the release.
+# Build every release component BEFORE the version is spent. The tag does not
+# exist when this workflow starts: the final job validates the exact asset
+# inventory and checksums, uploads them to a draft, and only then creates the
+# annotated tag and publishes.
+#
+# This ordering is the whole point. A tag push used to trigger this workflow, so
+# the version was committed to before anything was known to build. Two failures
+# of a gate that had never run permanently spent v0.2.5 and v0.2.6, because
+# GIT-WORKFLOW.md section 4 keeps published tags immutable. With the tag created
+# last, a failed build costs nothing and the same version is retried.
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Existing tag to build and publish"
+      sha:
+        description: "Release commit on main to build, tag and publish"
         required: true
 
 permissions:
@@ -21,11 +26,14 @@ jobs:
   spa:
     name: Build the SPA
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release_guard.outputs.tag }}
+      version: ${{ steps.release_guard.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -33,38 +41,73 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Tag must match shared/version.json and belong to main
+      - name: The version must be unreleased and the commit must be on main
         id: release_guard
-        # The version reaches the UI, /health and the update checker from this
-        # one file. A tag that disagrees with it ships a build that misreports
-        # itself, which is worse than a failed release.
+        # The version reaches the UI, /health and the update checker from
+        # shared/version.json, so that file — not a tag someone typed — names
+        # the release. The tag is created by the publish job at the end.
         env:
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_SHA: ${{ inputs.sha }}
         run: |
           set -euo pipefail
-          tag="$RELEASE_TAG"
-          declared="v$(python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
-          if [ "$tag" != "$declared" ]; then
-            echo "Tag $tag does not match shared/version.json ($declared)." >&2
-            exit 1
-          fi
-          if ! tagged_commit="$(git rev-parse --verify "$tag^{commit}")" \
-             || [ "$(git rev-parse HEAD)" != "$tagged_commit" ]; then
-            echo "$tag is not a tag for the checked-out commit." >&2
+          declared="$(python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          tag="v$declared"
+          release_commit="$(git rev-parse --verify "$RELEASE_SHA^{commit}")"
+          if [ "$(git rev-parse HEAD)" != "$release_commit" ]; then
+            echo "The checked-out commit is not $RELEASE_SHA." >&2
             exit 1
           fi
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "$tagged_commit" origin/main; then
-            echo "$tagged_commit is not reachable from origin/main." >&2
+          if ! git merge-base --is-ancestor "$release_commit" origin/main; then
+            echo "$release_commit is not reachable from origin/main." >&2
             exit 1
           fi
-          echo "version=${declared#v}" >> "$GITHUB_ENV"
-          echo "tagged_commit=$tagged_commit" >> "$GITHUB_OUTPUT"
+          git fetch --tags --force origin
+          if git rev-parse --verify --quiet "refs/tags/$tag^{}" >/dev/null; then
+            echo "$tag already exists. A version is never rebuilt; bump instead." >&2
+            exit 1
+          fi
+          # Semantic versions only move forward, including past the tags that
+          # earlier failed builds spent.
+          python - "$declared" <<'PY'
+          import subprocess
+          import sys
 
-      - name: Tagged commit must have successful CI
+          def parse(name: str) -> tuple[int, int, int] | None:
+              parts = name[1:].split(".")
+              if len(parts) != 3 or not all(p.isdigit() for p in parts):
+                  return None
+              return tuple(int(p) for p in parts)
+
+          candidate = parse("v" + sys.argv[1])
+          if candidate is None:
+              raise SystemExit(f"shared/version.json is not MAJOR.MINOR.PATCH: {sys.argv[1]}")
+          published = [
+              version
+              for version in (
+                  parse(line)
+                  for line in subprocess.run(
+                      ["git", "tag", "--list", "v*"],
+                      capture_output=True, text=True, check=True,
+                  ).stdout.split()
+              )
+              if version is not None
+          ]
+          if published and candidate <= max(published):
+              highest = ".".join(str(part) for part in max(published))
+              raise SystemExit(
+                  f"{sys.argv[1]} does not move forward past the highest tag v{highest}."
+              )
+          PY
+          echo "version=$declared" >> "$GITHUB_ENV"
+          echo "version=$declared" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
+
+      - name: The release commit must have successful CI
         uses: actions/github-script@v7
         env:
-          TAGGED_COMMIT: ${{ steps.release_guard.outputs.tagged_commit }}
+          RELEASE_COMMIT: ${{ steps.release_guard.outputs.release_commit }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -72,7 +115,7 @@ jobs:
               owner,
               repo,
               workflow_id: "ci.yml",
-              head_sha: process.env.TAGGED_COMMIT,
+              head_sha: process.env.RELEASE_COMMIT,
               event: "push",
               status: "completed",
               per_page: 100,
@@ -82,7 +125,7 @@ jobs:
             );
             if (!successful) {
               core.setFailed(
-                `CI has not completed successfully for ${process.env.TAGGED_COMMIT}.`
+                `CI has not completed successfully for ${process.env.RELEASE_COMMIT}.`
               );
             }
 
@@ -120,7 +163,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.sha }}
 
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -176,7 +219,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.sha }}
 
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -248,11 +291,13 @@ jobs:
     permissions:
       contents: write
     env:
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ needs.spa.outputs.tag }}
+      RELEASE_SHA: ${{ inputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+          ref: ${{ inputs.sha }}
 
       - name: Download SPA assets
         uses: actions/download-artifact@v4
@@ -360,11 +405,49 @@ jobs:
           files: build/release-assets/*
           fail_on_unmatched_files: true
           body: |
-            Waveguide Generator ${{ env.RELEASE_TAG }}.
+            ## Install Waveguide Generator ${{ env.RELEASE_TAG }}
 
-            The release contains the prebuilt SPA, the canonical app update layer,
-            both platform runtime layers, and first-install assets for macOS and
-            Windows. Every asset has a `.sha256` sidecar.
+            Download **one** file:
+
+            | Platform | File |
+            |---|---|
+            | macOS (Apple silicon) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-macos-arm64.dmg` |
+            | Windows (x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64.zip` |
+
+            macOS is not yet notarized by Apple, so the first launch is refused with
+            "Apple could not verify ... is free of malware". Open **System Settings ->
+            Privacy & Security**, scroll to Security, and choose **Open Anyway** beside
+            Waveguide Generator. This is only needed once.
+
+            Windows must be extracted to a short path such as `C:\wg`. The bundle's
+            internal paths reach 133 characters, so an install root longer than about
+            127 characters fails to extract.
+
+            <details><summary>The remaining files are used by the in-app updater, not by people</summary>
+
+            `waveguide-generator-app-*.zip` and its manifest are the platform-neutral
+            application layer; `waveguide-generator-runtime-*-<id>.zip` are the two
+            content-addressed runtime layers, re-used across releases that do not change
+            the interpreter; `waveguide-generator-v2-spa-*.tar.gz` is the prebuilt
+            frontend that lets a source install skip Node. The updater downloads only the
+            layer that changed, which is why they are published separately from the
+            installers. Every asset has a `.sha256` sidecar.
+
+            </details>
+
+      - name: Create the annotated tag now that every asset exists
+        # This is the step that spends the version, and it is deliberately the
+        # last thing before publication. Everything that can fail - all three
+        # builds, the cross-platform app-layer digest, the inventory and every
+        # checksum - has already succeeded. A draft release does not create a
+        # git ref, so an earlier failure leaves the version untouched and the
+        # same number is retried.
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" -m "Waveguide Generator $RELEASE_TAG" "$RELEASE_SHA"
+          git push origin "refs/tags/$RELEASE_TAG"
 
       - name: Publish only after every upload succeeded
         env:
