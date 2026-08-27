@@ -144,13 +144,21 @@ class CadReturnIngestRequest(BaseModel):
     symmetry_mode: Literal["auto", "full"] = Field(
         default="auto", alias="symmetryMode"
     )
-    # Segments per 2pi for the imported mesh's curvature refinement. Omitted
-    # means the server default (24). Halving it returned 45% of the triangles
-    # for 0.4 mm of peak chord error on the reference model, with the HF wall
-    # frequency limit unchanged -- worth reaching for on a model that is
-    # crowding the artifact triangle ceiling.
-    curvature_segments: int | None = Field(
-        default=None, alias="curvatureSegments", ge=8, le=64
+    # Chord deviation each panel may have from the true CAD surface, in mm.
+    # Omitted means the server default, IMPORTED_SURFACE_DEVIATION_MM = 0.15 mm.
+    # This is the imported mesh's cost dial: it replaced a segments-per-2pi
+    # control, which spent triangles in proportion to curvature radius and so
+    # over-refined small fillets while under-refining large sweeps. Measured
+    # across five geometries, the default is better than the rule it replaces on
+    # peak, p95 and rms at a slightly lower triangle count, and raises the HF
+    # wall frequency limit 3620 -> 5347 Hz on the reference return.
+    #
+    # The band stops at 0.35 rather than going higher because above it the
+    # request is coarser than the user's rigid target, ``Mesh.MeshSizeMax``
+    # sets the peak instead, and the field would stop controlling the quantity
+    # its name promises.
+    surface_deviation_mm: float | None = Field(
+        default=None, alias="surfaceDeviationMm", ge=0.1, le=0.35
     )
 
 
@@ -921,16 +929,26 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
             payload.skipped_source_ids,
             store,
             data_dir,
-            # Only carry the curvature override when it was actually asked
+            # Only carry the deviation override when it was actually asked
             # for: prep_options is part of the mesh cache key, so writing an
             # explicit null would invalidate every mesh cached before this
             # option existed.
+            #
+            # This dict is an allowlist by construction, and that is load-
+            # bearing rather than incidental: ``build_imported_mesh`` also
+            # accepts ``sizing_rule``, ``sagitta_grid_samples`` and
+            # ``measure_deviation``, which are measurement scaffolding for
+            # ``scripts/measure_imported_mesh_deviation.py``. ``sizing_rule``
+            # would silently restore the superseded sizing rule and
+            # ``measure_deviation`` costs about half a build again. None of
+            # them may become reachable from a request; keep this literal, and
+            # never splat a payload into it.
             prep_options={
                 "area_drift_overrides": payload.area_drift_overrides,
                 "symmetry_mode": payload.symmetry_mode,
                 **(
-                    {"curvature_segments": payload.curvature_segments}
-                    if payload.curvature_segments is not None
+                    {"surface_deviation_mm": payload.surface_deviation_mm}
+                    if payload.surface_deviation_mm is not None
                     else {}
                 ),
             },

@@ -11,12 +11,12 @@ from __future__ import annotations
 import pytest
 
 from server.mesh.imported import (
-    IMPORTED_CURVATURE_SEGMENTS,
-    IMPORTED_CURVATURE_SEGMENTS_MAX,
-    IMPORTED_CURVATURE_SEGMENTS_MIN,
+    IMPORTED_SURFACE_DEVIATION_MM,
+    IMPORTED_SURFACE_DEVIATION_MAX_MM,
+    IMPORTED_SURFACE_DEVIATION_MIN_MM,
     ImportedMeshError,
     _orientation_warnings,
-    _validated_curvature_segments,
+    _validated_surface_deviation,
     imported_tessellation_settings,
 )
 
@@ -27,44 +27,56 @@ SIZES = {
 }
 
 
-def test_tessellation_defaults_to_the_server_curvature_segments():
+def test_tessellation_defaults_to_the_server_surface_deviation():
     settings = imported_tessellation_settings(SIZES)
-    assert settings["curvature_segments_per_2pi"] == IMPORTED_CURVATURE_SEGMENTS
-    # the floor still tracks the finest explicit target, not the override
+    assert settings["surface_deviation_mm"] == IMPORTED_SURFACE_DEVIATION_MM
+    # the floor still tracks the finest explicit target, not the deviation dial
     assert settings["mesh_size_min_mm"] == pytest.approx(2.0)
     assert settings["mesh_size_max_mm"] == pytest.approx(30.0)
 
 
-def test_curvature_segments_override_is_honoured_without_touching_the_size_bounds():
-    settings = imported_tessellation_settings(SIZES, curvature_segments=12)
-    assert settings["curvature_segments_per_2pi"] == 12
+def test_surface_deviation_override_is_honoured_without_touching_the_size_bounds():
+    settings = imported_tessellation_settings(SIZES, deviation_mm=0.2)
+    assert settings["surface_deviation_mm"] == pytest.approx(0.2)
     assert settings["mesh_size_min_mm"] == pytest.approx(2.0)
     assert settings["mesh_size_max_mm"] == pytest.approx(30.0)
 
 
 def test_absent_override_reads_as_the_default():
-    assert _validated_curvature_segments(None) is None
+    assert _validated_surface_deviation(None) is None
 
 
-@pytest.mark.parametrize("value", [IMPORTED_CURVATURE_SEGMENTS_MIN, 12, IMPORTED_CURVATURE_SEGMENTS_MAX])
-def test_in_band_curvature_segments_are_accepted(value):
-    assert _validated_curvature_segments(value) == value
+@pytest.mark.parametrize(
+    "value",
+    [IMPORTED_SURFACE_DEVIATION_MIN_MM, 0.3, IMPORTED_SURFACE_DEVIATION_MAX_MM],
+)
+def test_in_band_surface_deviation_is_accepted(value):
+    assert _validated_surface_deviation(value) == pytest.approx(value)
 
 
 @pytest.mark.parametrize(
     "value",
     [
-        True,                                   # bool is not a segment count
-        IMPORTED_CURVATURE_SEGMENTS_MIN - 1,    # facets visibly below the floor
-        IMPORTED_CURVATURE_SEGMENTS_MAX + 1,    # buys nothing above the ceiling
-        12.5,                                   # not a whole number
-        "24",
+        True,                                      # bool is not a deviation
+        IMPORTED_SURFACE_DEVIATION_MIN_MM / 2,     # runs the triangle count away
+        IMPORTED_SURFACE_DEVIATION_MAX_MM * 2,     # visibly faceted past here
+        0.0,
+        -0.3,
+        "0.3",
         float("inf"),
     ],
 )
-def test_out_of_band_curvature_segments_are_refused(value):
-    with pytest.raises(ImportedMeshError, match="curvatureSegments"):
-        _validated_curvature_segments(value)
+def test_out_of_band_surface_deviation_is_refused(value):
+    with pytest.raises(ImportedMeshError, match="surfaceDeviationMm"):
+        _validated_surface_deviation(value)
+
+
+def test_the_default_sits_inside_its_own_band():
+    assert (
+        IMPORTED_SURFACE_DEVIATION_MIN_MM
+        <= IMPORTED_SURFACE_DEVIATION_MM
+        <= IMPORTED_SURFACE_DEVIATION_MAX_MM
+    )
 
 
 def test_orientation_warnings_are_silent_on_a_clean_repair():
