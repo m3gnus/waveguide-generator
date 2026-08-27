@@ -216,25 +216,28 @@ IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 # and 96 is WORSE (peak 1.018 at delta=0.2) for triple the build time. 24 is
 # already at the knee.
 #
-# STILL OPEN before this could ship:
+# EVERY BLOCKER THAT ONCE STOOD HERE IS CLOSED. Kept as a list because each one
+# resolved differently, and two resolved opposite to the prediction written
+# beside them:
 #
-# * The mesh cache key. ``IMPORT_MESH_PIPELINE_CONTRACT`` in
-#   ``server/cadlink/ingest.py`` is still "wg-import-solve-v5". A mesh cached
-#   under the segment rule would keep being served while a fresh ingest of the
-#   same body produced a sagitta mesh. It must be bumped.
-# * ``docs/reference/openapi.v1.json`` does not carry ``surfaceDeviationMm``,
-#   and ``scripts/tests/test_gen_openapi.py`` asserts byte equality against the
-#   live application, so the snapshot has to be regenerated. Note that the
-#   parent commit's drift is gone: main has since regenerated the snapshot, so
-#   ``curvatureSegments`` is in it and only the rename is outstanding.
-# * The wall frequency limit per delta is still unmeasured. It is probably
-#   clamp-dominated and unchanged -- the shipped commit saw the HF limit go
-#   3620 -> 3685 Hz when segments went 24 -> 12, i.e. slightly UP as the mesh
-#   coarsened -- but "probably" is what this branch has already been wrong
-#   about twice.
-# * ``sizing_rule`` in ``build_imported_mesh`` is measurement scaffolding, not
-#   a shipping option. It exists so both rules go through one code path; it
-#   should not reach the API.
+# * The mesh cache key. ``IMPORT_MESH_PIPELINE_CONTRACT`` deliberately stays at
+#   "wg-import-solve-v5" -- see the reasoning at its definition. A bump would
+#   re-mesh every existing CAD project on its next ingest and move acoustics
+#   nobody asked to have moved; Magnus chose to leave them alone (2026-08-27).
+#   The mix stays visible because ``occ_tessellation`` below records which rule
+#   built each mesh.
+# * ``docs/reference/openapi.v1.json`` is regenerated and carries
+#   ``surfaceDeviationMm``. Regenerating it AFTER merging main mattered: the
+#   textual merge of a generated file had left the document advertising both
+#   dials at once.
+# * The wall frequency limit per delta is measured, and the prediction that it
+#   was "probably clamp-dominated and unchanged" was wrong in the useful
+#   direction: lf 1525 -> 1757, mf 1846 -> 2119, hf 3620 -> 5347 Hz. Unlike
+#   peak deviation, ``effective_max_valid_frequency_hz`` is consumed by the
+#   pipeline, so this is the dial's largest real effect.
+# * ``sizing_rule`` in ``build_imported_mesh`` remains measurement scaffolding
+#   and does not reach the API. ``post_ingest`` builds ``prep_options`` as a
+#   literal allowlist for exactly this reason.
 #
 # TWO RESULTS WORTH KEEPING whichever rule eventually wins:
 #

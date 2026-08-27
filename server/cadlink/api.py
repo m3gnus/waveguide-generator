@@ -144,12 +144,6 @@ class CadReturnIngestRequest(BaseModel):
     symmetry_mode: Literal["auto", "full"] = Field(
         default="auto", alias="symmetryMode"
     )
-    # PARKED CANDIDATE field -- this branch is not the shipping one; the
-    # shipped dial is ``curvatureSegments``. See IMPORTED_SURFACE_DEVIATION_MM
-    # in ``server/mesh/imported.py`` for the measurements and for what would
-    # have to happen before this could ship (including regenerating the OpenAPI
-    # snapshot, which does not carry this alias).
-    #
     # Chord deviation each panel may have from the true CAD surface, in mm.
     # Omitted means the server default, IMPORTED_SURFACE_DEVIATION_MM = 0.15 mm.
     # This is the imported mesh's cost dial: it replaced a segments-per-2pi
