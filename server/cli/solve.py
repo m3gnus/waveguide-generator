@@ -32,6 +32,7 @@ from server.jobs.runtime import (
     SymmetryValidationError,
     UnknownEngineError,
 )
+from server.cadlink.store import CadLinkStore
 from server.jobs.store import JobStore
 from server.platform.paths import ensure_data_layout
 from server.platform.signal_rearm import (
@@ -425,8 +426,18 @@ async def solve_path(
 
     try:
         data_dir = ensure_data_layout(args.data_dir).root
+        # Imported geometry resolves its ingest through this registry, and a
+        # runtime without one refuses every CAD-Link solve as
+        # ``ingest_registry_unavailable`` -- so headless solves worked for
+        # parametric designs only, and a CAD model could not be swept, laddered
+        # or re-solved outside the GUI at all. It is the same store the app
+        # mounts, opened from the same data directory.
+        cadlink_store = CadLinkStore.for_data_dir(data_dir)
+        cadlink_store.initialize()
         runtime = JobRuntime(
-            JobStore.for_data_dir(data_dir), engine_registry=engine_registry
+            JobStore.for_data_dir(data_dir),
+            engine_registry=engine_registry,
+            cadlink_store=cadlink_store,
         )
         await runtime.start()
     except JobConflictError as exc:
