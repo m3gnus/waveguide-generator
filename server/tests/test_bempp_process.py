@@ -443,3 +443,78 @@ def test_the_worker_leaves_when_its_parent_is_force_killed(
         assert exits == [bempp_process._PARENT_GONE_EXIT_CODE]
     finally:
         reader.close()
+
+
+def _worker_that_spawns_children(connection) -> None:
+    """A worker body that does the one thing a split sweep does: fork workers.
+
+    ``hornlab_bempp_bem`` splits a sweep with a ``ProcessPoolExecutor``. This
+    stands in for that without importing bempp-cl, so it runs on hosted CI,
+    which never runs real solvers.
+    """
+
+    from concurrent.futures import ProcessPoolExecutor
+
+    try:
+        with ProcessPoolExecutor(max_workers=2) as pool:
+            squares = sorted(pool.map(abs, (-3, -4)))
+        connection.send(("ok", squares))
+    except BaseException as exc:  # noqa: BLE001 - the failure mode IS the subject
+        connection.send(("failed", f"{type(exc).__name__}: {exc}"))
+    finally:
+        connection.close()
+
+
+def test_the_worker_can_have_children_because_a_split_sweep_needs_them() -> None:
+    """The gap that let a broken default reach `main` and a release.
+
+    ``main`` at `6070dab6` took the auto-split sweep default without the commit
+    that made the worker non-daemonic, so every default solve of 80 or more
+    frequencies died with "daemonic processes are not allowed to have children".
+    CI was green throughout: the only test touching ``WG2_SOLVE_WORKERS``
+    exercises env parsing, and nothing in the suite ever entered the
+    multi-process path. A default that only breaks there is invisible to a suite
+    that never goes there.
+
+    This spawns the worker through the production code path and makes it create
+    grandchildren, which is the whole of what was broken.
+    """
+
+    host = BemppProcessHost(target=_worker_that_spawns_children)
+    try:
+        connection = host._ensure_started()
+        assert connection.poll(120), "the worker never reported back"
+        status, payload = connection.recv()
+        assert status == "ok", payload
+        assert payload == [3, 4]
+    finally:
+        host._terminate_sync()
+
+
+def test_a_daemonic_worker_could_not_have_had_children() -> None:
+    """Prove the test above could have failed.
+
+    Pinning ``daemon=False`` as a boolean would pass against any spawn, so it
+    would not have caught this. Running the identical worker body under
+    ``daemon=True`` shows the assertion above is load-bearing: the same code
+    that succeeds through ``BemppProcessHost`` fails here, with the exact error
+    users saw.
+    """
+
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe(duplex=True)
+    process = context.Process(
+        target=_worker_that_spawns_children, args=(child,), daemon=True
+    )
+    process.start()
+    child.close()
+    try:
+        assert parent.poll(120), "the daemonic worker never reported back"
+        status, payload = parent.recv()
+        assert status == "failed"
+        assert "daemonic processes are not allowed to have children" in payload
+    finally:
+        parent.close()
+        process.join(30)
+        if process.is_alive():  # pragma: no cover - defensive
+            process.terminate()
