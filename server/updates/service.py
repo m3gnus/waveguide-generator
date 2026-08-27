@@ -138,12 +138,26 @@ def _cache_epoch(value: Any, field: str) -> float:
 
 
 def _validated_bundle_asset(value: Any, *, release_tag: str) -> dict[str, Any]:
-    fields = {"name", "url", "sha256Url", "bytes", "sha256Bytes", "layer"}
-    if not isinstance(value, dict) or set(value) != fields:
+    # Two shapes, because a cache written before the digest change is still on
+    # disk and discarding it silently would cost a user their update check for no
+    # reason. `sha256` carries GitHub's own per-asset digest; `sha256Url` is the
+    # older sidecar form, kept for releases that predate it.
+    digest_fields = {"name", "url", "sha256", "bytes", "layer"}
+    sidecar_fields = {"name", "url", "sha256Url", "bytes", "sha256Bytes", "layer"}
+    if not isinstance(value, dict) or set(value) not in (digest_fields, sidecar_fields):
         raise ValueError("update-cache bundle asset has invalid fields")
+    if "sha256" in value:
+        digest = value.get("sha256")
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest.lower())
+        ):
+            raise ValueError("update-cache bundle asset has an invalid sha256")
     name = value.get("name")
     url = value.get("url")
     checksum_url = value.get("sha256Url")
+    has_sidecar = "sha256Url" in value
     size = value.get("bytes")
     checksum_size = value.get("sha256Bytes")
     layer = value.get("layer")
@@ -160,22 +174,28 @@ def _validated_bundle_asset(value: Any, *, release_tag: str) -> dict[str, Any]:
             ),
             asset_name=name,
         )
-        or not isinstance(checksum_url, str)
-        or not trusted_asset_url(
-            checksum_url,
-            tag=(
-                release_tag
-                if isinstance(layer, str) and layer in {"app", "manifest", "installer"}
-                else None
-            ),
-            asset_name=name + ".sha256",
+        or (
+            has_sidecar
+            and (
+                not isinstance(checksum_url, str)
+                or not trusted_asset_url(
+                    checksum_url,
+                    tag=(
+                        release_tag
+                        if isinstance(layer, str)
+                        and layer in {"app", "manifest", "installer"}
+                        else None
+                    ),
+                    asset_name=release_assets.checksum_name(name),
+                )
+                or isinstance(checksum_size, bool)
+                or not isinstance(checksum_size, int)
+                or checksum_size <= 0
+            )
         )
         or isinstance(size, bool)
         or not isinstance(size, int)
         or size <= 0
-        or isinstance(checksum_size, bool)
-        or not isinstance(checksum_size, int)
-        or checksum_size <= 0
         or not isinstance(layer, str)
         or layer not in {"app", "runtime", "manifest", "installer"}
         or (
@@ -185,6 +205,14 @@ def _validated_bundle_asset(value: Any, *, release_tag: str) -> dict[str, Any]:
         )
     ):
         raise ValueError("update-cache bundle asset is invalid")
+    if not has_sidecar:
+        return {
+            "name": name,
+            "url": url,
+            "sha256": str(value["sha256"]).lower(),
+            "bytes": size,
+            "layer": layer,
+        }
     return {
         "name": name,
         "url": url,
@@ -567,15 +595,18 @@ def update_action(
                 continue
             layer = asset.get("layer")
             if layer == "app" or (layer == "runtime" and required_runtime != installed_runtime):
-                assets.append(
-                    {
-                        "name": asset["name"],
-                        "url": asset["url"],
-                        "sha256Url": asset["sha256Url"],
-                        "bytes": asset["bytes"],
-                        "layer": layer,
-                    }
-                )
+                handoff = {
+                    "name": asset["name"],
+                    "url": asset["url"],
+                    "bytes": asset["bytes"],
+                    "layer": layer,
+                }
+                # Pass on whichever proof this release supplied.
+                if "sha256" in asset:
+                    handoff["sha256"] = asset["sha256"]
+                else:
+                    handoff["sha256Url"] = asset["sha256Url"]
+                assets.append(handoff)
         if not any(asset["layer"] == "app" for asset in assets):
             raise ValueError("The bundle release has no app layer")
         if required_runtime != installed_runtime and not any(
@@ -681,36 +712,72 @@ class UpdateService:
         return uploaded
 
     @staticmethod
+    def _asset_digest(asset: dict[str, Any]) -> str | None:
+        """The SHA-256 GitHub itself reports for an uploaded asset.
+
+        GitHub serves ``digest`` as ``sha256:<hex>`` on every release asset, and
+        it is strictly better evidence than the ``.sha256`` sidecar this replaced:
+        it arrives inside the same authenticated release response as the download
+        URL, so there is no second file that can be stale, mismatched or missing.
+        The sidecars also made the release page unreadable -- seven of fourteen
+        assets were checksums of the other seven.
+        """
+
+        digest = asset.get("digest")
+        if not isinstance(digest, str):
+            return None
+        algorithm, separator, hex_digest = digest.partition(":")
+        if separator != ":" or algorithm.lower() != "sha256":
+            return None
+        hex_digest = hex_digest.strip().lower()
+        if len(hex_digest) != 64 or any(c not in "0123456789abcdef" for c in hex_digest):
+            return None
+        return hex_digest
+
+    @classmethod
     def _paired_asset(
-        uploaded: dict[str, dict[str, Any]], name: str, layer: str, *, tag: str
+        cls, uploaded: dict[str, dict[str, Any]], name: str, layer: str, *, tag: str
     ) -> dict[str, Any] | None:
         asset = uploaded.get(name)
-        checksum = uploaded.get(name + ".sha256")
-        if asset is None or checksum is None:
+        if asset is None:
             return None
         url = asset.get("browser_download_url")
-        checksum_url = checksum.get("browser_download_url")
         if (
             not isinstance(url, str)
             or not trusted_asset_url(url, tag=tag, asset_name=name)
-            or not isinstance(checksum_url, str)
-            or not trusted_asset_url(
-                checksum_url,
-                tag=tag,
-                asset_name=release_assets.checksum_name(name),
-            )
             or (
                 layer in {"app", "runtime"}
                 and int(asset["size"]) > archive_size_limit(layer)
             )
         ):
             return None
+        sha256 = cls._asset_digest(asset)
+        if sha256 is None:
+            # Releases published before GitHub served per-asset digests, and any
+            # asset it declines to digest. Fall back to the sidecar rather than
+            # refusing the update: an installed client must be able to move off a
+            # release cut before this change.
+            checksum = uploaded.get(release_assets.checksum_name(name))
+            if checksum is None:
+                return None
+            checksum_url = checksum.get("browser_download_url")
+            if not isinstance(checksum_url, str) or not trusted_asset_url(
+                checksum_url, tag=tag, asset_name=release_assets.checksum_name(name)
+            ):
+                return None
+            return {
+                "name": name,
+                "url": url,
+                "sha256Url": checksum_url,
+                "bytes": int(asset["size"]),
+                "sha256Bytes": int(checksum["size"]),
+                "layer": layer,
+            }
         return {
             "name": name,
             "url": url,
-            "sha256Url": checksum_url,
+            "sha256": sha256,
             "bytes": int(asset["size"]),
-            "sha256Bytes": int(checksum["size"]),
             "layer": layer,
         }
 
@@ -732,14 +799,22 @@ class UpdateService:
         if int(manifest_asset["bytes"]) > MAX_MANIFEST_BYTES:
             raise RuntimeError("The release app manifest exceeds the size limit")
         manifest_bytes = self.asset_fetcher(str(manifest_asset["url"]), MAX_MANIFEST_BYTES)
-        checksum_bytes = self.asset_fetcher(str(manifest_asset["sha256Url"]), MAX_MANIFEST_BYTES)
-        try:
-            wanted = expected_digest(
-                checksum_bytes.decode("utf-8", "replace"),
-                str(manifest_asset["name"]),
+        if "sha256" in manifest_asset:
+            # GitHub's own digest for the asset, already validated in shape.
+            wanted = str(manifest_asset["sha256"])
+        else:
+            checksum_bytes = self.asset_fetcher(
+                str(manifest_asset["sha256Url"]), MAX_MANIFEST_BYTES
             )
-        except SpaError as exc:
-            raise RuntimeError(f"The release app manifest checksum is invalid: {exc}") from exc
+            try:
+                wanted = expected_digest(
+                    checksum_bytes.decode("utf-8", "replace"),
+                    str(manifest_asset["name"]),
+                )
+            except SpaError as exc:
+                raise RuntimeError(
+                    f"The release app manifest checksum is invalid: {exc}"
+                ) from exc
         actual = hashlib.sha256(manifest_bytes).hexdigest()
         if actual != wanted:
             raise RuntimeError("The release app manifest does not match its checksum")

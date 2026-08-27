@@ -391,3 +391,82 @@ def test_windows_release_uses_windows_runtime_and_full_zip_asset_names(
     assert result["action"]["assets"][1]["name"] == (
         f"update-runtime-windows-x86_64-{NEW_RUNTIME}.zip"
     )
+
+
+def _digest_asset(name: str, *, digest: str | None, size: int = 4096) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "name": name,
+        "state": "uploaded",
+        "size": size,
+        "browser_download_url": (
+            f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/{name}"
+        ),
+    }
+    if digest is not None:
+        entry["digest"] = digest
+    return entry
+
+
+def test_the_release_digest_replaces_the_sidecar() -> None:
+    """Seven of fourteen release assets were checksums of the other seven.
+
+    GitHub serves a per-asset `digest` in the same authenticated release response
+    as the download URL, so the sidecars were both redundant and weaker evidence:
+    a separate file can be stale, mismatched or absent while the asset it
+    describes is fine.
+    """
+
+    from server.updates.service import UpdateService
+
+    name = "update-app-2.0.1.zip"
+    digest = "a" * 64
+    uploaded = {name: _digest_asset(name, digest=f"sha256:{digest}")}
+
+    paired = UpdateService._paired_asset(uploaded, name, "app", tag="v2.0.1")
+
+    assert paired is not None, "a digest alone must be enough"
+    assert paired["sha256"] == digest
+    assert "sha256Url" not in paired
+
+
+def test_a_release_without_digests_still_uses_its_sidecar() -> None:
+    """A client installed from an older release must be able to move off it."""
+
+    from server.updates.service import UpdateService
+
+    name = "update-app-2.0.1.zip"
+    sidecar = f"{name}.sha256"
+    uploaded = {
+        name: _digest_asset(name, digest=None),
+        sidecar: _digest_asset(sidecar, digest=None, size=90),
+    }
+
+    paired = UpdateService._paired_asset(uploaded, name, "app", tag="v2.0.1")
+
+    assert paired is not None
+    assert paired["sha256Url"].endswith(sidecar)
+    assert "sha256" not in paired
+
+
+def test_a_digest_that_is_not_a_usable_sha256_is_refused() -> None:
+    """Never treat an unparseable digest as if it were absent-but-fine.
+
+    Falling through to "no proof" would be the dangerous reading. Each of these
+    must either fall back to a sidecar or, with none present, refuse outright.
+    """
+
+    from server.updates.service import UpdateService
+
+    name = "update-app-2.0.1.zip"
+    for bad in (
+        "sha512:" + "a" * 128,   # wrong algorithm
+        "sha256:" + "a" * 63,    # truncated
+        "sha256:" + "g" * 64,    # not hex
+        "a" * 64,                # no algorithm prefix
+        "",
+    ):
+        assert UpdateService._asset_digest({"digest": bad}) is None, bad
+        uploaded = {name: _digest_asset(name, digest=bad)}
+        assert (
+            UpdateService._paired_asset(uploaded, name, "app", tag="v2.0.1") is None
+        ), f"{bad!r} was accepted with no sidecar present"
