@@ -607,7 +607,12 @@ def test_the_macos_launcher_is_compiled_not_a_script(tmp_path: Path) -> None:
 
     assert calls and calls[0][0] == "cc"
     assert "-arch" in calls[0] and "arm64" in calls[0]
-    assert written.stat().st_mode & 0o111
+    # Only where the filesystem has an executable bit. NTFS does not, and
+    # os.chmod there toggles the read-only attribute and nothing else -- the
+    # same reason tree_digest stopped reading the bit off the filesystem at all.
+    # Asserting it on Windows tests the platform, not the launcher.
+    if os.name != "nt":
+        assert written.stat().st_mode & 0o111
 
 
 def test_a_missing_compiler_fails_the_build_rather_than_falling_back(tmp_path: Path) -> None:
