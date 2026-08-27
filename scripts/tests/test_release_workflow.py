@@ -76,3 +76,29 @@ def test_the_published_tag_is_asserted_annotated_and_on_the_release_commit() -> 
     assert 'kind="$(git cat-file -t "$(git rev-parse "$RELEASE_TAG")")"' in WORKFLOW
     assert 'if [ "$kind" != "tag" ]; then' in WORKFLOW
     assert 'if [ "$tagged" != "$RELEASE_SHA" ]; then' in WORKFLOW
+
+
+def test_the_workflow_spells_the_spa_archive_the_way_the_module_does() -> None:
+    """The name is generated in one job and hardcoded in two others.
+
+    The v0.3.0 release build failed here: `spa_archive_name` returns a COMPLETE
+    filename, extension included, and the shell around it still appended
+    `.tar.gz` as it had when the value was a stem. That wrote
+    `update-spa-<version>.tar.gz.tar.gz`, and the macOS job's `test -f` found
+    nothing -- three jobs into a release, on the one path no test covered.
+
+    The macOS and Windows jobs still spell the path literally, because they run
+    before the repository is importable. That is a duplication this cannot
+    remove, so it pins the two spellings together instead.
+    """
+
+    from shared.release_assets import spa_archive_name
+
+    rendered = spa_archive_name("$version")
+    assert f"build/spa/{rendered}" in WORKFLOW, (
+        f"the jobs look for build/spa/{rendered}; the workflow disagrees"
+    )
+    # The generated half must be used as given, never re-extended.
+    assert 'tar -czf "$archive" -C frontend dist' in WORKFLOW
+    assert '"$archive.tar.gz"' not in WORKFLOW
+    assert "${{ env.artifact }}.tar.gz" not in WORKFLOW
