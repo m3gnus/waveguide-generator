@@ -29,7 +29,10 @@ from server.cadlink.api import (
 )
 from server.cadlink.identity import SaveIdentity
 from server.cadlink.ingest import (
+    IMPORT_MESH_PIPELINE_CONTRACT,
     IngestRefusal,
+    _cache_key,
+    _cache_lookup_key,
     _canonical,
     build_deferred_viewport,
     compute_freshness,
@@ -42,6 +45,7 @@ from server.cadlink.ingest import (
 )
 from server.mesh.imported import (
     IMPORTED_SURFACE_DEVIATION_MAX_MM,
+    imported_tessellation_settings,
     IMPORTED_SURFACE_DEVIATION_MIN_MM,
     IMPORTED_SURFACE_DEVIATION_MM,
     ImportedMeshDependencyError,
@@ -299,6 +303,37 @@ def test_mesh_measurement_scaffolding_cannot_be_reached_from_a_request() -> None
     for scaffold in ("sizing_rule", "sagitta_grid_samples", "measure_deviation"):
         assert scaffold not in options, f"{scaffold} reached the ingest options"
     assert "**payload" not in options, "prep_options must stay a literal, not a splat"
+
+
+def test_the_sizing_change_does_not_re_mesh_existing_projects() -> None:
+    """A sizing-rule change that leaves the cache key alone, deliberately.
+
+    Bumping ``IMPORT_MESH_PIPELINE_CONTRACT`` would invalidate every cached mesh
+    and silently re-mesh every existing CAD project on its next ingest, moving
+    acoustics whose owners did not ask for a new mesh. Magnus chose to leave
+    them alone (2026-08-27): the sagitta rule governs from the next ingest of
+    changed inputs onward.
+
+    That is only safe because the two rules stay distinguishable per mesh rather
+    than behind one shared version string -- a segments mesh records
+    ``curvature_segments`` in ``occ_tessellation`` and a sagitta mesh records
+    ``surface_deviation_mm``. If a future change makes the rules
+    indistinguishable in the artifact, this decision has to be revisited and the
+    contract bumped, so both halves are pinned here together.
+    """
+
+    assert IMPORT_MESH_PIPELINE_CONTRACT == "wg-import-solve-v5"
+
+    sizes = {"rigid_size_mm": 20.0, "source_size_mm": {"source-hf": 4.0}}
+    sagitta = imported_tessellation_settings(sizes)
+    assert "surface_deviation_mm" in sagitta
+    assert "curvature_segments" not in sagitta
+
+    # The key is a pure function of its inputs, so an unchanged project keeps
+    # resolving to the mesh it already has.
+    for key_function in (_cache_key, _cache_lookup_key):
+        source = inspect.getsource(key_function)
+        assert '"import_pipeline_contract": IMPORT_MESH_PIPELINE_CONTRACT' in source
 
 
 def test_surface_deviation_is_bounded_to_the_band_where_the_dial_has_authority() -> None:
