@@ -238,6 +238,134 @@ SELF_INTERSECTION_MAX_CANDIDATE_PAIRS = 4_000_000
 _SELF_INTERSECTION_CHUNK = 200_000
 
 
+#: A triangle's radius ratio, ``2 * r_inscribed / r_circumscribed``. It is 1.0
+#: for an equilateral triangle and falls to 0 as the triangle degenerates,
+#: whether by becoming a needle or a cap, which is why it is preferred here to a
+#: bare aspect ratio -- an aspect ratio cannot tell a thin sliver from a flat
+#: one, and both hurt a boundary-element operator.
+#:
+#: The threshold is measured, not chosen: see
+#: ``scripts/measure_mesh_element_quality.py`` and the calibration recorded with
+#: it. Nothing in this pipeline gated element quality at all before this -- only
+#: outright degeneracy was caught, at ``areas <= 1e-15`` below -- so a sliver
+#: with finite area passed every check, and BEM conditioning is sensitive to
+#: exactly that.
+POOR_TRIANGLE_RADIUS_RATIO = 0.10
+#: Smallest interior angle, in degrees, below which a triangle is reported.
+POOR_TRIANGLE_MIN_ANGLE_DEG = 5.0
+
+
+def mesh_element_quality_report(
+    vertices: Any,
+    triangles: Any,
+    *,
+    radius_ratio_threshold: float = POOR_TRIANGLE_RADIUS_RATIO,
+    min_angle_threshold_deg: float = POOR_TRIANGLE_MIN_ANGLE_DEG,
+    sample_limit: int = 8,
+) -> dict[str, Any]:
+    """Report how well shaped a mesh's triangles are, not merely whether they exist.
+
+    Computed from the corner coordinates alone rather than through gmsh, so it
+    applies equally to a generated mesh, an imported CAD mesh, and one read back
+    from an archived ``.msh``. Degenerate and unaddressable faces are excluded
+    from the statistics and counted separately: a face with zero area has no
+    meaningful shape, and folding it in would drag the reported minimum to zero
+    for a reason the caller already knows about.
+    """
+
+    points = np.asarray(vertices, dtype=float)
+    faces = np.asarray(triangles, dtype=np.int64)
+    if points.ndim == 1 and points.size % 3 == 0:
+        points = points.reshape((-1, 3))
+    if faces.ndim == 1 and faces.size % 3 == 0:
+        faces = faces.reshape((-1, 3))
+    empty = {
+        "valid": False,
+        "measured_triangle_count": 0,
+        "excluded_triangle_count": 0,
+        "min_radius_ratio": None,
+        "mean_radius_ratio": None,
+        "min_angle_deg": None,
+        "poor_radius_ratio_count": 0,
+        "poor_min_angle_count": 0,
+        "radius_ratio_threshold": float(radius_ratio_threshold),
+        "min_angle_threshold_deg": float(min_angle_threshold_deg),
+        "worst_triangles": [],
+    }
+    if points.ndim != 2 or points.shape[1:] != (3,):
+        return empty
+    if faces.ndim != 2 or faces.shape[1:] != (3,):
+        return empty
+
+    in_range = np.all((faces >= 0) & (faces < len(points)), axis=1)
+    usable = faces[in_range]
+    corners = points[usable] if len(usable) else np.empty((0, 3, 3))
+
+    # Side lengths opposite each corner, so a, b, c pair with the angles below.
+    a = np.linalg.norm(corners[:, 2] - corners[:, 1], axis=1) if len(corners) else np.empty(0)
+    b = np.linalg.norm(corners[:, 0] - corners[:, 2], axis=1) if len(corners) else np.empty(0)
+    c = np.linalg.norm(corners[:, 1] - corners[:, 0], axis=1) if len(corners) else np.empty(0)
+    if len(corners):
+        cross = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+        area = 0.5 * np.linalg.norm(cross, axis=1)
+    else:
+        area = np.empty(0)
+
+    perimeter = a + b + c
+    product = a * b * c
+    measurable = (
+        np.isfinite(area)
+        & np.isfinite(product)
+        & (area > 1.0e-15)
+        & (product > 0.0)
+        & (perimeter > 0.0)
+    )
+    excluded = int(np.count_nonzero(~in_range)) + int(np.count_nonzero(~measurable))
+    if not np.any(measurable):
+        return {**empty, "valid": True, "excluded_triangle_count": excluded}
+
+    a, b, c = a[measurable], b[measurable], c[measurable]
+    area = area[measurable]
+    perimeter, product = perimeter[measurable], product[measurable]
+
+    # gamma = 2 * r_in / r_circ, with r_in = 2A/p and r_circ = abc/(4A).
+    radius_ratio = 16.0 * area * area / (perimeter * product)
+    # Law of cosines on the two shortest sides gives the smallest angle; clip
+    # because rounding can push a near-degenerate cosine just outside [-1, 1].
+    sides = np.sort(np.stack((a, b, c), axis=1), axis=1)
+    shortest, middle, longest = sides[:, 0], sides[:, 1], sides[:, 2]
+    cosine = (middle * middle + longest * longest - shortest * shortest) / (
+        2.0 * middle * longest
+    )
+    min_angle_deg = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+
+    order = np.argsort(radius_ratio)[:sample_limit]
+    return {
+        "valid": True,
+        "measured_triangle_count": int(len(radius_ratio)),
+        "excluded_triangle_count": excluded,
+        "min_radius_ratio": float(radius_ratio.min()),
+        "mean_radius_ratio": float(radius_ratio.mean()),
+        "min_angle_deg": float(min_angle_deg.min()),
+        "poor_radius_ratio_count": int(
+            np.count_nonzero(radius_ratio < radius_ratio_threshold)
+        ),
+        "poor_min_angle_count": int(
+            np.count_nonzero(min_angle_deg < min_angle_threshold_deg)
+        ),
+        "radius_ratio_threshold": float(radius_ratio_threshold),
+        "min_angle_threshold_deg": float(min_angle_threshold_deg),
+        "worst_triangles": [
+            {
+                "radius_ratio": float(radius_ratio[index]),
+                "min_angle_deg": float(min_angle_deg[index]),
+                "area": float(area[index]),
+            }
+            for index in order
+        ],
+    }
+
+
 def _sweep_and_prune(lower: np.ndarray, upper: np.ndarray) -> np.ndarray | None:
     """Axis-aligned broadphase over triangle boxes.
 
