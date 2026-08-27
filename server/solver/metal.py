@@ -1090,6 +1090,35 @@ def _cardioid_combine_refusal(
     )
 
 
+def _cardioid_rear_volume_refusal(coupled_mf_channel: Any | None) -> str | None:
+    """Refuse a coupled MF driver that also states its own sealed rear volume.
+
+    Under a coupled campaign the MF driver's rear load *is* the cardioid
+    chamber: ``coupled_cardioid_response`` applies
+    ``passive_cardioid_rear_volume_l`` itself, and the derived channel skips
+    ``_apply_channel_driver``, which is the only place ``rear_volume_l`` is
+    ever read. A channel carrying both was accepted and its own rear volume
+    silently dropped, so the solve completed with a plausible response for a
+    chamber nobody asked for -- and persisted it as a channel basis.
+
+    Like ``_cardioid_combine_refusal`` this cannot move to the request model.
+    The campaign names the MF channel from the manifest's source roles, so a
+    wire-level rule would have to refuse every driver-bearing channel in the
+    job, including an unrelated LF channel whose own sealed box is legitimate.
+    """
+
+    if coupled_mf_channel is None or coupled_mf_channel.driver is None:
+        return None
+    rear_volume_l = coupled_mf_channel.driver.rear_volume_l
+    if rear_volume_l is None:
+        return None
+    return (
+        f"drive channel {coupled_mf_channel.id!r} sets rear_volume_l "
+        f"{rear_volume_l:g} L, but under a coupled passive cardioid its rear load "
+        "is passive_cardioid_rear_volume_l; clear one of the two"
+    )
+
+
 def _coupled_cardioid_result(
     campaign: Mapping[str, Any],
     geometry: ImportedGeometrySource,
@@ -1620,6 +1649,8 @@ def solve_imported_metal_from_msh_text(
                 }
 
         refusal = _cardioid_combine_refusal(coupled_mf_channel, geometry.combine)
+        if refusal is None:
+            refusal = _cardioid_rear_volume_refusal(coupled_mf_channel)
         if refusal is not None:
             raise ValueError(refusal)
 

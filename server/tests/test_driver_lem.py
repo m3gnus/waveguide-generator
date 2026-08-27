@@ -41,6 +41,37 @@ def test_hornresp_units_convert_to_si() -> None:
     assert derived.Cms is not None and derived.Fs is not None
 
 
+def test_semi_inductance_pair_reaches_hornlab_sim_in_henries() -> None:
+    """Le2 is on the wire in mH like Le; hornlab-sim's LR-2 branch is SI."""
+
+    driver = hornlab_driver(_spec(le2_mh=1.4, re2_ohm=8.0))
+
+    assert driver.le2_h == pytest.approx(1.4e-3)
+    assert driver.re2_ohm == pytest.approx(8.0)
+    # It is genuinely in the impedance, not just carried: the LR-2 branch adds
+    # resistance where the plain Re+jwLe model has none.
+    omega = np.array([2.0 * np.pi * 2_000.0])
+    with_lr2 = driver.derive().blocked_electrical_impedance(omega)
+    without = hornlab_driver(_spec()).derive().blocked_electrical_impedance(omega)
+    assert with_lr2.real[0] > without.real[0]
+
+
+def test_semi_inductance_defaults_to_the_legacy_plain_le_model() -> None:
+    driver = hornlab_driver(_spec())
+    assert driver.le2_h is None
+    assert driver.re2_ohm is None
+
+
+def test_spec_refuses_half_a_semi_inductance_pair() -> None:
+    """hornlab-sim raises on a half-stated pair at solve time; the wire turns
+    that into a 422 that names the missing field."""
+
+    with pytest.raises(ValidationError, match="both le2_mh and re2_ohm"):
+        _spec(le2_mh=1.4)
+    with pytest.raises(ValidationError, match="both le2_mh and re2_ohm"):
+        _spec(re2_ohm=8.0)
+
+
 def test_source_area_warning_names_the_driver_count_a_patch_implies() -> None:
     """A patch holding two cones while count says one radiates half the volume
     velocity it should -- about 6 dB down, with the shape still looking right.

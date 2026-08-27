@@ -24,6 +24,8 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "bl_t_m": ("Bl_Tm", "Bl"),
     "re_ohm": ("Re_ohm", "Re"),
     "le_mh": ("Le_mH", "Le"),
+    "le2_mh": ("Le2_mH", "Le2"),
+    "re2_ohm": ("Re2_ohm", "Re2"),
     "mms_g": ("Mms_g", "Mms"),
     "mmd_g": ("Mmd_g",),
     "fs_hz": ("Fs_Hz", "Fs"),
@@ -69,6 +71,8 @@ SPEC_FIELD_MAP: dict[str, str] = {
     "bl_t_m": "bl_t_m",
     "re_ohm": "re_ohm",
     "le_mh": "le_mh",
+    "le2_mh": "le2_mh",
+    "re2_ohm": "re2_ohm",
     "mms_g": "mms_g",
     "mmd_g": "mmd_g",
     "fs_hz": "fs_hz",
@@ -172,7 +176,10 @@ def build_spec(fields: dict[str, float | str | None]) -> dict[str, float]:
     """The subset of ``fields`` that fills a ``DriverSpec``, Hornresp units.
 
     Only present values are emitted, and ``mmd_g``/``mms_g`` never both are --
-    ``mms_g`` wins, matching ``DriverSpec``'s exactly-one-mass rule.
+    ``mms_g`` wins, matching ``DriverSpec``'s exactly-one-mass rule. The LR-2
+    pair obeys the same principle from the other side: a row stating only one
+    half of it emits neither, because a spec the server refuses would make the
+    library row unpickable rather than merely less accurate.
     """
 
     spec: dict[str, float] = {}
@@ -185,6 +192,9 @@ def build_spec(fields: dict[str, float | str | None]) -> dict[str, float]:
         spec["cms_m_per_n"] = float(cms_mm_per_n) / 1000.0
     if "mmd_g" in spec and "mms_g" in spec:
         del spec["mmd_g"]
+    if ("le2_mh" in spec) != ("re2_ohm" in spec):
+        spec.pop("le2_mh", None)
+        spec.pop("re2_ohm", None)
     return spec
 
 

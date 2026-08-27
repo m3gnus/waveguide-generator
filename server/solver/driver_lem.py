@@ -41,6 +41,8 @@ def hornlab_driver(spec: DriverSpec) -> bandpass.Driver:
         Bl=spec.bl_t_m,
         Re=spec.re_ohm,
         Le=spec.le_mh * 1.0e-3,
+        le2_h=spec.le2_mh * 1.0e-3 if spec.le2_mh is not None else None,
+        re2_ohm=spec.re2_ohm,
         Mmd=spec.mmd_g * 1.0e-3 if spec.mmd_g is not None else None,
         Mms=spec.mms_g * 1.0e-3 if spec.mms_g is not None else None,
         Cms=spec.cms_m_per_n,

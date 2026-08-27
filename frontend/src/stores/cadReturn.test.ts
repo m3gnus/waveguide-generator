@@ -12,6 +12,7 @@ import {
   combineWire,
   driverEditedKeys,
   driverMissingGroups,
+  driverShortfallText,
   driverValues,
   driversForChannels,
   projectChannelDrivers,
@@ -712,6 +713,28 @@ describe('a channel driver picked from the library', () => {
     const withoutMass = { ...form, preset: { ...PRESET, base: { ...PRESET.base, mms_g: undefined } } };
     expect(driverMissingGroups(withoutMass)).toEqual([['mms_g', 'mmd_g']]);
     expect(channelDriverWire(withoutMass)).toBeUndefined();
+  });
+
+  it('makes the semi-inductance pair required only once one half is typed', () => {
+    // LR-2 is optional, so an untouched driver must stay complete; but half a
+    // pair is a 422 from DriverSpec, and the point of mirroring the server's
+    // rule here is that the user hears about it before the BEM run, not after.
+    const store = useCadReturnStore.getState();
+    store.setChannelDriverPreset('drive-hf', PRESET);
+    expect(driverMissingGroups(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual([]);
+
+    store.setChannelDriverField('drive-hf', 'le2_mh', 1.4);
+    let form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(driverMissingGroups(form)).toEqual([['re2_ohm']]);
+    expect(driverShortfallText(form)).toBe('Re2');
+    expect(channelDriverWire(form)).toBeUndefined();
+
+    store.setChannelDriverField('drive-hf', 're2_ohm', 8);
+    form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(driverMissingGroups(form)).toEqual([]);
+    const wire = channelDriverWire(form)!;
+    expect(wire.le2_mh).toBe(1.4);
+    expect(wire.re2_ohm).toBe(8);
   });
 
   it('emits the label and never both masses', () => {

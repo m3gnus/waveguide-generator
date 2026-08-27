@@ -258,7 +258,7 @@ class ParametricGeometrySource(JobModel):
 class DriverSpec(JobModel):
     """Thiele-Small driver model for one drive channel, Hornresp units.
 
-    The wire keeps Hornresp's units (Sd cm², Le mH, Mmd/Mms g, Cms m/N,
+    The wire keeps Hornresp's units (Sd cm², Le/Le2 mH, Mmd/Mms g, Cms m/N,
     Vas L, Rms kg/s, Xmax mm) exactly as the Fusion add-in documents them;
     conversion to SI happens once, in ``server/solver/driver_lem.py``.
     """
@@ -267,6 +267,13 @@ class DriverSpec(JobModel):
     bl_t_m: float = Field(gt=0, allow_inf_nan=False)
     re_ohm: float = Field(gt=0, allow_inf_nan=False)
     le_mh: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    #: Semi-inductance (LR-2) branch: ``Le2 || Re2`` in series with Re+jwLe,
+    #: which is what a measured voice coil actually does above a few hundred
+    #: hertz. Optional, and both or neither -- ``bandpass.Driver`` refuses a
+    #: half-stated pair, and refusing it here names the field in a 422 instead
+    #: of failing the solve after the mesh.
+    le2_mh: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    re2_ohm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     mmd_g: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     mms_g: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     cms_m_per_n: float | None = Field(default=None, gt=0, allow_inf_nan=False)
@@ -304,6 +311,10 @@ class DriverSpec(JobModel):
             raise ValueError("driver needs exactly one of mmd_g or mms_g")
         if self.cms_m_per_n is None and self.vas_l is None and self.fs_hz is None:
             raise ValueError("driver needs one of cms_m_per_n, vas_l, or fs_hz")
+        if (self.le2_mh is None) != (self.re2_ohm is None):
+            raise ValueError(
+                "driver semi-inductance needs both le2_mh and re2_ohm, or neither"
+            )
         return self
 
 
