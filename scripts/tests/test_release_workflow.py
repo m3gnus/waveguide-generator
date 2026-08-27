@@ -171,7 +171,7 @@ def _staging_script(tmp_path: Path) -> Path:
     script = textwrap.dedent(WORKFLOW[start:end])
     assert script.startswith("from __future__"), script[:80]
     path = tmp_path / "extracted" / "stage_release_assets.py"
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(script + "\n", encoding="utf-8")
     return path
 
@@ -250,16 +250,18 @@ def test_the_publish_step_stages_installers_and_layers_to_separate_releases(
 
     every_name = [name for names in layout.values() for name in names]
     expected_downloads = sorted(
-        name
+        original
         for original in every_name
         if original.startswith(release_assets.INSTALLER_PREFIX)
-        for name in (original, release_assets.checksum_name(original))
     )
+    # One sidecar survives, and it travels with the SPA archive to the companion.
     expected_layers = sorted(
-        name
-        for original in every_name
-        if not original.startswith(release_assets.INSTALLER_PREFIX)
-        for name in (original, release_assets.checksum_name(original))
+        [
+            original
+            for original in every_name
+            if not original.startswith(release_assets.INSTALLER_PREFIX)
+        ]
+        + [release_assets.checksum_name(release_assets.spa_archive_name(VERSION))]
     )
     assert downloads == expected_downloads
     assert layers == expected_layers
@@ -268,11 +270,8 @@ def test_the_publish_step_stages_installers_and_layers_to_separate_releases(
     assert downloads == sorted(
         [
             f"Waveguide.Generator-{VERSION}-macos-arm64.dmg",
-            f"Waveguide.Generator-{VERSION}-macos-arm64.dmg.sha256",
             f"Waveguide.Generator-{VERSION}-windows-x86_64-setup.exe",
-            f"Waveguide.Generator-{VERSION}-windows-x86_64-setup.exe.sha256",
             f"Waveguide.Generator-{VERSION}-windows-x86_64.zip",
-            f"Waveguide.Generator-{VERSION}-windows-x86_64.zip.sha256",
         ]
     )
     assert not set(downloads) & set(layers)
@@ -306,10 +305,12 @@ def test_the_transitional_version_publishes_its_layers_to_both_releases(
 
     every_name = [name for names in layout.values() for name in names]
     expected_layers = sorted(
-        name
-        for original in every_name
-        if not original.startswith(release_assets.INSTALLER_PREFIX)
-        for name in (original, release_assets.checksum_name(original))
+        [
+            original
+            for original in every_name
+            if not original.startswith(release_assets.INSTALLER_PREFIX)
+        ]
+        + [release_assets.checksum_name(release_assets.spa_archive_name(version))]
     )
     # The companion is exactly what it always was.
     assert layers == expected_layers
@@ -321,7 +322,7 @@ def test_the_transitional_version_publishes_its_layers_to_both_releases(
         f"Waveguide.Generator-{version}-windows-x86_64-setup.exe",
         f"Waveguide.Generator-{version}-windows-x86_64.zip",
     } <= set(downloads)
-    assert len(downloads) == len(expected_layers) + 6
+    assert len(downloads) == len(expected_layers) + 3
 
 
 def test_only_the_transitional_version_duplicates_its_layers() -> None:
@@ -333,6 +334,44 @@ def test_only_the_transitional_version_duplicates_its_layers() -> None:
     assert not release_assets.duplicate_layers_on_user_release("0.3.0")
     assert not release_assets.duplicate_layers_on_user_release("0.3.2")
     assert not release_assets.duplicate_layers_on_user_release(VERSION)
+
+
+def test_only_the_spa_archive_keeps_its_checksum_sidecar(tmp_path: Path) -> None:
+    """Checksums are still computed and verified -- they are just not uploaded.
+
+    Half of every release used to be sidecars of the other half, deleted by hand
+    afterwards because the producer kept making them. GitHub serves a per-asset
+    digest and the updater reads that. The SPA archive is the exception:
+    `scripts/fetch_spa.py` fetches it by URL for source installs and never
+    touches the releases API, so for that one file the sidecar is the only
+    checksum a consumer can reach.
+
+    Asserted by running the staging step rather than by grepping the YAML, so it
+    describes what is published rather than how it is spelled.
+    """
+
+    _publish_inputs(tmp_path)
+    result = _run_staging(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    staged = [
+        p.name
+        for directory in ("build/release-assets", "build/update-assets")
+        for p in (tmp_path / directory).iterdir()
+    ]
+    assert [name for name in staged if name.endswith(".sha256")] == [
+        release_assets.checksum_name(release_assets.spa_archive_name(VERSION))
+    ]
+    # Still built, and still the gate: corrupt one and the publish must fail.
+    sidecar = (
+        tmp_path
+        / "build/publish-inputs/macos"
+        / release_assets.checksum_name(
+            release_assets.installer_name(release_assets.MACOS_PLATFORM, VERSION)
+        )
+    )
+    sidecar.write_text(f"{'0' * 64}  wrong{chr(10)}", encoding="ascii")
+    assert _run_staging(tmp_path).returncode != 0
 
 
 def test_an_asset_the_build_did_not_produce_fails_the_publish(tmp_path: Path) -> None:
