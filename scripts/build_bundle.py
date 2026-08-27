@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any
+from typing import Any, NamedTuple
 import urllib.error
 import urllib.request
 import zipfile
@@ -228,7 +228,12 @@ def write_runtime_manifest(
     return payload
 
 
-def tree_digest(root: Path, *, exclude: frozenset[str] = frozenset()) -> str:
+def tree_digest(
+    root: Path,
+    *,
+    exclude: frozenset[str] = frozenset(),
+    executables: frozenset[str] = frozenset(),
+) -> str:
     """Digest a directory's content, independent of how it is packed.
 
     The two platforms must ship the same application layer, and comparing the
@@ -239,13 +244,19 @@ def tree_digest(root: Path, *, exclude: frozenset[str] = frozenset()) -> str:
     paths, symlink targets, and the bytes of each file -- so the archive is free
     to be compressed.
 
-    It deliberately does **not** cover the executable bit. Windows cannot
-    represent one and CPython fabricates it from the file extension, so reading
-    it back made the digest depend on the build host; see
-    :func:`_executable_flag`. The app layer carries no executable files, and
-    :func:`assert_app_layer_is_not_executable` keeps it that way on the platform
-    that can observe modes, which is where the release builds its reference
-    layer.
+    It covers the executable bit, but takes it from ``executables`` -- the set of
+    POSIX relative paths Git records as ``100755`` -- and never from the
+    filesystem. NTFS has no POSIX executable bit and CPython fabricates one from
+    the file extension, so ``.bat``, ``.cmd``, ``.exe`` and ``.com`` read back
+    with ``S_IEXEC`` set on Windows and as plain ``0o644`` everywhere else.
+    Reading the bit back made this digest depend on which host built the layer --
+    the precise thing it exists to rule out -- and three ``.bat`` files were
+    enough to fail the 0.2.5 release build on byte-identical content.
+
+    Keying on Git's mode restores a real check and agrees across platforms by
+    construction. Files that were never Git blobs -- the SPA and the Windows
+    bootstrap -- are simply absent from ``executables``, which is accurate rather
+    than a special case.
 
     The runtime layer is unaffected: it is described by RUNTIME-MANIFEST.json
     with a per-file digest of its own, so the real executables it ships keep
@@ -275,78 +286,42 @@ def tree_digest(root: Path, *, exclude: frozenset[str] = frozenset()) -> str:
             digest.update(f"l\x00{relative}\x00{os.readlink(path)}\x00".encode())
             continue
         digest.update(
-            f"f{_executable_flag(path)}\x00{relative}\x00{file_sha256(path)}\x00".encode()
+            f"f{'x' if relative.as_posix() in executables else '-'}\x00{relative}\x00"
+            f"{file_sha256(path)}\x00".encode()
         )
     return digest.hexdigest()
 
 
-def _executable_flag(path: Path) -> str:
-    """The executable bit, in a form both build platforms can agree on.
+def assert_app_layer_modes_match_git(app_root: Path, executables: frozenset[str]) -> None:
+    """Fail the build when the layer on disk disagrees with Git about modes.
 
-    NTFS has no POSIX executable bit, so CPython fabricates one from the file
-    extension: ``.bat``, ``.cmd``, ``.exe`` and ``.com`` read back with
-    ``S_IEXEC`` set on Windows and as plain ``0o644`` everywhere else. Reading
-    the bit back off the filesystem therefore makes this digest depend on which
-    host built the layer -- the precise thing it exists to rule out. It cost the
-    0.2.5 release build: three ``.bat`` files in the app layer
-    (``launchers/windows/launch-wg.bat``, ``scripts/install.bat``,
-    ``scripts/uninstall.bat``) were enough to make the Windows and macOS layers
-    disagree, with byte-identical contents on both.
+    :func:`tree_digest` takes the executable bit from Git rather than from the
+    filesystem, which is what makes the two build hosts agree. That leaves one
+    way for the digest to describe something the layer is not: the materializer
+    failing to apply a mode it reported. Both directions are checked, because a
+    missing bit and a surplus one are equally a divergence between what shipped
+    and what was digested.
 
-    The app layer has no executable files. ``copy_tracked_app_files`` writes
-    every entry with ``write_bytes``, which does not carry Git's mode, so all
-    288 tracked files land at ``0o644``; the SPA and the Windows bootstrap are
-    written the same way. ``assert_app_layer_is_not_executable`` holds the
-    builder to that on the platform that can observe modes, so it is a recorded
-    invariant rather than an assumption.
-
-    Note that this is the *materialized* layer, not Git's view of it: seven
-    tracked app files are 100755 in the tree, including ``scripts/install.sh``
-    and ``launchers/linux/launch-wg.sh``, and they all ship non-executable. That
-    is pre-existing and separate from this digest -- the bundles do not depend on
-    it, because the macOS ``.app`` launcher that actually runs is written fresh
-    by ``write_launcher_stub`` and chmod'd there -- but whether the layer ought
-    to carry Git's modes at all is a real question this comment should not
-    pretend is settled.
-
-    Deriving the flag from Git's mode instead of the filesystem would keep a
-    genuine executable-bit check and agree across platforms by construction. It
-    is not done here for two reasons: ``tree_digest`` runs over the assembled
-    layer, which also contains the SPA and the Windows bootstrap -- files that
-    were never Git blobs and have no mode to read -- and with the materializer
-    dropping modes, digesting those seven as executable would describe an intent
-    the shipped layer does not have. Worth revisiting together with the
-    materializer, not before it.
-    """
-
-    if os.name == "nt":
-        return "-"
-    return "x" if path.stat().st_mode & 0o111 else "-"
-
-
-def assert_app_layer_is_not_executable(app_root: Path) -> None:
-    """Fail the build if anything in the app layer carries an executable bit.
-
-    :func:`_executable_flag` digests the layer as non-executable on every
-    platform. That is true today and cheap to keep true, but if a file ever
-    arrives with ``+x`` on POSIX the digest would quietly stop describing it --
-    and the cross-platform gate would not catch it, because both sides would
-    agree on the same wrong answer. Windows cannot check this; POSIX can, and
-    the release builds the reference layer on macOS.
+    Windows cannot represent the bit, so there is nothing to compare there. The
+    release builds its reference layer on macOS, which can.
     """
 
     if os.name == "nt":
         return
-    executable = sorted(
+    on_disk = {
         path.relative_to(app_root).as_posix()
         for path in app_root.rglob("*")
         if not path.is_dir() and not path.is_symlink() and path.stat().st_mode & 0o111
+    }
+    if on_disk == executables:
+        return
+    missing = sorted(executables - on_disk)
+    surplus = sorted(on_disk - executables)
+    raise BundleError(
+        "The app layer's executable bits disagree with Git. "
+        f"Git marks these executable but the layer does not: {missing or 'none'}. "
+        f"The layer marks these executable but Git does not: {surplus or 'none'}."
     )
-    if executable:
-        raise BundleError(
-            "The app layer is digested as non-executable on every platform, but "
-            "these entries carry an executable bit: " + ", ".join(executable)
-        )
 
 
 def write_app_manifest(
@@ -355,8 +330,9 @@ def write_app_manifest(
     version: str,
     commit: str,
     runtime_id: str,
+    executables: frozenset[str] = frozenset(),
 ) -> dict[str, object]:
-    assert_app_layer_is_not_executable(app_root)
+    assert_app_layer_modes_match_git(app_root, executables)
     payload: dict[str, object] = {
         "schemaVersion": 1,
         "version": version,
@@ -365,7 +341,11 @@ def write_app_manifest(
         # Computed before the manifest exists, and therefore excluding it: the
         # manifest cannot contain a digest of itself. Consumers comparing two
         # layers compare this field, not the file that carries it.
-        "treeSha256": tree_digest(app_root, exclude=frozenset({"APP-MANIFEST.json"})),
+        "treeSha256": tree_digest(
+            app_root,
+            exclude=frozenset({"APP-MANIFEST.json"}),
+            executables=executables,
+        ),
     }
     write_json(app_root / "APP-MANIFEST.json", payload)
     return payload
@@ -451,12 +431,19 @@ def _validate_app_paths(paths: Iterable[PurePosixPath]) -> None:
             parent /= component
 
 
+class AppLayerFiles(NamedTuple):
+    """What the materializer wrote, and which of it Git marks executable."""
+
+    paths: tuple[PurePosixPath, ...]
+    executables: frozenset[str]
+
+
 def _git_tracked_app_entries(
     repo_root: Path,
     *,
     commit: str,
     runner: RunCallable,
-) -> tuple[tuple[PurePosixPath, str], ...]:
+) -> tuple[tuple[PurePosixPath, str, str], ...]:
     command = [
         "git",
         "ls-tree",
@@ -474,7 +461,7 @@ def _git_tracked_app_entries(
         raise BundleError(f"git ls-tree failed: {stderr or f'exit {result.returncode}'}")
     stdout = result.stdout
     encoded = stdout if isinstance(stdout, bytes) else stdout.encode()
-    entries: list[tuple[PurePosixPath, str]] = []
+    entries: list[tuple[PurePosixPath, str, str]] = []
     refused: list[str] = []
     for record in encoded.split(b"\0"):
         if not record:
@@ -495,11 +482,11 @@ def _git_tracked_app_entries(
                 f"Tracked app source is not a regular Git blob: {path.as_posix()} "
                 f"({mode} {object_type})"
             )
-        entries.append((path, object_id))
+        entries.append((path, object_id, mode))
     if refused:
         raise BundleError(f"git ls-tree returned paths outside the app filter: {refused}")
     entries.sort(key=lambda item: item[0].as_posix())
-    _validate_app_paths(path for path, _object_id in entries)
+    _validate_app_paths(path for path, _object_id, _mode in entries)
     return tuple(entries)
 
 
@@ -511,7 +498,7 @@ def git_tracked_app_files(
 ) -> tuple[PurePosixPath, ...]:
     return tuple(
         path
-        for path, _object_id in _git_tracked_app_entries(
+        for path, _object_id, _mode in _git_tracked_app_entries(
             repo_root,
             commit=commit,
             runner=runner,
@@ -525,11 +512,20 @@ def copy_tracked_app_files(
     *,
     commit: str = "HEAD",
     runner: RunCallable = subprocess.run,
-) -> tuple[PurePosixPath, ...]:
-    """Materialize exact app blobs from ``commit``, never checkout-filtered bytes."""
+) -> AppLayerFiles:
+    """Materialize exact app blobs from ``commit``, never checkout-filtered bytes.
+
+    Git's mode travels with the bytes. ``write_bytes`` alone does not carry it,
+    so seven tracked files that are ``100755`` in the tree -- ``scripts/install.sh``
+    and ``launchers/linux/launch-wg.sh`` among them -- used to ship at ``0o644``.
+    That made "the app layer has no executable files" a property of this function
+    rather than of the source, and it is the reason the layer digest had to drop
+    the executable bit entirely.
+    """
 
     entries = _git_tracked_app_entries(repo_root, commit=commit, runner=runner)
-    for relative, object_id in entries:
+    executables: list[str] = []
+    for relative, object_id, mode in entries:
         target = destination.joinpath(*relative.parts)
         result = runner(
             ["git", "cat-file", "blob", object_id],
@@ -546,7 +542,16 @@ def copy_tracked_app_files(
         payload = result.stdout if isinstance(result.stdout, bytes) else result.stdout.encode()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
-    return tuple(path for path, _object_id in entries)
+        if mode == "100755":
+            executables.append(relative.as_posix())
+            # A no-op on Windows, which has no executable bit to set. The digest
+            # is keyed on Git's mode rather than on this call precisely so the
+            # two hosts still agree.
+            target.chmod(target.stat().st_mode | 0o111)
+    return AppLayerFiles(
+        paths=tuple(path for path, _object_id, _mode in entries),
+        executables=frozenset(executables),
+    )
 
 
 def _validated_existing_spa(repo_root: Path, version: str) -> Path:
@@ -1435,7 +1440,10 @@ class BundleBuilder:
             commit=commit,
             runner=self.runner,
         )
-        print(f"Copied {len(tracked)} tracked app files.")
+        print(
+            f"Copied {len(tracked.paths)} tracked app files "
+            f"({len(tracked.executables)} executable)."
+        )
         install_spa_layer(
             destination,
             version=version,
@@ -1450,6 +1458,7 @@ class BundleBuilder:
             version=version,
             commit=commit,
             runtime_id=runtime_id,
+            executables=tracked.executables,
         )
 
     def assemble_bundle(
