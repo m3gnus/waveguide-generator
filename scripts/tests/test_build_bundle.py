@@ -42,13 +42,13 @@ from scripts.build_bundle import (
     deterministic_zip,
     install_spa_layer,
     is_x64_pe,
-    launcher_stub,
     locate_msvc_runtime_dlls,
     pe_file_version,
     prepare_output_directory,
     prune_runtime,
     require_python_build,
     substitute_info_plist,
+    write_launcher_stub,
     windows_desktop_bootstrap,
     windows_launcher_files,
     windows_pth,
@@ -561,18 +561,76 @@ def test_info_plist_substitution_updates_both_bundle_versions(tmp_path: Path) ->
     assert payload["CFBundleIdentifier"] == "is.hornlab.waveguide-generator-v2"
 
 
-def test_launcher_stub_sets_bundle_root_and_keeps_rosetta_guard() -> None:
-    stub = launcher_stub()
+def test_the_macos_launcher_is_compiled_not_a_script(tmp_path: Path) -> None:
+    """A script main executable made the bundle unopenable as downloaded.
 
-    assert "sysctl.proc_translated" in stub
-    assert 'exec arch -arm64 "$0" "$@"' in stub
-    assert "export WG2_BUNDLE=1" in stub
-    assert 'export WG2_APP_ROOT="$RESOURCES/app"' in stub
-    # Caches must leave the sealed bundle untouched.
-    assert 'export PYTHONPYCACHEPREFIX="$CACHE_ROOT/pycache"' in stub
-    assert 'export NUMBA_CACHE_DIR="$CACHE_ROOT/numba"' in stub
-    assert 'CACHE_ROOT="$HOME/Library/Caches/WaveguideGenerator"' in stub
-    assert 'exec "../runtime/bin/python3.13" -m launchers.desktop "$@"' in stub
+    It made the bundle a "script bundle" -- codesign reports
+    ``Format=app bundle with generic`` -- which Gatekeeper does not give the
+    ordinary unsigned-app treatment. Measured against a locally built .dmg with a
+    quarantine attribute applied: SIGKILL (137) launched directly, blocked with
+    no process through ``open``, and working only once quarantine was cleared.
+
+    The source must still do everything the script did, so those are asserted
+    against the C rather than against a generated string.
+    """
+
+    source = (Path(__file__).resolve().parents[2] / "launchers" / "macos" / "launcher.c").read_text(
+        encoding="utf-8"
+    )
+    assert 'setenv("WG2_BUNDLE", "1", 1)' in source
+    assert 'setenv("WG2_APP_ROOT", app_root, 1)' in source
+    # Caches must leave the sealed bundle untouched; writing into it breaks the
+    # signature and the next launch fails as damaged.
+    assert 'setenv("PYTHONPYCACHEPREFIX", pycache, 1)' in source
+    assert 'setenv("NUMBA_CACHE_DIR", numba, 1)' in source
+    assert "Library/Caches/WaveguideGenerator" in source
+    assert "runtime/bin/python3.13" in source
+    assert '"launchers.desktop"' in source
+    assert "execv(interpreter, args)" in source
+    # A compiled arm64 binary cannot be started translated, so the script's
+    # Rosetta re-exec has no counterpart and must not be reintroduced.
+    assert "proc_translated" not in source
+
+    written = tmp_path / "Waveguide Generator"
+    calls: list[list[str]] = []
+
+    def runner(command, **kwargs):
+        calls.append(list(command))
+        written.write_bytes(b"\xcf\xfa\xed\xfe")  # Mach-O magic, standing in
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    write_launcher_stub(
+        written,
+        repo_root=Path(__file__).resolve().parents[2],
+        runner=runner,
+    )
+
+    assert calls and calls[0][0] == "cc"
+    assert "-arch" in calls[0] and "arm64" in calls[0]
+    # Only where the filesystem has an executable bit. NTFS does not, and
+    # os.chmod there toggles the read-only attribute and nothing else -- the
+    # same reason tree_digest stopped reading the bit off the filesystem at all.
+    # Asserting it on Windows tests the platform, not the launcher.
+    if os.name != "nt":
+        assert written.stat().st_mode & 0o111
+
+
+def test_a_missing_compiler_fails_the_build_rather_than_falling_back(tmp_path: Path) -> None:
+    """Falling back to a script would rebuild the exact failure this removes.
+
+    Such a bundle builds, signs, uploads and installs, and only then refuses to
+    open -- on the user's machine, not on the builder's.
+    """
+
+    def failing_runner(command, **kwargs):
+        return SimpleNamespace(returncode=127, stdout=b"", stderr=b"cc: not found")
+
+    with pytest.raises(BundleError, match="Could not compile the macOS launcher"):
+        write_launcher_stub(
+            tmp_path / "Waveguide Generator",
+            repo_root=Path(__file__).resolve().parents[2],
+            runner=failing_runner,
+        )
 
 
 def test_layer_zip_is_sorted_and_omits_appledouble_files(tmp_path: Path) -> None:
