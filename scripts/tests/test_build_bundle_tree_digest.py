@@ -6,6 +6,10 @@ byte-identical contents on both sides: ``tree_digest`` read the executable bit
 back off the filesystem, and NTFS has no POSIX executable bit, so CPython
 fabricates one from the file extension. Three ``.bat`` files in the app layer
 were enough.
+
+The bit is now taken from Git's mode instead, which agrees across hosts by
+construction, so what these tests pin is that the filesystem cannot reach the
+digest at all.
 """
 
 from __future__ import annotations
@@ -25,39 +29,60 @@ def _layer(root):
     return root
 
 
-def test_a_batch_file_does_not_change_the_digest_by_looking_executable(tmp_path, monkeypatch):
-    """What Windows actually does, forced on the platform running the test.
+def test_a_batch_file_does_not_change_the_digest_by_looking_executable(tmp_path):
+    """The filesystem's answer, whatever it is, must not reach the digest.
 
-    ``_executable_flag`` is the whole mechanism, so driving ``os.name`` is
-    enough to reproduce the failure: on ``nt`` the fabricated bit must be
-    ignored rather than digested.
+    On Windows CPython reports ``scripts/install.bat`` as executable and on
+    POSIX it does not, and neither may matter. Both hosts are exercised for
+    real here rather than simulated: the digest is taken as it comes out on the
+    platform running the test, the mode is then changed underneath it where the
+    platform has a mode to change, and the value must not move either way.
     """
 
     root = _layer(tmp_path / "app")
-    posix_digest = build_bundle.tree_digest(root)
+    before = build_bundle.tree_digest(root)
 
-    # Windows: CPython would report the .bat as executable. The flag must not.
-    monkeypatch.setattr(build_bundle.os, "name", "nt")
-    assert build_bundle._executable_flag(root / "scripts" / "install.bat") == "-"
-    assert build_bundle.tree_digest(root) == posix_digest
+    if os.name != "nt":
+        (root / "scripts" / "install.bat").chmod(0o755)
+        assert build_bundle.tree_digest(root) == before
+        (root / "scripts" / "install.bat").chmod(0o644)
+    assert build_bundle.tree_digest(root) == before
+
+    # Git's mode is the only thing that moves it.
+    assert build_bundle.tree_digest(
+        root, executables=frozenset({"scripts/install.bat"})
+    ) != before
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX modes are not observable on Windows")
-def test_an_executable_file_in_the_app_layer_fails_the_build(tmp_path):
+def test_a_layer_that_disagrees_with_git_about_modes_fails_the_build(tmp_path):
     """The invariant the digest now rests on, enforced where it is observable.
 
-    Digesting everything as non-executable is correct only while the layer
-    really has no executable files. If one appears, both platforms would agree
-    on the same wrong answer and the cross-platform gate would stay green, so
-    the builder has to refuse instead.
+    Taking the bit from Git is correct only while the layer on disk actually
+    carries what Git said. Both directions are checked, because a missing bit and
+    a surplus one are equally a divergence between what shipped and what was
+    digested, and either would leave both platforms agreeing on the same wrong
+    answer while the cross-platform gate stayed green.
     """
 
     root = _layer(tmp_path / "app")
-    build_bundle.assert_app_layer_is_not_executable(root)  # clean layer passes
+    build_bundle.assert_app_layer_modes_match_git(root, frozenset())
 
+    # Surplus: on disk but not in Git.
     (root / "scripts" / "install.bat").chmod(0o755)
     with pytest.raises(build_bundle.BundleError, match="scripts/install.bat"):
-        build_bundle.assert_app_layer_is_not_executable(root)
+        build_bundle.assert_app_layer_modes_match_git(root, frozenset())
+
+    build_bundle.assert_app_layer_modes_match_git(
+        root, frozenset({"scripts/install.bat"})
+    )
+
+    # Missing: in Git but not on disk.
+    (root / "scripts" / "install.bat").chmod(0o644)
+    with pytest.raises(build_bundle.BundleError, match="scripts/install.bat"):
+        build_bundle.assert_app_layer_modes_match_git(
+            root, frozenset({"scripts/install.bat"})
+        )
 
 
 def _digest_in_order(root, relatives):

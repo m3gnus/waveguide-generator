@@ -382,11 +382,51 @@ def test_git_object_copy_uses_committed_bytes_and_excludes_test_trees(
 
     copied = copy_tracked_app_files(repo, destination)
 
-    assert [path.as_posix() for path in copied] == ["server/tracked.py"]
+    assert [path.as_posix() for path in copied.paths] == ["server/tracked.py"]
+    assert copied.executables == frozenset()
     assert (destination / "server" / "tracked.py").read_bytes() == b"tracked = True\n"
     assert not (destination / "server" / "tests").exists()
     assert not (destination / "server" / "ignored.py").exists()
     assert not (destination / "server" / "untracked.py").exists()
+
+
+def test_materialized_app_files_carry_gits_mode(tmp_path: Path) -> None:
+    """`write_bytes` does not carry a mode, and for a long time nothing did.
+
+    Seven tracked app files are 100755 in the tree -- scripts/install.sh and
+    launchers/linux/launch-wg.sh among them -- and every one of them shipped at
+    0o644. "The app layer has no executable files" was therefore a fact about
+    the materializer, not about the source, which is why the layer digest had to
+    drop the executable bit entirely to agree across platforms.
+    """
+
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    (repo / "scripts" / "install.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (repo / "scripts" / "plain.py").write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "update-index", "--chmod=+x", "scripts/install.sh"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "commit", "-q", "-m", "fixture"], cwd=repo, check=True)
+
+    destination = tmp_path / "app"
+    destination.mkdir()
+    copied = copy_tracked_app_files(repo, destination)
+
+    assert copied.executables == frozenset({"scripts/install.sh"})
+    if os.name != "nt":
+        assert (destination / "scripts" / "install.sh").stat().st_mode & 0o111
+        assert not (destination / "scripts" / "plain.py").stat().st_mode & 0o111
+
+    # And the manifest agrees with the layer in both directions.
+    build_bundle.assert_app_layer_modes_match_git(destination, copied.executables)
+    if os.name != "nt":
+        with pytest.raises(BundleError, match="disagree with Git"):
+            build_bundle.assert_app_layer_modes_match_git(destination, frozenset())
 
 
 def test_release_builder_refuses_a_dirty_worktree(tmp_path: Path) -> None:
@@ -1420,15 +1460,24 @@ def test_tree_digest_covers_content_not_packing(tmp_path: Path) -> None:
     (second / "server" / "app.py").write_text("print('x')\n", encoding="utf-8")
     assert build_bundle.tree_digest(first) == build_bundle.tree_digest(second)
 
-    # The executable bit is only assertable where the filesystem has one.
-    # Windows has no POSIX mode: os.chmod() there toggles the read-only
-    # attribute and nothing else, so a .py file reports st_mode & 0o111 == 0
-    # both before and after chmod(0o755) and the digest correctly does not
-    # move. The bit belongs in the identity on POSIX, so skip the step rather
-    # than weaken tree_digest to make it pass everywhere.
+    # The executable bit is part of the identity, and comes from Git.
+    executable = frozenset({"server/app.py"})
+    assert build_bundle.tree_digest(first) != build_bundle.tree_digest(
+        first, executables=executable
+    )
+    assert build_bundle.tree_digest(first, executables=executable) == (
+        build_bundle.tree_digest(second, executables=executable)
+    )
+
+    # And it does NOT come from the filesystem, which is the whole cross-platform
+    # fix. NTFS has no POSIX executable bit and CPython fabricates one from the
+    # file extension, so a digest that read the mode back disagreed between hosts
+    # on byte-identical content -- three .bat files failed the 0.2.5 release
+    # build that way. Changing the mode on disk must not move the digest.
     if os.name != "nt":
+        before = build_bundle.tree_digest(second)
         (second / "server" / "app.py").chmod(0o755)
-        assert build_bundle.tree_digest(first) != build_bundle.tree_digest(second)
+        assert build_bundle.tree_digest(second) == before
         (second / "server" / "app.py").chmod(0o644)
 
     (second / "extra.txt").write_text("", encoding="utf-8")
