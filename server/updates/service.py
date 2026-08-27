@@ -833,6 +833,23 @@ class UpdateService:
             raise RuntimeError("The release app manifest has invalid bundle identity")
         return runtime_id
 
+    def _updates_release(self, version: str) -> dict[str, Any] | None:
+        """The companion pre-release carrying this version's update layers.
+
+        The user-facing release holds only the installers, so the layers live on
+        ``v<version>-updates``. It is found in the recent-releases list that
+        ``_earlier_runtime_asset`` already fetches, rather than through a request
+        of its own: one list answers both questions.
+        """
+
+        if self._recent_releases is None:
+            self._recent_releases = self.recent_releases_fetcher()
+        wanted = release_assets.updates_tag(version)
+        for release in self._recent_releases:
+            if release.get("tag_name") == wanted:
+                return release
+        return None
+
     def _earlier_runtime_asset(self, runtime_id: str) -> dict[str, Any] | None:
         if runtime_id in self._runtime_asset_cache:
             return self._runtime_asset_cache[runtime_id]
@@ -842,7 +859,11 @@ class UpdateService:
         found: dict[str, Any] | None = None
         for release in self._recent_releases:
             tag = release.get("tag_name")
-            if not isinstance(tag, str) or TAG_RE.fullmatch(tag) is None:
+            # Runtime layers live on the companion pre-releases, whose tags carry
+            # the -updates suffix that TAG_RE deliberately rejects for versions.
+            if not isinstance(tag, str) or TAG_RE.fullmatch(
+                tag.removesuffix(release_assets.UPDATES_TAG_SUFFIX)
+            ) is None:
                 continue
             found = self._paired_asset(
                 self._uploaded_assets(release),
@@ -869,8 +890,17 @@ class UpdateService:
         if checkout is not None and checkout.get("kind") == "bundle":
             app_name = release_assets.app_layer_name(version)
             manifest_name = release_assets.app_manifest_name(version)
-            app_asset = self._paired_asset(uploaded, app_name, "app", tag=tag)
-            manifest_asset = self._paired_asset(uploaded, manifest_name, "manifest", tag=tag)
+            # The layers live on the companion pre-release, not on the release the
+            # user downloads from. Absent, the release is simply reported
+            # incomplete and no update is offered -- which is the correct answer:
+            # there is nothing to install.
+            updates_release = self._updates_release(version)
+            updates_tag = release_assets.updates_tag(version)
+            layers = self._uploaded_assets(updates_release) if updates_release else {}
+            app_asset = self._paired_asset(layers, app_name, "app", tag=updates_tag)
+            manifest_asset = self._paired_asset(
+                layers, manifest_name, "manifest", tag=updates_tag
+            )
             base_release = {
                 "version": version,
                 "tag": tag,
@@ -888,7 +918,9 @@ class UpdateService:
             runtime_name = release_assets.runtime_layer_name(
                 self._bundle_platform(), runtime_id
             )
-            runtime_asset = self._paired_asset(uploaded, runtime_name, "runtime", tag=tag)
+            runtime_asset = self._paired_asset(
+                layers, runtime_name, "runtime", tag=updates_tag
+            )
             installed_runtime = checkout.get("runtimeId")
             if runtime_asset is None and installed_runtime != runtime_id:
                 runtime_asset = self._earlier_runtime_asset(runtime_id)

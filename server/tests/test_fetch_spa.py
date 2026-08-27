@@ -26,6 +26,7 @@ from types import ModuleType
 import pytest
 
 from scripts.frontend_freshness import frontend_freshness, vite_executable
+from shared import release_assets
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -287,7 +288,14 @@ def test_the_requested_version_is_the_one_the_checkout_declares():
     declared = json.loads((ROOT / "shared" / "version.json").read_text(encoding="utf-8"))["version"]
     assert fetch_spa.declared_version(ROOT) == declared
     assert fetch_spa.asset_name(declared) == f"update-spa-{declared}.tar.gz"
-    assert fetch_spa.release_base_url("m3gnus/waveguide-generator", declared).endswith(f"/v{declared}")
+    # The archive is machinery, so it is published to the companion pre-release
+    # rather than to the release page a person reads. Still the declared
+    # version's tag in this repository: only the suffix moved.
+    assert fetch_spa.release_base_url("m3gnus/waveguide-generator", declared) == (
+        "https://github.com/m3gnus/waveguide-generator/releases/download/"
+        f"{release_assets.updates_tag(declared)}"
+    )
+    assert release_assets.updates_tag(declared).startswith(f"v{declared}")
 
 
 def _make_sources_newer_than(checkout: Path) -> None:
