@@ -51,6 +51,27 @@ jobs:
       - name: Frame codec tests
         run: node --test shared/js/frame.test.mjs
 
+  partial-merges:
+    name: No branch merged short of its tip
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Needs full history and every remote branch: the signal is where a
+      # branch's merge base sits relative to main's first-parent chain.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Fetch every branch the check compares against
+        run: git fetch --no-tags --prune origin "+refs/heads/*:refs/remotes/origin/*"
+      # PR #29 shipped a capability's consumer without its enabler and broke
+      # every default solve of 80 or more frequencies on main. Review and CI
+      # both passed, because the test that catches it was on the unmerged tail.
+      - name: Check for partially merged branches
+        run: python scripts/check_partial_merges.py
+
   drift:
     name: Generated-file drift
     runs-on: ubuntu-latest

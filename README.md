@@ -25,13 +25,30 @@ Then run the installer for your platform:
 
 For a self-contained macOS install, download the release's
 **Waveguide.Generator-&lt;version&gt;-macos-arm64.dmg**, open it, and drag **Waveguide Generator** to
-Applications. The app is ad-hoc signed rather than notarized, so on first launch
-macOS may require **System Settings → Privacy & Security → Open Anyway** and a
-confirmation; later launches work normally.
+Applications.
+
+**The first launch is refused, and that is expected.** macOS reports *"Apple could
+not verify 'Waveguide Generator' is free of malware that may harm your Mac or
+compromise your privacy."* The app is ad-hoc signed (`codesign --sign -`) and has
+not been through Apple notarization, which is what that check looks for — it is a
+statement about a missing Apple Developer signature, not about the app. To open
+it, click **Done**, then open **System Settings → Privacy & Security**, scroll to
+**Security**, and click **Open Anyway** beside Waveguide Generator. Confirm once
+and every later launch is normal.
+
+Control-clicking and choosing Open no longer bypasses this; Apple removed that
+path in macOS Sequoia, so Privacy & Security is the only route. The warning
+disappears for everyone once the app is signed with a Developer ID certificate
+and notarized, which needs a paid Apple Developer account and is not yet set up.
 
 For a self-contained Windows install, download
 **Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip**, extract the complete **Waveguide Generator**
-folder, and double-click **Waveguide Generator.exe** inside it. The executable is
+folder, and double-click **Waveguide Generator.exe** inside it. **Extract it to a
+short path such as `C:\wg`.** The bundle's deepest internal path is 133
+characters, so an install root longer than roughly 127 characters exceeds
+Windows' 260-character limit and extraction fails with a flood of "cannot find
+path" errors rather than one clear message. `C:\Program Files\...` is fine; a
+OneDrive-redirected Documents folder with a long company name may not be. The executable is
 not publisher-signed, so Microsoft Defender SmartScreen may require **More info →
 Run anyway** on first launch. The native window requires the **Microsoft Edge
 WebView2 Evergreen Runtime (x64)**, which is normally present on current Windows
@@ -289,32 +306,39 @@ python scripts/bump_version.py patch
 and `--check` proves every copy agrees. CI runs `--check` on every push; so does
 `server/tests/test_version_consistency.py`.
 
-Create the release commit on `main`, push `main`, and wait for CI to finish
-successfully on that exact commit. Only then tag that same commit and push the
-tag; the branch and tag pushes are deliberately separate operations:
+Releases are two deliberate commands, and **the tag is created last, by CI**:
 
 ```bash
-git push origin main
-# Wait for CI to be green on: git rev-parse HEAD
-git tag v0.2.1
-git push origin v0.2.1
+../release.sh waveguide-generator patch   # bump, commit, push main, wait for CI
+../release.sh waveguide-generator publish # build, validate, tag, publish
 ```
 
-The tag fires `.github/workflows/release.yml`, which **refuses to build when the
-tag disagrees with `shared/version.json`, the tagged commit is not reachable
-from `origin/main`, or CI did not succeed for that exact commit** — a build that
-misreports itself is worse than a failed release. Its SPA job attaches
-`waveguide-generator-v2-spa-<version>.tar.gz`; the macOS job builds the canonical
-platform-neutral app ZIP and manifest, the macOS runtime ZIP, and
-`Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job
-checks its independently built app ZIP byte-for-byte against the canonical one and
-builds the Windows runtime ZIP plus
-`Waveguide.Generator-<version>-windows-x86_64.zip`. Every attached file has a
-`.sha256` sidecar. A final publisher job validates the exact seven asset pairs, uploads
-them to a draft, and makes the release public only after all three build jobs succeed.
-Installer filenames use dots because those are the names GitHub serves; the installed
-application and extracted Windows folder retain spaces. The prebuilt SPA means
-installing Waveguide Generator needs no Node runtime.
+Phase 1 stops once CI is green on the exact release commit; nothing is tagged
+and no version is spent. Phase 2 dispatches
+`.github/workflows/release.yml` against that **commit**, which **refuses to run
+when `shared/version.json` does not move forward past every published tag, the
+commit is not reachable from `origin/main`, or CI did not succeed for that exact
+commit** — a build that misreports itself is worse than a failed release.
+
+Its SPA job attaches `waveguide-generator-v2-spa-<version>.tar.gz`; the macOS job
+builds the canonical platform-neutral app ZIP and manifest, the macOS runtime ZIP,
+and `Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job checks its
+independently built app ZIP against the canonical one by content digest and builds
+the Windows runtime ZIP plus `Waveguide.Generator-<version>-windows-x86_64.zip`.
+Every attached file has a `.sha256` sidecar. A final publisher job validates the
+exact seven asset pairs, uploads them to a draft, **then** creates the annotated
+tag and makes the release public.
+
+That order is deliberate. The tag used to be pushed by hand and was what
+triggered the build, so the version was committed to before anything was known
+to build. When a cross-platform gate failed twice on 2026-08-26, `v0.2.5` and
+`v0.2.6` became permanently dead tags with no assets and the work shipped as
+`v0.2.7`. A draft release does not create a git ref, so a failure now costs
+nothing and the same version is retried.
+
+Installer filenames use dots because those are the names GitHub serves; the
+installed application and extracted Windows folder retain spaces. The prebuilt
+SPA means installing Waveguide Generator needs no Node runtime.
 
 Pre-release and build-metadata suffixes are deliberately unsupported: the tag is
 built as `v` + this string, and the installer and update check compare it.
