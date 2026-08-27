@@ -19,7 +19,6 @@ import pytest
 from server.design.schema import DesignConfig, Expr
 from server.mesh import builder as mesh_builder
 from server.mesh.builder import (
-    DENSE_SOLVER_MEMORY_LIMIT_BYTES,
     MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
     _dense_solver_memory_requirements,
     _enforce_artifact_triangle_ceiling,
@@ -226,6 +225,39 @@ def test_build_solver_mesh_continues_past_user_budget_and_preserves_warning(
     assert "solve will continue" in warning
 
 
+def test_large_mesh_warning_quantifies_the_cubic_factorisation_cost() -> None:
+    """"Significantly longer" left the cost to the imagination, and the cost is
+    the whole argument for laddering instead of refining.
+
+    The estimate is checked against a measured ladder step: 11,130 DOF against
+    5,041 is 2.21x, which cost 9.8x the solve time and produced normalised
+    directivity matching the coarser level within 0.57 dB to 16 kHz. A cubic
+    estimate gives 11x -- close enough to steer a decision.
+    """
+
+    warning = mesh_builder._large_mesh_warnings(
+        triangle_count=7_173,
+        full_domain_count=11_130,
+        budget_full_domain=5_041,
+        domain_multiplier=2.0,
+        metadata={},
+    )[0]
+
+    assert "roughly 11x the solve time" in warning
+    assert "ladder two levels" in warning
+
+    # Just over the threshold is not worth a cost estimate; only the advice.
+    modest = mesh_builder._large_mesh_warnings(
+        triangle_count=7_173,
+        full_domain_count=5_500,
+        budget_full_domain=5_041,
+        domain_multiplier=2.0,
+        metadata={},
+    )[0]
+    assert "the solve time of a mesh at the threshold" not in modest
+    assert "ladder two levels" in modest
+
+
 def test_actual_domain_artifact_ceiling_is_enforced_post_build() -> None:
     _enforce_artifact_triangle_ceiling(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES)
     with pytest.raises(RuntimeError, match="solver-artifact sanity ceiling"):
@@ -237,22 +269,49 @@ def _triangles_using(vertex_count: int) -> np.ndarray:
     return (np.arange(padded, dtype=np.int64) % vertex_count).reshape((-1, 3))
 
 
+@pytest.fixture
+def eight_gib_ceiling(monkeypatch: pytest.MonkeyPatch) -> int:
+    """Pin the dense-memory limit so DOF boundaries are host-independent.
+
+    ``DENSE_SOLVER_MEMORY_LIMIT_BYTES`` is derived from physical RAM, so a
+    test that inherits it asserts a different boundary on every machine --
+    and would pass here while failing in CI. These tests are about the
+    boundary *arithmetic*, so they supply the limit themselves.
+    """
+
+    limit = 8 * 1024**3
+    monkeypatch.setattr(mesh_builder, "DENSE_SOLVER_MEMORY_LIMIT_BYTES", limit)
+    return limit
+
+
 @pytest.mark.parametrize(
     ("quadrants", "allowed_vertices", "rejected_vertices"),
     [(1234, 9_879, 9_880), (12, 9_879, 9_880), (1, 9_459, 9_460)],
 )
 def test_dense_solver_memory_ceiling_boundaries_follow_p1_dofs_and_symmetry(
-    quadrants: int, allowed_vertices: int, rejected_vertices: int
+    quadrants: int,
+    allowed_vertices: int,
+    rejected_vertices: int,
+    eight_gib_ceiling: int,
 ) -> None:
     allowed = _enforce_dense_solver_memory_ceiling(
         _triangles_using(allowed_vertices), quadrants
     )
     assert allowed["used_vertex_count"] == allowed_vertices
-    assert allowed["estimated_bytes"] <= DENSE_SOLVER_MEMORY_LIMIT_BYTES
+    assert allowed["estimated_bytes"] <= eight_gib_ceiling
     with pytest.raises(RuntimeError, match="8 GiB safety ceiling"):
         _enforce_dense_solver_memory_ceiling(
             _triangles_using(rejected_vertices), quadrants
         )
+
+
+def test_dense_solver_memory_limit_follows_host_ram_within_bounds() -> None:
+    """Never below the historical 8 GiB, never above 64 GiB, and overridable."""
+
+    from server.mesh.builder import _dense_solver_memory_limit_bytes
+
+    derived = _dense_solver_memory_limit_bytes()
+    assert 8 * 1024**3 <= derived <= 64 * 1024**3
 
 
 def test_dense_solver_guard_counts_only_vertices_referenced_by_triangles() -> None:
@@ -264,7 +323,9 @@ def test_dense_solver_guard_counts_only_vertices_referenced_by_triangles() -> No
     assert requirements["metal_dof_count"] == 3
 
 
-def test_infinite_baffle_aperture_p0_unknowns_raise_the_memory_estimate() -> None:
+def test_infinite_baffle_aperture_p0_unknowns_raise_the_memory_estimate(
+    eight_gib_ceiling: int,
+) -> None:
     triangles = _triangles_using(8_000)
     tags = np.full(len(triangles), 12, dtype=np.int32)
     ordinary = _dense_solver_memory_requirements(triangles, 1234)

@@ -137,11 +137,14 @@ def test_mesh_resolution_suspects_aggregate_into_one_warning() -> None:
     warnings = response["metadata"]["warnings"]
     mesh_warnings = [w for w in warnings if "Mesh resolution" in w]
     assert len(mesh_warnings) == 1
-    assert "up to about 150 Hz" in mesh_warnings[0]
+    assert "absolute SPL to about 150 Hz" in mesh_warnings[0]
     assert "6 elements per wavelength" in mesh_warnings[0]
     assert "50.0 mm edge" in mesh_warnings[0]
     assert "1 of 2 solved frequencies (200-200 Hz)" in mesh_warnings[0]
-    assert "Refine the mesh's mm resolutions" in mesh_warnings[0]
+    # 200 Hz is past the amplitude limit but inside the 450 Hz shape limit, so
+    # the aggregate says which metric survives rather than condemning both.
+    assert "shape to roughly 450 Hz" in mesh_warnings[0]
+    assert "stay within the shape limit" in mesh_warnings[0]
     # The per-frequency conditioning warning still stands on its own.
     assert any("Dense-solve conditioning is suspect at 200.0 Hz" in w for w in warnings)
     assert response["metadata"]["warning_count"] == len(warnings)
@@ -181,6 +184,43 @@ def test_mesh_resolution_all_clear_adds_no_warning() -> None:
     assert response["metadata"]["warning_count"] == len(
         response["metadata"]["warnings"]
     )
+
+
+def test_mesh_resolution_warning_reports_amplitude_and_shape_limits_apart() -> None:
+    """One ceiling cannot describe the failure.
+
+    The elements-per-wavelength rule is an amplitude criterion; normalised
+    shape survives roughly 3x past it (``_SHAPE_LIMIT_MULTIPLIER``). Saying
+    every metric dies at the amplitude limit overstates it, and an overstated
+    warning gets ignored.
+    """
+
+    from server.solver.result_mapping import _mesh_resolution_warning
+
+    inside = _mesh_resolution_warning(
+        suspect_frequencies=[1600.0, 2500.0, 3900.0],
+        diagnosed_count=40,
+        limit_hz=1489.0,
+        max_edge_m=0.0384,
+        min_elements_per_wavelength=6.0,
+    )
+    assert "1489 Hz" in inside and "4467 Hz" in inside
+    assert "stay within the shape limit" in inside
+    assert "remain usable" in inside
+
+    beyond = _mesh_resolution_warning(
+        suspect_frequencies=[1600.0, 8000.0, 20000.0],
+        diagnosed_count=40,
+        limit_hz=1489.0,
+        max_edge_m=0.0384,
+        min_elements_per_wavelength=6.0,
+    )
+    assert "also exceed the shape limit" in beyond
+    assert "2 of them (8000-20000 Hz)" in beyond
+
+    # Null depth is not a matchable quantity at any resolution, so both say so.
+    for text in (inside, beyond):
+        assert "never depth" in text
 
 
 def test_mesh_resolution_warning_survives_missing_policy_fields() -> None:

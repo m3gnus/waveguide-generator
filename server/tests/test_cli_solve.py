@@ -6,6 +6,8 @@ import asyncio
 import hashlib
 from io import StringIO
 import json
+
+import pytest
 from pathlib import Path
 
 from server.cli.args import build_parser, main
@@ -90,6 +92,45 @@ def _request(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_solve_wires_a_cadlink_store_so_imported_geometry_can_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without this the runtime refuses every CAD-Link solve.
+
+    ``JobRuntime`` resolves an imported geometry's ingest through
+    ``cadlink_store``; a runtime built without one raises
+    ``ingest_registry_unavailable``, so headless solves worked for parametric
+    designs only and a CAD model could not be swept or re-solved outside the
+    GUI at all.
+    """
+
+    captured: dict[str, object] = {}
+    real_runtime = solve_module.JobRuntime
+
+    def _capture(store, **kwargs):
+        captured.update(kwargs)
+        return real_runtime(store, **kwargs)
+
+    monkeypatch.setattr(solve_module, "JobRuntime", _capture)
+    exit_code = main(
+        [
+            "solve",
+            str(_design(tmp_path)),
+            "--json-events",
+            "--data-dir",
+            str(tmp_path / "data"),
+        ],
+        engine_registry=_registry(),
+    )
+
+    assert exit_code == 0
+
+    store = captured.get("cadlink_store")
+    assert store is not None
+    # It must be the data directory's own registry, not a scratch one.
+    assert Path(store.db_path).is_relative_to(tmp_path)
 
 
 def test_solve_happy_path_streams_completed_ndjson(tmp_path: Path, capsys) -> None:

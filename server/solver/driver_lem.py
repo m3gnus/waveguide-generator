@@ -21,6 +21,7 @@ raw fields as complex conjugates — the same single-boundary rule as
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -76,6 +77,51 @@ def one_way_peak_excursion_mm(cone_excursion_m: np.ndarray) -> np.ndarray:
     return np.asarray(cone_excursion_m, dtype=np.float64) * (1.0e3 * np.sqrt(2.0))
 
 
+#: Below this the patch is simply bigger than the driver's effective piston
+#: area -- a cone's geometric surface always is -- and nothing is wrong.
+_AREA_RATIO_WARN = 1.5
+#: How close the ratio must sit to a whole number before the warning dares
+#: name a count. Wide enough to survive the geometric-versus-effective gap.
+_AREA_RATIO_INTEGER_TOLERANCE = 0.3
+
+
+def source_area_warning(area_m2: float, spec: DriverSpec) -> str | None:
+    """Warn when a patch is too large for the drivers declared to fill it.
+
+    The solved cone volume velocity is spread over the whole source patch
+    (``scale = jw*U/S``), so a channel whose patch actually holds two drivers
+    while ``count`` says one radiates half the volume velocity it should --
+    about 6 dB down, silently, with a response shape that still looks right.
+    Nothing else in the pipeline compares the two areas: the ingest record's
+    area is checked against the *mesh*, never against the driver.
+
+    Only an oversized patch is reported. A patch smaller than ``count * Sd``
+    is the ordinary compression-driver case -- a 45 mm diaphragm feeding a
+    1" throat is a 3:1 area ratio and entirely correct, because acoustic
+    impedance is ``p/U`` and volume velocity is what crosses the junction.
+    """
+
+    sd_m2 = spec.sd_cm2 * 1.0e-4 * spec.count
+    if sd_m2 <= 0.0:
+        return None
+    ratio = float(area_m2) / sd_m2
+    if not math.isfinite(ratio) or ratio < _AREA_RATIO_WARN:
+        return None
+    suggestion = ""
+    implied = round(ratio * spec.count)
+    if (
+        implied > spec.count
+        and abs(ratio - implied / spec.count) <= _AREA_RATIO_INTEGER_TOLERANCE
+    ):
+        suggestion = f"; if this channel drives {implied} drivers, set count={implied}"
+    return (
+        f"source patch area {area_m2 * 1.0e4:.0f} cm2 is {ratio:.2f}x the modelled "
+        f"radiating area (count {spec.count} x Sd {spec.sd_cm2:g} cm2), so the "
+        f"solved volume velocity is spread over more area than the drivers fill"
+        f"{suggestion}"
+    )
+
+
 def channel_drive_scaling(
     frequencies_hz: np.ndarray,
     surface_pressure_avg_raw: np.ndarray,
@@ -117,6 +163,9 @@ def channel_drive_scaling(
     excursion_mm = one_way_peak_excursion_mm(coupled.cone_excursion_m)
     peak_excursion_mm = float(np.max(excursion_mm)) if excursion_mm.size else 0.0
     warnings: list[str] = []
+    area_warning = source_area_warning(float(area_m2), spec)
+    if area_warning is not None:
+        warnings.append(area_warning)
     if spec.xmax_mm is not None and peak_excursion_mm > spec.xmax_mm:
         warnings.append(
             f"peak cone excursion {peak_excursion_mm:.2f} mm exceeds Xmax "
