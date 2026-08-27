@@ -1531,10 +1531,64 @@ class BundleBuilder:
         )
         icon_writer(destination / WINDOWS_ICON_NAME)
 
+    #: Put the first-launch instruction where the wall is, not on a web page the
+    #: user has already left. macOS refuses this app on first launch and offers
+    #: NO way to proceed from the dialog: the app is ad-hoc signed, so Gatekeeper
+    #: has no developer identity to attach an exception to, and Privacy & Security
+    #: therefore lists nothing to allow. Measured 2026-08-27, both directly and
+    #: through LaunchServices; an unsigned build gets `source=no usable signature`
+    #: and would be allowed, but an unsigned arm64 binary cannot execute at all.
+    #: Removing the quarantine attribute is the only route that works without an
+    #: Apple Developer ID, and it is what comparable un-notarized projects ship.
+    DMG_README_NAME = "READ ME FIRST.txt"
+
+    def dmg_readme(self) -> str:
+        return """Waveguide Generator - first launch on macOS
+===========================================
+
+macOS will refuse to open this app the first time, with:
+
+    "Waveguide Generator" Not Opened
+    Apple could not verify "Waveguide Generator" is free of malware ...
+
+Only "Done" and "Move to Bin" are offered, and System Settings > Privacy &
+Security will NOT show an "Open Anyway" button. That is expected. It is a
+statement about a missing Apple signature, not a finding about this app.
+
+TO OPEN IT
+----------
+
+1. Drag Waveguide Generator to Applications, as usual.
+2. Open Terminal (Applications > Utilities > Terminal).
+3. Paste this line and press Return:
+
+     xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"
+
+4. Open the app normally. This is needed once, not on every launch.
+
+WHY
+---
+
+Apps distributed outside the App Store need a paid Apple Developer ID to be
+notarized. This build is signed ad-hoc instead, which lets it run but gives
+macOS no developer identity to offer you an exception for - which is why the
+dialog is a dead end rather than a prompt.
+
+The command above removes the "downloaded from the internet" flag that macOS
+put on the file. Nothing else about the app changes.
+
+WHAT IT SHOULD DO
+-----------------
+
+Waveguide Generator starts a local server on 127.0.0.1 and opens its interface.
+Nothing is sent anywhere; it runs entirely on your machine.
+"""
+
     def create_dmg(self, bundle: Path, output: Path, staging: Path) -> None:
         staging.mkdir()
         shutil.copytree(bundle, staging / bundle.name, symlinks=True)
         (staging / "Applications").symlink_to("/Applications")
+        (staging / self.DMG_README_NAME).write_text(self.dmg_readme(), encoding="utf-8")
         self.run_command(
             [
                 "hdiutil",

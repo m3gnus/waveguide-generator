@@ -414,10 +414,19 @@ jobs:
             | macOS (Apple silicon) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-macos-arm64.dmg` |
             | Windows (x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64.zip` |
 
-            macOS is not yet notarized by Apple, so the first launch is refused with
-            "Apple could not verify ... is free of malware". Open **System Settings ->
-            Privacy & Security**, scroll to Security, and choose **Open Anyway** beside
-            Waveguide Generator. This is only needed once.
+            **macOS: the first launch is refused, and there is no button to allow it.**
+            You will see "Apple could not verify ... is free of malware", offering only
+            Done and Move to Bin, and Privacy & Security will NOT list an "Open Anyway"
+            entry. That is expected. Drag the app to Applications, then run this once:
+
+            ```
+            xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"
+            ```
+
+            The same instructions ship inside the disk image as `READ ME FIRST.txt`.
+            The app is ad-hoc signed rather than notarized, which gives Gatekeeper no
+            developer identity to offer an exception for - a missing Apple signature,
+            not a finding about the app. Notarization needs a paid Apple Developer ID.
 
             Windows must be extracted to a short path such as `C:\wg`. The bundle's
             internal paths reach 133 characters, so an install root longer than about

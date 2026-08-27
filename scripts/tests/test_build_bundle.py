@@ -1570,3 +1570,51 @@ def test_the_app_manifest_records_the_tree_digest(tmp_path: Path) -> None:
     assert written["treeSha256"] == build_bundle.tree_digest(
         root, exclude=frozenset({"APP-MANIFEST.json"})
     )
+
+
+def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> None:
+    """The instruction has to be where the wall is.
+
+    macOS refuses this app on first launch and offers no way to proceed: it is
+    ad-hoc signed, so Gatekeeper has no developer identity to attach an exception
+    to, and Privacy & Security lists nothing to allow. A user who hits that dialog
+    has already left the release page, so the release notes are the wrong and only
+    place for the fix.
+    """
+
+    builder = BundleBuilder(
+        Path(__file__).resolve().parents[2],
+        system=lambda: "Darwin",
+        machine=lambda: "arm64",
+    )
+    readme = builder.dmg_readme()
+
+    # The command must be exact and copy-pasteable; a wrong path is worse than none.
+    assert 'xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"' in readme
+    # Say what they will actually see, including that the button is absent.
+    assert "Not Opened" in readme
+    assert "will NOT show an \"Open Anyway\" button" in readme
+    assert "Move to Bin" in readme
+    # And that it is once, not every launch.
+    assert "once, not on every launch" in readme
+
+    commands: list[list[str]] = []
+
+    def runner(command, **kwargs):
+        commands.append(list(command))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    builder.runner = runner
+    bundle = tmp_path / "Waveguide Generator.app"
+    (bundle / "Contents").mkdir(parents=True)
+    (bundle / "Contents" / "Info.plist").write_text("<plist/>", encoding="utf-8")
+    staging = tmp_path / "staging"
+
+    builder.create_dmg(bundle, tmp_path / "out.dmg", staging)
+
+    shipped = staging / builder.DMG_README_NAME
+    assert shipped.is_file(), "the disk image must carry the readme beside the app"
+    assert shipped.read_text(encoding="utf-8") == readme
+    # Still a normal drag-to-Applications image.
+    assert (staging / "Applications").is_symlink()
+    assert (staging / bundle.name).is_dir()
