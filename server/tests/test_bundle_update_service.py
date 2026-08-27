@@ -51,12 +51,12 @@ def _release(
     platform: str = "macos-arm64",
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
     version = "2.0.1"
-    app_name = f"waveguide-generator-app-{version}.zip"
-    manifest_name = f"waveguide-generator-app-{version}.manifest.json"
+    app_name = f"update-app-{version}.zip"
+    manifest_name = f"update-app-{version}.manifest.json"
     manifest = _manifest(version, runtime_id)
     assets = [*_pair(app_name, 1_500), *_pair(manifest_name, len(manifest))]
     if include_runtime:
-        assets += _pair(f"waveguide-generator-runtime-{platform}-{runtime_id}.zip", 7_500)
+        assets += _pair(f"update-runtime-{platform}-{runtime_id}.zip", 7_500)
     if include_installer:
         extension = "dmg" if platform == "macos-arm64" else "zip"
         assets += _pair(f"Waveguide.Generator-{version}-{platform}.{extension}", 9_000)
@@ -218,16 +218,16 @@ def test_current_release_records_all_bundle_assets_and_downloads_both_layers(
         "kind": "bundle_download",
         "assets": [
             {
-                "name": "waveguide-generator-app-2.0.1.zip",
-                "url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/waveguide-generator-app-2.0.1.zip",
-                "sha256Url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/waveguide-generator-app-2.0.1.zip.sha256",
+                "name": "update-app-2.0.1.zip",
+                "url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/update-app-2.0.1.zip",
+                "sha256Url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/update-app-2.0.1.zip.sha256",
                 "bytes": 1_500,
                 "layer": "app",
             },
             {
-                "name": f"waveguide-generator-runtime-macos-arm64-{NEW_RUNTIME}.zip",
-                "url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/waveguide-generator-runtime-macos-arm64-{NEW_RUNTIME}.zip",
-                "sha256Url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/waveguide-generator-runtime-macos-arm64-{NEW_RUNTIME}.zip.sha256",
+                "name": f"update-runtime-macos-arm64-{NEW_RUNTIME}.zip",
+                "url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/update-runtime-macos-arm64-{NEW_RUNTIME}.zip",
+                "sha256Url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/update-runtime-macos-arm64-{NEW_RUNTIME}.zip.sha256",
                 "bytes": 7_500,
                 "layer": "runtime",
             },
@@ -268,7 +268,7 @@ def test_runtime_is_selected_from_an_earlier_release_and_the_list_is_cached(
     tmp_path: Path,
 ) -> None:
     payload, fetched = _release(include_runtime=False)
-    runtime_name = f"waveguide-generator-runtime-macos-arm64-{NEW_RUNTIME}.zip"
+    runtime_name = f"update-runtime-macos-arm64-{NEW_RUNTIME}.zip"
     recent_calls = 0
 
     def recent() -> list[dict[str, Any]]:
@@ -290,7 +290,7 @@ def test_runtime_is_selected_from_an_earlier_release_and_the_list_is_cached(
 
 def test_bad_release_manifest_digest_is_a_guarded_update_error(tmp_path: Path) -> None:
     payload, fetched = _release(include_runtime=True)
-    manifest_name = "waveguide-generator-app-2.0.1.manifest.json"
+    manifest_name = "update-app-2.0.1.manifest.json"
     fetched[manifest_name + ".sha256"] = f"{'0' * 64}  {manifest_name}\n".encode()
 
     result = _service(tmp_path, payload, fetched).get_status()
@@ -315,7 +315,7 @@ def test_release_assets_are_bound_to_this_repository_and_release_tag(
     untrusted_url: str,
 ) -> None:
     payload, fetched = _release(include_runtime=True)
-    app_name = "waveguide-generator-app-2.0.1.zip"
+    app_name = "update-app-2.0.1.zip"
     app_asset = next(asset for asset in payload["assets"] if asset["name"] == app_name)
     app_asset["browser_download_url"] = untrusted_url.format(name=app_name)
 
@@ -386,8 +386,8 @@ def test_windows_release_uses_windows_runtime_and_full_zip_asset_names(
     ).get_status()
 
     names = {asset["name"] for asset in result["release"]["bundleAssets"]}
-    assert f"waveguide-generator-runtime-windows-x86_64-{NEW_RUNTIME}.zip" in names
+    assert f"update-runtime-windows-x86_64-{NEW_RUNTIME}.zip" in names
     assert "Waveguide.Generator-2.0.1-windows-x86_64.zip" in names
     assert result["action"]["assets"][1]["name"] == (
-        f"waveguide-generator-runtime-windows-x86_64-{NEW_RUNTIME}.zip"
+        f"update-runtime-windows-x86_64-{NEW_RUNTIME}.zip"
     )

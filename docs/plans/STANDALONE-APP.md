@@ -129,8 +129,8 @@ The two layers are independent release assets:
 
 | Asset | Contents | Changes when |
 |---|---|---|
-| `waveguide-generator-app-<version>.zip` | `Resources/app` | every release (a few MB) |
-| `waveguide-generator-runtime-macos-arm64-<runtimeId>.zip` | `Resources/runtime` | requirements, lock, Python distribution build, or runtime recipe changes |
+| `update-app-<version>.zip` | `Resources/app` | every release (a few MB) |
+| `update-runtime-macos-arm64-<runtimeId>.zip` | `Resources/runtime` | requirements, lock, Python distribution build, or runtime recipe changes |
 | `Waveguide.Generator-<version>-macos-arm64.dmg` | complete bundle | every release (first install); this is the filename GitHub serves |
 
 `runtimeId` is the first 12 hex digits of a length-delimited SHA-256 identity over
@@ -256,7 +256,7 @@ happens when the running instance is a bundle (`WG2_BUNDLE=1`):
 - `_parse_release` also recognises the bundle assets and records the runtime
   id the release's app layer requires (read from the release's
   `APP-MANIFEST.json`, which the build job uploads as a separate small asset
-  `waveguide-generator-app-<version>.manifest.json`).
+  `update-app-<version>.manifest.json`).
 - `update_action` for a bundle is `{"kind": "bundle_download", "assets": [...],
   "downloadBytes": N}`; the UI shows size and a single **Install update**
   button, no command fallback.

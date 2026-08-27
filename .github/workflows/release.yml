@@ -138,7 +138,7 @@ jobs:
       - name: Package and verify the SPA
         run: |
           set -euo pipefail
-          name="waveguide-generator-v2-spa-${{ env.version }}"
+          name="$(python -c 'import sys; from shared import release_assets; print(release_assets.spa_archive_name(sys.argv[1]))' "${{ env.version }}")"
           tar -czf "$name.tar.gz" -C frontend dist
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
           echo "artifact=$name" >> "$GITHUB_ENV"
@@ -180,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
-          spa="build/spa/waveguide-generator-v2-spa-$version.tar.gz"
+          spa="build/spa/update-spa-$version.tar.gz"
           test -f "$spa"
           test -f "$spa.sha256"
           uv run --no-project --python 3.13.12 scripts/build_bundle.py --spa "$spa" --output build/bundle
@@ -190,9 +190,9 @@ jobs:
         with:
           name: standalone-app-layer
           path: |
-            build/bundle/waveguide-generator-app-*.zip
-            build/bundle/waveguide-generator-app-*.zip.sha256
-            build/bundle/waveguide-generator-app-*.manifest.json
+            build/bundle/update-app-*.zip
+            build/bundle/update-app-*.zip.sha256
+            build/bundle/update-app-*.manifest.json
           if-no-files-found: error
 
       - name: Share the complete macOS release asset set
@@ -202,12 +202,12 @@ jobs:
           path: |
             build/bundle/Waveguide.Generator-*-macos-arm64.dmg
             build/bundle/Waveguide.Generator-*-macos-arm64.dmg.sha256
-            build/bundle/waveguide-generator-app-*.zip
-            build/bundle/waveguide-generator-app-*.zip.sha256
-            build/bundle/waveguide-generator-app-*.manifest.json
-            build/bundle/waveguide-generator-app-*.manifest.json.sha256
-            build/bundle/waveguide-generator-runtime-macos-arm64-*.zip
-            build/bundle/waveguide-generator-runtime-macos-arm64-*.zip.sha256
+            build/bundle/update-app-*.zip
+            build/bundle/update-app-*.zip.sha256
+            build/bundle/update-app-*.manifest.json
+            build/bundle/update-app-*.manifest.json.sha256
+            build/bundle/update-runtime-macos-arm64-*.zip
+            build/bundle/update-runtime-macos-arm64-*.zip.sha256
           if-no-files-found: error
 
   windows-bundle:
@@ -243,7 +243,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $version = uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])'
-          $spa = "build/spa/waveguide-generator-v2-spa-$version.tar.gz"
+          $spa = "build/spa/update-spa-$version.tar.gz"
           if (-not (Test-Path -LiteralPath $spa) -or -not (Test-Path -LiteralPath "$spa.sha256")) {
             throw "The verified SPA inputs are missing."
           }
@@ -258,8 +258,8 @@ jobs:
         # without weakening the guarantee.
         run: |
           $ErrorActionPreference = "Stop"
-          $local = @(Get-ChildItem -File build/bundle/waveguide-generator-app-*.manifest.json)
-          $reference = @(Get-ChildItem -File build/app-reference/waveguide-generator-app-*.manifest.json)
+          $local = @(Get-ChildItem -File build/bundle/update-app-*.manifest.json)
+          $reference = @(Get-ChildItem -File build/app-reference/update-app-*.manifest.json)
           if ($local.Count -ne 1 -or $reference.Count -ne 1) {
             throw "Expected exactly one local and one macOS-built app manifest."
           }
@@ -280,8 +280,8 @@ jobs:
           path: |
             build/bundle/Waveguide.Generator-*-windows-x86_64.zip
             build/bundle/Waveguide.Generator-*-windows-x86_64.zip.sha256
-            build/bundle/waveguide-generator-runtime-windows-x86_64-*.zip
-            build/bundle/waveguide-generator-runtime-windows-x86_64-*.zip.sha256
+            build/bundle/update-runtime-windows-x86_64-*.zip
+            build/bundle/update-runtime-windows-x86_64-*.zip.sha256
           if-no-files-found: error
 
   publish:
@@ -328,21 +328,21 @@ jobs:
           import re
           import shutil
 
+          from shared import release_assets
           from shared.safe_names import collision_key, validate_relative_name
 
           root = Path("build/publish-inputs")
           destination = Path("build/release-assets")
           destination.mkdir()
           version = json.loads(Path("shared/version.json").read_text(encoding="utf-8"))["version"]
-          escaped = re.escape(version)
           specs = (
-              ("spa", rf"waveguide-generator-v2-spa-{escaped}\.tar\.gz"),
-              ("macos", rf"Waveguide\.Generator-{escaped}-macos-arm64\.dmg"),
-              ("macos", rf"waveguide-generator-app-{escaped}\.zip"),
-              ("macos", rf"waveguide-generator-app-{escaped}\.manifest\.json"),
-              ("macos", r"waveguide-generator-runtime-macos-arm64-[0-9a-f]{12}\.zip"),
-              ("windows", rf"Waveguide\.Generator-{escaped}-windows-x86_64\.zip"),
-              ("windows", r"waveguide-generator-runtime-windows-x86_64-[0-9a-f]{12}\.zip"),
+              ("spa", re.escape(release_assets.spa_archive_name(version))),
+              ("macos", re.escape(release_assets.installer_name(release_assets.MACOS_PLATFORM, version))),
+              ("macos", re.escape(release_assets.app_layer_name(version))),
+              ("macos", re.escape(release_assets.app_manifest_name(version))),
+              ("macos", rf"{re.escape(release_assets.UPDATE_PREFIX)}-runtime-macos-arm64-[0-9a-f]{{12}}\.zip"),
+              ("windows", re.escape(release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))),
+              ("windows", rf"{re.escape(release_assets.UPDATE_PREFIX)}-runtime-windows-x86_64-[0-9a-f]{{12}}\.zip"),
           )
           expected_paths: set[Path] = set()
           public_keys: set[str] = set()
@@ -423,15 +423,17 @@ jobs:
             internal paths reach 133 characters, so an install root longer than about
             127 characters fails to extract.
 
-            <details><summary>The remaining files are used by the in-app updater, not by people</summary>
+            <details><summary>The other files are used by the in-app updater, not by people</summary>
 
-            `waveguide-generator-app-*.zip` and its manifest are the platform-neutral
-            application layer; `waveguide-generator-runtime-*-<id>.zip` are the two
-            content-addressed runtime layers, re-used across releases that do not change
-            the interpreter; `waveguide-generator-v2-spa-*.tar.gz` is the prebuilt
-            frontend that lets a source install skip Node. The updater downloads only the
-            layer that changed, which is why they are published separately from the
-            installers. Every asset has a `.sha256` sidecar.
+            Everything named `update-…` is machinery. `update-app-*.zip` and its
+            manifest are the platform-neutral application layer;
+            `update-runtime-*-<id>.zip` are the two runtime layers, addressed by
+            content so releases that do not change the interpreter share one and
+            the updater downloads only what moved; `update-spa-*.tar.gz` is the
+            prebuilt frontend, so a source install needs no Node runtime.
+
+            There is no Linux build. Linux installs from source — see the README.
+            The `.tar.gz` above is the frontend, not a Linux binary.
 
             </details>
 

@@ -37,6 +37,7 @@ from launchers.macos import generate_icon  # noqa: E402
 from server.platform.instance import PORT_ENV  # noqa: E402
 from server.platform.paths import DATA_DIR_ENV, app_root  # noqa: E402
 from shared.runtime_id import compute_runtime_id  # noqa: E402
+from shared import release_assets  # noqa: E402
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
 
 
@@ -1925,8 +1926,8 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 lock=lock,
                 platform_name=platform_name,
             )
-            runtime_asset = output / (
-                f"waveguide-generator-runtime-{platform_name}-{runtime_id}.zip"
+            runtime_asset = output / release_assets.runtime_layer_name(
+                platform_name, runtime_id
             )
             deterministic_zip(runtime_root, runtime_asset)
             _register_asset(assets, runtime_asset)
@@ -1939,7 +1940,7 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 spa=args.spa,
                 commit=commit,
             )
-            app_asset = output / f"waveguide-generator-app-{version}.zip"
+            app_asset = output / release_assets.app_layer_name(version)
             # Canonical modes avoid NTFS/POSIX checkout differences. The archive
             # is compressed: the two platforms are held to the same *content*
             # through the manifest's treeSha256, which no compressor can
@@ -1951,7 +1952,7 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 canonical_modes=True,
             )
             _register_asset(assets, app_asset)
-            manifest_asset = output / (f"waveguide-generator-app-{version}.manifest.json")
+            manifest_asset = output / release_assets.app_manifest_name(version)
             shutil.copy2(app_root / "APP-MANIFEST.json", manifest_asset)
             _register_asset(assets, manifest_asset)
 
@@ -1964,8 +1965,8 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                     app_root=app_root,
                     version=version,
                 )
-                installer_asset = output / (
-                    f"Waveguide.Generator-{version}-macos-arm64.dmg"
+                installer_asset = output / release_assets.installer_name(
+                    release_assets.MACOS_PLATFORM, version
                 )
                 if installer_asset.exists():
                     installer_asset.unlink()
@@ -1977,8 +1978,8 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                     runtime_root=runtime_root,
                     app_root=app_root,
                 )
-                installer_asset = output / (
-                    f"Waveguide.Generator-{version}-windows-x86_64.zip"
+                installer_asset = output / release_assets.installer_name(
+                    release_assets.WINDOWS_PLATFORM, version
                 )
                 deterministic_zip(
                     bundle,
