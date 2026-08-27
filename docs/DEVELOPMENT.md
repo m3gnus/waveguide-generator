@@ -89,7 +89,7 @@ Release builds pass the checksum file beside the SPA tarball automatically:
 
 ```bash
 python3 scripts/build_bundle.py \
-  --spa waveguide-generator-v2-spa-<version>.tar.gz \
+  --spa update-spa-<version>.tar.gz \
   --output build/bundle
 ```
 
@@ -114,7 +114,7 @@ host interpreter under a Windows asset name:
 
 ```powershell
 python scripts/build_bundle.py --platform windows `
-  --spa waveguide-generator-v2-spa-<version>.tar.gz `
+  --spa update-spa-<version>.tar.gz `
   --output build/bundle
 ```
 

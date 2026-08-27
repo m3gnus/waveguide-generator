@@ -50,6 +50,9 @@ raise SystemExit(2)
         shutil.copy2(fetch_spa_source, checkout / "scripts" / "fetch_spa.py")
 
     _write(checkout / "shared" / "version.json", json.dumps({"version": VERSION}))
+    # fetch_spa.py reads the release asset name from here rather than building
+    # its own, so the minimal checkout has to carry it alongside version.json.
+    shutil.copy2(ROOT / "shared" / "release_assets.py", checkout / "shared" / "release_assets.py")
     _write(checkout / "launch" / "serve.py", "")
     _write(checkout / "launchers" / "statusapp" / "__main__.py", "")
     _write(checkout / "launchers" / "macos" / "launch-wg.command", "#!/bin/bash\nexit 0\n")
@@ -186,7 +189,7 @@ def test_shell_checksum_mismatch_never_falls_back_to_local_dist(tmp_path: Path) 
     checkout = _test_checkout(tmp_path, None, simulate_default_fetch_failure=False)
     release = tmp_path / "bad-release"
     release.mkdir()
-    name = f"waveguide-generator-v2-spa-{VERSION}.tar.gz"
+    name = f"update-spa-{VERSION}.tar.gz"
     (release / name).write_bytes(b"corrupted archive")
     (release / f"{name}.sha256").write_text(f"{'0' * 64}  {name}\n", encoding="utf-8")
 

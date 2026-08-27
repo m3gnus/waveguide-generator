@@ -189,7 +189,7 @@ def test_a_checksum_file_for_a_different_asset_does_not_validate(checkout, relea
     name = fetch_spa.asset_name("2.0.0")
     digest = hashlib.sha256((release.directory / name).read_bytes()).hexdigest()
     (release.directory / f"{name}.sha256").write_text(
-        f"{digest}  waveguide-generator-v2-spa-1.9.9.tar.gz\n", encoding="utf-8"
+        f"{digest}  update-spa-1.9.9.tar.gz\n", encoding="utf-8"
     )
 
     assert _install(checkout, release) == 2
@@ -286,7 +286,7 @@ def test_the_requested_version_is_the_one_the_checkout_declares():
 
     declared = json.loads((ROOT / "shared" / "version.json").read_text(encoding="utf-8"))["version"]
     assert fetch_spa.declared_version(ROOT) == declared
-    assert fetch_spa.asset_name(declared) == f"waveguide-generator-v2-spa-{declared}.tar.gz"
+    assert fetch_spa.asset_name(declared) == f"update-spa-{declared}.tar.gz"
     assert fetch_spa.release_base_url("m3gnus/waveguide-generator", declared).endswith(f"/v{declared}")
 
 

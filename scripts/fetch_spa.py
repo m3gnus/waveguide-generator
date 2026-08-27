@@ -2,7 +2,7 @@
 """Install the prebuilt SPA that a v2 release publishes beside its tag.
 
 Running v2 must not require a Node runtime (rebuild plan goal 6).  CI builds the
-interface once per tag and attaches ``waveguide-generator-v2-spa-<version>.tar.gz``
+interface once per tag and attaches ``update-spa-<version>.tar.gz``
 to the GitHub release with a ``.sha256`` next to it; this script downloads that
 pair, **refuses to extract an archive whose digest does not match**, and installs
 the result over ``frontend/dist``.
@@ -50,9 +50,16 @@ _IMPORT_ROOT = (
     .expanduser()
     .resolve()
 )
+if str(_IMPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_ROOT))
+# Release asset names come from one module so the builder, the updater and this
+# script cannot drift apart. It is imported AFTER the path bootstrap above, and
+# from ``shared`` rather than ``server``, because the installer already depends
+# on ``shared/version.json`` in exactly this situation -- an otherwise empty
+# checkout. Failing loudly when it is missing beats guessing a name.
+from shared import release_assets  # noqa: E402
+
 if (_IMPORT_ROOT / "server" / "platform" / "paths.py").is_file():
-    if str(_IMPORT_ROOT) not in sys.path:
-        sys.path.insert(0, str(_IMPORT_ROOT))
     from server.platform.paths import app_root  # noqa: E402
 
     REPO_ROOT = app_root()
@@ -182,7 +189,7 @@ def declared_version(root: Path = REPO_ROOT) -> str:
 
 
 def asset_name(version: str) -> str:
-    return f"waveguide-generator-v2-spa-{version}.tar.gz"
+    return release_assets.spa_archive_name(version)
 
 
 def release_base_url(repo: str, version: str) -> str:

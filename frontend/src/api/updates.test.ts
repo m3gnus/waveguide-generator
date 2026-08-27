@@ -42,14 +42,14 @@ const bundlePayload = {
     assetsReady: true,
     runtimeId: '222222222222',
     bundleAssets: [{
-      name: 'waveguide-generator-app-2.0.1.zip',
+      name: 'update-app-2.0.1.zip',
       url: 'https://github.com/example/app.zip',
       sha256Url: 'https://github.com/example/app.zip.sha256',
       bytes: 1_500,
       sha256Bytes: 96,
       layer: 'app',
     }, {
-      name: 'waveguide-generator-app-2.0.1.manifest.json',
+      name: 'update-app-2.0.1.manifest.json',
       url: 'https://github.com/example/manifest.json',
       sha256Url: 'https://github.com/example/manifest.json.sha256',
       bytes: 180,
@@ -80,7 +80,7 @@ const bundlePayload = {
   action: {
     kind: 'bundle_download',
     assets: [{
-      name: 'waveguide-generator-app-2.0.1.zip',
+      name: 'update-app-2.0.1.zip',
       url: 'https://github.com/example/app.zip',
       sha256Url: 'https://github.com/example/app.zip.sha256',
       bytes: 1_500,

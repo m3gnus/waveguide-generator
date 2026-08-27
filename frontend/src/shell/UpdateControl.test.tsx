@@ -62,7 +62,7 @@ function bundleStatus(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
       assetsReady: true,
       runtimeId: '222222222222',
       bundleAssets: [{
-        name: 'waveguide-generator-app-2.0.1.zip',
+        name: 'update-app-2.0.1.zip',
         url: 'https://github.com/example/app.zip',
         sha256Url: 'https://github.com/example/app.zip.sha256',
         bytes: 5_500_000,
@@ -84,7 +84,7 @@ function bundleStatus(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     action: {
       kind: 'bundle_download',
       assets: [{
-        name: 'waveguide-generator-app-2.0.1.zip',
+        name: 'update-app-2.0.1.zip',
         url: 'https://github.com/example/app.zip',
         sha256Url: 'https://github.com/example/app.zip.sha256',
         bytes: 5_500_000,

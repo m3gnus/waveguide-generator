@@ -583,7 +583,7 @@ def test_first_healthy_bundle_start_removes_previous_layers_and_resigns(
     (resources / "runtime").mkdir()
     downloads = tmp_path / "data" / "updates" / "1.2.3" / "downloads"
     downloads.mkdir(parents=True)
-    (downloads / "waveguide-generator-app-1.2.3.zip").write_bytes(b"zip")
+    (downloads / "update-app-1.2.3.zip").write_bytes(b"zip")
     controller = BundleController(app, tmp_path / "data")
     webview, _created = _stub_webview()
     event_loop_started: list[bool] = []

@@ -320,7 +320,7 @@ when `shared/version.json` does not move forward past every published tag, the
 commit is not reachable from `origin/main`, or CI did not succeed for that exact
 commit** — a build that misreports itself is worse than a failed release.
 
-Its SPA job attaches `waveguide-generator-v2-spa-<version>.tar.gz`; the macOS job
+Its SPA job attaches `update-spa-<version>.tar.gz`; the macOS job
 builds the canonical platform-neutral app ZIP and manifest, the macOS runtime ZIP,
 and `Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job checks its
 independently built app ZIP against the canonical one by content digest and builds

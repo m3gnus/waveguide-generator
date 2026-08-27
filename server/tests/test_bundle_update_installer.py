@@ -144,8 +144,8 @@ def test_installer_moves_through_every_state_and_writes_the_bundle_request(
     app = _app_zip()
     runtime = _runtime_zip()
     payloads = {
-        "waveguide-generator-app-2.0.1.zip": app,
-        f"waveguide-generator-runtime-macos-arm64-{RUNTIME_ID}.zip": runtime,
+        "update-app-2.0.1.zip": app,
+        f"update-runtime-macos-arm64-{RUNTIME_ID}.zip": runtime,
     }
     base_download, base_fetch = _fakes(payloads)
     download_entered = threading.Event()
@@ -176,9 +176,9 @@ def test_installer_moves_through_every_state_and_writes_the_bundle_request(
         free_space_probe=lambda _path: 10**12,
     )
     assets = [
-        _asset("waveguide-generator-app-2.0.1.zip", app, "app"),
+        _asset("update-app-2.0.1.zip", app, "app"),
         _asset(
-            f"waveguide-generator-runtime-macos-arm64-{RUNTIME_ID}.zip",
+            f"update-runtime-macos-arm64-{RUNTIME_ID}.zip",
             runtime,
             "runtime",
         ),
@@ -225,7 +225,7 @@ def test_different_release_is_rejected_while_an_identical_job_is_idempotent(
     tmp_path: Path,
 ) -> None:
     app = _app_zip()
-    name = "waveguide-generator-app-2.0.1.zip"
+    name = "update-app-2.0.1.zip"
     base_download, fetch = _fakes({name: app})
     entered = threading.Event()
     proceed = threading.Event()
@@ -249,7 +249,7 @@ def test_different_release_is_rejected_while_an_identical_job_is_idempotent(
 
     assert _start(installer, "2.0.1", assets)["activeVersion"] == "2.0.1"
     other_app = _app_zip("2.0.2")
-    other_name = "waveguide-generator-app-2.0.2.zip"
+    other_name = "update-app-2.0.2.zip"
     with pytest.raises(BundleInstallError, match="Update 2.0.1 is already active"):
         _start(
             installer,
@@ -268,7 +268,7 @@ def test_app_only_update_is_bound_to_expected_and_installed_runtime_ids(
 ) -> None:
     detached_runtime_id = "abcdefabcdef"
     app = _app_zip(runtime_id=detached_runtime_id)
-    name = "waveguide-generator-app-2.0.1.zip"
+    name = "update-app-2.0.1.zip"
     download, fetch = _fakes({name: app})
     installer = _installer(
         tmp_path,
@@ -305,7 +305,7 @@ def test_storage_preflight_refuses_before_any_download(
         match = "not enough free disk space"
     installer = _installer(tmp_path, downloader=download, **kwargs)
     app = _app_zip()
-    asset = _asset("waveguide-generator-app-2.0.1.zip", app, "app")
+    asset = _asset("update-app-2.0.1.zip", app, "app")
 
     with pytest.raises(BundleInstallError, match=match):
         _start(installer, "2.0.1", [asset])
@@ -316,7 +316,7 @@ def test_storage_preflight_refuses_before_any_download(
 
 def test_digest_failure_is_reported_and_never_writes_a_request(tmp_path: Path) -> None:
     app = _app_zip()
-    name = "waveguide-generator-app-2.0.1.zip"
+    name = "update-app-2.0.1.zip"
     download, _fetch = _fakes({name: app})
     installer = _installer(
         tmp_path,
@@ -343,7 +343,7 @@ def test_advertised_archive_over_the_size_cap_fails_before_downloading(
         downloads += 1
 
     installer = _installer(tmp_path, downloader=download)
-    asset = _asset("waveguide-generator-app-2.0.1.zip", b"small", "app")
+    asset = _asset("update-app-2.0.1.zip", b"small", "app")
     asset["bytes"] = APP_MAX_ARCHIVE_BYTES + 1
 
     with pytest.raises(BundleInstallError, match="invalid asset"):

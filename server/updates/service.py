@@ -22,6 +22,7 @@ import urllib.error
 import urllib.request
 
 from scripts.fetch_spa import SpaError, expected_digest
+from shared import release_assets
 from server.platform.process import background_process_kwargs
 from server.updates.bundle import (
     BundleInstallError,
@@ -696,7 +697,7 @@ class UpdateService:
             or not trusted_asset_url(
                 checksum_url,
                 tag=tag,
-                asset_name=name + ".sha256",
+                asset_name=release_assets.checksum_name(name),
             )
             or (
                 layer in {"app", "runtime"}
@@ -721,12 +722,7 @@ class UpdateService:
         return self.platform_name
 
     def _bundle_installer_name(self, version: str) -> str | None:
-        platform_name = self._bundle_platform()
-        if self.platform_name == "darwin":
-            return f"Waveguide.Generator-{version}-{platform_name}.dmg"
-        if self.platform_name == "win32":
-            return f"Waveguide.Generator-{version}-{platform_name}.zip"
-        return None
+        return release_assets.installer_name(self._bundle_platform(), version)
 
     def _manifest_runtime_id(
         self,
@@ -767,7 +763,7 @@ class UpdateService:
             return self._runtime_asset_cache[runtime_id]
         if self._recent_releases is None:
             self._recent_releases = self.recent_releases_fetcher()
-        name = f"waveguide-generator-runtime-{self._bundle_platform()}-{runtime_id}.zip"
+        name = release_assets.runtime_layer_name(self._bundle_platform(), runtime_id)
         found: dict[str, Any] | None = None
         for release in self._recent_releases:
             tag = release.get("tag_name")
@@ -796,8 +792,8 @@ class UpdateService:
         version = tag.removeprefix("v")
         uploaded = self._uploaded_assets(payload)
         if checkout is not None and checkout.get("kind") == "bundle":
-            app_name = f"waveguide-generator-app-{version}.zip"
-            manifest_name = f"waveguide-generator-app-{version}.manifest.json"
+            app_name = release_assets.app_layer_name(version)
+            manifest_name = release_assets.app_manifest_name(version)
             app_asset = self._paired_asset(uploaded, app_name, "app", tag=tag)
             manifest_asset = self._paired_asset(uploaded, manifest_name, "manifest", tag=tag)
             base_release = {
@@ -814,7 +810,9 @@ class UpdateService:
             if manifest_asset is None:
                 return base_release, False
             runtime_id = self._manifest_runtime_id(manifest_asset, version)
-            runtime_name = f"waveguide-generator-runtime-{self._bundle_platform()}-{runtime_id}.zip"
+            runtime_name = release_assets.runtime_layer_name(
+                self._bundle_platform(), runtime_id
+            )
             runtime_asset = self._paired_asset(uploaded, runtime_name, "runtime", tag=tag)
             installed_runtime = checkout.get("runtimeId")
             if runtime_asset is None and installed_runtime != runtime_id:
@@ -851,7 +849,7 @@ class UpdateService:
                 ready,
             )
 
-        archive = f"waveguide-generator-v2-spa-{version}.tar.gz"
+        archive = release_assets.spa_archive_name(version)
         expected = {archive, f"{archive}.sha256"}
         ready_assets = set(uploaded) & expected
         release = {

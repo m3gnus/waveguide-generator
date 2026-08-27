@@ -25,7 +25,7 @@ from server.updates.service import (
 
 
 def release(version: str, *, ready: bool = True) -> dict[str, Any]:
-    archive = f"waveguide-generator-v2-spa-{version}.tar.gz"
+    archive = f"update-spa-{version}.tar.gz"
     assets = [
         {"name": archive, "state": "uploaded", "size": 100},
         {"name": f"{archive}.sha256", "state": "uploaded", "size": 64},
