@@ -12,7 +12,9 @@ import functools
 import hashlib
 import importlib.metadata
 import json
+import logging
 import math
+import os
 import tempfile
 from collections.abc import Callable, Mapping
 from copy import deepcopy
@@ -39,6 +41,8 @@ if TYPE_CHECKING:  # pragma: no cover - meshio is imported where it is used
     import meshio
 
 
+logger = logging.getLogger(__name__)
+
 CANONICAL_SURFACE_TAGS = {1, 2, 3, 4, 12}
 MOUTH_APERTURE_SURFACE_TAG = 12
 LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES = 18_000
@@ -47,7 +51,52 @@ LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES = 18_000
 # actual-domain limit as an artifact/preflight sanity check; the independent
 # vertex/DOF guard below is the authoritative dense-memory safety limit.
 MAX_SOLVER_MESH_ARTIFACT_TRIANGLES = 22_000
-DENSE_SOLVER_MEMORY_LIMIT_BYTES = 8 * 1024**3
+
+
+def _dense_solver_memory_limit_bytes() -> int:
+    """How much RAM one dense BEM matrix may claim.
+
+    This ceiling is what actually bounds the solvable frequency: the matrix
+    costs ``bytes_per_dof_squared * dof**2``, DOF grows as ``1/h**2``, and the
+    mesh's valid frequency grows only as ``1/h`` -- so the reachable frequency
+    scales as the fourth root of this number. A flat 8 GiB was 12.5% of a
+    64 GB workstation and silently capped a large imported cabinet near 2 kHz,
+    which reads as a physics limit and is not one.
+
+    Default to half of physical RAM, clamped to the old 8 GiB floor so no
+    machine gets *less* than before, and to 64 GiB so a very large host cannot
+    talk the preflight into approving a mesh nothing will finish solving.
+    ``WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES`` overrides it outright.
+    """
+
+    override = os.environ.get("WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES")
+    if override:
+        try:
+            requested = int(override)
+        except ValueError:
+            logger.warning(
+                "WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES=%r is not an integer; "
+                "using the derived limit",
+                override,
+            )
+        else:
+            if requested > 0:
+                return requested
+            logger.warning(
+                "WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES=%r is not positive; "
+                "using the derived limit",
+                override,
+            )
+    floor = 8 * 1024**3
+    ceiling = 64 * 1024**3
+    try:
+        physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, ValueError, OSError):
+        return floor
+    return max(floor, min(ceiling, physical // 2))
+
+
+DENSE_SOLVER_MEMORY_LIMIT_BYTES = _dense_solver_memory_limit_bytes()
 # 2: integrity now carries a self_intersection report.
 SOLVER_MESH_CACHE_FORMAT_VERSION = 2
 
@@ -283,7 +332,12 @@ def _enforce_dense_solver_memory_ceiling(
     mode: str = "",
     tags: np.ndarray | None = None,
 ) -> dict[str, int]:
-    """Fail before assembly when conservative dense storage exceeds 8 GiB."""
+    """Fail before assembly when conservative dense storage exceeds the limit.
+
+    The limit is ``DENSE_SOLVER_MEMORY_LIMIT_BYTES``, which is derived from
+    the host's RAM rather than fixed -- so tests that assert a boundary DOF
+    count must pin it rather than inherit it.
+    """
 
     requirements = _dense_solver_memory_requirements(
         triangles,
