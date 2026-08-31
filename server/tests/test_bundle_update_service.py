@@ -16,20 +16,20 @@ OLD_RUNTIME = "111111111111"
 NEW_RUNTIME = "222222222222"
 
 
-def _asset(name: str, size: int = 100) -> dict[str, object]:
+def _asset(name: str, size: int = 100, tag: str = "v2.0.1") -> dict[str, object]:
     return {
         "name": name,
         "state": "uploaded",
         "size": size,
         "browser_download_url": (
             "https://github.com/m3gnus/waveguide-generator/releases/"
-            f"download/v2.0.1/{name}"
+            f"download/{tag}/{name}"
         ),
     }
 
 
-def _pair(name: str, size: int = 100) -> list[dict[str, object]]:
-    return [_asset(name, size), _asset(name + ".sha256", 96)]
+def _pair(name: str, size: int = 100, tag: str = "v2.0.1") -> list[dict[str, object]]:
+    return [_asset(name, size, tag), _asset(name + ".sha256", 96, tag)]
 
 
 def _manifest(version: str = "2.0.1", runtime_id: str = NEW_RUNTIME) -> bytes:
@@ -43,32 +43,76 @@ def _manifest(version: str = "2.0.1", runtime_id: str = NEW_RUNTIME) -> bytes:
     ).encode()
 
 
-def _release(
+#: What ``_release`` hands back: the release a person downloads from, the bytes
+#: the service will fetch by asset name, and the companion pre-release carrying
+#: the layers. Three values rather than two because there are now two releases,
+#: and a fixture that patched one URL to fake the second would test the patch.
+ReleaseFixture = tuple[dict[str, Any], dict[str, bytes], dict[str, Any]]
+
+
+def _release(  # noqa: PLR0913
     *,
     include_runtime: bool,
     include_installer: bool = True,
     runtime_id: str = NEW_RUNTIME,
     platform: str = "macos-arm64",
-) -> tuple[dict[str, Any], dict[str, bytes]]:
+    layers_on_user_release: bool = False,
+) -> ReleaseFixture:
     version = "2.0.1"
     app_name = f"update-app-{version}.zip"
     manifest_name = f"update-app-{version}.manifest.json"
     manifest = _manifest(version, runtime_id)
-    assets = [*_pair(app_name, 1_500), *_pair(manifest_name, len(manifest))]
+    # Two releases now. The one a user lands on carries only the installers; every
+    # layer the updater consumes is on the companion pre-release, so the download
+    # page is not a list of seven files with no explanation.
+    layer_tag = f"v{version}" if layers_on_user_release else f"v{version}-updates"
+    layer_assets = [
+        *_pair(app_name, 1_500, layer_tag),
+        *_pair(manifest_name, len(manifest), layer_tag),
+    ]
     if include_runtime:
-        assets += _pair(f"update-runtime-{platform}-{runtime_id}.zip", 7_500)
+        layer_assets += _pair(
+            f"update-runtime-{platform}-{runtime_id}.zip", 7_500, layer_tag
+        )
+    user_assets: list[dict[str, Any]] = []
     if include_installer:
         extension = "dmg" if platform == "macos-arm64" else "zip"
-        assets += _pair(f"Waveguide.Generator-{version}-{platform}.{extension}", 9_000)
+        user_assets += _pair(
+            f"Waveguide.Generator-{version}-{platform}.{extension}", 9_000
+        )
     checksum = f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n".encode()
     return (
         {
             "tag_name": f"v{version}",
             "published_at": "2026-08-22T12:00:00Z",
-            "assets": assets,
+            "assets": user_assets + (layer_assets if layers_on_user_release else []),
         },
         {manifest_name: manifest, manifest_name + ".sha256": checksum},
+        {
+            "tag_name": f"v{version}-updates",
+            "prerelease": True,
+            "published_at": "2026-08-22T12:00:00Z",
+            "assets": [] if layers_on_user_release else layer_assets,
+        },
     )
+
+
+def _earlier_updates_release(
+    runtime_id: str, *, version: str = "2.0.0", platform: str = "macos-arm64"
+) -> dict[str, Any]:
+    """A previous version's companion release, carrying only its runtime layer.
+
+    Runtime layers are addressed by content, so an unchanged interpreter is
+    reachable from whichever release last published it -- and since the split,
+    that is a companion pre-release, whose tag ``TAG_RE`` alone would reject.
+    """
+
+    tag = f"v{version}-updates"
+    return {
+        "tag_name": tag,
+        "prerelease": True,
+        "assets": _pair(f"update-runtime-{platform}-{runtime_id}.zip", 7_500, tag),
+    }
 
 
 def _bundle_checkout(runtime_id: str = OLD_RUNTIME) -> dict[str, object]:
@@ -196,13 +240,13 @@ def test_windows_bundle_checkout_reads_manifests_beside_the_executable(
 def test_current_release_records_all_bundle_assets_and_downloads_both_layers(
     tmp_path: Path,
 ) -> None:
-    payload, fetched = _release(include_runtime=True)
+    payload, fetched, updates = _release(include_runtime=True)
     recent_calls = 0
 
     def recent() -> list[dict[str, Any]]:
         nonlocal recent_calls
         recent_calls += 1
-        return []
+        return [updates]
 
     result = _service(tmp_path, payload, fetched, recent_releases_fetcher=recent).get_status()
 
@@ -219,15 +263,15 @@ def test_current_release_records_all_bundle_assets_and_downloads_both_layers(
         "assets": [
             {
                 "name": "update-app-2.0.1.zip",
-                "url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/update-app-2.0.1.zip",
-                "sha256Url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/update-app-2.0.1.zip.sha256",
+                "url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1-updates/update-app-2.0.1.zip",
+                "sha256Url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1-updates/update-app-2.0.1.zip.sha256",
                 "bytes": 1_500,
                 "layer": "app",
             },
             {
                 "name": f"update-runtime-macos-arm64-{NEW_RUNTIME}.zip",
-                "url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/update-runtime-macos-arm64-{NEW_RUNTIME}.zip",
-                "sha256Url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/update-runtime-macos-arm64-{NEW_RUNTIME}.zip.sha256",
+                "url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1-updates/update-runtime-macos-arm64-{NEW_RUNTIME}.zip",
+                "sha256Url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1-updates/update-runtime-macos-arm64-{NEW_RUNTIME}.zip.sha256",
                 "bytes": 7_500,
                 "layer": "runtime",
             },
@@ -236,17 +280,48 @@ def test_current_release_records_all_bundle_assets_and_downloads_both_layers(
     }
     assert result["canInstall"] is True
     assert result["installState"] == "idle"
-    assert recent_calls == 0
+    # One list request answers "where are the layers?"; nothing asks a second
+    # time, and the installer never needed the list at all.
+    assert recent_calls == 1
+
+
+def test_the_installer_stays_on_the_release_a_person_downloads_from(
+    tmp_path: Path,
+) -> None:
+    """The split, seen from the client: two tags, and each asset on the right one.
+
+    Asserting the tag in the URL rather than only the asset names is the point.
+    A layer served from the user-facing release, or an installer hidden on the
+    companion, would still carry the right filename.
+    """
+
+    payload, fetched, updates = _release(include_runtime=True)
+
+    result = _service(
+        tmp_path, payload, fetched, recent_releases_fetcher=lambda: [updates]
+    ).get_status()
+
+    by_layer = {
+        asset["layer"]: asset for asset in result["release"]["bundleAssets"]
+    }
+    assert by_layer["installer"]["url"].startswith(
+        "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/"
+    )
+    for layer in ("app", "manifest", "runtime"):
+        assert by_layer[layer]["url"].startswith(
+            "https://github.com/m3gnus/waveguide-generator/releases/"
+            "download/v2.0.1-updates/"
+        ), f"the {layer} layer is not on the companion release"
 
 
 def test_unchanged_installed_runtime_needs_only_the_app_layer(tmp_path: Path) -> None:
-    payload, fetched = _release(include_runtime=False)
+    payload, fetched, updates = _release(include_runtime=False)
     recent_calls = 0
 
     def recent() -> list[dict[str, Any]]:
         nonlocal recent_calls
         recent_calls += 1
-        return []
+        return [updates]
 
     update = _service(
         tmp_path,
@@ -261,20 +336,24 @@ def test_unchanged_installed_runtime_needs_only_the_app_layer(tmp_path: Path) ->
     assert result["release"]["assetsReady"] is True
     assert [asset["layer"] for asset in result["action"]["assets"]] == ["app"]
     assert result["action"]["downloadBytes"] == 1_500
-    assert recent_calls == 0
+    assert recent_calls == 1
 
 
 def test_runtime_is_selected_from_an_earlier_release_and_the_list_is_cached(
     tmp_path: Path,
 ) -> None:
-    payload, fetched = _release(include_runtime=False)
+    payload, fetched, updates = _release(include_runtime=False)
     runtime_name = f"update-runtime-macos-arm64-{NEW_RUNTIME}.zip"
+    earlier = _earlier_updates_release(NEW_RUNTIME)
     recent_calls = 0
 
     def recent() -> list[dict[str, Any]]:
         nonlocal recent_calls
         recent_calls += 1
-        return [{"tag_name": "v2.0.1", "assets": _pair(runtime_name, 7_500)}]
+        # This release's companion, which does not carry the runtime, and the
+        # previous version's, which does. Both are pre-releases with the
+        # ``-updates`` suffix, so the search has to accept that tag shape.
+        return [updates, earlier]
 
     update = _service(tmp_path, payload, fetched, recent_releases_fetcher=recent)
 
@@ -283,17 +362,24 @@ def test_runtime_is_selected_from_an_earlier_release_and_the_list_is_cached(
 
     runtime = next(asset for asset in first["action"]["assets"] if asset["layer"] == "runtime")
     assert runtime["name"] == runtime_name
+    assert runtime["url"].startswith(
+        "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.0-updates/"
+    )
     assert first["release"]["assetsReady"] is True
     assert second["action"] == first["action"]
+    # One list, shared by the companion lookup and the earlier-runtime search,
+    # across two status calls.
     assert recent_calls == 1
 
 
 def test_bad_release_manifest_digest_is_a_guarded_update_error(tmp_path: Path) -> None:
-    payload, fetched = _release(include_runtime=True)
+    payload, fetched, updates = _release(include_runtime=True)
     manifest_name = "update-app-2.0.1.manifest.json"
     fetched[manifest_name + ".sha256"] = f"{'0' * 64}  {manifest_name}\n".encode()
 
-    result = _service(tmp_path, payload, fetched).get_status()
+    result = _service(
+        tmp_path, payload, fetched, recent_releases_fetcher=lambda: [updates]
+    ).get_status()
 
     assert result["availability"] == "unknown"
     assert "does not match" in result["lastError"]
@@ -303,10 +389,20 @@ def test_bad_release_manifest_digest_is_a_guarded_update_error(tmp_path: Path) -
 @pytest.mark.parametrize(
     "untrusted_url",
     [
+        # Another repository entirely: the origin check, unchanged by the split.
         "https://github.com/another/project/releases/download/v2.0.1/{name}",
+        # Another version's companion release.
         (
             "https://github.com/m3gnus/waveguide-generator/releases/"
-            "download/v2.0.0/{name}"
+            "download/v2.0.0-updates/{name}"
+        ),
+        # The user-facing release of the SAME version. A layer listed on the
+        # companion but served from the main tag is the mistake the split makes
+        # possible, and the tag binding is what refuses it. Widening the tag
+        # SHAPE to allow the suffix must not have widened the tag CHECK.
+        (
+            "https://github.com/m3gnus/waveguide-generator/releases/"
+            "download/v2.0.1/{name}"
         ),
     ],
 )
@@ -314,12 +410,14 @@ def test_release_assets_are_bound_to_this_repository_and_release_tag(
     tmp_path: Path,
     untrusted_url: str,
 ) -> None:
-    payload, fetched = _release(include_runtime=True)
+    payload, fetched, updates = _release(include_runtime=True)
     app_name = "update-app-2.0.1.zip"
-    app_asset = next(asset for asset in payload["assets"] if asset["name"] == app_name)
+    app_asset = next(asset for asset in updates["assets"] if asset["name"] == app_name)
     app_asset["browser_download_url"] = untrusted_url.format(name=app_name)
 
-    result = _service(tmp_path, payload, fetched).get_status()
+    result = _service(
+        tmp_path, payload, fetched, recent_releases_fetcher=lambda: [updates]
+    ).get_status()
 
     assert result["availability"] == "incomplete"
     assert result["release"]["assetsReady"] is False
@@ -327,7 +425,7 @@ def test_release_assets_are_bound_to_this_repository_and_release_tag(
 
 
 def test_install_request_carries_release_and_installed_runtime_ids(tmp_path: Path) -> None:
-    payload, fetched = _release(include_runtime=True)
+    payload, fetched, updates = _release(include_runtime=True)
     calls: list[tuple[str, str, str]] = []
 
     class RecordingInstaller:
@@ -358,6 +456,7 @@ def test_install_request_carries_release_and_installed_runtime_ids(tmp_path: Pat
         tmp_path,
         payload,
         fetched,
+        recent_releases_fetcher=lambda: [updates],
         bundle_installer=RecordingInstaller(),  # type: ignore[arg-type]
     )
 
@@ -372,7 +471,7 @@ def test_install_request_carries_release_and_installed_runtime_ids(tmp_path: Pat
 def test_windows_release_uses_windows_runtime_and_full_zip_asset_names(
     tmp_path: Path,
 ) -> None:
-    payload, fetched = _release(
+    payload, fetched, updates = _release(
         include_runtime=True,
         platform="windows-x86_64",
     )
@@ -382,7 +481,7 @@ def test_windows_release_uses_windows_runtime_and_full_zip_asset_names(
         payload,
         fetched,
         platform_name="win32",
-        recent_releases_fetcher=lambda: [],
+        recent_releases_fetcher=lambda: [updates],
     ).get_status()
 
     names = {asset["name"] for asset in result["release"]["bundleAssets"]}
@@ -391,6 +490,61 @@ def test_windows_release_uses_windows_runtime_and_full_zip_asset_names(
     assert result["action"]["assets"][1]["name"] == (
         f"update-runtime-windows-x86_64-{NEW_RUNTIME}.zip"
     )
+
+
+def test_a_missing_companion_release_is_incomplete_not_a_partial_update(
+    tmp_path: Path,
+) -> None:
+    """The failure the ordering in release.yml exists to prevent, seen by a client.
+
+    The user-facing release is published with its installers and the companion is
+    absent -- because it failed, or because a release was cut by hand. There is
+    nothing to install, and the only safe answer is to say so and offer nothing.
+    Downloading the installer instead, or reporting an error the user is asked to
+    act on, would both be wrong.
+    """
+
+    payload, fetched, updates = _release(include_runtime=True)
+
+    result = _service(
+        tmp_path, payload, fetched, recent_releases_fetcher=lambda: []
+    ).get_status()
+
+    assert result["availability"] == "incomplete"
+    assert result["release"]["assetsReady"] is False
+    assert result["action"] is None
+    assert result["canInstall"] is False
+    # Not an error: nothing failed, the layers are simply not published yet.
+    assert result["lastError"] is None
+    # And no half-update on offer. The installer is on the release and trusted,
+    # and it must still not be handed to a client as something to apply.
+    assert "bundleAssets" not in result["release"]
+
+
+def test_layers_left_on_the_user_facing_release_are_not_used(tmp_path: Path) -> None:
+    """The split asserted from the other side: no fallback to the old layout.
+
+    This fixture is exactly what every release up to and including 0.3.0 looked
+    like -- app layer, manifest and runtime on the release the installers are on,
+    and no companion at all. Before the split it was the happy path. If the
+    service still reads layers from the main release when the companion is
+    missing, this passes, and the split is decorative.
+    """
+
+    payload, fetched, updates = _release(
+        include_runtime=True, layers_on_user_release=True
+    )
+    assert any(
+        asset["name"] == "update-app-2.0.1.zip" for asset in payload["assets"]
+    ), "the fixture must actually put the layers on the user-facing release"
+
+    result = _service(
+        tmp_path, payload, fetched, recent_releases_fetcher=lambda: [updates]
+    ).get_status()
+
+    assert result["availability"] == "incomplete"
+    assert result["release"]["assetsReady"] is False
+    assert result["action"] is None
 
 
 def _digest_asset(name: str, *, digest: str | None, size: int = 4096) -> dict[str, object]:
