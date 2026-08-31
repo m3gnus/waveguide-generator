@@ -183,27 +183,29 @@ def _write(directory: Path, name: str, payload: bytes) -> None:
     (directory / f"{name}.sha256").write_text(f"{digest}  {name}\n", encoding="ascii")
 
 
-def _publish_inputs(tmp_path: Path) -> dict[str, list[str]]:
+def _publish_inputs(
+    tmp_path: Path, version: str = VERSION
+) -> dict[str, list[str]]:
     """Exactly what the three build jobs upload, one file per inventory entry."""
 
     (tmp_path / "shared").mkdir()
     (tmp_path / "shared" / "version.json").write_text(
-        json.dumps({"version": VERSION}), encoding="utf-8"
+        json.dumps({"version": version}), encoding="utf-8"
     )
     root = tmp_path / "build" / "publish-inputs"
     layout = {
-        "spa": [release_assets.spa_archive_name(VERSION)],
+        "spa": [release_assets.spa_archive_name(version)],
         "macos": [
-            release_assets.installer_name(release_assets.MACOS_PLATFORM, VERSION),
-            release_assets.app_layer_name(VERSION),
-            release_assets.app_manifest_name(VERSION),
+            release_assets.installer_name(release_assets.MACOS_PLATFORM, version),
+            release_assets.app_layer_name(version),
+            release_assets.app_manifest_name(version),
             release_assets.runtime_layer_name(
                 release_assets.MACOS_PLATFORM, RUNTIME_ID
             ),
         ],
         "windows": [
-            release_assets.windows_setup_name(VERSION),
-            release_assets.installer_name(release_assets.WINDOWS_PLATFORM, VERSION),
+            release_assets.windows_setup_name(version),
+            release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version),
             release_assets.runtime_layer_name(
                 release_assets.WINDOWS_PLATFORM, RUNTIME_ID
             ),
@@ -275,6 +277,62 @@ def test_the_publish_step_stages_installers_and_layers_to_separate_releases(
     )
     assert not set(downloads) & set(layers)
     assert all(name.startswith(release_assets.UPDATE_PREFIX) for name in layers)
+
+
+def test_the_transitional_version_publishes_its_layers_to_both_releases(
+    tmp_path: Path,
+) -> None:
+    """One version ships its layers twice, so the release before it can update.
+
+    0.3.0's updater reads layers from the release it lands on and cannot even
+    see a ``-updates`` tag, so a clean split would leave it reporting "update
+    preparing" forever. For `LAYER_DUPLICATION_VERSION` only, every layer is
+    published to the user-facing release as well. The companion is still
+    complete -- this adds copies, it never moves anything -- so a client that
+    reads the companion is unaffected either way.
+
+    The steady state is asserted by the disjointness test above, which runs at a
+    version this rule does not cover. When the duplication is dropped, that test
+    stays and this one goes.
+    """
+
+    version = release_assets.LAYER_DUPLICATION_VERSION
+    layout = _publish_inputs(tmp_path, version=version)
+    result = _run_staging(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    downloads = sorted(p.name for p in (tmp_path / "build/release-assets").iterdir())
+    layers = sorted(p.name for p in (tmp_path / "build/update-assets").iterdir())
+
+    every_name = [name for names in layout.values() for name in names]
+    expected_layers = sorted(
+        name
+        for original in every_name
+        if not original.startswith(release_assets.INSTALLER_PREFIX)
+        for name in (original, release_assets.checksum_name(original))
+    )
+    # The companion is exactly what it always was.
+    assert layers == expected_layers
+    # And every one of those files is also on the page a 0.3.0 client reads.
+    assert set(layers) <= set(downloads)
+    # The installers are still there and were not displaced by the copies.
+    assert {
+        f"Waveguide.Generator-{version}-macos-arm64.dmg",
+        f"Waveguide.Generator-{version}-windows-x86_64-setup.exe",
+        f"Waveguide.Generator-{version}-windows-x86_64.zip",
+    } <= set(downloads)
+    assert len(downloads) == len(expected_layers) + 6
+
+
+def test_only_the_transitional_version_duplicates_its_layers() -> None:
+    """The rule is pinned to one version, not left to drift on as a default."""
+
+    assert release_assets.duplicate_layers_on_user_release(
+        release_assets.LAYER_DUPLICATION_VERSION
+    )
+    assert not release_assets.duplicate_layers_on_user_release("0.3.0")
+    assert not release_assets.duplicate_layers_on_user_release("0.3.2")
+    assert not release_assets.duplicate_layers_on_user_release(VERSION)
 
 
 def test_an_asset_the_build_did_not_produce_fails_the_publish(tmp_path: Path) -> None:

@@ -129,6 +129,24 @@ def updates_tag(version: str) -> str:
 
 UPDATES_TAG_SUFFIX = "-updates"
 
+#: The one version whose update layers are published to BOTH releases.
+#:
+#: 0.3.0's updater reads the layers from the release it lands on, and its
+#: ``TAG_RE`` (``^v\d+\.\d+\.\d+$``) rejects the ``-updates`` suffix outright,
+#: so a clean split would leave every 0.3.0 install reporting "update preparing"
+#: forever -- confidently telling people to wait for something that can never
+#: arrive, which is worse than failing visibly. Publishing the layers twice for
+#: one version lets 0.3.0 update once. From the next version every install reads
+#: the companion, and this constant, the branch it guards in release.yml, and
+#: the test named after it all go together.
+LAYER_DUPLICATION_VERSION = "0.3.1"
+
+
+def duplicate_layers_on_user_release(version: str) -> bool:
+    """Whether ``version`` also publishes its layers to the user-facing release."""
+
+    return version == LAYER_DUPLICATION_VERSION
+
 
 def checksum_name(asset: str) -> str:
     """The sidecar carrying an asset's SHA-256."""

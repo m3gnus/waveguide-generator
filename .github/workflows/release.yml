@@ -361,6 +361,7 @@ jobs:
           machinery = Path("build/update-assets")
           machinery.mkdir()
           version = json.loads(Path("shared/version.json").read_text(encoding="utf-8"))["version"]
+          duplicate_layers = release_assets.duplicate_layers_on_user_release(version)
           specs = (
               ("spa", re.escape(release_assets.spa_archive_name(version))),
               ("macos", re.escape(release_assets.installer_name(release_assets.MACOS_PLATFORM, version))),
@@ -409,6 +410,13 @@ jobs:
               )
               shutil.copy2(asset, target / asset.name)
               shutil.copy2(sidecar, target / sidecar.name)
+              if target is machinery and duplicate_layers:
+                  # TRANSITIONAL, and self-deleting: see
+                  # release_assets.LAYER_DUPLICATION_VERSION. One version
+                  # publishes its layers twice so the previous release, which
+                  # cannot see the companion tag at all, can still update.
+                  shutil.copy2(asset, destination / asset.name)
+                  shutil.copy2(sidecar, destination / sidecar.name)
 
           actual_paths = {path for path in root.rglob("*") if path.is_file()}
           if actual_paths != expected_paths:
@@ -417,17 +425,25 @@ jobs:
               raise SystemExit(f"Release inventory mismatch; missing={missing}, extra={extra}")
           downloads = sorted(path.name for path in destination.iterdir())
           layers = sorted(path.name for path in machinery.iterdir())
-          if len(downloads) + len(layers) != len(specs) * 2:
+          duplicated = len(layers) if duplicate_layers else 0
+          if len(downloads) + len(layers) != len(specs) * 2 + duplicated:
               raise SystemExit(
-                  f"Release staging did not produce exactly {len(specs)} asset pairs; "
-                  f"downloads={downloads}, layers={layers}"
+                  f"Release staging did not produce exactly {len(specs)} asset pairs "
+                  f"(plus {duplicated} duplicated); downloads={downloads}, layers={layers}"
               )
           # The split is asserted, not assumed. Counting the two directories would
           # pass a release that staged the right number of files into the wrong
           # halves, and the failure mode of that is the one this whole change
           # exists to avoid: an updater pointed at a release with nothing on it.
           prefix = release_assets.INSTALLER_PREFIX
-          strays = sorted(name for name in downloads if not name.startswith(prefix))
+          strays = sorted(
+              name
+              for name in downloads
+              if not name.startswith(prefix)
+              # A layer on the user-facing release is a defect, except in the one
+              # version that deliberately publishes it to both.
+              and not (duplicate_layers and name in layers)
+          )
           hidden = sorted(name for name in layers if name.startswith(prefix))
           if strays or hidden:
               raise SystemExit(
@@ -441,8 +457,14 @@ jobs:
               )
           print(
               f"Validated {len(specs)} release asset pairs: "
-              f"{len(downloads) // 2} installer(s) on the user-facing release, "
-              f"{len(layers) // 2} layer(s) on the companion pre-release."
+              f"{(len(downloads) - duplicated) // 2} installer(s) on the user-facing "
+              f"release, {len(layers) // 2} layer(s) on the companion pre-release"
+              + (
+                  f", {duplicated // 2} of which are also published to the "
+                  "user-facing release so the previous version can still update."
+                  if duplicate_layers
+                  else "."
+              )
           )
           PY
 
