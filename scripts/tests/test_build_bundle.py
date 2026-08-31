@@ -540,6 +540,49 @@ def test_windows_prune_runtime_uses_the_flat_install_layout(tmp_path: Path) -> N
     assert removed
 
 
+def test_prune_runtime_keeps_the_gmsh_library_beside_the_interpreter(
+    tmp_path: Path,
+) -> None:
+    """Gmsh's native library is not in site-packages, and nothing else is.
+
+    The gmsh wheel installs ``gmsh-4.15.dll`` into ``<prefix>/Lib`` (and the
+    POSIX equivalent into ``<prefix>/lib``) rather than beside ``gmsh.py`` in
+    site-packages -- ``gmsh.py`` finds it by walking up from its own module
+    directory. Every other dependency ships its binaries inside site-packages,
+    so a prune glob or a staging step written around that assumption removes
+    the one library the mesher, every STEP export and every solve depend on,
+    and the bundle fails only at run time on the user's machine.
+
+    The Windows prune list already globs ``Lib/tcl*``/``Lib/tk*`` in exactly
+    this directory, so the blast radius is one careless pattern away.
+    """
+
+    runtime = tmp_path / "runtime"
+    windows_library = runtime / "Lib" / "gmsh-4.15.dll"
+    windows_library.parent.mkdir(parents=True)
+    windows_library.write_bytes(b"gmsh")
+    (runtime / "Lib" / "site-packages").mkdir()
+    (runtime / "Lib" / "site-packages" / "gmsh.py").write_text("", encoding="utf-8")
+    (runtime / "Lib" / "tcl8.6").mkdir()
+
+    prune_runtime(runtime, platform_name=WINDOWS_PLATFORM)
+
+    assert windows_library.is_file(), "the Windows bundle lost its gmsh library"
+    assert not (runtime / "Lib" / "tcl8.6").exists()
+
+    posix_runtime = tmp_path / "posix"
+    posix_library = posix_runtime / "lib" / "libgmsh.4.15.dylib"
+    posix_library.parent.mkdir(parents=True)
+    posix_library.write_bytes(b"gmsh")
+    (posix_runtime / "lib" / "python3.13" / "site-packages").mkdir(parents=True)
+    (posix_runtime / "lib" / "tcl8.6").mkdir()
+
+    prune_runtime(posix_runtime)
+
+    assert posix_library.is_file(), "the POSIX bundle lost its gmsh library"
+    assert not (posix_runtime / "lib" / "tcl8.6").exists()
+
+
 def test_info_plist_substitution_updates_both_bundle_versions(tmp_path: Path) -> None:
     template = tmp_path / "template.plist"
     output = tmp_path / "output.plist"

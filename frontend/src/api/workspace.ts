@@ -57,3 +57,42 @@ export async function selectWorkspaceFolder(
     body: JSON.stringify({ path }),
   } : { method: 'POST' }));
 }
+
+export interface OutputFolderWrite {
+  /** Absolute directory the files landed in, for reporting back to the user. */
+  directory: string;
+  files: string[];
+}
+
+/**
+ * Write files into the output folder through the backend.
+ *
+ * Design-level exports used to hand the browser an `<a download>` blob. That
+ * works in a browser tab and does nothing useful in the desktop window, which
+ * is a WebView2 host with no download UI and no download handler wired -- so
+ * the export succeeded on the server and the file never reached the user.
+ * Run-result exports already avoid this by writing server-side; this is the
+ * same path for the File menu, and it also means every export can name the
+ * folder it went to.
+ */
+export async function writeToOutputFolder(
+  subdirectory: string,
+  members: readonly { filename: string; blob: Blob }[],
+  fetcher: typeof fetch = fetch,
+  existing: 'reject' | 'merge_identical' | 'overwrite' = 'overwrite',
+): Promise<OutputFolderWrite> {
+  const body = new FormData();
+  body.append('subdirectory', subdirectory);
+  body.append('existing', existing);
+  members.forEach(({ filename }) => body.append('relative_path', filename));
+  members.forEach(({ filename, blob }) => body.append('file', blob, filename));
+  const response = await fetcher('/api/workspace/write-export', { method: 'POST', body });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  const payload = await response.json() as { directory?: unknown; files?: unknown };
+  return {
+    directory: typeof payload.directory === 'string' ? payload.directory : '',
+    files: Array.isArray(payload.files)
+      ? payload.files.filter((name): name is string => typeof name === 'string')
+      : [],
+  };
+}

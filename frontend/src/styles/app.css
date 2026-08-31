@@ -576,6 +576,15 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .run-name-field .ui-field { margin: 0; }
 .run-name-preview { overflow: hidden; color: var(--fg4); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .run-name-preview b { color: var(--acc); font-weight: 500; }
+.jobs-output-folder { display: flex; align-items: center; gap: 6px; margin: 6px 6px 0; padding: 0 4px 0 7px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--input-bg); color: var(--fg3); }
+.jobs-output-folder > svg { width: 12px; height: 12px; flex: none; }
+.jobs-output-folder-path { flex: 1; min-width: 0; height: var(--field-h); background: transparent; color: var(--fg2); font-size: var(--text-micro); text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.jobs-output-folder-path:hover:not(:disabled) { color: var(--fg); text-decoration: underline; }
+.jobs-output-folder-open { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r2); background: transparent; color: var(--fg3); }
+.jobs-output-folder-open:hover:not(:disabled) { color: var(--fg); background: var(--hover-bg); }
+.jobs-output-folder-open:disabled { opacity: .4; }
+.jobs-output-folder-open svg { width: 12px; height: 12px; }
+.jobs-output-folder-error { flex-basis: 100%; padding: 0 0 4px; color: var(--danger, #d66); font-size: var(--text-micro); }
 .jobs-filter { display: flex; align-items: center; gap: 6px; margin: 6px 6px 2px; padding: 0 5px 0 7px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--input-bg); color: var(--fg3); }
 .jobs-filter:focus-within { border-color: rgba(var(--acc-rgb), .5); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .08); }
 .jobs-filter svg { width: 12px; height: 12px; flex: none; }

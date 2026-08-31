@@ -11,6 +11,7 @@ import asyncio
 import concurrent.futures
 from contextlib import contextmanager
 import functools
+import logging
 import sys
 import threading
 from collections.abc import Callable, Iterator
@@ -36,6 +37,8 @@ if sys.platform == "win32":
     _kernel32.SetEnvironmentVariableW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR)
     _kernel32.SetEnvironmentVariableW.restype = wintypes.BOOL
 
+
+log = logging.getLogger("wg.mesh")
 
 GMSH_WORKER_THREAD_NAME = "gmsh-worker"
 T = TypeVar("T")
@@ -86,7 +89,14 @@ def _preserve_native_windows_path() -> Iterator[None]:
         yield
     finally:
         if not _kernel32.SetEnvironmentVariableW("PATH", path):
-            raise ctypes.WinError(ctypes.get_last_error())
+            failure = ctypes.WinError(ctypes.get_last_error())
+            # Raising from here would replace whatever the body was already
+            # raising, and the body's exception is the one that explains a
+            # failed mesh or export. Report a damaged PATH on its own only
+            # when the body succeeded and there is nothing to mask.
+            if sys.exc_info()[1] is None:
+                raise failure
+            log.error("Could not restore the native PATH after a Gmsh call: %s", failure)
 
 
 def _gmsh_executor() -> concurrent.futures.ThreadPoolExecutor:

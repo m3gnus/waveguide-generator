@@ -1,5 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import {
+  getWorkspaceFolder,
+  openWorkspaceFolder,
+  selectWorkspaceFolder,
+  type WorkspaceFolder,
+} from '../api/workspace';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign } from '../jobs/jobDesign';
@@ -16,6 +22,60 @@ import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
 import { LogDialog } from './LogDialog';
 import { middleEllipsis } from './ResultsPanel';
+
+/**
+ * The output folder, stated where runs are read rather than buried in settings.
+ *
+ * Every export -- automatic, run-result and File menu alike -- is written by
+ * the backend into this one folder. The desktop window is a WebView2 host with
+ * no download shelf, so nothing else in the application tells the user where a
+ * file just went; an export that does not name its destination is
+ * indistinguishable from one that silently failed.
+ */
+function OutputFolderBar() {
+  const [folder, setFolder] = useState<WorkspaceFolder | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    // A folder that cannot be read yet is not news: the button already reads
+    // "Choose output folder", which is the right affordance either way. Only a
+    // failure the user asked for is worth a message, and never as a
+    // `role="alert"` competing with the run errors in this same column.
+    void getWorkspaceFolder()
+      .then((value) => { if (!cancelled) setFolder(value); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
+  async function run(action: () => Promise<WorkspaceFolder>) {
+    setBusy(true);
+    setError(null);
+    try { setFolder(await action()); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(false); }
+  }
+
+  const path = folder?.path ?? null;
+  return <div className="jobs-output-folder">
+    <Icon name="folder"/>
+    <button
+      className="jobs-output-folder-path"
+      disabled={busy}
+      title={path ? `Exports are written to ${path}. Click to choose a different folder.` : 'Choose where exports are written'}
+      onClick={() => void run(() => selectWorkspaceFolder())}
+    >{path ? middleEllipsis(path, 30) : 'Choose output folder…'}</button>
+    <button
+      className="jobs-output-folder-open"
+      aria-label="Open output folder"
+      title="Open the output folder"
+      disabled={busy || !path}
+      onClick={() => void run(() => openWorkspaceFolder())}
+    ><Icon name="expand"/></button>
+    {error && <span className="jobs-output-folder-error">{error}</span>}
+  </div>;
+}
 
 function clock(iso: string | null): string {
   if (!iso) return '—';
@@ -295,7 +355,7 @@ function RunNameField({ actions, now = new Date() }: { actions?: ReactNode; now?
       placeholder={fromCad ? 'No CAD return selected' : 'Untitled'}
       title={fromCad
         ? 'CAD Link runs are named by the Fusion document. Rename the document in Fusion 360 and send it again to change it.'
-        : 'Names the design, its Download a copy file, and every run and export made from it'}
+        : 'Names the design, its Export a copy file, and every run and export made from it'}
       onChange={(event) => setDraft(event.target.value)}
       onFocus={() => { if (!fromCad) setEditing(true); }}
       onBlur={(event) => { if (!fromCad) commit(event.target.value); }}
@@ -359,6 +419,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   };
 
   return <div className="jobs-panel panel-scroll">
+    <OutputFolderBar/>
     {/* Only when there is something to report. This rail used to carry a
         permanent "0 active · connected · 31/31 shown" strip: a zero, a state
         that is almost always "connected", and a ratio that is almost always

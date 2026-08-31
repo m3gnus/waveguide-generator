@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { downloadGeometryExport, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { exportGeometryToOutputFolder, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
@@ -55,6 +55,14 @@ describe('geometry export requests', () => {
     const urls: string[] = [];
     const fetcher = (async (url: string) => {
       urls.push(String(url));
+      // The export is written into the output folder, not handed to the
+      // browser: an `<a download>` does nothing in the desktop WebView2 window.
+      if (String(url) === '/api/workspace/write-export') {
+        return new Response(
+          JSON.stringify({ directory: 'C:/Output/horn', files: ['horn.step'] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
       return new Response('ISO-10303-21;', {
         status: 200,
         headers: { 'Content-Type': 'model/step' },
@@ -67,21 +75,24 @@ describe('geometry export requests', () => {
 
   it('asks for the manufacturable solid by default', async () => {
     const { urls, fetcher } = recordingFetcher();
-    await downloadGeometryExport('step', design, 3, 'horn', undefined, undefined, fetcher);
-    expect(urls).toEqual(['/api/export/step?body=solid']);
+    await exportGeometryToOutputFolder('step', design, 3, 'horn', undefined, undefined, fetcher);
+    expect(urls).toEqual(['/api/export/step?body=solid', '/api/workspace/write-export']);
   });
 
   it('asks for the inner surface when that body is chosen', async () => {
     const { urls, fetcher } = recordingFetcher();
-    await downloadGeometryExport('step', design, 3, 'horn', undefined, 'surface', fetcher);
-    expect(urls).toEqual(['/api/export/step?body=surface']);
+    await exportGeometryToOutputFolder('step', design, 3, 'horn', undefined, 'surface', fetcher);
+    expect(urls).toEqual(['/api/export/step?body=surface', '/api/workspace/write-export']);
   });
 
   it('leaves the other geometry exports unqueried', async () => {
     const { urls, fetcher } = recordingFetcher();
-    await downloadGeometryExport('stl', design, 3, 'horn', undefined, undefined, fetcher);
-    await downloadGeometryExport('profiles', design, 3, 'horn', 'slices', undefined, fetcher);
-    expect(urls).toEqual(['/api/export/stl', '/api/export/profiles?kind=slices']);
+    await exportGeometryToOutputFolder('stl', design, 3, 'horn', undefined, undefined, fetcher);
+    await exportGeometryToOutputFolder('profiles', design, 3, 'horn', 'slices', undefined, fetcher);
+    expect(urls).toEqual([
+      '/api/export/stl', '/api/workspace/write-export',
+      '/api/export/profiles?kind=slices', '/api/workspace/write-export',
+    ]);
   });
 });
 

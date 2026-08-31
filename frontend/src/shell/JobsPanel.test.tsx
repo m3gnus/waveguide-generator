@@ -448,9 +448,9 @@ describe('jobs panel run list', () => {
     act(() => input.blur());
 
     expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
-    expect(input.title).toContain('Download a copy');
+    expect(input.title).toContain('Export a copy');
     expect(input.title).not.toContain('saves as');
-    // The Download a copy filename follows the same edit -- this is the whole
+    // The Export a copy filename follows the same edit -- this is the whole
     // point of the field.
     expect(useDocumentStore.getState()).toMatchObject({ designName: 'winner', filename: 'winner.cfg' });
 
@@ -508,5 +508,64 @@ describe('jobs panel run list', () => {
     expect(host.querySelector<HTMLInputElement>('[aria-label="Design name"]')?.value).toBe('horn');
     expect(host.querySelector('.run-name-preview')?.textContent)
       .toBe(`next · ${currentJobLabel(undefined, now)}`);
+  });
+});
+
+describe('jobs panel output folder', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    localStorage.clear();
+    preferencesStore.resetForTests();
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => publishJobs([]));
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  // Every export is written by the backend into this folder, and the desktop
+  // window has no download shelf to reveal where a file went. If this control
+  // stops naming the folder, a successful export is indistinguishable from a
+  // silent failure -- which is exactly how the v0.3.0 STEP reports read.
+  it('names the output folder and changes it on click', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      const chosen = calls.includes('/api/workspace/select');
+      return new Response(
+        JSON.stringify({ path: chosen ? 'C:/Chosen' : 'C:/Documents/WG', selected: chosen }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }));
+
+    await act(async () => root.render(<JobsPanel/>));
+    expect(calls).toContain('/api/workspace/path');
+    const folder = host.querySelector<HTMLButtonElement>('.jobs-output-folder-path')!;
+    expect(folder.textContent).toBe('C:/Documents/WG');
+
+    await act(async () => folder.click());
+    expect(calls).toContain('/api/workspace/select');
+    expect(host.querySelector('.jobs-output-folder-path')?.textContent).toBe('C:/Chosen');
+  });
+
+  it('offers to choose a folder when the backend cannot name one', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })));
+
+    await act(async () => root.render(<JobsPanel/>));
+
+    expect(host.querySelector('.jobs-output-folder-path')?.textContent).toBe('Choose output folder…');
+    // A folder that could not be read is not an alert: it must not crowd out
+    // the run errors that share this column.
+    expect(host.querySelector('.jobs-output-folder [role="alert"]')).toBeNull();
   });
 });
