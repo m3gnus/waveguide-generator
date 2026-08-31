@@ -125,6 +125,19 @@ WINDOWS_PYVENV_NAME = "pyvenv.cfg"
 WINDOWS_RUNTIME_PTH_NAME = "python._pth"
 WINDOWS_ICON_NAME = "WaveguideGenerator.ico"
 WINDOWS_README_NAME = "READ ME FIRST.txt"
+WINDOWS_SETUP_SCRIPT = PurePosixPath("installers/windows/bundle-setup.iss")
+#: Windows resolves most path operations against MAX_PATH of 260 *including* the
+#: terminating null, so the longest path a build may produce is 259 characters.
+WINDOWS_MAX_PATH = 259
+#: ISCC is not on the GitHub windows runner image and not on PATH after a
+#: default install, so the known per-user and per-machine locations are tried
+#: before giving up. WG2_ISCC overrides all of it.
+INNO_COMPILER_ENV = "WG2_ISCC"
+INNO_COMPILER_CANDIDATES = (
+    "%LOCALAPPDATA%/Programs/Inno Setup 6/ISCC.exe",
+    "%ProgramFiles(x86)%/Inno Setup 6/ISCC.exe",
+    "%ProgramFiles%/Inno Setup 6/ISCC.exe",
+)
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
 # A bare launch has to start the interpreter, import the app layer and let the
@@ -1192,6 +1205,46 @@ def deterministic_zip(
                     shutil.copyfileobj(source_handle, target, length=1 << 20)
 
 
+def max_payload_depth(root: Path) -> int:
+    """Length of the deepest path the bundle contributes, relative to its root.
+
+    The installer refuses an install root that would push this over
+    ``WINDOWS_MAX_PATH``. Measuring it here rather than writing a number into
+    the .iss is the point: bempp's kernel filenames are what currently set it,
+    and a dependency gaining a deeper file would otherwise silently turn a
+    correct limit into a wrong one that still looks deliberate.
+    """
+
+    deepest = 0
+    for path in root.rglob("*"):
+        if path.is_dir():
+            continue
+        deepest = max(deepest, len(path.relative_to(root).as_posix()))
+    if deepest == 0:
+        raise BundleError(f"Bundle has no files to measure: {root}")
+    return deepest
+
+
+def locate_inno_compiler(environment: Mapping[str, str]) -> Path:
+    """Find ISCC.exe, preferring an explicit override."""
+
+    override = environment.get(INNO_COMPILER_ENV)
+    if override:
+        candidate = Path(override)
+        if not candidate.is_file():
+            raise BundleError(f"{INNO_COMPILER_ENV} does not name a file: {candidate}")
+        return candidate
+    for template in INNO_COMPILER_CANDIDATES:
+        expanded = Path(os.path.expandvars(template))
+        if expanded.is_file():
+            return expanded
+    raise BundleError(
+        "Inno Setup's compiler (ISCC.exe) was not found. It is not part of the "
+        "GitHub windows runner image; install it (choco install innosetup) or "
+        f"point {INNO_COMPILER_ENV} at ISCC.exe."
+    )
+
+
 def write_checksum(asset: Path) -> Path:
     sidecar = asset.with_name(asset.name + ".sha256")
     # sha256sum format is one LF-terminated line on every platform; Windows
@@ -1635,6 +1688,50 @@ UNINSTALLING
 Delete the folder you extracted. Nothing is written outside it except a
 cache under %LOCALAPPDATA%\WaveguideGenerator, which is safe to delete too.
 """
+
+    def build_windows_setup(
+        self,
+        bundle: Path,
+        output: Path,
+        *,
+        version: str,
+        environment: Mapping[str, str] | None = None,
+    ) -> Path:
+        """Compile the assembled bundle into an installer.
+
+        Every define is passed rather than defaulted in the .iss, so a missing
+        one is a compile error instead of an installer built against a stale
+        assumption. ``MaxPayloadDepth`` in particular is measured from this
+        exact bundle: it is what the installer refuses an over-long install
+        root against, and a hardcoded copy would rot silently.
+        """
+
+        environment = os.environ if environment is None else environment
+        compiler = locate_inno_compiler(environment)
+        script = self.repo_root / WINDOWS_SETUP_SCRIPT
+        if not script.is_file():
+            raise BundleError(f"Installer script is missing: {script}")
+        depth = max_payload_depth(bundle)
+        if depth >= WINDOWS_MAX_PATH:
+            raise BundleError(
+                f"The bundle's own deepest path is {depth} characters, which leaves "
+                f"no room under the {WINDOWS_MAX_PATH}-character limit for any "
+                "install root at all."
+            )
+        self.run_command(
+            [
+                str(compiler),
+                f"/DAppVersion={version}",
+                f"/DPayloadDir={bundle}",
+                f"/DMaxPayloadDepth={depth}",
+                f"/DOutputDir={output.parent}",
+                f"/DOutputBaseFilename={output.stem}",
+                str(script),
+            ]
+        )
+        if not output.is_file():
+            raise BundleError(f"Inno Setup reported success but produced no {output.name}")
+        return output
 
     #: Put the first-launch instruction where the wall is, not on a web page the
     #: user has already left. macOS refuses this app on first launch and offers
@@ -2163,6 +2260,11 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                     archive_root=bundle.name,
                     extra_root_files={WINDOWS_README_NAME: builder.windows_readme()},
                 )
+                setup_asset = output / release_assets.windows_setup_name(version)
+                if setup_asset.exists():
+                    setup_asset.unlink()
+                builder.build_windows_setup(bundle, setup_asset, version=version)
+                _register_asset(assets, setup_asset)
                 output_bundle = output / bundle.name
                 if output_bundle.exists() or output_bundle.is_symlink():
                     _remove(output_bundle)
