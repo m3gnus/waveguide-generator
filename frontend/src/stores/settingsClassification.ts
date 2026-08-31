@@ -12,12 +12,19 @@ import type { PersistedSolveOptions, PolarUiState } from './solveOptions';
 export type SolveOptionKey = Exclude<keyof PersistedSolveOptions, 'polar'> | `polar.${keyof PolarUiState}`;
 
 /**
- * Every one of these is written into the submitted `SolveOptions`, so all of
- * them are solve-affecting -- including the two that only move what is drawn.
- * `normAngle` shifts the plotted curves and `diagonalAngle` picks which plane
- * is sampled for display, but both travel in `polar_config`, so changing
- * either does change the next submission and does make an earlier run no
- * longer comparable to it. That is the test this classification applies.
+ * Nearly all of these are written into the submitted `SolveOptions`, so nearly
+ * all of them are solve-affecting -- including `diagonalAngle`, which only
+ * picks which plane is sampled for display but decides what the solve measures
+ * to draw it. The test this classification applies is not "does it ride along
+ * in `polar_config`" but "does changing it make an earlier run no longer
+ * comparable to the next one".
+ *
+ * `normAngle` is the one that fails that test. It still travels in
+ * `polar_config`, and the server still shifts the stored patterns by it, but
+ * the shift is a single constant per row and `withNormalizationAngle`
+ * re-references any run to the value on screen at display time. Changing it
+ * therefore redraws, and an archived run answers the new angle as readily as a
+ * fresh one. See `results/normalization.ts` for why that composition is exact.
  */
 export const SOLVE_OPTION_EFFECTS: Record<SolveOptionKey, PreferenceEffect> = {
   engine: 'solve-affecting',
@@ -32,7 +39,7 @@ export const SOLVE_OPTION_EFFECTS: Record<SolveOptionKey, PreferenceEffect> = {
   'polar.angleEnd': 'solve-affecting',
   'polar.angleStep': 'solve-affecting',
   'polar.distance': 'solve-affecting',
-  'polar.normAngle': 'solve-affecting',
+  'polar.normAngle': 'render-refreshing',
   'polar.diagonalAngle': 'solve-affecting',
   'polar.enabledAxes': 'solve-affecting',
   'polar.observationOrigin': 'solve-affecting',

@@ -15,6 +15,8 @@ import { latestCombine } from '../results/latestCombine';
 import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf, memberLabelOf } from '../results/maxOutput';
 import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
 import { combinedChannelId, combineMetadataOf, type ResultPayload } from '../results/types';
+import { resolveNormalizationAngle, withNormalizationAngle } from '../results/normalization';
+import { MAX_MEASUREMENT_ANGLES, measurementAngleLabel, measurementAngles, measurementPlanes, nearestMeasurementAngle, onAxisAngle, withMeasurementAngle, type MeasurementPlane } from '../results/measurementAngle';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -33,6 +35,7 @@ import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './dialogFocus';
 import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
 import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
@@ -40,11 +43,21 @@ import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
 import { powerAgreementHealth } from '../results/radiatedPower';
 
-export function splSubtitle(result: ResultData | undefined): string {
+/**
+ * Where the SPL card's curves were measured.
+ *
+ * `angles` names the microphone positions when more than the on-axis one is
+ * drawn. Without it a card showing four traces gives no clue which is which
+ * beyond the legend, and the distance alone reads as if they share a position.
+ */
+export function splSubtitle(result: ResultData | undefined, angles?: { plane: string; angles: number[]; onAxis: number | null }): string {
   const observation = result?.metadata?.observation;
   const record = observation && typeof observation === 'object' ? observation as Record<string, unknown> : {};
   const distance = Number(record.effective_distance_m ?? record.requested_distance_m);
-  return Number.isFinite(distance) && distance > 0 ? `absolute · ${Number(distance.toPrecision(4))} m` : 'absolute · distance unspecified';
+  const position = Number.isFinite(distance) && distance > 0 ? `absolute · ${Number(distance.toPrecision(4))} m` : 'absolute · distance unspecified';
+  const offAxis = angles && angles.angles.length > 1;
+  if (!offAxis) return position;
+  return `${position} · ${angles.plane.slice(0, 1).toUpperCase()} ${angles.angles.map((angle) => `${Number(angle.toFixed(3))}°`).join(' / ')}`;
 }
 
 function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['jobs']): string {
@@ -1138,7 +1151,7 @@ function chartLabel(chartType: ChartType): string {
  * because compact charts drop their axis titles and this states them instead.
  */
 const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: string }> = {
-  frequency_response: { short: 'SPL', long: 'On-axis SPL', unit: 'dB' },
+  frequency_response: { short: 'SPL', long: 'Sound pressure level', unit: 'dB' },
   directivity_map_h: { short: 'Dir H', long: 'Directivity H', unit: 'dB' },
   directivity_map_v: { short: 'Dir V', long: 'Directivity V', unit: 'dB' },
   directivity_map_d: { short: 'Dir D', long: 'Directivity Diagonal', unit: 'dB' },
@@ -1150,7 +1163,7 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   beam_map: { short: 'Beam map' },
   balloon: { short: 'Balloon' },
   polar_response: { short: 'Polar', long: 'Polar response', unit: 'dB' },
-  phase_response: { short: 'Phase', long: 'On-axis phase', unit: '°' },
+  phase_response: { short: 'Phase', long: 'Pressure phase', unit: '°' },
   // The group delay unit follows a preference, not the chart: see chartUnit.
   group_delay: { short: 'GD', long: 'Group delay' },
   // The impedance unit depends on the result, not the chart: see chartUnit.
@@ -1300,16 +1313,24 @@ export function directivityMapPanels(items: NamedResult[], chartType: Directivit
   });
 }
 
-function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, angleGuideInterval, density, live }: {
+function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, normAngle, angleGuideInterval, density, live }: {
   chartType: DirectivityMapChartType;
   items: NamedResult[];
   tokens: ChartTokens;
   mapReference: number;
+  normAngle: number;
   angleGuideInterval: number;
   density: ChartDensity;
   live: boolean;
 }) {
-  const panels = directivityMapPanels(items, chartType);
+  // Re-reference every run on the card, primary and comparison alike, before
+  // the panels are built: a contour overlaid from a run solved at a different
+  // normalization angle would otherwise be drawn against a different zero.
+  const referenced = useMemo(
+    () => items.map((item) => ({ ...item, result: withNormalizationAngle(item.result, normAngle) })),
+    [items, normAngle],
+  );
+  const panels = directivityMapPanels(referenced, chartType);
   if (!panels.some(({ hasData }) => hasData)) {
     const plane = directivityPlaneForChart(chartType);
     const planeLabel = plane === 'horizontal' ? 'H' : plane === 'vertical' ? 'V' : 'Diagonal';
@@ -1528,6 +1549,109 @@ export function chartEntries(chartType: ChartType, named: NamedResult[], showMem
   return named.filter(({ secondary }) => !secondary);
 }
 
+/** Which cards read a measurement angle rather than the on-axis sample. */
+const ANGLED_CHARTS = new Set<ChartType>(['frequency_response', 'phase_response']);
+
+export interface MeasurementAngleSelection {
+  plane: MeasurementPlane;
+  /** Angles actually drawn, snapped to what this run sampled, on-axis first. */
+  angles: number[];
+  /** Every angle this run offers, for the control to list. */
+  available: number[];
+  planes: MeasurementPlane[];
+  onAxis: number | null;
+}
+
+/**
+ * Resolve a stored angle selection against the run in front of it.
+ *
+ * The preference outlives the result it was chosen for: a 30-degree pick made
+ * against a 5-degree sweep must still mean something against a 10-degree one,
+ * and against a run with no vertical plane at all. Snapping to the nearest
+ * measured angle keeps a selection meaningful across re-solves instead of
+ * silently emptying the chart every time the grid changes.
+ */
+export function resolveMeasurementSelection(
+  result: ResultPayload,
+  requestedPlane: MeasurementPlane,
+  requestedAngles: number[],
+): MeasurementAngleSelection {
+  const planes = measurementPlanes(result);
+  const plane = planes.includes(requestedPlane) ? requestedPlane : planes[0] ?? requestedPlane;
+  const available = measurementAngles(result, plane);
+  const axis = onAxisAngle(result, plane);
+  const snapped = requestedAngles
+    .map((angle) => nearestMeasurementAngle(result, plane, angle))
+    .filter((angle): angle is number => angle !== null);
+  const angles = [...new Set([...(axis === null ? [] : [axis]), ...snapped])].slice(0, MAX_MEASUREMENT_ANGLES);
+  return { plane, angles, available, planes, onAxis: axis };
+}
+
+/**
+ * One overlay entry per run per selected angle.
+ *
+ * On-axis alone is the default and returns `items` untouched, so the chart that
+ * existed before this did is drawn by the same code path with the same labels.
+ * Members of a combined sum are dropped as soon as a second angle is chosen:
+ * the crossover branches at four angles each is eight curves answering two
+ * different questions on one axis.
+ */
+export function measurementAngleEntries(
+  items: NamedResult[],
+  selection: MeasurementAngleSelection,
+): NamedResult[] {
+  const { plane, angles, onAxis } = selection;
+  if (angles.length <= 1 && (angles.length === 0 || angles[0] === onAxis)) return items;
+  return items.filter(({ secondary }) => !secondary).flatMap((item) => angles.map((angle) => ({
+    ...item,
+    id: `${item.id}@${plane}:${angle}`,
+    label: `${item.label} · ${measurementAngleLabel(angle)}`,
+    result: withMeasurementAngle(item.result, plane, angle),
+  })));
+}
+
+/**
+ * The angle strip under the SPL and phase cards.
+ *
+ * Angles are chips rather than a slider because the useful reading is a
+ * comparison -- on-axis against 30 degrees is the question people actually ask
+ * -- and a slider can only ever show one. The on-axis chip is always on: these
+ * cards are the on-axis response with company, not a polar cut.
+ */
+function MeasurementAngleControls({ selection, onChange }: {
+  selection: MeasurementAngleSelection;
+  onChange: (next: { plane?: MeasurementPlane; angles?: number[] }) => void;
+}) {
+  const { plane, planes, available, angles, onAxis } = selection;
+  if (available.length < 2) return null;
+  const toggle = (angle: number) => {
+    const next = angles.includes(angle)
+      ? angles.filter((candidate) => candidate !== angle)
+      : [...angles, angle].sort((left, right) => left - right);
+    onChange({ angles: next.filter((candidate) => candidate !== onAxis).slice(0, MAX_MEASUREMENT_ANGLES - 1) });
+  };
+  const full = angles.length >= MAX_MEASUREMENT_ANGLES;
+  return <div className="frequency-scrub measurement-angles">
+    {planes.length > 1 && <select aria-label="Measurement plane" value={plane} onChange={(event) => onChange({ plane: event.target.value as MeasurementPlane })}>
+      {planes.map((candidate) => <option key={candidate} value={candidate}>{candidate === 'horizontal' ? 'H' : candidate === 'vertical' ? 'V' : 'D'}</option>)}
+    </select>}
+    <div className="angle-chips" role="group" aria-label="Measurement angles">
+      {available.map((angle) => {
+        const active = angles.includes(angle);
+        const locked = angle === onAxis;
+        return <button
+          key={angle}
+          type="button"
+          aria-pressed={active}
+          disabled={locked || (!active && full)}
+          title={locked ? 'On-axis is always drawn' : active ? `Hide ${measurementAngleLabel(angle)}` : `Overlay ${measurementAngleLabel(angle)}`}
+          onClick={() => toggle(angle)}
+        >{measurementAngleLabel(angle)}</button>;
+      })}
+    </div>
+  </div>;
+}
+
 interface RadiationArtifactView {
   status: 'absent' | 'failed' | 'loading' | 'loaded';
   message?: string;
@@ -1536,6 +1660,10 @@ interface RadiationArtifactView {
 
 function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
   const preferences = usePreferences();
+  // The normalization angle is a display reference, not a solve setting: the
+  // stored patterns are re-referenced to whatever is in the field right now,
+  // so an archived run answers a change to it without being solved again.
+  const normAngle = useSolveOptionsStore((state) => state.polar.normAngle);
   // Only comparable and driver charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
   // surfaces whenever the comparison selection changes.
@@ -1545,6 +1673,15 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     if (entries.length) return entries;
     return COMPARABLE_CHARTS.has(chartType) ? [{ id: 'primary', label: 'Primary', result }] : NO_NAMED_RESULTS;
   }, [chartType, named, preferences.showMembersUnderCombined, result]);
+  // Which angles the SPL and phase cards read, resolved against this run.
+  const measurementSelection = useMemo(
+    () => resolveMeasurementSelection(result, preferences.measurementPlane, preferences.measurementAngles),
+    [preferences.measurementAngles, preferences.measurementPlane, result],
+  );
+  const angled = useMemo(
+    () => (ANGLED_CHARTS.has(chartType) ? measurementAngleEntries(overlays, measurementSelection) : overlays),
+    [chartType, measurementSelection, overlays],
+  );
   // Only the on-axis SPL chart carries measurements, and it is the only card
   // that should rebuild when one is loaded, hidden or nudged in level.
   const loadedMeasurements = useMeasuredOverlayStore((state) => state.overlays);
@@ -1569,8 +1706,16 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // new progress percentage rebuilds and repaints every EChart even when its
   // result snapshot has not changed.
   const plot = useMemo(() => {
-    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
-    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
+    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length
+      ? <div className="frequency-canvas">
+        <EChart option={splOption(angled, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)} label="Interactive HornLab sound pressure frequency response" live={live}/>
+        <MeasurementAngleControls selection={measurementSelection} onChange={(next) => preferencesStore.update({
+          ...(next.plane === undefined ? {} : { measurementPlane: next.plane }),
+          ...(next.angles === undefined ? {} : { measurementAngles: next.angles }),
+        })}/>
+      </div>
+      : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} normAngle={normAngle} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field from a supported solve backend."/>;
@@ -1595,10 +1740,16 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
     if (chartType === 'polar_response') return <PolarResponseCard items={overlays} tokens={tokens} density={density} live={live}/>;
     if (chartType === 'phase_response') {
-      const option = phaseOption(overlays, tokens, density);
+      const option = phaseOption(angled, tokens, density);
       return Array.isArray(option.series) && option.series.length
-        ? <EChart option={option} label="Interactive HornLab on-axis phase by frequency" live={live}/>
-        : <ChartStub reason="On-Axis Phase needs the spl_on_axis phase samples from a completed solve."/>;
+        ? <div className="frequency-canvas">
+          <EChart option={option} label="Interactive HornLab pressure phase by frequency" live={live}/>
+          <MeasurementAngleControls selection={measurementSelection} onChange={(next) => preferencesStore.update({
+          ...(next.plane === undefined ? {} : { measurementPlane: next.plane }),
+          ...(next.angles === undefined ? {} : { measurementAngles: next.angles }),
+        })}/>
+        </div>
+        : <ChartStub reason="Phase needs the directivity phase samples from a completed solve."/>;
     }
     if (chartType === 'group_delay') {
       const option = groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit);
@@ -1655,7 +1806,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="The retained radiation matrix has no finite reduced load curves."/>;
     }
     return null;
-  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.groupDelayUnit, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, wrapper]);
+  }, [angled, beamShapeAction, chartType, density, live, measured, measurementSelection, normAngle, overlays, preferences.directivityGuideInterval, preferences.groupDelayUnit, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, wrapper]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
@@ -1702,6 +1853,10 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   // a combined sum are not a comparison and are not counted here.
   const compared = named.filter(({ secondary }) => !secondary);
   const comparisonIgnored = compared.length > 1 && !COMPARABLE_CHARTS.has(chartType);
+  // Subscribed rather than read from the snapshot: the subtitle names the angle
+  // the map is referenced to, and that has to follow the field as it is typed.
+  const cardNormAngle = useSolveOptionsStore((state) => state.polar.normAngle);
+  const cardPreferences = usePreferences();
   const [expanded, setExpanded] = useState(false);
   const [imageReady, setImageReady] = useState(false);
   const [imageOperation, setImageOperation] = useState<'copy' | 'download' | null>(null);
@@ -1745,9 +1900,18 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   // The same list ResultChart overlays, so the chip and the subtitle describe
   // the chart that is actually drawn rather than the primary run alone.
   const impedanceItems = chartType === 'impedance' ? (named.length ? named : [{ id: 'primary', label: 'Primary', result }]) : undefined;
+  // Naming the angle the map is referenced to is what makes the field on the
+  // design side legible: the shift is a constant per row, so a heatmap gives no
+  // other clue what its zero is. `clamped` is the one case the viewer cannot
+  // infer at all -- an angle outside this run's sweep is answered at the
+  // nearest measured one, not refused.
+  const mapNorm = chartType.startsWith('directivity_map')
+    ? resolveNormalizationAngle(result, cardNormAngle)
+    : null;
   const subtitle = chartType.startsWith('directivity_map')
-    ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}`
-    : chartType === 'frequency_response' ? splSubtitle(result)
+    ? `ref ${preferencesStore.getSnapshot().mapReference} dB · 0 dB at ${Number(mapNorm!.angle.toFixed(3))}°${mapNorm!.clamped ? ' (nearest measured)' : ''}${polarStep ? ` · ${polarStep}` : ''}`
+    : chartType === 'frequency_response'
+      ? splSubtitle(result, resolveMeasurementSelection(result, cardPreferences.measurementPlane, cardPreferences.measurementAngles))
     : chartType === 'power_response' ? powerResponseMethodCaption(result)
     : impedanceItems ? impedanceSubtitle(impedanceItems)
     : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
@@ -2105,6 +2269,14 @@ export function ResultsPanel() {
       ? shownRaw.channels[shownCombinedChannel] as ResultPayload
       : shownRaw,
   );
+  // The viewport draws its measurement rig on the frame the shown run
+  // published. The dock already holds that payload, so it hands the frame over
+  // rather than making the viewport fetch a result of its own -- the same
+  // arrangement the pre-solve rail uses just above.
+  const shownLabel = display?.primaryId ? labelFor(display.primaryId, jobs) : null;
+  useEffect(() => {
+    useObservationStore.getState().adopt(shownRaw, shownLabel);
+  }, [shownLabel, shownRaw]);
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
       ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }
@@ -2302,6 +2474,10 @@ export function ResultsPanel() {
         jobStem: exportStemForJob(job),
         jobId: job.id,
         hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
+        // Exports follow the maps: the normalization angle is a display
+        // reference now, and the angle the run was solved at is no longer shown
+        // anywhere, so it is not a candidate.
+        normalizationAngle: useSolveOptionsStore.getState().polar.normAngle,
         preferences,
       }, preferences.exportFormats);
       if (selection.primary && result.files.length) {

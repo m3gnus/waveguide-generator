@@ -67,12 +67,13 @@ retaining valid values.
 |---|---|
 | `spl_on_axis.spl` | dB SPL relative to 20 µPa, from the first requested plane at the finite angle nearest 0° |
 | `spl_on_axis.phase_degrees` | raw wrapped complex-pressure phase in degrees; zero/invalid amplitude becomes `null` |
-| `directivity[plane]` | per-frequency `[angle_deg, normalized_level_db]` pairs; each row is shifted so the configured normalization angle is 0 dB |
+| `directivity[plane]` | per-frequency `[angle_deg, normalized_level_db]` pairs; each row is shifted so the configured normalization angle is 0 dB. The shift is one constant per row, so a reader may re-reference a row to any other angle by shifting it again — that composes exactly and is how the client re-references archived runs at display time. Do not read absolute level out of these: what the unshifted `directivity_db` means is backend-dependent |
 | `directivity_phase[plane]` | raw wrapped pressure phase with the same plane/frequency/angle shape as directivity; it is never level-normalized |
 | `impedance.real/imaginary` | either dimensionless specific acoustic impedance `Z/(rho*c)` from a unit-acceleration solve, or terminal electrical input impedance in ohms for a driver-coupled channel; `metadata.impedance_quantity` and `impedance_units` are authoritative |
 | `di.di` | full-sphere power directivity index integrated from a complete spherical pressure grid; `null` when the backend cannot supply one — display cuts are never substituted |
-| `balloon` | normalized spherical SPL grid with theta/phi axes, distance, and hemisphere flag when requested and supported |
+| `balloon` | spherical SPL grid with theta/phi axes, distance, and hemisphere flag when requested and supported. Normalized to its own first sample — the on-axis pole — and deliberately **not** to the configured normalization angle, which references only the `directivity` cuts. A run whose maps are referenced to 30° therefore has a balloon still referenced to 0° |
 | `beam_shape` | fitted forward-beam diagnostics; nullable per frequency and accompanied by validity/residual metadata |
+| `metadata.observation_frame_basis` | the frame the polars were measured in, as `axis`, `u`, `v`, `origin_m`, `mouth_center_m`, and `source_center_m` — unit vectors and points in metres, in mesh coordinates. Published by every backend given an explicit frame override; absent rather than invented for one without (the axisymmetric path). Consumers place observation geometry from this instead of re-deriving the frame from the mesh, which disagrees on a horn whose throat is not its rearmost feature |
 | `metadata.driver.cone_excursion_mm` | direct-radiator one-way peak displacement in millimetres, converted from the RMS drive phasor before comparison with the driver's one-way peak Xmax rating |
 | `passive_cardioid.cone_excursion_mm` | passive-cardioid one-way peak displacement on the result frequency grid; `cone_excursion_quantity` states the same peak convention |
 

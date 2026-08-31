@@ -31,7 +31,7 @@ describe('preferences surfaces', () => {
   it('renders all smoothing, reference, export, automation, and format controls', async () => {
     await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Smoothing"]')?.options).toHaveLength(11);
-    expect(host.querySelector<HTMLSelectElement>('[aria-label="Map reference"]')?.options).toHaveLength(4);
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Map contour"]')?.options).toHaveLength(4);
     // Ships off: the map is read by hovering, and the graticule was drawing
     // lines across the very region the on-axis response lives in.
     expect(host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')?.value).toBe('0');

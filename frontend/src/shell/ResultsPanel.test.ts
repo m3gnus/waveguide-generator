@@ -9,7 +9,7 @@ import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { resultFrequencyValidity } from '../results/validity';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, phaseOption, polarOption, powerResponseOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption } from './ResultsPanel';
+import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
 
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<() => Promise<void>>(),
@@ -763,5 +763,74 @@ describe('results chart layouts', () => {
       beamShapeAction: { label: 'Enable & rerun', onClick: vi.fn() },
     })));
     expect(host.querySelector('.chart-stub button')).toBeNull();
+  });
+});
+
+describe('measurement angle selection', () => {
+  const angled = (): ResultPayload => ({
+    frequencies: [1000],
+    directivity: {
+      horizontal: [[[0, 0], [30, -3], [60, -9]]],
+      vertical: [[[0, 0], [30, -6], [60, -18]]],
+    },
+    directivity_phase: { horizontal: [[[0, -20], [30, -55], [60, -110]]] },
+    spl_on_axis: { frequencies: [1000], spl: [94], phase_degrees: [-20] },
+  } as unknown as ResultPayload);
+
+  it('always includes the on-axis angle, first', () => {
+    const selection = resolveMeasurementSelection(angled(), 'horizontal', [60, 30]);
+    expect(selection.angles).toEqual([0, 60, 30]);
+    expect(selection.onAxis).toBe(0);
+  });
+
+  it('snaps a selection made against another sweep', () => {
+    expect(resolveMeasurementSelection(angled(), 'horizontal', [25]).angles).toEqual([0, 30]);
+  });
+
+  it('falls back to a plane the run actually has', () => {
+    const horizontalOnly = { ...angled(), directivity: { horizontal: [[[0, 0], [30, -3]]] } } as unknown as ResultPayload;
+    expect(resolveMeasurementSelection(horizontalOnly, 'vertical', []).plane).toBe('horizontal');
+  });
+
+  it('caps the overlay at the readable maximum', () => {
+    const dense = {
+      ...angled(),
+      directivity: { horizontal: [[[0, 0], [10, -1], [20, -2], [30, -3], [40, -4], [50, -5], [60, -6], [70, -7]]] },
+    } as unknown as ResultPayload;
+    const selection = resolveMeasurementSelection(dense, 'horizontal', [10, 20, 30, 40, 50, 60, 70]);
+    expect(selection.angles).toHaveLength(6);
+  });
+
+  it('draws the on-axis chart unchanged when nothing off-axis is chosen', () => {
+    const items: NamedResult[] = [{ id: 'a', label: 'Run A', result: angled() }];
+    const selection = resolveMeasurementSelection(angled(), 'horizontal', []);
+    expect(measurementAngleEntries(items, selection)).toBe(items);
+  });
+
+  it('expands one entry per angle and names each in the legend', () => {
+    const result = angled();
+    const items: NamedResult[] = [{ id: 'a', label: 'Run A', result }];
+    const entries = measurementAngleEntries(items, resolveMeasurementSelection(result, 'horizontal', [30]));
+    expect(entries.map(({ label }) => label)).toEqual(['Run A · 0°', 'Run A · 30°']);
+    expect(entries.map(({ result: payload }) => payload.spl_on_axis?.spl?.[0])).toEqual([94, 91]);
+  });
+
+  // Eight curves answering two questions on one axis is not a comparison.
+  it('drops the members of a combined sum once a second angle is drawn', () => {
+    const result = angled();
+    const items: NamedResult[] = [
+      { id: 'sum', label: 'Sum', result },
+      { id: 'lf', label: 'LF', result, secondary: true },
+    ];
+    const entries = measurementAngleEntries(items, resolveMeasurementSelection(result, 'horizontal', [30]));
+    expect(entries.every(({ label }) => label.startsWith('Sum'))).toBe(true);
+  });
+
+  it('names the drawn angles in the subtitle only when there is more than one', () => {
+    const result = angled();
+    expect(splSubtitle(result, resolveMeasurementSelection(result, 'horizontal', [])))
+      .toBe('absolute · distance unspecified');
+    expect(splSubtitle(result, resolveMeasurementSelection(result, 'vertical', [60])))
+      .toBe('absolute · distance unspecified · V 0° / 60°');
   });
 });

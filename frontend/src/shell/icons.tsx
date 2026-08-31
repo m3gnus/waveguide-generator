@@ -1,6 +1,6 @@
 import type { SVGProps } from 'react';
 
-type IconName = 'undo' | 'redo' | 'search' | 'play' | 'moon' | 'sun' | 'layout' | 'settings' | 'reset' | 'chip' | 'folder' | 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section' | 'field-plane' | 'box' | 'close' | 'expand' | 'copy' | 'download' | 'metrics' | 'caret' | 'plus' | 'info';
+type IconName = 'undo' | 'redo' | 'search' | 'play' | 'moon' | 'sun' | 'layout' | 'settings' | 'reset' | 'chip' | 'folder' | 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section' | 'field-plane' | 'microphone-arc' | 'box' | 'close' | 'expand' | 'copy' | 'download' | 'metrics' | 'caret' | 'plus' | 'info';
 
 const paths: Record<IconName, string[]> = {
   undo: ['M6 4.2 3.1 7.1 6 10', 'M3.1 7.1h6.1a3.7 3.7 0 0 1 0 7.4H6.4'],
@@ -21,6 +21,9 @@ const paths: Record<IconName, string[]> = {
   curve: ['M2.6 10.7c2.6.9 5.1-.5 6.4-2.4 1-1.4 1.7-2.6 4.4-3.1'],
   section: ['M13.4 8A5.4 5.4 0 1 1 2.6 8a5.4 5.4 0 0 1 10.8 0Z', 'M8 2.6v10.8'],
   'field-plane': ['m2.2 9.2 5.8-3.4 5.8 3.4L8 12.6Z', 'M3.4 5.8c1.1-1.4 2.2-1.4 3.3 0s2.2 1.4 3.3 0 2.2-1.4 3.3 0'],
+  // A source at the pivot, the measurement arc swept out in front of it, and
+  // three microphones standing on that arc.
+  'microphone-arc': ['M4 13.2A9.2 9.2 0 0 1 4 2.8', 'M3 8h.1', 'M4.7 3.5h.1M6.5 8h.1M4.7 12.5h.1'],
   box: ['M8 2.4 13.4 5.6V11L8 14.2 2.6 11V5.6Z', 'M8 8.2l5.4-2.6M8 8.2 2.6 5.6M8 8.2v6'],
   close: ['m4 4 8 8M12 4l-8 8'],
   expand: ['M6.2 3H3v3.2M9.8 13H13V9.8M3 6.2 6.3 3M13 9.8 9.7 13'],

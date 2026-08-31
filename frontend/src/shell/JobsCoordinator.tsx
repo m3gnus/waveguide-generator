@@ -340,6 +340,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
         workspaceSubdirectory: exportSubdirectoryForJob(job),
         designName: job.label ?? undefined,
+        normalizationAngle: useSolveOptionsStore.getState().polar.normAngle,
         preferences,
       }, formats),
       markExported: async (job, files, formats, completedAt) => jobsSocket.patchMetadata(job.id, {

@@ -285,11 +285,16 @@ export function buildPolarFrdSet(
         }
         rows.push(columns.join(DELIMITER));
       });
+      // `SPL_rel(dB)`, not `SPL(dB)`: these levels are referenced to the
+      // normalization angle, while the on-axis file beside them is absolute SPL
+      // re 20 uPa. Sharing one column name made the two look like the same
+      // quantity offset by a constant, which they are not -- the difference
+      // between them varies with frequency.
       const phaseHeader = includesPhase
-        ? [propagationNote(reference, result), ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER)]
+        ? [propagationNote(reference, result), ['Freq(Hz)', 'SPL_rel(dB)', 'Phase(degrees)'].join(DELIMITER)]
         : [
           'HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted',
-          ['Freq(Hz)', 'SPL(dB)'].join(DELIMITER),
+          ['Freq(Hz)', 'SPL_rel(dB)'].join(DELIMITER),
         ];
       files.push({
         filename: polarFilename(baseName, plane, angle),
