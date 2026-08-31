@@ -23,6 +23,7 @@ from launchers.statusapp.__main__ import (
     _show_startup_failure_dialog,
 )
 from launchers.statusapp.controller import ServiceState, StatusController, StatusSnapshot
+from launchers.windowframe import enable_non_client_regions, install_custom_frame
 from launchers.apply_update import (
     ApplyUpdateError,
     append_update_log,
@@ -190,6 +191,36 @@ class _WindowApi:
 
         self._desktop.open_window(url)
 
+    def window_state(self) -> dict[str, bool]:
+        """Report whether the caption is gone, and whether the window is maximized.
+
+        The interface draws its own window buttons on ``customFrame`` alone, so
+        this answer is the whole contract: say false and the OS title bar stays
+        in charge, which is the right outcome on any machine where the custom
+        frame could not be installed.
+        """
+
+        return self._desktop.window_state()
+
+    def window_minimize(self) -> dict[str, bool]:
+        return self._desktop.window_minimize()
+
+    def window_toggle_maximize(self) -> dict[str, bool]:
+        return self._desktop.window_toggle_maximize()
+
+    def window_close(self) -> None:
+        self._desktop.window_close()
+
+    def window_set_title(self, title: str) -> None:
+        """Name the window for the taskbar and Alt-Tab.
+
+        pywebview does not propagate ``document.title`` to the native window, and
+        with the caption removed the taskbar is the only place left where the
+        current design name can appear at all.
+        """
+
+        self._desktop.set_window_title(title)
+
 
 class DesktopWindow:
     """Own one controller and its primary native application window."""
@@ -219,6 +250,12 @@ class DesktopWindow:
         self.js_api = _WindowApi(self)
         self._webview: ModuleType | None = None
         self._window: object | None = None
+        #: The replaced window procedure, retained for the window's whole
+        #: life: Windows holds a pointer into it, and a thunk collected
+        #: early faults inside the message loop with no traceback to
+        #: explain it.
+        self._custom_frame: object | None = None
+        self._hwnd: int | None = None
         self._healthy_bundle_checked = False
         self._startup_snapshot: StatusSnapshot | None = None
         self._exit_code = 0
@@ -758,6 +795,106 @@ class DesktopWindow:
             raise RuntimeError("The desktop window has not started")
         self._webview.create_window(WINDOW_TITLE, target)
 
+    def _adopt_custom_frame(self) -> None:
+        """Take the OS caption once there is a loaded window to take it from.
+
+        Two things must be true before the interface may draw its own window
+        buttons, and both are checked here rather than assumed. WebView2 has to
+        accept ``IsNonClientRegionSupportEnabled``, or CSS ``app-region`` never
+        reaches Windows and the top bar could not move the window; and the frame
+        itself has to install. If either fails the caption stays, ``window_state``
+        keeps reporting ``customFrame: false``, and the interface draws nothing --
+        leaving a window with an OS title bar, exactly as before.
+
+        ``loaded`` fires on a thread pywebview spawns, so every native call below
+        is marshalled onto the UI thread that owns the form.
+        """
+
+        if sys.platform != "win32" or self._custom_frame is not None:
+            return
+        window = self._window
+        if window is None:
+            return
+        try:
+            from webview.platforms.winforms import BrowserView
+            from System import Func, Type
+
+            form = BrowserView.instances.get(getattr(window, "uid", None))
+            if form is None:
+                return
+
+            def on_ui() -> object:
+                try:
+                    core = getattr(form.browser.webview, "CoreWebView2", None)
+                    if core is None or not enable_non_client_regions(core):
+                        return Type
+                    hwnd = int(str(form.Handle.ToInt64()))
+                    frame = install_custom_frame(hwnd)
+                    if frame is not None:
+                        self._custom_frame = frame
+                        self._hwnd = hwnd
+                except Exception as exc:  # noqa: BLE001 - a losable feature
+                    _log_startup_failure(f"Could not install the custom window frame: {exc}")
+                return Type
+
+            form.Invoke(Func[Type](on_ui))
+        except Exception as exc:  # noqa: BLE001 - native boundary
+            _log_startup_failure(f"Could not reach the native window frame: {exc}")
+
+    def _window_is_maximized(self) -> bool:
+        if self._hwnd is None:
+            return False
+        try:
+            import ctypes
+
+            return bool(ctypes.windll.user32.IsZoomed(self._hwnd))
+        except Exception:  # noqa: BLE001 - cosmetic
+            return False
+
+    def window_state(self) -> dict[str, bool]:
+        return {
+            "customFrame": self._custom_frame is not None,
+            "maximized": self._window_is_maximized(),
+        }
+
+    def window_minimize(self) -> dict[str, bool]:
+        minimize = getattr(self._window, "minimize", None)
+        if callable(minimize):
+            minimize()
+        return self.window_state()
+
+    def window_toggle_maximize(self) -> dict[str, bool]:
+        """Maximize or restore, and answer with the state that was asked for.
+
+        The reply is the intent rather than a re-read: Windows animates the
+        change, so ``IsZoomed`` immediately afterwards can still describe the
+        window the user just left. The interface reconciles on the resize that
+        follows, which is also what catches a snap or a Win+Arrow.
+        """
+
+        maximized = self._window_is_maximized()
+        action = getattr(self._window, "restore" if maximized else "maximize", None)
+        if callable(action):
+            action()
+        return {"customFrame": self._custom_frame is not None, "maximized": not maximized}
+
+    def window_close(self) -> None:
+        """Close from the interface's button exactly as the OS button would.
+
+        ``destroy`` ends ``webview.start()``, and ``run()``'s ``finally`` stops
+        the server from there -- so this shares one shutdown path with the OS
+        close rather than inventing a second one that could drift from it.
+        """
+
+        destroy = getattr(self._window, "destroy", None)
+        if callable(destroy):
+            destroy()
+
+    def set_window_title(self, title: str) -> None:
+        """Public alias, because the interface now retitles the window too."""
+
+        self._set_window_title(title)
+
     def _set_window_title(self, title: str) -> None:
         """Retitle the live window, if this toolkit build lets us.
 
@@ -997,6 +1134,10 @@ class DesktopWindow:
                 height=900,
                 min_size=(1100, 700),
             )
+            try:
+                self._window.events.loaded += self._adopt_custom_frame
+            except Exception as exc:  # noqa: BLE001 - the window still works framed
+                _log_startup_failure(f"Could not arm the custom window frame: {exc}")
             try:
                 webview.start(func=self._window_loop)
             except Exception as exc:  # noqa: BLE001 - native initialization boundary
