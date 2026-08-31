@@ -1,0 +1,139 @@
+/* Window controls, and the drag region that replaces the OS title bar.
+ *
+ * Everything here is gated on `[data-native-frame]`, which `WindowControls`
+ * sets on the document element only after the launcher has confirmed it removed
+ * the caption. In a dev browser the attribute never appears and not one of these
+ * rules matches, so the same stylesheet ships to both hosts.
+ *
+ * `app-region` is what makes the top bar behave like a title bar. WebView2 with
+ * `IsNonClientRegionSupportEnabled` hands those regions to Windows as caption,
+ * which is what buys the behaviours a hand-rolled JS drag cannot: Aero Snap,
+ * Win+Arrow, snap layouts, double-click to maximize, and the shake gesture. The
+ * unprefixed property is the standard one; the `-webkit-` alias is kept for the
+ * older runtime a machine may still be pinned to.
+ */
+
+[data-native-frame] .topbar {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+/* Anything a pointer is meant to operate has to opt back out, or the drag
+ * region swallows the click before the control ever sees it. Popovers and
+ * dialogs are listed because the top bar renders them as its own children. */
+[data-native-frame] .topbar :is(
+  button, a, input, select, textarea, kbd, dialog,
+  [role='button'], [role='radiogroup'], [role='menu'], [role='menuitem'], [role='dialog'],
+  .design-menu-popover, .command-affordance
+) {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* A maximized window's client area starts flush with the screen edge, so the
+ * pointer can be thrown at the top of the display to hit the controls. Windows
+ * relies on that; the extra padding restores the few pixels the frame gave up. */
+[data-native-frame='windows'][data-native-maximized='true'] .topbar {
+  padding-top: 2px;
+}
+
+/* Windows ------------------------------------------------------------------ */
+
+.window-controls {
+  display: flex;
+  flex: none;
+  align-self: stretch;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* 46x32 is the caption-button metric Windows itself uses, and matching it is
+ * what makes the corner feel native rather than merely similar. The row is
+ * pulled to the panel edges so the close button reaches the true corner --
+ * a Fitts's-law target the user can hit without aiming. */
+.window-controls-windows {
+  margin: 0 -8px 0 4px;
+  align-items: stretch;
+}
+
+.window-controls-windows button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg2);
+  transition: background-color .1s, color .1s;
+}
+
+.window-controls-windows button:hover {
+  background: var(--ov3);
+  color: var(--fg);
+}
+
+.window-controls-windows button:active {
+  background: var(--ov2);
+}
+
+/* The one control whose mistaken press cannot be undone is the one Windows
+ * paints red on hover, and users read that red as the confirmation that they
+ * are about to close rather than minimize. */
+.window-controls-close:hover {
+  background: #c42b1c !important;
+  color: #fff !important;
+}
+
+.window-controls-close:active {
+  background: #b02616 !important;
+  color: #fff !important;
+}
+
+.window-controls svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+
+/* macOS -------------------------------------------------------------------- */
+
+.window-controls-macos {
+  align-items: center;
+  gap: 8px;
+  margin: 0 6px 0 2px;
+}
+
+.window-controls-macos button {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  padding: 0;
+  border-radius: 50%;
+  /* The inset ring is what stops the dots dissolving into a light background,
+   * and it is what the platform draws too. */
+  box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .2);
+  color: rgba(0, 0, 0, .55);
+}
+
+.window-controls-macos .window-controls-close { background: #ff5f57; }
+.window-controls-macos .window-controls-minimize { background: #febc2e; }
+.window-controls-macos .window-controls-maximize { background: #28c840; }
+
+/* The glyphs appear only while the pointer is over the group -- all three at
+ * once, which is the platform's behaviour and reads as one control cluster. */
+.window-controls-macos svg {
+  width: 8px;
+  height: 8px;
+  opacity: 0;
+  transition: opacity .1s;
+}
+
+.window-controls-macos:hover svg { opacity: 1; }
+
+/* An unfocused window's controls step back so the foreground window is
+ * unambiguous -- the single strongest "which window am I typing into" cue on
+ * both platforms, and one the OS title bar used to provide for free. */
+[data-native-blurred='true'] .window-controls-windows button { color: var(--fg4); }
+[data-native-blurred='true'] .window-controls-macos button {
+  background: var(--ov3);
+  box-shadow: none;
+}
