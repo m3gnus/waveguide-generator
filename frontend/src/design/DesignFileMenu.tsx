@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  downloadGeometryExport,
-  downloadText,
+  exportGeometryToOutputFolder,
   inspectDesignText,
   openDesignText,
   serializeDesignDocument,
@@ -9,6 +8,7 @@ import {
   type CadLinkOpenState,
   type StepBody,
 } from '../api/designIo';
+import { writeToOutputFolder } from '../api/workspace';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
 import { documentIsUnsaved, resetDocumentStore, useDocumentStore, type CadLinkClassification } from '../stores/document';
@@ -49,7 +49,7 @@ function reportText(report: ImportReport): string {
 }
 
 export async function exportProfileArtifacts(
-  exporter: (kind: 'profiles' | 'slices') => Promise<void>,
+  exporter: (kind: 'profiles' | 'slices') => Promise<{ directory: string }>,
   revision: number,
 ): Promise<string> {
   const kinds = ['profiles', 'slices'] as const;
@@ -65,7 +65,9 @@ export async function exportProfileArtifacts(
     const partial = completed.length ? `Exported ${completed.join(' and ')} CSV; ` : '';
     throw new Error(`${partial}failed ${failed.join('; ')}`);
   }
-  return `Exported profiles and slices CSV from revision ${revision}`;
+  const written = results.find((result) => result.status === 'fulfilled');
+  const directory = written?.status === 'fulfilled' ? written.value.directory : '';
+  return `Exported profiles and slices CSV from revision ${revision}${directory ? ` to ${directory}` : ''}`;
 }
 
 export function DesignFileMenu() {
@@ -213,15 +215,18 @@ export function DesignFileMenu() {
     });
   }
 
-  async function downloadCopy() {
+  async function exportCopy() {
     await act(async () => {
       const solveState = useSolveOptionsStore.getState();
       const polarConfig = polarConfigFromUi(solveState.polar);
       const response = await serializeDesignDocument(
         design, designName, fetch, polarConfig, wgSolveSettingsFromStore(solveState),
       );
-      downloadText(response.text, response.suggestedFilename);
-      setMessage(`Downloaded a copy as ${response.suggestedFilename}`);
+      const written = await writeToOutputFolder(designNameSlug(designName), [{
+        filename: response.suggestedFilename,
+        blob: new Blob([response.text], { type: 'text/plain;charset=utf-8' }),
+      }]);
+      setMessage(`Exported a copy as ${response.suggestedFilename} to ${written.directory}`);
     });
   }
 
@@ -246,15 +251,20 @@ export function DesignFileMenu() {
 
   async function exportOne(kind: 'step' | 'stl', stepBody: StepBody = 'solid') {
     await act(async () => {
-      await downloadGeometryExport(kind, design, revision, designNameSlug(designName), undefined, stepBody);
-      setMessage(`Exported ${kind.toUpperCase()} from revision ${revision}`);
+      const written = await exportGeometryToOutputFolder(
+        kind, design, revision, designNameSlug(designName), undefined, stepBody,
+      );
+      // Naming the folder is the point: the desktop window has no download
+      // shelf, so an export that does not say where it went looks like one
+      // that did not happen.
+      setMessage(`Exported ${kind.toUpperCase()} from revision ${revision} to ${written.directory}`);
     });
   }
 
   async function exportProfiles() {
     await act(async () => {
       const result = await exportProfileArtifacts(
-        (kind) => downloadGeometryExport('profiles', design, revision, designNameSlug(designName), kind),
+        (kind) => exportGeometryToOutputFolder('profiles', design, revision, designNameSlug(designName), kind),
         revision,
       );
       setMessage(result);
@@ -296,7 +306,7 @@ export function DesignFileMenu() {
             <span>{project.filename}</span><span>v{project.editVersion} · {project.exportCount} export{project.exportCount === 1 ? '' : 's'} · {cadProjectReference(project)}</span>
           </button>)}
       </div>}
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void downloadCopy()}><span>Download a copy</span><kbd>cfg</kbd></button>
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportCopy()}><span>Export a copy</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
       <div className="design-menu-divider"/>
       <button

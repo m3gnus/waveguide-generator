@@ -82,9 +82,9 @@ the usable budget.
 
 A design has one name, typed in the **Design name** field above the run list. It is
 the only place a name is edited, and everything follows it: the title bar, the file
-chip, the viewport heading, the `.cfg` filename used by **Download a copy**, the
+chip, the viewport heading, the `.cfg` filename used by **Export a copy**, the
 `Report.Title` written at the top of that file, the label each solve is stored under,
-and every export stem. Renaming counts as unsaved work. **Download a copy as…** first
+and every export stem. Renaming counts as unsaved work. **Export a copy as…** first
 renames the current design and then downloads it, so the file follows the name rather
 than the other way round.
 
@@ -106,20 +106,21 @@ Name the document in Fusion 360 before the first solve and every run of it carri
 name; rename it there and send again to change it. Each document keeps its own run
 numbering, and the ✎ rename is still available per run.
 
-### Downloading and exporting
+### Exporting
 
-**Download a copy** in the design menu serializes the current parameters and solve
-settings to a `.cfg`, then starts a normal browser download. It is a portable copy,
-not a durable editor save: it does not clear the unsaved indicator, create or advance
-a CAD-link identity, or update the CAD-link registry. Reopening the downloaded file is
-what makes that file the editor's current baseline.
+**Export a copy** in the design menu serializes the current parameters and solve
+settings to a `.cfg`, then writes it into the output folder named at the top of the
+Runs panel. It is a portable copy, not a durable editor save: it does not clear the
+unsaved indicator, create or advance a CAD-link identity, or update the CAD-link
+registry. Reopening that file is what makes it the editor's current baseline.
 
 The same menu exports the current design. STEP solid is the normal CAD/production
 export; STEP inner surface is available when a bare acoustic surface is wanted. STL
 is a tessellated inner surface for mesh-oriented workflows. **Send to CAD** is
-different from **Download a copy**: it commits an identity-bearing snapshot to the
-CAD-link registry, and a stale linked design is preserved as a fork rather than being
-silently overwritten.
+different from **Export a copy**: it commits an identity-bearing snapshot to the
+CAD-link registry. A design based on an older registry version is refused rather than
+silently forked into a second bundle that diverges from the linked CAD document --
+reopen its current head from **CAD-linked designs** and send that.
 
 Each completed job has its own export menu. Current result formats include chart PNGs,
 on-axis FRD, a horizontal/vertical FRD polar set for VituixCAD, frequency CSV, full

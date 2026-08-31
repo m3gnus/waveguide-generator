@@ -234,7 +234,7 @@ Schema = 1
 
 It is CAD-linked commit identity only. Export history, bundle paths, and per-machine
 CAD state belong in the server-side CAD-link registry, not in the portable design
-file. The browser's **Download a copy** action intentionally serializes without this
+file. The **Export a copy** action intentionally serializes without this
 block and does not create or advance registry state.
 
 ## Serialization

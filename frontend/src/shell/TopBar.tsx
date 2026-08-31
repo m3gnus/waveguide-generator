@@ -235,7 +235,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
 
   const showSettings = useCallback(() => { setSettingsSection(undefined); setSettingsOpen(true); }, []);
   const closeSettings = useCallback(() => { setSettingsOpen(false); setSettingsSection(undefined); }, []);
-  const fileAction = (label: 'Open…' | 'Download a copy') => {
+  const fileAction = (label: 'Open…' | 'Export a copy') => {
     const menu = document.querySelector<HTMLButtonElement>('.file-chip');
     if (menu?.getAttribute('aria-expanded') !== 'true') menu?.click();
     requestAnimationFrame(() => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
@@ -244,11 +244,11 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   // Naming a copy renames the design, and the file follows: the name is the one
   // thing WG keeps, and the `.cfg` is derived from it. Typing an extension is
   // therefore not part of the name -- it is stripped rather than stored.
-  const downloadCopyAs = () => {
-    const requested = window.prompt('Download a copy as', useDocumentStore.getState().designName);
+  const exportCopyAs = () => {
+    const requested = window.prompt('Export a copy as', useDocumentStore.getState().designName);
     if (!requested?.trim()) return;
     useDocumentStore.getState().setDesignName(requested.trim().replace(/\.(cfg|txt|mwg)$/i, ''));
-    requestAnimationFrame(() => fileAction('Download a copy'));
+    requestAnimationFrame(() => fileAction('Export a copy'));
   };
   const paletteEntries = useMemo<PaletteEntry[]>(() => {
     const parameters = buildParameterPaletteEntries(family, { mode: workspaceMode, design, cadReturnReady });
@@ -283,13 +283,14 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       { id: 'undo', kind: 'Commands', label: 'Undo', disabled: !canUndo, run: undo },
       { id: 'redo', kind: 'Commands', label: 'Redo', disabled: !canRedo, run: redo },
       { id: 'open', kind: 'Commands', label: 'Open', detail: 'Open a design file', run: () => fileAction('Open…') },
-      { id: 'save', kind: 'Commands', label: 'Download a copy', detail: 'Download without changing the editor’s saved state', run: () => fileAction('Download a copy') },
-      { id: 'save-as', kind: 'Commands', label: 'Download a copy as…', detail: 'Rename the current design and download a copy', run: downloadCopyAs },
+      { id: 'save', kind: 'Commands', label: 'Export a copy', detail: 'Write a .cfg copy to the output folder without changing the editor’s saved state', run: () => fileAction('Export a copy') },
+      { id: 'save-as', kind: 'Commands', label: 'Export a copy as…', detail: 'Rename the current design and export a copy', run: exportCopyAs },
       { id: 'reset-layout', kind: 'Commands', label: 'Reset layout', run: onResetLayout },
       { id: 'dark-theme', kind: 'Commands', label: 'Dark theme', run: () => setTheme('dark') },
       { id: 'light-theme', kind: 'Commands', label: 'Light theme', run: () => setTheme('light') },
       ...workspaceModePaletteEntries(),
       { id: 'settings', kind: 'Commands', label: 'Settings', run: showSettings },
+      { id: 'report-problem', kind: 'Commands', label: 'Report a problem', detail: 'Collect the logs and this machine’s solver status into one file', keywords: 'bug log diagnostics issue feedback suggestion support', run: () => setReportOpen(true) },
       { id: 'application-update', kind: 'Commands', label: update.data?.availability === 'available' ? `Update WG to ${update.data.release?.version ?? 'latest'}` : 'Application update', detail: update.data?.availability === 'available' ? 'Update available' : `Version ${__WG2_VERSION__}`, keywords: 'version release upgrade', run: () => setUpdateOpen(true) },
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];

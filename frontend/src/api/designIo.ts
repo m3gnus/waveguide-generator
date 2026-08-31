@@ -11,6 +11,7 @@ import { designFilename } from '../stores/designName';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import type { PolarConfig } from '../stores/solveOptions';
 import type { CadLinkClassification, DesignIdentity } from '../stores/document';
+import { writeToOutputFolder, type OutputFolderWrite } from './workspace';
 
 export interface MigrationApplication {
   name: string;
@@ -368,7 +369,16 @@ export function downloadText(text: string, filename: string, type = 'text/plain;
 
 export type StepBody = 'solid' | 'surface';
 
-export async function downloadGeometryExport(
+/**
+ * Build a geometry export and write it into the output folder.
+ *
+ * This used to hand the blob to `downloadBlob`. An `<a download>` reaches the
+ * user in a browser tab and goes nowhere in the desktop window, which is a
+ * WebView2 host with no download handler -- the export succeeded and the file
+ * silently never arrived. Writing server-side is what the run-result exports
+ * already do, and it lets the caller tell the user which folder to look in.
+ */
+export async function exportGeometryToOutputFolder(
   kind: 'step' | 'stl' | 'profiles',
   design: DesignDocument,
   designRevision: number,
@@ -376,7 +386,7 @@ export async function downloadGeometryExport(
   profileKind?: 'profiles' | 'slices',
   stepBody: StepBody = 'solid',
   fetcher: typeof fetch = fetch,
-): Promise<void> {
+): Promise<OutputFolderWrite> {
   const query = kind === 'profiles'
     ? `?kind=${profileKind ?? 'profiles'}`
     : kind === 'step' ? `?body=${stepBody}` : '';
@@ -391,5 +401,8 @@ export async function downloadGeometryExport(
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   const suffix = kind === 'profiles' ? `_${profileKind ?? 'profiles'}.csv` : `.${kind}`;
-  downloadBlob(await response.blob(), responseFilename(response, `${baseName}${suffix}`));
+  const filename = responseFilename(response, `${baseName}${suffix}`);
+  // Overwrite: re-exporting after an edit is the ordinary case, and a stale
+  // file of the same name is exactly what the user is replacing.
+  return writeToOutputFolder(baseName, [{ filename, blob: await response.blob() }], fetcher);
 }

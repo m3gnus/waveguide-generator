@@ -65,7 +65,9 @@ function open(): HTMLButtonElement[] {
   const chip = container.querySelector<HTMLButtonElement>('button.file-chip');
   act(() => chip?.click());
   const items = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')];
-  const exportItem = items.find((item) => item.textContent?.startsWith('Export'));
+  // Exactly 'Export', not a prefix: 'Export a copy' sits above the submenu
+  // toggle and would otherwise be opened in its place.
+  const exportItem = items.find((item) => item.querySelector('span')?.textContent === 'Export');
   act(() => exportItem?.click());
   return [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')];
 }
@@ -299,7 +301,7 @@ describe('design file export menu', () => {
     await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
 
     // One name: the opened file names the design, and the design names the
-    // runs and the filename used by Download a copy.
+    // runs and the filename used by Export a copy.
     expect(useDocumentStore.getState()).toMatchObject({
       designName: '260701_horn_v13', filename: '260701_horn_v13.cfg',
     });
@@ -361,12 +363,16 @@ describe('design file export menu', () => {
       text: 'serialized copy',
       suggestedFilename: 'copied-horn.cfg',
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
+      directory: 'C:/Output/copied-horn',
+      files: ['copied-horn.cfg'],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
 
     act(() => root.render(<DesignFileMenu/>));
     act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
     const download = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((button) => button.textContent?.startsWith('Download a copy'))!;
+      .find((button) => button.textContent?.startsWith('Export a copy'))!;
     await act(async () => { download.click(); });
 
     const request = vi.mocked(fetch).mock.calls[0];
@@ -374,16 +380,27 @@ describe('design file export menu', () => {
     expect(JSON.parse(String(request[1]?.body))).not.toHaveProperty('identity');
     expect(useDocumentStore.getState()).toMatchObject(before);
     expect(container.querySelector('[aria-label="Unsaved changes"]')).not.toBeNull();
-    expect(URL.createObjectURL).toHaveBeenCalledOnce();
-    expect(await (vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob).text()).toBe('serialized copy');
-    expect(click).toHaveBeenCalledOnce();
-    expect(container.querySelector('[role="status"]')?.textContent).toBe('Downloaded a copy as copied-horn.cfg');
+    // The copy is written into the output folder, never handed to the browser:
+    // an `<a download>` reaches nobody in the desktop WebView2 window, which is
+    // how a successful export could look like one that never happened.
+    const write = vi.mocked(fetch).mock.calls[1];
+    expect(String(write[0])).toBe('/api/workspace/write-export');
+    const form = write[1]?.body as FormData;
+    expect(form.get('subdirectory')).toBe('copied-horn');
+    expect(form.get('relative_path')).toBe('copied-horn.cfg');
+    expect(await (form.get('file') as File).text()).toBe('serialized copy');
+    expect(click).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toBe('Exported a copy as copied-horn.cfg to C:/Output/copied-horn');
   });
 
-  it('labels browser serialization as Download a copy rather than Save', () => {
+  // Not "Save": the copy deliberately leaves the design unsaved (see above),
+  // and not "Download" either -- it is written into the output folder, and
+  // the desktop window has no download for it to mean.
+  it('labels serialization as Export a copy, never Save', () => {
     const labels = open().map((item) => item.querySelector('span')?.textContent ?? '');
 
-    expect(labels).toContain('Download a copy');
+    expect(labels).toContain('Export a copy');
     expect(labels).not.toContain('Save');
   });
 
@@ -470,7 +487,7 @@ describe('design file export menu', () => {
     act(() => root.render(<DesignFileMenu/>));
     act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
     const download = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((button) => button.textContent?.startsWith('Download a copy'))!;
+      .find((button) => button.textContent?.startsWith('Export a copy'))!;
     await act(async () => { download.click(); });
 
     expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe('/api/design/serialize');
