@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import stat
 import struct
@@ -926,15 +927,23 @@ def test_release_workflow_publishes_one_complete_draft_inventory() -> None:
         Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
     ).read_text(encoding="utf-8")
 
-    assert workflow.count("softprops/action-gh-release@") == 1
+    # Two upload steps since the inventory is split across two releases, and no
+    # more: one per release, each uploading a whole staging directory in a single
+    # call, so neither release can be assembled a file at a time. Both pinned to
+    # the same reviewed action.
+    uploads = re.findall(r"softprops/action-gh-release@\S+", workflow)
+    assert len(uploads) == 2, uploads
+    assert len(set(uploads)) == 1, f"the two upload steps use different pins: {uploads}"
+    # Exactly one of them is the user-facing release, and it is the drafted one.
+    assert workflow.count("draft: true") == 1
+    assert workflow.count("prerelease: true") == 1
     assert "needs: [spa, macos-bundle, windows-bundle]" in workflow
-    assert "draft: true" in workflow
     assert 'gh release edit "$RELEASE_TAG" --draft=false' in workflow
     assert "Reuse a runtime already published" not in workflow
     # The count is derived from the spec list rather than spelled out. Adding the
     # Windows installer made a hardcoded "seven" wrong, and a message that has to
     # be edited in step with the list is one that eventually is not.
-    assert 'print(f"Validated {len(specs)} release asset pairs.")' in workflow
+    assert 'f"Validated {len(specs)} release asset pairs: "' in workflow
     assert "Waveguide.Generator-*-macos-arm64.dmg" in workflow
     assert "Waveguide.Generator-*-windows-x86_64.zip" in workflow
     assert "Waveguide.Generator-*-windows-x86_64-setup.exe" in workflow

@@ -193,7 +193,18 @@ def asset_name(version: str) -> str:
 
 
 def release_base_url(repo: str, version: str) -> str:
-    return f"https://github.com/{repo}/releases/download/v{version}"
+    """Where the prebuilt interface lives: the companion pre-release.
+
+    The user-facing release holds only the two installers, so a person landing on
+    it is not asked to choose between seven files. Everything else -- this archive
+    included -- is published to ``v<version>-updates``. Source installs therefore
+    fetch from there, not from the release page they would read.
+    """
+
+    return (
+        f"https://github.com/{repo}/releases/download/"
+        f"{release_assets.updates_tag(version)}"
+    )
 
 
 def _read_url(url: str, timeout: float) -> bytes:

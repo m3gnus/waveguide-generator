@@ -20,6 +20,7 @@ import urllib.request
 import zipfile
 
 from scripts.fetch_spa import SpaError, expected_digest, file_digest
+from shared.release_assets import UPDATES_TAG_SUFFIX
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name
 
 
@@ -214,7 +215,13 @@ def _github_release_asset_url(
     repository_parts = GITHUB_REPOSITORY.split("/")
     if parts[:4] != [*repository_parts, "releases", "download"]:
         return False
-    if VERSION_RE.fullmatch(parts[4].removeprefix("v")) is None or not parts[4].startswith("v"):
+    # A tag is either a version, v<major>.<minor>.<patch>, or that version with
+    # the companion suffix -- the pre-release that carries the update layers, so
+    # the release a user downloads from holds only the two installers. Both are
+    # bound to this repository by the checks above; the suffix widens the tag
+    # shape, not the origin.
+    tag_part = parts[4].removesuffix(UPDATES_TAG_SUFFIX)
+    if VERSION_RE.fullmatch(tag_part.removeprefix("v")) is None or not tag_part.startswith("v"):
         return False
     if any("/" in part or "\\" in part for part in parts):
         return False
