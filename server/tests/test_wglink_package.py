@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import subprocess
+import tempfile
 import zipfile
 
 import pytest
@@ -15,6 +18,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "scripts" / "build_wglink_package.py"
 INSTALLER = ROOT / "scripts" / "install_wglink.py"
+
+
+@pytest.fixture
+def short_tmp_path() -> Iterator[Path]:
+    """A fixture root short enough to install under on Windows.
+
+    Installing materializes the payload under a directory named for the full
+    40-character source commit, so pytest's own ``tmp_path`` prefix pushes the
+    deepest packaged file past Windows' 260-character path limit. Keep the root
+    short rather than relaxing a limit the shipped Windows bundle really has.
+    """
+    root = Path(tempfile.mkdtemp(prefix="wg2-"))
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _load_builder():
@@ -186,12 +205,12 @@ def test_default_fusion_addins_locations_cover_both_supported_platforms(tmp_path
 
 
 def test_installed_copy_points_to_wgs_existing_python_and_verified_resampler(
-    tmp_path: Path,
+    short_tmp_path: Path,
 ):
     installer = _load_installer()
     commit = "a" * 40
-    root, archive = _package(tmp_path, commit)
-    addins = tmp_path / "Fusion profile" / "API" / "AddIns"
+    root, archive = _package(short_tmp_path, commit)
+    addins = short_tmp_path / "Fusion profile" / "API" / "AddIns"
 
     status, target = installer.install(
         root=root,
@@ -249,17 +268,17 @@ def test_platform_install_preserves_a_developer_managed_copy(tmp_path: Path):
     assert not (root / "integrations" / "wglink" / "runtime").exists()
 
 
-def test_tampered_package_is_refused_before_an_existing_install_changes(tmp_path: Path):
+def test_tampered_package_is_refused_before_an_existing_install_changes(short_tmp_path: Path):
     installer = _load_installer()
     commit = "a" * 40
-    root, archive = _package(tmp_path, commit)
-    addins = tmp_path / "AddIns"
+    root, archive = _package(short_tmp_path, commit)
+    addins = short_tmp_path / "AddIns"
     installer.install(
         root=root, platform="macos", addins_dir=addins, archive_path=archive
     )
     target = addins.resolve() / "WGLink"
     before = (target / "WGLink.py").read_bytes()
-    tampered = tmp_path / "tampered.zip"
+    tampered = short_tmp_path / "tampered.zip"
     with zipfile.ZipFile(archive) as original, zipfile.ZipFile(tampered, "w") as changed:
         for info in original.infolist():
             data = original.read(info)
@@ -278,11 +297,11 @@ def test_tampered_package_is_refused_before_an_existing_install_changes(tmp_path
     assert (target / "WGLink.py").read_bytes() == before
 
 
-def test_uninstall_removes_only_the_copy_managed_by_this_wg_root(tmp_path: Path):
+def test_uninstall_removes_only_the_copy_managed_by_this_wg_root(short_tmp_path: Path):
     installer = _load_installer()
     commit = "a" * 40
-    root, archive = _package(tmp_path, commit)
-    addins = tmp_path / "AddIns"
+    root, archive = _package(short_tmp_path, commit)
+    addins = short_tmp_path / "AddIns"
     installer.install(
         root=root, platform="macos", addins_dir=addins, archive_path=archive
     )
