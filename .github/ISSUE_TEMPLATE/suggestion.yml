@@ -1,0 +1,21 @@
+name: Suggestion
+description: Something Waveguide Generator should do, or should do differently.
+labels: ["suggestion"]
+body:
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What should WG do
+      description: >
+        Describe the outcome you want rather than the control you imagine. What are
+        you trying to design, measure, or export, and where does WG make that harder
+        than it needs to be?
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How you work around it today
+      description: Leave this empty if there is no workaround.
+    validations:
+      required: false

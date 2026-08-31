@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { bundleUrl, reportClientError } from './api/diagnostics';
 import { AppQueryProvider } from './queryClient';
 import { Shell } from './shell/Shell';
 
@@ -25,6 +26,14 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, { messa
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error('Unhandled render error', error, info.componentStack);
+    // The console is not somewhere a user can be asked to look, and this
+    // boundary is the last thing that runs before the window goes blank. One
+    // POST puts the message where the next problem report will carry it.
+    void reportClientError({
+      message: error.message || 'The interface failed to render.',
+      stack: [error.stack, info.componentStack].filter(Boolean).join('\n\n'),
+      source: 'render',
+    });
   }
 
   render(): ReactNode {
@@ -66,6 +75,16 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, { messa
         >
           Reload
         </button>
+        {/* A plain anchor, deliberately. React is dead on this screen -- the
+            tree that would have run a fetch and a blob download is the tree
+            that just threw -- and the endpoint answers a GET with the file. */}
+        <a
+          href={bundleUrl()}
+          download
+          style={{ color: '#8ab4f8', fontSize: '0.85rem', marginTop: '0.25rem' }}
+        >
+          Download a problem report
+        </a>
       </div>
     );
   }

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import asdict
 import json
 import logging
 import os
@@ -20,14 +19,15 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from server.engines.registry import EngineRegistry, detect_engines
 from server.design.schema import DesignConfig
 from server.charts import mount_charts
+from server.diagnostics import mount_diagnostics
+from server.diagnostics.api import CLIENT_LOG_PATH, MAX_CLIENT_LOG_BODY_BYTES
+from server.diagnostics.capabilities import capabilities_payload
 from server.cadlink import mount_cadlink, mount_onshape
 from server.design_io import mount_design_io
 from server.drivers import mount_drivers
 from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.integration import mount_integration
-from server.integration.installed import measure_installed_stack
-from server.integration.provenance import pinned_dependency_shas
 from server.mesh.api import mount_solver_mesh
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
@@ -38,7 +38,6 @@ from server.platform.origin import (
 )
 from server.platform.paths import app_root, default_runs_dir, resolve_data_dir
 from shared.build_identity import build_identity, build_label
-from server.platform.sqlite import journal_mode_statuses
 from server.preview.service import mount_preview
 from server.settings import mount_settings
 from server.solver.symmetry import resolve_symmetry
@@ -271,7 +270,10 @@ def create_app(
     application.add_middleware(
         _RequestBodyLimitMiddleware,
         max_body_bytes=MAX_REQUEST_BODY_BYTES,
-        path_limits={_WORKSPACE_EXPORT_PATH: MAX_EXPORT_REQUEST_BODY_BYTES},
+        path_limits={
+            _WORKSPACE_EXPORT_PATH: MAX_EXPORT_REQUEST_BODY_BYTES,
+            CLIENT_LOG_PATH: MAX_CLIENT_LOG_BODY_BYTES,
+        },
     )
     # One persistent owner thread services every gmsh call.  Prewarming here
     # retains the v1 off-main-thread ``interruptible=False`` invariant from
@@ -424,41 +426,10 @@ def create_app(
 
     @application.get("/api/capabilities")
     async def capabilities() -> dict[str, object]:
-        capabilities_cache = [
-            asdict(engine) for engine in await engine_registry.capabilities()
-        ]
-        available = {
-            item["name"]
-            for item in capabilities_cache
-            if item.get("available") is True
-        }
-        resolved = next(
-            (name for name in ("metal", "beat", "bempp", "dryrun") if name in available),
-            None,
-        )
-        # "What can this host do" is incomplete without "and is this host the
-        # stack it claims to be". A drifted module changes what the probes above
-        # report while every version string stays put, so the comparison belongs
-        # next to them rather than only in a solve result nobody reads twice.
-        pinned = pinned_dependency_shas()
-        installed, drift = measure_installed_stack(pinned)
-        return {
-            "engines": capabilities_cache,
-            "engineSelection": {
-                "default": "auto",
-                "resolvedDefault": resolved,
-                "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
-                "axisymmetricRunner": "axisym",
-            },
-            "dependencies": {
-                "pinned": pinned,
-                "installed": installed,
-                "drift": drift,
-            },
-            # A store whose filesystem refused write-ahead logging still works,
-            # just slowly, so it is reported here rather than refused at boot.
-            "storage": journal_mode_statuses(),
-        }
+        # One definition, shared with the problem report
+        # (``server/diagnostics/capabilities.py``). Two copies of this would
+        # drift, and the copy that drifted would be the one in the bug report.
+        return await capabilities_payload(engine_registry)
 
     @application.post("/api/design/symmetry")
     async def design_symmetry(design: DesignConfig) -> dict[str, object]:
@@ -509,6 +480,18 @@ def create_app(
         update_request_path=(
             Path(update_request_path) if update_request_path is not None else None
         ),
+    )
+    # Last, because a problem report describes every store above it and reads
+    # them off ``application.state`` rather than building a second copy.
+    mount_diagnostics(
+        application,
+        version=VERSION,
+        # ``label`` is the one string a user should ever be asked to quote:
+        # ``build_label`` already renders version, short commit and dirtiness
+        # into something safe to paste, and a bare version number identifies
+        # hundreds of commits.
+        build={**BUILD_IDENTITY, "label": BUILD},
+        data_dir=resolved_data_dir,
     )
     # Job tasks stop first; only then may their shared gmsh owner be finalized.
     application.router.add_event_handler("shutdown", shutdown_mesher_prewarm)

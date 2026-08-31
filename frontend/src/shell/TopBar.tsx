@@ -17,6 +17,7 @@ import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
+import { ReportDialog } from './ReportDialog';
 import { commandShortcutLabel } from './platformKeys';
 import { SettingsDialog, type Theme } from './SettingsDialog';
 import { subscribeSettingsRequests, type SettingsSection } from './settingsNavigation';
@@ -217,6 +218,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>();
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const update = useUpdateStatus();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const temporal = useDesignStore.temporal.getState();
@@ -313,10 +315,12 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme" aria-pressed={theme === 'dark'}><Icon name="moon"/></button>
       <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')} aria-label="Light theme" aria-pressed={theme === 'light'}><Icon name="sun"/></button>
     </div>
+    <button className="icon-button" onClick={() => setReportOpen(true)} title="Report a problem" aria-label="Report a problem"><Icon name="info"/></button>
     <button className="icon-button" onClick={showSettings} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
     <button className="icon-button" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
     <span className="revision-chip" title="Design revision">r{revision}</span>
     <SettingsDialog open={settingsOpen} theme={theme} focusSection={settingsSection} onThemeChange={setTheme} onClose={closeSettings}/>
     <UpdateDialog open={updateOpen} snapshot={update} onRefresh={update.refresh} onClose={() => setUpdateOpen(false)}/>
+    <ReportDialog open={reportOpen} jobs={jobs} onClose={() => setReportOpen(false)}/>
   </header>;
 }
