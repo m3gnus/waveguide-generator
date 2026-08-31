@@ -29,12 +29,18 @@ import uvicorn  # noqa: E402 - the checkout root must be importable first
 from server.app import BUILD, create_app  # noqa: E402
 from server.platform.console import harden_console  # noqa: E402
 from server.platform.instance import (  # noqa: E402
+    DEFAULT_PID_POLL_INTERVAL,
+    PID_EXITED,
+    STOP_REQUESTED,
     InstanceAlreadyRunning,
     InstanceLock,
     InstanceLockError,
+    StopSignal,
     pid_is_running,
     requested_port,
     reserve_port,
+    wait_for_pid_exit,
+    watch_directory_entries,
 )
 from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
 from server.platform.paths import app_root, default_runs_dir, ensure_data_layout  # noqa: E402
@@ -162,17 +168,77 @@ def _watch_statusapp(
     control_path: Path,
     parent_pid: int | None,
     stop: threading.Event,
+    *,
+    poll_interval: float = DEFAULT_PID_POLL_INTERVAL,
 ) -> None:
-    """Gracefully stop when the owning status window closes or disappears."""
+    """Gracefully stop when the owning status window closes or disappears.
 
-    while not stop.wait(0.15):
-        requested = control_path.is_file()
-        parent_gone = parent_pid is not None and not pid_is_running(parent_pid)
-        if requested or parent_gone:
-            reason = "status window requested quit" if requested else "status window exited"
-            logging.getLogger("wg.launch").info("Stopping because the %s", reason)
-            server.should_exit = True
-            return
+    This thread lives for the whole run of an attached server, so what it costs
+    while nothing is happening is the point. It used to re-test both conditions
+    every 150 ms: 6.7 wakeups a second forever, each one a ``stat`` plus, on
+    Windows, an OpenProcess / WaitForSingleObject / CloseHandle round trip
+    through ctypes. On a laptop it is the wakeup rate rather than the CPU time
+    that matters -- a timer that never lets the package reach a deep C-state
+    costs real watts for a thread that is, almost always, about to learn that
+    nothing changed.
+
+    Both conditions are waitable instead. A process handle is signalled when the
+    parent exits, and a directory notification is signalled when the control
+    file appears, so where the platform supports it this parks in a single
+    ``WaitForMultipleObjects`` with no timeout at all: no wakeups, and both
+    events observed the moment they happen rather than up to a poll late.
+    Elsewhere -- and whenever a handle cannot be armed -- it degrades to exactly
+    the poll it always did, at exactly the interval it always used, so shutdown
+    latency never regresses.
+
+    The waits are only ever wakeup sources. Every decision below still comes
+    from re-testing the real conditions, which keeps one code path for both
+    platforms and keeps the thread honest about a file that appeared before the
+    watch was armed.
+    """
+
+    log = logging.getLogger("wg.launch")
+    # The control file's directory is created by the status window before the
+    # server is spawned, and it is where ready.json and update.json live too, so
+    # a handful of unrelated wakes are possible and harmless: each one costs one
+    # ``is_file()``.
+    wakeup = watch_directory_entries(control_path.parent)
+    try:
+        while not stop.is_set():
+            # Test before waiting, always. On the first pass this catches a
+            # control file or a dead parent from before the thread existed, and
+            # on later passes it is the arm-then-check ordering that stops a
+            # change during the handover from being missed by both the wait and
+            # the test.
+            requested = control_path.is_file()
+            parent_gone = parent_pid is not None and not pid_is_running(parent_pid)
+            if requested or parent_gone:
+                reason = "status window requested quit" if requested else "status window exited"
+                log.info("Stopping because the %s", reason)
+                server.should_exit = True
+                return
+
+            outcome = wait_for_pid_exit(
+                parent_pid,
+                stop,
+                # With a waitable control file there is nothing left for a timer
+                # to discover; without one the timeout *is* the control-file
+                # check, and it keeps the historical interval.
+                timeout=None if wakeup is not None else poll_interval,
+                wakeups=() if wakeup is None else (wakeup,),
+                poll_interval=poll_interval,
+            )
+            if outcome == PID_EXITED:
+                # The kernel signalled the process object. That is a stronger
+                # answer than any probe can give, so do not re-test it.
+                log.info("Stopping because the status window exited")
+                server.should_exit = True
+                return
+            if outcome == STOP_REQUESTED:
+                return
+    finally:
+        if wakeup is not None:
+            wakeup.close()
 
 
 def _shutdown_signals() -> tuple[int, ...]:
@@ -310,7 +376,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     stop_browser = threading.Event()
-    stop_status_watch = threading.Event()
+    # The status watchdog blocks in a kernel wait that cannot see a plain
+    # threading.Event, so give it one the kernel can signal; without it that
+    # thread would have to keep ticking just to notice shutdown. It is
+    # deliberately never closed: the watchdog is a daemon thread that may still
+    # be inside a wait on this handle when main returns, and closing a handle
+    # out from under a live wait is undefined behaviour on Win32.
+    stop_status_watch: threading.Event = (
+        StopSignal() if args.status_control is not None else threading.Event()
+    )
     shutdown_complete = threading.Event()
     try:
         app = create_app(

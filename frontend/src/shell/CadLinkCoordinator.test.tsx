@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
+import { selectCadWorkspace } from '../api/cadWorkspace';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { preferencesStore } from '../prefs/preferences';
 import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
@@ -16,6 +17,8 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import {
   CadLinkCoordinator,
   cadLinkCoordinatorBridge,
+  cadPollIntervals,
+  resetCadPollIntervals,
   showCadJobModel,
 } from './CadLinkCoordinator';
 import { cadSolveBlockerNow, jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
@@ -128,6 +131,7 @@ describe('CadLinkCoordinator', () => {
     importedMeshStore.clear();
     parkedSolveCommandStore.clear();
     workspaceModeStore.setMode('parametric');
+    resetCadPollIntervals();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -198,6 +202,146 @@ describe('CadLinkCoordinator', () => {
     expect(calls.filter((path) => path.endsWith('/returns'))).toHaveLength(1);
     expect(calls.filter((path) => path.endsWith('/fusion-status'))).toHaveLength(1);
     expect(calls.filter((path) => path.endsWith('/solve-command')).length).toBeGreaterThanOrEqual(1);
+  });
+
+  /** Poll cadence. The coordinator is mounted for the whole life of the app,
+   * so anything it does on a timer is what an idle WG costs — and `pageIsVisible`
+   * buys nothing in the packaged WebView2 window, which stays `visible` behind
+   * other windows. These cover the three ways the cost is kept off the wire. */
+  const cadenceHarness = (initial: { cadFolderConfigured: boolean }) => {
+    const state = { listing: { ...initial, items: [] as CadReturnBundle[] } };
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path.endsWith('/returns')) return json(state.listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/api/cadlink/designs')) return json({ items: [] });
+      if (path.endsWith('/api/cad-workspace/select')) {
+        return json({ selected: true, path: 'C:/wgreturn-workspace' });
+      }
+      return json({}, 404);
+    }));
+    const counted = (suffix: string) => calls.filter((path) => path.endsWith(suffix)).length;
+    return {
+      state,
+      counts: () => ({
+        returns: counted('/returns'),
+        fusionStatus: counted('/fusion-status'),
+        solveCommand: counted('/solve-command'),
+      }),
+      clear: () => { calls.length = 0; },
+    };
+  };
+
+  it('stops polling Fusion channels while no CAD workspace folder is configured', async () => {
+    vi.useFakeTimers();
+    const harness = cadenceHarness({ cadFolderConfigured: false });
+
+    await renderCoordinator();
+    // The listing that reports the folder is the one that silences the rest,
+    // so each channel is read exactly once before anything is known.
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(7_500); });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+
+    // The returns listing alone keeps a heartbeat, at the idle rate: nothing
+    // tells the coordinator that Settings has chosen a folder, so this is what
+    // saves the user from restarting WG after setting CAD Link up.
+    harness.clear();
+    harness.state.listing = { cadFolderConfigured: true, items: [] };
+    // The clock stands at 7_500; the heartbeat is due at `returnsIdleMs`.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(cadPollIntervals.returnsIdleMs - 7_400);
+    });
+    expect(harness.counts().returns).toBe(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+    const resumed = harness.counts();
+    expect(resumed.fusionStatus).toBeGreaterThanOrEqual(1);
+    expect(resumed.solveCommand).toBeGreaterThanOrEqual(2);
+  });
+
+  it('resumes the moment a CAD workspace folder is chosen, without waiting for the heartbeat', async () => {
+    vi.useFakeTimers();
+    const harness = cadenceHarness({ cadFolderConfigured: false });
+
+    await renderCoordinator();
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+
+    // Sit well past the base rates. Silence here is the point of the feature.
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+
+    // Choosing a folder through the manual path field never moves window
+    // focus, so `focus` cannot cover this one -- only the selection itself
+    // can. Drive the real API function rather than the store, so the wiring
+    // from `selectCadWorkspace` through to the coordinator is under test.
+    harness.clear();
+    harness.state.listing = { cadFolderConfigured: true, items: [] };
+    await act(async () => { await selectCadWorkspace('C:/wgreturn-workspace'); });
+
+    // Immediately, not on the next idle heartbeat: every channel is read again
+    // without the clock advancing at all.
+    const resumed = harness.counts();
+    expect(resumed.returns).toBeGreaterThanOrEqual(1);
+    expect(resumed.fusionStatus).toBeGreaterThanOrEqual(1);
+    expect(resumed.solveCommand).toBeGreaterThanOrEqual(1);
+
+    // And it holds the base rate afterwards rather than dropping back to idle.
+    harness.clear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(harness.counts().solveCommand).toBeGreaterThanOrEqual(4);
+  });
+
+  it('widens every poll once nothing has happened for the quiet window', async () => {
+    vi.useFakeTimers();
+    cadPollIntervals.quietMs = 5_000;
+    const harness = cadenceHarness({ cadFolderConfigured: true });
+
+    await renderCoordinator();
+    harness.clear();
+    // Base rate right up to the quiet mark: an unchanged listing and a `closed`
+    // heartbeat, repeated, are the only evidence that WG is genuinely idle.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(harness.counts()).toEqual({ returns: 2, fusionStatus: 2, solveCommand: 5 });
+
+    // Past it, nothing is due again until the idle intervals come round.
+    harness.clear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(9_000); });
+    expect(harness.counts()).toEqual({ returns: 0, fusionStatus: 0, solveCommand: 0 });
+  });
+
+  it('snaps back to the base rate the moment CAD work resumes', async () => {
+    vi.useFakeTimers();
+    cadPollIntervals.quietMs = 5_000;
+    const harness = cadenceHarness({ cadFolderConfigured: true });
+
+    await renderCoordinator();
+    await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
+    harness.clear();
+
+    // Regaining focus reconciles all three at once rather than leaving the
+    // user to wait out an interval chosen while they were in another window.
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+
+    harness.clear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 2 });
+
+    // Entering the CAD workspace holds the base rate for as long as it is open,
+    // however long the user then spends reading the panel.
+    await act(async () => { workspaceModeStore.setMode('cad'); await Promise.resolve(); });
+    harness.clear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(harness.counts().solveCommand).toBe(20);
+    expect(harness.counts().returns).toBe(8);
   });
 
   it('fails closed on repeated links and posts the chosen Fusion instance on refresh', async () => {

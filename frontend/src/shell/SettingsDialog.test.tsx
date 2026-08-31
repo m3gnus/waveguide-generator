@@ -375,10 +375,10 @@ describe('SettingsDialog', () => {
 
     const section = host.querySelector<HTMLElement>('#settings-drivers')!;
     expect(section.querySelector('.driver-library-counts')!.textContent)
-      .toBe('1 file \u00b7 1,803 drivers indexed \u00b7 505 with Thiele-Small data');
+      .toBe(`1 file \u00b7 ${(1803).toLocaleString()} drivers indexed \u00b7 505 with Thiele-Small data`);
     // And it says what the difference means, because 1,298 of them will never
     // appear in a search however hard the user looks.
-    expect(section.textContent).toContain('The other 1,298 are catalogue entries');
+    expect(section.textContent).toContain(`The other ${(1298).toLocaleString()} are catalogue entries`);
   });
 
   it('counts the shipped library apart from the files the user added', async () => {
@@ -402,7 +402,7 @@ describe('SettingsDialog', () => {
 
     const section = host.querySelector<HTMLElement>('#settings-drivers')!;
     expect(section.querySelector('.driver-library-counts')!.textContent)
-      .toBe('2 files (1 shipped) \u00b7 2,170 drivers indexed \u00b7 651 with Thiele-Small data');
+      .toBe(`2 files (1 shipped) \u00b7 ${(2170).toLocaleString()} drivers indexed \u00b7 651 with Thiele-Small data`);
     // The old copy promised an empty application; it no longer is one.
     expect(section.textContent).not.toContain('ships no driver data');
     expect(section.textContent).toContain('ships with Waveguide Generator');

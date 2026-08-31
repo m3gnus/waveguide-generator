@@ -114,6 +114,46 @@ describe('jobs panel run list', () => {
     expect(jobCardPropsEqual(props, { ...props, job: { ...completed } })).toBe(false);
   });
 
+  it('runs the one-second elapsed ticker only while a run is counting', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-08T00:00:10Z'));
+    const schedule = vi.spyOn(globalThis, 'setInterval');
+    const cancel = vi.spyOn(globalThis, 'clearInterval');
+    const tickers = () => schedule.mock.calls.filter(([, delay]) => delay === 1_000).length;
+    try {
+      // A finished run's times all come from stored timestamps, so a tick would
+      // re-render the list to paint what is already on it.
+      publishJobs([job(1, 'Finished')]);
+      await act(async () => root.render(<JobsPanel/>));
+      expect(tickers()).toBe(0);
+      const idle = host.textContent;
+      await act(async () => { vi.advanceTimersByTime(60_000); });
+      expect(tickers()).toBe(0);
+      expect(host.textContent).toBe(idle);
+
+      // Starting the ticker reads the clock straight away, so the card does not
+      // spend its first second showing the minute the panel spent idle.
+      const running: JobItem = { ...job(2, 'Solving'), status: 'running', completed_at: null, progress: 0.5 };
+      await act(async () => publishJobs([running]));
+      expect(tickers()).toBe(1);
+      expect(host.querySelector('.job-card.running time')?.textContent).toBe('1:10');
+      await act(async () => { vi.advanceTimersByTime(5_000); });
+      expect(host.querySelector('.job-card.running time')?.textContent).toBe('1:15');
+
+      // The last run finishing stops the ticker for good, and takes a final
+      // reading on the way out rather than freezing a second stale.
+      cancel.mockClear();
+      await act(async () => publishJobs([{ ...running, status: 'complete', completed_at: '2026-08-08T00:00:15Z' }]));
+      expect(cancel).toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(60_000); });
+      expect(tickers()).toBe(1);
+    } finally {
+      schedule.mockRestore();
+      cancel.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('commits rename on Enter and blur, preserves Unicode drafts, and reverts on Escape', async () => {
     const first = job(123, 'Shared title');
     const second = job(124, 'Shared title');
