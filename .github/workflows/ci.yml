@@ -87,6 +87,34 @@ jobs:
           echo "checking against $upstream"
           python scripts/check_partial_merges.py --upstream "$upstream"
 
+  attribution:
+    name: No AI attribution in new commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # AGENTS.md and GIT-WORKFLOW.md 3 forbid crediting an assistant in the
+      # history. That was enforced by asking, and two trailers reached published
+      # branches on 2026-08-27 through reviewed pull requests, hours after the
+      # rewrite that stripped the previous ones. The tooling adds them by
+      # default, so the rule needs something that executes.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Fetch the base this branch is measured against
+        run: git fetch --no-tags --prune origin "+refs/heads/*:refs/remotes/origin/*"
+      - name: Check new commits for AI attribution
+        env:
+          # A pull request is measured against its own base; a push against main,
+          # which for a push to `next` is exactly the commits it adds.
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          upstream="origin/${BASE_REF:-main}"
+          echo "checking ${upstream}..HEAD"
+          python scripts/check_no_ai_attribution.py --upstream "$upstream"
+
   drift:
     name: Generated-file drift
     runs-on: ubuntu-latest
