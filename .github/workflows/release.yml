@@ -408,15 +408,25 @@ jobs:
                   if name.startswith(release_assets.INSTALLER_PREFIX)
                   else machinery
               )
-              shutil.copy2(asset, target / asset.name)
-              shutil.copy2(sidecar, target / sidecar.name)
+              copies = [target]
               if target is machinery and duplicate_layers:
                   # TRANSITIONAL, and self-deleting: see
                   # release_assets.LAYER_DUPLICATION_VERSION. One version
                   # publishes its layers twice so the previous release, which
                   # cannot see the companion tag at all, can still update.
-                  shutil.copy2(asset, destination / asset.name)
-                  shutil.copy2(sidecar, destination / sidecar.name)
+                  # Removing it is these two lines, and nothing else -- which is
+                  # why the copying below is written once rather than per case.
+                  copies.append(destination)
+              # The sidecar is built and verified above; that is what proves the
+              # artifact is what the builder thinks it is. Only the SPA's is
+              # published. GitHub serves a per-asset digest and the updater reads
+              # that, but scripts/fetch_spa.py fetches by URL for source installs
+              # and never touches the releases API, so it still needs the file.
+              keeps_sidecar = asset.name == release_assets.spa_archive_name(version)
+              for into in copies:
+                  shutil.copy2(asset, into / asset.name)
+                  if keeps_sidecar:
+                      shutil.copy2(sidecar, into / sidecar.name)
 
           actual_paths = {path for path in root.rglob("*") if path.is_file()}
           if actual_paths != expected_paths:
@@ -426,10 +436,24 @@ jobs:
           downloads = sorted(path.name for path in destination.iterdir())
           layers = sorted(path.name for path in machinery.iterdir())
           duplicated = len(layers) if duplicate_layers else 0
-          if len(downloads) + len(layers) != len(specs) * 2 + duplicated:
+          # One file per asset, plus the single surviving sidecar -- not pairs.
+          if len(downloads) + len(layers) != len(specs) + 1 + duplicated:
               raise SystemExit(
-                  f"Release staging did not produce exactly {len(specs)} asset pairs "
-                  f"(plus {duplicated} duplicated); downloads={downloads}, layers={layers}"
+                  f"Release staging did not produce exactly {len(specs)} assets and "
+                  f"one sidecar (plus {duplicated} duplicated); "
+                  f"downloads={downloads}, layers={layers}"
+              )
+          spa_sidecar = release_assets.checksum_name(
+              release_assets.spa_archive_name(version)
+          )
+          stray_sidecars = sorted(
+              name
+              for name in downloads + layers
+              if name.endswith(".sha256") and name != spa_sidecar
+          )
+          if stray_sidecars:
+              raise SystemExit(
+                  f"Unexpected checksum sidecars staged for publication: {stray_sidecars}"
               )
           # The split is asserted, not assumed. Counting the two directories would
           # pass a release that staged the right number of files into the wrong
@@ -456,12 +480,12 @@ jobs:
                   f"layers={layers}"
               )
           print(
-              f"Validated {len(specs)} release asset pairs: "
-              f"{(len(downloads) - duplicated) // 2} installer(s) on the user-facing "
-              f"release, {len(layers) // 2} layer(s) on the companion pre-release"
+              f"Validated {len(specs)} release assets and one SPA sidecar: "
+              f"{len(downloads) - duplicated} on the user-facing release, "
+              f"{len(layers)} on the companion pre-release"
               + (
-                  f", {duplicated // 2} of which are also published to the "
-                  "user-facing release so the previous version can still update."
+                  f", {duplicated} of which are also published to the user-facing "
+                  "release so the previous version can still update."
                   if duplicate_layers
                   else "."
               )
