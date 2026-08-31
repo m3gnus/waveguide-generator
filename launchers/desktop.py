@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from types import ModuleType
@@ -16,7 +17,11 @@ from collections.abc import Callable
 from urllib.parse import urljoin, urlsplit
 import webbrowser
 
-from launchers.statusapp.__main__ import _report_startup_failure, _show_startup_failure_dialog
+from launchers.statusapp.__main__ import (
+    _log_startup_failure,
+    _report_startup_failure,
+    _show_startup_failure_dialog,
+)
 from launchers.statusapp.controller import ServiceState, StatusController, StatusSnapshot
 from launchers.apply_update import (
     ApplyUpdateError,
@@ -35,6 +40,25 @@ from launchers.statusapp.updater import (
 
 
 WINDOW_TITLE = "Waveguide Generator"
+#: Shown while the backend is not answering. The desktop window has no lamps --
+#: that is the status window's job -- so the title bar is the only surface it
+#: owns that is visible without the user going looking for it.
+UNREACHABLE_TITLE = f"{WINDOW_TITLE} — backend not responding"
+#: How long the steady-state loop sleeps between turns. It no longer asks the
+#: backend anything -- the controller's watcher does that from a blocking wait
+#: on the child process -- so all this governs is how soon the window notices an
+#: "Install update" the server has written to disk. The 0.25 s it inherited from
+#: the old health poll bought nothing there and cost 8.2 HTTP requests a second
+#: on a completely idle application.
+IDLE_INTERVAL = 1.0
+BACKEND_LOST = (
+    "Waveguide Generator's backend has stopped, so this window can no longer "
+    "reach it. Solving, the job list, and saving to the workspace are all "
+    "unavailable, and the interface cannot tell you so itself.\n\n"
+    "{reason}\n\n"
+    "The window is left open so you can copy out anything you still need. "
+    "Close and reopen Waveguide Generator to carry on working."
+)
 ROLLBACK_HANDOFF_RESULT = (
     "The previous version is being restored by a separate helper and will "
     "reopen by itself. If it does not, review update.log in the application "
@@ -175,6 +199,7 @@ class DesktopWindow:
         controller: StatusController,
         *,
         poll_interval: float = 0.25,
+        idle_interval: float = IDLE_INTERVAL,
         startup_timeout: float = 120.0,
         update_ready_delay: float = 0.75,
         pythonnet_loader: Callable[[], object] = _load_pythonnet,
@@ -182,7 +207,10 @@ class DesktopWindow:
         browser_fallback: Callable[[str], None] = _open_browser_fallback,
     ) -> None:
         self.controller = controller
+        #: Between readiness polls while the server is still coming up. HTTP is
+        #: the only way to learn that, so this one stays quick.
         self.poll_interval = poll_interval
+        self.idle_interval = idle_interval
         self.startup_timeout = startup_timeout
         self.update_ready_delay = update_ready_delay
         self.pythonnet_loader = pythonnet_loader
@@ -194,6 +222,10 @@ class DesktopWindow:
         self._healthy_bundle_checked = False
         self._startup_snapshot: StatusSnapshot | None = None
         self._exit_code = 0
+        self._backend_loss_reported = False
+        #: Retained so a caller -- in practice a test -- can join the one-shot
+        #: reporting thread instead of racing it.
+        self._loss_report: threading.Thread | None = None
 
     def _bundle_paths(self) -> tuple[Path, Path, Path] | None:
         environment = getattr(self.controller, "environ", os.environ)
@@ -726,7 +758,95 @@ class DesktopWindow:
             raise RuntimeError("The desktop window has not started")
         self._webview.create_window(WINDOW_TITLE, target)
 
-    def _poll_loop(self) -> None:
+    def _set_window_title(self, title: str) -> None:
+        """Retitle the live window, if this toolkit build lets us.
+
+        Defensive in the same way as the ``destroy`` calls below: the window is
+        whatever pywebview handed back, and a title we cannot set must not take
+        down the poll loop that is reporting a problem.
+        """
+
+        setter = getattr(self._window, "set_title", None)
+        if not callable(setter):
+            return
+        try:
+            setter(title)
+        except Exception as exc:  # noqa: BLE001 - cosmetic, and never worth raising
+            _log_startup_failure(f"Could not retitle the desktop window: {exc}")
+
+    def _report_backend_loss(self, message: str) -> None:
+        """Put the loss on screen without stalling the loop that found it.
+
+        On Windows this ends in a modal ``MessageBoxW``, which blocks until
+        somebody selects OK. Blocking *here* would stall the caller: the
+        controller's watcher thread, which is also what would notice a
+        replacement server, and before that the window loop itself. Either way
+        quitting the application would appear to hang behind a dialog
+        explaining that it is already broken.
+        """
+
+        _log_startup_failure(message)
+        self._loss_report = threading.Thread(
+            target=self._report_desktop_failure,
+            args=(message,),
+            name="wg2-backend-loss",
+            daemon=True,
+        )
+        self._loss_report.start()
+
+    def _backend_unreachable(self, snapshot: StatusSnapshot) -> None:
+        """React to a backend that goes away while the window is open.
+
+        The window has no lamps, the status bar in the interface reports only
+        the preview socket, and the interface itself is served by the very
+        backend that has gone -- so a mid-session loss had no symptom at all
+        except the Solve button going grey and staying grey. That is the report
+        this exists to answer, and it is answered once.
+
+        There is no grace period here any more, and no separate "unreachable,
+        but possibly only for a moment" level. Both existed to hedge against an
+        ambiguous reading: a single 0.35 s HTTP timeout is entirely normal while
+        the server is still importing its solvers, so a failure had to outlive
+        five seconds of polling before it could be believed. Nothing takes those
+        readings now. This is called by the controller's watcher when it is
+        already certain -- the child's process handle returned from ``wait()``,
+        or an adopted instance failed two probes in a row -- and waiting a
+        further five seconds to believe a process that has already exited would
+        only delay the message.
+        """
+
+        # Called on the controller's watcher thread, like the reporting thread
+        # below and like the old poll loop before it; ``_set_window_title``
+        # swallows a toolkit that dislikes that.
+        self._set_window_title(UNREACHABLE_TITLE)
+        if self._backend_loss_reported:
+            return
+        self._backend_loss_reported = True
+        self._report_backend_loss(BACKEND_LOST.format(reason=snapshot.backend.reason))
+
+    def _watch_backend(self) -> None:
+        """Ask the controller to tell us if the backend goes, and stop asking.
+
+        Idempotent and self-healing, which is why the loop calls it on every
+        turn rather than once: a controller restarted after a failed update
+        handoff needs a watcher for its new child, and a controller that has
+        already reported a loss must not be handed another one.
+        """
+
+        if self._backend_loss_reported:
+            return
+        self.controller.watch_backend(self._backend_unreachable)
+
+    def _window_loop(self) -> None:
+        """Own the window until it closes. Deliberately not a poll of anything.
+
+        What is left in here is one file check for an in-app update request the
+        server writes on demand; backend liveness is the controller's watcher,
+        which blocks rather than asks. The measured cost of the version that did
+        poll was 1,220 HTTP requests in 181 idle seconds, 610 of them re-reading
+        an index.html that had not changed.
+        """
+
         if self._startup_snapshot is not None:
             # pywebview invokes this callback only after its native event loop
             # has started. HTTP readiness alone is not enough to discard rollback.
@@ -734,11 +854,13 @@ class DesktopWindow:
         window = self._window
         closed = getattr(getattr(window, "events", None), "closed", None)
         wait = getattr(closed, "wait", None)
+        # Before the first sleep, not after it: the backend can die in the
+        # second this loop would otherwise spend not yet watching it.
+        self._watch_backend()
         if not callable(wait):
-            self.controller.poll()
             return
-        while not wait(self.poll_interval):
-            self.controller.poll()
+        while not wait(self.idle_interval):
+            self._watch_backend()
             if self._hand_off_update(window):
                 return
 
@@ -876,7 +998,7 @@ class DesktopWindow:
                 min_size=(1100, 700),
             )
             try:
-                webview.start(func=self._poll_loop)
+                webview.start(func=self._window_loop)
             except Exception as exc:  # noqa: BLE001 - native initialization boundary
                 if sys.platform == "win32" and (
                     "pythonnet" in str(exc).casefold() or "webview2" in str(exc).casefold()

@@ -381,11 +381,6 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     if (preferences.minRating > 0) lastMinimumRating.current = preferences.minRating;
   }, [preferences.minRating]);
 
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, []);
-
   const preferenceJobs = useMemo(() => applyJobPreferences(snapshot.jobs, preferences.jobSort, preferences.minRating), [snapshot.jobs, preferences.jobSort, preferences.minRating]);
   const visibleJobs = useMemo(() => {
     const wanted = query.trim().toLocaleLowerCase();
@@ -403,6 +398,30 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   const activeCount = snapshot.jobs.filter((job) => job.status === 'running' || job.status === 'queued').length;
   const hiddenByFilter = snapshot.jobs.length - visibleJobs.length;
   const notConnected = snapshot.connection !== 'connected';
+
+  // `now` exists for one job: advancing the elapsed clock on cards that are
+  // still counting. With nothing running or queued every time on screen comes
+  // from a stored timestamp, so a tick re-renders the whole list to paint the
+  // pixels it already has -- once a second, forever, on a window nobody is
+  // looking at. So the ticker runs only while there is something to count.
+  //
+  // A stopped ticker leaves `now` wherever it was, which would be wrong for up
+  // to a second either side of the gap, so both ends read the clock once: on
+  // the way in, because `now` may have been sitting still since the panel
+  // mounted, and on the way out, so the last reading a finishing run freezes at
+  // is the one it actually stopped on. (Finished cards read `completed_at` and
+  // ignore `now`; the teardown reading is for the run that leaves `running`
+  // without one.) `activeCount` rather than a boolean keeps that pair honest.
+  useEffect(() => {
+    if (activeCount === 0) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => {
+      clearInterval(timer);
+      setNow(Date.now());
+    };
+  }, [activeCount]);
+
   const remove = useCallback((job: JobItem) => {
     if (!window.confirm(`Remove “${runDisplayName(job)}” and its saved results?`)) return;
     void jobsSocket.deleteJob(job.id).catch((error) => coordinator.reportError(String(error)));

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
 import os
@@ -54,10 +55,21 @@ class StubController:
     update_requests: list[UpdateRequest | None] = field(default_factory=list)
     launched: list[UpdateRequest] = field(default_factory=list)
     handoff_error: str | None = None
+    #: Every callback the window has registered for backend loss. The real
+    #: controller answers this with a thread parked in ``Popen.wait()``; a test
+    #: calls the callback directly to stand in for the child dying.
+    watchers: list[Callable[[StatusSnapshot], None]] = field(default_factory=list)
 
     @property
     def url(self) -> str:
         return self.poll_snapshot.url
+
+    def watch_backend(
+        self, on_lost: Callable[[StatusSnapshot], None]
+    ) -> Callable[[StatusSnapshot], None]:
+        if on_lost not in self.watchers:
+            self.watchers.append(on_lost)
+        return on_lost
 
     def start(self) -> StatusSnapshot:
         self.starts += 1
@@ -466,7 +478,11 @@ class LiveWindow:
     def __init__(self, polls: int) -> None:
         self.remaining = polls
         self.destroyed = 0
+        self.titles: list[str] = []
         self.events = SimpleNamespace(closed=self)
+
+    def set_title(self, title: str) -> None:
+        self.titles.append(title)
 
     def wait(self, _timeout: float) -> bool:
         if self.destroyed or self.remaining <= 0:
@@ -503,8 +519,9 @@ def test_an_in_app_update_request_hands_off_then_closes_the_window(
     # The installer was started before the server went away, as in the status window.
     assert controller.closes == 1
     assert reported == []
-    # One readiness poll before the window, then two loop turns.
-    assert controller.polls == 3
+    # One readiness poll before the window, and none afterwards: the two loop
+    # turns it took to find the request asked the backend nothing.
+    assert controller.polls == 1
 
 
 def test_a_failed_update_handoff_is_reported_and_the_window_stays_open(
@@ -523,9 +540,10 @@ def test_a_failed_update_handoff_is_reported_and_the_window_stays_open(
     assert controller.launched == []
     assert window.destroyed == 0
     assert "v1.2.3" in reported[0] and "installer is missing" in reported[0]
-    # Polling carried on after the failure until the user closed the window:
-    # one readiness poll, then all three loop turns the stub window allowed.
-    assert controller.polls == 4
+    # The loop carried on after the failure until the user closed the window,
+    # and asked the backend nothing while it did: the readiness poll is the only
+    # one, however many turns the stub window allows.
+    assert controller.polls == 1
     assert controller.closes == 1
 
 
@@ -1139,3 +1157,107 @@ def test_a_failed_browser_fallback_commits_nothing(
     )
 
     assert window._fallback_from_windows_webview(snapshot, RuntimeError("no WebView2")) == 1
+
+
+def _unreachable(reason: str) -> StatusSnapshot:
+    """What the controller reports once the server behind the window is gone."""
+
+    return StatusSnapshot(
+        backend=LampStatus(ServiceState.ERROR, reason),
+        frontend=LampStatus(ServiceState.ERROR, "Frontend unavailable: " + reason),
+        url="http://127.0.0.1:3199/",
+        pid=None,
+        exit_code=1,
+    )
+
+
+def test_an_open_window_stops_asking_the_backend_anything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The measured bug: 8.21 HTTP requests a second from a completely idle app.
+
+    ``StatusController.poll()`` issues two unpooled requests -- ``/health`` and
+    a full re-download of index.html -- and this loop ran it four times a second
+    for as long as the window was open. Nothing it learned could change: the SPA
+    route cannot stop working while the process lives, and the process exiting
+    is something a blocking wait reports sooner and for free.
+    """
+
+    controller = StubController()
+    webview, window = _live_webview(polls=25)
+    monkeypatch.setitem(sys.modules, "webview", webview)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0, idle_interval=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
+
+    # Twenty-five turns of the steady-state loop; the only poll in the whole run
+    # is the readiness one that decided the window could open at all.
+    assert controller.polls == 1
+    # And exactly one watcher, however many turns re-register it.
+    assert len(controller.watchers) == 1
+    assert window.titles == []
+
+
+def test_a_backend_that_goes_is_reported_once_and_leaves_the_window_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reported symptom: Solve goes grey and nothing anywhere says why.
+
+    This loop used to poll the controller and discard the answer, so a backend
+    that died under an open window produced no lamp, no log line and no dialog
+    -- the interface it had already served kept rendering, and the only trace
+    was the Solve button greying out for good. The report survives the removal
+    of the polling; it now arrives from the controller's process watcher, which
+    fires the instant the child exits rather than up to 250 ms later.
+    """
+
+    controller = StubController()
+    webview, window = _live_webview(polls=2)
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    reported: list[str] = []
+    # `_report_desktop_failure` forwards a `detail` keyword the other tests
+    # here never reach, so this stub has to accept one.
+    monkeypatch.setattr(
+        desktop, "_report_startup_failure", lambda message, **_kwargs: reported.append(message)
+    )
+    logged: list[str] = []
+    monkeypatch.setattr(desktop, "_log_startup_failure", logged.append)
+
+    desktop_window = desktop.DesktopWindow(controller, poll_interval=0, idle_interval=0, **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
+    assert desktop_window.run() == 0
+
+    (on_lost,) = controller.watchers
+    gone = _unreachable("Server exited with code 3: solver worker died")
+    on_lost(gone)
+    # A second report of the same loss changes nothing, whoever sends it.
+    on_lost(gone)
+    if desktop_window._loss_report is not None:
+        desktop_window._loss_report.join(timeout=5.0)
+
+    assert len(reported) == 1
+    assert "solver worker died" in reported[0]
+    assert "Close and reopen" in reported[0]
+    # Said once, however many times it is noticed.
+    assert logged.count(reported[0]) == 1
+    # The window is left alone: unsaved design work is still in it.
+    assert window.destroyed == 0
+    assert window.titles == [desktop.UNREACHABLE_TITLE, desktop.UNREACHABLE_TITLE]
+
+
+def test_a_reported_loss_is_never_re_registered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-arming would rediscover the same dead child on every loop turn."""
+
+    controller = StubController()
+    window = desktop.DesktopWindow(controller, **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
+    monkeypatch.setattr(desktop, "_log_startup_failure", lambda _message: None)
+    monkeypatch.setattr(desktop.DesktopWindow, "_report_desktop_failure", lambda *_a, **_k: None)
+
+    window._watch_backend()
+    assert len(controller.watchers) == 1
+
+    window._backend_unreachable(_unreachable("Server exited with code 3"))
+    controller.watchers.clear()
+    window._watch_backend()
+
+    assert controller.watchers == []
+    if window._loss_report is not None:
+        window._loss_report.join(timeout=5.0)

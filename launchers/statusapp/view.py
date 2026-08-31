@@ -22,16 +22,36 @@ COLORS = {
     ServiceState.STOPPED: "#7b8490",
 }
 
+#: How often the Tk loop drains its cross-thread queue. Nothing remote is asked
+#: on this tick: the queue carries snapshots produced elsewhere, and the one
+#: thing it touches is the in-app update request file the server writes on
+#: demand. Ten times a second was inherited from when this same tick also drove
+#: HTTP probing, and a window showing two lamps and a URL has never needed it.
+TICK_MS = 250
+#: Between startup polls, and only until the backend answers once. After that
+#: the view stops asking altogether -- see :meth:`StatusView._settle`.
+STARTUP_POLL_INTERVAL = 0.55
+
 
 class StatusView:
     """Render controller snapshots and bind all close paths to controller.close."""
 
-    def __init__(self, root: tk.Tk, controller: StatusController) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        controller: StatusController,
+        *,
+        tick_ms: int = TICK_MS,
+        startup_poll_interval: float = STARTUP_POLL_INTERVAL,
+    ) -> None:
         self.root = root
         self.controller = controller
+        self._tick_ms = tick_ms
+        self._startup_poll_interval = startup_poll_interval
         self._closing = False
         self._starting = True
         self._poll_running = False
+        self._settled = False
         self._next_poll_at = 0.0
         self._updates: queue.SimpleQueue[tuple[str, StatusSnapshot]] = queue.SimpleQueue()
         self._update_errors: queue.SimpleQueue[str] = queue.SimpleQueue()
@@ -59,11 +79,18 @@ class StatusView:
         buttons.grid(row=5, column=0, columnspan=3, sticky="e", pady=(16, 0))
         self._open_button = ttk.Button(buttons, text="Open in browser", command=self.open_browser)
         self._open_button.grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(buttons, text="Quit", command=self.close).grid(row=0, column=1)
+        # Never disabled, unlike "Open in browser". This is the button for the
+        # case where the backend did not start, so the state that greys the
+        # others out is exactly the state that makes this one the only route to
+        # a log somebody can attach to a report.
+        ttk.Button(buttons, text="Open logs folder", command=self.open_logs).grid(
+            row=0, column=1, padx=(0, 8)
+        )
+        ttk.Button(buttons, text="Quit", command=self.close).grid(row=0, column=2)
 
         self._render(self.controller.poll())
         threading.Thread(target=self._start, name="wg2-status-start", daemon=True).start()
-        self.root.after(100, self._tick)
+        self.root.after(self._tick_ms, self._tick)
 
     def _lamp_row(
         self, parent: ttk.Frame, row: int, name: str
@@ -84,6 +111,12 @@ class StatusView:
     def _tick(self) -> None:
         while not self._update_errors.empty():
             self._closing = False
+            # A bundle handoff that failed stopped and restarted the server, so
+            # the lamps describe a process that no longer exists and the watcher
+            # that would have said so was ended by the stop. Go back to startup
+            # polling until the replacement answers and settles this again.
+            self._settled = False
+            self._next_poll_at = 0.0
             error = self._update_errors.get()
             self._backend_reason.set("Update could not start")
             self._frontend_reason.set(error)
@@ -95,11 +128,15 @@ class StatusView:
                 return
             if kind == "started":
                 self._starting = False
-            else:
+            elif kind == "snapshot":
                 self._poll_running = False
-                self._next_poll_at = time.monotonic() + 0.55
+                self._next_poll_at = time.monotonic() + self._startup_poll_interval
+            # "lost" arrives from the controller's watcher, not from a poll of
+            # ours, so it re-arms nothing -- there is nothing left to poll for.
             if not self._closing:
                 self._render(snapshot)
+                if not self._settled and snapshot.backend.state is ServiceState.OK:
+                    self._settle()
         if not self._closing:
             requested_update = self.controller.take_update_request()
             if requested_update is not None:
@@ -107,12 +144,36 @@ class StatusView:
         if (
             not self._closing
             and not self._starting
+            and not self._settled
             and not self._poll_running
             and time.monotonic() >= self._next_poll_at
         ):
             self._poll_running = True
             threading.Thread(target=self._poll, name="wg2-status-poll", daemon=True).start()
-        self.root.after(100, self._tick)
+        self.root.after(self._tick_ms, self._tick)
+
+    def _settle(self) -> None:
+        """Stop asking the server questions, and arrange to be told instead.
+
+        The backend has answered, so nothing a further poll could discover is
+        still unknown. The SPA route it also fetched cannot stop working while
+        the process lives, and the process dying is precisely what the
+        controller's watcher reports -- from a blocking wait on the child's
+        handle, at no cost, and sooner than any interval could.
+
+        Polling on from here is what an idle installation was measured doing:
+        two fresh loopback connections every 0.55 s, for ever, one of them
+        re-downloading six kilobytes of index.html to check it still began with
+        "<html". Startup is the only part of that which was ever load-bearing.
+        """
+
+        self._settled = True
+        self.controller.watch_backend(self._on_backend_lost)
+
+    def _on_backend_lost(self, snapshot: StatusSnapshot) -> None:
+        # Runs on the controller's watcher thread. Tk belongs to _tick, so the
+        # snapshot travels the same queue every other worker here uses.
+        self._updates.put(("lost", snapshot))
 
     def _start_update(self, request: UpdateRequest) -> None:
         label = request.version if isinstance(request, BundleUpdateRequest) else request
@@ -157,6 +218,14 @@ class StatusView:
     def open_browser(self) -> None:
         if self.controller.url:
             webbrowser.open(self.controller.url)
+
+    def open_logs(self) -> None:
+        try:
+            self.controller.open_logs_folder()
+        except Exception as exc:  # noqa: BLE001 - reported in the window, never raised
+            # Reported where the user is already looking. A traceback out of a
+            # Tk callback would go to a console this application does not have.
+            self._frontend_reason.set(f"Could not open the logs folder: {exc}")
 
     def close(self) -> None:
         if self._closing:

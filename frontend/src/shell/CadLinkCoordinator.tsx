@@ -48,6 +48,7 @@ import {
 } from '../stores/solveOptions';
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
 import { cadProjectName, listCadProjects, newestReturnForProject } from '../api/cadProjects';
+import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -139,8 +140,82 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
 };
 const bridgeListeners = new Set<() => void>();
 
+/** Only ever a hint. WG ships as a WebView2 window, not a browser tab, and a
+ * window sitting behind other windows still reports `visible` — so this saves
+ * no work at all in the packaged app. It is kept because it is correct and
+ * free in a real browser; nothing below may depend on it to stay idle. */
 function pageIsVisible(): boolean {
   return document.visibilityState !== 'hidden';
+}
+
+/** Poll cadences, in milliseconds.
+ *
+ * Mutable and exported so tests can shorten the quiet window: backoff is a
+ * property of elapsed time, and a test that had to wait out the real one would
+ * have to advance half a minute of fake time for every case.
+ *
+ * The `*Idle` figures are what an app nobody is using costs. The base figures
+ * are what CAD work costs, and only those are latency the user can feel. */
+export const cadPollIntervals = {
+  /** See the solve-command poll: this is dead time on a clock the user watches. */
+  solveCommandMs: 1_000,
+  solveCommandIdleMs: 10_000,
+  returnsMs: 2_500,
+  returnsIdleMs: 30_000,
+  fusionStatusMs: 2_500,
+  fusionStatusIdleMs: 30_000,
+  /** How long without any sign of CAD activity before the polls widen. */
+  quietMs: 30_000,
+};
+
+const cadPollDefaults = { ...cadPollIntervals };
+
+export function resetCadPollIntervals(): void {
+  Object.assign(cadPollIntervals, cadPollDefaults);
+}
+
+/** A timer whose period is recomputed immediately before every tick, and which
+ * can suspend itself entirely by asking for `null`.
+ *
+ * `window.setInterval` fixes its period when it is created, so a poll that
+ * wants to widen while nothing is happening would have to tear its timer down
+ * and rebuild it on every input the cadence depends on. A self-rescheduling
+ * timeout asks `period()` again each time it fires, so backing off and snapping
+ * back are the same mechanism seen from two answers.
+ *
+ * The next tick is scheduled *before* the current one runs, exactly as
+ * `setInterval` does: a slow poll must not stretch the interval behind it.
+ *
+ * `restart` is registered so that any sign of activity can drop a long idle
+ * delay on the floor — the user must never wait out an interval that was
+ * chosen while they were away. */
+function startAdaptivePoll(
+  restarts: Set<() => void>,
+  tick: () => void,
+  period: () => number | null,
+): () => void {
+  let timer: number | null = null;
+  const schedule = () => {
+    const delay = period();
+    timer = delay === null ? null : window.setTimeout(fire, delay);
+  };
+  const fire = () => {
+    timer = null;
+    schedule();
+    tick();
+  };
+  const restart = () => {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+    schedule();
+  };
+  restarts.add(restart);
+  schedule();
+  return () => {
+    restarts.delete(restart);
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+  };
 }
 
 export const cadLinkCoordinatorBridge = {
@@ -789,6 +864,12 @@ export function CadLinkCoordinator() {
   const [onshapeStatus, setOnshapeStatus] = useState<OnshapeStatus | null>(null);
   const [selectedOnshapeInstanceId, setSelectedOnshapeInstanceId] = useState<string | null>(null);
   const [onshapeConnection, setOnshapeConnection] = useState<OnshapeConnection | null>(null);
+  // Read by the solve-command consumer, which must not take `bundles` as a
+  // dependency: every returns poll hands `setBundles` a fresh array, so a
+  // dependency there tore the marker poll down and rebuilt it -- with an extra
+  // immediate read -- on every single listing, forever. The ref is also the
+  // fresher answer, since it is whatever the last listing saw.
+  const bundlesRef = useRef<CadReturnBundle[]>([]);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
   const projectOpenPending = useRef(false);
   const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(unavailable);
@@ -817,6 +898,63 @@ export function CadLinkCoordinator() {
   } | null>(null);
   const fusionPullPromise = useRef<Promise<CadReturnBundle> | null>(null);
   const onshape = preferences.cadApplication === 'onshape';
+  bundlesRef.current = bundles;
+
+  // --- Poll cadence -------------------------------------------------------
+  // Three polls are mounted for the whole life of the app, because the
+  // coordinator is: a return, a status change or a Fusion-authored solve may
+  // arrive from outside WG at any moment, and nothing else is listening. At
+  // their base rates that is roughly 1.5 requests a second, which is what an
+  // idle window with no CAD application anywhere near it used to cost.
+  //
+  // So the cadence is evidence-driven rather than constant. `null` suspends a
+  // poll outright; the wake paths below are what bring it back.
+  /** What the last listing said about a CAD workspace folder; null until one
+   * has answered. Unknown deliberately polls: an older or still-starting
+   * server must not be mistaken for an unconfigured one and silenced. */
+  const cadFolderConfigured = useRef<boolean | null>(null);
+  /** Whether Fusion itself is running. Someone with Fusion open is doing CAD
+   * work even when WG shows the parametric design, and the whole point of the
+   * marker poll is to be quick for them. */
+  const fusionProcessLive = useRef(false);
+  const lastFusionState = useRef<string | null>(null);
+  const lastCadActivityAt = useRef(Date.now());
+  const pollRestarts = useRef(new Set<() => void>());
+
+  /** Reasons to hold every poll at its base rate, checked at each tick rather
+   * than captured, so a mode change or a pending return takes effect on the
+   * next tick even if nothing thought to wake the timer. */
+  const cadFlowActive = useCallback(() => (
+    workspaceModeStore.getSnapshot().mode === 'cad'
+    || fusionProcessLive.current
+    || pendingReturnRequestId.current !== null
+    || pendingReturnWaiter.current !== null
+    || fusionPullPromise.current !== null
+    || parkedSolveCommandStore.getSnapshot().command !== null
+  ), []);
+
+  /** Restart every poll at its base rate. Called for anything that means the
+   * user is back in the CAD flow — entering the workspace, sending, expecting
+   * a return, a listing or status that actually changed, the window regaining
+   * focus — so an idle interval chosen minutes ago is never in the way. */
+  const noteCadActivity = useCallback(() => {
+    lastCadActivityAt.current = Date.now();
+    pollRestarts.current.forEach((restart) => restart());
+  }, []);
+
+  /** `unconfiguredMs` is what a poll costs while no CAD workspace folder is
+   * selected: `null` for the two that have nothing to say until one is, and
+   * the idle rate for the returns listing, which is also how WG finds out that
+   * a folder has since been chosen without making the user restart. */
+  const pollDelayMs = useCallback((
+    baseMs: number,
+    idleMs: number,
+    unconfiguredMs: number | null,
+  ): number | null => {
+    if (cadFlowActive()) return baseMs;
+    if (cadFolderConfigured.current === false) return unconfiguredMs;
+    return Date.now() - lastCadActivityAt.current >= cadPollIntervals.quietMs ? idleMs : baseMs;
+  }, [cadFlowActive]);
 
   useEffect(() => {
     setSelectedFusionInstanceId(null);
@@ -892,12 +1030,20 @@ export function CadLinkCoordinator() {
       if (request === fusionStatusRequest.current
         && ['closed', 'addin_offline', 'no_document', 'not_linked', 'instance_selection_required', 'current', 'stale'].includes(next.state)) {
         setFusionStatus(next);
+        fusionProcessLive.current = next.processRunning === true;
+        // A heartbeat that keeps saying `closed` is the evidence for backing
+        // off; the first one that says anything else is Fusion arriving, and
+        // everything downstream of it wants the base rate again.
+        if (next.state !== lastFusionState.current) {
+          lastFusionState.current = next.state;
+          noteCadActivity();
+        }
       }
     } catch {
       // Presence is advisory. Workspace and export errors are presented by the
       // actual action; a missed heartbeat must not hide CAD returns.
     }
-  }, [design, identity, preferences.cadApplication, selectedBundlePath, selectedFusionInstanceId]);
+  }, [design, identity, noteCadActivity, preferences.cadApplication, selectedBundlePath, selectedFusionInstanceId]);
 
   const selectFusionInstance = useCallback((instanceId: string) => {
     setSelectedFusionInstanceId(instanceId);
@@ -906,16 +1052,27 @@ export function CadLinkCoordinator() {
 
   useEffect(() => {
     setFusionStatus(null);
+    // Forget the last heartbeat with the status it described. A stale "Fusion
+    // is running" would otherwise hold every poll at its base rate after the
+    // user switched to Onshape, where nothing reads it again to clear it.
+    fusionProcessLive.current = false;
+    lastFusionState.current = null;
     if (preferences.cadApplication !== 'fusion360') return undefined;
     if (pageIsVisible()) void refreshFusionStatus();
-    const timer = window.setInterval(() => {
-      if (pageIsVisible()) void refreshFusionStatus();
-    }, 2_500);
+    // Suspended outright while no CAD workspace folder is selected: the add-in
+    // writes its heartbeat into that folder, so there is nothing to read.
+    const stop = startAdaptivePoll(
+      pollRestarts.current,
+      () => { if (pageIsVisible()) void refreshFusionStatus(); },
+      () => pollDelayMs(
+        cadPollIntervals.fusionStatusMs, cadPollIntervals.fusionStatusIdleMs, null,
+      ),
+    );
     return () => {
-      window.clearInterval(timer);
+      stop();
       fusionStatusRequest.current += 1;
     };
-  }, [designRevision, documentSettings, preferences.cadApplication, refreshFusionStatus]);
+  }, [designRevision, documentSettings, pollDelayMs, preferences.cadApplication, refreshFusionStatus]);
 
   // `committed` is the identity a send just registered. Without it the refresh
   // that follows a first send would still carry the pre-send identity -- which
@@ -981,6 +1138,18 @@ export function CadLinkCoordinator() {
       setBundles(response.items);
       const previous = seenReturnRevisions.current;
       const next = new Map(response.items.map((item) => [item.bundlePath, item.modifiedAt]));
+      // This listing is also how the coordinator learns whether CAD Link is
+      // set up at all, and it is the only poll that keeps running when it is
+      // not — so a folder chosen in Settings resumes the other two from here
+      // rather than on the next app start.
+      const wasConfigured = cadFolderConfigured.current;
+      cadFolderConfigured.current = response.cadFolderConfigured;
+      // A listing that differs from the last one is the reason to keep polling
+      // quickly. An identical one, over and over, is the evidence for widening.
+      const listingChanged = previous === null
+        || previous.size !== next.size
+        || [...next].some(([path, modifiedAt]) => previous.get(path) !== modifiedAt);
+      if (listingChanged || response.cadFolderConfigured !== wasConfigured) noteCadActivity();
       const requested = pendingReturnRequestId.current
         ? response.items.find((item) => (
             item.readable && item.requestId === pendingReturnRequestId.current
@@ -1103,7 +1272,7 @@ export function CadLinkCoordinator() {
       // latest completion owns the loading flag even when it did not raise it.
       if (request === returnListRequest.current) setLoading(false);
     }
-  }, [autoIngestSelected]);
+  }, [autoIngestSelected, noteCadActivity]);
   refreshRef.current = refresh;
 
   // Entering CAD Link with nothing on screen reopens the project that was
@@ -1152,6 +1321,9 @@ export function CadLinkCoordinator() {
   const sendToFusion = useCallback(async (target?: { documentId: string; instanceId: string; returnStateHash: string | null }) => {
     const request = ++fusionSendRequest.current;
     setSendingToFusion(true); setError(null); setStatus(null);
+    // A send is the start of a CAD round trip; every poll downstream of it is
+    // now on the user's clock.
+    noteCadActivity();
     try {
       const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
       const result = await sendDesignToCad(
@@ -1181,7 +1353,7 @@ export function CadLinkCoordinator() {
     } finally {
       if (request === fusionSendRequest.current && mounted.current) setSendingToFusion(false);
     }
-  }, [design, designRevision, designName, identity, refresh, setCadLink]);
+  }, [design, designRevision, designName, identity, noteCadActivity, refresh, setCadLink]);
 
   // The one Fusion outbound entry point (menu, rail, and panel). Deriving the
   // action and the expected-document guard here means no call site can send an
@@ -1214,19 +1386,34 @@ export function CadLinkCoordinator() {
     if (onshape) { setLoading(false); return undefined; }
     if (pageIsVisible()) void refresh({ autoOpenNew: true });
     else setLoading(false);
-    const timer = window.setInterval(() => {
-      if (pageIsVisible()) void refresh({ background: true, autoOpenNew: true });
-    }, 2_500);
+    // The one poll that never suspends. With no workspace folder selected it
+    // answers `{items: [], cadFolderConfigured: false}` for a few bytes, and
+    // it is the only thing that can notice a folder being chosen — Settings
+    // writes it on the server, and nothing tells the coordinator. At the idle
+    // rate that is one request every thirty seconds, which is the price of not
+    // making the user restart WG after setting CAD Link up.
+    const stop = startAdaptivePoll(
+      pollRestarts.current,
+      () => { if (pageIsVisible()) void refresh({ background: true, autoOpenNew: true }); },
+      () => pollDelayMs(
+        cadPollIntervals.returnsMs,
+        cadPollIntervals.returnsIdleMs,
+        cadPollIntervals.returnsIdleMs,
+      ),
+    );
     return () => {
-      window.clearInterval(timer);
+      stop();
       returnListRequest.current += 1;
     };
-  }, [onshape, refresh]);
+  }, [onshape, pollDelayMs, refresh]);
 
   const expectFusionReturn = useCallback((requestId: string, requestedAt = Date.now()) => {
     pendingReturnRequestId.current = requestId;
     pendingReturnRequestedAt.current = requestedAt;
-  }, []);
+    // The listing poll is the only thing that discovers the arrival, and the
+    // user is watching for it: it must not still be on an idle delay.
+    noteCadActivity();
+  }, [noteCadActivity]);
 
   /** Ask Fusion for the active document and resolve with the exact correlated
    * return. Composable: the caller decides whether to ingest and solve. */
@@ -1535,6 +1722,9 @@ export function CadLinkCoordinator() {
       const pending = await getSolveCommand().catch(() => null);
       const command = pending?.command;
       if (!pending || !command) return;
+      // Fusion asked for something: whatever cadence got us here, the rest of
+      // this round trip runs at the base rate.
+      noteCadActivity();
       if (pending.outcome) {
         if (solveCommandSeen.current === command.commandId) return;
         solveCommandSeen.current = command.commandId;
@@ -1552,7 +1742,7 @@ export function CadLinkCoordinator() {
       setStatus('Fusion asked WG to solve this model. Preparing…');
       // The request is only actionable from the workspace that renders it.
       enterCadWorkspace();
-      const bundle = bundles.find((item) => item.bundlePath === command.bundlePath)
+      const bundle = bundlesRef.current.find((item) => item.bundlePath === command.bundlePath)
         ?? (await listReturns()).items.find((item) => item.bundlePath === command.bundlePath);
       if (!bundle?.readable) {
         const reason = 'Fusion asked WG to solve a return that is not readable in the workspace.';
@@ -1614,36 +1804,86 @@ export function CadLinkCoordinator() {
         autoIngestSelected();
       }
     }
-  }, [autoIngestSelected, bundles, ingestSelected]);
+  }, [autoIngestSelected, ingestSelected, noteCadActivity]);
 
   // Faster than the returns poll, and Fusion-only: Onshape has no marker.
   // This one reads a single small marker file rather than listing a workspace,
   // and it sits at the head of everything the user is waiting for after they
   // press Solve in Fusion, so the whole poll interval is dead time on the
-  // clock they are watching.
+  // clock they are watching. That is why the base rate survives every backoff
+  // condition that could plausibly mean "using CAD": the CAD workspace being
+  // open, Fusion itself running, a send or a return in flight, a parked
+  // command. It widens only when none of those hold — and none of them can
+  // hold if Fusion is not even installed, which is the case this is for.
+  // Suspended entirely while no workspace folder is selected: the marker lives
+  // in that folder, so no Solve in Fusion can ever produce one.
   useEffect(() => {
     if (onshape) return undefined;
     if (pageIsVisible()) void consumeSolveCommand();
-    const timer = window.setInterval(() => {
-      if (pageIsVisible()) void consumeSolveCommand();
-    }, 1_000);
-    return () => window.clearInterval(timer);
-  }, [consumeSolveCommand, onshape]);
+    return startAdaptivePoll(
+      pollRestarts.current,
+      () => { if (pageIsVisible()) void consumeSolveCommand(); },
+      () => pollDelayMs(
+        cadPollIntervals.solveCommandMs, cadPollIntervals.solveCommandIdleMs, null,
+      ),
+    );
+  }, [consumeSolveCommand, onshape, pollDelayMs]);
 
-  // Browsers heavily throttle timers in background tabs. Do no pointless I/O
-  // while hidden, then reconcile every Fusion-facing channel immediately when
-  // the user returns instead of waiting for the next timer slot.
+  // Coming back to WG is the strongest possible sign the user is about to do
+  // something, so it both reconciles every Fusion-facing channel at once and
+  // resets the cadence — waiting out an idle interval chosen while they were
+  // away would be exactly the latency the base rates exist to avoid.
+  //
+  // `focus` is here because `visibilitychange` is close to useless in the
+  // packaged app: WG runs in a WebView2 window, which stays `visible` while it
+  // sits behind other windows, so alt-tabbing away fires nothing. It is also
+  // the event that fires when the native folder picker Settings opens closes
+  // again, which is how choosing a CAD workspace resumes the polls at once
+  // instead of on the returns listing's next idle tick.
   useEffect(() => {
     if (onshape) return undefined;
     const resume = () => {
       if (!pageIsVisible()) return;
+      noteCadActivity();
       void refresh({ background: true, autoOpenNew: true });
       void refreshFusionStatus();
       void consumeSolveCommand();
     };
     document.addEventListener('visibilitychange', resume);
-    return () => document.removeEventListener('visibilitychange', resume);
-  }, [consumeSolveCommand, onshape, refresh, refreshFusionStatus]);
+    window.addEventListener('focus', resume);
+    return () => {
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('focus', resume);
+    };
+  }, [consumeSolveCommand, noteCadActivity, onshape, refresh, refreshFusionStatus]);
+
+  // Entering the CAD workspace is the user saying they are working in CAD now.
+  // The cadence checks the mode on every tick, but a poll that is already
+  // sitting on a thirty-second delay would not notice for thirty seconds.
+  useEffect(() => workspaceModeStore.subscribe(() => {
+    if (workspaceModeStore.getSnapshot().mode === 'cad') noteCadActivity();
+  }), [noteCadActivity]);
+
+  // Choosing a CAD workspace folder is the one event that has to reach a
+  // coordinator which has switched itself off, and the `focus` above only
+  // catches half of it: the native picker takes focus away and gives it back,
+  // but the manual path field beside it never leaves the window.
+  //
+  // `cadFolderConfigured` goes back to unknown rather than straight to
+  // configured -- the next listing is what has the authority to say, and until
+  // it answers, unknown is the state that keeps polling. Reconciling here
+  // rather than only restarting the timers is what makes the CAD Link panel
+  // populate on the click that configured it, instead of a poll interval later.
+  useEffect(() => {
+    if (onshape) return undefined;
+    return cadWorkspaceSelection.subscribe(() => {
+      cadFolderConfigured.current = null;
+      noteCadActivity();
+      void refresh({ background: true, autoOpenNew: true });
+      void refreshFusionStatus();
+      void consumeSolveCommand();
+    });
+  }, [consumeSolveCommand, noteCadActivity, onshape, refresh, refreshFusionStatus]);
 
   const clearFeedback = useCallback(() => { setError(null); setStatus(null); }, []);
   const reportError = useCallback((message: string) => setError(message), []);

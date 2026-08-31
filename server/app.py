@@ -64,6 +64,30 @@ request_log = logging.getLogger("wg.requests")
 DEFAULT_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
 MAX_REQUEST_BODY_BYTES = DEFAULT_MAX_REQUEST_BODY_BYTES
 _WORKSPACE_EXPORT_PATH = "/api/workspace/write-export"
+#: ``(method, path)`` pairs whose successful responses log at DEBUG.
+#:
+#: uvicorn's own access log is off (``launch/serve.py``), so ``log_request``
+#: below is the only thing writing a line per request -- and at idle, with the
+#: packaged app open and nobody touching it, these five were ~8 lines a second
+#: appended to ``server.log`` forever. That is a continuous trickle of small
+#: writes that keeps the disk out of its low-power states, and it buries the
+#: lines somebody opened the log to find under megabytes of the ones they did
+#: not. None of the five says anything after the first time it is read: the
+#: health probe, the shell document, and the three CAD-link pollers all mean
+#: "still here".
+#:
+#: Keyed by method as well as path so a route that is idle chatter one way and
+#: a real action the other keeps its voice. The chatter itself is being fixed
+#: at the callers; this is the backstop for the next poller that appears.
+QUIET_REQUEST_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/"),
+        ("GET", "/api/cadlink/solve-command"),
+        ("GET", "/api/cadlink/returns"),
+        ("POST", "/api/cadlink/fusion-status"),
+    }
+)
 
 
 class _RequestBodyLimitMiddleware:
@@ -405,7 +429,17 @@ def create_app(
                 (time.monotonic() - began) * 1000,
             )
             raise
-        request_log.info(
+        # A quietened route that starts answering 4xx or 5xx is exactly what
+        # someone reads this log to discover, so failure keeps INFO wherever it
+        # came from; only the boring successes drop. 3xx counts as boring on
+        # purpose -- the 304 a browser gets revalidating the shell document is
+        # the same idle traffic wearing a different status code.
+        quiet = (
+            response.status_code < 400
+            and (request.method, request.url.path) in QUIET_REQUEST_ROUTES
+        )
+        request_log.log(
+            logging.DEBUG if quiet else logging.INFO,
             "%s %s -> %d in %.1f ms",
             request.method,
             request.url.path,

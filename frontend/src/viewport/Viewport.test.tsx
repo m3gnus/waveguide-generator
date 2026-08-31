@@ -261,7 +261,7 @@ describe('Viewport preview errors', () => {
     expect(slider.type).toBe('range');
     expect(slider.max).toBe('2');
     expect(slider.value).toBe('1');
-    expect(host.querySelector('.field-plane-legend-title span')?.textContent).toBe('1,000 Hz');
+    expect(host.querySelector('.field-plane-legend-title span')?.textContent).toBe(`${(1000).toLocaleString()} Hz`);
 
     const setFrequencyIndex = vi.spyOn(useFieldPlaneStore.getState(), 'setFrequencyIndex');
     act(() => {
@@ -300,7 +300,7 @@ describe('Viewport preview errors', () => {
 
     enter('1000');
     expect(useFieldPlaneStore.getState().frequencyIndex).toBe(1);
-    expect(noticeText()).toBe('requested 1,000 Hz → showing 987 Hz');
+    expect(noticeText()).toBe(`requested ${(1000).toLocaleString()} Hz → showing 987 Hz`);
 
     // Moving the slider away retires the notice; retyping the exact solved
     // frequency never raises one.

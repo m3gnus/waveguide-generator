@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -724,6 +725,201 @@ def test_app_threads_extra_websocket_origins_to_both_routes(
 
     asyncio.run(connect())
     assert sent[0]["type"] == "websocket.accept"
+
+
+def _idle_child() -> subprocess.Popen[bytes]:
+    """A child that lives exactly until its stdin is closed."""
+
+    return subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE
+    )
+
+
+def _start_status_watchdog(
+    control: Path, parent_pid: int | None, stop: threading.Event, **kwargs: Any
+) -> tuple[SimpleNamespace, threading.Thread]:
+    server = SimpleNamespace(should_exit=False)
+    watcher = threading.Thread(
+        target=serve._watch_statusapp,
+        args=(server, control, parent_pid, stop),
+        kwargs=kwargs,
+        daemon=True,
+    )
+    watcher.start()
+    return server, watcher
+
+
+def _release_stop(stop: threading.Event, watcher: threading.Thread) -> None:
+    """Wake the watchdog and only then let its stop handle go.
+
+    Closing a handle another thread is still waiting on is undefined on Win32,
+    so a test that failed early must leak the handle rather than close it.
+    """
+
+    stop.set()
+    watcher.join(timeout=5.0)
+    if not watcher.is_alive() and isinstance(stop, instance.StopSignal):
+        stop.close()
+
+
+def test_stop_signal_is_still_an_ordinary_threading_event() -> None:
+    stop = instance.StopSignal()
+    assert not stop.is_set()
+    stop.set()
+    assert stop.is_set()
+    stop.clear()
+    assert not stop.is_set()
+    # Losing the kernel event must not cost the Python flag its meaning.
+    stop.close()
+    stop.set()
+    assert stop.is_set()
+
+
+def test_wait_for_pid_exit_reports_a_process_that_has_already_exited() -> None:
+    child = _idle_child()
+    assert child.stdin is not None
+    child.stdin.close()
+    child.wait(timeout=30)
+
+    assert instance.wait_for_pid_exit(child.pid, timeout=1.0) == instance.PID_EXITED
+
+
+def test_wait_for_pid_exit_returns_the_moment_a_child_dies() -> None:
+    child = _idle_child()
+    stop = instance.StopSignal()
+    assert child.stdin is not None
+    try:
+        threading.Timer(0.1, child.stdin.close).start()
+        started = time.monotonic()
+        outcome = instance.wait_for_pid_exit(child.pid, stop, timeout=None)
+        elapsed = time.monotonic() - started
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=30)
+        stop.close()
+
+    assert outcome == instance.PID_EXITED
+    assert elapsed < 5.0
+
+
+def test_wait_for_pid_exit_is_released_by_a_waitable_stop() -> None:
+    stop = instance.StopSignal()
+    threading.Timer(0.05, stop.set).start()
+
+    # timeout=None is a genuinely unbounded wait on Windows, so only the stop
+    # handle can end this call.
+    assert instance.wait_for_pid_exit(os.getpid(), stop, timeout=None) == instance.STOP_REQUESTED
+    stop.close()
+
+
+def test_wait_for_pid_exit_bounds_an_unwaitable_plain_event() -> None:
+    started = time.monotonic()
+    outcome = instance.wait_for_pid_exit(
+        os.getpid(), threading.Event(), timeout=None, poll_interval=0.05
+    )
+
+    # A plain Event is invisible to a kernel wait, so "wait forever" has to be
+    # substituted with a tick the caller's loop can re-check the flag on.
+    assert outcome == instance.WAIT_ELAPSED
+    assert time.monotonic() - started < 5.0
+
+
+def test_watch_directory_entries_declines_a_directory_it_cannot_watch(tmp_path: Path) -> None:
+    assert instance.watch_directory_entries(tmp_path / "absent") is None
+
+
+def test_directory_change_wakeup_signals_when_a_file_appears(tmp_path: Path) -> None:
+    wakeup = instance.watch_directory_entries(tmp_path)
+    if wakeup is None:
+        pytest.skip("this platform has no waitable directory change notification")
+    with wakeup:
+        (tmp_path / "stop").write_text("stop\n", encoding="utf-8")
+        outcome = instance.wait_for_pid_exit(None, None, timeout=5.0, wakeups=(wakeup,))
+
+    assert outcome == instance.WAKEUP_SIGNALLED
+
+
+def test_status_watchdog_stops_the_server_when_the_parent_exits(tmp_path: Path) -> None:
+    child = _idle_child()
+    stop = instance.StopSignal()
+    server, watcher = _start_status_watchdog(
+        tmp_path / "stop", child.pid, stop, poll_interval=0.05
+    )
+    try:
+        assert child.stdin is not None
+        child.stdin.close()
+        child.wait(timeout=30)
+        watcher.join(timeout=10.0)
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=30)
+        _release_stop(stop, watcher)
+
+    assert server.should_exit is True
+
+
+def test_status_watchdog_blocks_instead_of_polling_for_the_control_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    probe = instance.watch_directory_entries(tmp_path)
+    if probe is None:
+        pytest.skip("this platform has no waitable directory change notification")
+    probe.close()
+
+    probed: list[int] = []
+    real_pid_is_running = serve.pid_is_running
+
+    def counting_pid_is_running(pid: int) -> bool:
+        probed.append(pid)
+        return real_pid_is_running(pid)
+
+    monkeypatch.setattr(serve, "pid_is_running", counting_pid_is_running)
+    control = tmp_path / "stop"
+    stop = instance.StopSignal()
+    # A poll interval no test could ever wait out: anything this watchdog
+    # notices from here on has to have arrived as an event.
+    server, watcher = _start_status_watchdog(control, os.getpid(), stop, poll_interval=600.0)
+    try:
+        time.sleep(0.3)
+        assert server.should_exit is False
+        assert probed == [os.getpid()], "the watchdog woke on a timer instead of blocking"
+
+        control.write_text("stop\n", encoding="utf-8")
+        watcher.join(timeout=10.0)
+    finally:
+        _release_stop(stop, watcher)
+
+    assert server.should_exit is True
+
+
+def test_status_watchdog_polls_the_control_file_without_a_waitable_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The fallback every non-Windows launcher takes, exercised everywhere.
+    monkeypatch.setattr(serve, "watch_directory_entries", lambda _directory: None)
+    control = tmp_path / "stop"
+    stop = threading.Event()
+    server, watcher = _start_status_watchdog(control, os.getpid(), stop, poll_interval=0.02)
+    try:
+        control.write_text("stop\n", encoding="utf-8")
+        watcher.join(timeout=10.0)
+    finally:
+        _release_stop(stop, watcher)
+
+    assert server.should_exit is True
+
+
+def test_status_watchdog_shutdown_leaves_the_server_alone(tmp_path: Path) -> None:
+    stop = instance.StopSignal()
+    server, watcher = _start_status_watchdog(
+        tmp_path / "stop", os.getpid(), stop, poll_interval=600.0
+    )
+    _release_stop(stop, watcher)
+
+    assert not watcher.is_alive()
+    assert server.should_exit is False
 
 
 def test_app_shutdown_stops_jobs_before_gmsh_worker(tmp_path: Path) -> None:

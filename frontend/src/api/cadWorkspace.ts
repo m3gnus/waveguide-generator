@@ -1,3 +1,5 @@
+import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
+
 /**
  * Where a captured CAD document is filed in the run archive.
  *
@@ -45,7 +47,13 @@ export async function selectCadWorkspace(
     } : {}),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
-  return response.json() as Promise<CadWorkspacePath>;
+  const selection = await response.json() as CadWorkspacePath;
+  // Both routes to a folder land here -- the native picker when `path` is
+  // absent, the manual field when it is not -- so this is the only place that
+  // sees every one of them. The CAD Link coordinator is asleep until it hears
+  // this; see `stores/cadWorkspaceSelection`.
+  cadWorkspaceSelection.noteSelection(selection.selected);
+  return selection;
 }
 
 export async function openCadWorkspace(
