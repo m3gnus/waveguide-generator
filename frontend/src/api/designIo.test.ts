@@ -51,6 +51,22 @@ describe('design hydration', () => {
 });
 
 describe('geometry export requests', () => {
+  /**
+   * A `Response` whose `blob()` hands back *this environment's* `Blob`.
+   *
+   * `Response.blob()` from Node returns a Node `Blob`, and jsdom's `FormData`
+   * accepts only a jsdom one -- so `writeToOutputFolder` threw
+   * "parameter 2 is not of type 'Blob'" on CI's Node 20 while passing on a newer
+   * local Node, where the two happen to be compatible. In a browser there is only
+   * ever one `Blob`, so the mismatch is an artefact of the harness rather than
+   * anything the export path does; overriding `blob()` alone keeps `ok`, the
+   * headers and `responseFilename` exactly as production sees them.
+   */
+  function exportResponse(body: string, type: string): Response {
+    const response = new Response(body, { status: 200, headers: { 'Content-Type': type } });
+    return Object.assign(response, { blob: async () => new Blob([body], { type }) });
+  }
+
   function recordingFetcher(): { urls: string[]; fetcher: typeof fetch } {
     const urls: string[] = [];
     const fetcher = (async (url: string) => {
@@ -63,10 +79,7 @@ describe('geometry export requests', () => {
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
       }
-      return new Response('ISO-10303-21;', {
-        status: 200,
-        headers: { 'Content-Type': 'model/step' },
-      });
+      return exportResponse('ISO-10303-21;', 'model/step');
     }) as unknown as typeof fetch;
     return { urls, fetcher };
   }
