@@ -8350,6 +8350,154 @@
         "summary": "Design Symmetry"
       }
     },
+    "/api/diagnostics/bundle": {
+      "get": {
+        "operationId": "download_bundle_api_diagnostics_bundle_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "job",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job"
+            }
+          },
+          {
+            "in": "query",
+            "name": "design",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Design",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Bundle",
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
+    "/api/diagnostics/client-log": {
+      "post": {
+        "operationId": "record_client_error_api_diagnostics_client_log_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Entry"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Record Client Error Api Diagnostics Client Log Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Client Error",
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
+    "/api/diagnostics/open-logs": {
+      "post": {
+        "operationId": "open_logs_api_diagnostics_open_logs_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Open Logs Api Diagnostics Open Logs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Open Logs",
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
+    "/api/diagnostics/summary": {
+      "get": {
+        "operationId": "read_summary_api_diagnostics_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Summary Api Diagnostics Summary Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Summary",
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
     "/api/drivers": {
       "get": {
         "operationId": "search_drivers_api_drivers_get",

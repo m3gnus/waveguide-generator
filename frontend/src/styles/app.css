@@ -1164,3 +1164,20 @@ textarea:disabled { opacity: .48; }
    opening a control row for one occasional action. */
 .crossover-recall { height: 17px; padding: 0 5px; border: 1px solid rgba(var(--amber-rgb), .38); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-micro); }
 .crossover-recall:hover { border-color: var(--amber); }
+
+/* Problem report ---------------------------------------------------------- */
+.report-dialog { width: min(640px, 92vw); }
+.report-dialog-body { display: grid; gap: 14px; padding: 16px; color: var(--fg2); font-size: var(--text-base); }
+.report-field { display: grid; gap: 4px; }
+.report-field > span { color: var(--fg2); font-size: var(--text-micro); }
+.report-field textarea, .report-field select { padding: 6px 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg1); font: inherit; resize: vertical; }
+.report-design-toggle { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; }
+.report-design-toggle input { margin-top: 3px; }
+.report-design-toggle b { display: block; color: var(--fg1); font-weight: 600; }
+.report-design-toggle small { display: block; margin-top: 2px; color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
+.report-summary { display: grid; gap: 6px; }
+.report-summary h3 { margin: 0; color: var(--fg1); font-size: var(--text-base); }
+.report-summary pre { max-height: 180px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: var(--text-micro); line-height: 1.45; white-space: pre-wrap; }
+.report-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.report-dialog-actions :is(button, a) { display: inline-flex; align-items: center; min-height: 32px; padding: 6px 12px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); text-decoration: none; }
+.report-dialog-actions a.primary { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); color: var(--acc-text); }

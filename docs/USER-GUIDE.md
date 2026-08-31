@@ -327,3 +327,50 @@ matched case-insensitively against a fixed alias table (`Sd_cm2`/`Sd`, `Bl_Tm`/`
 value that was not actually in the file. Rows for the same brand and model that only
 differ by impedance become one driver with an impedance-variant list. The folder is
 rescanned automatically whenever its files change, or on request through the API.
+
+## Reporting a problem
+
+**Report a problem** — in the command palette, or the ⓘ button beside Settings — collects
+everything a bug report needs into one `.zip`. **Save report** writes it, **Open a
+GitHub issue** opens a form already filled in with your build and platform for you to
+attach it to, **Copy summary** puts the short text version on the clipboard for a
+forum post, and **Open logs folder** shows you the raw files. Nothing is transmitted
+anywhere: the buttons produce a file and a clipboard string, and you decide where
+they go.
+
+The report contains the application log, the log of whichever run you select, the
+build label, the operating system and Python version, which solver backends this
+machine can use, whether the installed HornLab modules match the ones this build
+pins, and the interface settings that describe how WG is configured. It does **not**
+contain your design, your driver library, or your CAD project unless you tick
+**Include my current design** — that checkbox is off every time the dialog opens.
+Home-directory paths are rewritten to `~` throughout, so the report does not name
+the account it came from. Folder names *below* your home directory are kept —
+`~/Documents/Client X` stays as it is — because the shape of a path is itself the
+cause of several bugs. `manifest.json` inside the zip lists every file in it, so
+you can read all of it before sending anything.
+
+Attach the zip to a new issue at
+<https://github.com/m3gnus/waveguide-generator/issues>. Suggestions and feature
+requests belong in the same place — open an issue and say what you would like WG to
+do; there is no separate form.
+
+### When WG will not start
+
+The report dialog needs a running application, so when the window never appears the
+log has to be fetched by hand. The status window has an **Open logs folder** button
+that works even when the backend has failed to start. Failing that, the logs are at:
+
+| | |
+|---|---|
+| Windows | `%APPDATA%\WaveguideGenerator\logs` |
+| macOS | `~/Library/Application Support/WaveguideGenerator/logs` |
+| Linux | `~/.local/share/WaveguideGenerator/logs` (or `$XDG_DATA_HOME/WaveguideGenerator/logs`) |
+
+`server.log` is the application log and `server.log.1` is the previous one, kept
+because the log rotates at 5 MB and a startup failure is often already in the older
+file. `logs/jobs/<job-id>.log` is one file per run. Attach `server.log` — and
+`server.log.1` if it exists — to the issue.
+
+If the interface loads and then fails to render, the error screen has a **Download a
+problem report** link that produces the same zip without needing the palette.

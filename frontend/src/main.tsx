@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { startClientErrorReporting } from './shell/clientErrors';
 import { durableSettings, startDurableSettings } from './stores/durableSettings';
 import './styles/app.css';
 
@@ -14,6 +15,11 @@ import './styles/app.css';
  * start into no start: the cached copy carries that session instead.
  */
 async function start(): Promise<void> {
+  // Before the first await: a throw during hydration is exactly the failure
+  // that leaves a blank window with nothing in the log.
+  const stopErrorReporting = startClientErrorReporting();
+  if (import.meta.hot) import.meta.hot.dispose(stopErrorReporting);
+
   await durableSettings.hydrate({ timeoutMs: 1_500 });
   startDurableSettings();
 

@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in Waveguide Generator behaves incorrectly, or will not start.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Attach a problem report if you can.** In WG, open the command palette and
+        run **Report a problem**, then **Save report** and drag the `.zip` into this
+        issue. It carries the logs, the build label, and what this machine can solve.
+        It does not carry your design unless you tick the box that says so.
+
+        If WG will not start, press **Open logs folder** in the status window and
+        attach `server.log` (and `server.log.1`, if it is there). The user guide's
+        *Reporting a problem* section lists the folder for each platform.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what WG did instead.
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: >
+        The build label, from the report summary or the update dialog. A version
+        number alone does not identify a build — hundreds of commits share one.
+      placeholder: "0.2.4 (a08d2809)"
+    validations:
+      required: false
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: false
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it was installed
+      options:
+        - Downloaded app bundle (.zip / .dmg)
+        - Installer script from a Git clone
+        - Run from a development checkout
+    validations:
+      required: false
