@@ -1,11 +1,31 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { postSolvePlan, solvePlanRequestBody, type SolvePlan } from './actions';
+import { postSolvePlan, SolvePlanRefused, solvePlanRequestBody, type SolvePlan } from './actions';
 import type { DesignDocument } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
 
 export const SOLVE_PLAN_DEBOUNCE_MS = 150;
 export const SOLVE_PLAN_GC_MS = 60_000;
+
+/**
+ * How often an unanswered plan asks again.
+ *
+ * Solve is disabled whenever this query has no plan, so a single unanswered
+ * request used to disable it for the rest of the session: the key is the
+ * request body, `staleTime` is Infinity, and nothing here refetched on a timer.
+ * The socket reconnecting invalidates this query
+ * (`useCapabilityRefreshOnReconnect`), but that only fires when the socket
+ * comes *back*; a backend that stays down, or one that answers the socket while
+ * failing this route, never produces the signal. So the query heals itself.
+ *
+ * Only faults are retried, never refusals -- see `SolvePlanRefused`. Polling a
+ * 422 the server will keep giving would be noise, and it would hide the message
+ * the user actually needs behind a pending state.
+ */
+export const SOLVE_PLAN_RECOVERY_MS = 5_000;
+
+/** One immediate retry absorbs the blip; the interval above covers the rest. */
+export const SOLVE_PLAN_FAULT_RETRIES = 1;
 
 export interface SolvePlanSnapshot {
   plan: SolvePlan | null;
@@ -20,6 +40,11 @@ function requestBody(
 ): string | null {
   if (!enabled || options === null) return null;
   return solvePlanRequestBody(design, options);
+}
+
+/** A refusal is the server's answer and stands; anything else is worth asking again. */
+function isFault(error: unknown): boolean {
+  return !(error instanceof SolvePlanRefused);
 }
 
 /** Resolve the server's actual plan for the current parametric submission. */
@@ -50,7 +75,12 @@ export function useSolvePlan(
     enabled: settledBody !== null,
     staleTime: Infinity,
     gcTime: SOLVE_PLAN_GC_MS,
-    retry: false,
+    retry: (failureCount, error) =>
+      failureCount < SOLVE_PLAN_FAULT_RETRIES && isFault(error),
+    refetchInterval: (entry) =>
+      entry.state.status === 'error' && isFault(entry.state.error)
+        ? SOLVE_PLAN_RECOVERY_MS
+        : false,
   });
   const currentIsSettled = currentBody !== null && currentBody === settledBody;
   return {
