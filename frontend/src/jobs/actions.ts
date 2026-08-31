@@ -283,6 +283,26 @@ export function solvePlanRequestBody(
   });
 }
 
+/**
+ * The server considered this submission and refused it.
+ *
+ * Separated from a plain Error because the two need opposite handling. A
+ * refusal is an answer: the design or the engine list is the problem, the
+ * message says so, and asking again changes nothing until the request does.
+ * Anything else -- a rejected fetch, a truncated body -- means we never got an
+ * answer, which is the case that heals on its own and must therefore be
+ * retried. `useSolvePlan` is what makes that distinction load-bearing.
+ */
+export class SolvePlanRefused extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'SolvePlanRefused';
+    this.status = status;
+  }
+}
+
 export async function postSolvePlan(
   body: string,
   fetcher: typeof fetch = fetch,
@@ -294,7 +314,7 @@ export async function postSolvePlan(
     body,
     signal,
   });
-  if (!response.ok) throw new Error(await detail(response));
+  if (!response.ok) throw new SolvePlanRefused(await detail(response), response.status);
   const plan = await response.json() as Partial<SolvePlan>;
   if (
     typeof plan.engine !== 'string'
