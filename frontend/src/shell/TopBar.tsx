@@ -24,6 +24,7 @@ import { subscribeSettingsRequests, type SettingsSection } from './settingsNavig
 import { namespaceStorage } from '../stores/durableSettings';
 import { workspaceNavigation } from './Workspace';
 import { UpdateButton, UpdateDialog, useUpdateStatus } from './UpdateControl';
+import { WindowControls } from './WindowControls';
 
 const themeStorage = namespaceStorage('theme');
 
@@ -300,6 +301,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   }, [cadCoordinator.fusionStatus?.running, cadReturnReady, canRedo, canUndo, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
 
   return <header className="topbar">
+    <WindowControls side="leading"/>
     <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>
     <i className="v-separator" />
     <DesignFileMenu />
@@ -319,6 +321,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     <button className="icon-button" onClick={showSettings} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
     <button className="icon-button" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
     <span className="revision-chip" title="Design revision">r{revision}</span>
+    <WindowControls side="trailing"/>
     <SettingsDialog open={settingsOpen} theme={theme} focusSection={settingsSection} onThemeChange={setTheme} onClose={closeSettings}/>
     <UpdateDialog open={updateOpen} snapshot={update} onRefresh={update.refresh} onClose={() => setUpdateOpen(false)}/>
     <ReportDialog open={reportOpen} jobs={jobs} onClose={() => setReportOpen(false)}/>
