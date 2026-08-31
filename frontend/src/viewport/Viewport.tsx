@@ -41,6 +41,7 @@ import {
 import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 import { defaultFieldPlane, nearestFieldPlaneFrequencyIndex, useFieldPlaneStore } from './fieldPlaneStore';
+import { useObservationStore } from './observationStore';
 import type { FieldPlaneResponseId } from '../api/fieldPlane';
 import type { ImportedMeshScene } from './importedMesh';
 import { importedMeshStore, type ImportedMeshShowing } from './importedMeshStore';
@@ -381,6 +382,11 @@ export function Viewport() {
     () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext),
     [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, resultSelection.primary],
   );
+  const observationVisible = useObservationStore((state) => state.visible);
+  const observationBasis = useObservationStore((state) => state.basis);
+  const observationSource = useObservationStore((state) => state.sourceLabel);
+  const observationHovered = useObservationStore((state) => state.hovered);
+  const polar = useSolveOptionsStore((state) => state.polar);
   const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
   const fieldJobId = useFieldPlaneStore((state) => state.jobId);
   const fieldStatus = useFieldPlaneStore((state) => state.status);
@@ -1177,6 +1183,14 @@ export function Viewport() {
 
     {fieldEnabled && <FieldPlaneProbeTooltip fieldMaxSplDb={fieldMaxSplDb}/>}
 
+    {observationVisible && observationBasis && <div className="observation-readout" role="status" aria-live="polite">
+      <b>{observationHovered
+        ? `${observationHovered.plane} ${Number(observationHovered.angleDeg.toFixed(3))}°`
+        : `${polar.distance} m from ${polar.observationOrigin}`}</b>
+      <span>drag a microphone to read it · shift-drag to change distance</span>
+      {observationSource && <small>frame from {observationSource}</small>}
+    </div>}
+
     <div className="viewport-tools">
       {meshSources.length > 1 && <>
         <div className="viewport-tool-group viewport-tool-segment mesh-source-tools" role="group" aria-label="Viewport mesh source">
@@ -1203,6 +1217,19 @@ export function Viewport() {
       <div className="viewport-tool-group">
         <button className={clipMode === 'section' ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={clipMode === 'section'} onClick={() => setClipMode((value) => value === 'section' ? 'off' : 'section')}><Icon name="section"/></button>
       </div>
+      {/* Only offered once a run has published the frame it measured in. The
+          arc is where the solve put its microphones, and nothing here guesses
+          one for a geometry that has not been solved. */}
+      {observationBasis && <div className="viewport-tool-group">
+        <button
+          type="button"
+          className={observationVisible ? 'on' : ''}
+          title="Show the measurement positions the polars were taken at"
+          aria-label="Measurement positions overlay"
+          aria-pressed={observationVisible}
+          onClick={() => useObservationStore.getState().toggle()}
+        ><Icon name="microphone-arc"/></button>
+      </div>}
       {availableFieldJob && <div className="viewport-tool-group">
         <button
           type="button"

@@ -12,6 +12,7 @@ import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson } from './derivedAcoustics';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
+import { withNormalizationAngle } from './normalization';
 import { complexToDb, impedanceUnits } from './mappers';
 import { propagationReference } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
@@ -27,6 +28,12 @@ export interface ExportContext {
   designRevision?: number;
   /** The selected run's immutable directivity settings for ATH `.cfg` export. */
   polarConfig?: unknown;
+  /**
+   * The angle the exported polar levels are referenced to, matching the maps on
+   * screen. Omitted leaves the payload as the server referenced it, which is
+   * what a test or a caller with no display in front of it wants.
+   */
+  normalizationAngle?: number;
   solveSettings?: WgSolveSettings | null;
   /** Exact CAD-authored placement graph carried by this imported run. */
   cadIdentity?: CadIdentityProvenance;
@@ -194,7 +201,13 @@ function patternDb(value: unknown): number | null {
 }
 
 export function buildPolarCsv(result: ResultPayload): string {
-  const rows = ['Frequency_Hz,Plane,Theta_deg,SPL_norm_dB'];
+  // The header states the reference the levels below it are relative to, which
+  // is the one thing a bare `SPL_norm_dB` column cannot say for itself.
+  const reference = (result.metadata?.directivity as Record<string, unknown> | undefined)?.normalization_angle_degrees;
+  const rows = [
+    ...(finite(reference) ? [`# Normalization: per-frequency polar level; 0 dB at ${reference} deg`] : []),
+    'Frequency_Hz,Plane,Theta_deg,SPL_norm_dB',
+  ];
   const frequencies = resultFrequencies(result);
   const directivity = (result.directivity ?? {}) as Record<string, NonNullable<ResultPayload['directivity']>['horizontal']>;
   const planeOrder = ['horizontal', 'vertical', 'diagonal'];
@@ -737,7 +750,13 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   return [filename];
 }
 
-export async function runExportBundle(context: ExportContext, formats = context.preferences.exportFormats): Promise<ExportBundleResult> {
+export async function runExportBundle(inputContext: ExportContext, formats = inputContext.preferences.exportFormats): Promise<ExportBundleResult> {
+  // One re-reference for the whole bundle, at the top, so the polar CSV, the
+  // polar FRD set and the rendered heatmap PNG cannot disagree about where 0 dB
+  // is -- and so each of them states the same angle in its own header.
+  const context: ExportContext = inputContext.result && inputContext.normalizationAngle !== undefined
+    ? { ...inputContext, result: withNormalizationAngle(inputContext.result, inputContext.normalizationAngle) }
+    : inputContext;
   const files: string[] = [];
   const failures: ExportFailure[] = [];
   const emitted = new Set<string>();

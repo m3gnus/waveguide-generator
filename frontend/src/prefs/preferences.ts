@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import type { JobItem } from '../api/jobsSocket';
 import type { RunNameDateFormat, RunNameDatePosition, RunNameNumberFormat, RunNameNumberPosition } from '../jobs/runNaming';
 import type { SmoothingMode } from '../results/smoothing';
+import { MAX_MEASUREMENT_ANGLES, POLAR_PLANES as MEASUREMENT_PLANE_IDS, type MeasurementPlane } from '../results/measurementAngle';
 import { durableSettings } from '../stores/durableSettings';
 
 export const CHART_TYPES = [
@@ -9,7 +10,7 @@ export const CHART_TYPES = [
   { id: 'directivity_map_v', label: 'Directivity Map (V)' },
   { id: 'directivity_map_d', label: 'Directivity Map (Diagonal)' },
   { id: 'directivity_map', label: 'Directivity Map (All planes)' },
-  { id: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
+  { id: 'frequency_response', label: 'Frequency Response (SPL)' },
   { id: 'directivity_index', label: 'Directivity Index' },
   { id: 'power_response', label: 'Power Response (Spatial Average)' },
   { id: 'beam_shape', label: 'Forward Beam Shape' },
@@ -17,7 +18,7 @@ export const CHART_TYPES = [
   { id: 'beam_map', label: 'Forward Beam Map' },
   { id: 'balloon', label: '3D Balloon' },
   { id: 'polar_response', label: 'Polar Response' },
-  { id: 'phase_response', label: 'On-Axis Phase' },
+  { id: 'phase_response', label: 'Phase' },
   { id: 'group_delay', label: 'Group Delay' },
   { id: 'impedance', label: 'Impedance' },
   { id: 'radiation_impedance', label: 'Radiation Matrix Load' },
@@ -131,6 +132,23 @@ export interface Preferences {
    */
   splPhase: boolean;
   /**
+   * Which plane the SPL and phase cards read their measurement angles from.
+   *
+   * Separate from the polar card's plane, which answers a different question:
+   * that one is a shape at one frequency, this one is a response at one angle.
+   */
+  measurementPlane: MeasurementPlane;
+  /**
+   * Angles the SPL and phase cards draw, in degrees.
+   *
+   * Empty means on-axis, which is what these cards have always drawn, and is
+   * the only value that survives a result carrying no directivity patterns.
+   * An angle the current run never sampled is snapped to the nearest one it
+   * did rather than dropped, so a selection made against a 5-degree sweep is
+   * still readable against a 10-degree one.
+   */
+  measurementAngles: number[];
+  /**
    * Draw the members beneath the combined sum on the SPL chart.
    *
    * On by default: the sum of an LR4 crossover is read against the branches
@@ -210,6 +228,8 @@ const defaults: Preferences = {
   chartTypes: ['frequency_response', 'directivity_map_h', 'directivity_map_v', 'directivity_index', 'impedance', 'summary'],
   chartTheme: MATCH_INTERFACE_THEME,
   splPhase: true,
+  measurementPlane: 'horizontal',
+  measurementAngles: [],
   showMembersUnderCombined: true,
   showReverseNull: false,
   impedanceDisplay: 'real_imaginary',
@@ -234,6 +254,7 @@ const exportIds = new Set(EXPORT_FORMATS.map(({ id }) => id));
 const smoothingIds = new Set(['none', '1/1', '1/2', '1/3', '1/6', '1/12', '1/24', '1/48', 'variable', 'psychoacoustic', 'erb']);
 const impedanceDisplayIds = new Set<ImpedanceDisplay>(['real_imaginary', 'magnitude_phase']);
 const groupDelayUnitIds = new Set<GroupDelayUnit>(['ms', 'cycles']);
+const MEASUREMENT_PLANES = new Set<MeasurementPlane>(MEASUREMENT_PLANE_IDS);
 const jobSortIds = new Set<JobSort>(['completed_desc', 'created_desc', 'rating_desc', 'name_asc']);
 const cadApplicationIds = new Set<CadApplication>(['fusion360', 'onshape']);
 const runNameDatePositions = new Set<RunNameDatePosition>(['off', 'prefix', 'suffix']);
@@ -271,6 +292,14 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     // literal "[object Object]" and asked the exporter to render in it.
     chartTheme: typeof raw.chartTheme === 'string' && raw.chartTheme ? raw.chartTheme : defaults.chartTheme,
     splPhase: raw.splPhase !== false,
+    measurementPlane: MEASUREMENT_PLANES.has(raw.measurementPlane as MeasurementPlane)
+      ? raw.measurementPlane as MeasurementPlane
+      : defaults.measurementPlane,
+    measurementAngles: Array.isArray(raw.measurementAngles)
+      ? [...new Set(raw.measurementAngles.filter((angle): angle is number => Number.isFinite(angle)))]
+        .sort((left, right) => left - right)
+        .slice(0, MAX_MEASUREMENT_ANGLES)
+      : [...defaults.measurementAngles],
     showMembersUnderCombined: raw.showMembersUnderCombined !== false,
     showReverseNull: raw.showReverseNull === true,
     impedanceDisplay: impedanceDisplayIds.has(raw.impedanceDisplay as ImpedanceDisplay)

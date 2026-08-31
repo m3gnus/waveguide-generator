@@ -159,7 +159,8 @@ describe('FRD builders', () => {
     expect(files).toHaveLength(6);
     files.forEach(({ text }) => {
       expect(text).not.toContain('magnitude-only');
-      expect(text).toContain('Freq(Hz)\tSPL(dB)\tPhase(degrees)');
+      // Relative, not absolute: the on-axis file beside it is the one carrying SPL re 20 uPa.
+      expect(text).toContain('Freq(Hz)\tSPL_rel(dB)\tPhase(degrees)');
       expect(dataRows(text)).toHaveLength(frequencies.length);
       expect(dataRows(text).every((row) => row.length === 3)).toBe(true);
     });

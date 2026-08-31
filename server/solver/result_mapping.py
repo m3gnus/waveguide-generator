@@ -547,6 +547,50 @@ def _renormalize_directivity(
                     point[1] = float(point[1]) - reference
 
 
+def observation_frame_basis(config: Any) -> dict[str, Any] | None:
+    """State the frame the polars were measured in, for anything that draws it.
+
+    The frame is inferred once from the authoritative Gmsh artifact and handed
+    to the backend as ``frame_override``; every backend that takes one is
+    therefore measuring on exactly this arc.  Publishing it is what lets the
+    viewport put the microphones where the solver actually put them, rather
+    than re-deriving the mouth centre from the mesh on the client and
+    disagreeing with the solve the first time a horn sits in a deep cabinet --
+    the case ``_gmsh22_observation_frame`` documents at length.
+
+    Returns ``None`` for a backend that has no explicit frame (the axisymmetric
+    path, whose geometry is its own frame), so the field is absent rather than
+    invented.
+    """
+
+    frame = getattr(config, "frame_override", None)
+    if frame is None:
+        return None
+    fields = {
+        "axis": "axis",
+        "u": "u",
+        "v": "v",
+        "origin_m": "origin",
+        "mouth_center_m": "mouth_center",
+        "source_center_m": "source_center",
+    }
+    basis: dict[str, Any] = {}
+    for key, attribute in fields.items():
+        value = getattr(frame, attribute, None)
+        if value is None:
+            continue
+        vector = json_safe_native_value(value)
+        if isinstance(vector, list) and len(vector) == 3 and all(
+            isinstance(component, (int, float)) and math.isfinite(component)
+            for component in vector
+        ):
+            basis[key] = [float(component) for component in vector]
+    # An axis and an origin are the minimum a caller can place anything with.
+    if "axis" not in basis or "origin_m" not in basis:
+        return None
+    return basis
+
+
 def _on_axis_pressure(result: Any) -> np.ndarray | None:
     pressure_source = getattr(result, "pressure_complex", None)
     if pressure_source is None:
@@ -1021,6 +1065,11 @@ def build_solver_response(
     metadata.setdefault("performance", {})
     metadata["performance"].setdefault("total_time_seconds", time.time() - start_time)
     metadata["observation"] = observation
+    # setdefault, not assignment: the imported-geometry path states the same
+    # basis from the same `frame_override` before it gets here.
+    frame_basis = observation_frame_basis(config)
+    if frame_basis is not None:
+        metadata.setdefault("observation_frame_basis", frame_basis)
     metadata["directivity"] = build_directivity_metadata(
         {
             **context.polar_config,

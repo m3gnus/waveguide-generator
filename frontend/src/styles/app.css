@@ -538,12 +538,31 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .balloon-3d-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--fg4); font: var(--text-micro) var(--mono); }
 .balloon-3d:active { cursor: grabbing; }
 .balloon-3d-help { position: absolute; top: 6px; left: 8px; color: var(--fg4); font: var(--text-micro) var(--mono); letter-spacing: .01em; opacity: .72; pointer-events: none; }
+/* Bottom-left, clear of the field-plane panel on the right and the tool rail
+   below. Pointer-events off: the microphones are dragged through it. */
+.observation-readout { position: absolute; bottom: 46px; left: 10px; display: flex; flex-direction: column; gap: 1px; padding: 4px 8px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: color-mix(in srgb, var(--chart-bg) 72%, transparent); backdrop-filter: blur(7px); pointer-events: none; }
+.observation-readout b { color: var(--fg1); font: var(--text-micro) var(--mono); letter-spacing: .04em; text-transform: uppercase; }
+.observation-readout span, .observation-readout small { color: var(--fg4); font: var(--text-micro) var(--mono); }
 .balloon-3d-reset { position: absolute; top: 5px; right: 6px; padding: 2px 6px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: color-mix(in srgb, var(--chart-bg) 72%, transparent); color: var(--fg3); font: var(--text-micro) var(--mono); opacity: .55; backdrop-filter: blur(7px); cursor: pointer; transition: opacity .12s, color .12s; }
 .balloon-3d-reset:hover, .balloon-3d-reset:focus-visible { color: var(--fg1); opacity: 1; }
 .frequency-scrub { position: absolute; inset: auto 4px 4px; display: flex; align-items: center; gap: 6px; height: 17px; padding: 0 6px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: color-mix(in srgb, var(--chart-bg) 70%, transparent); color: var(--fg2); font: var(--text-micro) var(--mono); backdrop-filter: blur(7px); opacity: .4; transition: opacity .12s; }
 .result-card:hover .frequency-scrub, .frequency-scrub:focus-within, .result-detail .frequency-scrub { opacity: 1; }
 .frequency-scrub input { flex: 1; min-width: 0; height: 11px; }
 .frequency-scrub span { flex: none; white-space: nowrap; }
+/* The angle strip is the same glass rail as the frequency scrub, but its
+   contents scroll: a 5-degree sweep to 90 offers nineteen chips and the card is
+   not always wide enough for them. The scrollbar is hidden because the rail is
+   17px tall and a visible one would eat most of it. */
+.measurement-angles { gap: 4px; }
+.angle-chips { display: flex; flex: 1; gap: 3px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.angle-chips::-webkit-scrollbar { display: none; }
+.angle-chips button { flex: none; padding: 0 4px; border: 1px solid transparent; border-radius: var(--r3); background: none; color: var(--fg4); font: var(--text-micro) var(--mono); cursor: pointer; transition: color .12s, background .12s, border-color .12s; }
+.angle-chips button:hover:not(:disabled) { color: var(--fg1); background: var(--ov1); }
+.angle-chips button[aria-pressed="true"] { border-color: var(--glass-bd); background: var(--ov3); color: var(--fg1); }
+/* On-axis is pressed and disabled at once: it is always drawn, so it reads as
+   the anchor the others are compared against rather than as a dead control. */
+.angle-chips button:disabled { cursor: default; }
+.angle-chips button:disabled:not([aria-pressed="true"]) { opacity: .35; }
 .directivity-multiplane { display: flex; width: 100%; height: 100%; min-width: 0; }
 .directivity-multiplane > div { position: relative; flex: 1 1 0; min-width: 0; }
 /* Right-aligned so the first sub-panel's label clears the card's title chip. */

@@ -14,6 +14,7 @@ from server.solver.result_mapping import (
     REFERENCE_RHO_C,
     build_provisional_frequency_response,
     build_solver_response,
+    observation_frame_basis,
 )
 
 
@@ -580,3 +581,84 @@ def test_a_mesh_without_a_source_tag_keeps_the_native_inference() -> None:
         msh_text=sourceless,
     )
     assert native.custom_points is None
+
+
+def _frame() -> SimpleNamespace:
+    return SimpleNamespace(
+        axis=np.asarray([0.0, 0.0, 1.0]),
+        u=np.asarray([1.0, 0.0, 0.0]),
+        v=np.asarray([0.0, 1.0, 0.0]),
+        origin=np.asarray([0.0, 0.0, 0.19]),
+        mouth_center=np.asarray([0.0, 0.0, 0.19]),
+        source_center=np.asarray([0.0, 0.0, 0.0]),
+    )
+
+
+def test_observation_frame_basis_is_published_for_every_backend_that_has_one() -> None:
+    """The viewport places microphones from this, so it must not be Metal-only.
+
+    Before this existed the basis was written by the imported-geometry path
+    alone, and a parametric run -- the overwhelming majority -- computed the
+    identical frame and discarded it.
+    """
+
+    config = _config()
+    config.frame_override = _frame()
+    response = build_solver_response(
+        result=_native_result(),
+        config=config,
+        context=_context(),
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
+    )
+    basis = response["metadata"]["observation_frame_basis"]
+    assert basis == {
+        "axis": [0.0, 0.0, 1.0],
+        "u": [1.0, 0.0, 0.0],
+        "v": [0.0, 1.0, 0.0],
+        "origin_m": [0.0, 0.0, 0.19],
+        "mouth_center_m": [0.0, 0.0, 0.19],
+        "source_center_m": [0.0, 0.0, 0.0],
+    }
+    # The origin follows the measurement origin the solve used, so the arc the
+    # viewport draws pivots where the polars actually pivoted.
+    assert response["metadata"]["directivity"]["observation_origin"] == "mouth"
+
+
+def test_observation_frame_basis_is_absent_rather_than_invented() -> None:
+    response = build_solver_response(
+        result=_native_result(),
+        config=_config(),
+        context=_context(),
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
+    )
+    assert "observation_frame_basis" not in response["metadata"]
+
+    # A frame missing the two vectors nothing can be placed without is refused
+    # whole rather than published half-built.
+    partial = _config()
+    partial.frame_override = SimpleNamespace(u=np.asarray([1.0, 0.0, 0.0]))
+    assert observation_frame_basis(partial) is None
+
+    nonfinite = _config()
+    nonfinite.frame_override = _frame()
+    nonfinite.frame_override.origin = np.asarray([0.0, np.nan, 0.19])
+    assert observation_frame_basis(nonfinite) is None
+
+
+def test_a_caller_that_already_stated_the_basis_keeps_its_own() -> None:
+    config = _config()
+    config.frame_override = _frame()
+    stated = {"axis": [0.0, 0.0, -1.0], "origin_m": [0.0, 0.0, 1.0]}
+    response = build_solver_response(
+        result=_native_result(),
+        config=config,
+        context=_context(),
+        start_time=0.0,
+        metadata={"observation_frame_basis": stated},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
+    )
+    assert response["metadata"]["observation_frame_basis"] == stated

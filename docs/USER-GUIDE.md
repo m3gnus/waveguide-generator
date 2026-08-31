@@ -48,6 +48,67 @@ show the same referenced phase trace over the on-axis SPL chart that appears in 
 export. Partial solves keep usable samples and show their warnings and failed-frequency
 diagnostics.
 
+### Where the microphone is, and what "normalized" means
+
+Two settings decide what the directivity results describe, and they answer different
+questions. Both live under the directivity options.
+
+**Measurement distance and origin** say where the virtual microphone sits: how far from
+the horn, and whether the measurement angles pivot about the mouth centre or the throat.
+These are part of the solve. Changing either means solving again.
+
+**Normalization angle** is a display reference and nothing else. Every polar curve in a
+directivity map is shifted so that this angle reads 0 dB, which is what makes the map
+show pattern rather than level. It is applied when the map is drawn, so changing it
+redraws immediately and also re-references runs that were solved earlier — no re-solve.
+
+Because it is only a shift applied to the directivity maps, the normalization angle does
+not move the frequency response, the phase, the group delay, the directivity index, or
+the impedance, and it is not meant to. Those are absolute quantities measured at a point;
+the maps are relative ones. If you want to see how the response itself changes off-axis,
+that is the measurement-angle control, below — not this.
+
+Two other things are worth knowing about it. The **3D balloon** is referenced to its own
+on-axis pole rather than to this angle, so setting a normalization angle of 30° moves the
+heatmaps and leaves the balloon where it was. And the results setting called **Map
+reference** is unrelated: that one picks which contour is highlighted and how far down the
+colour scale runs, in dB, not an angle.
+
+### Reading the response off-axis
+
+The SPL and Phase cards default to on-axis, but the solve measured every angle in the
+sweep, so any of them can be drawn. The angle strip along the bottom of those two cards
+lists the measured angles; press one to overlay it, and use the plane selector beside it
+to switch between the horizontal, vertical, and diagonal cuts. On-axis is always drawn,
+as the anchor the others are read against, and up to six angles can be shown at once.
+
+The levels are absolute SPL, the same quantity the on-axis curve has always been — so
+0° against 30° is a direct reading of what the horn loses off-axis, not a normalized
+shape. Only angles the sweep actually sampled are offered: a finer angular step gives
+more of them and costs almost nothing, because the field is evaluated after the solve.
+
+Exported polar FRD files carry the same per-angle responses, one file per angle, but
+their level column (`SPL_rel(dB)`) is relative to the normalization angle rather than
+absolute. The on-axis FRD is the one that carries absolute SPL re 20 µPa.
+
+### Seeing the measurement positions
+
+Once a run has completed, the microphone button in the viewport toolbar draws the rig
+that run measured on: one arc per enabled plane at the measurement distance, a marker at
+every sampled angle, and a dot at the pivot the angles turn about. The frame comes from
+the solved run, so the arc is where the solver actually put its microphones rather than a
+redrawing of the settings.
+
+The rig responds to the directivity settings as they are edited — distance, angle range,
+angular step, planes, and the mouth/throat pivot all move it without another solve.
+Dragging a microphone along its arc selects that angle for the SPL and Phase cards.
+Holding shift while dragging moves it radially instead, which changes the measurement
+distance; that one *is* a solve setting, so the arc moves at once but the curves on
+screen keep describing the distance they were measured at until the design is run again.
+
+The overlay only appears for a run that published its observation frame. A design that
+has not been solved has no measured rig to show, and WG does not guess one.
+
 ### What each backend can solve
 
 WG plans the **formulation** separately from the full-3D backend. Eligible round

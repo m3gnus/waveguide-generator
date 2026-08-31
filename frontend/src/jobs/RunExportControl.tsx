@@ -13,6 +13,7 @@ import {
 } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
+import { useSolveOptionsStore } from '../stores/solveOptions';
 import { canLoadJobDesign, hydrateJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
 import { exportStemForJob, exportSubdirectoryForJob } from './exportNaming';
 import './RunExportControl.css';
@@ -122,6 +123,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
     workspaceSubdirectory: exportSubdirectoryForJob(job),
     designName: job.label ?? undefined,
+    normalizationAngle: useSolveOptionsStore.getState().polar.normAngle,
     preferences,
   });
 

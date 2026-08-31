@@ -37,6 +37,10 @@ export const PREFERENCE_EFFECTS: Record<keyof Preferences, PreferenceEffect> = {
   chartTypes: 'render-refreshing',
   chartTheme: 'render-refreshing',
   splPhase: 'render-refreshing',
+  // Which angle on the arc the SPL and phase cards read. Every angle was solved;
+  // choosing between them is a redraw.
+  measurementPlane: 'render-refreshing',
+  measurementAngles: 'render-refreshing',
   showMembersUnderCombined: 'render-refreshing',
   showReverseNull: 'render-refreshing',
   impedanceDisplay: 'render-refreshing',

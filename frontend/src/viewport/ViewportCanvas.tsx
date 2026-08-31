@@ -7,6 +7,7 @@ import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerP
 import { calculateCameraFit, clippingRange, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
 import { FieldPlane } from './FieldPlane';
+import { ObservationOverlay } from './ObservationOverlay';
 import { deriveCapQuad, fieldPlaneToClipPlane, staticSectionClipPlane, type ModelClipMode } from './fieldPlaneClipping';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 import { useFieldPlaneStore } from './fieldPlaneStore';
@@ -774,6 +775,7 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, invertFieldC
       colormap={fieldColormap}
       scheduler={scheduler}
     />
+    <ObservationOverlay unitsPerMetre={scene.unitsPerMetre} scheduler={scheduler}/>
     {scene.surfaces.map((surface) => <SurfaceMesh
       key={surface.key}
       surface={surface}
