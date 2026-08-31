@@ -25,6 +25,21 @@ import '../styles/windowControls.css';
 
 type Side = 'leading' | 'trailing';
 
+/**
+ * Everything in the top bar a pointer is meant to operate rather than drag by.
+ *
+ * `windowControls.css` opts the same list out of `app-region` for Windows, and
+ * `WindowControls.test.tsx` pins the two lists to each other -- a control that
+ * appears in one and not the other is either undraggable where it should drag or
+ * unclickable where it should click, and neither is visible in review.
+ */
+export const NO_DRAG_SELECTOR = [
+  'button', 'a', 'input', 'select', 'textarea', 'kbd', 'dialog',
+  '[role=\'button\']', '[role=\'radiogroup\']', '[role=\'menu\']',
+  '[role=\'menuitem\']', '[role=\'dialog\']',
+  '.design-menu-popover', '.command-affordance',
+].join(', ');
+
 /** Which end of the title bar each platform hangs its controls from. */
 const SIDE_BY_PLATFORM: Record<HostPlatform, Side | null> = {
   windows: 'trailing',
@@ -58,6 +73,60 @@ function CloseGlyph() {
   </svg>;
 }
 
+/* macOS glyphs -------------------------------------------------------------
+ *
+ * The Windows set above is drawn for a 46x32 caption button on a flat
+ * background. Reusing it inside a 12 px traffic light is what made the dots
+ * read as a Windows title bar wearing macOS colours -- a square outline for
+ * maximize above all, which is not a shape the platform draws anywhere.
+ *
+ * These are traced from a measurement of the real buttons rather than eyeballed
+ * (lwouis/macos-traffic-light-buttons-as-SVG, whose art board is 85.4 units to
+ * the 12 px button; every number below is that source scaled by 12/85.4).
+ * Getting them close is not enough: these sit two pixels from a real title bar
+ * on the same screen, so a glyph a pixel wide or a pixel long reads as wrong
+ * without the viewer being able to say why. In particular the cross is 5.7 px
+ * across, not the 3.5 px a first guess put there, and the minus is 8 px -- two
+ * thirds of the button, far wider than it looks like it should be.
+ *
+ * The green button carries the full-screen chevrons, pointing out of the corners
+ * it will expand into and back in toward the centre once it is full screen.
+ * That glyph is a promise about what the button does, which is why the button
+ * enters full screen rather than zooming: Apple's plain click is full screen and
+ * its Option-click is zoom, and `WindowControls` follows both.
+ */
+
+/** The centre-line of a 0.98 px bar, round-capped, in the button's 12 px box. */
+function MacCloseGlyph() {
+  return <svg viewBox="0 0 12 12" aria-hidden="true">
+    <path d="M3.65 3.65 8.35 8.35M8.35 3.65 3.65 8.35"
+      stroke="currentColor" strokeWidth="0.98" strokeLinecap="round" fill="none"/>
+  </svg>;
+}
+
+function MacMinimizeGlyph() {
+  return <svg viewBox="0 0 12 12" aria-hidden="true">
+    <path d="M2.50 6h7.01"
+      stroke="currentColor" strokeWidth="0.98" strokeLinecap="round" fill="none"/>
+  </svg>;
+}
+
+/** Chevrons in the top-right and bottom-left, pointing out of the window. */
+function MacFullscreenGlyph() {
+  return <svg viewBox="0 0 12 12" aria-hidden="true">
+    <path d="M4.38 2.92h3.76a.91.91 0 0 1 .91.91v3.76z" fill="currentColor"/>
+    <path d="M7.64 9.06H3.88a.91.91 0 0 1-.91-.91V4.38z" fill="currentColor"/>
+  </svg>;
+}
+
+/** The same two, turned to face the centre: this gives the screen back. */
+function MacRestoreScreenGlyph() {
+  return <svg viewBox="0 0 12 12" aria-hidden="true">
+    <path d="M9.05 7.6V3.83a.91.91 0 0 0-.91-.91H4.38z" fill="currentColor"/>
+    <path d="M2.97 4.38v3.77a.91.91 0 0 0 .91.91h3.76z" fill="currentColor"/>
+  </svg>;
+}
+
 export interface WindowControlsProps {
   side: Side;
   /** Injected in tests so no pywebview bridge is needed. */
@@ -86,11 +155,36 @@ export function WindowControls({ side, store = nativeWindow }: WindowControlsPro
     const root = document.documentElement;
     root.dataset.nativeFrame = state.platform;
     root.dataset.nativeMaximized = String(state.maximized);
+    root.style.setProperty('--native-top-inset', `${state.topInset}px`);
     return () => {
       delete root.dataset.nativeFrame;
       delete root.dataset.nativeMaximized;
+      root.style.removeProperty('--native-top-inset');
     };
-  }, [owns, state.maximized, state.platform]);
+  }, [owns, state.maximized, state.platform, state.topInset]);
+
+  // macOS has to ask for its drags; Windows is given them.
+  //
+  // WebKit does not implement `-webkit-app-region`, so on macOS the stylesheet's
+  // drag region does nothing and the gesture has to start here: a plain
+  // mousedown in the bar, on something that is not a control, hands the click to
+  // AppKit. The listener is a capturing one so that it sees the event before any
+  // component can stop it, and the second click of a double-click is answered as
+  // a double-click instead -- otherwise the gesture would begin a second
+  // zero-distance drag and the window would never zoom.
+  useEffect(() => {
+    if (!owns || state.platform !== 'macos') return undefined;
+    const onMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0 || event.defaultPrevented) return;
+      const target = event.target as Element | null;
+      if (typeof target?.closest !== 'function') return;
+      if (!target.closest('.topbar') || target.closest(NO_DRAG_SELECTOR)) return;
+      if (event.detail >= 2) void store.doubleClick();
+      else void store.beginDrag();
+    };
+    document.addEventListener('mousedown', onMouseDown, true);
+    return () => { document.removeEventListener('mousedown', onMouseDown, true); };
+  }, [owns, state.platform, store]);
 
   // Which window has focus was the title bar's job. Nothing else in the
   // interface says it, so the controls dim instead.
@@ -110,35 +204,43 @@ export function WindowControls({ side, store = nativeWindow }: WindowControlsPro
 
   if (active !== side) return null;
 
-  const maximizeLabel = state.maximized ? 'Restore down' : 'Maximize';
+  const mac = state.platform === 'macos';
+  const maximizeLabel = state.maximized
+    ? (mac ? 'Exit full screen' : 'Restore down')
+    : (mac ? 'Enter full screen' : 'Maximize');
+  const close = mac ? <MacCloseGlyph/> : <CloseGlyph/>;
+  const minimize = mac ? <MacMinimizeGlyph/> : <MinimizeGlyph/>;
+  const maximize = state.maximized
+    ? (mac ? <MacRestoreScreenGlyph/> : <RestoreGlyph/>)
+    : (mac ? <MacFullscreenGlyph/> : <MaximizeGlyph/>);
   return <div className={`window-controls window-controls-${state.platform}`} role="group" aria-label="Window">
-    {state.platform === 'macos' && <button
+    {mac && <button
       type="button"
       className="window-controls-close"
       title="Close"
       aria-label="Close"
       onClick={() => { void store.close(); }}
-    ><CloseGlyph/></button>}
+    >{close}</button>}
     <button
       type="button"
       className="window-controls-minimize"
       title="Minimize"
       aria-label="Minimize"
       onClick={() => { void store.minimize(); }}
-    ><MinimizeGlyph/></button>
+    >{minimize}</button>
     <button
       type="button"
       className="window-controls-maximize"
-      title={maximizeLabel}
+      title={mac ? `${maximizeLabel} (hold Option to zoom)` : maximizeLabel}
       aria-label={maximizeLabel}
-      onClick={() => { void store.toggleMaximize(); }}
-    >{state.maximized ? <RestoreGlyph/> : <MaximizeGlyph/>}</button>
-    {state.platform !== 'macos' && <button
+      onClick={(event) => { void store.toggleMaximize(mac && event.altKey); }}
+    >{maximize}</button>
+    {!mac && <button
       type="button"
       className="window-controls-close"
       title="Close"
       aria-label="Close"
       onClick={() => { void store.close(); }}
-    ><CloseGlyph/></button>}
+    >{close}</button>}
   </div>;
 }

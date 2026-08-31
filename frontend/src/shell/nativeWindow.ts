@@ -29,15 +29,30 @@ export interface NativeWindowSnapshot {
   customFrame: boolean;
   maximized: boolean;
   platform: HostPlatform;
+  /**
+   * Pixels the interface must leave clear at the top of the window.
+   *
+   * Non-zero only in macOS full screen, where the menu bar slides down over
+   * whatever is beneath it and the window's own layout metrics report nothing:
+   * `contentLayoutRect` and `safeAreaInsets.top` are both 0 there. Without the
+   * reservation the top bar's brand, menus and Solve button sit underneath it.
+   */
+  topInset: number;
 }
 
 /** What the launcher exposes as `js_api`. Each call is asynchronous. */
 interface NativeWindowApi {
-  window_state?: () => Promise<{ maximized?: boolean; customFrame?: boolean }>;
+  window_state?: () => Promise<{
+    maximized?: boolean;
+    customFrame?: boolean;
+    topInset?: number;
+  }>;
   window_minimize?: () => Promise<{ maximized?: boolean } | void>;
-  window_toggle_maximize?: () => Promise<{ maximized?: boolean } | void>;
+  window_toggle_maximize?: (zoom?: boolean) => Promise<{ maximized?: boolean } | void>;
   window_close?: () => Promise<void>;
   window_set_title?: (title: string) => Promise<void>;
+  window_begin_drag?: () => Promise<void>;
+  window_double_click?: () => Promise<{ action?: string } | void>;
 }
 
 interface PywebviewBridge {
@@ -57,6 +72,7 @@ const ABSENT: NativeWindowSnapshot = {
   customFrame: false,
   maximized: false,
   platform: 'other',
+  topInset: 0,
 };
 
 /**
@@ -190,6 +206,7 @@ export class NativeWindowStore {
           this.host.pywebview?.platform,
           this.host.navigator?.userAgent ?? '',
         ),
+        topInset: Number.isFinite(state?.topInset) ? Number(state?.topInset) : 0,
       });
     } catch {
       // The bridge answering badly is not a reason to lose the window: fall back
@@ -205,7 +222,8 @@ export class NativeWindowStore {
       current.present === next.present &&
       current.customFrame === next.customFrame &&
       current.maximized === next.maximized &&
-      current.platform === next.platform
+      current.platform === next.platform &&
+      current.topInset === next.topInset
     ) {
       return;
     }
@@ -227,17 +245,53 @@ export class NativeWindowStore {
     await this.api()?.window_minimize?.();
   }
 
-  async toggleMaximize(): Promise<void> {
+  /**
+   * Take the window to full screen, or zoom it when `zoom` is set.
+   *
+   * The two are one button because that is how macOS's green one works: a plain
+   * click is full screen, Option-click is zoom. Windows has no such split and
+   * ignores the argument -- there the button maximizes either way.
+   */
+  async toggleMaximize(zoom = false): Promise<void> {
     const api = this.api();
     if (!api?.window_toggle_maximize) return;
-    this.assume(!this.snapshot.maximized);
-    const result = await api.window_toggle_maximize();
+    if (!zoom) this.assume(!this.snapshot.maximized);
+    const result = await api.window_toggle_maximize(zoom);
     if (result && typeof result.maximized === 'boolean') this.assume(result.maximized);
     else await this.refresh();
   }
 
   async close(): Promise<void> {
     await this.api()?.window_close?.();
+  }
+
+  /**
+   * Ask the host to take over the pointer and move the window.
+   *
+   * macOS only, and not an optimization over a JavaScript drag -- it is the only
+   * drag available. WebKit does not implement `-webkit-app-region` at all
+   * (`CSS.supports('-webkit-app-region', 'drag')` is false in this WKWebView),
+   * so the stylesheet's drag region reaches Windows and nothing else. AppKit's
+   * `performWindowDragWithEvent:` runs the gesture from the click still in
+   * flight, which is what makes moving between Spaces and displays -- and the
+   * snapping that comes with them -- behave like every other window's.
+   *
+   * On Windows this is never called: the runtime has already handed the top bar
+   * to the OS as caption before a mousedown reaches the document.
+   */
+  async beginDrag(): Promise<void> {
+    await this.api()?.window_begin_drag?.();
+  }
+
+  /**
+   * Answer a double-click on the top bar.
+   *
+   * The host decides what that means, because macOS lets the user choose
+   * between zoom, minimize and nothing in System Settings, and with the title
+   * bar gone this bar is the only surface left that can honour the choice.
+   */
+  async doubleClick(): Promise<void> {
+    await this.api()?.window_double_click?.();
   }
 
   /**

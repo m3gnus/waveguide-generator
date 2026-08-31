@@ -2,7 +2,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NativeWindowStore } from './nativeWindow';
-import { WindowControls } from './WindowControls';
+import { NO_DRAG_SELECTOR, WindowControls } from './WindowControls';
+import { readFileSync } from 'node:fs';
 
 /**
  * A store wired to a fake pywebview host.
@@ -102,7 +103,7 @@ describe('WindowControls', () => {
     await render(storeFor({ backend: 'cocoa' }), 'leading');
     expect(container.querySelector('.window-controls-macos')).not.toBeNull();
     expect([...container.querySelectorAll('button')].map((b) => b.getAttribute('aria-label')))
-      .toEqual(['Close', 'Minimize', 'Maximize']);
+      .toEqual(['Close', 'Minimize', 'Enter full screen']);
     expect(document.documentElement.dataset.nativeFrame).toBe('macos');
   });
 
@@ -145,5 +146,159 @@ describe('WindowControls', () => {
     expect(document.documentElement.dataset.nativeFrame).toBe('windows');
     await act(async () => root.render(<></>));
     expect(document.documentElement.dataset.nativeFrame).toBeUndefined();
+  });
+});
+
+/**
+ * A top bar to press on, with one control in it and one piece of plain text.
+ *
+ * The component listens on the document rather than on an element it renders,
+ * because the bar it makes draggable is its parent. Tests therefore have to
+ * build the bar themselves.
+ */
+function topbarWith(): { bar: HTMLElement; label: HTMLElement; button: HTMLElement } {
+  const bar = document.createElement('header');
+  bar.className = 'topbar';
+  const label = document.createElement('span');
+  label.textContent = 'WAVEGUIDE GENERATOR';
+  const button = document.createElement('button');
+  bar.append(label, button);
+  document.body.appendChild(bar);
+  return { bar, label, button };
+}
+
+function press(target: Element, detail = 1) {
+  target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail }));
+}
+
+describe('WindowControls on macOS', () => {
+  let bar: HTMLElement;
+  let label: HTMLElement;
+  let button: HTMLElement;
+
+  beforeEach(() => { ({ bar, label, button } = topbarWith()); });
+  afterEach(() => bar.remove());
+
+  // macOS puts them at the leading edge, and the close button first -- the
+  // opposite of Windows on both counts.
+  it('draws its controls at the leading edge, close first', async () => {
+    await render(storeFor({ backend: 'cocoa' }), 'leading');
+    const labels = [...container.querySelectorAll('button')].map(b => b.getAttribute('aria-label'));
+    expect(labels).toEqual(['Close', 'Minimize', 'Enter full screen']);
+    expect(document.documentElement.dataset.nativeFrame).toBe('macos');
+  });
+
+  // Reusing the Windows glyphs made the dots read as a Windows title bar in
+  // macOS colours -- a square outline for maximize above all, which is not a
+  // shape the platform draws anywhere. macOS zooms with two filled triangles.
+  it('draws the platform\'s own glyphs, not the Windows ones', async () => {
+    await render(storeFor({ backend: 'cocoa' }), 'leading');
+    const green = container.querySelector('button[aria-label="Enter full screen"]');
+    expect(green?.querySelectorAll('path[fill="currentColor"]').length).toBe(2);
+    expect(green?.querySelector('rect')).toBeNull();
+    const close = container.querySelector('button[aria-label="Close"] path');
+    expect(close?.getAttribute('stroke-linecap')).toBe('round');
+    // 12 px coordinates, because the glyphs are traced at the button's own size.
+    expect(close?.closest('svg')?.getAttribute('viewBox')).toBe('0 0 12 12');
+  });
+
+  it('turns the chevrons inward once the window is full screen', async () => {
+    await render(storeFor({ backend: 'cocoa', maximized: true }), 'leading');
+    const green = container.querySelector('button[aria-label="Exit full screen"]');
+    expect(green?.querySelectorAll('path[fill="currentColor"]').length).toBe(2);
+  });
+
+  // A plain click is full screen and Option-click is zoom, exactly as the real
+  // green button behaves. Sending the same call for both would make the
+  // modifier silently do nothing.
+  it('passes Option through so the green button zooms instead', async () => {
+    const window_toggle_maximize = vi.fn(async () => ({ maximized: false }));
+    await render(storeFor({ backend: 'cocoa', api: { window_toggle_maximize } }), 'leading');
+    const green = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Enter full screen"]');
+    await act(async () => {
+      green?.dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }));
+    });
+    expect(window_toggle_maximize).toHaveBeenCalledWith(true);
+    await act(async () => {
+      green?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(window_toggle_maximize).toHaveBeenLastCalledWith(false);
+  });
+
+  it('draws nothing at the trailing edge', async () => {
+    await render(storeFor({ backend: 'cocoa' }), 'trailing');
+    expect(container.querySelector('.window-controls')).toBeNull();
+  });
+
+  // WebKit has no `-webkit-app-region`, so this call is the only way the window
+  // can be moved at all.
+  it('starts a native drag from a press on the bar', async () => {
+    const window_begin_drag = vi.fn(async () => undefined);
+    await render(storeFor({ backend: 'cocoa', api: { window_begin_drag } }), 'leading');
+    press(label);
+    expect(window_begin_drag).toHaveBeenCalledOnce();
+  });
+
+  it('leaves presses on a control alone', async () => {
+    const window_begin_drag = vi.fn(async () => undefined);
+    await render(storeFor({ backend: 'cocoa', api: { window_begin_drag } }), 'leading');
+    press(button);
+    expect(window_begin_drag).not.toHaveBeenCalled();
+  });
+
+  it('leaves presses outside the bar alone', async () => {
+    const window_begin_drag = vi.fn(async () => undefined);
+    await render(storeFor({ backend: 'cocoa', api: { window_begin_drag } }), 'leading');
+    press(document.body);
+    expect(window_begin_drag).not.toHaveBeenCalled();
+  });
+
+  // The second click of a double-click must not begin a second zero-distance
+  // drag, or the window would never zoom.
+  it('answers the second click as a double-click', async () => {
+    const window_begin_drag = vi.fn(async () => undefined);
+    const window_double_click = vi.fn(async () => ({ action: 'zoom' }));
+    await render(
+      storeFor({ backend: 'cocoa', api: { window_begin_drag, window_double_click } }), 'leading');
+    press(label, 1);
+    press(label, 2);
+    expect(window_begin_drag).toHaveBeenCalledOnce();
+    expect(window_double_click).toHaveBeenCalledOnce();
+  });
+
+  // Windows is given its drags by the runtime; asking for them there as well
+  // would move the window twice for one gesture.
+  it('asks for no drag on Windows', async () => {
+    const window_begin_drag = vi.fn(async () => undefined);
+    await render(storeFor({ api: { window_begin_drag } }), 'trailing');
+    press(label);
+    expect(window_begin_drag).not.toHaveBeenCalled();
+  });
+
+  it('stops listening when it unmounts', async () => {
+    const window_begin_drag = vi.fn(async () => undefined);
+    await render(storeFor({ backend: 'cocoa', api: { window_begin_drag } }), 'leading');
+    await act(async () => root.render(<></>));
+    press(label);
+    expect(window_begin_drag).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The JavaScript and the stylesheet must exempt the same controls.
+ *
+ * They cannot share a value -- one is CSS -- and they fail in opposite,
+ * invisible ways: a control missing from the stylesheet is unclickable on
+ * Windows, and one missing from the selector is undraggable on macOS.
+ */
+describe('the drag exemptions', () => {
+  it('match the stylesheet', () => {
+    const css = new TextDecoder().decode(readFileSync('src/styles/windowControls.css'));
+    const block = /\.topbar :is\(([^)]+)\)/.exec(css);
+    expect(block).not.toBeNull();
+    const inCss = (block?.[1] ?? '').split(',').map(s => s.trim()).filter(Boolean).sort();
+    const inTs = NO_DRAG_SELECTOR.split(',').map(s => s.trim().replace(/'/g, "'")).sort();
+    expect(inCss).toEqual(inTs);
   });
 });

@@ -23,6 +23,7 @@ from launchers.statusapp.__main__ import (
     _show_startup_failure_dialog,
 )
 from launchers.statusapp.controller import ServiceState, StatusController, StatusSnapshot
+from launchers.macoswindow import install_custom_frame as install_macos_frame
 from launchers.windowframe import enable_non_client_regions, install_custom_frame
 from launchers.apply_update import (
     ApplyUpdateError,
@@ -79,6 +80,12 @@ WEBVIEW2_REPAIR = (
     "If WebView2 is already installed and the error names pythonnet, reinstall the "
     "dependencies from server/requirements-runtime.txt."
 )
+
+
+#: How long the close button waits for pywebview's JavaScript bridge to finish
+#: the call it is answering. The bridge's own round trip is sub-millisecond when
+#: the web view is alive; this is margin, not a measurement of it.
+BRIDGE_SETTLE_SECONDS = 0.25
 
 
 class WindowsWebViewUnavailable(RuntimeError):
@@ -205,11 +212,33 @@ class _WindowApi:
     def window_minimize(self) -> dict[str, bool]:
         return self._desktop.window_minimize()
 
-    def window_toggle_maximize(self) -> dict[str, bool]:
-        return self._desktop.window_toggle_maximize()
+    def window_toggle_maximize(self, zoom: bool = False) -> dict[str, bool]:
+        """Full screen, or zoom when the interface says Option was held.
+
+        The split is macOS's own: a plain click on the green button is full
+        screen and Option-click is zoom. Windows has one behaviour and ignores
+        the argument.
+        """
+
+        return self._desktop.window_toggle_maximize(zoom)
 
     def window_close(self) -> None:
         self._desktop.window_close()
+
+    def window_begin_drag(self) -> None:
+        """Start a window drag from the click the interface is holding.
+
+        macOS only, and only because WebKit has no ``-webkit-app-region``: on
+        Windows the runtime hands the top bar to the OS as caption and no
+        JavaScript is involved in a drag at all.
+        """
+
+        self._desktop.window_begin_drag()
+
+    def window_double_click(self) -> dict[str, object]:
+        """Answer a double-click on the top bar the way a title bar would."""
+
+        return self._desktop.window_double_click()
 
     def window_set_title(self, title: str) -> None:
         """Name the window for the taskbar and Alt-Tab.
@@ -795,6 +824,28 @@ class DesktopWindow:
             raise RuntimeError("The desktop window has not started")
         self._webview.create_window(WINDOW_TITLE, target)
 
+    def _arm_custom_frame(self, window: object) -> None:
+        """Subscribe to the event this platform's backend actually fires.
+
+        ``loaded`` is the right hook on Windows and a dead one on macOS. pywebview
+        fires it from ``inject_pywebview``, which the Cocoa backend reaches only
+        from ``webView:didFinishNavigation:`` -- and against this SPA that had not
+        happened nine seconds after the window opened, with
+        ``events.loaded.is_set()`` still false and a handler on it never called.
+        Measured, not inferred: the first attempt at this shipped on ``loaded``
+        for both platforms and left macOS with the title bar it was meant to take.
+
+        ``shown`` is set for every backend by ``webview.start`` itself rather than
+        by a navigation delegate, and it was measured firing exactly once with
+        ``Window.native`` already published and the install succeeding from it.
+        """
+
+        events = window.events  # type: ignore[attr-defined]
+        if sys.platform == "darwin":
+            events.shown += self._adopt_custom_frame
+        else:
+            events.loaded += self._adopt_custom_frame
+
     def _adopt_custom_frame(self) -> None:
         """Take the OS caption once there is a loaded window to take it from.
 
@@ -806,14 +857,20 @@ class DesktopWindow:
         keeps reporting ``customFrame: false``, and the interface draws nothing --
         leaving a window with an OS title bar, exactly as before.
 
-        ``loaded`` fires on a thread pywebview spawns, so every native call below
-        is marshalled onto the UI thread that owns the form.
+        The event that gets here is per-platform -- see ``_arm_custom_frame`` --
+        and both fire on a thread pywebview spawns, so every native call below is
+        marshalled onto the UI thread that owns the window.
         """
 
-        if sys.platform != "win32" or self._custom_frame is not None:
+        if self._custom_frame is not None:
             return
         window = self._window
         if window is None:
+            return
+        if sys.platform == "darwin":
+            self._adopt_macos_frame(window)
+            return
+        if sys.platform != "win32":
             return
         try:
             from webview.platforms.winforms import BrowserView
@@ -841,7 +898,34 @@ class DesktopWindow:
         except Exception as exc:  # noqa: BLE001 - native boundary
             _log_startup_failure(f"Could not reach the native window frame: {exc}")
 
+    def _adopt_macos_frame(self, window: object) -> None:
+        """Take the macOS title bar, using the NSWindow pywebview publishes.
+
+        There is no equivalent of the WebView2 check here. The Windows frame
+        needs a runtime setting before the top bar can move the window at all;
+        macOS drags through ``performWindowDragWithEvent_``, which every version
+        of AppKit this app runs on already has.
+        """
+
+        try:
+            frame = install_macos_frame(getattr(window, "native", None))
+        except Exception as exc:  # noqa: BLE001 - native boundary
+            _log_startup_failure(f"Could not reach the native window frame: {exc}")
+            return
+        if frame is not None:
+            self._custom_frame = frame
+
     def _window_is_maximized(self) -> bool:
+        frame = self._custom_frame
+        if sys.platform == "darwin":
+            if frame is None:
+                return False
+            try:
+                # Full screen, not zoom: it is what the green button's glyph
+                # describes, so it is the state the glyph has to follow.
+                return frame.fullscreen()
+            except Exception:  # noqa: BLE001 - cosmetic
+                return False
         if self._hwnd is None:
             return False
         try:
@@ -851,11 +935,18 @@ class DesktopWindow:
         except Exception:  # noqa: BLE001 - cosmetic
             return False
 
-    def window_state(self) -> dict[str, bool]:
-        return {
+    def window_state(self) -> dict[str, object]:
+        state: dict[str, object] = {
             "customFrame": self._custom_frame is not None,
             "maximized": self._window_is_maximized(),
         }
+        frame = self._custom_frame
+        if sys.platform == "darwin" and frame is not None:
+            try:
+                state["topInset"] = frame.top_inset()
+            except Exception:  # noqa: BLE001 - cosmetic
+                state["topInset"] = 0.0
+        return state
 
     def window_minimize(self) -> dict[str, bool]:
         minimize = getattr(self._window, "minimize", None)
@@ -863,7 +954,7 @@ class DesktopWindow:
             minimize()
         return self.window_state()
 
-    def window_toggle_maximize(self) -> dict[str, bool]:
+    def window_toggle_maximize(self, zoom: bool = False) -> dict[str, bool]:
         """Maximize or restore, and answer with the state that was asked for.
 
         The reply is the intent rather than a re-read: Windows animates the
@@ -872,11 +963,43 @@ class DesktopWindow:
         follows, which is also what catches a snap or a Win+Arrow.
         """
 
+        frame = self._custom_frame
+        if sys.platform == "darwin" and frame is not None:
+            # pywebview's Cocoa ``maximize`` resizes to the screen and its
+            # ``restore`` un-minimizes, so the two are not inverses and a window
+            # maximized through them can never be restored. AppKit's own are.
+            if zoom:
+                frame.toggle_zoom()
+                return {"customFrame": True, "maximized": frame.fullscreen()}
+            return {"customFrame": True, "maximized": frame.toggle_fullscreen()}
         maximized = self._window_is_maximized()
         action = getattr(self._window, "restore" if maximized else "maximize", None)
         if callable(action):
             action()
-        return {"customFrame": self._custom_frame is not None, "maximized": not maximized}
+        return {"customFrame": frame is not None, "maximized": not maximized}
+
+    def window_begin_drag(self) -> None:
+        """Let AppKit run a window drag from the interface's mousedown."""
+
+        frame = self._custom_frame
+        if sys.platform != "darwin" or frame is None:
+            return
+        try:
+            frame.begin_drag()
+        except Exception as exc:  # noqa: BLE001 - a losable gesture
+            _log_startup_failure(f"Could not start the window drag: {exc}")
+
+    def window_double_click(self) -> dict[str, object]:
+        """Zoom, minimize or do nothing, as System Settings says to."""
+
+        frame = self._custom_frame
+        if sys.platform != "darwin" or frame is None:
+            return {"action": "none"}
+        try:
+            return {"action": frame.double_click()}
+        except Exception as exc:  # noqa: BLE001 - a losable gesture
+            _log_startup_failure(f"Could not answer the top-bar double click: {exc}")
+            return {"action": "none"}
 
     def window_close(self) -> None:
         """Close from the interface's button exactly as the OS button would.
@@ -884,11 +1007,30 @@ class DesktopWindow:
         ``destroy`` ends ``webview.start()``, and ``run()``'s ``finally`` stops
         the server from there -- so this shares one shutdown path with the OS
         close rather than inventing a second one that could drift from it.
+
+        On macOS it must not run *here*. This method is called from inside
+        pywebview's JavaScript bridge, and the bridge's next act is to evaluate
+        JavaScript in the web view to resolve the promise the interface is
+        waiting on. Destroying the window first takes that web view away, so the
+        ``evaluateJavaScript:`` completion handler never fires -- and Cocoa's
+        ``evaluate_js`` waits on a semaphore with no timeout, on a thread
+        pywebview does not mark as a daemon. The window closes, the main thread
+        finishes, and the interpreter then waits for that thread for ever: the
+        application appears hung and has to be force quit. Measured from the
+        stack of the surviving thread, blocked in
+        ``webview/platforms/cocoa.py`` ``evaluate_js``.
+
+        Letting the bridge finish first costs a quarter of a second of nothing
+        happening, which is invisible next to the window-close animation.
         """
 
         destroy = getattr(self._window, "destroy", None)
-        if callable(destroy):
+        if not callable(destroy):
+            return
+        if sys.platform != "darwin":
             destroy()
+            return
+        threading.Timer(BRIDGE_SETTLE_SECONDS, destroy).start()
 
     def set_window_title(self, title: str) -> None:
         """Public alias, because the interface now retitles the window too."""
@@ -1135,7 +1277,7 @@ class DesktopWindow:
                 min_size=(1100, 700),
             )
             try:
-                self._window.events.loaded += self._adopt_custom_frame
+                self._arm_custom_frame(self._window)
             except Exception as exc:  # noqa: BLE001 - the window still works framed
                 _log_startup_failure(f"Could not arm the custom window frame: {exc}")
             try:
