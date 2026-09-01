@@ -25,11 +25,12 @@ DEFAULT_FIELD_TRACES_MAX_BYTES = 256 * 1024 * 1024
 PHASE_CONVENTION = "solver_exp_plus_ikr"
 METAL_FIELD_TRACE_BACKEND = "metal-native"
 BEMPP_FIELD_TRACE_BACKEND = "bempp"
-FieldTraceBackend = Literal["metal-native", "bempp"]
+BEAT_FIELD_TRACE_BACKEND = "beat"
+FieldTraceBackend = Literal["metal-native", "bempp", "beat"]
 _COMPLEX64_LE = np.dtype("<c8")
 _SYMMETRY_PLANES = frozenset({None, "yz", "xz", "xy", "yz+xz"})
 _FIELD_TRACE_BACKENDS = frozenset(
-    {METAL_FIELD_TRACE_BACKEND, BEMPP_FIELD_TRACE_BACKEND}
+    {METAL_FIELD_TRACE_BACKEND, BEMPP_FIELD_TRACE_BACKEND, BEAT_FIELD_TRACE_BACKEND}
 )
 
 
@@ -851,6 +852,7 @@ __all__ = [
     "DEFAULT_FIELD_TRACES_MAX_BYTES",
     "FIELD_TRACES_MAX_BYTES_ENV",
     "FIELD_TRACES_VERSION",
+    "BEAT_FIELD_TRACE_BACKEND",
     "FieldTraceBackend",
     "FieldTraceArtifact",
     "FieldTraceBundle",

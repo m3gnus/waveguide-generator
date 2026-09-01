@@ -50,3 +50,33 @@ def test_circsym_mode_is_rejected() -> None:
 def test_infinite_baffle_is_rejected() -> None:
     with pytest.raises(ValueError, match="infinite-baffle"):
         beat.solve_beat_from_msh_text("$MeshFormat\n", _context(sim_type=1))
+
+
+def test_surface_trace_support_is_detected_from_the_installed_package() -> None:
+    """Detect the capability instead of assuming it.
+
+    ``SolveConfig.surface_traces`` was added after the currently pinned build,
+    so the adapter has to work against a package that has it and one that does
+    not; passing the flag to a solver that ignores it would report retained
+    traces that never arrive.
+    """
+
+    from dataclasses import dataclass
+
+    @dataclass
+    class WithTraces:
+        surface_traces: bool = False
+
+    @dataclass
+    class WithoutTraces:
+        quadrature_order: int = 4
+
+    class Package:
+        def __init__(self, solve_config):
+            self.SolveConfig = solve_config
+
+    assert beat._package_retains_surface_traces(Package(WithTraces)) is True
+    assert beat._package_retains_surface_traces(Package(WithoutTraces)) is False
+    assert beat._package_retains_surface_traces(Package(None)) is False
+    # A stub whose signature cannot be read is a "no", not a crash.
+    assert beat._package_retains_surface_traces(Package(object())) is False
