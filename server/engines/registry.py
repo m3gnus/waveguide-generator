@@ -32,6 +32,23 @@ class EngineInfo:
     cancellation_granularity: str = "between-frequencies"
 
 
+def _symmetry_domains(name: str) -> tuple[str, ...]:
+    """Reduced domains an engine can actually solve.
+
+    BEAT mirrors across x, or across x and y, with the mesh in the positive
+    fundamental domain, which covers ATH quadrants 1234, 14 and 1. It has no
+    y-only mirror, so quadrants 12 -- WG's ``xz`` half -- is refused by
+    ``reject_unsupported_native_symmetry``; advertising a bare "half" here
+    would promise it.
+    """
+
+    if name in {"metal", "bempp"}:
+        return ("full", "half", "quarter")
+    if name == "beat":
+        return ("full", "half-yz", "quarter")
+    return ("full",)
+
+
 def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineInfo]:
     """Return stable, honest reasons without treating optional absence as an error."""
 
@@ -138,12 +155,12 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                     if name == "metal"
                     else ("parametric",)
                 ),
-                symmetry_domains=(
-                    ("full", "half", "quarter")
-                    if name in {"metal", "bempp", "beat"}
-                    else ("full",)
+                symmetry_domains=_symmetry_domains(name),
+                field_traces=(
+                    bool(status.get("surface_traces"))
+                    if name == "beat"
+                    else name in {"metal", "bempp"}
                 ),
-                field_traces=name in {"metal", "bempp"},
                 di_sphere=True,
                 cancellation_granularity=(
                     "intra-frequency"

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 from functools import lru_cache
 import importlib
+import inspect
 import logging
 import time
 from pathlib import Path
@@ -34,7 +35,11 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
-from .field_traces_store import field_trace_retention_plan
+from .field_traces_store import (
+    BEAT_FIELD_TRACE_BACKEND,
+    build_field_trace_artifact,
+    field_trace_retention_plan,
+)
 from .frequency_sweep import (
     live_execution_frequencies,
     sort_native_result_frequencies,
@@ -83,6 +88,18 @@ class _BeatProbeUnavailable(RuntimeError):
         self.status = status
 
 
+def _package_retains_surface_traces(package: Any) -> bool:
+    """Whether the installed package can return the boundary Cauchy datum."""
+
+    solve_config = getattr(package, "SolveConfig", None)
+    if solve_config is None:
+        return False
+    try:
+        return "surface_traces" in inspect.signature(solve_config).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _probe_beat_status() -> dict[str, Any]:
     package = _load_api()
     if package is None:
@@ -98,6 +115,9 @@ def _probe_beat_status() -> dict[str, Any]:
         "reason": str(status.get("reason") or "beat capability probe returned no reason"),
         "version": status.get("version"),
         "backend": status.get("backend"),
+        # Detected, not assumed: surface-trace retention landed after the first
+        # pinned build, and the registry advertises whatever the pin can do.
+        "surface_traces": _package_retains_surface_traces(package),
     }
 
 
@@ -159,7 +179,6 @@ def solve_beat_from_msh_text(
     field_plane_enabled = (
         getattr(context, "polar_config", {}).get("field_plane", True) is True
     )
-    # The BEAT solver does not expose its boundary traces over the wire yet.
     retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
         field_trace_retention_plan(
             msh_text,
@@ -167,11 +186,11 @@ def solve_beat_from_msh_text(
             frequency_count=len(live_execution_frequencies(context)),
             channel_count=1,
             enabled=field_plane_enabled,
-            supported=False,
+            supported=bool(status.get("surface_traces")),
             cap_bytes=field_trace_cap_bytes,
+            unsupported_reason="unsupported_solver_version",
         )
     )
-    del retain_traces
 
     started = time.time()
     if stage_callback:
@@ -240,6 +259,7 @@ def solve_beat_from_msh_text(
             mesh_scale=1.0,
             beat_backend=backend,
             source_motion=context.source_motion,
+            **({"surface_traces": True} if retain_traces else {}),
             progress_callback=progress,
             on_frequency_result=(
                 on_frequency_result if result_callback is not None else None
@@ -331,7 +351,20 @@ def solve_beat_from_msh_text(
         metadata=metadata,
         sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
     )
-    response["_field_traces"] = None
+    field_traces = (
+        build_field_trace_artifact(
+            msh_text,
+            [("default", result)],
+            config,
+            backend=BEAT_FIELD_TRACE_BACKEND,
+            sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
+        )
+        if retain_traces
+        else None
+    )
+    if retain_traces and field_traces is None:
+        trace_reason = "trace_output_missing"
+    response["_field_traces"] = field_traces
     response["_field_trace_unavailable_reason"] = trace_reason
     return response
 
