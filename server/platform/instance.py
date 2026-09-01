@@ -579,12 +579,16 @@ def wait_for_pid_exit(
         outcome = _windows_wait_for_pid_exit(pid, stop, timeout, wakeups, poll_interval)
         if outcome is not None:
             return outcome
-    if timeout is None and any(wakeup is not None for wakeup in wakeups):
-        # The poll cannot observe a wakeup handle, and the caller only asked to
-        # wait forever because it expected that handle to speak for whatever it
-        # is really watching. An unbounded poll would swallow the loop and that
-        # condition would never be re-tested, so bound the wait and give the
-        # caller its tick back instead.
+    if timeout is None:
+        # Reaching the poll at all means no kernel wait could take this on, so
+        # the only way anything here is discovered is by looking. `timeout=None`
+        # asks for a wait with no timer, and a poll with no timer is a loop that
+        # tests one condition for ever: a wakeup handle it cannot observe, a
+        # plain `Event` no wait can be released by, or simply the caller's own
+        # conditions, none of which it re-tests. So the wait is bounded and the
+        # tick handed back, which is the contract this function documents and
+        # the one `StopSignal` points callers at -- and what `launch/serve.py`,
+        # the only caller that passes `timeout=None`, already loops around.
         timeout = poll_interval
     return _polling_wait_for_pid_exit(pid, stop, timeout, poll_interval)
 

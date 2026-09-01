@@ -788,8 +788,20 @@ def test_wait_for_pid_exit_returns_the_moment_a_child_dies() -> None:
     child = _idle_child()
     stop = instance.StopSignal()
     assert child.stdin is not None
+
+    def end_the_child() -> None:
+        assert child.stdin is not None
+        child.stdin.close()
+        # Reaping is the point, not tidiness. An exited child nobody has waited
+        # on is a zombie, and a zombie still answers `os.kill(pid, 0)` -- which
+        # is how `_pid_is_running` asks on POSIX. Without this the pid never
+        # appears to go away and the wait below runs until pytest's timeout
+        # kills the whole session. Every real caller watches a pid that is not
+        # its child, where the question does not arise.
+        child.wait(timeout=30)
+
     try:
-        threading.Timer(0.1, child.stdin.close).start()
+        threading.Timer(0.1, end_the_child).start()
         started = time.monotonic()
         outcome = instance.wait_for_pid_exit(child.pid, stop, timeout=None)
         elapsed = time.monotonic() - started
