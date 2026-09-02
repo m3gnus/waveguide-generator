@@ -560,7 +560,7 @@ def create_app(
     mount_cadlink(application)
     mount_onshape(application)
     mount_charts(application)
-    mount_settings(application)
+    settings_store = mount_settings(application)
     mount_drivers(application)
     mount_updates(
         application,
@@ -570,6 +570,9 @@ def create_app(
         update_request_path=(
             Path(update_request_path) if update_request_path is not None else None
         ),
+        # The update channel is remembered here rather than in the browser
+        # because it has to survive the update it controls.
+        settings=settings_store,
     )
     # Last, because a problem report describes every store above it and reads
     # them off ``application.state`` rather than building a second copy.

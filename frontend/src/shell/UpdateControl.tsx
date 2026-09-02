@@ -283,7 +283,12 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
   } else if (snapshot.error || data?.lastError) {
     title = 'Update status unavailable';
     summary = snapshot.error?.message ?? data?.lastError ?? summary;
-  } else if (data?.availability === 'current' || data?.availability === 'ahead') {
+  } else if (data?.availability === 'ahead') {
+    // Reached by switching back to Stable while running a beta, which is the
+    // whole reason no new availability state was added for that: WG is not out
+    // of date, it is in front of the channel it now follows.
+    summary = `Version ${data.runningVersion} is newer than the latest ${data.channel === 'beta' ? 'release' : 'stable release'}. ${checkedLabel(data.checkedAt)}.`;
+  } else if (data?.availability === 'current') {
     summary = `Version ${data.runningVersion} is up to date. ${checkedLabel(data.checkedAt)}.`;
   }
 
@@ -292,6 +297,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
       <header><div><h2 id="update-dialog-title">{title}</h2><p>{summary}</p></div><button className="dialog-close" aria-label="Close update details" onClick={close}><Icon name="close"/></button></header>
       <div className="update-dialog-body">
         {data?.checkout.reason && <p className={`update-checkout-note ${data.checkout.updateSupported ? '' : 'blocked'}`}><b>{data.checkout.kind === 'bundle' ? 'Standalone app' : data.checkout.kind === 'development' ? 'Development checkout' : 'Checkout status'}</b>{data.checkout.reason}</p>}
+        {data?.channel === 'beta' && <p className="update-checkout-note"><b>Beta channel</b>WG is offered pre-releases as well as finished ones. Change this in Settings.</p>}
         {data?.freshness === 'stale' && <p className="update-stale-note">Showing the last successful result. {data.lastError}</p>}
         {data?.action?.kind === 'copy_command' && <section className="update-command" aria-labelledby="update-command-title">
           <div><h3 id="update-command-title">Install this update</h3><p>WG will close, run the verified installer, and restart. The {data.action.shell} command remains available as a fallback.</p></div>

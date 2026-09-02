@@ -24,6 +24,7 @@ import urllib.request
 from scripts.fetch_spa import SpaError, expected_digest
 from shared import release_assets
 from server.platform.process import background_process_kwargs
+from server.settings.store import SettingsStore
 from server.updates.bundle import (
     BundleInstallError,
     BundleUpdateInstaller,
@@ -60,6 +61,18 @@ TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)
 # pre-release too. See `_is_update_layer_carrier`.
 STABLE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 RUNTIME_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+#: Where the chosen update channel is remembered.
+#:
+#: Server-side, and deliberately so: the setting has to survive the update it
+#: controls, and a browser-scoped copy does not -- a beta install that lost the
+#: preference on its first restart would silently be back on stable and the
+#: channel would buy nothing. ``SettingsStore`` is a generic namespace map, so
+#: this needs no schema of its own.
+UPDATE_SETTINGS_NAMESPACE = "updates"
+STABLE_CHANNEL = "stable"
+BETA_CHANNEL = "beta"
+UPDATE_CHANNELS = (STABLE_CHANNEL, BETA_CHANNEL)
 CACHE_SCHEMA = 1
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_RELEASE_LIST_BYTES = 5_000_000
@@ -82,6 +95,7 @@ _CACHE_FIELDS = frozenset(
         "nextCheckEpoch",
         "failureCount",
         "lastError",
+        "channel",
     }
 )
 _RELEASE_CACHE_FIELDS = frozenset({"version", "tag", "url", "publishedAt", "assetsReady"})
@@ -115,6 +129,10 @@ class UpdateRateLimitError(RuntimeError):
 
 class UpdateInstallUnavailable(RuntimeError):
     """The current process cannot safely hand a release to the installer."""
+
+
+class UpdateChannelUnavailable(RuntimeError):
+    """This process has nowhere durable to remember an update channel."""
 
 
 def _iso(timestamp: float | None) -> str | None:
@@ -175,6 +193,61 @@ def _is_update_layer_carrier(tag: str) -> bool:
     if tag.endswith(suffix):
         return TAG_RE.fullmatch(tag.removesuffix(suffix)) is not None
     return STABLE_TAG_RE.fullmatch(tag) is not None
+
+
+def _is_offerable_release_tag(tag: str, *, allow_prerelease: bool) -> bool:
+    """May this tag be offered to a user as a release to move to?
+
+    Stable keeps the narrow shape: ``releases/latest`` is defined as the most
+    recent non-pre-release, so anything else arriving there is a surprise and
+    should stay refused.
+
+    Beta admits a SemVer pre-release label, but **not** an ``-updates``
+    companion. Both are GitHub pre-releases, so a scan that filtered only on
+    that flag would offer `v0.4.0-beta.1-updates` -- a bag of update layers with
+    no installer on it -- as though it were the release itself.
+    """
+
+    if not allow_prerelease:
+        return STABLE_TAG_RE.fullmatch(tag) is not None
+    if tag.endswith(release_assets.UPDATES_TAG_SUFFIX):
+        return False
+    return TAG_RE.fullmatch(tag) is not None
+
+
+def _is_installable_tag(tag: str) -> bool:
+    """May WG build an install command or an install handoff from this tag?
+
+    Widened past ``STABLE_TAG_RE`` for the beta channel. A beta is a real
+    release page carrying real installer assets, and the installers take
+    ``--tag <tag>`` verbatim, so refusing one here would show a beta install an
+    update it could never apply -- the exact opposite of what the channel is
+    for, since its whole purpose is exercising packaging and the install path
+    before a stable version number is spent.
+
+    This does not let a beta reach a stable install: ``_parse_release`` is the
+    only way a tag becomes an offered release, and on the stable channel it
+    still refuses every pre-release. What the narrow shape was really protecting
+    against -- an ``-updates`` companion -- stays refused here.
+    """
+
+    return _is_offerable_release_tag(tag, allow_prerelease=True)
+
+
+def channel_of(stored: Any) -> str:
+    """Read a stored ``updates`` namespace defensively.
+
+    The settings store is a generic map the frontend writes, so this namespace
+    may hold anything at all: a corrupt file, a hand edit, or a shape from a
+    later version. Only the exact recognised strings opt in; everything else
+    means the stable channel, which is the answer that cannot surprise anyone.
+    """
+
+    if isinstance(stored, dict):
+        channel = stored.get("channel")
+        if isinstance(channel, str) and channel in UPDATE_CHANNELS:
+            return channel
+    return STABLE_CHANNEL
 
 
 def _cache_epoch(value: Any, field: str) -> float:
@@ -351,6 +424,14 @@ def _validated_cache(value: Any) -> dict[str, Any]:
         if release_mode not in {"checkout", "bundle"}:
             raise ValueError("update-cache releaseMode is invalid")
         normalized["releaseMode"] = release_mode
+    if "channel" in value:
+        # Which channel produced the cached release. A cache written on beta and
+        # read after a switch back to stable describes a different question, so
+        # this is compared exactly as ``releaseMode`` is and forces a re-check.
+        channel = value["channel"]
+        if channel not in UPDATE_CHANNELS:
+            raise ValueError("update-cache channel is invalid")
+        normalized["channel"] = channel
     for field in ("lastAttemptEpoch", "checkedAtEpoch", "nextCheckEpoch"):
         if field in value:
             normalized[field] = _cache_epoch(value[field], field)
@@ -635,7 +716,7 @@ def update_action(
 ) -> dict[str, Any]:
     """Build the appropriate bundle download or checkout installer action."""
 
-    if STABLE_TAG_RE.fullmatch(tag) is None:
+    if not _is_installable_tag(tag):
         raise ValueError("Refusing to build an update command from an invalid tag")
     if checkout is not None and checkout.get("kind") == "bundle":
         if release is None or not isinstance(release.get("bundleAssets"), list):
@@ -700,6 +781,7 @@ class UpdateService:
         checkout_probe: Callable[[Path, str], dict[str, Any]] = checkout_status,
         update_request_path: Path | None = None,
         bundle_installer: BundleUpdateInstaller | None = None,
+        settings: SettingsStore | None = None,
     ) -> None:
         _version(running_version)
         self.running_version = running_version
@@ -711,6 +793,7 @@ class UpdateService:
         self.clock = clock
         self.platform_name = platform_name
         self.checkout_probe = checkout_probe
+        self.settings = settings
         self.update_request_path = (
             Path(update_request_path).resolve() if update_request_path is not None else None
         )
@@ -726,6 +809,49 @@ class UpdateService:
                 destination_app_dir=self.repo_root,
                 request_path=self.update_request_path,
             )
+
+    def channel(self) -> str:
+        """Which release channel this installation follows.
+
+        Stable unless the stored preference says otherwise, including when no
+        settings store was supplied -- an embedded caller without one gets the
+        behaviour it had before channels existed.
+        """
+
+        if self.settings is None:
+            return STABLE_CHANNEL
+        return channel_of(self.settings.get(UPDATE_SETTINGS_NAMESPACE))
+
+    def set_channel(self, channel: str) -> str:
+        """Remember the channel, and make the next status check honour it.
+
+        The cached release describes the *other* channel's question, so it is
+        discarded here rather than left to expire: a user who switches to beta
+        and sees the stable answer for the next twelve hours would reasonably
+        conclude the switch did nothing.
+        """
+
+        if channel not in UPDATE_CHANNELS:
+            raise ValueError(f"Unsupported update channel: {channel!r}")
+        if self.settings is None:
+            raise UpdateChannelUnavailable(
+                "This process has no settings store, so the update channel cannot be changed."
+            )
+        with self._lock:
+            self.settings.put(UPDATE_SETTINGS_NAMESPACE, {"channel": channel})
+            self._recent_releases = None
+            self._runtime_asset_cache.clear()
+            cache = self._load_cache()
+            cache.pop("release", None)
+            cache.pop("etag", None)
+            cache.pop("availability", None)
+            cache["channel"] = channel
+            cache["nextCheckEpoch"] = 0.0
+            try:
+                self._save_cache(cache)
+            except OSError as exc:
+                log.warning("Could not persist update status cache: %s", exc)
+        return channel
 
     def _load_cache(self) -> dict[str, Any]:
         if self._cache is not None:
@@ -903,6 +1029,43 @@ class UpdateService:
                 return release
         return None
 
+    def _beta_release_payload(self) -> dict[str, Any]:
+        """The highest version among recent releases, pre-releases included.
+
+        The beta channel cannot use ``releases/latest``: GitHub defines that as
+        the most recent non-pre-release, which is precisely what makes the
+        stable channel free. So it scans the recent list instead -- the same one
+        the companion lookup already fetches -- and takes the maximum by release
+        precedence.
+
+        ``_version`` does the filtering that matters. It refuses ``-updates``
+        companions outright, so a beta's own companion (`v0.4.0-beta.1-updates`,
+        a pre-release like the beta itself) can never be selected here and
+        offered as a release.
+        """
+
+        if self._recent_releases is None:
+            self._recent_releases = self.recent_releases_fetcher()
+        best: dict[str, Any] | None = None
+        best_version: tuple[Any, ...] | None = None
+        for entry in self._recent_releases:
+            if not isinstance(entry, dict) or entry.get("draft") is True:
+                continue
+            tag = entry.get("tag_name")
+            if not isinstance(tag, str) or not _is_offerable_release_tag(
+                tag, allow_prerelease=True
+            ):
+                continue
+            try:
+                version = _version(tag)
+            except ValueError:
+                continue
+            if best_version is None or version > best_version:
+                best, best_version = entry, version
+        if best is None:
+            raise RuntimeError("No recent GitHub release has a supported version tag")
+        return best
+
     def _earlier_runtime_asset(self, runtime_id: str) -> dict[str, Any] | None:
         if runtime_id in self._runtime_asset_cache:
             return self._runtime_asset_cache[runtime_id]
@@ -932,12 +1095,16 @@ class UpdateService:
         payload: dict[str, Any],
         *,
         checkout: dict[str, Any] | None = None,
+        allow_prerelease: bool = False,
     ) -> tuple[dict[str, Any], bool]:
         tag = payload.get("tag_name")
-        # Deliberately strict. `releases/latest` never returns a pre-release, so
-        # this is unchanged today; #56 widens it when the beta channel gains its
-        # own scan, rather than admitting betas here before anything reads them.
-        if not isinstance(tag, str) or STABLE_TAG_RE.fullmatch(tag) is None:
+        # Strict on the stable channel, where `releases/latest` never returns a
+        # pre-release and anything else arriving is a surprise. The beta scan is
+        # the one caller that passes ``allow_prerelease``, and even then an
+        # ``-updates`` companion is refused -- see `_is_offerable_release_tag`.
+        if not isinstance(tag, str) or not _is_offerable_release_tag(
+            tag, allow_prerelease=allow_prerelease
+        ):
             raise RuntimeError("GitHub's latest release has an unsupported version tag")
         version = tag.removeprefix("v")
         uploaded = self._uploaded_assets(payload)
@@ -1045,25 +1212,52 @@ class UpdateService:
             return "current"
         return "ahead"
 
-    def _refresh(self, cache: dict[str, Any], now: float, checkout: dict[str, Any]) -> None:
+    def _refresh(
+        self,
+        cache: dict[str, Any],
+        now: float,
+        checkout: dict[str, Any],
+        channel: str = STABLE_CHANNEL,
+    ) -> None:
         cache["lastAttemptEpoch"] = now
+        # A new remote observation starts here, so any release list memoized by
+        # an earlier check is discarded. Within one refresh the list is still
+        # fetched once and shared by the beta scan, the companion lookup and the
+        # earlier-runtime search.
+        self._recent_releases = None
+        self._runtime_asset_cache.clear()
         try:
             release_mode = "bundle" if checkout.get("kind") == "bundle" else "checkout"
-            cached_mode_mismatch = cache.get("releaseMode") != release_mode
-            response = self.fetcher(
-                cache.get("etag")
-                if isinstance(cache.get("etag"), str) and not cached_mode_mismatch
-                else None
+            cached_context_mismatch = (
+                cache.get("releaseMode") != release_mode
+                or (cache.get("channel") or STABLE_CHANNEL) != channel
             )
+            if channel == BETA_CHANNEL:
+                # No conditional request: this reads the release *list*, whose
+                # ETag would answer a different question than the cached
+                # release, and a beta check is rare enough not to need one.
+                payload = self._beta_release_payload()
+                response = ReleaseResponse(payload, None)
+            else:
+                response = self.fetcher(
+                    cache.get("etag")
+                    if isinstance(cache.get("etag"), str) and not cached_context_mismatch
+                    else None
+                )
             if response.not_modified:
                 if not isinstance(cache.get("release"), dict):
                     raise RuntimeError("GitHub returned not-modified before any release was cached")
             else:
                 if response.payload is None:
                     raise RuntimeError("GitHub returned no release payload")
-                release, _assets_ready = self._parse_release(response.payload, checkout=checkout)
+                release, _assets_ready = self._parse_release(
+                    response.payload,
+                    checkout=checkout,
+                    allow_prerelease=channel == BETA_CHANNEL,
+                )
                 cache["release"] = release
                 cache["releaseMode"] = release_mode
+                cache["channel"] = channel
                 cache["availability"] = self._availability(
                     cache,
                     installed_version=(
@@ -1074,6 +1268,10 @@ class UpdateService:
                 )
                 if response.etag:
                     cache["etag"] = response.etag
+                elif channel == BETA_CHANNEL:
+                    # Otherwise a stale stable ETag would survive the beta check
+                    # and suppress the next stable one with a 304.
+                    cache.pop("etag", None)
 
             availability = cache.get("availability")
             ttl = (
@@ -1102,6 +1300,7 @@ class UpdateService:
 
     def get_status(self, *, force: bool = False) -> dict[str, Any]:
         checkout = self.checkout_probe(self.repo_root, self.running_version)
+        channel = self.channel()
         refreshed = False
         with self._lock:
             now = self.clock()
@@ -1116,20 +1315,27 @@ class UpdateService:
             cache["availability"] = self._availability(cache, installed_version=installed_version)
             due = now >= float(cache.get("nextCheckEpoch") or 0)
             release_mode = "bundle" if checkout.get("kind") == "bundle" else "checkout"
-            if cache.get("releaseMode") != release_mode:
+            # A cached answer from the other channel answers a different
+            # question, so it is re-checked for the same reason a mode change is.
+            # A cache with no channel at all was written before channels existed
+            # and can only have come from the stable endpoint.
+            cached_channel = cache.get("channel") or STABLE_CHANNEL
+            if cache.get("releaseMode") != release_mode or cached_channel != channel:
                 due = True
             floor_elapsed = (
                 now - float(cache.get("lastAttemptEpoch") or 0) >= MANUAL_REFRESH_FLOOR_SECONDS
             )
             if due or (force and floor_elapsed):
-                self._refresh(cache, now, checkout)
+                self._refresh(cache, now, checkout, channel)
                 try:
                     self._save_cache(cache)
                 except OSError as exc:
                     log.warning("Could not persist update status cache: %s", exc)
                 refreshed = True
 
-            mode_matches = cache.get("releaseMode") == release_mode
+            mode_matches = cache.get("releaseMode") == release_mode and (
+                cache.get("channel") or STABLE_CHANNEL
+            ) == channel
             release = (
                 cache.get("release")
                 if mode_matches and isinstance(cache.get("release"), dict)
@@ -1171,6 +1377,7 @@ class UpdateService:
             return {
                 "schemaVersion": 1,
                 "runningVersion": installed_version or self.running_version,
+                "channel": channel,
                 "availability": availability,
                 "freshness": freshness,
                 "cached": not refreshed,
@@ -1210,7 +1417,7 @@ class UpdateService:
             )
 
         tag = str(release.get("tag") or "")
-        if STABLE_TAG_RE.fullmatch(tag) is None:
+        if not _is_installable_tag(tag):
             raise UpdateInstallUnavailable("The offered release tag is invalid.")
 
         if action.get("kind") == "bundle_download":

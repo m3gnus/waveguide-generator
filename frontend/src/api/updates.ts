@@ -1,4 +1,12 @@
 export type UpdateAvailability = 'available' | 'current' | 'ahead' | 'incomplete' | 'unknown';
+/**
+ * Which releases this installation is offered.
+ *
+ * `stable` follows GitHub's `releases/latest`, which excludes pre-releases;
+ * `beta` also sees them, so packaging and Windows problems surface before a
+ * stable version number is spent on them.
+ */
+export type UpdateChannel = 'stable' | 'beta';
 export type UpdateFreshness = 'fresh' | 'stale' | 'unknown';
 export type CheckoutKind = 'release' | 'development' | 'detached' | 'modified' | 'unsupported' | 'bundle';
 export type UpdateInstallState = 'idle' | 'downloading' | 'verifying' | 'ready' | 'failed';
@@ -75,6 +83,7 @@ export type UpdateAction = CopyCommandUpdateAction | BundleDownloadUpdateAction;
 export interface UpdateStatus {
   schemaVersion: 1;
   runningVersion: string;
+  channel: UpdateChannel;
   availability: UpdateAvailability;
   freshness: UpdateFreshness;
   cached: boolean;
@@ -133,8 +142,22 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
 }
 
+/**
+ * Three numbers, optionally followed by a SemVer pre-release label.
+ *
+ * Widened for the beta channel, and it has to be: a beta install's whole status
+ * payload -- release, running version, the version being downloaded -- carries
+ * `0.4.0-beta.1`, and the narrow shape would have rejected the response
+ * wholesale rather than any one field. This mirrors `TAG_RE` on the server;
+ * build metadata (`+sha`) is not accepted there either.
+ */
 function isVersion(value: unknown): value is string {
-  return typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value);
+  return typeof value === 'string'
+    && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(value);
+}
+
+function isChannel(value: unknown): value is UpdateChannel {
+  return value === 'stable' || value === 'beta';
 }
 
 function isRuntimeId(value: unknown): value is string {
@@ -227,6 +250,7 @@ function isUpdateStatus(value: unknown): value is UpdateStatus {
   return isRecord(value)
     && value.schemaVersion === 1
     && typeof value.runningVersion === 'string'
+    && isChannel(value.channel)
     && isAvailability(value.availability)
     && isFreshness(value.freshness)
     && typeof value.cached === 'boolean'
@@ -254,6 +278,39 @@ export async function getUpdateStatus(refresh = false, signal?: AbortSignal): Pr
     throw new Error('Update status response is invalid');
   }
   return payload;
+}
+
+export async function getUpdateChannel(signal?: AbortSignal): Promise<UpdateChannel> {
+  const response = signal ? await fetch('/api/updates/channel', { signal }) : await fetch('/api/updates/channel');
+  if (!response.ok) throw new Error(`Update channel request failed (${response.status})`);
+  const payload: unknown = await response.json();
+  if (!isRecord(payload) || !isChannel(payload.channel)) {
+    throw new Error('Update channel response is invalid');
+  }
+  return payload.channel;
+}
+
+export async function setUpdateChannel(channel: UpdateChannel): Promise<UpdateChannel> {
+  const response = await fetch('/api/updates/channel', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channel }),
+  });
+  if (!response.ok) {
+    let detail = `Update channel could not be saved (${response.status})`;
+    try {
+      const payload: unknown = await response.json();
+      if (isRecord(payload) && typeof payload.detail === 'string') detail = payload.detail;
+    } catch {
+      // Keep the status-based fallback when the response is not JSON.
+    }
+    throw new Error(detail);
+  }
+  const payload: unknown = await response.json();
+  if (!isRecord(payload) || !isChannel(payload.channel)) {
+    throw new Error('Update channel response is invalid');
+  }
+  return payload.channel;
 }
 
 export async function installApplicationUpdate(): Promise<UpdateInstallAccepted> {

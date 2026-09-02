@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getUpdateStatus, installApplicationUpdate } from './updates';
+import { getUpdateChannel, getUpdateStatus, installApplicationUpdate, setUpdateChannel } from './updates';
 
 const payload = {
   schemaVersion: 1,
   runningVersion: '2.0.0',
+  channel: 'stable',
   availability: 'current',
   freshness: 'fresh',
   cached: false,
@@ -124,6 +125,30 @@ describe('getUpdateStatus', () => {
   });
 
   it.each([
+    ['a missing channel', { ...payload, channel: undefined }],
+    ['an unknown channel', { ...payload, channel: 'nightly' }],
+    ['a release tag that disagrees with its pre-release version', {
+      ...payload,
+      availability: 'available',
+      release: {
+        version: '2.1.0-beta.1',
+        tag: 'v2.1.0',
+        url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.1.0',
+        publishedAt: '2026-08-22T12:00:00Z',
+        assetsReady: true,
+      },
+    }],
+    ['a version carrying build metadata', {
+      ...payload,
+      availability: 'available',
+      release: {
+        version: '2.1.0+abc',
+        tag: 'v2.1.0+abc',
+        url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.1.0+abc',
+        publishedAt: '2026-08-22T12:00:00Z',
+        assetsReady: true,
+      },
+    }],
     ['unknown availability', { ...payload, availability: 'sometimes' }],
     ['unknown freshness', { ...payload, freshness: 'expired' }],
     ['incomplete checkout', { ...payload, checkout: { kind: 'release' } }],
@@ -179,6 +204,71 @@ describe('getUpdateStatus', () => {
     await expect(getUpdateStatus()).rejects.toThrow('invalid');
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({}, 503)));
     await expect(getUpdateStatus()).rejects.toThrow('(503)');
+  });
+});
+
+describe('the beta channel', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('accepts a pre-release version and its tag', async () => {
+    const beta = {
+      ...payload,
+      channel: 'beta',
+      availability: 'available',
+      release: {
+        version: '2.1.0-beta.1',
+        tag: 'v2.1.0-beta.1',
+        url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.1.0-beta.1',
+        publishedAt: '2026-08-22T12:00:00Z',
+        assetsReady: true,
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(beta)));
+
+    await expect(getUpdateStatus()).resolves.toEqual(beta);
+  });
+
+  it('accepts a beta install running ahead of the latest stable release', async () => {
+    const ahead = { ...payload, availability: 'ahead', runningVersion: '2.1.0-beta.1' };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(ahead)));
+
+    await expect(getUpdateStatus()).resolves.toEqual(ahead);
+  });
+
+  it('reads the stored channel', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ channel: 'beta' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getUpdateChannel()).resolves.toBe('beta');
+    expect(fetchMock).toHaveBeenCalledWith('/api/updates/channel');
+  });
+
+  it('writes the chosen channel and returns what the server stored', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ channel: 'beta' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(setUpdateChannel('beta')).resolves.toBe('beta');
+    expect(fetchMock).toHaveBeenCalledWith('/api/updates/channel', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"channel":"beta"}',
+    });
+  });
+
+  it('surfaces the server-supplied reason a channel change was refused', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: 'Unsupported update channel' }, 400)));
+
+    await expect(setUpdateChannel('beta')).rejects.toThrow('Unsupported update channel');
+  });
+
+  it.each([
+    ['an unknown channel', { channel: 'nightly' }],
+    ['no channel at all', {}],
+  ] as [string, unknown][])('rejects a channel response naming %s', async (_label, malformed) => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(malformed)));
+    await expect(getUpdateChannel()).rejects.toThrow('Update channel response is invalid');
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(malformed)));
+    await expect(setUpdateChannel('beta')).rejects.toThrow('Update channel response is invalid');
   });
 });
 
