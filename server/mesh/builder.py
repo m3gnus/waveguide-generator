@@ -398,15 +398,37 @@ def _require_closed_acoustic_topology(
 
 
 SELF_INTERSECTION_WARNING_PREFIX = "Solver mesh self-intersects"
+# One remedy, used by the warning and by the strict-mode refusal so the two
+# cannot drift apart. It deliberately does NOT say "reduce Rear Resolution",
+# which the first version did: rear resolution governs the outer shell, and a
+# crossing at the mouth rim is the acoustic surface chording across the
+# rollback and out through that shell. Measured on a stock R-OSSE with a 3 mm
+# wall, taking rear resolution from 15 mm to 7 mm took the count from 0 to 341
+# -- the advice made it worse, because a finer shell only resolves more of a
+# crossing it did not cause. The location the warning already reports is what
+# says which resolution is the one to reduce.
+SELF_INTERSECTION_REMEDY = (
+    "Increase Wall Thickness, or reduce the mm resolution that covers the "
+    "reported location -- Mouth Resolution at the mouth rim, Rear Resolution "
+    "on the rear shell. Coarsening the other one can lower the count without "
+    "removing the crossing."
+)
 
 
-def _self_intersection_warnings(report: Mapping[str, Any]) -> list[str]:
+def _self_intersection_warnings(
+    report: Mapping[str, Any], *, fold: str | None = None
+) -> list[str]:
     """Describe overlapping triangles without guessing which surfaces they are.
 
     The detector sees geometry, not roles: every rigid surface shares one
     physical tag, so the message names the count, the size and the place, and
     offers the free-standing thin-wall case as the usual cause rather than
     asserting it.
+
+    ``fold`` carries the mesher's analytic offset-fold report, folded into this
+    message rather than emitted beside it. The two remedies are opposites --
+    a fold wants a THINNER wall, a crossing a thicker one -- and as separate
+    warnings they contradicted each other on the same mesh.
     """
 
     if not report.get("checked"):
@@ -434,12 +456,22 @@ def _self_intersection_warnings(report: Mapping[str, Any]) -> list[str]:
     overlaps = f"{crossings:,} triangle pairs cross"
     if coplanar:
         overlaps += f" and {coplanar:,} overlap in-plane"
+    remedy = SELF_INTERSECTION_REMEDY
+    if fold:
+        # A folded offset cannot be meshed apart at any density, so when one is
+        # present it replaces the remedy above rather than sitting next to it
+        # telling the user the opposite thing.
+        remedy = (
+            f"The analytic outer offset also folds on itself ({fold}): the wall "
+            "is thicker there than the surface's own curvature radius, so no "
+            "mesh density can separate the shell from itself. Reduce Wall "
+            "Thickness, or open the curvature at that station."
+        )
     return [
         f"{SELF_INTERSECTION_WARNING_PREFIX}: {overlaps}{where}. Surfaces that "
         "pass through each other are not the boundary the design describes, so "
         "the solved field is not the field of the intended geometry. On a "
-        "free-standing waveguide this is usually a thin wall meshed at a coarse "
-        "rear resolution: increase Wall Thickness or reduce Rear Resolution."
+        f"free-standing waveguide this is usually a thin wall. {remedy}"
     ]
 
 def _large_mesh_warnings(
@@ -787,19 +819,23 @@ def _build_sync(
         warnings.append(
             "Solver mesh contains invalid, degenerate, or non-manifold triangles."
         )
-    warnings.extend(_self_intersection_warnings(integrity["self_intersection"]))
-    fold = metadata.get("outerOffsetFold")
-    if fold:
-        # The mesher has always detected this and only logged it, on the
-        # grounds that the acoustic surface is unaffected. That is true of the
-        # analytic profile and false of the boundary the solver integrates
-        # over, and a log line reaches nobody reading a polar plot.
-        warnings.append(
-            f"Outer wall offset folds on itself: {fold}. The requested wall "
-            "thickness exceeds the throat's curvature radius there, so the "
-            "rear shell doubles back through itself. Reduce Wall Thickness or "
-            "open the throat curvature."
+    # The fold rides on the crossing warning and is no longer a warning of its
+    # own. As one it fired on a stock R-OSSE at ATH's own default 5 mm wall
+    # while the built mesh had zero crossing pairs, and it named the throat:
+    # measured, the flip is at axial interval 46 of 50 -- the mouth rollback,
+    # whose curvature radius is 3.6 mm -- and it moves to the throat only past
+    # a 15 mm wall. The mesher's own note records that 11 of 16 reference
+    # designs fold, so an alarm on the analytic grid alone is an alarm on
+    # ordinary work. What reaches the solver is the built mesh, and the
+    # crossing detector is what reads that; the fold text is kept as the cause
+    # when there is something to explain. `metadata["outerOffsetFold"]` still
+    # carries it unconditionally for anyone inspecting the artifact.
+    warnings.extend(
+        _self_intersection_warnings(
+            integrity["self_intersection"],
+            fold=(str(fold) if (fold := metadata.get("outerOffsetFold")) else None),
         )
+    )
     off_plane_open_edges = int(integrity.get("off_plane_open_edge_count", 0))
     # Only a bare horn owns an intentionally open mouth rim. Closed shell and
     # coupled infinite-baffle models have already failed above if any free edge
@@ -924,7 +960,7 @@ async def build_solver_mesh(
     if validation_mode == "strict" and crossings:
         raise RuntimeError(
             f"Solver mesh failed strict validation: {crossings:,} self-intersecting "
-            "triangle pairs. Increase Wall Thickness or reduce Rear Resolution."
+            f"triangle pairs. {SELF_INTERSECTION_REMEDY}"
         )
     if validation_mode == "strict" and not result["integrity"]["valid"]:
         raise RuntimeError("Solver mesh failed strict topology integrity validation")
@@ -952,6 +988,7 @@ __all__ = [
     "LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES",
     "MAX_SOLVER_MESH_ARTIFACT_TRIANGLES",
     "MOUTH_APERTURE_SURFACE_TAG",
+    "SELF_INTERSECTION_REMEDY",
     "SELF_INTERSECTION_WARNING_PREFIX",
     "SOLVER_MESH_CACHE_FORMAT_VERSION",
     "build_solver_mesh",
