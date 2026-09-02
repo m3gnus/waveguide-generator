@@ -9,6 +9,20 @@ Everything below was measured against artifacts that **actually carried
 un-quarantined artifact tells you nothing about this question, and assuming
 otherwise is how the earlier wrong inference happened.
 
+One subtlety that makes "verified with `xattr -p`" less obvious than it sounds:
+a file sitting *on a mounted disk image* has no `com.apple.quarantine` attribute
+of its own. The quarantine is a mount option —
+
+```
+$ mount | grep Waveguide
+/dev/disk5s1 on /Volumes/Waveguide Generator (apfs, local, nodev, nosuid,
+  read-only, journaled, noowners, quarantine, nobrowse, mounted by magnus)
+```
+
+— and the attribute materialises on the copies as they are read out. So check
+the `.dmg` before mounting, or the copy afterwards; checking a file on the
+mounted volume looks like proof of the opposite of the truth.
+
 ## The short version
 
 | What | `spctl --assess --verbose=4 --type execute` | Runs? |
@@ -158,6 +172,48 @@ Note `(id: jl_AltRXm)` for the script against `(id: (null))` for the app: the
 script is given a temporary signing identity — `securityd:gk temporarySigning
 type=3` appears in the same log — and the app is not.
 
+### The built image, checked as an artifact
+
+`scripts/build_bundle.py --platform macos` was run locally and the resulting
+`.dmg` given a fresh quarantine attribute and mounted. The two things that could
+have failed in packaging did not:
+
+```
+$ ls -la "/Volumes/Waveguide Generator/"
+lrwxr-xr-x  Applications -> /Applications
+-rwxr-xr-x  Install Waveguide Generator.command
+-rw-r--r--  READ ME FIRST.txt
+drwxr-xr-x  Waveguide Generator.app
+```
+
+The installer keeps mode `755` through `hdiutil create` — a `.command` without
+the executable bit opens in TextEdit instead of running, which looks to a user
+like nothing happening at all. And assessed in place on the quarantined volume,
+the two files differ exactly as the synthetic probes did:
+
+```
+$ spctl --assess --verbose=4 --type execute "/Volumes/.../Install Waveguide Generator.command"
+rejected
+source=no usable signature
+
+$ spctl --assess --verbose=4 --type execute "/Volumes/.../Waveguide Generator.app"
+rejected
+```
+
+Copying the installer out of the image gives it the attribute, as a Finder drag
+would, and the assessment is unchanged:
+
+```
+$ xattr -p com.apple.quarantine "Install Waveguide Generator.command"
+0281;6a9890ea;;338B34C7-16EC-4DFF-A5B9-291F3E704A50
+```
+
+The script's own behaviour once it runs is covered by
+`test_the_installer_script_installs_and_clears_the_quarantine`, which builds a
+real ad-hoc signed bundle, quarantines it, runs the shipped script against it,
+and asserts the installed copy has no quarantine attribute left and still passes
+`codesign --verify --deep --strict`.
+
 ### What is NOT measured here
 
 **Whether "Open Anyway" actually appears for the script, and whether clicking it
@@ -185,6 +241,35 @@ $ ".../Waveguide Generator.app/Contents/MacOS/Waveguide Generator"
 ran
 exit=0
 ```
+
+### A self-signed certificate is not a cheaper Developer ID
+
+Tried, in a keychain created for the purpose and deleted afterwards, leaving the
+login keychain and its search list untouched. A self-signed code-signing
+certificate imports fine and is then unusable:
+
+```
+$ security find-identity -p codesigning <isolated keychain>
+  1) CFE58F45... "HornLab Probe Self Signed" (CSSMERR_TP_NOT_TRUSTED)
+     1 identities found
+
+$ codesign --force --deep --keychain <isolated keychain> --sign "HornLab Probe Self Signed" Probe.app
+HornLab Probe Self Signed: no identity found
+```
+
+`codesign` refuses an untrusted identity outright. Making it usable means adding
+a trust setting for that certificate — and that setting lives on the *developer's*
+machine and does not travel with the app, so on a user's machine the chain still
+anchors to nothing. Gatekeeper's Developer ID policy wants a leaf chaining to
+Apple's Developer ID CA plus a notarization ticket; a self-signed leaf cannot
+provide either, and there is no user-facing way to add an anchor to that policy.
+
+So it costs a local trust-store change and buys nothing at the far end. It is
+strictly worse than ad-hoc for distribution, and it does not produce the "Open
+Anyway" override. That closes the backlog's open question of whether anything
+short of the $99/yr program produces a working override: nothing does — the
+installer script does not make the *app* approvable either, it sidesteps the
+question by putting an approvable file next to it.
 
 ## What a Developer ID would cost
 
