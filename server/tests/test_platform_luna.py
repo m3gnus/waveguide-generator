@@ -803,7 +803,17 @@ def test_wait_for_pid_exit_returns_the_moment_a_child_dies() -> None:
     try:
         threading.Timer(0.1, end_the_child).start()
         started = time.monotonic()
-        outcome = instance.wait_for_pid_exit(child.pid, stop, timeout=None)
+        # Off Windows `timeout=None` is one bounded poll_interval tick, not an
+        # unbounded wait -- `wait_for_pid_exit` documents exactly that, and says
+        # the caller's loop supplies the rest, as `launch/serve.py` does. A
+        # single call therefore asserts that the child dies, is reaped and is
+        # observed inside one 0.15 s tick, against a timer that fires at 0.1 s.
+        # A loaded runner does not promise the remaining 50 ms: macos-latest
+        # failed here on `next` at bd342b4b, before this branch existed.
+        while True:
+            outcome = instance.wait_for_pid_exit(child.pid, stop, timeout=None)
+            if outcome != instance.WAIT_ELAPSED or time.monotonic() - started > 5.0:
+                break
         elapsed = time.monotonic() - started
     finally:
         if child.poll() is None:
