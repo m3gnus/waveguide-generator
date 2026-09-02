@@ -210,3 +210,28 @@ def test_the_three_gatekeeper_texts_say_the_same_thing() -> None:
     for name, text in surfaces.items():
         normalized = " ".join(text.split()).lower()
         assert "not list" in normalized, name
+
+
+def test_the_readme_never_sends_anyone_to_open_anyway_for_the_app() -> None:
+    """The correction on 2026-08-27 fixed one of the two places that said it.
+
+    The macOS install section was rewritten that day to say Privacy & Security
+    lists nothing for an ad-hoc bundle. The Launch section, a hundred lines down,
+    kept the original advice -- Control-click then Open, and failing that
+    "System Settings -> Privacy & Security and choose Open Anyway for the app" --
+    and shipped that way in 0.3.0. Both halves of it are wrong: Sequoia removed
+    the Control-click bypass, and the app is never listed in Privacy & Security.
+
+    It is also advice for a wall that a checkout does not hit. Measured
+    2026-09-02 on macOS 26.5.2: the launcher app is a script bundle, unsigned,
+    and `git clone` sets no com.apple.quarantine, so LaunchServices opens it with
+    no dialog at all. Gatekeeper assesses quarantined items; nothing else.
+    """
+
+    launch = _between(_read("README.md"), "## Launch", "## Run the server directly (dev)")
+    normalized = " ".join(launch.split())
+
+    assert "Open Anyway" not in launch
+    assert "Control-click" not in launch
+    assert "does not set it" in normalized
+    assert "no dialog" in normalized

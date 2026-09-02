@@ -135,10 +135,12 @@ or close the window to stop the complete server process tree.
 | Windows | double-click `launchers\windows\launch-wg.bat` |
 | Linux | `./launchers/linux/launch-wg.sh` |
 
-The macOS app is deliberately unsigned. The first time, Control-click (or
-right-click) **Waveguide Generator.app**, choose **Open**, then confirm **Open**.
-After that, normal double-clicks work. If macOS still blocks it, open
-**System Settings → Privacy & Security** and choose **Open Anyway** for the app.
+The macOS launcher app is deliberately unsigned, and from a Git checkout that
+costs you nothing: Gatekeeper only assesses files that carry the "downloaded
+from the internet" flag, and `git clone` does not set it. Measured 2026-09-02 on
+macOS 26.5.2 — it opens on the first double-click, with no dialog. That is not
+true of the `.dmg` above, which *is* downloaded; see the disk-image instructions
+in [Install](#install).
 
 The repository root intentionally has no duplicate install or launch scripts;
 use the platform folders above. On first launch the entry creates `.venv` with
