@@ -90,9 +90,24 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     )
 
     # "beat" is the GPU engine (hornlab-beat-bem). Its probe reports available
-    # only when a functional CUDA/ROCm path exists (or the internal force-CPU
-    # test switch is set), so on CPU-only hosts it shows up with an honest
-    # unavailable reason and BEMPP stays the CPU engine.
+    # only when a functional CUDA/ROCm/Metal path exists (or the internal
+    # force-CPU test switch is set), so on CPU-only hosts it shows up with an
+    # honest unavailable reason and BEMPP stays the CPU engine.
+    #
+    # BEAT's symmetry and DI entries were stale rather than wrong: the package
+    # has mapped WG's "yz" half onto its x mirror and "yz+xz" quarter onto its
+    # xy mirror, and has emitted the theta-major DI grid, since the pin that
+    # added diagonal cuts. Both are now declared, having been run rather than
+    # reasoned about -- on an R-OSSE at 1 and 2 kHz the reduced domains mesh to
+    # half (810) and a quarter (402) of the full 1,630 triangles, report the
+    # expected native planes, return DI, and agree with the full-domain solve
+    # to 0.052 dB on axis and 0.005-0.052 dB over |theta| <= 60.
+    #
+    # "half" is coarser than BEAT actually is: it has no y-only mirror, so a
+    # half_xz request is refused at solve time with a capability message rather
+    # than silently mis-solved. The vocabulary here cannot say "half, one
+    # orientation", and an honest runtime refusal is better than under-declaring
+    # the half that does work.
     for name, probe in (
         ("metal", metal_status),
         ("bempp", bempp_status),
@@ -125,11 +140,11 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 ),
                 symmetry_domains=(
                     ("full", "half", "quarter")
-                    if name in {"metal", "bempp"}
+                    if name in {"metal", "bempp", "beat"}
                     else ("full",)
                 ),
                 field_traces=name in {"metal", "bempp"},
-                di_sphere=name != "beat",
+                di_sphere=True,
                 cancellation_granularity=(
                     "intra-frequency"
                     if name in {"metal", "bempp"}
@@ -198,11 +213,17 @@ def resolve_auto_engine(
     Metal, then the GPU BEAT engine, then BEMPP; the gated dry-run engine is
     only a final development fallback when no physical solver is available.
 
-    The order is safe because availability already encodes the platform:
-    Metal exists only on macOS, and "beat" advertises available only when a
-    functional CUDA/ROCm device was probed (never for its internal CPU path),
-    so AUTO reaches beat exactly on GPU-equipped non-Mac hosts, where the
-    accelerated dense solve is the point of the backend. BEMPP remains the
+    The order is safe because availability already encodes the platform, but
+    not in the way it once did. "beat" advertises available only when a
+    functional accelerator was probed and never for its internal CPU path --
+    that part is unchanged. What changed is which accelerators count: the
+    package gained an Apple Metal backend, so BEAT is now available on Apple
+    Silicon too, and AUTO no longer reaches it "exactly on GPU-equipped non-Mac
+    hosts". On a Mac both Metal and BEAT are available and Metal is preferred,
+    which is a measured preference rather than a platform accident: on the ATH
+    reference ladder hornlab-metal-bem wins the whole sweep at every size, by
+    1.0x at ~2,000 dofs rising to 6.9x at ~20,000, and all of that margin is
+    the solve stage. BEAT stays explicitly selectable there. BEMPP remains the
     universal CPU engine.
 
     ``mounting`` drops candidates that cannot solve the requested mounting at

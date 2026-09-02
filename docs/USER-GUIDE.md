@@ -115,8 +115,10 @@ WG plans the **formulation** separately from the full-3D backend. Eligible round
 designs use the portable **Axisymmetric (meridian)** runner on macOS, Windows,
 and Linux; it runs on CPU everywhere and can use Metal acceleration on Apple
 Silicon. Non-axisymmetric designs fall back to **Metal** (Apple GPU), **BEAT**
-(CUDA/ROCm GPU), or **BEMPP** (CPU/OpenCL), according to the host and the backend
-selected in Solve options.
+(NVIDIA CUDA, AMD ROCm, or Apple GPU), or **BEMPP** (CPU/OpenCL), according to
+the host and the backend selected in Solve options. On Apple Silicon both Metal
+and BEAT can run; Metal is what AUTO picks, because it is measurably faster on
+this hardware, and BEAT is there when you want it.
 
 The infinite-baffle setting is design physics, not a solver choice. Axisymmetric,
 Metal full 3D, and current BEMPP full 3D all implement the coupled interior plus
