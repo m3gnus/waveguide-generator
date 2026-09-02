@@ -327,12 +327,27 @@ async def main() -> int:
         "--skip-cold", action="store_true", help="warm timings only (faster)"
     )
     parser.add_argument(
+        "--band-ratio",
+        type=float,
+        default=None,
+        help=(
+            "band width as a frequency ratio (2.0 = octaves). Set for the "
+            "measurement only, by rebinding the planner's default -- band width "
+            "is not a per-solve option"
+        ),
+    )
+    parser.add_argument(
         "--repeats",
         type=int,
         default=1,
         help="interleaved A-B repeats; the reported time is the minimum of each leg",
     )
     args = parser.parse_args()
+
+    if args.band_ratio is not None:
+        import server.solver.mesh_ladder as mesh_ladder
+
+        mesh_ladder.DEFAULT_BAND_RATIO = args.band_ratio
 
     design = await load_design(args.design)
     if args.resolution_scale != 1.0:
@@ -389,6 +404,7 @@ async def main() -> int:
         "resolution_scale": args.resolution_scale,
         "frequency_range_hz": list(args.range),
         "frequency_count": args.frequencies,
+        "band_ratio": args.band_ratio,
         "elements_per_wavelength": LADDER_ELEMENTS_PER_WAVELENGTH,
         "ladder": ladder_summary(ladder),
         "timings": timings,

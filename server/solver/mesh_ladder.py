@@ -200,7 +200,7 @@ def plan_mesh_ladder(
     frequencies: Sequence[float],
     *,
     reference_max_edge_mm: float,
-    band_ratio: float = DEFAULT_BAND_RATIO,
+    band_ratio: float | None = None,
     elements_per_wavelength: float = LADDER_ELEMENTS_PER_WAVELENGTH,
 ) -> MeshLadderPlan | None:
     """Partition ``frequencies`` into descending bands with a mesh scale each.
@@ -212,6 +212,9 @@ def plan_mesh_ladder(
     coarsened -- there is then no ladder, only the ordinary single-mesh solve.
     """
 
+    # Read at call time rather than bound at import: band width is the ladder's
+    # one open design parameter, and the measurement harness rebinds it.
+    band_ratio = DEFAULT_BAND_RATIO if band_ratio is None else band_ratio
     values = np.asarray(list(frequencies), dtype=np.float64).reshape(-1)
     if values.size < 2 or not np.all(np.isfinite(values)) or np.any(values <= 0.0):
         return None
