@@ -1878,7 +1878,11 @@ def test_the_disk_image_carries_an_executable_installer_script(tmp_path: Path) -
 
     installer = staging / builder.DMG_INSTALLER_NAME
     assert installer.is_file(), "the disk image must carry the installer beside the app"
-    assert installer.stat().st_mode & 0o111, "a non-executable .command opens in an editor"
+    if os.name == "posix":
+        # NTFS has no POSIX execute bit and Path.chmod cannot set one, so this
+        # says nothing on a Windows runner. It is not a gap: create_dmg shells
+        # out to hdiutil, so the disk image is only ever built on macOS.
+        assert installer.stat().st_mode & 0o111, "a non-executable .command opens in an editor"
     source = repo_root / builder.DMG_INSTALLER_SOURCE
     assert installer.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
 
@@ -1905,7 +1909,17 @@ def test_a_missing_installer_script_fails_the_build(tmp_path: Path) -> None:
         builder.dmg_installer()
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+#: `bash` on a Windows runner resolves to the WSL launcher, which has no
+#: distribution installed and answers every invocation with instructions for
+#: installing one. So these are POSIX-only: the script itself only ever runs on
+#: macOS, and Linux CI exercises it identically.
+_NEEDS_POSIX_BASH = pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bash") is None,
+    reason="needs a POSIX bash; Windows resolves bash to the WSL stub",
+)
+
+
+@_NEEDS_POSIX_BASH
 def test_the_installer_script_is_valid_bash() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     script = repo_root / BundleBuilder.DMG_INSTALLER_SOURCE
@@ -2008,7 +2022,7 @@ def test_the_installer_script_installs_and_clears_the_quarantine(tmp_path: Path)
     assert sorted(p.name for p in applications.iterdir()) == ["Waveguide Generator.app"]
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@_NEEDS_POSIX_BASH
 def test_the_installer_script_refuses_to_run_away_from_the_app(tmp_path: Path) -> None:
     """Copied out of the disk image on its own, it must say so, not half-install.
 
