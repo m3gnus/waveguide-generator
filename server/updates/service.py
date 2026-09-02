@@ -50,7 +50,15 @@ def recent_releases_api() -> str:
 
 
 RELEASE_PAGE_ROOT = f"https://github.com/{REPOSITORY}/releases/tag"
-TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+# A release tag is `v<major>.<minor>.<patch>`, optionally followed by a SemVer
+# pre-release label: `v0.4.0-beta.1`. Betas are published from `next` as GitHub
+# pre-releases, which `releases/latest` does not return, so a stable install
+# never sees one -- the label only has to parse for the beta channel's own scan.
+TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
+# The strict shape, for the places that must not accept a pre-release: a beta is
+# not a stable release, and the companion that carries the update layers is a
+# pre-release too. See `_is_update_layer_carrier`.
+STABLE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 RUNTIME_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 CACHE_SCHEMA = 1
 MAX_RESPONSE_BYTES = 1_000_000
@@ -115,13 +123,58 @@ def _iso(timestamp: float | None) -> str | None:
     return datetime.fromtimestamp(timestamp, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
-def _version(tag_or_version: str) -> tuple[int, int, int]:
+def _prerelease_precedence(label: str | None) -> tuple[Any, ...]:
+    """Order a SemVer pre-release label against its own release (rule 11).
+
+    A release outranks any pre-release sharing its core numbers, so the absent
+    label sorts highest. Within pre-releases, identifiers compare left to right:
+    numeric ones numerically and below alphanumeric ones, and when everything to
+    the left is equal the longer set wins -- `0.4.0-beta.1` < `0.4.0-beta.1.2`.
+    """
+
+    if label is None:
+        return (1,)
+    identifiers: list[tuple[int, int, str]] = []
+    for identifier in label.split("."):
+        if identifier.isdigit():
+            identifiers.append((0, int(identifier), ""))
+        else:
+            identifiers.append((1, 0, identifier))
+    return (0, tuple(identifiers))
+
+
+def _version(tag_or_version: str) -> tuple[Any, ...]:
+    """Parse a tag or version into a tuple that sorts by release precedence."""
+
+    # `updates` is a syntactically valid SemVer pre-release identifier, so
+    # `v0.4.0-updates` parses as a version unless it is refused here. It is not
+    # one: it names the companion release that carries another version's update
+    # layers, and sorting it just below `v0.4.0` would let a companion stand in
+    # for the release it belongs to.
+    if tag_or_version.endswith(release_assets.UPDATES_TAG_SUFFIX):
+        raise ValueError(f"Not a version, but an update companion: {tag_or_version!r}")
     match = TAG_RE.fullmatch(
         tag_or_version if tag_or_version.startswith("v") else f"v{tag_or_version}"
     )
     if match is None:
         raise ValueError(f"Unsupported release version: {tag_or_version!r}")
-    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+    major, minor, patch, label = match.groups()
+    return (int(major), int(minor), int(patch), _prerelease_precedence(label))
+
+
+def _is_update_layer_carrier(tag: str) -> bool:
+    """May this release's assets hold the app, manifest and runtime layers?
+
+    Today they live on the stable release itself. `-updates` companions are the
+    shape they move to, so both qualify. A plain pre-release does not: a beta and
+    a companion are both GitHub pre-releases, and treating `v0.4.0-beta.1` as a
+    companion would offer a beta's layers to a stable install.
+    """
+
+    suffix = release_assets.UPDATES_TAG_SUFFIX
+    if tag.endswith(suffix):
+        return TAG_RE.fullmatch(tag.removesuffix(suffix)) is not None
+    return STABLE_TAG_RE.fullmatch(tag) is not None
 
 
 def _cache_epoch(value: Any, field: str) -> float:
@@ -582,7 +635,7 @@ def update_action(
 ) -> dict[str, Any]:
     """Build the appropriate bundle download or checkout installer action."""
 
-    if TAG_RE.fullmatch(tag) is None:
+    if STABLE_TAG_RE.fullmatch(tag) is None:
         raise ValueError("Refusing to build an update command from an invalid tag")
     if checkout is not None and checkout.get("kind") == "bundle":
         if release is None or not isinstance(release.get("bundleAssets"), list):
@@ -859,11 +912,9 @@ class UpdateService:
         found: dict[str, Any] | None = None
         for release in self._recent_releases:
             tag = release.get("tag_name")
-            # Runtime layers live on the companion pre-releases, whose tags carry
-            # the -updates suffix that TAG_RE deliberately rejects for versions.
-            if not isinstance(tag, str) or TAG_RE.fullmatch(
-                tag.removesuffix(release_assets.UPDATES_TAG_SUFFIX)
-            ) is None:
+            # Runtime layers live on the release itself today and on a companion
+            # pre-release once #57 lands; a plain beta carries neither.
+            if not isinstance(tag, str) or not _is_update_layer_carrier(tag):
                 continue
             found = self._paired_asset(
                 self._uploaded_assets(release),
@@ -883,7 +934,10 @@ class UpdateService:
         checkout: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         tag = payload.get("tag_name")
-        if not isinstance(tag, str) or TAG_RE.fullmatch(tag) is None:
+        # Deliberately strict. `releases/latest` never returns a pre-release, so
+        # this is unchanged today; #56 widens it when the beta channel gains its
+        # own scan, rather than admitting betas here before anything reads them.
+        if not isinstance(tag, str) or STABLE_TAG_RE.fullmatch(tag) is None:
             raise RuntimeError("GitHub's latest release has an unsupported version tag")
         version = tag.removeprefix("v")
         uploaded = self._uploaded_assets(payload)
@@ -1156,7 +1210,7 @@ class UpdateService:
             )
 
         tag = str(release.get("tag") or "")
-        if TAG_RE.fullmatch(tag) is None:
+        if STABLE_TAG_RE.fullmatch(tag) is None:
             raise UpdateInstallUnavailable("The offered release tag is invalid.")
 
         if action.get("kind") == "bundle_download":
