@@ -157,6 +157,36 @@ def _warm_metal() -> None:
     solve(str(WARMUP_MESH), config)
 
 
+def _warm_beat(status: Mapping[str, object]) -> None:
+    """Start and exercise the BEAT Engine's persistent Julia worker.
+
+    BEAT is the one engine whose cost was never being paid off the user's
+    first solve, and the one where a warmup is cheapest to justify. Every BEAT
+    solve goes through a Julia worker that ``hornlab_beat_bem`` keeps for the
+    life of *this* process, so the cost is paid once per server -- but nothing
+    was paying it until a user asked for a solve and then waited through Julia
+    startup, package loading, engine compilation and accelerator kernel
+    compilation before the first frequency began.
+
+    ``mode="tiny"`` rather than ``"worker"``: booting the worker alone leaves
+    the JIT and the GPU kernel compilation on the first real solve, which is
+    most of the wait. ``"tiny"`` solves one frequency on a four-triangle
+    tetrahedron and touches those paths in the order a user's solve will, the
+    same reasoning as the BEMPP and Metal warmups above.
+
+    Unlike ``_warm_metal`` this needs no ``WG2_SOLVER_WARMUP=1`` opt-in. The
+    objection that gates the Metal branch is that a non-cancellable native
+    solve on a daemon thread can hold Quit open; BEAT's work happens in a
+    child process that ``shutdown_workers`` terminates, so this thread is only
+    ever waiting on a pipe.
+    """
+
+    import hornlab_beat_bem
+
+    backend = str(status.get("backend") or "cuda")
+    hornlab_beat_bem.warm_up(beat_backend=backend, mode="tiny")
+
+
 def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
     """Compile and exercise the BEMPP fallback in the *calling* interpreter.
 
@@ -219,18 +249,31 @@ def _run_warmup() -> None:
             engine = "Metal"
             _warm_metal()
         else:
-            from server.solver import bempp as bempp_adapter
+            # AUTO's order is metal, beat, bempp (see
+            # server/engines/registry.resolve_auto_engine). Leaving BEAT out
+            # here did not merely skip a warmup: on a CUDA host, where AUTO
+            # resolves to BEAT, this fell through and warmed BEMPP -- an
+            # engine that host's first solve never reaches.
+            from server.solver import beat as beat_adapter
 
-            bempp_status = bempp_adapter.bempp_status()
-            if not bempp_status.get("available"):
-                log.info(
-                    "Solver warmup skipped: Metal: %s; BEMPP: %s",
-                    metal_status.get("reason"),
-                    bempp_status.get("reason"),
-                )
-                return
-            engine = "BEMPP"
-            _warm_bempp(bempp_status)
+            beat_status = beat_adapter.beat_status()
+            if beat_status.get("available"):
+                engine = "BEAT"
+                _warm_beat(beat_status)
+            else:
+                from server.solver import bempp as bempp_adapter
+
+                bempp_status = bempp_adapter.bempp_status()
+                if not bempp_status.get("available"):
+                    log.info(
+                        "Solver warmup skipped: Metal: %s; BEAT: %s; BEMPP: %s",
+                        metal_status.get("reason"),
+                        beat_status.get("reason"),
+                        bempp_status.get("reason"),
+                    )
+                    return
+                engine = "BEMPP"
+                _warm_bempp(bempp_status)
     except Exception as exc:  # noqa: BLE001 - a warmup is an optimisation
         # Whatever failed here will fail again at the real call site, where the
         # message reaches the user attached to their job. The same policy as
@@ -278,6 +321,38 @@ def start_solver_warmup() -> threading.Thread | None:
         return _thread
 
 
+def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
+    """Warm the BEAT Julia worker, but only where AUTO would reach it.
+
+    The sibling of ``prewarm_bempp_worker_for_engine``, and registered the same
+    way, for the same reason: BEAT's initialization is the largest thing
+    between a server start and a GPU host's first result, and it happens in a
+    child process, so warming it costs shutdown nothing.
+
+    It is a *separate* hook rather than a branch inside the BEMPP one because
+    the two warm different things in different processes and only one of them
+    can apply to a given host; a single function named for one engine that
+    quietly warmed the other would be worse than two honest ones.
+
+    Returns whether a worker was warmed, for tests and diagnostics.
+    """
+
+    if os.environ.get("WG2_SOLVER_WARMUP") == "0":
+        log.info("BEAT worker prewarm disabled by WG2_SOLVER_WARMUP=0")
+        return False
+    if engine != "beat":
+        log.debug("BEAT worker prewarm skipped: AUTO resolves to %s", engine)
+        return False
+    try:
+        from server.solver import beat as beat_adapter
+
+        _warm_beat(beat_adapter.beat_status())
+    except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
+        log.info("BEAT worker prewarm did not start: %s", exc)
+        return False
+    return True
+
+
 def prewarm_bempp_worker_for_engine(engine: str | None) -> bool:
     """Warm the BEMPP worker child, but only where AUTO would reach it.
 
@@ -320,6 +395,7 @@ def solver_warmup_thread() -> threading.Thread | None:
 __all__ = [
     "WARMUP_FREQUENCY_HZ",
     "WARMUP_MESH",
+    "prewarm_beat_worker_for_engine",
     "prewarm_bempp_worker_for_engine",
     "solver_warmup_thread",
     "start_solver_warmup",

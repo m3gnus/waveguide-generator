@@ -225,6 +225,30 @@ async def bempp_worker_prewarm(engine_registry: EngineRegistry) -> None:
     await asyncio.to_thread(prewarm_bempp_worker_for_engine, engine)
 
 
+async def beat_worker_prewarm(engine_registry: EngineRegistry) -> None:
+    """Warm the BEAT Julia worker once AUTO's answer is known.
+
+    The same shape as ``bempp_worker_prewarm``, and for the same reason: BEAT
+    keeps one persistent Julia worker for the life of this process, so its
+    startup, package loading, engine compilation and GPU kernel compilation
+    are paid once -- but until this hook existed nothing paid them, and a GPU
+    host's first solve waited through all of it before its first frequency.
+    Both hooks are registered; each returns immediately unless AUTO named its
+    own engine, so at most one ever warms anything.
+    """
+
+    from server.solver.warmup import prewarm_beat_worker_for_engine
+
+    try:
+        engine = await engine_registry.resolve("auto", solver_mode=None)
+    except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
+        logging.getLogger("wg.solver.warmup").info(
+            "BEAT worker prewarm could not resolve AUTO: %s", exc
+        )
+        return
+    await asyncio.to_thread(prewarm_beat_worker_for_engine, engine)
+
+
 class _HashedAssetStaticFiles(StaticFiles):
     """Serve the SPA with cache lifetimes that match how Vite names files.
 
@@ -343,6 +367,37 @@ def create_app(
             bempp_worker_prewarm(engine_registry)
         )
 
+    async def prewarm_beat_worker() -> None:
+        """Schedule the BEAT worker prewarm alongside the BEMPP one.
+
+        Registered by default for the same reason: the work happens in a child
+        process, and ``shutdown_beat_worker`` below terminates it, so warming
+        it cannot lengthen a Quit.
+        """
+
+        application.state.beat_prewarm_task = asyncio.create_task(
+            beat_worker_prewarm(engine_registry)
+        )
+
+    async def shutdown_beat_worker() -> None:
+        """Stop the prewarm and retire the Julia worker with the app.
+
+        ``hornlab_beat_bem`` keeps its workers in a module-level registry with
+        no exit hook of its own, and the prewarm means one can be alive for a
+        session that never solved.
+        """
+
+        task = getattr(application.state, "beat_prewarm_task", None)
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        try:
+            from hornlab_beat_bem import shutdown_workers
+        except (ImportError, OSError):
+            return
+        await asyncio.to_thread(shutdown_workers)
+
     async def shutdown_bempp_worker() -> None:
         """Stop the prewarm and the worker with the app, not at interpreter exit.
 
@@ -363,6 +418,7 @@ def create_app(
         await asyncio.to_thread(shutdown_bempp_process)
 
     application.router.add_event_handler("startup", prewarm_bempp_worker)
+    application.router.add_event_handler("startup", prewarm_beat_worker)
     if solver_warmup:
         application.router.add_event_handler("startup", prewarm_solver)
 
@@ -532,6 +588,7 @@ def create_app(
     application.router.add_event_handler("shutdown", engine_registry.shutdown_prewarm)
     application.router.add_event_handler("shutdown", shutdown_gmsh_worker)
     application.router.add_event_handler("shutdown", shutdown_bempp_worker)
+    application.router.add_event_handler("shutdown", shutdown_beat_worker)
     application.mount(
         "/", _HashedAssetStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend"
     )
