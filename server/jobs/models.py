@@ -115,6 +115,14 @@ class SolveOptions(JobModel):
     # is about *where* the points land, not about spending fewer of them.
     frequencies_hz: list[float] | None = None
     verbose: bool = False
+    # Per-band mesh ladder. ``auto`` solves each descending octave on a mesh
+    # coarsened for that octave, which is where a full-band sweep's cost
+    # actually is -- per-frequency BEM cost is flat on a fixed mesh, so 100 Hz
+    # otherwise pays the 20 kHz element count. Off by default: it trades the
+    # field plane (no single surface mesh to retain traces on) for the speed,
+    # and the top octave -- and therefore the design's own mesh -- is unchanged
+    # either way.
+    mesh_ladder: Literal["off", "auto"] = "off"
     mesh_validation_mode: Literal["warn", "strict", "off"] = "warn"
     polar_config: PolarConfig = Field(default_factory=PolarConfig)
     stage_delay_ms: int = Field(default=30, ge=0, le=2000)
@@ -143,7 +151,9 @@ class SolveOptions(JobModel):
             raise ValueError("solver_mode must be one of auto, full_3d, or circsym")
         return normalized
 
-    @field_validator("frequency_spacing", "mesh_validation_mode", mode="before")
+    @field_validator(
+        "frequency_spacing", "mesh_validation_mode", "mesh_ladder", mode="before"
+    )
     @classmethod
     def normalize_option_enum(cls, value: Any) -> Any:
         return str(value).strip().lower()

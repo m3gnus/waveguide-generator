@@ -17,7 +17,7 @@ import logging
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -49,8 +49,17 @@ from .base import (
 )
 from .context import SolverContext
 from .frequency_sweep import (
+    canonical_frequencies,
     live_execution_frequencies,
+    order_frequencies_for_live_plotting,
     sort_native_result_frequencies,
+)
+from .mesh_ladder import (
+    LadderBandMesh,
+    MeshLadderPlan,
+    build_ladder_band_meshes,
+    merge_band_results,
+    plan_mesh_ladder,
 )
 from .field_traces_store import (
     METAL_FIELD_TRACE_BACKEND,
@@ -312,6 +321,175 @@ def _native_check_open_edges(context: SolverContext) -> bool:
     return has_closed_outer_body(context.design.root)
 
 
+#: How far a coarsened band mesh may disagree with the mesh above it, in dB
+#: rms over the main lobe, before the band is refused and re-solved on the
+#: baseline mesh.
+#:
+#: This tolerance exists because the elements-per-wavelength rule is *not*
+#: sufficient on its own -- measured, not assumed. On 260308tritonia-q a band
+#: sized to 5.24x the design's own resolution stayed comfortably inside its own
+#: 1,389 Hz validity ceiling, was watertight, had zero self-intersections and a
+#: bounding box within 1 mm of the baseline's, and still moved the normalised
+#: pattern by up to 2.04 dB rms. The bands that did agree came in at 0.021 dB
+#: (1.31x) and 0.052 dB (2.39x). So the usable separation is wide, and 0.10 dB
+#: sits in the middle of it with a factor of two of margin on the accept side
+#: and nearly six on the reject side.
+#:
+#: A fixed cap on the coarsening ratio was the alternative and is the wrong
+#: instrument: ``result_mapping._SHAPE_LIMIT_MULTIPLIER`` already records that
+#: mesh error is erratic rather than monotone in the ratio, and that "a two- or
+#: three-level ladder scored on the metric in use beats arithmetic from this
+#: constant". The seam probe is that scoring, done per design and per run.
+LADDER_SEAM_TOLERANCE_DB = 0.10
+
+
+class _SeamDeviationTooLarge(RuntimeError):
+    """A band mesh answered its seam frequency differently from the band above."""
+
+
+def _normalised_main_lobe_db(pressure: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return one pattern in dB relative to its own peak, and its main-lobe mask.
+
+    Peak normalisation rather than the polar norm angle: the seam probe compares
+    two meshes at one frequency, so it needs a reference that exists on both and
+    depends on neither's angular sampling.
+    """
+
+    magnitude = np.maximum(np.abs(np.asarray(pressure).reshape(-1)), np.finfo(np.float64).tiny)
+    level_db = 20.0 * np.log10(magnitude / float(np.max(magnitude)))
+    return level_db, level_db >= -6.0
+
+
+def _native_solve_mesh(
+    msh_text: str,
+    frequencies: list[float],
+    config: Any,
+    *,
+    sort_after: bool,
+) -> Any:
+    """Solve one mesh at an explicit frequency list through the native helper."""
+
+    path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".msh", delete=False, encoding="utf-8"
+        ) as handle:
+            path = Path(handle.name)
+            handle.write(msh_text)
+        result = native_solve_frequencies(str(path), frequencies, config)
+    finally:
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Could not remove temporary Metal mesh %s: %s", path, exc)
+    if sort_after:
+        sort_native_result_frequencies(result)
+    return result
+
+
+def _projected_solve_work_ratio(bands: Sequence[LadderBandMesh]) -> float | None:
+    """Baseline solve work over laddered solve work, using dof-squared as cost."""
+
+    baseline_dofs = float(bands[0].stats.get("vertex_count", 0) or 0)
+    if baseline_dofs <= 0.0:
+        return None
+    baseline = 0.0
+    laddered = 0.0
+    for band in bands:
+        count = len(band.frequencies)
+        dofs = float(band.stats.get("vertex_count", 0) or 0)
+        baseline += count * baseline_dofs**2
+        laddered += count * dofs**2
+    if laddered <= 0.0:
+        return None
+    return baseline / laddered
+
+
+def _pattern_deviation_db(reference: np.ndarray, candidate: np.ndarray) -> float:
+    """Main-lobe rms between two patterns at one frequency, in dB."""
+
+    reference_db, main_lobe = _normalised_main_lobe_db(reference)
+    candidate_db, _ = _normalised_main_lobe_db(candidate)
+    if reference_db.shape != candidate_db.shape:
+        raise _SeamDeviationTooLarge(
+            "the band mesh returned a different observation grid from the band "
+            "above it"
+        )
+    if not np.any(main_lobe):
+        return 0.0
+    residual = candidate_db[main_lobe] - reference_db[main_lobe]
+    return float(np.sqrt(np.mean(residual * residual)))
+
+
+def _row_at(result: Any, frequency_hz: float) -> np.ndarray:
+    frequencies = np.asarray(result.frequencies_hz, dtype=np.float64).reshape(-1)
+    index = int(np.argmin(np.abs(frequencies - frequency_hz)))
+    return np.asarray(result.pressure_complex)[index]
+
+
+def _seam_overlap_deviation_db(
+    reference: Any,
+    band: LadderBandMesh,
+    reference_msh_text: str,
+    probe_config: Any,
+) -> dict[str, Any]:
+    """Compare a band's mesh with the finer mesh above it, at both band ends.
+
+    Two probes, because one is demonstrably not enough. The *seam* probe
+    re-solves the band above's lowest frequency on this band's mesh: that is the
+    step a user would see at a boundary, and it is what the sizing rule has to
+    earn. The *interior* probe does the same at this band's own lowest
+    frequency, because a coarse mesh's error here is geometric rather than
+    wavelength-driven and therefore grows *downwards* -- measured on
+    250917asro68q, where a band whose seam agreed to 0.064 dB had drifted to
+    0.291 dB at its own bottom. Scoring only the seam accepts that band.
+
+    Three single-frequency solves, all on the two cheap meshes rather than the
+    expensive baseline, and all *before* the band is solved: a band that fails
+    then costs three probe frequencies instead of a whole discarded band solve.
+    Each rung has already passed this test against the rung above it, so the
+    chain is anchored on the baseline by induction.
+    """
+
+    reference_frequencies = np.asarray(
+        reference.frequencies_hz, dtype=np.float64
+    ).reshape(-1)
+    seam_hz = float(np.min(reference_frequencies))
+    interior_hz = float(min(band.frequencies))
+
+    seam_probe = _native_solve_mesh(
+        band.msh_text, [seam_hz], probe_config, sort_after=False
+    )
+    seam_db = _pattern_deviation_db(
+        _row_at(reference, seam_hz), np.asarray(seam_probe.pressure_complex)[0]
+    )
+    check: dict[str, Any] = {
+        "seam_frequency_hz": seam_hz,
+        "seam_main_lobe_rms_db": seam_db,
+        "interior_frequency_hz": None,
+        "interior_main_lobe_rms_db": None,
+        "main_lobe_rms_db": seam_db,
+        "tolerance_db": LADDER_SEAM_TOLERANCE_DB,
+    }
+    if interior_hz >= seam_hz or seam_db > LADDER_SEAM_TOLERANCE_DB:
+        return check
+    band_interior = _native_solve_mesh(
+        band.msh_text, [interior_hz], probe_config, sort_after=False
+    )
+    reference_interior = _native_solve_mesh(
+        reference_msh_text, [interior_hz], probe_config, sort_after=False
+    )
+    interior_db = _pattern_deviation_db(
+        np.asarray(reference_interior.pressure_complex)[0],
+        np.asarray(band_interior.pressure_complex)[0],
+    )
+    check["interior_frequency_hz"] = interior_hz
+    check["interior_main_lobe_rms_db"] = interior_db
+    check["main_lobe_rms_db"] = max(seam_db, interior_db)
+    return check
+
+
 def solve_metal_from_msh_text(
     msh_text: str,
     context: SolverContext,
@@ -323,10 +501,27 @@ def solve_metal_from_msh_text(
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None,
+    ladder_bands: Sequence[LadderBandMesh] | None = None,
 ) -> dict[str, Any]:
-    """Run native Metal from an original Gmsh 2.2 text artifact."""
+    """Run native Metal from an original Gmsh 2.2 text artifact.
+
+    ``ladder_bands`` runs the per-band mesh ladder: each band solves its own
+    frequencies on its own mesh and the native results are merged onto one
+    ascending axis.  ``msh_text`` stays the *baseline* artifact and is the only
+    mesh the observation frame and observation points are derived from, so the
+    ladder changes the scattering discretisation and nothing about where the
+    field is evaluated.  ``ladder_bands[0]`` is the baseline band and must carry
+    that same artifact.
+    """
 
     context.validate()
+    if ladder_bands is not None:
+        if not ladder_bands:
+            raise ValueError("mesh ladder solve requires at least one band")
+        if ladder_bands[0].msh_text != msh_text:
+            raise ValueError(
+                "mesh ladder band 0 must carry the baseline mesh artifact"
+            )
     if native_config is None or native_solve is None:
         raise MetalUnavailable("hornlab-metal-bem is not installed.")
     status = metal_status()
@@ -340,17 +535,29 @@ def solve_metal_from_msh_text(
     if stage_callback:
         stage_callback("setup", 0.0, "Configuring Metal BEM solve")
 
+    # Bands are solved one after another, so the native callbacks restart their
+    # index at zero for each.  Everything downstream -- the provisional-result
+    # revision counter above all -- reads that index as a position in the whole
+    # sweep, so it is offset by the frequencies already solved.
+    swept_total = (
+        sum(len(band.frequencies) for band in ladder_bands)
+        if ladder_bands is not None
+        else context.num_frequencies
+    )
+    band_offset = 0
+
     def progress(index: int, total: int, frequency_hz: float) -> None:
         if cancellation_callback:
             cancellation_callback()
-        fraction = index / max(1, total)
+        position = band_offset + index
+        fraction = position / max(1, swept_total)
         if progress_callback:
             progress_callback(fraction)
         if stage_callback:
             stage_callback(
                 "frequency_solve",
                 fraction,
-                f"Solving frequency {index + 1}/{total} with Metal BEM",
+                f"Solving frequency {position + 1}/{swept_total} with Metal BEM",
             )
 
     def on_frequency_result(
@@ -359,10 +566,11 @@ def solve_metal_from_msh_text(
         if cancellation_callback:
             cancellation_callback()
         if result_callback is not None:
+            position = band_offset + index
             result_callback(
-                index,
+                position,
                 build_provisional_frequency_response(
-                    index=index,
+                    index=position,
                     frequency_hz=frequency_hz,
                     entry=entry,
                     config=config,
@@ -386,8 +594,16 @@ def solve_metal_from_msh_text(
             frequency_count=len(live_execution_frequencies(context)),
             channel_count=1,
             enabled=field_plane_enabled,
-            supported=aperture_tag is None,
-            unsupported_reason="unsupported_coupled_infinite_baffle",
+            # A laddered sweep has no single surface mesh, so there is no
+            # artifact a field plane could be interpolated from. Refusing here
+            # is the honest answer; keeping one band's traces would silently
+            # attach that band's surface solution to the whole sweep.
+            supported=aperture_tag is None and ladder_bands is None,
+            unsupported_reason=(
+                "unsupported_coupled_infinite_baffle"
+                if aperture_tag is not None
+                else "unsupported_per_band_mesh_ladder"
+            ),
             cap_bytes=field_trace_cap_bytes,
         )
     )
@@ -426,32 +642,127 @@ def solve_metal_from_msh_text(
         kwargs["source_motion"] = context.source_motion
     config = _native_config_or_unavailable(kwargs)
 
-    path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".msh", delete=False, encoding="utf-8"
-        ) as handle:
-            path = Path(handle.name)
-            handle.write(msh_text)
-        if result_callback is not None and native_solve_frequencies is not None:
-            result = native_solve_frequencies(
-                str(path), live_execution_frequencies(context).tolist(), config
+    ladder_dropped_fields: tuple[str, ...] = ()
+    ladder_solve_refusals: dict[int, str] = {}
+    ladder_seam_checks: dict[int, dict[str, Any]] = {}
+    if ladder_bands is not None:
+        if native_solve_frequencies is None:
+            raise MetalUnavailable(
+                "Installed hornlab-metal-bem does not support explicit frequency "
+                "lists, which the per-band mesh ladder requires."
             )
-            sort_native_result_frequencies(result)
-        elif context.frequencies_hz is None:
-            result = native_solve(str(path), config)
-        else:
-            # solve_frequencies bypasses the generated grid entirely; freq_min/
-            # freq_max/freq_count on the config stay as list-derived summaries.
-            result = native_solve_frequencies(
-                str(path), list(context.frequencies_hz), config
+        # The seam probe re-solves one frequency the band above already
+        # answered. It is a diagnostic, not part of the sweep, so it must not
+        # reach the live-plot stream as an extra point on the frequency axis.
+        probe_config = (
+            _native_config_or_unavailable(
+                {k: v for k, v in kwargs.items() if k != "on_frequency_result"}
             )
-    finally:
-        if path is not None:
+            if result_callback is not None
+            else config
+        )
+
+        def solve_band(band: LadderBandMesh, mesh_source: str) -> Any:
+            frequencies = (
+                order_frequencies_for_live_plotting(band.frequencies).tolist()
+                if result_callback is not None
+                else list(band.frequencies)
+            )
+            return _native_solve_mesh(
+                mesh_source,
+                frequencies,
+                config,
+                sort_after=result_callback is not None,
+            )
+
+        band_results: list[Any] = []
+        band_elapsed: dict[int, float] = {}
+        # The mesh each band was *actually* solved on, which is not the mesh it
+        # was planned on whenever a band fell back. The next band's probe must
+        # compare against the rung that ran, not the rung that was proposed.
+        solved_meshes: list[str] = []
+        for band in ladder_bands:
+            if cancellation_callback:
+                cancellation_callback()
+            band_mesh_used = band.msh_text
+            band_started = time.perf_counter()
             try:
-                path.unlink(missing_ok=True)
-            except OSError as exc:
-                logger.warning("Could not remove temporary Metal mesh %s: %s", path, exc)
+                if band.msh_text != msh_text and band_results:
+                    check = _seam_overlap_deviation_db(
+                        band_results[-1],
+                        band,
+                        solved_meshes[-1],
+                        probe_config,
+                    )
+                    ladder_seam_checks[band.band.index] = check
+                    deviation = float(check["main_lobe_rms_db"])
+                    if deviation > LADDER_SEAM_TOLERANCE_DB:
+                        raise _SeamDeviationTooLarge(
+                            "the band mesh disagrees with the band above it by "
+                            f"{deviation:.3f} dB main-lobe rms, over the "
+                            f"{LADDER_SEAM_TOLERANCE_DB:.2f} dB tolerance"
+                        )
+                band_result = solve_band(band, band.msh_text)
+            except Exception as exc:
+                # Two failures, one response. The native helper applies checks
+                # the mesher does not -- the reduced-domain bound above all,
+                # which a coarsened mesh can chord across -- and a mesh that
+                # passes every check can still answer differently, which only a
+                # measurement catches. Either way the band goes back to the
+                # baseline mesh, which is what the ladder replaced.
+                if cancellation_callback:
+                    cancellation_callback()
+                if band.msh_text == msh_text:
+                    raise
+                logger.warning(
+                    "Mesh-ladder band %d rejected, falling back to the baseline "
+                    "mesh: %s",
+                    band.band.index,
+                    exc,
+                )
+                ladder_solve_refusals[band.band.index] = (
+                    str(exc)
+                    if isinstance(exc, _SeamDeviationTooLarge)
+                    else f"native solve refused the band mesh: {exc}"
+                )
+                band_result = solve_band(band, msh_text)
+                band_mesh_used = msh_text
+            band_elapsed[band.band.index] = time.perf_counter() - band_started
+            band_results.append(band_result)
+            solved_meshes.append(band_mesh_used)
+            band_offset += len(band.frequencies)
+        merged = merge_band_results(band_results)
+        result = merged.result
+        ladder_dropped_fields = merged.dropped_fields
+    else:
+        path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".msh", delete=False, encoding="utf-8"
+            ) as handle:
+                path = Path(handle.name)
+                handle.write(msh_text)
+            if result_callback is not None and native_solve_frequencies is not None:
+                result = native_solve_frequencies(
+                    str(path), live_execution_frequencies(context).tolist(), config
+                )
+                sort_native_result_frequencies(result)
+            elif context.frequencies_hz is None:
+                result = native_solve(str(path), config)
+            else:
+                # solve_frequencies bypasses the generated grid entirely; freq_min/
+                # freq_max/freq_count on the config stay as list-derived summaries.
+                result = native_solve_frequencies(
+                    str(path), list(context.frequencies_hz), config
+                )
+        finally:
+            if path is not None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning(
+                        "Could not remove temporary Metal mesh %s: %s", path, exc
+                    )
     if cancellation_callback:
         cancellation_callback()
     if stage_callback:
@@ -489,6 +800,36 @@ def solve_metal_from_msh_text(
             "backend": "full_3d_coupled",
             "aperture_tag": aperture_tag,
             "source": "hornlab-waveguide-mesher",
+        }
+    if ladder_bands is not None:
+        # Provenance: a result produced from several meshes must say so. The
+        # stored mesh artifact is band 0's, which is the design's own mesh, so
+        # naming the band the artifact belongs to is what keeps a downloaded
+        # mesh from being read as "the mesh this sweep ran on".
+        band_metadata = []
+        for band in ladder_bands:
+            entry = band.as_metadata()
+            refusal = ladder_solve_refusals.get(band.band.index)
+            if refusal is not None:
+                entry["fallback_reason"] = refusal
+                entry["solved_on_baseline_mesh"] = True
+            seam = ladder_seam_checks.get(band.band.index)
+            if seam is not None:
+                entry["seam_check"] = seam
+            entry["solve_wall_time_seconds"] = band_elapsed.get(band.band.index)
+            band_metadata.append(entry)
+        metadata["mesh_ladder"] = {
+            "applied": True,
+            "mesh_artifact_band_index": 0,
+            "dropped_native_fields": list(ladder_dropped_fields),
+            # Dense BEM work goes as the square of the unknown count, so this
+            # is what the ladder expected to save on the solve alone. It does
+            # not include the extra mesh builds, seam probes or per-band solver
+            # sessions, which is why the per-band wall times are reported
+            # beside it: on a small mesh those fixed costs can exceed the
+            # saving and the honest number is the clock, not the projection.
+            "projected_solve_work_ratio": _projected_solve_work_ratio(ladder_bands),
+            "bands": band_metadata,
         }
     response = build_solver_response(
         result=result,
@@ -2075,6 +2416,52 @@ def _circsym_eligibility_reasons(request: SolveRequest) -> list[str]:
 circsym_eligibility_reasons = _circsym_eligibility_reasons
 
 
+def _mesh_ladder_requested(request: SolveRequest) -> bool:
+    return str(getattr(request.options, "mesh_ladder", "off")).strip().lower() == "auto"
+
+
+async def _resolve_mesh_ladder(
+    request: SolveRequest,
+    context: SolverContext,
+    mesh: Mapping[str, Any],
+    cancel_cb: CancelCallback,
+    stage_cb: StageCallback,
+) -> tuple[list[LadderBandMesh] | None, str | None, MeshLadderPlan | None]:
+    """Plan and build the per-band ladder, or say why there is not one.
+
+    The sizing reference is the *realized* coarsest edge of the design's own
+    mesh, which has just been built, so the ladder never has to guess how a
+    requested mm resolution turns into an element.
+    """
+
+    if not _mesh_ladder_requested(request):
+        return None, None, None
+    plan = plan_mesh_ladder(
+        request.design,
+        canonical_frequencies(context),
+        reference_max_edge_mm=float(mesh["stats"].get("max_edge_mm", 0.0)),
+    )
+    if plan is None:
+        return None, (
+            "no band below the top octave could be coarsened while staying "
+            "valid at its own top frequency"
+        ), None
+    stage_cb("mesh_prepare", 0.0, "Building per-band solver meshes")
+    bands = await build_ladder_band_meshes(
+        request.design,
+        plan,
+        mesh,
+        request.options,
+        cancel_cb=cancel_cb,
+    )
+    if all(band.band.resolution_scale == 1.0 or band.fallback_reason for band in bands):
+        reasons = sorted({band.fallback_reason for band in bands if band.fallback_reason})
+        return None, "every coarsened band fell back to the baseline mesh: " + (
+            "; ".join(reasons) if reasons else "no band was coarsened"
+        ), plan
+    return bands, None, plan
+
+
 class MetalEngine:
     name = "metal"
 
@@ -2116,7 +2503,16 @@ class MetalEngine:
                 cancellation_callback=cancel_cb,
                 result_callback=result_cb,
             )
-            results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
+            metadata = results.setdefault("metadata", {})
+            metadata["mesh_stats"] = mesh_stats
+            if _mesh_ladder_requested(request):
+                metadata["mesh_ladder"] = {
+                    "applied": False,
+                    "reason": (
+                        "imported geometry is solved on the mesh that was "
+                        "imported; there is no design resolution to coarsen"
+                    ),
+                }
             channel_bases = results.pop("_channel_bases_npz", None)
             radiation_matrix = results.pop("_radiation_impedance_npz", None)
             field_traces = results.pop("_field_traces", None)
@@ -2167,6 +2563,14 @@ class MetalEngine:
                 outcome.field_trace_unavailable_reason = (
                     "unsupported_axisymmetric_formulation"
                 )
+                if _mesh_ladder_requested(request):
+                    metadata["mesh_ladder"] = {
+                        "applied": False,
+                        "reason": (
+                            "the axisymmetric meridian fast path solves a 2D "
+                            "meridian, which the ladder does not size"
+                        ),
+                    }
                 return outcome
 
         context = SolverContext.from_request(request, solver_mode="full_3d")
@@ -2176,9 +2580,15 @@ class MetalEngine:
             cancel_cb,
             lambda stage, progress, message: stage_cb(stage, progress, message),
         )
+        # The stored artifact is always the design's own mesh, ladder or not.
+        # A laddered sweep says so in ``metadata['mesh_ladder']`` rather than by
+        # substituting a different artifact.
         if artifact_cb is not None:
             await artifact_cb(mesh["msh_text"], mesh["stats"])
         cancel_cb()
+        ladder_bands, ladder_refusal, ladder_plan = await _resolve_mesh_ladder(
+            request, context, mesh, cancel_cb, stage_cb
+        )
         results = await asyncio.to_thread(
             solve_metal_from_msh_text,
             mesh["msh_text"],
@@ -2188,9 +2598,14 @@ class MetalEngine:
             stage_callback=stage_cb,
             cancellation_callback=cancel_cb,
             result_callback=result_cb,
+            ladder_bands=ladder_bands,
         )
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
         metadata = results.setdefault("metadata", {})
+        if ladder_refusal is not None:
+            metadata["mesh_ladder"] = {"applied": False, "reason": ladder_refusal}
+        elif ladder_plan is not None and isinstance(metadata.get("mesh_ladder"), dict):
+            metadata["mesh_ladder"].update(ladder_plan.as_metadata())
         metadata["solve_path"] = "full-3d"
         metadata["axisymmetric_eligibility_reasons"] = eligibility_reasons
         metadata["solve_path_reason"] = (

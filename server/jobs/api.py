@@ -156,6 +156,7 @@ class FieldPlaneUnavailableResponse(BaseModel):
     code: Literal[
         "unsupported_axisymmetric_formulation",
         "unsupported_coupled_infinite_baffle",
+        "unsupported_per_band_mesh_ladder",
     ]
     message: str
     remedy: str
@@ -533,10 +534,12 @@ def create_jobs_router(
                 detail=f"Field-trace artifact is corrupt: {exc}",
             ) from exc
         except FieldPlaneUnsupported as exc:
-            if exc.code in {
-                "unsupported_axisymmetric_formulation",
-                "unsupported_coupled_infinite_baffle",
-            } and exc.remedy is not None:
+            # Any refusal that names both a code and a remedy gets the full
+            # envelope. This used to be a list of the two codes that did, which
+            # meant a third one silently degraded to a bare detail string --
+            # caught by adding the mesh-ladder refusal, whose remedy reached
+            # nobody until the list grew.
+            if exc.code is not None and exc.remedy is not None:
                 return JSONResponse(
                     status_code=422,
                     content=FieldPlaneUnavailableResponse(

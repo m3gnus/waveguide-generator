@@ -731,6 +731,45 @@ def test_unsupported_field_plane_details_distinguish_formulation_and_mounting(
     asyncio.run(scenario())
 
 
+def test_a_laddered_solve_refuses_the_field_plane_and_names_the_option(
+    tmp_path: Path,
+) -> None:
+    """A ladder has several meshes, so there is no surface to interpolate from."""
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        _create_job(
+            store,
+            "laddered",
+            traces=False,
+            unavailable_reason="unsupported_per_band_mesh_ladder",
+        )
+
+        status, raw, _headers = await _request(
+            app, "/api/results/laddered/field-plane", _body()
+        )
+
+        assert status == 422
+        assert json.loads(raw) == {
+            "detail": (
+                "Per-band mesh ladder solves run several meshes and retain no "
+                "single surface mesh to interpolate a field plane from."
+            ),
+            "error_contract_version": 1,
+            "code": "unsupported_per_band_mesh_ladder",
+            "message": (
+                "Per-band mesh ladder solves run several meshes and retain no "
+                "single surface mesh to interpolate a field plane from."
+            ),
+            "remedy": "Set Mesh ladder to Off and re-solve.",
+        }
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "plane_update",
     [
