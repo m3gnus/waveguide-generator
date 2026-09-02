@@ -15,8 +15,10 @@ import gzip
 import json
 import logging
 from pathlib import Path
+import sys
 import threading
 import time
+import types
 from typing import Any
 
 import pytest
@@ -247,6 +249,89 @@ def test_the_bempp_worker_prewarm_skips_hosts_auto_solves_elsewhere(
 
     assert solver_warmup.prewarm_bempp_worker_for_engine("bempp") is True
     assert prewarmed == ["bempp"]
+
+
+def test_the_beat_worker_prewarm_is_registered_and_stopped_by_default(
+    tmp_path: Path,
+) -> None:
+    """A GPU host's first solve waited through the whole Julia start-up.
+
+    BEAT keeps one persistent Julia worker per server process, so the cost is
+    paid once -- but nothing paid it until a user asked for a solve. Warming it
+    is registered by default for the same reason as BEMPP's: the work is in a
+    child process the app can terminate, so it cannot lengthen a Quit. Which
+    also means it must be stopped with the app.
+    """
+
+    application = create_app(data_dir=tmp_path)
+    startup = {handler.__name__ for handler in application.router.on_startup}
+    shutdown = {handler.__name__ for handler in application.router.on_shutdown}
+    assert "prewarm_beat_worker" in startup
+    assert "shutdown_beat_worker" in shutdown
+
+
+def test_the_beat_worker_prewarm_only_warms_the_engine_auto_chose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AUTO's order is metal, beat, bempp -- each prewarm claims exactly one.
+
+    Both worker prewarms are registered unconditionally, so the thing that
+    stops a Mac from booting a Julia process it will never solve on is this
+    guard and nothing else.
+    """
+
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    warmed: list[str] = []
+    monkeypatch.setattr(
+        solver_warmup, "_warm_beat", lambda status: warmed.append("beat")
+    )
+
+    assert solver_warmup.prewarm_beat_worker_for_engine("metal") is False
+    assert solver_warmup.prewarm_beat_worker_for_engine("bempp") is False
+    assert solver_warmup.prewarm_beat_worker_for_engine(None) is False
+    assert warmed == []
+
+    assert solver_warmup.prewarm_beat_worker_for_engine("beat") is True
+    assert warmed == ["beat"]
+
+
+def test_the_beat_worker_prewarm_can_be_switched_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.setattr(
+        solver_warmup, "_warm_beat", lambda status: pytest.fail("must not warm")
+    )
+    monkeypatch.setenv("WG2_SOLVER_WARMUP", "0")
+
+    assert solver_warmup.prewarm_beat_worker_for_engine("beat") is False
+
+
+def test_the_beat_warmup_runs_a_solve_not_just_a_process_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``mode="worker"`` would leave the expensive half on the first real solve.
+
+    Booting the Julia worker pays start-up and package loading; the JIT and the
+    GPU kernel compilation are only paid by running something. ``tiny`` solves
+    one frequency on a four-triangle tetrahedron, which is what makes the
+    warmup worth a process at all.
+    """
+
+    from server.solver import warmup as solver_warmup
+
+    calls: list[dict[str, object]] = []
+    module = types.SimpleNamespace(
+        warm_up=lambda **kwargs: calls.append(kwargs)
+    )
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", module)
+
+    solver_warmup._warm_beat({"available": True, "backend": "cuda"})
+
+    assert calls == [{"beat_backend": "cuda", "mode": "tiny"}]
 
 
 def test_the_bempp_worker_prewarm_takes_auto_from_the_registrys_one_snapshot(
