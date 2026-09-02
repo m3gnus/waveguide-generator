@@ -57,6 +57,7 @@ describe('NativeWindowStore', () => {
       customFrame: false,
       maximized: false,
       platform: 'other',
+      topInset: 0,
     });
   });
 
@@ -87,6 +88,8 @@ describe('NativeWindowStore', () => {
       customFrame: true,
       maximized: true,
       platform: 'windows',
+      // Windows never reserves anything: the menu bar is not an overlay there.
+      topInset: 0,
     });
   });
 

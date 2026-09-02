@@ -5,7 +5,15 @@
  * the caption. In a dev browser the attribute never appears and not one of these
  * rules matches, so the same stylesheet ships to both hosts.
  *
- * `app-region` is what makes the top bar behave like a title bar. WebView2 with
+ * `app-region` is what makes the top bar behave like a title bar *on Windows*.
+ * WebKit does not implement the property at all -- `CSS.supports` says no to
+ * both spellings in the shipped WKWebView -- so on macOS every `app-region`
+ * declaration below is inert and `WindowControls` starts the drag from a
+ * mousedown instead. The rules are still written unconditionally: they cost
+ * nothing where they are ignored, and splitting them per platform would put the
+ * Windows drag region behind an attribute test it does not need.
+ *
+ * WebView2 with
  * `IsNonClientRegionSupportEnabled` hands those regions to Windows as caption,
  * which is what buys the behaviours a hand-rolled JS drag cannot: Aero Snap,
  * Win+Arrow, snap layouts, double-click to maximize, and the shake gesture. The
@@ -35,6 +43,27 @@
  * relies on that; the extra padding restores the few pixels the frame gave up. */
 [data-native-frame='windows'][data-native-maximized='true'] .topbar {
   padding-top: 2px;
+}
+
+/* A drag has to start on a mousedown that is not also selecting something. The
+ * top bar has real text in it -- the brand, the design name, the revision chip
+ * -- and without this, moving the window paints half of them blue on the way. */
+[data-native-frame] .topbar {
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+/* Full screen on macOS: the menu bar slides down over the window rather than
+ * pushing it, and the window's own metrics do not mention it -- so the shell
+ * grows its first row and the top bar takes the difference as padding. Zero in
+ * every other state, which is why one rule can cover both. */
+[data-native-frame='macos'] .app-shell {
+  grid-template-rows: calc(48px + var(--native-top-inset, 0px)) minmax(0, 1fr) 28px;
+}
+
+[data-native-frame='macos'] .topbar {
+  padding-top: var(--native-top-inset, 0px);
 }
 
 /* Windows ------------------------------------------------------------------ */
@@ -94,11 +123,19 @@
   display: block;
 }
 
-/* macOS -------------------------------------------------------------------- */
+/* macOS -------------------------------------------------------------------
+ *
+ * Sized and coloured from a measurement of the real buttons rather than from
+ * the values that circulate as "the macOS colours" (#ff5f57 / #febc2e /
+ * #28c840, which are a older and more saturated). Source:
+ * lwouis/macos-traffic-light-buttons-as-SVG, art board 85.4 units to the 12 px
+ * button. Each button has its own ring and its own glyph colour -- one shared
+ * grey glyph is the giveaway that a set of dots is an imitation.
+ */
 
 .window-controls-macos {
   align-items: center;
-  gap: 8px;
+  gap: 8px;              /* 12 px buttons, 8 px apart: 20 px between centres */
   margin: 0 6px 0 2px;
 }
 
@@ -108,21 +145,36 @@
   flex: none;
   padding: 0;
   border-radius: 50%;
-  /* The inset ring is what stops the dots dissolving into a light background,
-   * and it is what the platform draws too. */
-  box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .2);
-  color: rgba(0, 0, 0, .55);
+  /* 3.6 of 85.4 units, which is half a point at this size. The ring is what
+   * stops the dots dissolving into a light background, and the platform draws
+   * one too. */
+  box-shadow: inset 0 0 0 .5px var(--mac-ring);
+  background: var(--mac-fill);
 }
 
-.window-controls-macos .window-controls-close { background: #ff5f57; }
-.window-controls-macos .window-controls-minimize { background: #febc2e; }
-.window-controls-macos .window-controls-maximize { background: #28c840; }
+.window-controls-macos .window-controls-close {
+  --mac-fill: #ed6a5f; --mac-ring: #e24b41; color: #460804;
+}
+
+.window-controls-macos .window-controls-minimize {
+  --mac-fill: #f6be50; --mac-ring: #e1a73e; color: #90591d;
+}
+
+.window-controls-macos .window-controls-maximize {
+  --mac-fill: #61c555; --mac-ring: #2dac2f; color: #2a6218;
+}
+
+.window-controls-macos button:active {
+  filter: brightness(.76);
+}
 
 /* The glyphs appear only while the pointer is over the group -- all three at
- * once, which is the platform's behaviour and reads as one control cluster. */
+ * once, which is the platform's behaviour and reads as one control cluster.
+ * They fill the whole button, because the geometry inside them is already in
+ * the button's own 12 px coordinates. */
 .window-controls-macos svg {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   opacity: 0;
   transition: opacity .1s;
 }
@@ -133,7 +185,11 @@
  * unambiguous -- the single strongest "which window am I typing into" cue on
  * both platforms, and one the OS title bar used to provide for free. */
 [data-native-blurred='true'] .window-controls-windows button { color: var(--fg4); }
+/* An unfocused window's dots lose their colour entirely on macOS rather than
+ * merely dimming, and the glyphs stay away even under the pointer. */
 [data-native-blurred='true'] .window-controls-macos button {
-  background: var(--ov3);
-  box-shadow: none;
+  --mac-fill: #c7c7c7;
+  --mac-ring: #d1d0d2;
 }
+
+[data-native-blurred='true'] .window-controls-macos:hover svg { opacity: 0; }
