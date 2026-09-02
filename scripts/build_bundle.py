@@ -1737,12 +1737,18 @@ cache under %LOCALAPPDATA%\WaveguideGenerator, which is safe to delete too.
     #: user has already left. macOS refuses this app on first launch and offers
     #: NO way to proceed from the dialog: the app is ad-hoc signed, so Gatekeeper
     #: has no developer identity to attach an exception to, and Privacy & Security
-    #: therefore lists nothing to allow. Measured 2026-08-27, both directly and
-    #: through LaunchServices; an unsigned build gets `source=no usable signature`
-    #: and would be allowed, but an unsigned arm64 binary cannot execute at all.
-    #: Removing the quarantine attribute is the only route that works without an
-    #: Apple Developer ID, and it is what comparable un-notarized projects ship.
+    #: therefore lists nothing to allow. Measured 2026-08-27 and re-measured
+    #: 2026-09-02 on macOS 26.5.2 against a genuinely quarantined download; an
+    #: unsigned build gets `source=no usable signature` and would be allowed, but
+    #: an unsigned arm64 binary cannot execute at all. See
+    #: docs/validation/2026-09/MACOS-GATEKEEPER.md for the transcripts.
+    #:
+    #: The installer script beside it exists because a *script* is unsigned in a
+    #: way Gatekeeper can offer an exception for, so it can be approved where the
+    #: app cannot, and it then does the copy and the quarantine removal itself.
     DMG_README_NAME = "READ ME FIRST.txt"
+    DMG_INSTALLER_NAME = "Install Waveguide Generator.command"
+    DMG_INSTALLER_SOURCE = "installers/macos/dmg-install.command"
 
     def dmg_readme(self) -> str:
         return """Waveguide Generator - first launch on macOS
@@ -1754,11 +1760,28 @@ macOS will refuse to open this app the first time, with:
     Apple could not verify "Waveguide Generator" is free of malware ...
 
 Only "Done" and "Move to Bin" are offered, and System Settings > Privacy &
-Security will NOT show an "Open Anyway" button. That is expected. It is a
-statement about a missing Apple signature, not a finding about this app.
+Security will NOT list the app. That is expected. It is a statement about a
+missing Apple signature, not a finding about this app.
 
-TO OPEN IT
-----------
+TO OPEN IT - TRY THIS FIRST
+---------------------------
+
+1. Double-click "Install Waveguide Generator.command" in this window.
+2. macOS refuses that too, with the same "Apple could not verify" wording.
+   Click Done.
+3. Open System Settings > Privacy & Security and scroll to Security.
+   Unlike the app, the installer SHOULD be listed there, as
+
+       "Install Waveguide Generator.command" was blocked to protect your Mac.
+
+   Click "Open Anyway", authenticate, and click Open in the confirmation.
+4. The installer copies the app to Applications, removes the download flag,
+   and starts it. You never open Terminal.
+
+IF THE INSTALLER IS NOT LISTED IN PRIVACY & SECURITY
+----------------------------------------------------
+
+Then do it by hand instead:
 
 1. Drag Waveguide Generator to Applications, as usual.
 2. Open Terminal (Applications > Utilities > Terminal).
@@ -1774,10 +1797,12 @@ WHY
 Apps distributed outside the App Store need a paid Apple Developer ID to be
 notarized. This build is signed ad-hoc instead, which lets it run but gives
 macOS no developer identity to offer you an exception for - which is why the
-dialog is a dead end rather than a prompt.
+dialog is a dead end rather than a prompt. A plain script has no signature at
+all, which is a state macOS does offer an override for; that is the only
+difference between the two files, and the whole reason the installer is here.
 
-The command above removes the "downloaded from the internet" flag that macOS
-put on the file. Nothing else about the app changes.
+Either route removes the "downloaded from the internet" flag that macOS put on
+the file. Nothing else about the app changes.
 
 WHAT IT SHOULD DO
 -----------------
@@ -1786,11 +1811,26 @@ Waveguide Generator starts a local server on 127.0.0.1 and opens its interface.
 Nothing is sent anywhere; it runs entirely on your machine.
 """
 
+    def dmg_installer(self) -> str:
+        source = self.repo_root / self.DMG_INSTALLER_SOURCE
+        try:
+            return source.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise BundleError(f"The macOS disk-image installer is missing: {source}") from exc
+
     def create_dmg(self, bundle: Path, output: Path, staging: Path) -> None:
         staging.mkdir()
         shutil.copytree(bundle, staging / bundle.name, symlinks=True)
         (staging / "Applications").symlink_to("/Applications")
         (staging / self.DMG_README_NAME).write_text(self.dmg_readme(), encoding="utf-8")
+        # Written rather than copied so the mode is set here and cannot arrive
+        # from a checkout that lost the executable bit -- a non-executable
+        # .command opens in a text editor instead of running, which is exactly
+        # the silent failure this file exists to avoid. Windows checkouts
+        # fabricate that bit, and the release runner is not always macOS.
+        installer = staging / self.DMG_INSTALLER_NAME
+        installer.write_text(self.dmg_installer(), encoding="utf-8")
+        installer.chmod(0o755)
         self.run_command(
             [
                 "hdiutil",

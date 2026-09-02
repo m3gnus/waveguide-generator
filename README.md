@@ -24,35 +24,45 @@ Then run the installer for your platform:
 | Linux | `bash installers/linux/install.sh` |
 
 For a self-contained macOS install, download the release's
-**Waveguide.Generator-&lt;version&gt;-macos-arm64.dmg**, open it, and drag **Waveguide Generator** to
-Applications.
+**Waveguide.Generator-&lt;version&gt;-macos-arm64.dmg** and open it.
 
-**The first launch is refused, and there is no button to allow it.** macOS reports
+**macOS refuses to open the app itself, and offers no button for it.** It reports
 *"Apple could not verify 'Waveguide Generator' is free of malware that may harm
 your Mac or compromise your privacy"*, offering only **Done** and **Move to Bin** —
-and **System Settings → Privacy & Security will not show an "Open Anyway" entry.**
-That is expected, and it is a statement about a missing Apple signature rather
-than a finding about the app.
+and **System Settings → Privacy & Security does not list the app**, because an
+ad-hoc signature gives Gatekeeper no identity to attach an exception to. That is
+a statement about a missing Apple signature rather than a finding about the app.
 
-To open it, run this once in Terminal:
+The disk image therefore carries **`Install Waveguide Generator.command`** beside
+the app. Double-click it. macOS refuses that too — click **Done** — but a plain
+script *is* something Gatekeeper will offer an override for, so it appears in
+**System Settings → Privacy & Security → Open Anyway** where the app does not.
+Approve it there and the script copies the app to Applications, clears the
+download flag, and starts it. No Terminal.
+
+If the installer is not listed in Privacy & Security either, drag the app to
+Applications and run this once in Terminal instead:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"
 ```
 
-Then open the app normally. The same instruction ships inside the disk image as
-`READ ME FIRST.txt`.
+Both routes are spelled out inside the disk image in `READ ME FIRST.txt`, and
+either is needed once, not on every launch.
 
-**Why there is no "Open Anyway".** Apps distributed outside the App Store need a
-paid Apple Developer ID to be notarized. This build is signed *ad-hoc* instead,
-which lets it execute but gives Gatekeeper no developer identity to attach an
-exception to — measured, an ad-hoc bundle assesses with no source at all, while
-an unsigned one reports `source=no usable signature` and *would* be offered an
-override. Unsigned is not an option either: an unsigned arm64 binary cannot
-execute on Apple silicon. Removing the quarantine attribute is therefore the only
-route that works without an Apple Developer ID, and it is what comparable
-un-notarized projects ship. Control-clicking and choosing Open does not help;
-Apple removed that bypass in macOS Sequoia.
+**Why the app and the script differ.** Apps distributed outside the App Store
+need a paid Apple Developer ID to be notarized. This build is signed *ad-hoc*
+instead, which lets it execute but gives Gatekeeper no developer identity to
+attach an exception to: measured against a genuinely quarantined download, the
+ad-hoc bundle assesses as `rejected` with no `source` line at all, while an
+unsigned file reports `source=no usable signature` — and it is that `source` line
+the "Open Anyway" exception attaches to. Shipping the app unsigned is not the
+escape: an unsigned arm64 executable is killed by the kernel on Apple silicon
+whatever its quarantine state, which is measured too. A shell script has no
+Mach-O to sign and so is unsigned without being unrunnable, which is the entire
+reason the installer exists. Control-clicking and choosing Open does not help;
+Apple removed that bypass in macOS Sequoia. The transcripts are in
+[docs/validation/2026-09/MACOS-GATEKEEPER.md](docs/validation/2026-09/MACOS-GATEKEEPER.md).
 
 For a self-contained Windows install, download
 **Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip**, extract the complete **Waveguide Generator**
