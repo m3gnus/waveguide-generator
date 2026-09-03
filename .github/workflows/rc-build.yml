@@ -1,0 +1,165 @@
+name: RC build
+
+# Build the installers WITHOUT spending anything: no tag, no draft, no
+# release, no version bump — artifacts only. Exists for the hand-test gate in
+# hornlab-policy/PLAN.md step 5: Magnus tries a DMG and a Windows installer
+# built from a release candidate before the version is pinned. The jobs are
+# the release.yml bundle jobs minus the release guard and the publish job;
+# assets are named by shared/version.json as it stands, so an RC built before
+# phase 1 carries the previous version string — that is expected.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit on main to build (defaults to main's head)"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  spa:
+    name: Build the SPA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build the SPA
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Package and verify the SPA
+        run: |
+          set -euo pipefail
+          version="$(python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          archive="$(python -c 'import sys; from shared import release_assets; print(release_assets.spa_archive_name(sys.argv[1]))' "$version")"
+          tar -czf "$archive" -C frontend dist
+          sha256sum "$archive" > "$archive.sha256"
+          echo "artifact=$archive" >> "$GITHUB_ENV"
+          tar -tzf "$archive" | grep -Fx "dist/index.html"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-spa
+          path: |
+            ${{ env.artifact }}
+            ${{ env.artifact }}.sha256
+          if-no-files-found: error
+
+  macos-bundle:
+    name: Build the macOS standalone app
+    runs-on: macos-latest
+    needs: spa
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.2"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-spa
+          path: build/spa
+      - name: Build and verify the standalone app
+        run: |
+          set -euo pipefail
+          version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          spa="build/spa/update-spa-$version.tar.gz"
+          test -f "$spa"
+          test -f "$spa.sha256"
+          uv run --no-project --python 3.13.12 scripts/build_bundle.py --spa "$spa" --output build/bundle
+      - name: Share the canonical platform-neutral app layer
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-app-layer
+          path: |
+            build/bundle/update-app-*.zip
+            build/bundle/update-app-*.zip.sha256
+            build/bundle/update-app-*.manifest.json
+          if-no-files-found: error
+      - name: Share the macOS RC assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc-macos-dmg
+          path: |
+            build/bundle/Waveguide.Generator-*-macos-arm64.dmg
+            build/bundle/Waveguide.Generator-*-macos-arm64.dmg.sha256
+          if-no-files-found: error
+
+  windows-bundle:
+    name: Build the Windows standalone app
+    runs-on: windows-latest
+    needs: [spa, macos-bundle]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.2"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-spa
+          path: build/spa
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-app-layer
+          path: build/app-reference
+      - name: Install the pinned Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup --version=6.7.3 -y --no-progress
+          $iscc = "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            $iscc = (Get-ChildItem -Path "$env:ProgramFiles","${env:ProgramFiles(x86)}" -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1 -ExpandProperty FullName)
+          }
+          if (-not $iscc) { throw "Inno Setup installed but ISCC.exe was not found." }
+          "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build and verify the standalone app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])'
+          $spa = "build/spa/update-spa-$version.tar.gz"
+          if (-not (Test-Path -LiteralPath $spa) -or -not (Test-Path -LiteralPath "$spa.sha256")) {
+            throw "The verified SPA inputs are missing."
+          }
+          uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform windows --spa $spa --output build/bundle
+      - name: Assert both platforms built the same app layer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $local = @(Get-ChildItem -File build/bundle/update-app-*.manifest.json)
+          $reference = @(Get-ChildItem -File build/app-reference/update-app-*.manifest.json)
+          if ($local.Count -ne 1 -or $reference.Count -ne 1) {
+            throw "Expected exactly one local and one macOS-built app manifest."
+          }
+          $localTree = (Get-Content -Raw $local[0] | ConvertFrom-Json).treeSha256
+          $referenceTree = (Get-Content -Raw $reference[0] | ConvertFrom-Json).treeSha256
+          if (-not $localTree -or -not $referenceTree) {
+            throw "An app manifest carries no treeSha256; the builder did not write one."
+          }
+          if ($localTree -ne $referenceTree) {
+            throw "Windows and macOS app layers differ: $localTree != $referenceTree"
+          }
+          Write-Host "Cross-platform app layer treeSha256: $localTree"
+      - name: Share the Windows RC assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc-windows-installer
+          path: |
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe.sha256
+          if-no-files-found: error
