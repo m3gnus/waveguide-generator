@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -1014,10 +1015,38 @@ def test_a_lock_holder_that_never_serves_is_reported_in_the_end(tmp_path: Path) 
         controller.close()
 
 
+def _await_attempt(controller: StatusController) -> subprocess.Popen[str]:
+    """Block until the attempt now running has exited.
+
+    Deliberately not a deadline. The conflicting server's first act is to bump
+    the counter and exit 2, so the only way this fails to return is a child that
+    never runs at all -- a hang, which `pytest.ini`'s faulthandler backstop
+    turns into a stack dump naming this frame. What a deadline would add instead
+    is a Python interpreter's start-up time as part of the pass condition: the
+    previous form sampled `process.poll()` every 30 ms and gave up at 20 s, and
+    lost that once in a full run taken at load average 32.
+
+    Same family as the `wait_for_pid_exit` tests in `test_platform_luna.py`,
+    which carry the reasoning in full: a pass condition that is a duration is
+    the defect, and the fix is an ordering rather than a wider margin.
+    """
+
+    process = controller.process
+    assert process is not None, "no attempt is running"
+    process.wait()
+    return process
+
+
 def test_the_wait_starts_one_server_per_interval_rather_than_one_per_poll(
     tmp_path: Path,
 ) -> None:
-    """``poll()`` runs four times a second; the retry must not follow it."""
+    """``poll()`` runs four times a second; the retry must not follow it.
+
+    Nothing here is timed. The clock is the injected one and never advances on
+    its own, each attempt is waited out rather than sampled against a deadline,
+    and the whole claim is read off a counter -- so the answer is the same on an
+    idle laptop and on a runner with five suites on it.
+    """
 
     now = [1_000.0]
     attempts = _Attempts(tmp_path / "attempts", conflicts=99)
@@ -1029,28 +1058,33 @@ def test_the_wait_starts_one_server_per_interval_rather_than_one_per_poll(
         clock=lambda: now[0],
     )
 
-    def exited() -> bool:
-        process = controller.process
-        return process is not None and process.poll() is not None
-
     try:
         controller.start()
-        _wait_for(exited, timeout=20.0)
+        first = _await_attempt(controller)
         assert attempts.count() == 1
 
         # The first conflict retries at once: waiting out an interval the lock
         # holder may already have finished would be a delay for nothing.
         controller.poll()
-        _wait_for(exited, timeout=20.0)
+        stalled = _await_attempt(controller)
+        assert stalled is not first
         assert attempts.count() == 2
 
         for _ in range(6):
             controller.poll()
+        # Read the *handle*, not the counter. The counter is written by the
+        # child, so a count of 2 cannot tell "no server was started" from "one
+        # was started and has not got there yet" -- and a retry that follows
+        # every poll passes that assertion on any machine slow enough to still
+        # be spawning. The handle is replaced synchronously inside `poll()`, so
+        # it answers the question the test is actually asking.
+        assert controller.process is stalled, "a poll started a server of its own"
         assert attempts.count() == 2
 
         now[0] += 0.75
         controller.poll()
-        _wait_for(exited, timeout=20.0)
+        assert controller.process is not stalled, "the interval never came round"
+        _await_attempt(controller)
         assert attempts.count() == 3
     finally:
         controller.close()
