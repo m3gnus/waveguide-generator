@@ -17,6 +17,11 @@ import { useFieldPlaneStore } from './fieldPlaneStore';
 import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import meshFixture from './test-fixtures/tagged_sources-small.msh?raw';
 
+/** Group a count the way the component does — in the runner's locale, not en-US.
+ *  See summary.test.ts: `toLocaleString()` takes its separator from the machine's
+ *  region, so a literal '1,000' passes in the US and fails everywhere else. */
+const grouped = (value: number) => value.toLocaleString();
+
 const frame: DecodedFrame = {
   header: {
     v: 1,
@@ -261,7 +266,7 @@ describe('Viewport preview errors', () => {
     expect(slider.type).toBe('range');
     expect(slider.max).toBe('2');
     expect(slider.value).toBe('1');
-    expect(host.querySelector('.field-plane-legend-title span')?.textContent).toBe('1,000 Hz');
+    expect(host.querySelector('.field-plane-legend-title span')?.textContent).toBe(`${grouped(1_000)} Hz`);
 
     const setFrequencyIndex = vi.spyOn(useFieldPlaneStore.getState(), 'setFrequencyIndex');
     act(() => {
@@ -300,7 +305,7 @@ describe('Viewport preview errors', () => {
 
     enter('1000');
     expect(useFieldPlaneStore.getState().frequencyIndex).toBe(1);
-    expect(noticeText()).toBe('requested 1,000 Hz → showing 987 Hz');
+    expect(noticeText()).toBe(`requested ${grouped(1_000)} Hz → showing 987 Hz`);
 
     // Moving the slider away retires the notice; retyping the exact solved
     // frequency never raises one.

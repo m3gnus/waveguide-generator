@@ -6,6 +6,11 @@ import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { resetDriverLibraryStore } from '../stores/driverLibrary';
 import { SettingsDialog, type Theme } from './SettingsDialog';
 
+/** Group a count the way the component does — in the runner's locale, not en-US.
+ *  See summary.test.ts: `toLocaleString()` takes its separator from the machine's
+ *  region, so a literal '1,803' passes in the US and fails everywhere else. */
+const grouped = (value: number) => value.toLocaleString();
+
 function Harness() {
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>('dark');
@@ -375,10 +380,10 @@ describe('SettingsDialog', () => {
 
     const section = host.querySelector<HTMLElement>('#settings-drivers')!;
     expect(section.querySelector('.driver-library-counts')!.textContent)
-      .toBe('1 file \u00b7 1,803 drivers indexed \u00b7 505 with Thiele-Small data');
+      .toBe(`1 file \u00b7 ${grouped(1_803)} drivers indexed \u00b7 505 with Thiele-Small data`);
     // And it says what the difference means, because 1,298 of them will never
     // appear in a search however hard the user looks.
-    expect(section.textContent).toContain('The other 1,298 are catalogue entries');
+    expect(section.textContent).toContain(`The other ${grouped(1_298)} are catalogue entries`);
   });
 
   it('counts the shipped library apart from the files the user added', async () => {
@@ -402,7 +407,7 @@ describe('SettingsDialog', () => {
 
     const section = host.querySelector<HTMLElement>('#settings-drivers')!;
     expect(section.querySelector('.driver-library-counts')!.textContent)
-      .toBe('2 files (1 shipped) \u00b7 2,170 drivers indexed \u00b7 651 with Thiele-Small data');
+      .toBe(`2 files (1 shipped) \u00b7 ${grouped(2_170)} drivers indexed \u00b7 651 with Thiele-Small data`);
     // The old copy promised an empty application; it no longer is one.
     expect(section.textContent).not.toContain('ships no driver data');
     expect(section.textContent).toContain('ships with Waveguide Generator');
