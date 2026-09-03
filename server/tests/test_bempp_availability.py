@@ -367,3 +367,86 @@ def test_solving_refuses_when_the_backend_cannot_run(monkeypatch):
 
     with pytest.raises(bempp.BemppUnavailable, match="numba cannot load"):
         bempp.solve_bempp_from_msh_text("mesh", _Context())
+
+
+class _Result:
+    """Only the field the zero-result guard reads."""
+
+    def __init__(self, pressure):
+        self.pressure_complex = pressure
+
+
+def test_the_probe_does_not_claim_an_assembly_it_never_ran(monkeypatch):
+    """The probe enumerates and selects; it must not say it assembled.
+
+    It said "bempp-cl assembles on OpenCL device X" while doing no assembly at
+    all, which is the sentence a maintainer reads when deciding whether a
+    silent-output box is a solver bug or a runtime bug.
+    """
+
+    cpu = _FakeDevice("Intel(R) Core(TM) i7", "cpu-devices")
+    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([_FakePlatform("Intel(R) OpenCL", [cpu])]))
+    monkeypatch.setattr(bempp, "_bempp_default_cpu_device", lambda: cpu, raising=False)
+
+    usable, reason = bempp._opencl_status()
+
+    assert usable is True
+    assert "selected OpenCL device" in reason
+    assert "assembles on OpenCL device" not in reason
+
+
+def test_an_all_zero_opencl_result_is_refused_not_returned():
+    """The PoCL failure: success everywhere, and every pressure zero.
+
+    bempp-cl does not check the build status of the kernel it enqueues, so a
+    runtime that cannot link returns the output buffer untouched. Zeros are
+    finite, correctly shaped and fast, so nothing below this raises. Measured
+    on PoCL 7.0.0 on Windows 2026-09-02.
+    """
+
+    import numpy as np
+
+    silent = _Result(np.zeros((4, 37), dtype=np.complex128))
+
+    with pytest.raises(bempp.BemppUnavailable) as excinfo:
+        bempp._refuse_silent_zero_result(silent, "opencl")
+
+    message = str(excinfo.value)
+    assert "kernel" in message
+    assert "every pressure is zero" in message
+    # The remedy has to travel with the diagnosis, as it does for every other
+    # OpenCL refusal in this module.
+    assert "Khronos" in message or "OpenCL" in message
+
+
+def test_a_real_opencl_result_passes_the_zero_guard():
+    """One non-zero entry is enough; the guard must not cost a good solve."""
+
+    import numpy as np
+
+    pressure = np.zeros((4, 37), dtype=np.complex128)
+    pressure[2, 9] = 1e-12 + 0j
+
+    bempp._refuse_silent_zero_result(_Result(pressure), "opencl")
+
+
+def test_the_zero_guard_leaves_numba_alone():
+    """numba raises when it cannot compile, so it never returns silence.
+
+    Applying the guard there would turn a genuinely quiet case on the fallback
+    backend into a spurious OpenCL diagnosis naming a runtime that is not in use.
+    """
+
+    import numpy as np
+
+    bempp._refuse_silent_zero_result(_Result(np.zeros((4, 37), dtype=np.complex128)), "numba")
+
+
+def test_the_zero_guard_never_fails_a_solve_it_cannot_check():
+    """A result without the field, or with an empty one, is not evidence of failure."""
+
+    import numpy as np
+
+    bempp._refuse_silent_zero_result(_Result(None), "opencl")
+    bempp._refuse_silent_zero_result(_Result(np.zeros((0,), dtype=np.complex128)), "opencl")
+    bempp._refuse_silent_zero_result(object(), "opencl")

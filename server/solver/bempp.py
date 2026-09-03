@@ -341,6 +341,21 @@ def _opencl_status() -> tuple[bool, str]:
     different question from the one the solve asks, which on Apple Silicon,
     whose ICD exposes the GPU and no CPU, meant a READY report followed by a
     failure inside every solve.
+
+    What this deliberately does *not* do is assemble anything, so it says
+    "selected", not "assembles". Assembling a 32-element sphere here would
+    catch a runtime that enumerates but cannot build its kernel -- measured on
+    PoCL 7.0.0 on Windows 2026-09-02, which reported a healthy CPU device with
+    fp64 and then returned an all-zero operator, because its kernel needs an
+    MSVC linker to become loadable and bempp-cl never checks the build status.
+    But that assembly was measured at 13.9 s cold and 12.2 s warm on the
+    reference AMD host: pyopencl's on-disk program cache does not make the
+    second interpreter cheap, so the cost would be paid again by the API
+    process and by every worker child, not moved. A capability probe cannot
+    spend that.
+
+    The all-zero runtime is therefore caught where an assembly is already
+    being paid for -- see ``_refuse_silent_zero_result``, on the solve path.
     """
 
     try:
@@ -385,7 +400,7 @@ def _opencl_status() -> tuple[bool, str]:
                     f"which is not a {OPENCL_DEVICE_TYPE} device. {_OPENCL_GUIDANCE}"
                 )
             return True, (
-                f"bempp-cl assembles on OpenCL device {selected_name} "
+                f"bempp-cl selected OpenCL device {selected_name} "
                 f"({selected_platform})"
             )
         try:
@@ -538,6 +553,51 @@ def _closed_mode(context: SolverContext) -> bool:
     """
 
     return has_closed_outer_body(context.design.root)
+
+
+def _refuse_silent_zero_result(result: Any, backend: str | None) -> None:
+    """Refuse a solve that returned silence because the OpenCL kernel never ran.
+
+    bempp-cl enqueues its assembly kernel without checking the build status, so
+    a runtime that cannot compile returns the output buffer exactly as it was
+    allocated: all zeros, finite, correctly shaped, and fast. Nothing raises,
+    and every layer above reports success.
+
+    Measured on PoCL 7.0.0 on Windows 2026-09-02, whose kernels compile but
+    cannot be linked without an MSVC toolchain: the capability report read
+    ``available: true, backend: "opencl"`` with no fallback, the solve finished
+    7.5x "faster" than numba, and every entry was zero. The user sees a
+    completed solve and an empty plot.
+
+    A driven radiator cannot be silent at every frequency and every angle, so an
+    entirely zero pressure field is never a physical answer -- it only ever
+    means the assembly did not run. Checking it costs one pass over an array
+    that has already been computed, which is why the check lives here rather
+    than in the capability probe, where it would have cost ~12 s per process.
+
+    Only the OpenCL path can fail this way; numba raises when it cannot compile.
+    """
+
+    if backend != PREFERRED_ASSEMBLY_BACKEND:
+        return
+    pressure = getattr(result, "pressure_complex", None)
+    if pressure is None:
+        return
+    try:
+        import numpy as np
+
+        if np.asarray(pressure).size == 0 or np.any(np.asarray(pressure)):
+            return
+    except Exception:  # noqa: BLE001 - a check that cannot run must not fail a good solve
+        return
+    raise BemppUnavailable(
+        "The OpenCL assembly produced an entirely silent result, so its kernel "
+        "did not run. The device initialized and the solve reported success, "
+        "but every pressure is zero, which no driven source can be. The OpenCL "
+        "runtime installed here builds a kernel object it cannot load; the "
+        "runtime usually reports that on stderr rather than through the API. "
+        f"{_OPENCL_GUIDANCE}"
+    )
 
 
 def solve_bempp_from_msh_text(
@@ -783,6 +843,8 @@ def solve_bempp_from_msh_text(
                 path.unlink(missing_ok=True)
             except OSError as exc:
                 logger.warning("Could not remove temporary BEMPP mesh %s: %s", path, exc)
+    _refuse_silent_zero_result(result, backend)
+
     if cancellation_callback:
         cancellation_callback()
     if stage_callback:
