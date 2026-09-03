@@ -2,11 +2,11 @@
   "modules": {
     "hornlab-beat-bem": {
       "repo": "https://github.com/m3gnus/hornlab-beat-bem.git",
-      "sha": "7b6e6eb5dfdaba3dfbd7d1cd6fc4a9ba4bf885c5"
+      "sha": "3ae6980656a056c9da5205d16494dd5cddc32a11"
     },
     "hornlab-bempp-bem": {
       "repo": "https://github.com/m3gnus/hornlab-bempp-bem.git",
-      "sha": "e26e1a1258871efd6bd36a35a47b59f95c3138e8"
+      "sha": "57b1260777c09097c879a3fe7ecb377c32f322cb"
     },
     "hornlab-metal-bem": {
       "repo": "https://github.com/m3gnus/hornlab-metal-bem.git",
