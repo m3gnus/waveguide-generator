@@ -33,9 +33,23 @@ The build refuses, correctly, on four things worth knowing before you blame it: 
 | 8 | The update path can rename `app` and `runtime` in place, unelevated | Directly exercises what gate 2 protects. |
 | 9 | Uninstall clears the tree, including bytecode the installer never wrote | `[UninstallDelete]` removes `runtime` and `app` wholesale and `{app}` only if empty, so a planted `__pycache__` is the case worth testing. |
 
-## Gate 7 needs a different machine
+## Gate 7 needs a different machine, and a human
 
 Where `EnableLUA=0`, every process runs at High integrity and **any** SmartScreen or mark-of-the-web result from that box is untrustworthy — including a negative one. A false "SmartScreen is fine" is exactly the finding that ships a bad installer, so the script skips this gate and says so rather than producing a green line. It needs a machine with UAC enabled, and it is the one gate no CI can answer either: what a first-time user actually sees.
+
+Three things have to hold at once, and each one silently voids the gate on its own:
+
+- **UAC is on.** `gates.ps1` does not probe for this and cannot: gate 7's result is a hardcoded `$null`, so enabling UAC and re-running the script still prints `7 SKIP`. That is deliberate — there is nothing for a script to decide here — but it means gate 7 is never satisfied as a side effect of the other eight.
+- **The setup executable carries `ZoneId=3`.** SmartScreen does not look at locally-authored files. Building the installer and running it from `build\` reproduces nothing a user will ever see. This is the same trap gate 5 already calls out, and it applies with equal force here.
+- **It is launched by double-clicking it in Explorer.** See below. This is the one place where the launch rule the rest of this document gives is exactly wrong.
+
+`installers/windows/gate7-prepare.ps1` asserts all three preconditions, stamps the mark of the web, and then stops:
+
+```powershell
+installers\windows\gate7-prepare.ps1 -Setup path\to\Waveguide.Generator-<version>-windows-x86_64-setup.exe
+```
+
+It deliberately does not launch anything. What it prints is the manual procedure, and the evidence for this gate is screenshots plus a click count.
 
 ## Result, 2026-09-03
 
@@ -58,3 +72,7 @@ Built from `next` at `9a6fc0e8` with the icon fix applied, against the published
 ### One trap, paid for in wall-clock
 
 Launch the installer with `Start-Process -NoNewWindow`, never `-WindowStyle`. `-WindowStyle` forces `UseShellExecute`, and ShellExecute on this installer hangs invisibly — the first gate run stalled for 600 s with no setup process to see and nothing in the log. `-NoNewWindow` goes through `CreateProcess` and returns.
+
+**This rule is inverted for gate 7, and only for gate 7.** SmartScreen's block is a shell dialog: it exists on the ShellExecute path and nowhere else. `CreateProcess` does not consult it, so a gate 7 run driven the way gates 2–9 are driven cannot see the thing it is looking for and returns a pass that means nothing — the same vacuous green as running it with UAC off. Gate 7 has to go through the shell, which is to say: a person double-clicks it and looks.
+
+That also makes the 600 s stall worth re-reading. An invisible block on the ShellExecute path is what SmartScreen *does*; a dialog rendered where the automation could not see it is a candidate explanation for that hang, not merely a scheduling accident. It is a further reason gate 7 is decided at the console rather than scripted.
