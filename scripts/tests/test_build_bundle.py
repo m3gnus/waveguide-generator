@@ -963,6 +963,10 @@ def test_release_notes_give_both_platforms_their_first_launch_wall() -> None:
         Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
     ).read_text(encoding="utf-8")
 
+    # The route that needs no Terminal comes first; the command stays as the
+    # fallback for a machine where Privacy & Security offers nothing.
+    assert BundleBuilder.DMG_INSTALLER_NAME in workflow
+    assert "Open Anyway" in workflow
     assert "xattr -dr com.apple.quarantine" in workflow
     assert "Unblock" in workflow
     assert "Windows protected your PC" in workflow
@@ -1804,11 +1808,19 @@ def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> Non
     )
     readme = builder.dmg_readme()
 
-    # The command must be exact and copy-pasteable; a wrong path is worse than none.
+    # The installer script is the route that does not need Terminal, so it comes
+    # first and is named exactly as the file in the disk image.
+    assert builder.DMG_INSTALLER_NAME == "Install Waveguide Generator.command"
+    assert f'Double-click "{builder.DMG_INSTALLER_NAME}"' in readme
+    assert "Privacy & Security" in readme
+    assert "Open Anyway" in readme
+    # The Terminal command stays as the fallback, and must be exact and
+    # copy-pasteable; a wrong path is worse than none.
     assert 'xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"' in readme
-    # Say what they will actually see, including that the button is absent.
+    # Say what they will actually see, including that the app itself is not
+    # listed in Privacy & Security however long they look for it.
     assert "Not Opened" in readme
-    assert "will NOT show an \"Open Anyway\" button" in readme
+    assert "will NOT list the app" in readme
     assert "Move to Bin" in readme
     # And that it is once, not every launch.
     assert "once, not on every launch" in readme
@@ -1833,3 +1845,204 @@ def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> Non
     # Still a normal drag-to-Applications image.
     assert (staging / "Applications").is_symlink()
     assert (staging / bundle.name).is_dir()
+
+
+def test_the_disk_image_carries_an_executable_installer_script(tmp_path: Path) -> None:
+    """The one file in the image macOS will let the user approve.
+
+    Measured 2026-09-02 on macOS 26.5.2 against a genuinely quarantined download:
+    the ad-hoc signed .app assesses as `rejected` with no `source` line at all, so
+    Privacy & Security lists nothing for it, while an unsigned script assesses as
+    `rejected  source=no usable signature` -- and that `source` is what the "Open
+    Anyway" exception attaches to. Shipping the app unsigned instead is not
+    available: an unsigned arm64 executable is SIGKILLed whatever its quarantine
+    state. See docs/validation/2026-09/MACOS-GATEKEEPER.md.
+
+    The executable bit is the failure mode worth a test of its own. A .command
+    without it opens in TextEdit instead of running, which looks like nothing
+    happening at all, and Windows checkouts fabricate that bit -- the same class
+    of bug that already reached a release once.
+    """
+
+    repo_root = Path(__file__).resolve().parents[2]
+    builder = BundleBuilder(repo_root, system=lambda: "Darwin", machine=lambda: "arm64")
+    builder.runner = lambda command, **kwargs: SimpleNamespace(
+        returncode=0, stdout="", stderr=""
+    )
+    bundle = tmp_path / "Waveguide Generator.app"
+    (bundle / "Contents").mkdir(parents=True)
+    (bundle / "Contents" / "Info.plist").write_text("<plist/>", encoding="utf-8")
+    staging = tmp_path / "staging"
+
+    builder.create_dmg(bundle, tmp_path / "out.dmg", staging)
+
+    installer = staging / builder.DMG_INSTALLER_NAME
+    assert installer.is_file(), "the disk image must carry the installer beside the app"
+    if os.name == "posix":
+        # NTFS has no POSIX execute bit and Path.chmod cannot set one, so this
+        # says nothing on a Windows runner. It is not a gap: create_dmg shells
+        # out to hdiutil, so the disk image is only ever built on macOS.
+        assert installer.stat().st_mode & 0o111, "a non-executable .command opens in an editor"
+    source = repo_root / builder.DMG_INSTALLER_SOURCE
+    assert installer.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+
+    script = installer.read_text(encoding="utf-8")
+    # The two steps the user would otherwise open Terminal for.
+    assert 'ditto "$SOURCE" "$TARGET"' in script
+    assert 'xattr -dr com.apple.quarantine "$TARGET"' in script
+    # It runs from a read-only mounted volume with nothing else from the checkout
+    # beside it, so it may not reach back into the repository for anything.
+    assert "scripts/" not in script
+    assert "REPO_DIR" not in script
+
+
+def test_a_missing_installer_script_fails_the_build(tmp_path: Path) -> None:
+    """Never build a disk image whose installer is silently absent.
+
+    The whole point of the file is that it is the only thing in the image a user
+    can approve. An image without it looks fine and hands every macOS user back
+    the Terminal command.
+    """
+
+    builder = BundleBuilder(tmp_path, system=lambda: "Darwin", machine=lambda: "arm64")
+    with pytest.raises(BundleError, match="disk-image installer is missing"):
+        builder.dmg_installer()
+
+
+#: `bash` on a Windows runner resolves to the WSL launcher, which has no
+#: distribution installed and answers every invocation with instructions for
+#: installing one. So these are POSIX-only: the script itself only ever runs on
+#: macOS, and Linux CI exercises it identically.
+_NEEDS_POSIX_BASH = pytest.mark.skipif(
+    os.name != "posix" or shutil.which("bash") is None,
+    reason="needs a POSIX bash; Windows resolves bash to the WSL stub",
+)
+
+
+@_NEEDS_POSIX_BASH
+def test_the_installer_script_is_valid_bash() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / BundleBuilder.DMG_INSTALLER_SOURCE
+    result = subprocess.run(
+        ["bash", "-n", str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="ditto, xattr and codesign are macOS")
+def test_the_installer_script_installs_and_clears_the_quarantine(tmp_path: Path) -> None:
+    """The half of the flow that does not need a human: what happens once it runs.
+
+    Built against a real ad-hoc signed bundle carrying a real com.apple.quarantine
+    attribute, because an un-quarantined artifact would pass this test without
+    proving anything -- the mistake the whole Gatekeeper item keeps repeating.
+    """
+
+    repo_root = Path(__file__).resolve().parents[2]
+    image = tmp_path / "image"
+    image.mkdir()
+    app = image / "Waveguide Generator.app"
+    (app / "Contents" / "MacOS").mkdir(parents=True)
+    (app / "Contents" / "Resources").mkdir(parents=True)
+    source_c = tmp_path / "main.c"
+    source_c.write_text("int main(void){return 0;}\n", encoding="utf-8")
+    compiled = subprocess.run(
+        ["cc", "-arch", "arm64", "-o", str(app / "Contents" / "MacOS" / "app"), str(source_c)],
+        capture_output=True,
+        check=False,
+    )
+    if compiled.returncode != 0:
+        pytest.skip("no working arm64 compiler")
+    plistlib.dump(
+        {"CFBundleExecutable": "app", "CFBundleIdentifier": "is.hornlab.test"},
+        (app / "Contents" / "Info.plist").open("wb"),
+    )
+    (app / "Contents" / "Resources" / "payload.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
+    subprocess.run(
+        ["xattr", "-w", "-r", "com.apple.quarantine", "0081;0;Safari;X", str(app)],
+        check=True,
+    )
+    before = subprocess.run(
+        ["xattr", "-p", "com.apple.quarantine", str(app / "Contents" / "MacOS" / "app")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert before.returncode == 0, "the fixture must actually be quarantined"
+
+    installer = image / BundleBuilder.DMG_INSTALLER_NAME
+    shutil.copy2(repo_root / BundleBuilder.DMG_INSTALLER_SOURCE, installer)
+    installer.chmod(0o755)
+    applications = tmp_path / "Applications"
+    applications.mkdir()
+
+    result = subprocess.run(
+        ["bash", str(installer), str(applications)],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    installed = applications / "Waveguide Generator.app"
+    assert installed.is_dir()
+    remaining = subprocess.run(
+        ["xattr", "-p", "com.apple.quarantine", str(installed / "Contents" / "MacOS" / "app")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert remaining.returncode != 0, (
+        "the installed copy still carries com.apple.quarantine; "
+        f"got {remaining.stdout.strip()!r}"
+    )
+    # ditto must preserve the ad-hoc signature; an app that copies but no longer
+    # verifies is SIGKILLed on launch with no explanation.
+    verified = subprocess.run(
+        ["codesign", "--verify", "--deep", "--strict", str(installed)],
+        capture_output=True,
+        check=False,
+    )
+    assert verified.returncode == 0, verified.stderr
+
+    # Installing again over the top replaces rather than failing or nesting.
+    again = subprocess.run(
+        ["bash", str(installer), str(applications)],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert sorted(p.name for p in applications.iterdir()) == ["Waveguide Generator.app"]
+
+
+@_NEEDS_POSIX_BASH
+def test_the_installer_script_refuses_to_run_away_from_the_app(tmp_path: Path) -> None:
+    """Copied out of the disk image on its own, it must say so, not half-install.
+
+    And it must still hand back the Terminal command, because that is the only
+    thing left that works when the user has already moved the file.
+    """
+
+    repo_root = Path(__file__).resolve().parents[2]
+    installer = tmp_path / BundleBuilder.DMG_INSTALLER_NAME
+    shutil.copy2(repo_root / BundleBuilder.DMG_INSTALLER_SOURCE, installer)
+    installer.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(installer), str(tmp_path / "nowhere")],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+    )
+
+    assert result.returncode == 1
+    assert "is not beside this installer" in result.stdout
+    assert 'xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"' in result.stdout

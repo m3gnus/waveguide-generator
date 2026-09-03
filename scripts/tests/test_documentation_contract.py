@@ -165,3 +165,73 @@ def test_user_guide_distinguishes_startup_returns_from_new_arrivals() -> None:
     assert "Ready to prepare" in normalized
     assert "Prepare simulation" in normalized
     assert "appears only as the retry" not in normalized
+
+
+def test_the_three_gatekeeper_texts_say_the_same_thing() -> None:
+    """README, release notes and the in-image readme are one instruction.
+
+    They disagreed once already, and the way it happened is instructive: the
+    backlog recorded "Privacy & Security > Open Anyway" as the route that works
+    for the app while the shipped texts recorded, correctly, that the app is
+    never listed there. A user following the wrong half is stuck with no next
+    step, and nothing in the build would have caught it.
+
+    Measured 2026-09-02 on macOS 26.5.2 against a genuinely quarantined download:
+    the ad-hoc signed .app assesses `rejected` with no `source` line, so it gets
+    no override; the unsigned installer script assesses
+    `rejected  source=no usable signature`, which is the state an override
+    attaches to. See docs/validation/2026-09/MACOS-GATEKEEPER.md.
+    """
+
+    from scripts.build_bundle import BundleBuilder
+
+    surfaces = {
+        "README.md": _read("README.md"),
+        "release notes": _read(".github/workflows/release.yml"),
+        "READ ME FIRST.txt": BundleBuilder(
+            ROOT, system=lambda: "Darwin", machine=lambda: "arm64"
+        ).dmg_readme(),
+    }
+
+    for name, text in surfaces.items():
+        # The route that needs no Terminal, named exactly as the file shipped.
+        assert BundleBuilder.DMG_INSTALLER_NAME in text, name
+        assert "Open Anyway" in text, name
+        assert "Privacy & Security" in text, name
+        # The fallback, still exact and still copy-pasteable.
+        assert (
+            'xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"' in text
+        ), name
+
+    # And each must say, in as many words, that the app itself is NOT listed
+    # there -- otherwise a reader sends themselves to Privacy & Security looking
+    # for the app, finds nothing, and has no next step. That is the exact
+    # sentence the backlog had backwards.
+    for name, text in surfaces.items():
+        normalized = " ".join(text.split()).lower()
+        assert "not list" in normalized, name
+
+
+def test_the_readme_never_sends_anyone_to_open_anyway_for_the_app() -> None:
+    """The correction on 2026-08-27 fixed one of the two places that said it.
+
+    The macOS install section was rewritten that day to say Privacy & Security
+    lists nothing for an ad-hoc bundle. The Launch section, a hundred lines down,
+    kept the original advice -- Control-click then Open, and failing that
+    "System Settings -> Privacy & Security and choose Open Anyway for the app" --
+    and shipped that way in 0.3.0. Both halves of it are wrong: Sequoia removed
+    the Control-click bypass, and the app is never listed in Privacy & Security.
+
+    It is also advice for a wall that a checkout does not hit. Measured
+    2026-09-02 on macOS 26.5.2: the launcher app is a script bundle, unsigned,
+    and `git clone` sets no com.apple.quarantine, so LaunchServices opens it with
+    no dialog at all. Gatekeeper assesses quarantined items; nothing else.
+    """
+
+    launch = _between(_read("README.md"), "## Launch", "## Run the server directly (dev)")
+    normalized = " ".join(launch.split())
+
+    assert "Open Anyway" not in launch
+    assert "Control-click" not in launch
+    assert "does not set it" in normalized
+    assert "no dialog" in normalized

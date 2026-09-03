@@ -25,6 +25,7 @@ the exception in `validation/`: it is a blank form to copy, not evidence.
 | [Measurement template](validation/MEASUREMENT-TEMPLATE.md) | Anyone validating a build against a solve | Current template | Copy per case; pairs with the Results panel's measured overlay |
 | [Validation cases](validation/CASES.md) | Anyone judging solver accuracy | Living index | Measured-vs-simulated references; first entry is the published CAFMEH-P3 comparison |
 | [August 2026 validation](validation/2026-08/README.md) | Maintainers | Dated evidence | Captured machines and commits; not current release status |
+| [September 2026 validation](validation/2026-09/README.md) | Maintainers | Dated evidence | macOS Gatekeeper measurements, macOS 26.5.2, 2026-09-02 |
 
 Maintainer backlogs and working briefs are workspace-local and intentionally absent
 from the public repository. Stable contracts and accepted design decisions belong

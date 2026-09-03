@@ -550,19 +550,27 @@ jobs:
             | macOS (Apple silicon) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-macos-arm64.dmg` |
             | Windows (x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64-setup.exe` |
 
-            **macOS: the first launch is refused, and there is no button to allow it.**
-            You will see "Apple could not verify ... is free of malware", offering only
-            Done and Move to Bin, and Privacy & Security will NOT list an "Open Anyway"
-            entry. That is expected. Drag the app to Applications, then run this once:
+            **macOS: open the disk image and double-click `Install Waveguide Generator.command`.**
+            macOS refuses it with "Apple could not verify ... is free of malware" -
+            click **Done**, then go to **System Settings > Privacy & Security**, find
+            the installer under Security, and click **Open Anyway**. It copies the app
+            to Applications, clears the download flag and starts it. No Terminal.
+
+            The app itself is refused with the same wording and *cannot* be approved
+            that way: it is ad-hoc signed, which gives Gatekeeper no developer identity
+            to attach an exception to, so Privacy & Security does not list it. A plain
+            script is unsigned, which is a state macOS does offer an override for. That
+            is the only difference between the two files.
+
+            If the installer is not listed in Privacy & Security either, drag the app to
+            Applications and run this once instead:
 
             ```
             xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"
             ```
 
-            The same instructions ship inside the disk image as `READ ME FIRST.txt`.
-            The app is ad-hoc signed rather than notarized, which gives Gatekeeper no
-            developer identity to offer an exception for - a missing Apple signature,
-            not a finding about the app. Notarization needs a paid Apple Developer ID.
+            Both routes ship inside the disk image as `READ ME FIRST.txt`. Neither is a
+            finding about the app; notarization needs a paid Apple Developer ID.
 
             **Windows: run the installer and click through one dialog.** It is unsigned,
             so the first run shows "Windows protected your PC" - click **More info**,
