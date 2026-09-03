@@ -5,16 +5,15 @@ name: CI
 # gates link to. What runs here is everything that is deterministic on a hosted
 # runner -- suites, build, and the drift gates that keep generated files honest.
 
-# `next` is the standing integration branch: work lands there and `main` is
-# merged from it only at a release, so every commit on `main` is a shipped
-# version. `next` therefore needs the same gates as `main` -- without this it
-# would accumulate a whole release cycle of unverified commits and only be
-# checked at merge time, which is strictly worse than gating each change.
+# `main` is the sole trunk (one-branch model, 2026-09-03): work lands there,
+# betas are pre-release tags cut from it, and stable versions are full
+# releases -- so the tag list, not a branch, is the release history. The old
+# `next` integration branch is retired.
 on:
   push:
-    branches: [v2, main, next]
+    branches: [v2, main]
   pull_request:
-    branches: [v2, main, next]
+    branches: [v2, main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -74,11 +73,9 @@ jobs:
       # PR #29 shipped a capability's consumer without its enabler and broke
       # every default solve of 80 or more frequencies on main. Review and CI
       # both passed, because the test that catches it was on the unmerged tail.
-      # Work merges into `next` first, so a short merge appears there a whole
-      # release cycle before it would appear on `main`. Checking `main` alone
-      # would leave the guard blind for exactly that window -- which is the
-      # window PR #29 broke. Falls back to `main` before `next` exists.
-      # The script resolves this itself now, so CI and a hand-run agree. That
+      # The script resolves the upstream itself (`origin/next` while that
+      # ref existed, `origin/main` since the one-branch model), so CI and a
+      # hand-run agree. That
       # divergence was the bug: CI overrode the upstream while the script default
       # stayed `origin/main`, so running it by hand reported a branch fully merged
       # into `next` as partially merged.
@@ -105,8 +102,8 @@ jobs:
         run: git fetch --no-tags --prune origin "+refs/heads/*:refs/remotes/origin/*"
       - name: Check new commits for AI attribution
         env:
-          # A pull request is measured against its own base; a push against main,
-          # which for a push to `next` is exactly the commits it adds.
+          # A pull request is measured against its own base; a push to trunk
+          # against main itself, i.e. exactly the commits the push adds.
           BASE_REF: ${{ github.base_ref }}
         run: |
           upstream="origin/${BASE_REF:-main}"
