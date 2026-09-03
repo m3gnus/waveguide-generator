@@ -1,11 +1,19 @@
-# ABEC artifacts — preservation copy, placement undecided
+# ABEC validation artifacts
 
-**Do not merge this branch as a considered layout.** `docs/validation/` is where these
-files were put to get them into git today, not a decision that this is where they belong.
-Moving them later is a `git mv`; if they should live in their own repository instead, this
-branch is simply never merged and the content is copied out of it.
+**Placement decided 2026-09-03 by Magnus: these live here, in
+`waveguide-generator/docs/validation/`.** The alternative considered was a separate
+repository; this won because `SOLVER-QUALIFICATION.md` already lives here and *cites*
+these fixtures, so splitting them would recreate the very problem this move fixes. The
+content is 2.9 MB of mostly ASCII and needs no mesher, so it does not push the repo
+toward carrying large binaries.
 
-## Why the hurry
+**Do not remove the `-text` entries for these two directories from `.gitattributes`.**
+This repository defaults to `* text=auto eol=lf`. Without the override, every mesh and
+ABEC script here would be rewritten on checkout — and they must round-trip byte for byte
+to a Windows-only solver that no agent can drive to re-verify. A corruption that silently
+succeeds is worse than one that errors, and this is one of those.
+
+## Why these were rescued
 
 Both directories lived only in the workspace root's `benchmarks/`, which is not a git
 repository. They existed on exactly one disk, with no remote and nothing to notice their
