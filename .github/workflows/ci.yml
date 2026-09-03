@@ -11,9 +11,9 @@ name: CI
 # `next` integration branch is retired.
 on:
   push:
-    branches: [v2, main]
+    branches: [main]
   pull_request:
-    branches: [v2, main]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
