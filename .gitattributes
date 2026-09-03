@@ -13,3 +13,9 @@
 # line endings around labels and goto. Pin them regardless of the checking-out
 # user's core.autocrlf.
 *.bat text eol=crlf
+
+# Archived ABEC projects are preservation copies: they must round-trip to ABEC3
+# byte for byte. Line-ending normalisation would rewrite meshes and scripts that
+# a Windows-only solver has to read back verbatim.
+docs/validation/abec-g8-circsym-ib/** -text
+docs/validation/abec-rerun/** -text
