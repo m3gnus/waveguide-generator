@@ -44,5 +44,6 @@ describe('viewport field-plane job selection', () => {
     expect(fieldPlaneUnavailableTooltip([job('axisymmetric', false, 'unsupported_axisymmetric_formulation')])).toContain('Solver mode to Full 3D');
     expect(fieldPlaneUnavailableTooltip([job('coupled-ib', false, 'unsupported_coupled_infinite_baffle')])).toContain('Simulation type to Free-standing');
     expect(fieldPlaneUnavailableTooltip([job('disabled', false, 'disabled_by_option')])).toContain('Keep field plane data');
+    expect(fieldPlaneUnavailableTooltip([job('ladder', false, 'unsupported_per_band_mesh_ladder')])).toContain('per-band mesh ladder off');
   });
 });

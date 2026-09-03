@@ -271,7 +271,15 @@ class FieldPlaneService:
             "unsupported_solve_mode",
             "unsupported_axisymmetric_formulation",
             "unsupported_coupled_infinite_baffle",
+            "unsupported_per_band_mesh_ladder",
         }
+        if unavailable_reason == "unsupported_per_band_mesh_ladder":
+            raise FieldPlaneUnsupported(
+                "Per-band mesh ladder solves run several meshes and retain no "
+                "single surface mesh to interpolate a field plane from.",
+                code="unsupported_per_band_mesh_ladder",
+                remedy="Set Mesh ladder to Off and re-solve.",
+            )
         if unavailable_reason == "unsupported_axisymmetric_formulation":
             raise FieldPlaneUnsupported(
                 "Axisymmetric meridian solves do not retain exterior field traces.",

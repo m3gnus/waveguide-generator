@@ -2592,7 +2592,8 @@
           "code": {
             "enum": [
               "unsupported_axisymmetric_formulation",
-              "unsupported_coupled_infinite_baffle"
+              "unsupported_coupled_infinite_baffle",
+              "unsupported_per_band_mesh_ladder"
             ],
             "title": "Code",
             "type": "string"
@@ -6730,6 +6731,15 @@
               "linear"
             ],
             "title": "Frequency Spacing",
+            "type": "string"
+          },
+          "mesh_ladder": {
+            "default": "off",
+            "enum": [
+              "off",
+              "auto"
+            ],
+            "title": "Mesh Ladder",
             "type": "string"
           },
           "mesh_validation_mode": {

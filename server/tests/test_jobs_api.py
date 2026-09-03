@@ -271,6 +271,7 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
     assert set(unavailable_properties["code"]["enum"]) == {
         "unsupported_axisymmetric_formulation",
         "unsupported_coupled_infinite_baffle",
+        "unsupported_per_band_mesh_ladder",
     }
     assert unavailable_properties["remedy"]["type"] == "string"
 
