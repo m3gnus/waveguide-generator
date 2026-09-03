@@ -856,6 +856,32 @@ def test_inno_compiler_override_is_validated_before_the_build_starts(
         locate_inno_compiler({INNO_COMPILER_ENV: str(missing)})
 
 
+def test_installer_points_every_shown_icon_at_the_staged_ico() -> None:
+    """The launcher is a byte copy of pythonw.exe and nothing patches its
+    resources, so an icon read from the .exe is Python's, not ours -- visible
+    on the Start-menu and desktop shortcuts and in Apps & features.
+
+    assemble_windows_bundle stages WINDOWS_ICON_NAME at the payload root, so
+    the fix is to name it rather than to embed anything.
+    """
+
+    script = (
+        Path(__file__).resolve().parents[2] / "installers" / "windows" / "bundle-setup.iss"
+    ).read_text(encoding="utf-8")
+
+    reference = 'IconFilename: "{app}' + chr(92) + WINDOWS_ICON_NAME + '"'
+    shortcuts = [
+        line
+        for line in script.splitlines()
+        if line.startswith("Name: ") and "Waveguide Generator.exe" in line
+    ]
+    assert shortcuts, "no shortcut points at the launcher"
+    assert all(reference in line for line in shortcuts)
+    assert "UninstallDisplayIcon={app}" + chr(92) + WINDOWS_ICON_NAME in script
+    # The build's own .ico is what the installer executable wears too.
+    assert "SetupIconFile={#PayloadDir}" + chr(92) + WINDOWS_ICON_NAME in script
+
+
 def test_installer_script_pins_the_per_user_install_that_the_updater_needs() -> None:
     """launchers/apply_update.py renames directories in place with no elevation
     path, so a Program Files install breaks in-app updates for every non-admin
