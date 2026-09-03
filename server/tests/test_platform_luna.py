@@ -762,6 +762,94 @@ def _release_stop(stop: threading.Event, watcher: threading.Thread) -> None:
         stop.close()
 
 
+# --------------------------------------------------------------------------
+# Driving a wait instead of racing it
+#
+# The three `wait_for_pid_exit` tests below each used to state its pass
+# condition as a *duration*. A timer fired at 0.05 s or 0.1 s and the wait had
+# one 0.15 s tick to notice -- `timeout=None` is exactly one `poll_interval` off
+# Windows -- so 50 to 100 ms had to cover a whole process dying, being reaped
+# and being observed. That measures the runner, not the code, and two of them
+# failed on macos-latest inside an hour on 2026-09-02, one of them on `next`
+# itself. `7d22e6d5` did not write the race, but bounding the wait is what made
+# it reachable.
+#
+# So none of them times anything now. Two rules replace it:
+#
+#   * Arm the wait with a bound no test run could sit out, so `WAIT_ELAPSED` is
+#     unreachable and the outcome names *why* the wait ended.
+#   * Park the wait on a thread first, cause the event from the main thread,
+#     then join. The pass condition becomes an ordering and a released /
+#     not-released outcome, and a broken implementation fails as "the wait never
+#     returned" rather than as "too slow".
+#
+# The joins are hang guards, not budgets: they sit orders of magnitude above the
+# thread handoffs they cover, and widening one could never turn a red run green.
+#
+# `test_the_wait_starts_one_server_per_interval_rather_than_one_per_poll` in
+# `test_statusapp_controller.py` is the third test of the same family and is
+# fixed the same way -- an injected clock and a real wait, no deadline.
+# --------------------------------------------------------------------------
+
+#: A bound no test run could ever sit out, used both as the deadline a wait is
+#: given and as the tick it substitutes for "forever". Arming a wait with it
+#: removes `WAIT_ELAPSED` from the possible answers, so the outcome names the
+#: thing that actually happened.
+UNREACHABLE_BOUND = 600.0
+
+#: Only ever reached when a wait is stuck. An order of magnitude below
+#: `UNREACHABLE_BOUND` on purpose: a join that expires here always means the
+#: wait never returned, never that the wait's own deadline beat the join to it.
+HANG_GUARD = 30.0
+
+
+class _ParkingStop(instance.StopSignal):
+    """A stop that records when a waiter has actually parked on it.
+
+    Only the portable polling wait parks in Python. On Windows a `StopSignal`
+    carrying a kernel event is waited on inside `WaitForMultipleObjects`, where
+    nothing here can see it -- so `parked` is an ordering guarantee exactly when
+    `win32_handle` is 0, which is the case on every non-Windows platform and on
+    a Windows box that could not create the event.
+
+    Where the ordering cannot be observed the assertions still hold, because a
+    stop set before the wait begins is reported as `STOP_REQUESTED` too. The
+    observation is what makes the *pending* wait the one under test rather than
+    a flag noticed on the way in.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parked = threading.Event()
+
+    def wait(self, timeout: float | None = None) -> bool:  # type: ignore[override]
+        self.parked.set()
+        return super().wait(timeout)
+
+    def await_parked(self) -> None:
+        if self.win32_handle:
+            return
+        assert self.parked.wait(timeout=HANG_GUARD), "the wait never parked on the stop"
+
+
+def _park_wait(*args: Any, **kwargs: Any) -> tuple[threading.Thread, list[str]]:
+    """Run one `wait_for_pid_exit` on a thread and collect its single outcome."""
+
+    outcomes: list[str] = []
+    waiter = threading.Thread(
+        target=lambda: outcomes.append(instance.wait_for_pid_exit(*args, **kwargs)),
+        daemon=True,
+    )
+    waiter.start()
+    return waiter, outcomes
+
+
+def _joined_outcome(waiter: threading.Thread, outcomes: list[str]) -> str:
+    waiter.join(timeout=HANG_GUARD)
+    assert not waiter.is_alive(), "the wait never returned"
+    return outcomes[0]
+
+
 def test_stop_signal_is_still_an_ordinary_threading_event() -> None:
     stop = instance.StopSignal()
     assert not stop.is_set()
@@ -784,57 +872,90 @@ def test_wait_for_pid_exit_reports_a_process_that_has_already_exited() -> None:
     assert instance.wait_for_pid_exit(child.pid, timeout=1.0) == instance.PID_EXITED
 
 
-def test_wait_for_pid_exit_returns_the_moment_a_child_dies() -> None:
+def test_wait_for_pid_exit_ends_a_parked_wait_when_the_child_dies() -> None:
+    """The death ends the wait; running out of time is the other answer.
+
+    `PID_EXITED` rather than `WAIT_ELAPSED` is the whole claim, and it is an
+    outcome, not a stopwatch: the wait is given a timeout it would have to sit
+    out entirely to report anything else. The tick is short because off Windows
+    a pid exit is only ever discovered by looking -- there is no handle to be
+    signalled by -- and short is free here, since nothing asserts how many ticks
+    it took.
+
+    This used to fire a 0.1 s timer at a wait bounded to one 0.15 s tick, so it
+    asserted that a child dies, is reaped *and* is observed inside the remaining
+    50 ms. macos-latest lost that on `next` at bd342b4b.
+    """
+
     child = _idle_child()
-    stop = instance.StopSignal()
+    stop = _ParkingStop()
     assert child.stdin is not None
 
-    def end_the_child() -> None:
-        assert child.stdin is not None
+    waiter, outcomes = _park_wait(
+        child.pid, stop, timeout=UNREACHABLE_BOUND, poll_interval=0.01
+    )
+    try:
+        stop.await_parked()
         child.stdin.close()
         # Reaping is the point, not tidiness. An exited child nobody has waited
         # on is a zombie, and a zombie still answers `os.kill(pid, 0)` -- which
         # is how `_pid_is_running` asks on POSIX. Without this the pid never
-        # appears to go away and the wait below runs until pytest's timeout
-        # kills the whole session. Every real caller watches a pid that is not
-        # its child, where the question does not arise.
+        # appears to go away and the wait runs until pytest's timeout kills the
+        # whole session. Every real caller watches a pid that is not its child,
+        # where the question does not arise.
         child.wait(timeout=30)
-
-    try:
-        threading.Timer(0.1, end_the_child).start()
-        started = time.monotonic()
-        outcome = instance.wait_for_pid_exit(child.pid, stop, timeout=None)
-        elapsed = time.monotonic() - started
+        outcome = _joined_outcome(waiter, outcomes)
     finally:
         if child.poll() is None:
             child.kill()
-        child.wait(timeout=30)
-        stop.close()
+            child.wait(timeout=30)
+        _release_stop(stop, waiter)
 
     assert outcome == instance.PID_EXITED
-    assert elapsed < 5.0
 
 
 def test_wait_for_pid_exit_is_released_by_a_waitable_stop() -> None:
-    stop = instance.StopSignal()
-    threading.Timer(0.05, stop.set).start()
+    """A wait already parked is released by the stop, not by a timer.
 
-    # timeout=None is a genuinely unbounded wait on Windows, so only the stop
-    # handle can end this call.
-    assert instance.wait_for_pid_exit(os.getpid(), stop, timeout=None) == instance.STOP_REQUESTED
-    stop.close()
+    `timeout=None` is a genuinely unbounded wait on Windows, where only the stop
+    handle can end it; everywhere else it is one `poll_interval`, and an
+    unreachable interval makes the two cases agree -- `WAIT_ELAPSED` is not
+    available to either. So the only way this returns is the stop, and the only
+    way it fails is by not returning at all.
+
+    The previous form set the stop from a 0.05 s timer and asserted the outcome
+    of a wait bounded to 0.15 s. `assert 'elapsed' == 'stopped'` is what
+    macos-latest reported when the runner spent that margin elsewhere.
+    """
+
+    stop = _ParkingStop()
+    waiter, outcomes = _park_wait(
+        os.getpid(), stop, timeout=None, poll_interval=UNREACHABLE_BOUND
+    )
+    try:
+        stop.await_parked()
+        stop.set()
+        outcome = _joined_outcome(waiter, outcomes)
+    finally:
+        _release_stop(stop, waiter)
+
+    assert outcome == instance.STOP_REQUESTED
 
 
 def test_wait_for_pid_exit_bounds_an_unwaitable_plain_event() -> None:
-    started = time.monotonic()
-    outcome = instance.wait_for_pid_exit(
+    """A plain `Event` is invisible to a kernel wait, so the wait must tick.
+
+    Substituting `poll_interval` for "forever" is the only thing that hands the
+    caller's loop back a chance to re-read the flag. The proof is that the call
+    returns `WAIT_ELAPSED` at all -- nothing here watches the clock, because a
+    wait that ignored the substitution would not be slow, it would never return.
+    """
+
+    waiter, outcomes = _park_wait(
         os.getpid(), threading.Event(), timeout=None, poll_interval=0.05
     )
 
-    # A plain Event is invisible to a kernel wait, so "wait forever" has to be
-    # substituted with a tick the caller's loop can re-check the flag on.
-    assert outcome == instance.WAIT_ELAPSED
-    assert time.monotonic() - started < 5.0
+    assert _joined_outcome(waiter, outcomes) == instance.WAIT_ELAPSED
 
 
 def test_watch_directory_entries_declines_a_directory_it_cannot_watch(tmp_path: Path) -> None:
