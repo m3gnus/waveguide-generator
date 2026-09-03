@@ -51,6 +51,65 @@ def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> Non
     assert all(item.name != "circsym" for item in detected)
 
 
+def test_beat_advertises_the_reduced_domains_and_di_sphere_it_really_has(
+    monkeypatch,
+) -> None:
+    """The registry must not under-report BEAT, nor promise the xz half.
+
+    BEAT gained theta-major sphere grids, diagonal cuts and axial motion, but
+    the registry still answered ``di_sphere=False`` and offered only the full
+    domain. It mirrors across x, or x and y, so ATH quadrants 1234, 14 and 1
+    are solvable; quadrants 12 is refused by the package itself, and a bare
+    "half" here would promise it.
+    """
+
+    from server.solver import beat, bempp, circsym, metal
+
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no helper", "version": None})
+    monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "package absent", "version": None})
+    monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": False, "reason": "absent", "version": None})
+    monkeypatch.setattr(
+        beat,
+        "beat_status",
+        lambda: {"available": True, "reason": "cuda", "version": "1", "surface_traces": False},
+    )
+    detected = {item.name: item for item in registry.detect_engines(environ={})}
+    assert detected["beat"].di_sphere is True
+    assert detected["beat"].symmetry_domains == ("full", "half-yz", "quarter")
+    assert "half" not in detected["beat"].symmetry_domains
+    assert detected["bempp"].symmetry_domains == ("full", "half", "quarter")
+
+
+def test_beat_field_trace_capability_follows_the_installed_package(
+    monkeypatch,
+) -> None:
+    """Surface-trace retention landed after the first pinned build.
+
+    Advertising it unconditionally would make the app request traces a pinned
+    solver cannot return; hard-coding it False would keep them unreachable
+    after a pin bump. The probe reports what the installed package can do.
+    """
+
+    from server.solver import beat, bempp, circsym, metal
+
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no helper", "version": None})
+    monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "absent", "version": None})
+    monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": False, "reason": "absent", "version": None})
+    for supported in (False, True):
+        monkeypatch.setattr(
+            beat,
+            "beat_status",
+            lambda supported=supported: {
+                "available": True,
+                "reason": "cuda",
+                "version": "1",
+                "surface_traces": supported,
+            },
+        )
+        detected = {item.name: item for item in registry.detect_engines(environ={})}
+        assert detected["beat"].field_traces is supported
+
+
 def test_auto_resolution_prefers_metal_then_beat_then_bempp() -> None:
     """AUTO: metal > beat (GPU-only by its own probe) > bempp > dryrun.
 
