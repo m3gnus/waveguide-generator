@@ -72,7 +72,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDir}
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile={#PayloadDir}\WaveguideGenerator.ico
-UninstallDisplayIcon={app}\Waveguide Generator.exe,0
+; The launcher is a renamed pythonw.exe and nothing patches its resources,
+; so its embedded icon is Python's. Point every icon Windows shows at the
+; .ico the build stages beside it instead.
+UninstallDisplayIcon={app}\WaveguideGenerator.ico
 UninstallDisplayName=Waveguide Generator
 
 ; The payload is ~200 MB across ~7700 mostly-small files, which is the case
@@ -98,9 +101,9 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{group}\Waveguide Generator"; Filename: "{app}\Waveguide Generator.exe"
+Name: "{group}\Waveguide Generator"; Filename: "{app}\Waveguide Generator.exe"; IconFilename: "{app}\WaveguideGenerator.ico"
 Name: "{group}\Uninstall Waveguide Generator"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Waveguide Generator"; Filename: "{app}\Waveguide Generator.exe"; Tasks: desktopicon
+Name: "{autodesktop}\Waveguide Generator"; Filename: "{app}\Waveguide Generator.exe"; IconFilename: "{app}\WaveguideGenerator.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\Waveguide Generator.exe"; Description: "Start Waveguide Generator"; Flags: nowait postinstall skipifsilent
