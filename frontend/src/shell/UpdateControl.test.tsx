@@ -437,7 +437,19 @@ describe('UpdateControl', () => {
       action: null,
       canInstall: false,
     })}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+
+    // The indicator, not only the dialog. This test asserted the dialog alone,
+    // so the top bar went on reading "up to date" for a version that is not the
+    // one the channel offers -- the two disagreed about the same snapshot.
+    const indicator = host.querySelector<HTMLButtonElement>('.update-indicator')!;
+    expect(indicator.textContent).toContain('ahead of stable');
+    expect(indicator.textContent).not.toContain('up to date');
+    expect(indicator.getAttribute('aria-label')).toContain('ahead of stable');
+    // Still not a problem state: being in front of your channel is not a
+    // warning, so the visual treatment stays the same as 'current'.
+    expect(indicator.className).toContain('current');
+
+    await act(async () => indicator.click());
 
     const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dialog.textContent).toContain('newer than the latest stable release');

@@ -64,7 +64,16 @@ export function updatePresentation(snapshot: Pick<UpdateSnapshot, 'data' | 'erro
   if (snapshot.data?.freshness === 'stale') {
     return { state: 'unknown', wide: `${version} · status unknown`, compact: version, announcement: 'Waveguide Generator update status is stale.' };
   }
-  if (snapshot.data?.availability === 'current' || snapshot.data?.availability === 'ahead') {
+  if (snapshot.data?.availability === 'ahead') {
+    // Running a beta after switching back to Stable. The visual state stays
+    // 'current' on purpose -- being in front of your channel is not a problem
+    // to flag -- but the label is not "up to date", because the running version
+    // is not the one the channel offers. The dialog has said "newer than the
+    // latest stable release" since this state was added; the indicator said
+    // "up to date", so the two disagreed about the same snapshot.
+    return { state: 'current', wide: `${version} · ahead of stable`, compact: version, announcement: `Waveguide Generator ${version} is newer than the latest stable release.` };
+  }
+  if (snapshot.data?.availability === 'current') {
     return { state: 'current', wide: `${version} · up to date`, compact: version, announcement: 'Waveguide Generator is up to date.' };
   }
   if (snapshot.isPending) {
