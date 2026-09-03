@@ -292,6 +292,55 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
     )
 
 
+def restrict_for_ground_plane(
+    resolution: SymmetryResolution, ground_axis: str | None
+) -> SymmetryResolution:
+    """Drop the mirror plane a rigid ground plane makes unavailable.
+
+    A reduced mesh is cut *on* its mirror plane and must touch it; a model
+    standing above a ground plane must not reach it. The two cannot name the
+    same plane, and lifting the model off the origin is what destroys the cut,
+    so the restriction does not depend on the height.
+
+    Applied here rather than inside ``resolve_symmetry`` because that result is
+    memoized on the design alone and is also served to the design-symmetry
+    endpoint, which knows nothing about solve options. Restricting afterwards
+    keeps one geometry answer and makes the ground plane a separate, visible
+    subtraction from it -- so ``auto`` degrades quarter to half_yz on a floor
+    instead of the package rejecting the mesh after it has been built, and a
+    forced conflicting mode fails naming the ground plane as the reason.
+    """
+
+    if ground_axis is None:
+        return resolution
+    from .ground_plane import GroundPlane
+
+    blocked = GroundPlane(axis=ground_axis, height_m=0.0).blocked_symmetry_plane
+    if blocked not in {"xz", "yz"}:
+        # A z-axis ground plane blocks only the legacy "xy" bi-symmetry, which
+        # WG never resolves and the package refuses anyway. Nothing to subtract.
+        return resolution
+    if not getattr(resolution, blocked):
+        return resolution
+    reason = (
+        f"a rigid ground plane bounding {ground_axis} stands the model off "
+        f"{ground_axis} = 0, so the {blocked} mirror plane is no longer a cut "
+        "through the model"
+    )
+    reasons = {plane: list(items) for plane, items in resolution.reasons.items()}
+    reasons.setdefault(blocked, []).append(reason)
+    xz = resolution.xz and blocked != "xz"
+    yz = resolution.yz and blocked != "yz"
+    return SymmetryResolution(
+        quadrants=1 if xz and yz else 12 if xz else 14 if yz else 1234,
+        xz=xz,
+        yz=yz,
+        reasons=reasons,
+        tolerance_mm=resolution.tolerance_mm,
+        relative_tolerance=resolution.relative_tolerance,
+    )
+
+
 def validate_symmetry_mode(mode: str, resolution: SymmetryResolution) -> int:
     """Return the explicit mask, rejecting any requested absent plane."""
 
@@ -325,5 +374,6 @@ __all__ = [
     "SymmetryResolution",
     "clear_symmetry_cache",
     "resolve_symmetry",
+    "restrict_for_ground_plane",
     "validate_symmetry_mode",
 ]

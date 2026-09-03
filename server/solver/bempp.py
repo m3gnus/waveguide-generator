@@ -43,6 +43,12 @@ from .field_traces_store import (
     field_trace_retention_plan,
 )
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
+from .ground_plane import (
+    GROUND_PLANE_AXES,
+    NATIVE_GROUND_PLANE,
+    observation_below_ground_warning,
+    place_above_ground,
+)
 from .infinite_baffle import require_coupled_aperture_tag
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -477,6 +483,63 @@ def _assembly_backend_status() -> tuple[bool, str, str | None, str | None]:
     return True, warning, FALLBACK_ASSEMBLY_BACKEND, warning
 
 
+def _probe_ground_plane_axes() -> tuple[str, ...]:
+    """Which axes the *installed* package will accept as a rigid half space.
+
+    Constructed rather than assumed, following the ``aperture_tag`` probe above.
+    ``SolveConfig.ground_plane`` arrived with hornlab-bempp-bem PR #10; against
+    an earlier pin the keyword raises TypeError and this reports no axes at all,
+    so ``server/engines/registry.py`` simply does not advertise the mounting.
+    That is the difference between an option that is absent and one that is
+    offered and then fails several minutes into a solve.
+
+    Each axis is tried separately: the package validates ``ground_plane``
+    eagerly in ``__post_init__``, so a value it does not implement is refused
+    here rather than at assembly time.
+    """
+
+    if SolveConfig is None:
+        return ()
+    supported: list[str] = []
+    for axis in GROUND_PLANE_AXES:
+        try:
+            SolveConfig(ground_plane=NATIVE_GROUND_PLANE[axis])
+        except TypeError:
+            # The keyword itself is missing: an older pin, so no axis works.
+            return ()
+        except Exception:  # noqa: BLE001 - an unimplemented plane is not an error
+            continue
+        supported.append(axis)
+    return tuple(supported)
+
+
+def _probe_ground_plane_composition() -> bool:
+    """Whether a ground plane may ride alongside a reduced-domain mesh.
+
+    This is not cosmetic: hornlab-bempp-bem joins the symmetry spec and the
+    ground plane into one reflection group, so a left-right-symmetric horn on a
+    floor keeps its half mesh and pays four images on it. hornlab-metal-bem and
+    hornlab-beat-bem each carry a single image-transform set and cannot, so the
+    identical model there solves the full domain -- roughly four times the work.
+
+    Measured on the pinned package rather than reasoned about: a reduced ``yz``
+    mesh over an ``xz`` ground expands to ``plane_spec="yz+xz"`` with four
+    image signs, the seam validated on ``yz`` alone.
+
+    Declared so the UI cannot imply the engines are interchangeable for a
+    grounded solve, and so an engine that cannot compose is not handed a
+    reduced mesh when one is wired up.
+    """
+
+    if SolveConfig is None:
+        return False
+    try:
+        SolveConfig(native_symmetry_plane="yz", ground_plane="xz")
+    except Exception:  # noqa: BLE001 - any refusal means it does not compose
+        return False
+    return True
+
+
 class _BemppProbeUnavailable(RuntimeError):
     """Carries an unavailable probe result past the cache, which must not keep it."""
 
@@ -510,6 +573,8 @@ def _probe_bempp_status() -> dict[str, Any]:
         "assembly_backend": backend,
         "warning": warning,
         "coupled_infinite_baffle": coupled_infinite_baffle,
+        "ground_plane_axes": _probe_ground_plane_axes(),
+        "ground_plane_composes_with_symmetry": _probe_ground_plane_composition(),
     }
 
 
@@ -636,6 +701,44 @@ def solve_bempp_from_msh_text(
             "Installed hornlab-bempp-bem does not support coupled "
             "infinite-baffle aperture tags."
         )
+    ground_plane = getattr(context, "ground_plane", None)
+    if ground_plane is not None:
+        supported = tuple(status.get("ground_plane_axes") or ())
+        if not supported:
+            raise BemppUnavailable(
+                "Installed hornlab-bempp-bem does not support a rigid ground "
+                "plane. It needs the pin that added SolveConfig.ground_plane."
+            )
+        if ground_plane.axis not in supported:
+            raise BemppUnavailable(
+                f"Installed hornlab-bempp-bem cannot bound the "
+                f"{ground_plane.axis} axis with a rigid half space; it supports "
+                + ", ".join(supported)
+                + "."
+            )
+        if aperture_tag is not None:
+            # Both are half-space models and each claims the whole exterior.
+            # Solving them together would answer a question nobody asked, so
+            # refuse rather than silently letting one win.
+            raise ValueError(
+                "A coupled infinite baffle and a rigid ground plane are two "
+                "different half-space boundaries and cannot be combined. The "
+                "baffle already mounts the mouth in an unbounded wall; turn the "
+                "ground plane off, or set the simulation type to free-standing."
+            )
+        # Before the observation frame and the mesh file are derived from this
+        # text, so the mouth origin, the polar arcs and the solved geometry all
+        # move together and stay referenced to the horn rather than the floor.
+        msh_text = place_above_ground(msh_text, ground_plane)
+        # The package logs this and solves on, so without surfacing it the only
+        # symptom is a polar whose lower angles are quietly the upper ones.
+        below_ground = observation_below_ground_warning(
+            ground_plane, getattr(context, "polar_config", {}) or {}
+        )
+        if below_ground is not None:
+            logger.warning("%s", below_ground)
+            if stage_callback:
+                stage_callback("setup", 0.0, below_ground)
     if context.frequencies_hz is not None and bempp_solve_frequencies is None:
         raise BemppUnavailable(
             "Installed hornlab-bempp-bem does not support explicit frequency lists."
@@ -762,6 +865,12 @@ def solve_bempp_from_msh_text(
     }
     if aperture_tag is not None:
         config_kwargs["aperture_tag"] = aperture_tag
+    if ground_plane is not None:
+        # The one place wg2 spells a ground plane as an axis pair. Everything
+        # above this line -- the option, the capability, the UI -- names the
+        # single axis the half space bounds, because "xy" already means legacy
+        # bi-symmetry in WG and x-and-y mirrors in BEAT.
+        config_kwargs["ground_plane"] = ground_plane.native_plane
     # The BEMPP package's parallel sweep deliberately has no callback seam.
     # Keep an explicit multi-worker opt-in fast; the default serial/cancellable
     # path streams provisional rows just like Metal and Boundary Lab.
@@ -789,6 +898,11 @@ def solve_bempp_from_msh_text(
             raise BemppUnavailable(
                 "Installed hornlab-bempp-bem does not support coupled "
                 "infinite-baffle aperture tags."
+            ) from exc
+        if "ground_plane" in message:
+            raise BemppUnavailable(
+                "Installed hornlab-bempp-bem does not support a rigid ground "
+                "plane."
             ) from exc
         raise
     if context.source_motion != "normal":
@@ -902,6 +1016,19 @@ def solve_bempp_from_msh_text(
             "source": "hornlab-waveguide-mesher",
         }
         metadata["bempp"]["aperture_tag"] = aperture_tag
+    if ground_plane is not None:
+        # Recorded the way Boundary Lab records it -- by bounded axis, with an
+        # explicit reflection coefficient -- so a result says which half space
+        # it was solved in without anyone having to decode an axis-pair token.
+        metadata["ground_plane"] = {
+            "type": "rigid_half_space",
+            "axis": ground_plane.axis,
+            "height_m": ground_plane.height_m,
+            "offset_m": 0.0,
+            "reflection_coefficient": 1.0,
+        }
+        metadata["bempp"]["ground_plane"] = ground_plane.native_plane
+        metadata["ground_plane"]["observation_warning"] = below_ground
     response = build_solver_response(
         result=result,
         config=config,

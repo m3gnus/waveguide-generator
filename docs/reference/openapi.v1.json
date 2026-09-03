@@ -3018,6 +3018,34 @@
         "title": "GainSpec",
         "type": "object"
       },
+      "GroundPlaneConfig": {
+        "additionalProperties": false,
+        "description": "A rigid reflecting half space the model stands above.\n\nKept in solve options rather than in the design because it describes the\nroom the horn is placed in, not the horn: ATH's text format has no key for\nit, so a design-level field would either break round-trip or invent a\nWG-only dialect. It is also the setting a user changes between solves of\nthe *same* design, which is what solve options are for.\n\n``axis`` names the coordinate the half space bounds -- never an axis-pair\ntoken; see ``server/solver/ground_plane.py`` for why that distinction is\nload-bearing. WG's frame has z along the horn axis and y vertical, so the\nfloor is ``axis=\"y\"``, a side wall is ``\"x\"``, and ``\"z\"`` is a rigid wall\nbehind the throat.\n\n``height_m`` is the height of the model's own origin above the plane,\nmatching Boundary Lab's per-source ``positionHeightM``. The default 1.0 m\nis a listening-axis height, not a physical constant: it is a starting\nvalue, and the solve refuses rather than guesses if the model would cross\nthe plane at it.",
+        "properties": {
+          "axis": {
+            "default": "y",
+            "enum": [
+              "x",
+              "y",
+              "z"
+            ],
+            "title": "Axis",
+            "type": "string"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "height_m": {
+            "default": 1.0,
+            "title": "Height M",
+            "type": "number"
+          }
+        },
+        "title": "GroundPlaneConfig",
+        "type": "object"
+      },
       "GuidingCurveConfig": {
         "additionalProperties": false,
         "properties": {
@@ -6732,6 +6760,9 @@
             ],
             "title": "Frequency Spacing",
             "type": "string"
+          },
+          "ground_plane": {
+            "$ref": "#/components/schemas/GroundPlaneConfig"
           },
           "mesh_ladder": {
             "default": "off",

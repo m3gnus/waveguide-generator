@@ -35,6 +35,10 @@ export const SOLVE_OPTION_EFFECTS: Record<SolveOptionKey, PreferenceEffect> = {
   frequencySpacing: 'solve-affecting',
   frequencyMode: 'solve-affecting',
   frequencyListText: 'solve-affecting',
+  // Changing the ground plane changes the boundary condition itself, so an
+  // earlier run is not comparable to the next one -- the strongest possible
+  // reading of this classification's test.
+  groundPlane: 'solve-affecting',
   'polar.angleStart': 'solve-affecting',
   'polar.angleEnd': 'solve-affecting',
   'polar.angleStep': 'solve-affecting',

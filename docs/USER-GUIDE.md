@@ -127,6 +127,25 @@ for that formulation; Metal can also use half/quarter domains. BEAT does not yet
 support coupled infinite baffle. No backend substitutes an image/double-horn
 approximation for a flush-mounted waveguide.
 
+The **ground plane** in Solve options is a different boundary, not another name
+for the baffle, and the difference matters because picking the wrong one still
+returns a believable result. An infinite baffle lets the mouth into an
+unbounded rigid wall level with the mouth and removes every cabinet edge. A
+ground plane puts a rigid reflecting surface through the origin and stands the
+whole body above it, edges and all, so the horn radiates into a half space. A
+horn on the floor is the second one; solving it as the first gives a smooth,
+plausible response that is not the one the design has.
+
+Choose the surface by the axis it bounds: **Floor** is under the horn,
+**Side wall** beside it, and **Rear wall** behind the throat. "Height above
+surface" is how far the model's own origin sits above it; the whole model must
+clear the surface, and a solve that would not is refused with the smallest
+height that works rather than solved with the horn buried. Standing the model
+off the surface removes the matching mirror plane, so Auto symmetry drops to
+the reduction that survives -- a floor costs the horizontal cut but keeps the
+left/right one. The ground plane needs BEMPP full 3D on this build, and it
+cannot be combined with an infinite baffle.
+
 Imported CAD geometry still requires Metal. Field-plane traces are available
 from free-standing Metal and BEMPP full-3D solves; Axisymmetric and coupled-IB
 solves report that traces are unavailable. The capability response drives these

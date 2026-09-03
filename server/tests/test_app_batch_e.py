@@ -171,6 +171,8 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
             "fast_paths",
             "formulations",
             "mountings",
+            "ground_plane_axes",
+            "ground_plane_composes_with_symmetry",
             "geometry_sources",
             "symmetry_domains",
             "field_traces",

@@ -20,6 +20,32 @@ The point grid does not contain every terminal surface, so the resolver separate
 - Infinite baffle: the coupled baffle and aperture are constructed from the sampled mouth and centred source rings and expose no independent left/right or top/bottom offsets. Their plane symmetry therefore follows the sampled surface. `mesh.vertical_offset` follows the same finite-scalar rule and rigid-placement treatment in this mode.
 - Profile/formula geometry, morph target and dimensions, OSSE guiding curves and rotation, cross-section parameters, global rotation/scale, throat extension, and slot geometry are covered by the sampled surface itself.
 
+## The rigid ground plane subtracts a plane
+
+A ground plane (`SolveOptions.ground_plane`) is an infinite, perfectly rigid
+reflecting surface through the origin, and the model is translated to stand
+above it. It is named by the single axis it bounds -- `x`, `y`, or `z`, with
+the fluid in `axis >= 0` -- never by an axis-pair token, because `xy` already
+means legacy bi-symmetry here and x-and-y mirrors in BEAT, and it means the
+z = 0 plane in `hornlab-bempp-bem`. WG's frame runs the waveguide axis along z
+with y vertical, so `y` is the floor.
+
+Standing the model off the surface is what removes the matching mirror plane: a
+reduced mesh is cut *on* its plane and must touch it, while a model above a
+ground plane must not reach it, and no mesh can do both. So a ground plane on
+`y` subtracts xz, one on `x` subtracts yz, and one on `z` subtracts only the
+legacy `xy` bi-symmetry that is never resolved anyway.
+
+The subtraction is applied to the resolved `SymmetryResolution` rather than
+inside `resolve_symmetry`, whose result is memoized on the design alone and is
+also served to `POST /api/design/symmetry`, which knows nothing about solve
+options. `auto` therefore degrades quarter to `half_yz` on a floor, and a
+forced conflicting mode fails naming the ground plane among its reasons --
+instead of the solver rejecting a reduced mesh that has already been built.
+
+A ground plane and a coupled infinite baffle are two different half-space
+boundaries and are refused together.
+
 ## Resolution and precedence
 
 `auto` chooses quarter (`1`) when both planes hold, upper half (`12`) for xz only, right half (`14`) for yz only, and full (`1234`) when neither holds. A requested `full`, `half_xz`, `half_yz`, or `quarter` maps directly to those same masks. Explicit reduced modes are honoured only after validation; if a required plane is absent, submission fails with the plane name and all its rejection reasons. Explicit `full` always remains valid.

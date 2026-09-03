@@ -101,6 +101,49 @@ class PolarConfig(JobModel):
         }
 
 
+class GroundPlaneConfig(JobModel):
+    """A rigid reflecting half space the model stands above.
+
+    Kept in solve options rather than in the design because it describes the
+    room the horn is placed in, not the horn: ATH's text format has no key for
+    it, so a design-level field would either break round-trip or invent a
+    WG-only dialect. It is also the setting a user changes between solves of
+    the *same* design, which is what solve options are for.
+
+    ``axis`` names the coordinate the half space bounds -- never an axis-pair
+    token; see ``server/solver/ground_plane.py`` for why that distinction is
+    load-bearing. WG's frame has z along the horn axis and y vertical, so the
+    floor is ``axis="y"``, a side wall is ``"x"``, and ``"z"`` is a rigid wall
+    behind the throat.
+
+    ``height_m`` is the height of the model's own origin above the plane,
+    matching Boundary Lab's per-source ``positionHeightM``. The default 1.0 m
+    is a listening-axis height, not a physical constant: it is a starting
+    value, and the solve refuses rather than guesses if the model would cross
+    the plane at it.
+    """
+
+    enabled: bool = False
+    axis: Literal["x", "y", "z"] = "y"
+    height_m: float = Field(default=1.0)
+
+    @field_validator("axis", mode="before")
+    @classmethod
+    def normalize_axis(cls, value: Any) -> Any:
+        return str(value).strip().lower()
+
+    @model_validator(mode="after")
+    def validate_height(self) -> "GroundPlaneConfig":
+        if not math.isfinite(self.height_m):
+            raise ValueError("ground_plane.height_m must be finite")
+        if self.height_m < 0.0:
+            raise ValueError(
+                "ground_plane.height_m must not be negative; the model's origin "
+                "cannot sit below the plane it stands on"
+            )
+        return self
+
+
 class SolveOptions(JobModel):
     """Execution choices kept separate from the authoritative v2 design."""
 
@@ -125,6 +168,8 @@ class SolveOptions(JobModel):
     mesh_ladder: Literal["off", "auto"] = "off"
     mesh_validation_mode: Literal["warn", "strict", "off"] = "warn"
     polar_config: PolarConfig = Field(default_factory=PolarConfig)
+    # Off by default, so every existing solve is unchanged.
+    ground_plane: GroundPlaneConfig = Field(default_factory=GroundPlaneConfig)
     stage_delay_ms: int = Field(default=30, ge=0, le=2000)
 
     @field_validator("engine", "solver_mode", "symmetry")

@@ -20,6 +20,15 @@ export type ObservationOrigin = 'mouth' | 'throat';
 export type SymmetryMode = 'auto' | 'full' | 'half_xz' | 'half_yz' | 'quarter';
 export type SolverMode = 'auto' | 'full_3d' | 'circsym';
 export type FrequencyMode = 'range' | 'list';
+/**
+ * The coordinate a rigid ground plane bounds. Never an axis-pair token: `xy`
+ * already means legacy bi-symmetry in WG and x-and-y mirrors in BEAT, so the
+ * plane is named by the single axis it bounds, as Boundary Lab does.
+ * WG's frame puts z along the horn axis and y vertical, so `y` is the floor.
+ */
+export type GroundPlaneAxis = 'x' | 'y' | 'z';
+
+export const GROUND_PLANE_AXES: GroundPlaneAxis[] = ['x', 'y', 'z'];
 
 export const SOLVER_MODES: SolverMode[] = ['auto', 'full_3d', 'circsym'];
 
@@ -39,6 +48,13 @@ export interface PolarConfig {
   field_plane: boolean;
 }
 
+/** Mirrors the server's `SolveOptions.ground_plane` contract. */
+export interface GroundPlaneConfig {
+  enabled: boolean;
+  axis: GroundPlaneAxis;
+  height_m: number;
+}
+
 export interface SolveOptions {
   engine: string;
   solver_mode?: SolverMode;
@@ -49,6 +65,16 @@ export interface SolveOptions {
   /** Present only in list mode; the server then ignores spacing and solves these verbatim. */
   frequencies_hz?: number[];
   polar_config: PolarConfig;
+  /**
+   * Present only when a ground plane is actually requested.
+   *
+   * Omitted rather than sent disabled so a free-air solve puts no new bytes on
+   * the wire: `importedSubmission.test.ts` pins the imported payload byte for
+   * byte, and the shared solve-block fixtures pin the reader's output. The
+   * server defaults this to disabled, so absent and `{enabled: false}` mean
+   * the same thing to it.
+   */
+  ground_plane?: GroundPlaneConfig;
 }
 
 export interface PolarUiState {
@@ -184,6 +210,7 @@ export interface PersistedSolveOptions {
   frequencyMode: FrequencyMode;
   frequencyListText: string;
   polar: PolarUiState;
+  groundPlane: GroundPlaneConfig;
 }
 
 export const DEFAULT_SOLVE_OPTIONS: Readonly<PersistedSolveOptions> = Object.freeze({
@@ -196,6 +223,11 @@ export const DEFAULT_SOLVE_OPTIONS: Readonly<PersistedSolveOptions> = Object.fre
   frequencyMode: 'range',
   frequencyListText: '',
   polar: defaultPolarUi,
+  // Off by default: a ground plane changes the answer, so it is never on
+  // unless asked for. 1.0 m is a listening-axis starting height, not a
+  // constant -- the server refuses rather than guesses if the model would
+  // cross the plane at it.
+  groundPlane: Object.freeze({ enabled: false, axis: 'y', height_m: 1.0 }) as GroundPlaneConfig,
 });
 
 export function defaultSolveOptions(): PersistedSolveOptions {
@@ -285,6 +317,23 @@ export function normalizePersistedSolveOptions(
     frequencyMode: oneOf(stored.frequencyMode, FREQUENCY_MODES, fallback.frequencyMode),
     frequencyListText: typeof stored.frequencyListText === 'string' ? stored.frequencyListText : fallback.frequencyListText,
     polar: normalizePolarUi(stored.polar, fallback.polar),
+    groundPlane: normalizeGroundPlane(stored.groundPlane, fallback.groundPlane),
+  };
+}
+
+/** Restore a stored ground plane, rejecting anything the server would refuse. */
+function normalizeGroundPlane(
+  raw: unknown,
+  fallback: GroundPlaneConfig,
+): GroundPlaneConfig {
+  const stored = isRecord(raw) ? raw : {};
+  const height = Number(stored.height_m);
+  return {
+    enabled: typeof stored.enabled === 'boolean' ? stored.enabled : fallback.enabled,
+    axis: oneOf(stored.axis, GROUND_PLANE_AXES, fallback.axis),
+    // A negative height would put the model's origin under the floor, which
+    // the server rejects; fall back rather than submit a request that cannot run.
+    height_m: Number.isFinite(height) && height >= 0 ? height : fallback.height_m,
   };
 }
 
@@ -299,6 +348,7 @@ interface SolveOptionsStore extends PersistedSolveOptions {
   setFrequencyListText: (text: string) => void;
   frequencyListParse: () => FrequencyListParse;
   updatePolar: (update: Partial<PolarUiState>) => void;
+  updateGroundPlane: (update: Partial<GroundPlaneConfig>) => void;
   toggleAxis: (axis: PolarAxis) => void;
   options: () => SolveOptions;
 }
@@ -315,6 +365,9 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
   setFrequencyListText: (frequencyListText) => set({ frequencyListText }),
   frequencyListParse: () => parseFrequencyList(get().frequencyListText),
   updatePolar: (update) => set((state) => ({ polar: { ...state.polar, ...update } })),
+  updateGroundPlane: (update) => set((state) => ({
+    groundPlane: { ...state.groundPlane, ...update },
+  })),
   toggleAxis: (axis) => set((state) => {
     const enabled = state.polar.enabledAxes.includes(axis);
     if (enabled && state.polar.enabledAxes.length === 1) return state;
@@ -336,6 +389,7 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
       verbose: get().verbose,
       frequency_spacing: get().frequencySpacing,
       polar_config: polarConfigFromUi(get().polar),
+      ...(get().groundPlane.enabled ? { ground_plane: { ...get().groundPlane } } : {}),
     };
     if (get().frequencyMode !== 'list') return base;
     const { frequencies, error } = parseFrequencyList(get().frequencyListText);

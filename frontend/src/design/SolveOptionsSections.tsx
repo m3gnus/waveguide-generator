@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { useCapabilities } from '../jobs/useCapabilities';
+import { activeBackendCapability, backendLimitation } from './backendSupport';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { widenPolarToDerivation } from '../jobs/importedSubmission';
 import { HelpTipRow, useHelpTip } from './HelpTip';
@@ -14,6 +15,7 @@ import {
   useSolveOptionsStore,
   type FrequencyMode,
   type FrequencySpacing,
+  type GroundPlaneAxis,
   type MeshValidationMode,
   type ObservationOrigin,
   type PolarAxis,
@@ -96,11 +98,117 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
       <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
     <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>
+    {mode === 'parametric' && <GroundPlaneControls />}
     <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />
     <ToggleRow id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />
     {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
   </>;
 }
+
+/**
+ * The rigid ground plane, and the copy that keeps it apart from the baffle.
+ *
+ * These are two different boundary conditions, and choosing the wrong one
+ * returns a plausible wrong answer rather than an error -- a horn on the floor
+ * solved as a baffled horn gets a smooth, believable response that is simply
+ * not the one the design has. So the labels never call either of them a
+ * "half space" alone, and the note under the toggle states the difference
+ * rather than leaving it to be inferred from two similar-sounding options.
+ *
+ * The plane is chosen by the axis it bounds, never by an axis-pair token: `xy`
+ * already means legacy bi-symmetry in WG's own symmetry vocabulary and
+ * x-and-y mirrors in BEAT, so a shared `xy` here would be a third meaning.
+ * WG's frame runs z along the horn axis with y vertical, which is why the
+ * floor is y and a rear wall is z.
+ */
+export function GroundPlaneControls() {
+  const store = useSolveOptionsStore();
+  const { engines } = useCapabilities();
+  const ground = store.groundPlane;
+  const backend = activeBackendCapability(store.engine, engines);
+  const limitation = backendLimitation(backend, 'ground-plane');
+  const belowGround = ground.enabled ? belowGroundNote(ground.height_m, store.polar) : undefined;
+  const axes = backend?.ground_plane_axes;
+  return <>
+    <ToggleRow
+      id="solve-ground-plane"
+      label="Ground plane"
+      help="Puts an infinite, perfectly rigid reflecting surface through the origin and stands the model above it, so the horn radiates into a half space. The whole body is reflected, cabinet edges included. This is NOT the infinite baffle: the baffle lets the mouth into an unbounded wall level with the mouth and removes every edge, which is a different boundary and a different answer. Off solves in free air."
+      checked={ground.enabled}
+      onChange={(enabled) => store.updateGroundPlane({ enabled })}
+    />
+    {ground.enabled && <>
+      <HelpTipRow
+        className="select-row"
+        text="Which surface reflects. WG's frame runs the waveguide axis along z with y vertical, so Floor is the ground under the horn, Side wall is a wall beside it, and Rear wall stands behind the throat. A rear wall is not the same as an infinite baffle: the baffle is at the mouth."
+      >
+        <label htmlFor="ground-plane-axis">Reflecting surface</label>
+        <select
+          id="ground-plane-axis"
+          value={ground.axis}
+          onChange={(event) => store.updateGroundPlane({ axis: event.target.value as GroundPlaneAxis })}
+        >
+          <option value="y" disabled={axes ? !axes.includes('y') : false}>Floor — under the horn</option>
+          <option value="x" disabled={axes ? !axes.includes('x') : false}>Side wall — beside the horn</option>
+          <option value="z" disabled={axes ? !axes.includes('z') : false}>Rear wall — behind the throat</option>
+        </select>
+      </HelpTipRow>
+      <PolarNumber
+        id="ground-plane-height"
+        label="Height above surface"
+        help="How far the model's own origin sits above the reflecting surface. The whole model must clear it: if it would not at this height, the solve refuses and names the smallest height that works, rather than solving a model buried in the floor."
+        value={ground.height_m}
+        unit="m"
+        min={0}
+        step={0.05}
+        update={(height_m) => store.updateGroundPlane({ height_m })}
+      />
+      <p className="section-note">
+        A ground plane reflects the whole body and keeps its edges; an infinite baffle
+        replaces them with an unbounded wall at the mouth. They are different boundary
+        conditions — picking the wrong one still returns a result.
+      </p>
+      <p className="section-note">
+        Standing the model off the {ground.axis} = 0 surface removes the matching
+        mirror plane, so Auto symmetry drops to the reduction that survives.
+      </p>
+      {belowGround && <p className="section-note" role="status">{belowGround}</p>}
+      {limitation && <div className="field-error" role="alert">{limitation}</div>}
+    </>}
+  </>;
+}
+
+/**
+ * Warn live when the measurement arcs would reach under the plane.
+ *
+ * Mirrors `observation_below_ground_warning` in `server/solver/ground_plane.py`
+ * so the caveat appears while the height is being chosen rather than only in
+ * the solve log. It is easy to hit, not exotic: the default 2 m measurement
+ * distance at a 1 m height puts a third of a vertical arc under the floor, and
+ * the solver returns the mirrored point above the plane there rather than
+ * refusing -- so the plot looks fine and is not.
+ *
+ * The bound is the arc's lowest reachable point, `height - distance`: exact for
+ * anything passing through the downward direction, conservative otherwise. The
+ * horizontal arc alone stays at the model's height and never descends.
+ */
+function belowGroundNote(
+  height_m: number,
+  polar: PolarUiState,
+): string | undefined {
+  if (!(polar.distance > 0)) return undefined;
+  const descends = polar.sphericalSampling
+    || polar.enabledAxes.some((axis) => axis !== 'horizontal');
+  if (!descends) return undefined;
+  const lowest = height_m - polar.distance;
+  if (lowest >= -1e-6) return undefined;
+  return `Measurement points would reach ${Math.round(Math.abs(lowest) * 1000)} mm `
+    + `below the plane, because the ${polar.distance} m measurement distance is `
+    + `larger than the height. Those angles return the mirror of the point above `
+    + `the plane, not a physical value. Raise the height above the measurement `
+    + `distance, or measure closer.`;
+}
+
 
 /**
  * Checkbox row that carries its own hover help.
