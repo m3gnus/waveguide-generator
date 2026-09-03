@@ -217,9 +217,15 @@ def _fetch_package(root: Path) -> Path:
     return cached
 
 
+RUNTIME_ID_COMMIT_LENGTH = 12
+
+
 def _runtime_id(provenance: dict[str, object]) -> str:
     version = str(provenance["waveguideGeneratorVersion"])
-    commit = str(provenance["sourceCommit"])
+    # Only the directory name is shortened. Identity is still established by the
+    # full commit in provenance.json, which _runtime_matches compares verbatim,
+    # so this buys 28 characters of Windows MAX_PATH headroom for free.
+    commit = str(provenance["sourceCommit"])[:RUNTIME_ID_COMMIT_LENGTH]
     return f"wg-{version}-source-{commit}"
 
 

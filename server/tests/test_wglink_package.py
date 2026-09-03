@@ -250,6 +250,39 @@ def test_installed_copy_points_to_wgs_existing_python_and_verified_resampler(
     assert resampler.read_text(encoding="utf-8") == "# exact resampler\n"
 
 
+def test_payload_directory_shortens_the_commit_without_weakening_identity(
+    short_tmp_path: Path,
+):
+    """The payload directory name costs 12 characters of the commit, not 40.
+
+    Windows MAX_PATH is 260 and this segment sits deep inside the WG root, so
+    the full commit was a sixth of the budget. Identity is unaffected: the
+    payload still carries the whole commit in provenance.json.
+    """
+
+    installer = _load_installer()
+    commit = "a" * 40
+    root, archive = _package(short_tmp_path, commit)
+    addins = short_tmp_path / "AddIns"
+
+    installer.install(
+        root=root,
+        platform="macos",
+        addins_dir=addins,
+        archive_path=archive,
+    )
+
+    payloads = root / "integrations" / "wglink" / "runtime" / "payloads"
+    directories = [path for path in payloads.iterdir() if path.is_dir()]
+    assert len(directories) == 1
+    assert directories[0].name == f"wg-9.8.7-source-{commit[:12]}"
+
+    provenance = json.loads(
+        (directories[0] / "wglink" / "provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["sourceCommit"] == commit
+
+
 def test_platform_install_preserves_a_developer_managed_copy(tmp_path: Path):
     installer = _load_installer()
     root = _wg_root(tmp_path, "a" * 40)
