@@ -1,0 +1,27 @@
+; Ath version V2025-06
+; Created: 2026-09-03 09:53
+ABEC.MeshFrequency = 40000
+ABEC.NumFrequencies = 100
+ABEC.Polars:SPL = {
+Distance = 2
+MapAngleRange = 0,90,19
+NormAngle = 0
+Offset = 120
+}
+ABEC.SimProfile = 0
+ABEC.SimType = 1
+ABEC.f1 = 200
+ABEC.f2 = 20000
+Coverage.Angle = 45
+Length = 120
+Mesh.LengthSegments = 120
+OS.k = 1
+Output.ABECProject = 1
+Output.DestDir = C:\Users\Docker\AppData\Local\Temp\claude\C--Users-Docker-Desktop-Hornlab---Workspace\cf3a8134-ea25-446b-89d3-ff2077e83c76\scratchpad\g8\out
+Output.STL = 0
+Term.n = 4
+Term.q = 0.98
+Term.s = 0.6
+Throat.Angle = 10
+Throat.Diameter = 25.4
+Throat.Profile = 1
