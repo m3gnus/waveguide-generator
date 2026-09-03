@@ -119,7 +119,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          choco install innosetup --version=6.7.3 -y --no-progress
+          choco install innosetup --version=6.7.1 -y --no-progress
           $iscc = "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path -LiteralPath $iscc)) {
             $iscc = (Get-ChildItem -Path "$env:ProgramFiles","${env:ProgramFiles(x86)}" -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue |
