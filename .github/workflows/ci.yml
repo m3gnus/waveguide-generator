@@ -78,14 +78,12 @@ jobs:
       # release cycle before it would appear on `main`. Checking `main` alone
       # would leave the guard blind for exactly that window -- which is the
       # window PR #29 broke. Falls back to `main` before `next` exists.
+      # The script resolves this itself now, so CI and a hand-run agree. That
+      # divergence was the bug: CI overrode the upstream while the script default
+      # stayed `origin/main`, so running it by hand reported a branch fully merged
+      # into `next` as partially merged.
       - name: Check for partially merged branches
-        run: |
-          upstream=origin/main
-          if git rev-parse --verify --quiet origin/next >/dev/null; then
-            upstream=origin/next
-          fi
-          echo "checking against $upstream"
-          python scripts/check_partial_merges.py --upstream "$upstream"
+        run: python scripts/check_partial_merges.py
 
   attribution:
     name: No AI attribution in new commits
