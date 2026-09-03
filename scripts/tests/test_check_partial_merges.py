@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 from scripts.check_partial_merges import (  # noqa: E402
     absorbed_prefix,
     acknowledged,
+    default_upstream,
     main,
 )
 
@@ -137,3 +138,31 @@ def test_an_acknowledgement_without_a_reason_is_refused(repo: Path) -> None:
     note.write_text("feature\n", encoding="utf-8")
     with pytest.raises(SystemExit, match="<branch>: <reason>"):
         acknowledged(note)
+
+
+def test_default_upstream_is_main_even_when_a_next_ref_still_exists(tmp_path, monkeypatch):
+    """The one-branch model retired `next`, but the ref outlives the decision.
+
+    This pins the bug that the old "prefer origin/next when it exists" default became
+    on 2026-09-03: `next` stops moving while `main` advances, so probing for the ref
+    resolves the upstream to a frozen branch and every commit that lands on `main`
+    widens the gap. A hand-run then reports branches as partially merged against a ref
+    nothing merges into -- and this is the check people run by hand precisely when they
+    already distrust CI.
+
+    Deliberately constructed so the old implementation fails it: `origin/next` exists
+    and is reachable, so a `rev-parse --verify` probe would succeed and return it.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    _commit(repo, "base")
+    # A frozen `next`, exactly as the migration leaves it: present, and behind.
+    _git(repo, "update-ref", "refs/remotes/origin/next", "HEAD")
+    _commit(repo, "advance")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+    monkeypatch.chdir(repo)
+    assert default_upstream() == "origin/main"

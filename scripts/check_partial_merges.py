@@ -102,22 +102,26 @@ def absorbed_prefix(branch: str, upstream: str) -> tuple[str, list[str]] | None:
 
 
 def default_upstream() -> str:
-    """The trunk work actually lands on: `origin/next` when it exists, else `origin/main`.
+    """The trunk work lands on: `origin/main`, in every repository.
 
-    This mirrors what `.github/workflows/ci.yml` already does. The default used to be a
-    flat `origin/main`, which predated the 2026-08-27 `next` model and was never updated
-    with it -- so CI checked `origin/next` while a hand-run of this script checked
-    `origin/main` and reported a branch fully merged into `next` as partially merged.
+    This mirrors what `.github/workflows/ci.yml` already does -- it passes
+    `origin/${BASE_REF:-main}` explicitly.
 
-    That false positive arrived at the worst possible moment: someone runs this by hand
-    precisely when they do not trust CI's verdict and want to see for themselves, and the
-    natural response to a false positive is to stop believing the guard entirely.
+    It used to prefer `origin/next` when that ref existed, which was correct under the
+    2026-08-27 `next` model and became a bug on 2026-09-03 when the one-branch model
+    retired `next`. The ref is not deleted at the moment the model changes, so
+    "when it exists" kept resolving to a branch that had stopped moving: `main` advanced
+    past it and a hand-run silently compared every branch against a frozen ref, whose
+    every subsequent commit widened the gap and manufactured absorbed-prefix reports.
+
+    That is the same false positive the `origin/next` preference was introduced to fix,
+    in mirror image, and it arrives at the same worst moment: someone runs this by hand
+    precisely when they do not trust CI's verdict, and the natural response to a false
+    positive is to stop believing the guard entirely. Resolving a trunk by probing for a
+    ref is what made both directions possible -- so this now names the trunk outright,
+    and a future model change has to edit it rather than silently re-point it.
     """
-    try:
-        _git("rev-parse", "--verify", "--quiet", "origin/next")
-    except subprocess.CalledProcessError:
-        return "origin/main"
-    return "origin/next"
+    return "origin/main"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -126,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--upstream",
         default=None,
-        help="default: origin/next when it exists, else origin/main",
+        help="default: origin/main",
     )
     parser.add_argument("--acknowledged", type=Path, default=ACKNOWLEDGED_PATH)
     args = parser.parse_args(argv)
