@@ -234,6 +234,81 @@ def test_warning_names_the_count_size_and_place() -> None:
     assert "77" in warning
     assert "10.1 mm" in warning
     assert "Wall Thickness" in warning
+    # "reduce Rear Resolution" was the remedy here and it is wrong: rear
+    # resolution governs the outer shell, and the crossing this warning most
+    # often reports is the acoustic surface chording across a mouth rollback.
+    # Measured on a stock R-OSSE with a 3 mm wall, taking rear resolution from
+    # 15 mm to 7 mm took the crossing count from 0 to 341.
+    assert "reduce Rear Resolution" not in warning
+    assert "Mouth Resolution" in warning
+
+
+_SAMPLE_CROSSING = {
+    "checked": True,
+    "proper_crossing_count": 12,
+    "coplanar_overlap_count": 0,
+    "samples": [
+        {
+            "triangles": [1, 2],
+            "location_m": [0.14, 0.0, 0.036],
+            "extent_m": 0.004,
+        }
+    ],
+}
+
+
+def test_a_fold_replaces_the_remedy_instead_of_contradicting_it() -> None:
+    """One mesh must not carry both "increase" and "reduce Wall Thickness".
+
+    The fold warning used to be emitted beside the crossing warning, and the
+    two remedies are opposites. A folded offset cannot be meshed apart at any
+    density, so when one is present it is the one that answers.
+    """
+
+    (plain,) = _self_intersection_warnings(_SAMPLE_CROSSING)
+    assert "Increase Wall Thickness" in plain
+    assert "Reduce Wall Thickness" not in plain
+
+    (folded,) = _self_intersection_warnings(
+        _SAMPLE_CROSSING, fold="R-OSSE ... normal flip near azimuth row 0, interval 46"
+    )
+    assert "Reduce Wall Thickness" in folded
+    assert "Increase Wall Thickness" not in folded
+    assert "interval 46" in folded
+
+
+def test_a_fold_alone_is_not_a_warning() -> None:
+    """It fired on ATH's own 5 mm default while the mesh had zero crossings.
+
+    On a stock R-OSSE the flip is at axial interval 46 of 50 -- the mouth
+    rollback, whose curvature radius is 3.6 mm -- not at the throat the old
+    text named, and it only moves to the throat past a 15 mm wall. The mesher
+    records that 11 of 16 reference designs fold. What reaches the solver is
+    the built mesh, so the fold is reported as a cause when the mesh actually
+    crosses, and not as an alarm of its own.
+    """
+
+    assert (
+        _self_intersection_warnings(
+            {
+                "checked": True,
+                "proper_crossing_count": 0,
+                "coplanar_overlap_count": 0,
+                "samples": [],
+            },
+            fold="R-OSSE ... normal flip near azimuth row 0, interval 46",
+        )
+        == []
+    )
+
+
+def test_the_strict_refusal_and_the_warning_give_the_same_remedy() -> None:
+    """They drifted apart once; sharing the text is what stops it recurring."""
+
+    from server.mesh.builder import SELF_INTERSECTION_REMEDY
+
+    (warning,) = _self_intersection_warnings(_SAMPLE_CROSSING)
+    assert SELF_INTERSECTION_REMEDY in warning
 
 
 def _crossing_mesh_design(monkeypatch, tmp_path) -> DesignConfig:

@@ -13,6 +13,7 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     // literal here quietly rewrites what every case below is testing the next
     // time the product version moves.
     runningVersion: __WG2_VERSION__,
+    channel: 'stable',
     availability: 'available',
     freshness: 'fresh',
     cached: false,
@@ -407,5 +408,39 @@ describe('UpdateControl', () => {
 
     expect(host.textContent).not.toContain('Update status refreshed');
     expect(host.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+  it('names the beta channel in the dialog and points at Settings to change it', async () => {
+    act(() => root.render(<Harness value={status({
+      channel: 'beta',
+      release: {
+        version: '2.1.0-beta.1',
+        tag: 'v2.1.0-beta.1',
+        url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.1.0-beta.1',
+        publishedAt: '2026-08-11T12:00:00Z',
+        assetsReady: true,
+      },
+    })}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('Beta channel');
+    expect(dialog.textContent).toContain('Change this in Settings');
+    expect(dialog.textContent).toContain('2.1.0-beta.1 is available');
+  });
+
+  it('says a beta install is ahead of stable rather than up to date', async () => {
+    // Reached by switching back to Stable while running a beta, which is why
+    // no new availability state was needed for that case.
+    act(() => root.render(<Harness value={status({
+      availability: 'ahead',
+      release: null,
+      action: null,
+      canInstall: false,
+    })}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('newer than the latest stable release');
+    expect(dialog.textContent).not.toContain('is up to date');
   });
 });

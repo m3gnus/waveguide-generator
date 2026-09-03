@@ -39,6 +39,19 @@
         "title": "ArchiveRunDocumentRequest",
         "type": "object"
       },
+      "Body_choose_update_channel_api_updates_channel_put": {
+        "properties": {
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "title": "Body_choose_update_channel_api_updates_channel_put",
+        "type": "object"
+      },
       "CadDriveChannelIdentity": {
         "additionalProperties": false,
         "description": "The submitted channel address resolved against immutable return sources.",
@@ -10121,6 +10134,64 @@
         "tags": [
           "chart-export"
         ]
+      }
+    },
+    "/api/updates/channel": {
+      "get": {
+        "operationId": "update_channel_api_updates_channel_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Channel Api Updates Channel Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Update Channel"
+      },
+      "put": {
+        "operationId": "choose_update_channel_api_updates_channel_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_choose_update_channel_api_updates_channel_put"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Choose Update Channel Api Updates Channel Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Choose Update Channel"
       }
     },
     "/api/updates/install": {
