@@ -430,6 +430,83 @@ describe('SettingsDialog', () => {
     expect(section.textContent).not.toContain('catalogue entries');
   });
 
+  describe('the update channel', () => {
+    async function openChannel(
+      handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+    ) {
+      vi.stubGlobal('fetch', vi.fn(handler));
+      act(() => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      return host.querySelector<HTMLElement>('#settings-updates')!;
+    }
+
+    const channelResponse = (channel: string) => async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/updates/channel') {
+        return new Response(JSON.stringify({ channel }), { status: 200 });
+      }
+      throw new Error('offline');
+    };
+
+    it('shows the stored channel and describes what it means', async () => {
+      const section = await openChannel(channelResponse('beta'));
+
+      const beta = [...section.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'Beta')!;
+      expect(beta.getAttribute('aria-pressed')).toBe('true');
+      expect(section.textContent).toContain('before a stable version number is committed');
+      // The reason the storage is server-side, said where someone can act on it.
+      expect(section.textContent).toContain('survives the updates it controls');
+    });
+
+    it('defaults to stable and offers no beta until one is chosen', async () => {
+      const section = await openChannel(channelResponse('stable'));
+
+      const buttons = [...section.querySelectorAll<HTMLButtonElement>('button')];
+      expect(buttons.find((button) => button.textContent === 'Stable')!.getAttribute('aria-pressed')).toBe('true');
+      expect(buttons.find((button) => button.textContent === 'Beta')!.getAttribute('aria-pressed')).toBe('false');
+      expect(section.textContent).toContain('Only finished releases');
+    });
+
+    it('writes the chosen channel to the server', async () => {
+      const calls: Array<[string, RequestInit | undefined]> = [];
+      const section = await openChannel(async (input, init) => {
+        const path = String(input);
+        calls.push([path, init]);
+        if (path === '/api/updates/channel') {
+          return new Response(JSON.stringify({ channel: init?.method === 'PUT' ? 'beta' : 'stable' }), { status: 200 });
+        }
+        throw new Error('offline');
+      });
+
+      const beta = [...section.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'Beta')!;
+      await act(async () => { beta.click(); await Promise.resolve(); await Promise.resolve(); });
+
+      expect(calls.some(([path, init]) => path === '/api/updates/channel'
+        && init?.method === 'PUT'
+        && init.body === '{"channel":"beta"}')).toBe(true);
+      expect(beta.getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('puts the previous channel back when the server refuses the change', async () => {
+      const section = await openChannel(async (input, init) => {
+        if (String(input) !== '/api/updates/channel') throw new Error('offline');
+        if (init?.method === 'PUT') {
+          return new Response(JSON.stringify({ detail: 'Settings are read-only' }), { status: 400 });
+        }
+        return new Response(JSON.stringify({ channel: 'stable' }), { status: 200 });
+      });
+
+      const buttons = [...section.querySelectorAll<HTMLButtonElement>('button')];
+      const beta = buttons.find((button) => button.textContent === 'Beta')!;
+      await act(async () => { beta.click(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+
+      expect(beta.getAttribute('aria-pressed')).toBe('false');
+      expect(buttons.find((button) => button.textContent === 'Stable')!.getAttribute('aria-pressed')).toBe('true');
+      expect(section.textContent).toContain('Settings are read-only');
+    });
+  });
+
   it('warns when the Onshape key file is readable by other accounts', async () => {
     const section = await openOnshapeSettings({
       configured: true,
