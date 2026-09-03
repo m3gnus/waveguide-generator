@@ -179,12 +179,19 @@ def _warm_beat(status: Mapping[str, object]) -> None:
     solve on a daemon thread can hold Quit open; BEAT's work happens in a
     child process that ``shutdown_workers`` terminates, so this thread is only
     ever waiting on a pipe.
+
+    The backend comes from ``resolve_beat_backend`` rather than being read out
+    of ``status`` here, so that the accelerator this warms is by construction
+    the one the solve will run on. Warming a different one is worse than not
+    warming at all: it pays a device initialisation twice and leaves the path
+    the user waits on cold.
     """
 
     import hornlab_beat_bem
 
-    backend = str(status.get("backend") or "cuda")
-    hornlab_beat_bem.warm_up(beat_backend=backend, mode="tiny")
+    from .beat import resolve_beat_backend
+
+    hornlab_beat_bem.warm_up(beat_backend=resolve_beat_backend(status), mode="tiny")
 
 
 def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:

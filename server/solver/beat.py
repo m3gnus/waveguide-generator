@@ -66,6 +66,11 @@ class BeatUnavailable(RuntimeError):
     """The optional BEAT Engine package cannot run a solve here."""
 
 
+#: Where ``resolve_beat_backend`` lands when a probe reports available without
+#: naming an accelerator. The CPU path is the one backend every host has, so a
+#: wrong guess here costs a slow solve rather than a failed device init.
+BEAT_FALLBACK_BACKEND = "cpu"
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,6 +155,29 @@ def beat_status() -> dict[str, Any]:
 beat_status.cache_clear = _cached_successful_beat_status.cache_clear  # type: ignore[attr-defined]
 
 
+def resolve_beat_backend(status: Mapping[str, Any]) -> str:
+    """The accelerator a BEAT solve will run on, given a probe result.
+
+    One function because there are two callers and they must not disagree: the
+    solve below, and the boot warmup in ``server/solver/warmup.py``. They used
+    to spell the same fallback differently -- the solve said ``"cpu"`` and the
+    warmup said ``"cuda"`` -- so a probe that reported available without naming
+    a backend would have warmed CUDA and then solved on the CPU, paying a
+    device initialisation this host may not even have and leaving the path the
+    user actually waits on cold.
+
+    No pin has ever produced that state: at ``hornlab-beat-bem`` ``88487d8``
+    every ``available: True`` branch of ``beat_engine_status`` names a concrete
+    backend, and every branch that leaves it ``None`` reports unavailable. That
+    invariant lives in another repository, though, and nothing here pinned it,
+    so the divergence was one upstream edit away from mattering rather than
+    impossible. Sharing the resolution makes the two sides wrong together at
+    worst, which is recoverable, instead of wrong differently, which is silent.
+    """
+
+    return str(status.get("backend") or BEAT_FALLBACK_BACKEND)
+
+
 def solve_beat_from_msh_text(
     msh_text: str,
     context: SolverContext,
@@ -175,7 +203,7 @@ def solve_beat_from_msh_text(
     status = beat_status()
     if not status["available"]:
         raise BeatUnavailable(status["reason"])
-    backend = str(status.get("backend") or "cpu")
+    backend = resolve_beat_backend(status)
     field_plane_enabled = (
         getattr(context, "polar_config", {}).get("field_plane", True) is True
     )
@@ -420,4 +448,11 @@ class BeatEngine:
         )
 
 
-__all__ = ["BeatEngine", "BeatUnavailable", "beat_status", "solve_beat_from_msh_text"]
+__all__ = [
+    "BEAT_FALLBACK_BACKEND",
+    "BeatEngine",
+    "BeatUnavailable",
+    "beat_status",
+    "resolve_beat_backend",
+    "solve_beat_from_msh_text",
+]

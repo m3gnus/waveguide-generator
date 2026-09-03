@@ -334,6 +334,61 @@ def test_the_beat_warmup_runs_a_solve_not_just_a_process_start(
     assert calls == [{"beat_backend": "cuda", "mode": "tiny"}]
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"available": True, "backend": "cuda"},
+        {"available": True, "backend": "metal"},
+        {"available": True, "backend": "rocm"},
+        {"available": True, "backend": "cpu"},
+        # The case the two sides used to answer differently.
+        {"available": True},
+        {"available": True, "backend": None},
+        {"available": True, "backend": ""},
+    ],
+)
+def test_the_beat_warmup_warms_the_backend_the_solve_will_use(
+    monkeypatch: pytest.MonkeyPatch, status: dict[str, object]
+) -> None:
+    """The warmup and the solve must resolve one accelerator, not two.
+
+    ``_warm_beat`` spelled its fallback ``"cuda"`` while the solve in
+    ``server/solver/beat.py`` spelled the same fallback ``"cpu"``. A probe that
+    reported available without naming a backend therefore warmed a CUDA context
+    -- on a host that need not have one -- and then solved on the CPU, so the
+    warmup paid a device initialisation for a path the user's solve never took
+    and left the path it did take cold.
+
+    No shipped pin produces that state; at ``hornlab-beat-bem`` ``88487d8``
+    every available branch names a backend. The invariant lives in a different
+    repository, though, and nothing on this side held it, so this asserts the
+    property that actually matters -- the two agree -- rather than the constant
+    either one happens to use.
+    """
+
+    from server.solver import beat as beat_adapter
+    from server.solver import warmup as solver_warmup
+
+    calls: list[dict[str, object]] = []
+    module = types.SimpleNamespace(warm_up=lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", module)
+
+    solver_warmup._warm_beat(status)
+
+    assert len(calls) == 1
+    assert calls[0]["beat_backend"] == beat_adapter.resolve_beat_backend(status)
+
+
+def test_an_unnamed_beat_backend_falls_back_to_the_one_every_host_has() -> None:
+    """A guess that costs a slow solve beats one that costs a failed device init."""
+
+    from server.solver import beat as beat_adapter
+
+    assert beat_adapter.BEAT_FALLBACK_BACKEND == "cpu"
+    assert beat_adapter.resolve_beat_backend({"available": True}) == "cpu"
+    assert beat_adapter.resolve_beat_backend({"backend": "metal"}) == "metal"
+
+
 def test_the_bempp_worker_prewarm_takes_auto_from_the_registrys_one_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
