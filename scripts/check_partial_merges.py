@@ -101,12 +101,37 @@ def absorbed_prefix(branch: str, upstream: str) -> tuple[str, list[str]] | None:
     return base, left
 
 
+def default_upstream() -> str:
+    """The trunk work actually lands on: `origin/next` when it exists, else `origin/main`.
+
+    This mirrors what `.github/workflows/ci.yml` already does. The default used to be a
+    flat `origin/main`, which predated the 2026-08-27 `next` model and was never updated
+    with it -- so CI checked `origin/next` while a hand-run of this script checked
+    `origin/main` and reported a branch fully merged into `next` as partially merged.
+
+    That false positive arrived at the worst possible moment: someone runs this by hand
+    precisely when they do not trust CI's verdict and want to see for themselves, and the
+    natural response to a false positive is to stop believing the guard entirely.
+    """
+    try:
+        _git("rev-parse", "--verify", "--quiet", "origin/next")
+    except subprocess.CalledProcessError:
+        return "origin/main"
+    return "origin/next"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("branches", nargs="*", help="default: every origin branch")
-    parser.add_argument("--upstream", default="origin/main")
+    parser.add_argument(
+        "--upstream",
+        default=None,
+        help="default: origin/next when it exists, else origin/main",
+    )
     parser.add_argument("--acknowledged", type=Path, default=ACKNOWLEDGED_PATH)
     args = parser.parse_args(argv)
+    if args.upstream is None:
+        args.upstream = default_upstream()
     excused = acknowledged(args.acknowledged)
 
     branches = args.branches or remote_branches(args.upstream)
