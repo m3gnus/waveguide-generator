@@ -46,14 +46,21 @@ import json
 import logging
 import os
 from pathlib import Path
+import stat
 import time
 
-from server.platform.acl_repair import RepairCounts, process_is_elevated, sweep
+from server.platform.acl_repair import (
+    RepairCounts,
+    path_has_reparse_point,
+    process_is_elevated,
+    sweep,
+)
 
 log = logging.getLogger("wg.acl")
 
 __all__ = ["MARKER_NAME", "SWEEP_VERSION", "repair_legacy_acls"]
 
+WINDOWS = os.name == "nt"
 MARKER_NAME = "acl_repair_state.json"
 
 # Bump when the matcher or the repair changes in a way that should make a
@@ -81,6 +88,19 @@ def _write_marker(path: Path, roots: dict) -> None:
     except OSError as exc:
         # Losing the marker costs a repeated sweep, not correctness.
         log.debug("Could not record the ACL repair marker at %s: %s", path, exc)
+
+
+def _marker_path_is_safe(path: Path, *, data_root: Path) -> bool:
+    """Whether marker I/O stays inside the already-validated data root."""
+
+    try:
+        return not path_has_reparse_point(path, root=data_root)
+    except FileNotFoundError:
+        # The ordinary first-run case: the leaf does not exist yet.  Its
+        # validated parent is the data root and the writer creates it.
+        return True
+    except OSError:
+        return False
 
 
 def _already_finished(record: object, *, elevated_now: bool) -> bool:
@@ -119,12 +139,22 @@ def repair_legacy_acls(
     log line. Roots already finished are absent rather than reported as zero.
     """
 
-    if os.name != "nt":
+    if not WINDOWS:
         return {}
 
     data_root = Path(data_root)
+    try:
+        # The marker is state for this repair.  Validate its root before even
+        # reading it so a redirected data directory cannot move marker I/O
+        # outside the application's configured tree.
+        data_metadata = data_root.lstat()
+        if path_has_reparse_point(data_root) or not stat.S_ISDIR(data_metadata.st_mode):
+            return {}
+    except OSError:
+        return {}
     marker_path = data_root / MARKER_NAME
-    roots = _read_marker(marker_path)
+    marker_safe = _marker_path_is_safe(marker_path, data_root=data_root)
+    roots = _read_marker(marker_path) if marker_safe else {}
 
     candidates: list[Path] = [data_root]
     if workspace_root is not None:
@@ -138,7 +168,14 @@ def repair_legacy_acls(
         key = str(root)
         if _already_finished(roots.get(key), elevated_now=elevated):
             continue
-        if not root.is_dir():
+        try:
+            # Validate the selected root without following it.  A workspace
+            # setting can itself name a junction, before ``sweep`` has a chance
+            # to enforce its per-entry boundary.
+            metadata = root.lstat()
+            if path_has_reparse_point(root) or not stat.S_ISDIR(metadata.st_mode):
+                continue
+        except OSError:
             continue
         try:
             counts = sweep(root)
@@ -172,6 +209,10 @@ def repair_legacy_acls(
                 root,
             )
 
-    if results:
+    # Check the leaf again at the write boundary.  An existing marker symlink
+    # must never redirect the migration's state update outside the data root.
+    if results and marker_safe and _marker_path_is_safe(
+        marker_path, data_root=data_root
+    ):
         _write_marker(marker_path, roots)
     return results

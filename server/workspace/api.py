@@ -224,7 +224,9 @@ async def _decode_multipart_export_request(
     return subdirectory, existing, members
 
 
-def _retry_after_acl_repair(destination: Path, read: Callable[[], _T]) -> _T:
+def _retry_after_acl_repair(
+    destination: Path, read: Callable[[], _T], *, workspace_root: Path | None = None
+) -> _T:
     """Run `read`; if it fails, try repairing a legacy ACL and run it once more.
 
     The app is what made these files unreadable -- a staging descriptor that
@@ -242,7 +244,7 @@ def _retry_after_acl_repair(destination: Path, read: Callable[[], _T]) -> _T:
     try:
         return read()
     except OSError as first:
-        if repair_path(destination) is not Outcome.REPAIRED:
+        if repair_path(destination, root=workspace_root) is not Outcome.REPAIRED:
             raise first
         logger.info(
             "Repaired a legacy staging ACL on %s while reading it back; "
@@ -824,7 +826,9 @@ def _write_export_sync(
                 continue
             try:
                 identical = _retry_after_acl_repair(
-                    destination, lambda: _streaming_file_matches(destination, content)
+                    destination,
+                    lambda: _streaming_file_matches(destination, content),
+                    workspace_root=workspace_root,
                 )
             except OSError as exc:
                 # "Different content" would be a claim about bytes nobody read.
@@ -861,7 +865,9 @@ def _write_export_sync(
                 if incoming_record:
                     try:
                         existing = _retry_after_acl_repair(
-                            destination, destination.read_bytes
+                            destination,
+                            destination.read_bytes,
+                            workspace_root=workspace_root,
                         )
                     except OSError as exc:
                         # A pointer file that cannot be opened and one that

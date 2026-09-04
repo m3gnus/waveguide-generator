@@ -66,6 +66,7 @@ from enum import Enum
 import logging
 import os
 from pathlib import Path
+import stat
 
 log = logging.getLogger("wg.acl")
 
@@ -74,6 +75,7 @@ __all__ = [
     "process_is_elevated",
     "RepairCounts",
     "descriptor_is_poisoned",
+    "path_has_reparse_point",
     "repair_path",
     "sweep",
 ]
@@ -230,6 +232,53 @@ class AccessEntry:
     ace_type: int
 
 
+def _is_reparse_point(path: Path | str) -> bool:
+    """Whether this exact path component redirects operations elsewhere.
+
+    ``Path.is_symlink`` does not cover Windows junctions.  Windows exposes both
+    junctions and symbolic links through ``st_file_attributes`` on an lstat;
+    the mode check keeps the same boundary meaningful in platform-independent
+    tests.  Callers deliberately let ``OSError`` propagate so an unreadable
+    path is never mistaken for a safe ordinary one.
+    """
+
+    metadata = Path(path).lstat()
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0)
+        & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
+def path_has_reparse_point(
+    path: Path | str, *, root: Path | str | None = None
+) -> bool:
+    """Whether any lexical component from ``root`` through ``path`` redirects.
+
+    The walk is lexical on purpose: resolving either argument first would erase
+    the junction or link this boundary needs to see.  Callers that own a root
+    pass it to keep the check local.  A standalone repair checks from the
+    filesystem anchor, choosing refusal over changing an ACL through an
+    unexamined ancestor.
+    """
+
+    candidate = Path(os.path.abspath(path))
+    boundary = Path(os.path.abspath(root)) if root is not None else Path(candidate.anchor)
+    try:
+        relative = candidate.relative_to(boundary)
+    except ValueError:
+        # A repair boundary outside its declared root is never eligible.
+        return True
+
+    current = boundary
+    if _is_reparse_point(current):
+        return True
+    for part in relative.parts:
+        current = current / part
+        if _is_reparse_point(current):
+            return True
+    return False
+
+
 def read_dacl(path: Path | str) -> tuple[bool, list[AccessEntry]]:
     """Return (dacl_is_protected, entries) for `path`.
 
@@ -340,13 +389,18 @@ def entries_match_staging_pattern(
     return True
 
 
-def descriptor_is_poisoned(path: Path | str) -> bool:
+def descriptor_is_poisoned(
+    path: Path | str, *, root: Path | str | None = None
+) -> bool:
     """Whether `path` carries the staging descriptor. Raises on an unreadable one."""
 
     path = Path(path)
+    if path_has_reparse_point(path, root=root):
+        return False
+    metadata = path.lstat()
     protected, entries = read_dacl(path)
     return entries_match_staging_pattern(
-        protected, entries, is_directory=path.is_dir()
+        protected, entries, is_directory=stat.S_ISDIR(metadata.st_mode)
     )
 
 
@@ -377,20 +431,28 @@ def _reset_to_inherit(path: Path) -> None:
         )
 
 
-def repair_path(path: Path | str) -> Outcome:
+def repair_path(
+    path: Path | str, *, root: Path | str | None = None
+) -> Outcome:
     """Repair one path if -- and only if -- it carries the staging descriptor."""
 
     if not WINDOWS:
         return Outcome.NOT_APPLICABLE
     path = Path(path)
     try:
-        poisoned = descriptor_is_poisoned(path)
+        poisoned = descriptor_is_poisoned(path, root=root)
     except OSError as exc:
         log.debug("Cannot read the descriptor for %s: %s", path, exc)
         return Outcome.UNREADABLE
     if not poisoned:
         return Outcome.NOT_POISONED
     try:
+        # Narrow the name-based API's race window by checking the full lexical
+        # chain again immediately before mutation.  Eliminating the race
+        # entirely would require a handle-based ACL API rather than two path
+        # operations; this check still refuses every stable reparse layout.
+        if path_has_reparse_point(path, root=root):
+            return Outcome.NOT_POISONED
         _reset_to_inherit(path)
     except OSError as exc:
         log.debug("Cannot repair %s: %s", path, exc)
@@ -430,6 +492,14 @@ def sweep(root: Path | str, *, limit: int = 20_000) -> RepairCounts:
     root = Path(root)
     if not WINDOWS:
         return RepairCounts()
+    try:
+        # ``root`` is a public input, not inherently a trusted boundary.  A
+        # normal-looking directory below a junction must be rejected before
+        # the root-local checks below begin.
+        if path_has_reparse_point(root):
+            return RepairCounts(scanned=1, skipped=1)
+    except OSError:
+        return RepairCounts(scanned=1, unreadable=1)
     scanned = repaired = skipped = unreadable = failed = 0
     truncated = False
 
@@ -440,7 +510,14 @@ def sweep(root: Path | str, *, limit: int = 20_000) -> RepairCounts:
             truncated = True
             break
         scanned += 1
-        outcome = repair_path(current)
+        try:
+            if path_has_reparse_point(current, root=root):
+                skipped += 1
+                continue
+        except OSError:
+            unreadable += 1
+            continue
+        outcome = repair_path(current, root=root)
         if outcome is Outcome.REPAIRED:
             repaired += 1
         elif outcome is Outcome.UNREADABLE:
@@ -450,7 +527,11 @@ def sweep(root: Path | str, *, limit: int = 20_000) -> RepairCounts:
         else:
             skipped += 1
         try:
-            if current.is_dir() and not current.is_symlink():
+            # Repairing an ordinary directory can change its ACL, but it must
+            # not weaken the traversal boundary: check again immediately
+            # before enumeration in case the name was replaced meanwhile.
+            metadata = current.lstat()
+            if not path_has_reparse_point(current, root=root) and stat.S_ISDIR(metadata.st_mode):
                 pending.extend(current.iterdir())
         except OSError:
             # A directory whose listing is refused is counted by whatever its
