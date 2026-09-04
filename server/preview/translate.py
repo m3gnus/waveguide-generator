@@ -102,6 +102,22 @@ def acoustic_surface_fit(root: Any) -> str | None:
     patch unmeshable, and the mesher raises rather than letting Gmsh grind. Ask
     for the compatibility fit there instead of handing the mesher a config it
     will refuse.
+
+    **Counterpart** (GIT-WORKFLOW.md 5): since hornlab-waveguide-mesher
+    35a4426 the mesher's own ``surface_fit`` default is ``auto``, and
+    ``PointGridHornGeometry.__post_init__`` resolves it by the same
+    FREEFORM-else-interpolate rule -- independently, off ``freeform_report``
+    rather than off the formula name. Two implementations of one contract: a
+    change to either predicate must visit both, and they must be tested
+    together.
+
+    They are not interchangeable, deliberately. This function returns an
+    explicit value on every path, so Waveguide Generator never asks for
+    ``auto`` and never gets the fallback ``auto`` carries in the mesher's
+    ``build_from_config`` -- where an interpolating build that raises is
+    retried as ``approximate``. An explicit ``interpolate`` still fails loudly
+    here, which is what we want while the underlying small-model tolerance
+    defect is unfixed: it is a ranked plan item, not a thing to paper over.
     """
 
     return "approximate" if root.formula == "FREEFORM" else "interpolate"
