@@ -2294,6 +2294,30 @@
         "title": "EnclosureConfig",
         "type": "object"
       },
+      "EngineSubstitution": {
+        "description": "The engine the request asked for, and the one standing in for it.\n\nPresent only when a stored selection named an engine this host cannot run.\n`requested` is left exactly as the caller sent it, because the selection is\nhost-local UI state that should re-engage untouched the day that engine\nbecomes available here.",
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "requested": {
+            "title": "Requested",
+            "type": "string"
+          },
+          "resolved": {
+            "title": "Resolved",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requested",
+          "resolved",
+          "reason"
+        ],
+        "title": "EngineSubstitution",
+        "type": "object"
+      },
       "ErrorDetail": {
         "additionalProperties": false,
         "description": "Stable refusal/failure detail while the legacy ``detail`` string remains.",
@@ -6812,6 +6836,16 @@
           "engine": {
             "title": "Engine",
             "type": "string"
+          },
+          "engine_substitution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EngineSubstitution"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "formulation": {
             "enum": [

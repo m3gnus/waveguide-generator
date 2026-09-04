@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
-import { planSolveDesign, submitDesign, submitImported, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
+import { planSolveDesign, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
 import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
@@ -22,12 +22,26 @@ import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '.
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 
+/**
+ * A line of text rendered beside the Solve button, not inside its `title`.
+ *
+ * A disabled control cannot be hovered usefully, so a tooltip was the one place
+ * this could not go -- and until now it was the only place it went. `blocked`
+ * says why Solve cannot run; `substituted` says the solve will run, just not on
+ * the engine that was asked for. Neither interrupts anything.
+ */
+export interface SolveNotice {
+  tone: 'blocked' | 'substituted';
+  text: string;
+}
+
 interface SolveControl {
   solve(): void;
   disabled: boolean;
   submitting: boolean;
   label: string;
   title: string;
+  notice: SolveNotice | null;
 }
 
 /** The imported path forces Metal, so an unavailable engine is not a gate the
@@ -386,9 +400,20 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return () => window.removeEventListener('keydown', shortcut);
   }, [fileGeometryActive, solve, solveAvailable, solveBlocker, submitting]);
 
+  const notice = useMemo<SolveNotice | null>(
+    () => solveNotice({
+      cadGeometryActive,
+      plan: solvePlan,
+      pending: solvePlanPending,
+      optionsError: solveOptionsError,
+      planError: solvePlanError,
+    }),
+    [cadGeometryActive, solveOptionsError, solvePlan, solvePlanError, solvePlanPending],
+  );
   const control = useMemo<SolveControl>(() => ({
     solve,
     disabled: !solveAvailable || submitting || Boolean(solveBlocker) || fileGeometryActive,
+    notice,
     submitting,
     label: cadGeometryActive ? 'Solve CAD Link' : 'Solve',
     title: submitting
@@ -404,9 +429,53 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? metalCapability?.reason ?? capabilityError ?? 'Metal engine is unavailable'
                 : parametricUnavailable,
-  }), [cadGeometryActive, capabilityError, fileGeometryActive, metalCapability?.available, metalCapability?.reason, parametricUnavailable, selectedEngine, solve, solveAvailable, solveBlocker, solvePlan, submitting]);
+  }), [cadGeometryActive, capabilityError, fileGeometryActive, metalCapability?.available, metalCapability?.reason, notice, parametricUnavailable, selectedEngine, solve, solveAvailable, solveBlocker, solvePlan, submitting]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
+}
+
+/**
+ * The notice shown beside Solve: why it cannot run, or what it swapped.
+ *
+ * Only the parametric path produces one. The CAD path already renders Metal's
+ * own availability text elsewhere, and duplicating it here would put the same
+ * sentence on screen twice.
+ *
+ * A pending plan is deliberately silent. Planning is debounced and re-runs on
+ * every parameter keystroke, so reporting "no plan yet" would flash a warning
+ * during ordinary editing.
+ */
+export function solveNotice(input: {
+  cadGeometryActive: boolean;
+  plan: SolvePlan | null;
+  pending: boolean;
+  optionsError: string | null;
+  planError: string | null;
+}): SolveNotice | null {
+  if (input.cadGeometryActive) return null;
+  const blocked = input.optionsError ?? input.planError;
+  if (blocked) return { tone: 'blocked', text: blocked };
+  if (input.pending) return null;
+  const substitution = input.plan?.engine_substitution;
+  if (substitution) {
+    return { tone: 'substituted', text: engineSubstitutionNotice(substitution) };
+  }
+  return null;
+}
+
+/**
+ * Names the swap, its cause, and the fact that the preference survives it.
+ *
+ * The last clause is the point: without it the honest reading of this message
+ * is that the app has overwritten a setting, and the next thing the user does
+ * is go and set it back.
+ */
+export function engineSubstitutionNotice(substitution: EngineSubstitution): string {
+  const requested = substitution.requested.trim().toUpperCase();
+  const resolved = substitution.resolved.trim().toUpperCase();
+  return `${requested} is not available on this computer, so this solve will use `
+    + `${resolved} instead. ${substitution.reason} Your ${requested} preference is kept `
+    + `and will be used again as soon as it can run here.`;
 }
 
 export function solvePlanTitle(plan: SolvePlan, requestedEngine: string): string {
@@ -414,6 +483,12 @@ export function solvePlanTitle(plan: SolvePlan, requestedEngine: string): string
   const resolved = plan.engine.trim().toLowerCase();
   if (requested === 'auto') {
     return `Solve current design with AUTO (${resolved.toUpperCase()})`;
+  }
+  if (plan.engine_substitution) {
+    // Distinct from the line below: that one is a formulation change (an
+    // axisymmetric design planned onto the full-3D backend), this one is the
+    // requested backend not existing on this machine at all.
+    return `${engineSubstitutionNotice(plan.engine_substitution)} Solve now.`;
   }
   if (requested !== resolved) {
     return `Solve current design with ${resolved.toUpperCase()} (requested ${requested.toUpperCase()} full-3D fallback)`;

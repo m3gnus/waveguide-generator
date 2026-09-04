@@ -28,11 +28,24 @@ export interface Capabilities {
   engines: EngineCapability[];
   engineSelection: EngineSelection;
 }
+/**
+ * What the server ran instead of the engine the request named, and why.
+ *
+ * `requested` is the caller's stored selection, returned untouched: it stays
+ * the user's preference so it re-engages on its own once that engine can run
+ * here. Present only when a substitution actually happened.
+ */
+export interface EngineSubstitution {
+  requested: string;
+  resolved: string;
+  reason: string;
+}
 export interface SolvePlan {
   engine: string;
   formulation: 'axisymmetric' | 'full-3d';
   reason: string;
   eligibility_reasons: string[];
+  engine_substitution?: EngineSubstitution | null;
 }
 export interface SolveSubmissionMetadata { label: string; designRevision: number }
 export interface ImportedGeometrySubmission {
@@ -303,6 +316,14 @@ export class SolvePlanRefused extends Error {
   }
 }
 
+/** Absent and null both mean "nothing was substituted"; a partial object does not. */
+function validSubstitution(value: SolvePlan['engine_substitution']): boolean {
+  if (value === undefined || value === null) return true;
+  return typeof value.requested === 'string' && Boolean(value.requested)
+    && typeof value.resolved === 'string' && Boolean(value.resolved)
+    && typeof value.reason === 'string';
+}
+
 export async function postSolvePlan(
   body: string,
   fetcher: typeof fetch = fetch,
@@ -323,6 +344,7 @@ export async function postSolvePlan(
     || typeof plan.reason !== 'string'
     || !Array.isArray(plan.eligibility_reasons)
     || !plan.eligibility_reasons.every((reason) => typeof reason === 'string')
+    || !validSubstitution(plan.engine_substitution)
   ) {
     throw new Error('Solve plan response is invalid');
   }

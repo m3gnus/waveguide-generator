@@ -139,6 +139,20 @@ class RadiationImpedancePresentation(BaseModel):
     in_phase_termination: RadiationImpedanceTermination
 
 
+class EngineSubstitution(BaseModel):
+    """The engine the request asked for, and the one standing in for it.
+
+    Present only when a stored selection named an engine this host cannot run.
+    `requested` is left exactly as the caller sent it, because the selection is
+    host-local UI state that should re-engage untouched the day that engine
+    becomes available here.
+    """
+
+    requested: str
+    resolved: str
+    reason: str
+
+
 class SolvePlanResponse(BaseModel):
     """The request-specific engine/formulation selected by the runtime."""
 
@@ -146,6 +160,7 @@ class SolvePlanResponse(BaseModel):
     formulation: Literal["axisymmetric", "full-3d"]
     reason: str
     eligibility_reasons: list[str]
+    engine_substitution: EngineSubstitution | None = None
 
 
 class FieldPlaneUnavailableResponse(BaseModel):
@@ -321,11 +336,15 @@ def create_jobs_router(
                 client_request_id=body.client_request_id,
             )
         plan = resolved.symmetry_metadata["solver_plan"]
+        substitution = plan.get("engine_substitution")
         return SolvePlanResponse(
             engine=resolved.engine_name,
             formulation=plan["formulation"],
             reason=plan["reason"],
             eligibility_reasons=[str(reason) for reason in plan["eligibility_reasons"]],
+            engine_substitution=(
+                EngineSubstitution(**substitution) if substitution else None
+            ),
         )
 
     @router.post(

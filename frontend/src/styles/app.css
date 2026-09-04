@@ -92,6 +92,13 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 /* The plain solve when a Fusion pull is the recommended action beside it. */
 .solve-button-secondary { min-width: 0; background: var(--ctl-grad); box-shadow: none; border: 1px solid var(--hair); color: var(--fg1); font-weight: 500; }
 .solve-button svg { width: 11px; }
+/* Beside the Solve button, never inside its title: a disabled control cannot be
+   hovered usefully, and this text exists for exactly that case. It is bounded
+   and ellipsised so a long capability reason cannot push the window controls
+   off the end of the top bar; the full text stays reachable as the title. */
+.solve-notice { min-width: 0; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); line-height: 1.2; }
+.solve-notice-blocked { color: var(--red); }
+.solve-notice-substituted { color: var(--amber); }
 .solve-button kbd { border-color: var(--solve-kbd-bd); background: var(--solve-kbd); color: var(--solve-kbd-fg); }
 .theme-toggle { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--seg-bg); }
 .theme-toggle button { display: grid; place-items: center; width: 24px; height: 20px; border-radius: var(--r3); background: transparent; color: var(--fg3); }
@@ -1128,6 +1135,10 @@ textarea:disabled { opacity: .48; }
   .file-chip { max-width: 132px; }
   .command-affordance span,
   .command-affordance kbd,
+  /* The top bar is already fighting for width here (the window-controls
+     squeeze); the notice is an addition, so it is the first thing to go. Its
+     text stays on the button's title, and nothing about it was a gate. */
+  .solve-notice,
   .solve-button kbd { display: none; }
   .command-affordance { width: 36px; min-width: 36px; padding: 0; justify-content: center; }
   .solve-button { padding-inline: 8px; }

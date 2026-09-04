@@ -173,6 +173,13 @@ export function SolveActions() {
       aria-busy={solve.submitting}
       onClick={solve.solve}
     ><Icon name="play"/>{fusionMoved ? 'Solve prepared' : solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
+    {solve.notice && <span
+      className={`solve-notice solve-notice-${solve.notice.tone}`}
+      role="status"
+      /* Polite, not an alert: the substitution has already been made and the
+         solve can proceed, so this must not interrupt what the user is doing. */
+      aria-live="polite"
+    >{solve.notice.text}</span>}
   </>;
 }
 

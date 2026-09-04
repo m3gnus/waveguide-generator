@@ -596,6 +596,61 @@ async def resolve_submission(
         request = request.model_copy(deep=True)
         request.options.engine = engine_name
         symmetry_metadata["solver_plan"]["engine"] = engine_name
+    elif engine_name not in {"axisym", "dryrun"} and (
+        await engine_registry.get_engine(engine_name) is None
+    ):
+        # A stored engine selection outlives the machine it was made on. Pick
+        # BEAT on a box that has it, open the app on one that does not, and the
+        # refusal this used to raise reached the UI as nothing but a disabled
+        # Solve button: the app knew exactly why it could not solve and said so
+        # in a `title` tooltip on a control you cannot hover meaningfully. Fall
+        # back to what AUTO would have chosen and report the swap, so the user
+        # is told rather than left guessing.
+        #
+        # The stored preference is deliberately not rewritten. It is host-local
+        # UI state, not part of the design, and leaving it alone is what lets it
+        # re-engage by itself the day the engine becomes available here.
+        #
+        # Excluded: `axisym`, which is a formulation and is refused earlier with
+        # its own message, and `dryrun`, a development toggle whose entire point
+        # is that a real engine must never quietly stand in for it.
+        unavailable_reason = await engine_registry.unavailable_reason(engine_name)
+        mounting = request.design.root.simulation.sim_type
+        substitute = await engine_registry.resolve(
+            "auto", solver_mode=request.options.solver_mode, mounting=mounting
+        )
+        if substitute is None:
+            unsupported = (
+                " that supports a coupled infinite-baffle mounting"
+                if mounting == "infinite-baffle"
+                else ""
+            )
+            raise EngineUnavailableError(
+                f"Solve engine '{engine_name}' is unavailable, and no other "
+                f"engine on this host{unsupported} can take its place. "
+                + (unavailable_reason or "No capability reason was reported.")
+                + " Install/enable Axisymmetric, Metal, BEAT, or BEMPP; "
+                "explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
+                "synthetic development solves."
+            )
+        request = request.model_copy(deep=True)
+        request.options.engine = substitute
+        symmetry_metadata["solver_plan"]["engine"] = substitute
+        symmetry_metadata["solver_plan"]["engine_substitution"] = {
+            "requested": engine_name,
+            "resolved": substitute,
+            "reason": unavailable_reason
+            or "No capability reason was reported.",
+        }
+        logger.info(
+            "Solve engine %r is unavailable on this host; falling back to %r, "
+            "which is what AUTO would have selected. %s The stored engine "
+            "preference is unchanged.",
+            engine_name,
+            substitute,
+            unavailable_reason or "No capability reason was reported.",
+        )
+        engine_name = substitute
     if (
         engine_name == "bempp"
         and request.design.root.simulation.sim_type == "infinite-baffle"

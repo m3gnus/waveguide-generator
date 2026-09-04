@@ -310,8 +310,15 @@ def test_submission_plan_endpoint_uses_the_submitted_design(
     assert ineligible.status_code == 503
     refusal = json.loads(ineligible.body)
     assert refusal["error"]["code"] == "engine_unavailable"
+    # Still a refusal, and it must stay one: the axisymmetric runner is the
+    # only registered engine and this design is not eligible for it, so there
+    # is genuinely nothing to fall back to. The message now says that rather
+    # than naming BEAT alone, because "install BEAT" is not the only remedy.
     assert refusal["error"]["message"] == (
-        "Solve engine 'beat' is unavailable. GPU backend is offline"
+        "Solve engine 'beat' is unavailable, and no other engine on this "
+        "host can take its place. GPU backend is offline Install/enable "
+        "Axisymmetric, Metal, BEAT, or BEMPP; explicitly enable dry-run "
+        "with WG2_ENABLE_DRYRUN=1 for synthetic development solves."
     )
 
 
@@ -739,3 +746,229 @@ def test_auto_skips_beat_for_a_coupled_infinite_baffle_solve() -> None:
                 uncoupled,
             )
         )
+
+
+def test_an_unavailable_stored_engine_falls_back_instead_of_refusing() -> None:
+    """A stored selection must not be able to disable Solve on its own.
+
+    The reported symptom was a permanently grey Solve button: an engine chosen
+    on one machine, remembered, and then unavailable on the next one made
+    ``/api/solve/plan`` answer 503 for the whole session. The frontend treats a
+    503 as a refusal and deliberately never retries it, so nothing healed, and
+    the only text explaining any of it lived in a ``title`` tooltip on a
+    disabled button.
+
+    The engine now falls back to what AUTO would have chosen, and says so.
+    """
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("bempp", True, "CPU", "1"),
+            registry.EngineInfo("beat", False, "No Julia executable was found.", None),
+        ],
+        factory=lambda name: object() if name == "bempp" else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(
+            _planner_request(engine="beat", solver_mode="full_3d"), engine_registry
+        )
+    )
+
+    assert resolution.engine_name == "bempp"
+    assert resolution.symmetry_metadata["solver_plan"]["engine"] == "bempp"
+    assert resolution.symmetry_metadata["solver_plan"]["engine_substitution"] == {
+        "requested": "beat",
+        "resolved": "bempp",
+        "reason": "No Julia executable was found.",
+    }
+
+
+def test_the_fallback_follows_auto_order_rather_than_any_available_engine() -> None:
+    """The AUTO ordering is the contract, not whichever engine happens to be left."""
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("metal", True, "helper loadable", "1"),
+            registry.EngineInfo("bempp", True, "CPU", "1"),
+            registry.EngineInfo("beat", False, "no Julia", None),
+        ],
+        factory=lambda name: object() if name in {"metal", "bempp"} else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(
+            _planner_request(engine="beat", solver_mode="full_3d"), engine_registry
+        )
+    )
+
+    # metal outranks bempp in ("metal", "beat", "bempp", "dryrun").
+    assert resolution.engine_name == "metal"
+
+
+def test_the_fallback_respects_the_infinite_baffle_mounting_filter() -> None:
+    """The substitute has to be able to run the request, not merely exist.
+
+    BEAT advertises no coupled infinite-baffle mounting, so it must not be
+    picked as a stand-in for an unavailable Metal on such a solve even though
+    it ranks above BEMPP in the AUTO order.
+    """
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("metal", False, "requires macOS", None),
+            registry.EngineInfo(
+                "beat", True, "GPU ready", "1", mountings=("free-standing",)
+            ),
+            registry.EngineInfo(
+                "bempp",
+                True,
+                "CPU",
+                "1",
+                mountings=("free-standing", "infinite-baffle"),
+            ),
+        ],
+        factory=lambda name: object() if name in {"beat", "bempp"} else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(
+            _planner_request(
+                engine="metal", solver_mode="full_3d", sim_type="infinite-baffle"
+            ),
+            engine_registry,
+        )
+    )
+
+    assert resolution.engine_name == "bempp"
+    substitution = resolution.symmetry_metadata["solver_plan"]["engine_substitution"]
+    assert substitution["requested"] == "metal"
+
+
+def test_a_substituted_engine_still_gets_its_own_mounting_treatment() -> None:
+    """Falling back onto BEMPP must not skip BEMPP infinite-baffle handling.
+
+    The substitution happens before the mounting rules rather than after, so a
+    solve that lands on BEMPP by fallback is configured exactly like one that
+    asked for it. Ordering is the whole content of this test.
+    """
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("metal", False, "requires macOS", None),
+            registry.EngineInfo(
+                "bempp",
+                True,
+                "CPU",
+                "1",
+                mountings=("free-standing", "infinite-baffle"),
+            ),
+        ],
+        factory=lambda name: object() if name == "bempp" else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(
+            _planner_request(
+                engine="metal", solver_mode="full_3d", sim_type="infinite-baffle"
+            ),
+            engine_registry,
+        )
+    )
+
+    assert resolution.engine_name == "bempp"
+    assert resolution.symmetry_metadata["resolved_quadrants"] == 1234
+    assert resolution.symmetry_metadata["solver_plan"]["symmetry_reason"] == (
+        "BEMPP coupled infinite-baffle uses the validated full-domain formulation"
+    )
+
+
+def test_dryrun_never_gets_a_real_engine_substituted_for_it() -> None:
+    """The dry-run gate exists to stop real solves, so it must stay a refusal."""
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [registry.EngineInfo("bempp", True, "CPU", "1")],
+        factory=lambda name: object() if name == "bempp" else None,
+    )
+
+    with pytest.raises(EngineUnavailableError) as caught:
+        asyncio.run(
+            resolve_submission(
+                _planner_request(engine="dryrun", solver_mode="full_3d"),
+                engine_registry,
+            )
+        )
+
+    assert "WG2_ENABLE_DRYRUN=1" in str(caught.value)
+    assert "bempp" not in str(caught.value)
+
+
+def test_the_callers_request_engine_is_left_untouched() -> None:
+    """The caller's own request object must survive the substitution.
+
+    ``resolve_submission`` deep-copies before substituting. That is what lets
+    the UI keep showing -- and keep persisting -- the engine the user actually
+    chose, so it re-engages by itself once that engine can run here.
+    """
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("bempp", True, "CPU", "1"),
+            registry.EngineInfo("beat", False, "no Julia", None),
+        ],
+        factory=lambda name: object() if name == "bempp" else None,
+    )
+    request = _planner_request(engine="beat", solver_mode="full_3d")
+
+    resolution = asyncio.run(resolve_submission(request, engine_registry))
+
+    assert request.options.engine == "beat"
+    assert resolution.request.options.engine == "bempp"
+
+
+def test_the_plan_endpoint_reports_the_substitution_to_the_client(
+    tmp_path: Path,
+) -> None:
+    """The swap has to reach the UI, or it is just a quieter silent failure."""
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("bempp", True, "CPU", "1"),
+            registry.EngineInfo("beat", False, "No Julia executable was found.", None),
+        ],
+        factory=lambda name: object() if name == "bempp" else None,
+    )
+    runtime = JobRuntime(
+        JobStore(tmp_path / "jobs.db"),
+        engine_registry=engine_registry,
+    )
+    endpoint = next(
+        route.endpoint
+        for route in create_jobs_router(runtime).routes
+        if getattr(route, "path", None) == "/api/solve/plan"
+    )
+
+    plan = asyncio.run(endpoint(_planner_request(engine="beat", solver_mode="full_3d")))
+
+    assert plan.engine == "bempp"
+    assert plan.engine_substitution is not None
+    assert plan.engine_substitution.requested == "beat"
+    assert plan.engine_substitution.resolved == "bempp"
+    assert plan.engine_substitution.reason == "No Julia executable was found."
+
+
+def test_an_available_engine_reports_no_substitution() -> None:
+    """The field is absent on the ordinary path, so the UI shows no notice."""
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [registry.EngineInfo("bempp", True, "CPU", "1")],
+        factory=lambda name: object() if name == "bempp" else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(
+            _planner_request(engine="bempp", solver_mode="full_3d"), engine_registry
+        )
+    )
+
+    assert "engine_substitution" not in resolution.symmetry_metadata["solver_plan"]
