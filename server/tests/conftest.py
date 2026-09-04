@@ -24,6 +24,9 @@ by default, which is a real 25-61 s native solve in a spawned child. The suite
 builds hundreds of apps and several of its assertions are wall-clock bounds, so
 it opts out through the same switch an operator would use. Tests that need the
 prewarm re-enable it explicitly.
+
+BEAT CPU provisioning: same shape, different cost -- a background download of a
+portable Julia. See the switch below.
 """
 
 from __future__ import annotations
@@ -36,6 +39,12 @@ import pytest
 from server.platform.signal_rearm import restore_sigpipe_ignore
 
 os.environ.setdefault("WG2_SOLVER_WARMUP", "0")
+# BEAT CPU runtime provisioning: a launched application provisions one in the
+# background on a GPU-less Windows or Linux host, which downloads a portable
+# Julia and precompiles it. A test run is not an install, so the suite opts out
+# through the same switch an operator would use; the tests that are about the
+# gate call ``start_cpu_provisioning`` with an explicit environment.
+os.environ.setdefault("WG2_SKIP_BEAT_CPU_PROVISION", "1")
 
 
 @pytest.fixture(autouse=True)

@@ -11,6 +11,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -352,3 +354,177 @@ def test_bootstrap_force_reinstalls_all_declared_packages_and_removes_extras(
         for command in commands
         if "uninstall" in command and "obsolete-package" in command
     ]
+
+
+# --------------------------------------------------------------------------
+# BEAT runtime provisioning: a GPU runtime iff the hardware is there, and a CPU
+# runtime for the Windows and Linux hosts that have no such hardware.
+# --------------------------------------------------------------------------
+
+
+def _provisioning_double(
+    bootstrap, monkeypatch, *, system: str, facts: object, exit_code: int = 0
+) -> list[list[str]]:
+    """Record what the bootstrap would run on a host of a stated shape.
+
+    ``facts`` is what the installed package answers about itself -- whether it
+    can provision a CPU runtime, and what GPU this host has -- or ``None`` for a
+    probe that could not be run at all.
+    """
+
+    commands: list[list[str]] = []
+
+    def run(command: list[str], *, quiet: bool = False):
+        commands.append(command)
+        if "-m" in command and "hornlab_beat_bem.provision" in command:
+            return SimpleNamespace(returncode=exit_code)
+        return SimpleNamespace(returncode=0)
+
+    def capture(command: list[str]):
+        if facts is None:
+            return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        return SimpleNamespace(returncode=0, stdout=json.dumps(facts) + "\n", stderr="")
+
+    monkeypatch.setattr(bootstrap, "_run", run)
+    monkeypatch.setattr(bootstrap, "_capture", capture)
+    monkeypatch.setattr(bootstrap.platform, "system", lambda: system)
+    monkeypatch.delenv("WG2_SKIP_BEAT_CPU_PROVISION", raising=False)
+    monkeypatch.delenv("WG2_SKIP_GPU_PROVISION", raising=False)
+    return commands
+
+
+def _provision_calls(commands: list[list[str]]) -> list[list[str]]:
+    return [
+        command
+        for command in commands
+        if "-m" in command and "hornlab_beat_bem.provision" in command
+    ]
+
+
+@pytest.mark.parametrize("system", ["Windows", "Linux"])
+def test_a_gpu_less_windows_or_linux_host_provisions_the_cpu_runtime(
+    tmp_path, monkeypatch, capsys, system: str
+) -> None:
+    """The step that makes BEAT's CPU engine real on the machines it is for.
+
+    The GPU call stays first and stays gated: it exits silently without a
+    device, so nothing here starts a multi-gigabyte download.
+    """
+
+    bootstrap = _load_bootstrap()
+    commands = _provisioning_double(
+        bootstrap, monkeypatch, system=system, facts={"cpu": True, "gpu": None}
+    )
+
+    bootstrap._provision_beat_runtime(tmp_path / "python")
+
+    assert [command[command.index("-m") + 1 :] for command in _provision_calls(commands)] == [
+        ["hornlab_beat_bem.provision", "--if-gpu"],
+        ["hornlab_beat_bem.provision", "--backend", "cpu"],
+    ]
+    assert "BEAT CPU runtime" in capsys.readouterr().out
+
+
+def test_a_gpu_host_provisions_no_cpu_runtime(tmp_path, monkeypatch, capsys) -> None:
+    bootstrap = _load_bootstrap()
+    commands = _provisioning_double(
+        bootstrap, monkeypatch, system="Linux", facts={"cpu": True, "gpu": "cuda"}
+    )
+
+    bootstrap._provision_beat_runtime(tmp_path / "python")
+
+    assert [command[-1] for command in _provision_calls(commands)] == ["--if-gpu"]
+    assert "cuda runtime instead" in capsys.readouterr().out
+
+
+def test_macos_is_left_to_the_gpu_step(tmp_path, monkeypatch) -> None:
+    bootstrap = _load_bootstrap()
+    commands = _provisioning_double(
+        bootstrap, monkeypatch, system="Darwin", facts={"cpu": True, "gpu": None}
+    )
+
+    bootstrap._provision_beat_runtime(tmp_path / "python")
+
+    assert [command[-1] for command in _provision_calls(commands)] == ["--if-gpu"]
+
+
+def test_an_older_pinned_package_is_reported_and_skipped(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Graceful degradation, in the one place that would otherwise fail hard.
+
+    ``--backend cpu`` does not exist before hornlab-beat-bem ac48d90, so running
+    it would print an argparse error into an installer transcript and exit 2.
+    The capability row says the same thing to the user later; this says it to
+    whoever is watching the install.
+    """
+
+    bootstrap = _load_bootstrap()
+    commands = _provisioning_double(
+        bootstrap, monkeypatch, system="Windows", facts={"cpu": False, "gpu": None}
+    )
+
+    bootstrap._provision_beat_runtime(tmp_path / "python")
+
+    assert [command[-1] for command in _provision_calls(commands)] == ["--if-gpu"]
+    assert bootstrap.BEAT_CPU_PROVISION_COMMIT in capsys.readouterr().out
+
+
+def test_an_unreadable_package_probe_skips_rather_than_guesses(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    bootstrap = _load_bootstrap()
+    commands = _provisioning_double(
+        bootstrap, monkeypatch, system="Linux", facts=None
+    )
+
+    bootstrap._provision_beat_runtime(tmp_path / "python")
+
+    assert [command[-1] for command in _provision_calls(commands)] == ["--if-gpu"]
+    assert "could not be asked" in capsys.readouterr().out
+
+
+def test_a_failed_cpu_provisioning_warns_without_failing_the_bootstrap(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    bootstrap = _load_bootstrap()
+    commands = _provisioning_double(
+        bootstrap,
+        monkeypatch,
+        system="Linux",
+        facts={"cpu": True, "gpu": None},
+        exit_code=1,
+    )
+
+    bootstrap._provision_beat_runtime(tmp_path / "python")  # must not raise
+
+    assert len(_provision_calls(commands)) == 2
+    assert "WARNING" in capsys.readouterr().out
+
+
+def test_the_cpu_provisioning_opt_out_is_honoured(tmp_path, monkeypatch) -> None:
+    bootstrap = _load_bootstrap()
+    commands = _provisioning_double(
+        bootstrap, monkeypatch, system="Linux", facts={"cpu": True, "gpu": None}
+    )
+    monkeypatch.setenv("WG2_SKIP_BEAT_CPU_PROVISION", "1")
+
+    bootstrap._provision_beat_runtime(tmp_path / "python")
+
+    assert [command[-1] for command in _provision_calls(commands)] == ["--if-gpu"]
+
+
+def test_an_environment_without_beat_provisions_nothing(tmp_path, monkeypatch) -> None:
+    bootstrap = _load_bootstrap()
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        bootstrap,
+        "_run",
+        lambda command, **_kwargs: commands.append(command) or SimpleNamespace(returncode=1),
+    )
+    monkeypatch.setattr(bootstrap.platform, "system", lambda: "Linux")
+
+    bootstrap._provision_beat_runtime(tmp_path / "python")
+
+    assert _provision_calls(commands) == []

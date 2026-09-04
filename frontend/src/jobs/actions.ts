@@ -32,6 +32,8 @@ export interface EngineSelection {
 export interface Capabilities {
   engines: EngineCapability[];
   engineSelection: EngineSelection;
+  /** True only while this server is deciding or preparing the BEAT CPU runtime. */
+  cpuPreparationInFlight: boolean;
 }
 /**
  * What the server ran instead of the engine the request named, and why.

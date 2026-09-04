@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime
 import json
 from pathlib import Path
+import threading
 
 import numpy as np
 import pytest
@@ -27,6 +28,248 @@ from server.solver.field_traces_store import (
     FieldTraceChannel,
     METAL_FIELD_TRACE_BACKEND,
 )
+
+
+def _cpu_info(available: bool, reason: str) -> registry.EngineInfo:
+    return registry.EngineInfo("beat-cpu", available, reason, "1")
+
+
+def test_cpu_refresh_preserves_terminal_event_during_an_inflight_probe(
+    monkeypatch,
+) -> None:
+    from server.solver import beat
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    answers = iter([(False, "still preparing"), (True, "ready")])
+    calls = 0
+
+    def cpu_status(_package):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            assert release_first.wait(5.0)
+        return next(answers)
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [_cpu_info(False, "starting")], cpu_refresh=True
+    )
+
+    async def scenario() -> None:
+        await engine_registry.capabilities()
+        engine_registry._cpu_readiness_changed()
+        await asyncio.to_thread(first_started.wait, 5.0)
+        # The worker has already reached terminal false, but the terminal row
+        # is still blocked in the registry refresh. Keep the browser polling.
+        assert engine_registry.cpu_preparation_in_flight() is True
+        # A terminal event arrives while the first refresh owns the task.
+        engine_registry._cpu_readiness_changed()
+        release_first.set()
+        assert engine_registry._refresh_task is not None
+        await engine_registry._refresh_task
+        refreshed = await engine_registry.capabilities()
+        assert refreshed[0].available is True
+        assert refreshed[0].reason == "ready"
+        assert calls == 2
+        assert engine_registry.cpu_preparation_in_flight() is False
+        await engine_registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
+def test_cpu_refresh_retains_an_event_before_initial_cache_population(
+    monkeypatch,
+) -> None:
+    from server.solver import beat
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(
+        beat, "_cpu_backend_status", lambda _package: (True, "ready")
+    )
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [_cpu_info(False, "starting")], cpu_refresh=True
+    )
+
+    async def scenario() -> None:
+        engine_registry._cpu_readiness_changed()
+        initial = await engine_registry.capabilities()
+        assert initial[0].available is False
+        assert engine_registry._refresh_task is not None
+        await engine_registry._refresh_task
+        assert (await engine_registry.capabilities())[0].available is True
+        await engine_registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
+def test_custom_detector_is_not_overridden_by_runtime_refresh(monkeypatch) -> None:
+    from server.solver import beat, beat_cpu_runtime
+
+    calls = 0
+
+    def cpu_status(_package):
+        nonlocal calls
+        calls += 1
+        return True, "runtime ready"
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [_cpu_info(False, "disabled by embedding application")]
+    )
+
+    async def scenario() -> None:
+        await engine_registry.capabilities()
+        beat_cpu_runtime._notify_readiness_listeners()
+        await asyncio.sleep(0)
+        item = (await engine_registry.capabilities())[0]
+        assert item.available is False
+        assert item.reason == "disabled by embedding application"
+        assert calls == 0
+        await engine_registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
+def test_missing_package_consumes_refresh_and_a_later_event_retries(
+    monkeypatch,
+) -> None:
+    from server.solver import beat
+
+    package = None
+    calls = 0
+
+    def load_api():
+        return package
+
+    def cpu_status(_package):
+        nonlocal calls
+        calls += 1
+        return True, "ready"
+
+    monkeypatch.setattr(beat, "_load_api", load_api)
+    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [_cpu_info(False, "package missing")], cpu_refresh=True
+    )
+
+    async def scenario() -> None:
+        nonlocal package
+        await engine_registry.capabilities()
+        engine_registry._cpu_readiness_changed()
+        await asyncio.sleep(0)
+        first_task = engine_registry._refresh_task
+        assert first_task is not None
+        await first_task
+        await asyncio.sleep(0)
+        assert engine_registry._refresh_task is None
+        assert engine_registry.cpu_preparation_in_flight() is False
+        assert calls == 0
+
+        package = object()
+        engine_registry._cpu_readiness_changed()
+        await asyncio.sleep(0)
+        retry_task = engine_registry._refresh_task
+        assert retry_task is not None
+        await retry_task
+        assert (await engine_registry.capabilities())[0].available is True
+        assert calls == 1
+        await engine_registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
+def test_failed_refresh_is_consumed_without_a_busy_retry(monkeypatch) -> None:
+    from server.solver import beat
+
+    calls = 0
+
+    def cpu_status(_package):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("state file unreadable")
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [_cpu_info(False, "last known answer")], cpu_refresh=True
+    )
+
+    async def scenario() -> None:
+        await engine_registry.capabilities()
+        engine_registry._cpu_readiness_changed()
+        await asyncio.sleep(0)
+        refresh_task = engine_registry._refresh_task
+        assert refresh_task is not None
+        await refresh_task
+        await asyncio.sleep(0)
+        assert calls == 1
+        assert engine_registry._refresh_task is None
+        assert engine_registry.cpu_preparation_in_flight() is False
+        assert (await engine_registry.capabilities())[0].reason == "last known answer"
+        await engine_registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_unregisters_listener_and_cancels_refresh(monkeypatch) -> None:
+    from server.solver import beat, beat_cpu_runtime
+
+    status_started = threading.Event()
+    release_status = threading.Event()
+
+    def cpu_status(_package):
+        status_started.set()
+        assert release_status.wait(5.0)
+        return True, "late answer"
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(beat, "_cpu_backend_status", cpu_status)
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [_cpu_info(False, "disabled")], cpu_refresh=True
+    )
+    listener = engine_registry._cpu_listener
+    assert listener in beat_cpu_runtime._readiness_listeners
+
+    async def scenario() -> None:
+        await engine_registry.capabilities()
+        engine_registry._cpu_readiness_changed()
+        await asyncio.to_thread(status_started.wait, 5.0)
+        refresh_task = engine_registry._refresh_task
+        assert refresh_task is not None
+        await engine_registry.shutdown_prewarm()
+        assert listener not in beat_cpu_runtime._readiness_listeners
+        assert refresh_task.cancelled()
+        release_status.set()
+        await asyncio.sleep(0.01)
+        assert (await engine_registry.capabilities())[0].available is False
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release_status.set()
+
+
+def test_capabilities_payload_exposes_cpu_preparation_lifecycle(monkeypatch) -> None:
+    from server.diagnostics import capabilities as diagnostics
+
+    monkeypatch.setattr(diagnostics, "pinned_dependency_shas", lambda: {})
+    monkeypatch.setattr(diagnostics, "measure_installed_stack", lambda _pins: ({}, {}))
+    monkeypatch.setattr(diagnostics, "journal_mode_statuses", lambda: {})
+
+    class StubRegistry:
+        async def capabilities(self):
+            return (_cpu_info(False, "checking hardware"),)
+
+        def cpu_preparation_in_flight(self):
+            return True
+
+    payload = asyncio.run(diagnostics.capabilities_payload(StubRegistry()))
+
+    assert payload["cpuPreparationInFlight"] is True
 
 
 def _stub_beat_backends(monkeypatch, **available: bool) -> None:
@@ -101,10 +344,12 @@ def test_every_beat_backend_is_selectable_and_ordered(monkeypatch) -> None:
     assert expected <= set(registry.FULL3D_ENGINE_ORDER)
     assert expected <= registry.SELECTABLE_ENGINE_NAMES
     assert beat.LEGACY_BEAT_ENGINE in registry.SELECTABLE_ENGINE_NAMES
-    # AUTO must not reach the portable CPU path ahead of the CPU engine this
-    # project ships and has measured.
+    # Metal leads everywhere, and a real solve always beats the synthetic one.
+    # Where BEAT-CPU sits relative to BEMPP is platform-dependent and has its
+    # own tests below.
     order = list(registry.FULL3D_ENGINE_ORDER)
-    assert order.index("bempp") < order.index("beat-cpu") < order.index("dryrun")
+    assert order.index("beat-cpu") < order.index("dryrun")
+    assert order.index("bempp") < order.index("dryrun")
     assert order.index("metal") == 0
 
     _stub_beat_backends(monkeypatch, metal=True, cpu=True)
@@ -182,28 +427,118 @@ def test_beat_field_trace_capability_follows_the_installed_package(
             assert detected[beat.beat_engine_name(backend)].field_traces is supported
 
 
-def test_auto_resolution_prefers_metal_then_beat_gpus_then_bempp() -> None:
-    """AUTO: metal > BEAT's accelerators > bempp > BEAT-CPU > dryrun.
+def _pin_platform(monkeypatch, system: str) -> None:
+    """Answer ``platform.system()`` for the order lookup, which is host-dependent."""
 
-    The CPU path's position is the deliberate part. It is user-facing now, so
-    AUTO can reach it at all, but it sits behind BEMPP: it is the portable last
-    resort, not a peer of the CPU engine this project has measured and shipped.
-    Every host with a Julia advertises it, so putting it any earlier would take
-    solves away from BEMPP on every CPU-only machine.
+    import platform as platform_module
+
+    monkeypatch.setattr(platform_module, "system", lambda: system)
+
+
+def _info(name: str, available: bool) -> registry.EngineInfo:
+    return registry.EngineInfo(name, available, "test", "1")
+
+
+def test_auto_resolution_prefers_metal_then_beat_gpus(monkeypatch) -> None:
+    """AUTO: metal > BEAT's accelerators > (the CPU engines) > dryrun.
+
+    The accelerator half of the order is the same everywhere, and Metal leading
+    on a Mac is measured rather than assumed. Which CPU engine follows them is
+    platform-dependent and is the next test.
     """
 
-    def info(name: str, available: bool) -> registry.EngineInfo:
-        return registry.EngineInfo(name, available, "test", "1")
-
-    mac = [info("metal", True), info("beat-metal", True), info("beat-cpu", True), info("bempp", True)]
+    _pin_platform(monkeypatch, "Darwin")
+    mac = [
+        _info("metal", True),
+        _info("beat-metal", True),
+        _info("beat-cpu", True),
+        _info("bempp", True),
+    ]
     assert registry.resolve_auto_engine(capabilities=mac) == "metal"
-    gpu_windows = [info("metal", False), info("beat-cuda", True), info("beat-cpu", True), info("bempp", True)]
+
+    _pin_platform(monkeypatch, "Windows")
+    gpu_windows = [
+        _info("metal", False),
+        _info("beat-cuda", True),
+        _info("beat-cpu", True),
+        _info("bempp", True),
+    ]
     assert registry.resolve_auto_engine(capabilities=gpu_windows) == "beat-cuda"
-    cpu_windows = [info("metal", False), info("beat-cuda", False), info("beat-cpu", True), info("bempp", True)]
-    assert registry.resolve_auto_engine(capabilities=cpu_windows) == "bempp"
-    no_bempp = [info("bempp", False), info("beat-cpu", True), info("dryrun", True)]
+    no_bempp = [_info("bempp", False), _info("beat-cpu", True), _info("dryrun", True)]
     assert registry.resolve_auto_engine(capabilities=no_bempp) == "beat-cpu"
     assert registry.get_engine("beat-cuda", capabilities=gpu_windows) is not None
+
+
+def test_a_provisioned_cpu_runtime_leads_bempp_on_windows_and_linux(monkeypatch) -> None:
+    """The platform default, and the reason it is safe.
+
+    ``beat-cpu`` is available only where ``hornlab_beat_bem`` has instantiated
+    its CPU project and proved it with a 1 kHz solve on this machine
+    (``server/solver/beat_cpu_runtime.py``), and Windows and Linux are the
+    platforms Waveguide Generator provisions that on. So on those hosts AUTO
+    prefers it to BEMPP; on a host where it was never provisioned the row is
+    unavailable and the order cannot reach it at all.
+
+    macOS keeps BEMPP ahead: Metal leads there on measured evidence, no CPU
+    runtime is provisioned, and nothing measured the swap on that platform.
+    """
+
+    cpu_only = [
+        _info("metal", False),
+        _info("beat-cuda", False),
+        _info("beat-cpu", True),
+        _info("bempp", True),
+    ]
+    for system in ("Windows", "Linux"):
+        _pin_platform(monkeypatch, system)
+        assert registry.resolve_auto_engine(capabilities=cpu_only) == "beat-cpu"
+        order = list(registry.full3d_engine_order())
+        assert order.index("beat-cpu") < order.index("bempp")
+
+    _pin_platform(monkeypatch, "Darwin")
+    assert registry.resolve_auto_engine(capabilities=cpu_only) == "bempp"
+    mac_order = list(registry.full3d_engine_order())
+    assert mac_order.index("bempp") < mac_order.index("beat-cpu")
+    assert mac_order.index("metal") == 0
+
+    # An unprovisioned CPU runtime is an unavailable row, so the swap cannot
+    # take a Windows solve away from BEMPP on a machine that never got one.
+    _pin_platform(monkeypatch, "Windows")
+    unprovisioned = [
+        _info("beat-cpu", False),
+        _info("bempp", True),
+    ]
+    assert registry.resolve_auto_engine(capabilities=unprovisioned) == "bempp"
+
+
+def test_the_order_is_a_default_and_never_overrides_an_explicit_choice(
+    monkeypatch,
+) -> None:
+    """Reordering AUTO must not reach a user who named an engine.
+
+    ``EngineRegistry.resolve`` answers a named request by name and availability
+    alone. That is what keeps "I chose BEMPP" meaning BEMPP on a Windows box
+    whose BEAT CPU runtime is provisioned and now leads the AUTO order.
+    """
+
+    _pin_platform(monkeypatch, "Windows")
+    capabilities = [
+        _info("beat-cpu", True),
+        _info("bempp", True),
+        _info("beat-cuda", False),
+    ]
+    engine_registry = registry.EngineRegistry(detector=lambda: list(capabilities))
+
+    async def scenario() -> None:
+        assert await engine_registry.resolve("bempp", solver_mode=None) == "bempp"
+        assert await engine_registry.resolve("beat-cpu", solver_mode=None) == "beat-cpu"
+        # An explicit choice this host cannot run stays refused rather than
+        # being quietly replaced by the new front-runner.
+        assert await engine_registry.resolve("beat-cuda", solver_mode=None) is None
+        # AUTO is the only request the platform order answers.
+        assert await engine_registry.resolve("auto", solver_mode=None) == "beat-cpu"
+
+    asyncio.run(scenario())
 
 
 def test_auto_keeps_synthetic_dryrun_available_for_reduced_geometry() -> None:

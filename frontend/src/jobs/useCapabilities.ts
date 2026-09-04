@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
   getCapabilities,
   type EngineCapability,
@@ -21,10 +21,10 @@ import { useSolveOptionsStore } from '../stores/solveOptions';
  * issued another. They now share `appQueryClient`'s single in-flight request
  * and its cache.
  *
- * The result never changes within a server *process*: `EngineRegistry` probes
- * once and memoises for its lifetime (`server/engines/registry.py`). So the
- * staleTime below is long -- refetching inside one process can only return
- * identical bytes.
+ * Most results do not change within a server process: `EngineRegistry` probes
+ * once and memoises them. The one live transition is BEAT CPU preparation;
+ * its explicit lifecycle flag temporarily enables the short poll below.
+ * Everything else uses the long stale time so panel remounts stay cache-only.
  *
  * What a long staleTime cannot do is notice a *new* process. It only marks data
  * stale; it never refetches on a timer, so a focused tab whose server restarted
@@ -45,6 +45,7 @@ const NO_ENGINE_SELECTION: Readonly<EngineSelection> = Object.freeze({
   full3dOrder: Object.freeze([]),
   axisymmetricRunner: '',
 });
+const plannerSupportByClient = new WeakMap<QueryClient, string>();
 
 export interface CapabilitiesSnapshot {
   engines: readonly EngineCapability[];
@@ -55,12 +56,29 @@ export interface CapabilitiesSnapshot {
 }
 
 export function useCapabilities(): CapabilitiesSnapshot {
+  const client = useQueryClient();
   const { data, error, isError, isPending } = useQuery({
     queryKey: CAPABILITIES_QUERY_KEY,
     queryFn: () => getCapabilities(),
     retry: 1,
     staleTime: CAPABILITIES_STALE_MS,
+    // This explicit server lifecycle covers delayed hardware inventory too.
+    // Terminal ready, failed and skipped answers all stop the timer.
+    refetchInterval: (query) => query.state.data?.cpuPreparationInFlight ? 1000 : false,
   });
+  const plannerSupport = data
+    ? `${data.engineSelection?.resolvedDefault ?? ''}|${(data.engines ?? NO_ENGINES)
+      .map((engine) => `${engine.name}:${engine.available ? 1 : 0}`)
+      .join(',')}`
+    : null;
+  useEffect(() => {
+    if (plannerSupport === null) return;
+    const previous = plannerSupportByClient.get(client);
+    if (previous !== undefined && previous !== plannerSupport) {
+      void client.invalidateQueries({ queryKey: ['solve-plan'] });
+    }
+    plannerSupportByClient.set(client, plannerSupport);
+  }, [client, plannerSupport]);
   return {
     engines: data?.engines ?? NO_ENGINES,
     engineSelection: data?.engineSelection ?? NO_ENGINE_SELECTION,

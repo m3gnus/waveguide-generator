@@ -145,18 +145,34 @@ backend list offers each of them separately:
 | **BEAT · CUDA** | an NVIDIA GPU |
 | **BEAT · ROCm** | an AMD GPU |
 | **BEAT · Metal** | an Apple Silicon GPU |
-| **BEAT · CPU** | any machine with a Julia runtime, no GPU needed |
+| **BEAT · CPU** | any machine, once its Julia runtime has been provisioned |
 
 They all solve the same problem and differ only in speed, so on a machine with
 both a GPU and the CPU path you can pick either and compare. Any engine this
 machine cannot run stays in the list, greyed out, with the reason on the row —
 so a missing driver or an uninstalled runtime says so instead of vanishing.
 
-On Apple Silicon, Metal, BEAT · Metal and BEAT · CPU can all run. AUTO picks
-Metal, because it is measurably faster on this hardware; the BEAT engines are
-there when you want them. AUTO reaches BEAT · CPU only when nothing else on the
-machine can solve, since it is the portable fallback rather than the fastest CPU
-route — BEMPP is that.
+**BEAT · CPU needs a runtime, and says so until it has one.** It runs on a
+private Julia runtime that has to be downloaded, instantiated, and then proved
+by actually solving a 1 kHz test frequency; only after that does the engine
+report itself available. On Windows and Linux, a machine with no supported GPU
+prepares that runtime for you. Source installations prepare it during setup;
+the packaged application prepares it in the background on its first launch.
+The engine becomes selectable when preparation finishes, without restarting.
+Until then its row reports progress or a failure, and other engines remain usable.
+Nothing is downloaded on a machine that has a GPU BEAT can use instead, and
+`WG2_SKIP_BEAT_CPU_PROVISION=1` switches the whole thing off.
+
+On Apple Silicon, Metal, BEAT · Metal and BEMPP can all run, and AUTO picks
+Metal because it is measurably faster on this hardware; the BEAT engines are
+there when you want them. macOS does not prepare a BEAT · CPU runtime, so that
+row stays unavailable there until you provision one yourself, and AUTO prefers
+BEMPP as the CPU route.
+
+On Windows and Linux, AUTO prefers a provisioned BEAT · CPU to BEMPP once no
+GPU engine is available — it can only reach it on a machine where that 1 kHz
+solve has already run. Choosing an engine yourself always overrides this: an
+explicit BEMPP stays BEMPP.
 
 The infinite-baffle setting is design physics, not a solver choice. Axisymmetric,
 Metal full 3D, and current BEMPP full 3D all implement the coupled interior plus

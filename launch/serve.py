@@ -121,6 +121,33 @@ def _publish_status_ready(control_path: Path | None, port: int) -> None:
     temporary.replace(ready_path)
 
 
+def _start_beat_cpu_provisioning() -> None:
+    """Give a GPU-less Windows or Linux install a BEAT CPU runtime, in the background.
+
+    The source install provisions from ``scripts/bootstrap.py``, which the
+    packaged application never runs: it ships a prebuilt runtime layer with
+    ``hornlab-beat-bem`` already installed, so without this nothing would ever
+    fetch the Julia that backend needs and the engine would be permanently
+    unavailable on exactly the machines it exists for.
+
+    Here rather than in ``create_app`` for the same reason ``solver_warmup`` is
+    decided here: this is the production launcher, and building an app object --
+    which hundreds of tests and any embedder does -- must not start downloading
+    a runtime. Every gate, and the work itself, is in
+    ``server/solver/beat_cpu_runtime.py``; this call only says "in a launched
+    application, do it", and cannot fail the launch.
+    """
+
+    try:
+        from server.solver.beat_cpu_runtime import start_cpu_provisioning
+
+        start_cpu_provisioning()
+    except Exception:  # noqa: BLE001 - an optional engine never blocks a launch
+        logging.getLogger("wg.launch").exception(
+            "Could not start BEAT CPU runtime provisioning"
+        )
+
+
 def _solver_warmup_enabled() -> bool:
     """Enable the native solver warmup only by explicit operator request.
 
@@ -386,6 +413,9 @@ def main(argv: list[str] | None = None) -> int:
         StopSignal() if args.status_control is not None else threading.Event()
     )
     shutdown_complete = threading.Event()
+    # Before the app, so the capability probe this start runs can already report
+    # "provisioning" rather than "not provisioned". It only starts a thread.
+    _start_beat_cpu_provisioning()
     try:
         app = create_app(
             data_dir=paths.root,

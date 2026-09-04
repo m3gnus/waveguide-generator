@@ -292,6 +292,28 @@ def _warm_bempp(status: Mapping[str, object]) -> None:
     prewarm_bempp_process()
 
 
+def _beat_cpu_leads_bempp() -> bool:
+    """Whether AUTO would reach a provisioned BEAT CPU runtime before BEMPP.
+
+    Two questions, both cheap: does this platform prefer it (an ordering fact),
+    and is it actually provisioned here (a capability fact, answered from a
+    state file rather than a Julia launch). Asking both is what keeps this
+    warmup on the engine the user's first solve will really use -- the
+    divergence ``resolve_beat_backend`` exists to prevent, in the other
+    direction.
+    """
+
+    from server.engines.registry import full3d_engine_order
+    from server.solver import beat as beat_adapter
+
+    order = full3d_engine_order()
+    cpu_engine = beat_adapter.beat_engine_name(beat_adapter.BEAT_CPU_BACKEND)
+    if order.index(cpu_engine) > order.index("bempp"):
+        return False
+    statuses = beat_adapter.beat_backend_statuses()
+    return bool(statuses.get(beat_adapter.BEAT_CPU_BACKEND, {}).get("available"))
+
+
 def _run_warmup() -> None:
     began = time.monotonic()
     handlers = _log_handlers()
@@ -308,19 +330,31 @@ def _run_warmup() -> None:
             engine = "Metal"
             _warm_metal()
         else:
-            # AUTO's order is metal, BEAT's accelerators, bempp, BEAT-CPU (see
-            # FULL3D_ENGINE_ORDER). Leaving BEAT out here did not merely skip a
-            # warmup: on a CUDA host, where AUTO resolves to BEAT, this fell
-            # through and warmed BEMPP -- an engine that host's first solve
-            # never reaches. The package probe is the right question at this
-            # point precisely because it reports available only for an
-            # accelerator, which is the half of BEAT that outranks BEMPP.
+            # AUTO's order is metal, BEAT's accelerators, then the two CPU
+            # engines in whichever order this platform prefers (see
+            # ``registry.full3d_engine_order``). Leaving BEAT out here did not
+            # merely skip a warmup: on a CUDA host, where AUTO resolves to BEAT,
+            # this fell through and warmed BEMPP -- an engine that host's first
+            # solve never reaches. The package probe answers for the accelerator
+            # half, which is the half that outranks BEMPP everywhere.
             from server.solver import beat as beat_adapter
 
             beat_status = beat_adapter.beat_status()
-            if beat_status.get("available"):
+            beat_backend = (
+                beat_adapter.resolve_beat_backend(beat_status)
+                if beat_status.get("available")
+                else None
+            )
+            if beat_backend is not None and beat_backend != beat_adapter.BEAT_CPU_BACKEND:
                 engine = "BEAT"
-                _warm_beat(beat_adapter.resolve_beat_backend(beat_status))
+                _warm_beat(beat_backend)
+            elif _beat_cpu_leads_bempp():
+                # Windows and Linux prefer a *provisioned* BEAT CPU runtime to
+                # BEMPP, and that row is available only where a real solve has
+                # already been proved, so asking for it here cannot warm an
+                # engine the first solve will not reach.
+                engine = "BEAT"
+                _warm_beat(beat_adapter.BEAT_CPU_BACKEND)
             else:
                 from server.solver import bempp as bempp_adapter
 

@@ -9,14 +9,21 @@ v1 ``server/solver/metal_solver.py:79-179``,
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from contextlib import suppress
+from dataclasses import dataclass, replace
+import logging
 import os
+import threading
 from typing import Any, Callable, Mapping, Sequence
 
 from server.platform.warmup import BackgroundWarmup
 
 
-#: The full-3D backends AUTO walks, best first. One list, because it was two:
+log = logging.getLogger("wg.engines.registry")
+
+
+#: The full-3D backends AUTO walks, best first, on a host that provisions no
+#: BEAT CPU runtime of its own. One list, because it was two:
 #: ``resolve_auto_engine`` and the ``/api/capabilities`` payload each kept their
 #: own copy, and a copy that drifted would have made the interface advertise an
 #: order the planner does not follow.
@@ -24,11 +31,10 @@ from server.platform.warmup import BackgroundWarmup
 #: Metal leads on the measured ATH ladder (1.0x at ~2,000 dofs to 6.9x at
 #: ~20,000, all of it in the solve stage). The BEAT accelerators follow; at most
 #: one of them is ever available on a given host, so their relative order only
-#: settles a two-GPU-family box. BEMPP stays ahead of BEAT's CPU path because it
-#: is the CPU engine this project has measured and shipped, and BEAT-CPU is the
-#: portable last resort rather than a peer of it -- but it *is* ahead of dryrun,
-#: because a slow real solve beats a synthetic one.
-FULL3D_ENGINE_ORDER: tuple[str, ...] = (
+#: settles a two-GPU-family box. BEMPP is ahead of BEAT's CPU path here because
+#: it is the CPU engine this project has measured and shipped -- and BEAT-CPU is
+#: ahead of dryrun, because a slow real solve beats a synthetic one.
+_BASE_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
     "metal",
     "beat-cuda",
     "beat-rocm",
@@ -37,6 +43,52 @@ FULL3D_ENGINE_ORDER: tuple[str, ...] = (
     "beat-cpu",
     "dryrun",
 )
+
+#: Windows and Linux are the platforms Waveguide Generator provisions a BEAT CPU
+#: runtime for (``server/solver/beat_cpu_runtime.py``), and there ``beat-cpu``
+#: leads BEMPP. What makes that safe is what "available" now means for that row:
+#: since the readiness rewrite it is set only when ``hornlab_beat_bem`` has
+#: instantiated the CPU project and solved a 1 kHz probe through the precompiled
+#: engine bundle on this machine, so AUTO can only reach it on a host where a
+#: CPU solve has demonstrably run. On every host where it has not, this order is
+#: the base order.
+_CPU_FIRST_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
+    "metal",
+    "beat-cuda",
+    "beat-rocm",
+    "beat-metal",
+    "beat-cpu",
+    "bempp",
+    "dryrun",
+)
+
+
+def full3d_engine_order(system: str | None = None) -> tuple[str, ...]:
+    """AUTO's full-3D preference order on this platform.
+
+    macOS is deliberately not in the swap. Metal leads there on measured
+    evidence and BEAT-CPU is not provisioned there at all, so moving it ahead of
+    BEMPP could only change the answer on a Mac whose Metal path is broken --
+    and would move it ahead of the CPU engine this project has measured, on the
+    one platform where nothing proved the swap.
+
+    Ordering is a *default*, never an override: an explicitly selected engine is
+    resolved by name in ``EngineRegistry.resolve`` and never passes through
+    here.
+    """
+
+    import platform as _platform
+
+    host = _platform.system() if system is None else system
+    if host in {"Windows", "Linux"}:
+        return _CPU_FIRST_FULL3D_ENGINE_ORDER
+    return _BASE_FULL3D_ENGINE_ORDER
+
+
+#: This host's order. Kept as a module constant because it cannot change while
+#: the process runs, and because the capability payload and the planner must
+#: publish and follow the same one.
+FULL3D_ENGINE_ORDER: tuple[str, ...] = full3d_engine_order()
 
 #: Every engine name a solve request may name. Derived from the order above so
 #: adding a backend there is enough to make it requestable, plus the formulation
@@ -275,7 +327,7 @@ def resolve_legacy_beat_engine(
     """
 
     available = {item.name for item in capabilities if item.available}
-    for candidate in FULL3D_ENGINE_ORDER:
+    for candidate in full3d_engine_order():
         if candidate.startswith("beat-") and candidate in available:
             return candidate
     return None
@@ -342,8 +394,9 @@ def resolve_auto_engine(
     """Resolve AUTO to the best engine this host can actually run.
 
     Solver mode chooses a path inside a backend, not a backend. The order is
-    ``FULL3D_ENGINE_ORDER``: Metal, then BEAT's accelerators, then BEMPP, then
-    BEAT's portable CPU path, and only then the gated dry-run engine.
+    ``full3d_engine_order()``: Metal, then BEAT's accelerators, then -- on the
+    platforms this application provisions a BEAT CPU runtime for -- BEAT-CPU
+    ahead of BEMPP, and only then the gated dry-run engine.
 
     The order is safe because availability already encodes the platform. On a
     Mac, Metal, BEAT-Metal, BEAT-CPU and BEMPP are all available and Metal is
@@ -353,11 +406,9 @@ def resolve_auto_engine(
     margin is the solve stage. Every BEAT variant stays explicitly selectable
     there.
 
-    BEAT-CPU sits behind BEMPP deliberately. Now that it is a user-facing
-    engine it is reachable by AUTO at all, which it never was before, but it is
-    the portable last resort rather than a peer of the CPU engine this project
-    has measured and shipped -- and it is still ahead of dryrun, because a slow
-    real solve beats a synthetic one.
+    Where BEAT-CPU sits relative to BEMPP is the one platform-dependent part,
+    and ``full3d_engine_order`` documents why. Either way it stays ahead of
+    dryrun, because a slow real solve beats a synthetic one.
 
     ``mounting`` drops candidates that cannot solve the requested mounting at
     all. BEAT rejects every coupled infinite-baffle request, so without this
@@ -382,7 +433,7 @@ def resolve_auto_engine(
             for item in detected
             if engine_supports_symmetry(item, resolved_quadrants)
         }
-    for candidate in FULL3D_ENGINE_ORDER:
+    for candidate in full3d_engine_order():
         if candidate in available:
             return candidate
     return None
@@ -418,11 +469,28 @@ class EngineRegistry:
         *,
         detector: Callable[[], list[EngineInfo]] = detect_engines,
         factory: Callable[[str], Any | None] = create_engine,
+        cpu_refresh: bool | None = None,
     ) -> None:
         self._detector = detector
         self._factory = factory
         self._cache: tuple[EngineInfo, ...] | None = None
         self._lock = asyncio.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._refresh_task: asyncio.Task[None] | None = None
+        self._refresh_state_lock = threading.Lock()
+        self._refresh_revision = 0
+        self._refresh_applied_revision = 0
+        self._listener_removed = False
+        self._cpu_listener: Callable[[], None] | None = None
+        self._cpu_refresh_enabled = detector is detect_engines if cpu_refresh is None else cpu_refresh
+        if self._cpu_refresh_enabled:
+            try:
+                from server.solver.beat_cpu_runtime import add_readiness_listener
+
+                self._cpu_listener = self._cpu_readiness_changed
+                add_readiness_listener(self._cpu_listener)
+            except ImportError:
+                self._cpu_refresh_enabled = False
         # Probing imports the Metal and BEMPP stacks, which measured 500-950 ms
         # on the first request. Doing it during boot keeps it off the page load,
         # where it used to contend with the first symmetry resolution.
@@ -436,14 +504,95 @@ class EngineRegistry:
     async def shutdown_prewarm(self) -> None:
         """Finish a probe still running when the server stops."""
 
+        if not self._listener_removed:
+            self._listener_removed = True
+            if self._cpu_listener is not None:
+                from server.solver.beat_cpu_runtime import remove_readiness_listener
+
+                remove_readiness_listener(self._cpu_listener)
+                self._cpu_listener = None
         await self.warmup.stop()
+        refresh_task = self._refresh_task
+        if refresh_task is not None and not refresh_task.done():
+            refresh_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await refresh_task
+
+    def cpu_preparation_in_flight(self) -> bool:
+        """Whether the owned runtime preparation lifecycle is active."""
+
+        if not self._cpu_refresh_enabled or self._listener_removed:
+            return False
+        from server.solver.beat_cpu_runtime import cpu_preparation_in_flight
+
+        with self._refresh_state_lock:
+            refresh_pending = self._refresh_revision > self._refresh_applied_revision
+        return cpu_preparation_in_flight() or refresh_pending
 
     async def capabilities(self) -> tuple[EngineInfo, ...]:
+        self._loop = asyncio.get_running_loop()
         if self._cache is None:
             async with self._lock:
                 if self._cache is None:
                     self._cache = tuple(await asyncio.to_thread(self._detector))
+                    self._schedule_cpu_refresh()
         return self._cache
+
+    def _cpu_readiness_changed(self) -> None:
+        if self._listener_removed:
+            return
+        with self._refresh_state_lock:
+            self._refresh_revision += 1
+        if self._loop is not None and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._schedule_cpu_refresh)
+
+    def _schedule_cpu_refresh(self) -> None:
+        if self._listener_removed or self._cache is None:
+            return
+        with self._refresh_state_lock:
+            dirty = self._refresh_revision > self._refresh_applied_revision
+        if dirty and (self._refresh_task is None or self._refresh_task.done()):
+            self._refresh_task = asyncio.create_task(self._refresh_cpu_backend())
+            self._refresh_task.add_done_callback(self._cpu_refresh_finished)
+
+    def _cpu_refresh_finished(self, task: asyncio.Task[None]) -> None:
+        """Close the completion window in which a new event saw a live task."""
+
+        if self._refresh_task is task:
+            self._refresh_task = None
+        self._schedule_cpu_refresh()
+
+    async def _refresh_cpu_backend(self) -> None:
+        from server.solver.beat import _cpu_backend_status, _load_api
+
+        while not self._listener_removed:
+            with self._refresh_state_lock:
+                target_revision = self._refresh_revision
+                applied_revision = self._refresh_applied_revision
+            if target_revision <= applied_revision:
+                return
+            try:
+                package = _load_api()
+                if package is not None:
+                    available, reason = await asyncio.to_thread(
+                        _cpu_backend_status, package
+                    )
+                    async with self._lock:
+                        if self._cache is not None and not self._listener_removed:
+                            self._cache = tuple(
+                                replace(item, available=available, reason=reason)
+                                if item.name == "beat-cpu"
+                                else item
+                                for item in self._cache
+                            )
+            except Exception:  # noqa: BLE001 - refresh cannot break capabilities
+                log.warning("BEAT CPU capability refresh failed", exc_info=True)
+            with self._refresh_state_lock:
+                self._refresh_applied_revision = max(
+                    self._refresh_applied_revision, target_revision
+                )
+                if self._refresh_revision == self._refresh_applied_revision:
+                    return
 
     async def resolve(
         self,

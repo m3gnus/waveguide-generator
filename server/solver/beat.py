@@ -264,59 +264,27 @@ def beat_status() -> dict[str, Any]:
 beat_status.cache_clear = _cached_successful_beat_status.cache_clear  # type: ignore[attr-defined]
 
 
-def _cpu_julia_project() -> Path | None:
-    """The bundled CPU Julia project directory, or ``None`` if unlocatable."""
-
-    try:
-        runtime = importlib.import_module("hornlab_beat_bem.runtime")
-    except (ImportError, OSError):
-        return None
-    factory = getattr(runtime, "default_project", None)
-    if factory is None:
-        return None
-    try:
-        return Path(factory(BEAT_CPU_BACKEND))
-    except Exception:  # noqa: BLE001 - an unlocatable project is not a probe failure
-        return None
-
-
 def _cpu_backend_status(package: Any) -> tuple[bool, str]:
     """Whether a BEAT CPU solve could start here, without paying a Julia startup.
 
-    Asked cheaply on purpose. The three accelerator backends each have a device
-    that can be present and still not work, which is why the package pays a
-    Julia launch to ask ``CUDA``/``AMDGPU``/``Metal``.``functional()``. The CPU
-    path has no device to fail on: its bundled project is pure Julia with a
-    checked-in Manifest, so "is there a Julia, and is the project there" is the
-    whole question. Asking it this way keeps a second Julia launch off every
-    boot, including on the GPU hosts that already pay for one.
+    This used to answer "is there a Julia executable, and is the bundled project
+    on disk", and call that available. Both can be true on a machine where the
+    first solve then fails: the project's checked-in Manifest names packages
+    that nothing has downloaded, so an offline or never-instantiated host
+    discovered the problem inside a user's job instead of on the capability row.
 
-    What that trades away is first-run package precompilation: a host that has
-    never run the CPU project pays it on the first solve, and an offline host
-    that has never instantiated it fails there rather than here. That is the
-    same honesty the ``HORNLAB_BEAT_FORCE_CPU`` path has always had, and it is
-    the cheap half of the question -- a missing Julia, which is the case that
-    actually happens -- that this answers exactly.
+    ``server/solver/beat_cpu_runtime.py`` asks the question that has an honest
+    answer -- has ``hornlab_beat_bem.provision`` instantiated this project and
+    proved it with a real 1 kHz solve -- and it is still cheap: a small JSON
+    read and a content hash rather than the Julia launch the accelerator rows
+    pay for. The reason it returns carries the command that fixes whatever it
+    found.
     """
 
-    try:
-        julia = package.discover_julia()
-    except Exception as exc:  # noqa: BLE001 - a broken optional stack is unavailable
-        return False, f"BEAT CPU detection failed: {exc}"
-    if julia is None:
-        env_var = getattr(package, "JULIA_ENV_VAR", "HORNLAB_BEAT_JULIA")
-        return False, (
-            "No Julia executable was found. Install Julia >= 1.10 and put it on "
-            f"PATH, set {env_var} to its full path, or run: "
-            "python -m hornlab_beat_bem.provision"
-        )
-    project = _cpu_julia_project()
-    if project is not None and not (project / "Project.toml").exists():
-        return False, f"The bundled BEAT CPU Julia project is missing: {project}"
-    return True, (
-        "Julia was found and BEAT's bundled CPU project is present; this backend "
-        "runs on any host and needs no accelerator."
-    )
+    from .beat_cpu_runtime import cpu_runtime_readiness
+
+    readiness = cpu_runtime_readiness(package)
+    return readiness.ready, readiness.reason
 
 
 def beat_backend_statuses() -> dict[str, dict[str, Any]]:
@@ -366,10 +334,13 @@ def beat_backend_statuses() -> dict[str, dict[str, Any]]:
     selected = str(status.get("backend") or "") if status.get("available") else ""
     statuses: dict[str, dict[str, Any]] = {}
     for backend in BEAT_BACKENDS:
-        if backend == selected:
-            available, reason = True, probe_reason
-        elif backend == BEAT_CPU_BACKEND:
+        # CPU has its own provisioning evidence.  The package probe may name
+        # CPU when forced, but that selection alone does not prove the runtime
+        # can solve.
+        if backend == BEAT_CPU_BACKEND:
             available, reason = _cpu_backend_status(package)
+        elif backend == selected:
+            available, reason = True, probe_reason
         elif selected:
             available = False
             reason = (

@@ -105,6 +105,80 @@ describe('useCapabilities', () => {
     expect(CAPABILITIES_STALE_MS).toBeGreaterThan(60_000);
     expect(Number.isFinite(CAPABILITIES_STALE_MS)).toBe(true);
   });
+
+  it('publishes a ready CPU transition without a reconnect and invalidates plans', async () => {
+    const preparing = {
+      ...CAPABILITIES,
+      cpuPreparationInFlight: true,
+      engines: [...CAPABILITIES.engines, {
+        name: 'beat-cpu', available: false, reason: 'checking hardware', version: '0.1.0', fast_paths: [],
+      }],
+    };
+    const ready = {
+      ...preparing,
+      cpuPreparationInFlight: false,
+      engines: preparing.engines.map((engine) => engine.name === 'beat-cpu'
+        ? { ...engine, available: true, reason: 'ready' }
+        : engine),
+    };
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify(preparing), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(ready), { status: 200 }));
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+
+    await render(<Consumer tag="status"/>);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await flushReact();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['solve-plan'] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops polling after terminal preparation failure', async () => {
+    const preparing = { ...CAPABILITIES, cpuPreparationInFlight: true };
+    const failed = {
+      ...CAPABILITIES,
+      cpuPreparationInFlight: false,
+      engines: [...CAPABILITIES.engines, {
+        name: 'beat-cpu', available: false,
+        reason: 'Julia executable unavailable after provisioning failed',
+        version: '0.1.0', fast_paths: [],
+      }],
+    };
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify(preparing), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(failed), { status: 200 }));
+
+    await render(<Consumer tag="status"/>);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await flushReact();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not poll a terminal old-package capability reason', async () => {
+    const oldPackage = {
+      ...CAPABILITIES,
+      cpuPreparationInFlight: false,
+      engines: [...CAPABILITIES.engines, {
+        name: 'beat-cpu', available: false,
+        reason: 'Installed package predates CPU runtime provisioning',
+        version: '0.1.0', fast_paths: [],
+      }],
+    };
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(oldPackage), { status: 200 }),
+    );
+
+    await render(<Consumer tag="status"/>);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 /**

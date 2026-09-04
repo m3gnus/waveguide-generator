@@ -245,6 +245,21 @@ def test_backend_statuses_report_the_probe_reason_when_nothing_was_selected(
     )
 
 
+def test_forced_cpu_probe_still_requires_cpu_readiness(monkeypatch) -> None:
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(
+        beat, "beat_status", lambda: _probe(True, "cpu", "CPU forced")
+    )
+    monkeypatch.setattr(
+        beat, "_cpu_backend_status", lambda _package: (False, "runtime unprovisioned")
+    )
+
+    statuses = beat.beat_backend_statuses()
+
+    assert statuses["cpu"]["available"] is False
+    assert statuses["cpu"]["reason"] == "runtime unprovisioned"
+
+
 def test_a_diagnostic_about_one_family_is_quoted_on_that_row_only(monkeypatch) -> None:
     """A broken CUDA install is the message that actually helps someone.
 

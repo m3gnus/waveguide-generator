@@ -661,7 +661,10 @@ def test_solver_warmup_falls_back_to_bempp(
     any machine where BEAT reports available (an Apple Silicon Mac included),
     the real probe would route ``_run_warmup`` into the BEAT branch instead of
     the BEMPP one this test is asserting, and the test would fail for a reason
-    that has nothing to do with the fallback logic under test.
+    that has nothing to do with the fallback logic under test. The same is true
+    of the provisioned BEAT CPU runtime, which leads BEMPP on Windows and Linux:
+    stub it out rather than let the answer depend on whether this machine has
+    one.
     """
 
     from server.solver import beat as beat_adapter
@@ -671,6 +674,7 @@ def test_solver_warmup_falls_back_to_bempp(
     status = {"available": True, "assembly_backend": "numba"}
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False})
     monkeypatch.setattr(beat_adapter, "beat_status", lambda: {"available": False})
+    monkeypatch.setattr(warmup, "_beat_cpu_leads_bempp", lambda: False)
     monkeypatch.setattr(bempp, "bempp_status", lambda: status)
     monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append(("metal", None)))
     monkeypatch.setattr(warmup, "_warm_bempp", lambda value: calls.append(("bempp", value)))
@@ -678,6 +682,33 @@ def test_solver_warmup_falls_back_to_bempp(
     warmup._run_warmup()
 
     assert calls == [("bempp", status)]
+
+
+def test_forced_cpu_probe_warms_only_a_ready_cpu_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A forced package probe cannot bypass the registry's CPU readiness."""
+
+    from server.solver import beat as beat_adapter
+    from server.solver import bempp, metal, warmup
+
+    calls: list[str] = []
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": False})
+    monkeypatch.setattr(
+        beat_adapter,
+        "beat_status",
+        lambda: {"available": True, "backend": "cpu", "reason": "forced CPU"},
+    )
+    monkeypatch.setattr(warmup, "_beat_cpu_leads_bempp", lambda: False)
+    monkeypatch.setattr(
+        bempp, "bempp_status", lambda: {"available": True, "assembly_backend": "numba"}
+    )
+    monkeypatch.setattr(warmup, "_warm_beat", lambda backend: calls.append(f"beat-{backend}"))
+    monkeypatch.setattr(warmup, "_warm_bempp", lambda _status: calls.append("bempp"))
+
+    warmup._run_warmup()
+
+    assert calls == ["bempp"]
 
 
 def test_solver_warmup_skips_when_no_physical_engine_is_available(
@@ -697,6 +728,7 @@ def test_solver_warmup_skips_when_no_physical_engine_is_available(
     calls: list[str] = []
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no Metal"})
     monkeypatch.setattr(beat_adapter, "beat_status", lambda: {"available": False, "reason": "no BEAT"})
+    monkeypatch.setattr(warmup, "_beat_cpu_leads_bempp", lambda: False)
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "no BEMPP"})
     monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append("metal"))
     monkeypatch.setattr(warmup, "_warm_bempp", lambda _status: calls.append("bempp"))

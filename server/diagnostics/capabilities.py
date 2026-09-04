@@ -12,7 +12,7 @@ import asyncio
 from dataclasses import asdict
 from typing import Any, Protocol
 
-from server.engines.registry import FULL3D_ENGINE_ORDER
+from server.engines.registry import full3d_engine_order
 from server.integration.installed import measure_installed_stack
 from server.integration.provenance import pinned_dependency_shas
 from server.platform.sqlite import journal_mode_statuses
@@ -31,13 +31,20 @@ PROBE_TIMEOUT_SECONDS = 5.0
 class _Registry(Protocol):
     async def capabilities(self) -> tuple[Any, ...]: ...
 
+    def cpu_preparation_in_flight(self) -> bool: ...
+
 
 async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
     """The engine list, the resolved default, module drift, and storage mode."""
 
     engines = [asdict(engine) for engine in await engine_registry.capabilities()]
     available = {item["name"] for item in engines if item.get("available") is True}
-    resolved = next((name for name in FULL3D_ENGINE_ORDER if name in available), None)
+    # The planner's own order, asked for the same way it asks: the preference
+    # between BEMPP and BEAT's CPU path is platform-dependent, and an interface
+    # that advertised a different one from the one AUTO follows would be worse
+    # than no order at all.
+    order = full3d_engine_order()
+    resolved = next((name for name in order if name in available), None)
     # "What can this host do" is incomplete without "and is this host the stack
     # it claims to be". A drifted module changes what the probes above report
     # while every version string stays put.
@@ -45,10 +52,13 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
     installed, drift = measure_installed_stack(pinned)
     return {
         "engines": engines,
+        "cpuPreparationInFlight": bool(
+            getattr(engine_registry, "cpu_preparation_in_flight", lambda: False)()
+        ),
         "engineSelection": {
             "default": "auto",
             "resolvedDefault": resolved,
-            "full3dOrder": list(FULL3D_ENGINE_ORDER),
+            "full3dOrder": list(order),
             "axisymmetricRunner": "axisym",
         },
         "dependencies": {"pinned": pinned, "installed": installed, "drift": drift},

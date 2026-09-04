@@ -575,6 +575,7 @@ def test_capability_probe_runs_off_thread_and_is_cached(
         assert {
             key: value for key, value in first.items() if key not in _host_scoped
         } == {
+            "cpuPreparationInFlight": False,
             "engines": [
                 {
                     "name": "mock",
