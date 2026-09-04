@@ -17,11 +17,12 @@ from server.exports.api import ExportRequest
 from server.exports import core
 from server.exports.core import (
     StepSolidResult,
+    StlResult,
     _build_step_solid_sync,
     _build_step_sync,
     binary_stl,
     profile_csv,
-    smooth_segments,
+    validate_export_segments,
 )
 
 
@@ -103,9 +104,21 @@ def _request() -> ExportRequest:
     )
 
 
-def test_smooth_density_clamps_and_snaps_angular_up_to_multiple_of_four() -> None:
-    assert smooth_segments(_design(length_segments=10, angular_segments=51, corner_segments=2)) == (60, 104, 4)
-    assert smooth_segments(_design(length_segments=100, angular_segments=200, corner_segments=20)) == (160, 240, 12)
+def test_export_sizing_ignores_the_design_segment_controls() -> None:
+    """The retired multipliers: exports size themselves, so these do not move it."""
+
+    from server.exports.core import _stl_grid_plan, _surface_grid_plan
+
+    sparse = _design(length_segments=10, angular_segments=51, corner_segments=2)
+    dense = _design(length_segments=100, angular_segments=200, corner_segments=20)
+    assert _stl_grid_plan(sparse)[0] == _stl_grid_plan(dense)[0]
+    assert _surface_grid_plan(sparse) == _surface_grid_plan(dense)
+
+
+def test_segment_controls_are_still_validated_even_though_unused() -> None:
+    validate_export_segments(_design(length_segments=10))
+    with pytest.raises(ValueError, match="supported export range"):
+        validate_export_segments(_design(length_segments=1.0e308))
 
 
 def test_binary_stl_filters_to_horn_and_applies_mm_axis_transform() -> None:
@@ -333,7 +346,7 @@ def test_step_route_defaults_to_the_solid_over_http(monkeypatch) -> None:
 
 def test_stl_and_each_profile_route_echo_revision_and_contract_filenames(monkeypatch) -> None:
     async def fake_stl(_design, _name):
-        return b" " * 80 + struct.pack("<I", 0)
+        return StlResult(data=b" " * 80 + struct.pack("<I", 0))
 
     def fake_profiles(_design, kind):
         return f"# {kind}\r\n"
@@ -344,8 +357,37 @@ def test_stl_and_each_profile_route_echo_revision_and_contract_filenames(monkeyp
     assert stl.media_type == "application/sla"
     assert stl.headers["content-disposition"].endswith('"demo_horn.stl"')
     assert struct.unpack_from("<I", stl.body, 80)[0] == 0
+    assert "x-export-warning" not in stl.headers
     for kind in ("profiles", "slices"):
         response = asyncio.run(api.export_profiles(_request(), kind))
         assert response.media_type == "text/csv"
         assert response.headers["x-design-revision"] == "57"
         assert response.headers["content-disposition"].endswith(f'"demo_horn_{kind}.csv"')
+
+
+def test_an_oversized_stl_is_served_with_its_warning_not_refused(monkeypatch) -> None:
+    """The backstop reports itself. A file the user asked for still arrives."""
+
+    async def fake_stl(_design, _name):
+        return StlResult(
+            data=b" " * 80 + struct.pack("<I", 0),
+            warning="coarsened to roughly 150,000 triangles",
+        )
+
+    monkeypatch.setattr(api, "build_stl", fake_stl)
+    response = asyncio.run(api.export_stl(_request()))
+    assert response.status_code == 200
+    assert response.headers["x-export-warning"] == "coarsened to roughly 150,000 triangles"
+    assert struct.unpack_from("<I", response.body, 80)[0] == 0
+
+
+def test_a_warning_with_a_non_latin1_character_does_not_break_the_response(
+    monkeypatch,
+) -> None:
+    async def fake_stl(_design, _name):
+        return StlResult(data=b" " * 80 + struct.pack("<I", 0), warning="trimmed \u2014 see log")
+
+    monkeypatch.setattr(api, "build_stl", fake_stl)
+    response = asyncio.run(api.export_stl(_request()))
+    assert response.status_code == 200
+    assert "trimmed" in response.headers["x-export-warning"]

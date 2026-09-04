@@ -7,7 +7,7 @@ import numpy as np
 from hornlab_mesher.preview.api import build_preview_geometry
 
 from server.design.schema import DesignConfig
-from server.exports.core import _build_stl_mesh_sync, _inner_grid
+from server.exports.core import _build_stl_mesh_sync, _inner_grid, _surface_grid_plan
 from server.preview.core import preview_options
 from server.preview.translate import design_to_mesher_config
 
@@ -41,8 +41,10 @@ def _preview_bounds(design: DesignConfig) -> np.ndarray:
 
 
 def _step_source_bounds(design: DesignConfig) -> np.ndarray:
-    # STEP's ruled surface is built directly from this authoritative inner grid.
-    points = _inner_grid(design, restore_length=True).reshape(-1, 3)
+    # STEP's ruled surface is built directly from this authoritative inner grid,
+    # on the grid the export sizes for itself rather than the design's own.
+    plan = _surface_grid_plan(design)
+    points = _inner_grid(design, grid=(plan.angular, plan.length)).reshape(-1, 3)
     return np.ptp(points, axis=0)
 
 

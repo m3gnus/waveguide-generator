@@ -155,11 +155,20 @@ def _lineage_bundle_stem(
     return design_name
 
 
-def _headers(request: ExportRequest, filename: str) -> dict[str, str]:
-    return {
+def _headers(
+    request: ExportRequest, filename: str, warning: str | None = None
+) -> dict[str, str]:
+    headers = {
         "Content-Disposition": f'attachment; filename="{filename}"',
         "X-Design-Revision": str(request.design_revision),
     }
+    if warning:
+        # A sizing backstop reports itself rather than refusing the export, so
+        # the file is always served and the note rides with it. Header values
+        # are latin-1 on the wire; the messages are ASCII, but encode
+        # defensively rather than 500 on a stray character.
+        headers["X-Export-Warning"] = warning.encode("ascii", "replace").decode()
+    return headers
 
 
 def _export_error(exc: Exception) -> HTTPException:
@@ -668,13 +677,17 @@ async def export_step(
 @router.post("/stl")
 async def export_stl(request: ExportRequest) -> Response:
     try:
-        content = await build_stl(request.design, request.model_name)
+        result = await build_stl(request.design, request.model_name)
     except Exception as exc:
         raise _export_error(exc) from exc
+    if result.warning:
+        logger.warning("STL export sizing: %s", result.warning)
     return Response(
-        content=content,
+        content=result.data,
         media_type="application/sla",
-        headers=_headers(request, f"{_base_name(request.base_name)}.stl"),
+        headers=_headers(
+            request, f"{_base_name(request.base_name)}.stl", result.warning
+        ),
     )
 
 
