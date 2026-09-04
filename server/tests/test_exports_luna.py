@@ -17,7 +17,7 @@ from server.exports.core import (
     _inner_grid,
     _prepared_design,
     binary_stl,
-    smooth_segments,
+    validate_export_segments,
 )
 
 
@@ -44,11 +44,14 @@ def _design(*, scale: float = 1.0, length_segments: float = 12) -> DesignConfig:
     )
 
 
-def test_step_restores_at_least_ten_length_segments_but_profiles_keep_one() -> None:
+def test_geometry_exports_pin_their_own_grid_but_profiles_keep_the_design_s() -> None:
+    """Profile CSV rows are the artifact; a mesh grid is the export's to choose."""
+
     design = _design(length_segments=1)
-    step = _prepared_design(design, restore_length=True)
-    profile = _prepared_design(design, restore_length=True, profile_sampling=True)
-    assert step.root.mesh.length_segments.value == 10
+    pinned = _prepared_design(design, grid=(120, 80))
+    profile = _prepared_design(design, profile_sampling=True)
+    assert pinned.root.mesh.angular_segments.value == 120
+    assert pinned.root.mesh.length_segments.value == 80
     assert profile.root.mesh.length_segments.value == 1
 
 
@@ -63,7 +66,7 @@ def test_extreme_segment_input_becomes_422_not_overflow(
     )
 
     async def validate(design: DesignConfig) -> str:
-        smooth_segments(design)
+        validate_export_segments(design)
         return "unreachable"
 
     monkeypatch.setattr(api, "build_step", validate)
@@ -101,8 +104,8 @@ def test_scale_two_doubles_step_grid_and_stl_mesh_bounds() -> None:
     unit = _design(scale=1.0)
     doubled = _design(scale=2.0)
 
-    step_unit = np.ptp(_inner_grid(unit, restore_length=True), axis=(0, 1))
-    step_doubled = np.ptp(_inner_grid(doubled, restore_length=True), axis=(0, 1))
+    step_unit = np.ptp(_inner_grid(unit), axis=(0, 1))
+    step_doubled = np.ptp(_inner_grid(doubled), axis=(0, 1))
     assert step_doubled == pytest.approx(step_unit * 2.0, rel=1.0e-6, abs=1.0e-8)
 
     stl_unit = _build_stl_mesh_sync(

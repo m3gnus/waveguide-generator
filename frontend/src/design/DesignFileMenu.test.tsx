@@ -185,6 +185,35 @@ describe('design file export menu', () => {
     expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=surface']);
   });
 
+  it('surfaces an STL fidelity warning after reporting the successful write', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/export/stl') {
+        const response = new Response('stl', {
+          status: 200,
+          headers: { 'X-Export-Warning': 'fine detail was coarsened' },
+        });
+        return Object.assign(response, {
+          blob: async () => new Blob(['stl'], { type: 'application/sla' }),
+        });
+      }
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          directory: 'C:/Output/horn', files: ['horn.stl'],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    const item = itemNamed('STL');
+    await act(async () => { item.click(); });
+
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      'Exported STL from revision 1 to C:/Output/horn. Warning: fine detail was coarsened',
+    );
+  });
+
   it('sends a linked design to CAD and reports its sequence and destination', async () => {
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_01K00000000000000000000000',

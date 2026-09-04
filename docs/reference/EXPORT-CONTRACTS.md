@@ -1,7 +1,8 @@
 # Export contract
 
 Status: canonical current contract, verified against `server/exports/`,
-`frontend/src/results/`, and `frontend/src/jobs/RunExportControl.tsx` on 2026-08-13.
+`frontend/src/results/`, and `frontend/src/jobs/RunExportControl.tsx` on 2026-08-13;
+export sizing reverified 2026-09-04.
 The detailed original-application inventory remains in Git history at `f51a23c`.
 
 ## Provenance rule
@@ -18,7 +19,7 @@ exported per declared channel unless the user has selected a specific one.
 |---|---|
 | STEP solid | Full-domain manufacturable B-rep in millimetres, including available wall/enclosure material with an open throat. Carries the `mesh.vertical_offset` placement in every domain — it is a CAD boundary, unlike the recentred solve and preview frames. A design without material may fall back to a surface body. |
 | STEP inner surface | Full-domain ruled acoustic bore in millimetres. Exposed from the design menu for users who want to thicken/loft themselves. |
-| STL | Binary little-endian STL of physical-tag-1 horn-inner triangles from an authoritative densified Gmsh build. Coordinates are millimetres with solver `(x, vertical, axial)` mapped to `(x, -vertical, axial)` and winding reversed to preserve the mesher's normal side. |
+| STL | Binary little-endian STL of physical-tag-1 horn-inner triangles from an authoritative Gmsh build on the export's own grid. Coordinates are millimetres with solver `(x, vertical, axial)` mapped to `(x, -vertical, axial)` and winding reversed to preserve the mesher's normal side. |
 | Fusion curves | Two semicolon-delimited CRLF CSVs, profiles and slices, headed in centimetres as `x_cm;y_cm;z_cm`; uses the bare uniform-ring inner surface without vertical offset. |
 | Parameter config | Canonical `.cfg` text from the design-format contract, preserving compatible raw expressions and optional CAD identity. |
 | Mesh artifact | The stored solver `.msh` bytes for that job; no export-time geometry rebuild. |
@@ -26,6 +27,38 @@ exported per declared channel unless the user has selected a specific one.
 
 STEP solid is the normal CAD choice. STL and curve CSV remain explicit advanced formats,
 not alternate geometry authorities.
+
+## Geometry exports size themselves
+
+A geometry export samples the analytic surface as finely as its own **fidelity
+tolerance** requires, and no finer. It reads neither the solver's millimetre mesh
+resolutions nor `mesh.max_triangles`, and the design's `mesh.angular_segments`,
+`mesh.length_segments` and `mesh.corner_segments` do not move it either: those remain
+solver and CFG-compatibility fields. There is no user-facing export grid control, and
+adding one would reintroduce the coupling this replaced. The tolerances are constants in
+`server/exports/sizing.py`.
+
+| Export | Tolerance | Meaning |
+|---|---|---|
+| STEP solid | 0.02 mm | Deviation of the fitted CAD surface from the analytic formula. Tighter than the print tolerance because downstream CAD operations refine against this master. |
+| STL | 0.10 mm | Chord deviation of the written triangles: print resolution, at or below every common layer height and well inside a 0.4 mm nozzle. |
+| STEP inner surface | 0.10 mm chord | Planned to the same chord as the STL. The written surface lands somewhat outside it — it is a *ruled* loft through control-point splines — so the number planned is a chord, not a promise about the file. |
+
+The grid is chosen by bounded numerical measurement, not by a curvature formula. The
+analytic surface is sampled on both a twice-dense lattice and a slightly detuned lattice;
+each sample's distance to the nearby candidate cells is compared against the tolerance.
+The detuned probe prevents periodic `p` expressions from disappearing merely because
+they share a phase with the candidate grid. This is finite sampling rather than a proof
+over every possible user expression. Density therefore follows measured geometry and
+part size — the same waveguide at twice the scale needs a finer grid to hold the same
+absolute deviation.
+
+**The STL's triangle ceiling is a backstop, not a gate.** A design whose tolerance would
+need more than 150,000 triangles is exported anyway, coarsened to the ceiling, with the
+reason returned in the `X-Export-Warning` response header and logged. An export is never
+refused for being large. (`mesh.max_triangles` is the solver's advisory warning
+threshold; using it here turned a warning into a refusal on a mesh the export itself had
+densified.)
 
 ## Result formats
 

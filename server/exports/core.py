@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+import logging
 import math
 from pathlib import Path
 import re
@@ -14,6 +15,16 @@ from typing import TYPE_CHECKING, Any, Mapping
 import numpy as np
 
 from server.design.schema import DesignConfig, Expr
+from server.exports.sizing import (
+    EXPORT_CORNER_SEGMENTS,
+    STEP_SURFACE_TOLERANCE_MM,
+    STL_CHORD_TOLERANCE_MM,
+    STL_TRIANGLE_CEILING,
+    GridPlan,
+    facet_element_size_mm,
+    plan_cad_resolution,
+    plan_grid,
+)
 from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
 from server.mesh.gmsh_worker import _preserve_native_windows_path, run_on_gmsh_worker
 from server.preview.translate import design_to_mesher_config
@@ -21,6 +32,8 @@ from server.preview.translate import design_to_mesher_config
 if TYPE_CHECKING:
     from hornlab_mesher.cad import CadInfo
 
+
+logger = logging.getLogger(__name__)
 
 MAX_EXPORT_SEGMENT_INPUT = 1_000_000.0
 
@@ -31,6 +44,14 @@ class StepSolidResult:
 
     step_text: str
     cad_info: CadInfo
+
+
+@dataclass(frozen=True)
+class StlResult:
+    """Binary STL bytes, plus anything the export had to say about sizing."""
+
+    data: bytes
+    warning: str | None = None
 
 
 def _number(value: Expr | None, fallback: float) -> float:
@@ -52,18 +73,20 @@ def _segment_number(value: Expr | None, fallback: float, field: str) -> float:
     return number
 
 
-def smooth_segments(design: DesignConfig) -> tuple[int, int, int]:
-    """Apply v1's smooth-export segment clamps and four-way angular snap."""
+def validate_export_segments(design: DesignConfig) -> None:
+    """Reject segment controls an export cannot make sense of.
+
+    The geometry exports no longer *read* these fields -- they size themselves
+    from a deviation tolerance (``server/exports/sizing.py``). They are still
+    validated here because the design carries them for the solver and for the
+    profile CSVs, and a non-finite or absurd value should be a 422 rather than
+    something the export silently ignores.
+    """
 
     mesh = design.root.mesh
-    length_raw = _segment_number(mesh.length_segments, 0, "mesh.length_segments")
-    angular_input = _segment_number(mesh.angular_segments, 0, "mesh.angular_segments")
-    corner_input = _segment_number(mesh.corner_segments, 0, "mesh.corner_segments")
-    length = min(160, max(60, int(math.floor(max(3 * length_raw, 60) + 0.5))))
-    angular_raw = max(2 * angular_input, 100)
-    angular = min(240, max(100, int(math.ceil(angular_raw / 4.0) * 4)))
-    corner = min(12, max(4, int(math.floor(max(2 * corner_input, 4) + 0.5))))
-    return length, angular, corner
+    _segment_number(mesh.length_segments, 0, "mesh.length_segments")
+    _segment_number(mesh.angular_segments, 0, "mesh.angular_segments")
+    _segment_number(mesh.corner_segments, 0, "mesh.corner_segments")
 
 
 def _profile_angular(value: float) -> int:
@@ -76,26 +99,37 @@ def _profile_angular(value: float) -> int:
 def _prepared_design(
     design: DesignConfig,
     *,
-    restore_length: bool = False,
+    grid: tuple[int, int] | None = None,
     profile_sampling: bool = False,
 ) -> DesignConfig:
+    """Reopen the full domain and strip everything a part does not have.
+
+    ``grid`` pins the export's own sampling, chosen by the planners in
+    ``server/exports/sizing.py``. Without it this is the probe form: the
+    design's own counts stand, which is what a planner measures from before it
+    decides. Profile CSVs are the exception -- their rows *are* the artifact,
+    so they keep the design's counts verbatim (v1 compatibility).
+    """
+
+    validate_export_segments(design)
     payload = copy.deepcopy(design.model_dump(mode="json"))
     root = payload
-    original_length = _segment_number(
-        design.root.mesh.length_segments,
-        40 if profile_sampling else 20,
-        "mesh.length_segments",
-    )
-    length, angular, corner = smooth_segments(design)
     if profile_sampling:
+        original_length = _segment_number(
+            design.root.mesh.length_segments, 40, "mesh.length_segments"
+        )
         root["mesh"]["length_segments"] = max(1, int(math.floor(original_length + 0.5)))
         root["mesh"]["angular_segments"] = _profile_angular(
             _number(design.root.mesh.angular_segments, 40)
         )
     else:
-        root["mesh"]["length_segments"] = max(10, int(math.floor(original_length + 0.5))) if restore_length else length
-        root["mesh"]["angular_segments"] = angular
-        root["mesh"]["corner_segments"] = corner
+        if grid is not None:
+            root["mesh"]["angular_segments"] = int(grid[0])
+            root["mesh"]["length_segments"] = int(grid[1])
+        # Corner arcs get the finest count the export ever used rather than a
+        # multiple of the solve setting; only morph and guiding-curve designs
+        # have corner arcs at all.
+        root["mesh"]["corner_segments"] = EXPORT_CORNER_SEGMENTS
     root["mesh"]["quadrants"] = 1234
     root["mesh"]["wall_thickness"] = 0
     root["mesh"]["vertical_offset"] = 0
@@ -108,12 +142,12 @@ def _prepared_design(
 def _bare_grid_config(
     design: DesignConfig,
     *,
-    restore_length: bool,
+    grid: tuple[int, int] | None = None,
     profile_sampling: bool = False,
 ) -> dict[str, Any]:
     prepared = _prepared_design(
         design,
-        restore_length=restore_length,
+        grid=grid,
         profile_sampling=profile_sampling,
     )
     config = design_to_mesher_config(prepared)
@@ -134,7 +168,7 @@ def _bare_grid_config(
 def _inner_grid(
     design: DesignConfig,
     *,
-    restore_length: bool,
+    grid: tuple[int, int] | None = None,
     profile_sampling: bool = False,
 ) -> np.ndarray:
     try:
@@ -146,7 +180,7 @@ def _inner_grid(
     geometry = build_viewport_geometry_from_config(
         _bare_grid_config(
             design,
-            restore_length=restore_length,
+            grid=grid,
             profile_sampling=profile_sampling,
         )
     )
@@ -258,9 +292,46 @@ def _write_step(inner_points: np.ndarray) -> str:
                 gmsh.finalize()
 
 
+def _geometry_params(config: Mapping[str, Any]) -> dict[str, Any]:
+    """The analytic geometry a mesher config describes, for the planners."""
+
+    from hornlab_mesher.config_builder import build_geometry_params
+
+    params, _, _ = build_geometry_params(dict(config))
+    return params
+
+
+def _surface_grid_plan(design: DesignConfig) -> GridPlan:
+    """Size the ruled inner-surface STEP by the same chord as the STL.
+
+    This export is not the manufacturable part -- that is the solid -- but an
+    open reference bore the user lofts or thickens in CAD, and ``_write_step``
+    builds it as a *ruled* loft (``makeRuled=True, maxDegree=1``) through
+    ``addBSpline`` rings, whose points are control points rather than points
+    the curve passes through. Both of those smooth the surface away from the
+    grid by more than any interpolation model here predicts: measured on the
+    seed R-OSSE, the written surface lands about 1.5x outside the chord this
+    plans to (0.143 mm against a planned 0.098 mm), with the excess
+    concentrated in the last few rings of the mouth roll-back. So the chord is
+    what is planned and stated, not a tolerance the file would not honour --
+    closing that gap means changing the writer's ruled/control-point
+    construction, which is a separate change.
+
+    Against the retired multipliers this is still a clear gain on the same
+    design: 0.424 mm deviation before at a 100x20 grid, 0.143 mm after.
+    """
+
+    return plan_grid(
+        _geometry_params(_bare_grid_config(design)),
+        angular=("linear", STL_CHORD_TOLERANCE_MM),
+        axial=("linear", STL_CHORD_TOLERANCE_MM),
+    )
+
+
 def _build_step_sync(design_dump: dict[str, Any]) -> str:
     design = DesignConfig.model_validate(design_dump)
-    return _write_step(_inner_grid(design, restore_length=True))
+    plan = _surface_grid_plan(design)
+    return _write_step(_inner_grid(design, grid=(plan.angular, plan.length)))
 
 
 async def build_step(design: DesignConfig) -> str:
@@ -290,6 +361,32 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     # stops an ATH-imported design declaring Mesh.Quadrants = 1 or 12 from
     # exporting an unplaced solid alongside a placed bundle.)
     config = _solver_mesher_config(design, keep_placement=True)
+    # Corner arcs first, so the sampling search below measures the geometry
+    # that will actually be written. Choosing the resolution against the
+    # design's own corner count and then building with a different one would
+    # leave a morph design's measured deviation describing a grid nobody gets.
+    config["mesh"] = {
+        **(config.get("mesh") or {}),
+        "cornerSegments": EXPORT_CORNER_SEGMENTS,
+    }
+    # The solver's mm resolutions used to size the CAD point grid as well, so
+    # refining an acoustic mesh made every STEP roughly 20x slower and 10x
+    # larger while the export's own controls moved the grid by one row. The
+    # part is a CAD artifact: it is sampled to a CAD tolerance instead, and the
+    # result is the same file whatever the solve was set to.
+    plan = plan_cad_resolution(config, tolerance_mm=STEP_SURFACE_TOLERANCE_MM)
+    config["mesh"] = {
+        **config["mesh"],
+        "throatResolution": plan.resolution_mm,
+        "mouthResolution": plan.resolution_mm,
+        "rearResolution": plan.resolution_mm,
+    }
+    logger.info(
+        "STEP solid sampled at %.3g mm (measured deviation %s mm, tolerance %g mm)",
+        plan.resolution_mm,
+        "unmeasured" if plan.deviation_mm is None else f"{plan.deviation_mm:.5f}",
+        STEP_SURFACE_TOLERANCE_MM,
+    )
     with tempfile.NamedTemporaryFile(
         prefix="waveguide-solid-", suffix=".step", delete=False
     ) as handle:
@@ -394,8 +491,43 @@ def binary_stl(
     return bytes(output)
 
 
-def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, list[Any]]:
-    """Build an authoritative Gmsh mesh while retaining the dense export grid."""
+def _stl_mesher_config(design: DesignConfig) -> dict[str, Any]:
+    """The pinned-grid config an STL is meshed from.
+
+    ``preserveGrid`` makes the CAD faces *be* the sampled grid cells, so the
+    grid alone sets the exported surface's deviation and the millimetre
+    resolutions only decide how finely gmsh subdivides facets that are already
+    inside tolerance. Both are the export's to choose.
+    """
+
+    config = _solver_mesher_config(design)
+    config.setdefault("mesh", {}).update(
+        {"topology": "legacy", "preserveGrid": True, "scaleToMetres": True}
+    )
+    return config
+
+
+def _stl_grid_plan(design: DesignConfig) -> tuple[GridPlan, dict[str, Any]]:
+    """Size the STL to a print-resolution chord deviation.
+
+    Nothing here reads ``mesh.max_triangles``: that is the solver's advisory
+    warning threshold, and passing it through turned a warning into a refusal
+    on a mesh the export itself had densified. The export carries its own
+    generous ceiling instead, and trims to it rather than refusing.
+    """
+
+    params = _geometry_params(_stl_mesher_config(_prepared_design(design)))
+    plan = plan_grid(
+        params,
+        angular=("linear", STL_CHORD_TOLERANCE_MM),
+        axial=("linear", STL_CHORD_TOLERANCE_MM),
+        triangle_ceiling=STL_TRIANGLE_CEILING,
+    )
+    return plan, params
+
+
+def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
+    """Mesh the export's own pinned grid, sized to a print-resolution chord."""
 
     try:
         from hornlab_mesher.config_builder import build_from_config
@@ -409,9 +541,33 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, list[Any]]:
     import meshio
 
     design = DesignConfig.model_validate(design_dump)
-    config = _solver_mesher_config(design)
-    config.setdefault("mesh", {}).update(
-        {"topology": "legacy", "preserveGrid": True, "scaleToMetres": True}
+    plan, params = _stl_grid_plan(design)
+    prepared = _prepared_design(design, grid=(plan.angular, plan.length))
+    config = _stl_mesher_config(prepared)
+    element_mm = facet_element_size_mm(params, plan.angular, plan.length)
+    config["mesh"].update(
+        {
+            # One element per grid cell: below the longest cell edge gmsh
+            # subdivides faces that are already inside tolerance, which is how
+            # a refined solve mesh used to quadruple an STL for no fidelity.
+            "throatResolution": element_mm,
+            "mouthResolution": element_mm,
+            "rearResolution": element_mm,
+            # The export's own headroom, not the design's advisory budget. The
+            # plan is already trimmed to STL_TRIANGLE_CEILING, so this exists
+            # only so a surprise warns below instead of refusing here.
+            "maxTriangles": STL_TRIANGLE_CEILING * 4,
+            "allowLargeMesh": True,
+        }
+    )
+    warnings = [plan.warning] if plan.warning else []
+    logger.info(
+        "STL grid %dx%d (~%d triangles, measured deviation %s mm, tolerance %g mm)",
+        plan.angular,
+        plan.length,
+        plan.triangles,
+        "unmeasured" if plan.deviation_mm is None else f"{plan.deviation_mm:.5f}",
+        STL_CHORD_TOLERANCE_MM,
     )
     with tempfile.TemporaryDirectory(prefix="wg2-stl-mesh-") as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
@@ -419,31 +575,43 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, list[Any]]:
         # native environment when this synchronous seam is exercised directly
         # and the pinned mesher opens and closes its own session instead.
         with _preserve_native_windows_path():
-            build_from_config(config, mesh_path)
+            build_from_config(config, mesh_path, allow_large_mesh=True)
         parsed = meshio.read(mesh_path)
         triangles, tags = _triangles_and_tags(parsed)
         vertices = np.asarray(parsed.points, dtype=float)
         if vertices.ndim != 2 or vertices.shape[1:] != (3,) or not np.isfinite(vertices).all():
             raise ValueError("parsed STL mesh contains invalid or non-finite coordinates")
+    horn_triangles = int((tags == 1).sum())
+    if horn_triangles > STL_TRIANGLE_CEILING:
+        warnings.append(
+            f"This STL has {horn_triangles:,} triangles, above the "
+            f"{STL_TRIANGLE_CEILING:,} this export aims to stay under. It is "
+            "written in full; slicers may be slow to load it."
+        )
     return {
         "vertices": vertices.reshape(-1).tolist(),
         "indices": triangles.reshape(-1).astype(int).tolist(),
         "surfaceTags": tags.astype(int).tolist(),
+        "warnings": warnings,
     }
 
 
-async def build_stl(design: DesignConfig, model_name: str = "MWG Horn") -> bytes:
-    """Build the densified full-domain solver mesh and retain its horn surface."""
+async def build_stl(design: DesignConfig, model_name: str = "MWG Horn") -> StlResult:
+    """Build the horn surface at print resolution, sized by the export itself."""
 
     canonical = await run_on_gmsh_worker(
         _build_stl_mesh_sync,
-        _prepared_design(design).model_dump(mode="json"),
+        design.model_dump(mode="json"),
     )
-    return binary_stl(
-        canonical.get("vertices", []),
-        canonical.get("indices", []),
-        canonical.get("surfaceTags", []),
-        model_name,
+    warnings = [str(item) for item in canonical.get("warnings") or []]
+    return StlResult(
+        data=binary_stl(
+            canonical.get("vertices", []),
+            canonical.get("indices", []),
+            canonical.get("surfaceTags", []),
+            model_name,
+        ),
+        warning=" ".join(warnings) or None,
     )
 
 
@@ -479,18 +647,19 @@ def build_profiles(design: DesignConfig, kind: str) -> str:
     """Rebuild the bare, uniform-ring inner surface without vertical offset."""
 
     return profile_csv(
-        _inner_grid(design, restore_length=True, profile_sampling=True),
+        _inner_grid(design, profile_sampling=True),
         kind,
     )
 
 
 __all__ = [
     "StepSolidResult",
+    "StlResult",
     "binary_stl",
     "build_profiles",
     "build_step",
     "build_step_solid",
     "build_stl",
     "profile_csv",
-    "smooth_segments",
+    "validate_export_segments",
 ]

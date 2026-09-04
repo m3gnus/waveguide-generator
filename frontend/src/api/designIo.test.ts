@@ -62,8 +62,11 @@ describe('geometry export requests', () => {
    * anything the export path does; overriding `blob()` alone keeps `ok`, the
    * headers and `responseFilename` exactly as production sees them.
    */
-  function exportResponse(body: string, type: string): Response {
-    const response = new Response(body, { status: 200, headers: { 'Content-Type': type } });
+  function exportResponse(body: string, type: string, warning?: string): Response {
+    const response = new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': type, ...(warning ? { 'X-Export-Warning': warning } : {}) },
+    });
     return Object.assign(response, { blob: async () => new Blob([body], { type }) });
   }
 
@@ -106,6 +109,20 @@ describe('geometry export requests', () => {
       '/api/export/stl', '/api/workspace/write-export',
       '/api/export/profiles?kind=slices', '/api/workspace/write-export',
     ]);
+  });
+
+  it('returns an STL warning after the file has been written successfully', async () => {
+    const { fetcher } = recordingFetcher();
+    const warningFetcher = (async (url: string, init?: RequestInit) => (
+      String(url) === '/api/export/stl'
+        ? exportResponse('stl', 'application/sla', 'fine detail was coarsened')
+        : fetcher(url, init)
+    )) as typeof fetch;
+    const result = await exportGeometryToOutputFolder(
+      'stl', design, 3, 'horn', undefined, undefined, warningFetcher,
+    );
+    expect(result.warning).toBe('fine detail was coarsened');
+    expect(result.directory).toBe('C:/Output/horn');
   });
 });
 
