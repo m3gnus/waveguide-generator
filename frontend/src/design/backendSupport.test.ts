@@ -4,6 +4,8 @@ import {
   activeBackendName,
   backendLimitation,
   backendSupports,
+  isBeatBackendEngine,
+  migratedLegacyBeatEngine,
   plannedBackendCapabilities,
   type BackendIdentity,
 } from './backendSupport';
@@ -178,5 +180,47 @@ describe('aperture mesh scale', () => {
     const entry = field('mesh.aperture_resolution_scale');
     expect(fieldIsVisible(entry, { ...design, simulation: { ...design.simulation, sim_type: 'freestanding' } })).toBe(false);
     expect(fieldIsVisible(entry, { ...design, simulation: { ...design.simulation, sim_type: 'infinite-baffle' } })).toBe(true);
+  });
+});
+
+
+describe('legacy beat engine migration', () => {
+  const beatSelection: EngineSelection = {
+    default: 'auto',
+    resolvedDefault: 'metal',
+    full3dOrder: ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'bempp', 'beat-cpu', 'dryrun'],
+    axisymmetricRunner: 'axisym',
+  };
+
+  it('narrows a stored beat to the best variant this host can run', () => {
+    // "beat" meant "the family, and let the probe choose". It still means
+    // that, resolved against the same order AUTO uses -- so a design file
+    // written before the split does not quietly become a different solver.
+    const engines = [engine('beat-cuda', false), engine('beat-metal', true), engine('beat-cpu', true)];
+    expect(migratedLegacyBeatEngine('beat', engines, beatSelection)).toBe('beat-metal');
+  });
+
+  it('lands on an advertised variant even when none is available', () => {
+    // A greyed-out BEAT row carrying its reason tells the user why their saved
+    // choice cannot run here. Jumping silently to AUTO would not.
+    const engines = [engine('beat-cuda', false), engine('beat-cpu', false), engine('metal', true)];
+    expect(migratedLegacyBeatEngine('beat', engines, beatSelection)).toBe('beat-cuda');
+  });
+
+  it('leaves everything else alone', () => {
+    const engines = [engine('beat-cpu', true), engine('metal', true)];
+    expect(migratedLegacyBeatEngine('metal', engines, beatSelection)).toBeNull();
+    expect(migratedLegacyBeatEngine('auto', engines, beatSelection)).toBeNull();
+    expect(migratedLegacyBeatEngine('beat-cpu', engines, beatSelection)).toBeNull();
+    // Capabilities not loaded, or a server too old to advertise the variants:
+    // the bare name is still the right thing to have selected.
+    expect(migratedLegacyBeatEngine('beat', [], beatSelection)).toBeNull();
+    expect(migratedLegacyBeatEngine('beat', [engine('beat', true)], beatSelection)).toBeNull();
+  });
+
+  it('recognises the per-backend names', () => {
+    expect(isBeatBackendEngine('beat-cpu')).toBe(true);
+    expect(isBeatBackendEngine('beat')).toBe(false);
+    expect(isBeatBackendEngine('bempp')).toBe(false);
   });
 });

@@ -4,6 +4,11 @@ import { useSolveOptionsStore, type SolveOptions, type SolverMode } from '../sto
 
 export interface EngineCapability {
   name: string;
+  /** What to call it in the interface. `name` is a wire identifier and reads
+   * like one: "beat-rocm" says nothing about the hardware it wants. Optional
+   * because a server older than the field sends none, and the name is then
+   * exactly what was shown before labels existed. */
+  label?: string;
   available: boolean;
   reason: string | null;
   version: string | null;

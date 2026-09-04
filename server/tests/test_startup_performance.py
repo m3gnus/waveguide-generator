@@ -369,11 +369,11 @@ def test_the_beat_worker_prewarm_can_be_switched_off(
     from server.solver import warmup as solver_warmup
 
     monkeypatch.setattr(
-        solver_warmup, "_warm_beat", lambda status: pytest.fail("must not warm")
+        solver_warmup, "_warm_beat", lambda backend: pytest.fail("must not warm")
     )
     monkeypatch.setenv("WG2_SOLVER_WARMUP", "0")
 
-    assert solver_warmup.prewarm_beat_worker_for_engine("beat") is False
+    assert solver_warmup.prewarm_beat_worker_for_engine("beat-cuda") is False
 
 
 def test_the_beat_warmup_runs_a_solve_not_just_a_process_start(
@@ -395,41 +395,70 @@ def test_the_beat_warmup_runs_a_solve_not_just_a_process_start(
     )
     monkeypatch.setitem(sys.modules, "hornlab_beat_bem", module)
 
-    solver_warmup._warm_beat({"available": True, "backend": "cuda"})
+    solver_warmup._warm_beat("cuda")
 
     assert calls == [{"beat_backend": "cuda", "mode": "tiny"}]
 
 
-@pytest.mark.parametrize(
-    "status",
-    [
-        {"available": True, "backend": "cuda"},
-        {"available": True, "backend": "metal"},
-        {"available": True, "backend": "rocm"},
-        {"available": True, "backend": "cpu"},
-        # The case the two sides used to answer differently.
-        {"available": True},
-        {"available": True, "backend": None},
-        {"available": True, "backend": ""},
-    ],
-)
+@pytest.mark.parametrize("backend", ["cuda", "rocm", "metal", "cpu"])
 def test_the_beat_warmup_warms_the_backend_the_solve_will_use(
-    monkeypatch: pytest.MonkeyPatch, status: dict[str, object]
+    monkeypatch: pytest.MonkeyPatch, backend: str
 ) -> None:
     """The warmup and the solve must resolve one accelerator, not two.
 
-    ``_warm_beat`` spelled its fallback ``"cuda"`` while the solve in
-    ``server/solver/beat.py`` spelled the same fallback ``"cpu"``. A probe that
-    reported available without naming a backend therefore warmed a CUDA context
-    -- on a host that need not have one -- and then solved on the CPU, so the
-    warmup paid a device initialisation for a path the user's solve never took
-    and left the path it did take cold.
+    ``_warm_beat`` used to re-derive the backend from a probe result, and
+    spelled its fallback ``"cuda"`` while the solve in ``server/solver/beat.py``
+    spelled the same fallback ``"cpu"``. A probe that reported available without
+    naming a backend therefore warmed a CUDA context -- on a host that need not
+    have one -- and then solved on the CPU, so the warmup paid a device
+    initialisation for a path the user's solve never took and left the path it
+    did take cold.
 
-    No shipped pin produces that state; at ``hornlab-beat-bem`` ``88487d8``
-    every available branch names a backend. The invariant lives in a different
-    repository, though, and nothing on this side held it, so this asserts the
-    property that actually matters -- the two agree -- rather than the constant
-    either one happens to use.
+    Now that each backend is its own engine, neither side derives anything: the
+    engine name carries the backend, the prewarm reads it off that name, and the
+    adapter is constructed with it. This asserts that chain end to end, which is
+    the property that actually matters -- the two agree -- rather than the
+    constant either one happens to use.
+    """
+
+    from server.engines.registry import create_engine
+    from server.solver import warmup as solver_warmup
+
+    calls: list[dict[str, object]] = []
+    module = types.SimpleNamespace(warm_up=lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", module)
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+
+    engine = f"beat-{backend}"
+    assert solver_warmup.prewarm_beat_worker_for_engine(engine) is True
+
+    assert calls == [{"beat_backend": backend, "mode": "tiny"}]
+    assert create_engine(engine).backend == backend
+
+
+def test_the_beat_prewarm_ignores_engines_that_are_not_beat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.setattr(
+        solver_warmup, "_warm_beat", lambda backend: pytest.fail("must not warm")
+    )
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+
+    for engine in ("metal", "bempp", "axisym", "dryrun", None):
+        assert solver_warmup.prewarm_beat_worker_for_engine(engine) is False
+
+
+def test_the_beat_prewarm_still_answers_the_legacy_family_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stored ``beat`` the registry could not map still warms something.
+
+    ``resolve_prewarm_engine`` normally hands this hook a resolved variant, so
+    the bare name only survives when no ``beat-*`` was available to map it to.
+    Falling back to the package probe there is what the hook did for that name
+    before the split, and it is better than warming nothing.
     """
 
     from server.solver import beat as beat_adapter
@@ -438,11 +467,13 @@ def test_the_beat_warmup_warms_the_backend_the_solve_will_use(
     calls: list[dict[str, object]] = []
     module = types.SimpleNamespace(warm_up=lambda **kwargs: calls.append(kwargs))
     monkeypatch.setitem(sys.modules, "hornlab_beat_bem", module)
+    monkeypatch.setattr(
+        beat_adapter, "beat_status", lambda: {"available": True, "backend": "rocm"}
+    )
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
 
-    solver_warmup._warm_beat(status)
-
-    assert len(calls) == 1
-    assert calls[0]["beat_backend"] == beat_adapter.resolve_beat_backend(status)
+    assert solver_warmup.prewarm_beat_worker_for_engine("beat") is True
+    assert calls == [{"beat_backend": "rocm", "mode": "tiny"}]
 
 
 def test_an_unnamed_beat_backend_falls_back_to_the_one_every_host_has() -> None:
@@ -943,7 +974,8 @@ def test_the_beat_prewarm_follows_the_users_choice_over_autos(
     registry = EngineRegistry(
         detector=lambda: [
             EngineInfo("metal", True, "test", "0.1.0"),
-            EngineInfo("beat", True, "test", "0.1.0"),
+            EngineInfo("beat-metal", True, "test", "0.1.0"),
+            EngineInfo("beat-cpu", True, "test", "0.1.0"),
         ]
     )
 
@@ -951,6 +983,17 @@ def test_the_beat_prewarm_follows_the_users_choice_over_autos(
     # the engine the user actually solves with cold.
     assert asyncio.run(registry.resolve("auto", solver_mode=None)) == "metal"
 
+    asyncio.run(beat_worker_prewarm(registry, _persisted("beat-cpu")))
+
+    assert warmed == ["beat-cpu"]
+
+    # A preference stored before BEAT's backends were separately selectable
+    # still reaches this hook rather than falling through to AUTO's Metal. It
+    # arrives as the bare name because the head start does not wait for the
+    # capability probe that would have resolved it to a variant --
+    # ``prewarm_beat_worker_for_engine`` lets the package's own probe pick the
+    # backend for that name, which is what it did before the split.
+    warmed.clear()
     asyncio.run(beat_worker_prewarm(registry, _persisted("beat")))
 
     assert warmed == ["beat"]
@@ -1046,6 +1089,86 @@ def test_a_saved_engine_warms_without_waiting_for_the_capability_probe(
     asyncio.run(beat_worker_prewarm(EngineRegistry(detector=detector), _persisted("beat")))
 
     assert warmed == ["beat"]
+
+
+def test_a_saved_beat_backend_gets_the_head_start_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The head start claims the BEAT family, not the single name "beat".
+
+    Each of BEAT's execution backends is its own selectable engine, so a user
+    who chose one has ``beat-metal`` saved, never ``beat``. The head start used
+    an equality test against the hook's own engine name, which would have
+    withheld it from every one of them -- and BEAT's warmup is the long one
+    this was measured for, so that would have quietly removed the fix for
+    exactly the users it was written for.
+
+    The detector refuses to answer until the warmup has started, so a prewarm
+    that awaits the probe first deadlocks the test rather than passing slowly.
+    """
+
+    from server.app import beat_worker_prewarm
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+
+    for saved in ("beat-metal", "beat-cpu", "beat"):
+        warming = threading.Event()
+        warmed: list[str | None] = []
+
+        def warm(engine: str | None) -> bool:
+            warmed.append(engine)
+            warming.set()
+            return True
+
+        def detector() -> list[EngineInfo]:
+            assert warming.wait(10.0), "the prewarm waited for the probe"
+            return [
+                EngineInfo("metal", True, "test", "0.1.0"),
+                EngineInfo("beat-metal", True, "test", "0.1.0"),
+                EngineInfo("beat-cpu", True, "test", "0.1.0"),
+            ]
+
+        monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", warm)
+        asyncio.run(
+            beat_worker_prewarm(EngineRegistry(detector=detector), _persisted(saved))
+        )
+
+        assert warmed == [saved], saved
+
+
+def test_a_saved_metal_engine_does_not_take_beats_head_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``beat-metal`` and ``metal`` are different engines, and only one is BEAT's.
+
+    A prefix test rather than a family test would have handed the Metal engine
+    to BEAT's hook, and a substring one would have done the reverse.
+    """
+
+    from server.app import beat_worker_prewarm
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    warmed: list[str | None] = []
+
+    def detector() -> list[EngineInfo]:
+        assert warmed == [], "Metal is not BEAT's to warm before the probe"
+        return [EngineInfo("metal", True, "test", "0.1.0")]
+
+    monkeypatch.setattr(
+        solver_warmup,
+        "prewarm_beat_worker_for_engine",
+        lambda engine: warmed.append(engine) or False,
+    )
+
+    asyncio.run(
+        beat_worker_prewarm(EngineRegistry(detector=detector), _persisted("metal"))
+    )
+
+    # Reached only through AUTO's resolved answer, after the probe, and
+    # refused there because it is not a BEAT engine.
+    assert warmed == ["metal"]
 
 
 def test_the_probe_still_gates_a_prewarm_with_no_saved_engine(

@@ -16,6 +16,41 @@ from typing import Any, Callable, Mapping, Sequence
 from server.platform.warmup import BackgroundWarmup
 
 
+#: The full-3D backends AUTO walks, best first. One list, because it was two:
+#: ``resolve_auto_engine`` and the ``/api/capabilities`` payload each kept their
+#: own copy, and a copy that drifted would have made the interface advertise an
+#: order the planner does not follow.
+#:
+#: Metal leads on the measured ATH ladder (1.0x at ~2,000 dofs to 6.9x at
+#: ~20,000, all of it in the solve stage). The BEAT accelerators follow; at most
+#: one of them is ever available on a given host, so their relative order only
+#: settles a two-GPU-family box. BEMPP stays ahead of BEAT's CPU path because it
+#: is the CPU engine this project has measured and shipped, and BEAT-CPU is the
+#: portable last resort rather than a peer of it -- but it *is* ahead of dryrun,
+#: because a slow real solve beats a synthetic one.
+FULL3D_ENGINE_ORDER: tuple[str, ...] = (
+    "metal",
+    "beat-cuda",
+    "beat-rocm",
+    "beat-metal",
+    "bempp",
+    "beat-cpu",
+    "dryrun",
+)
+
+#: Every engine name a solve request may name. Derived from the order above so
+#: adding a backend there is enough to make it requestable, plus the formulation
+#: and family names that are not full-3D backends: ``auto``, the axisymmetric
+#: meridian runner, and the legacy bare ``beat``.
+#:
+#: The names are spelled out rather than imported from ``server.solver.beat``
+#: on purpose -- this module is imported at boot and that one pulls the optional
+#: Julia package with it. ``test_engines_registry`` pins the two together.
+SELECTABLE_ENGINE_NAMES: frozenset[str] = frozenset(
+    {"auto", "axisym", "beat"} | set(FULL3D_ENGINE_ORDER)
+)
+
+
 @dataclass(frozen=True, slots=True)
 class EngineInfo:
     name: str
@@ -30,6 +65,14 @@ class EngineInfo:
     field_traces: bool = False
     di_sphere: bool = True
     cancellation_granularity: str = "between-frequencies"
+    #: What the selector calls this engine. ``name`` is a wire identifier and
+    #: reads like one -- "beat-rocm" tells a user nothing about what hardware it
+    #: wants. Defaults to the name so an engine that has nothing better to say
+    #: displays exactly what it did before labels existed.
+    label: str = ""
+
+    def display_label(self) -> str:
+        return self.label or self.name
 
 
 def _symmetry_domains(name: str) -> tuple[str, ...]:
@@ -44,7 +87,7 @@ def _symmetry_domains(name: str) -> tuple[str, ...]:
 
     if name in {"metal", "bempp"}:
         return ("full", "half", "quarter")
-    if name == "beat":
+    if name == "beat" or name.startswith("beat-"):
         return ("full", "half-yz", "quarter")
     return ("full",)
 
@@ -58,6 +101,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
         engines.append(
             EngineInfo(
                 name="dryrun",
+                label="Dry run \u2014 synthetic",
                 available=True,
                 reason="Enabled explicitly by WG2_ENABLE_DRYRUN=1",
                 version="builtin",
@@ -68,7 +112,12 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             )
         )
 
-    from server.solver.beat import beat_status
+    from server.solver.beat import (
+        BEAT_BACKENDS,
+        BEAT_BACKEND_LABELS,
+        beat_backend_statuses,
+        beat_engine_name,
+    )
     from server.solver.bempp import bempp_status
     from server.solver.circsym import circsym_status
     from server.solver.metal import metal_status
@@ -85,6 +134,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     engines.append(
         EngineInfo(
             name="axisym",
+            label="Axisymmetric meridian",
             available=bool(meridian_status.get("available")),
             reason=str(
                 meridian_status.get("reason")
@@ -106,11 +156,6 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
         )
     )
 
-    # "beat" is the GPU engine (hornlab-beat-bem). Its probe reports available
-    # only when a functional CUDA/ROCm/Metal path exists (or the internal
-    # force-CPU test switch is set), so on CPU-only hosts it shows up with an
-    # honest unavailable reason and BEMPP stays the CPU engine.
-    #
     # BEAT's symmetry and DI entries were stale rather than wrong: the package
     # has mapped WG's "yz" half onto its x mirror and "yz+xz" quarter onto its
     # xy mirror, and has emitted the theta-major DI grid, since the pin that
@@ -125,10 +170,9 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     # than silently mis-solved. The vocabulary here cannot say "half, one
     # orientation", and an honest runtime refusal is better than under-declaring
     # the half that does work.
-    for name, probe in (
-        ("metal", metal_status),
-        ("bempp", bempp_status),
-        ("beat", beat_status),
+    for name, label, probe in (
+        ("metal", "Metal \u2014 Apple GPU", metal_status),
+        ("bempp", "BEMPP \u2014 CPU", bempp_status),
     ):
         try:
             status = probe()
@@ -141,6 +185,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
         engines.append(
             EngineInfo(
                 name=name,
+                label=label,
                 available=bool(status.get("available")),
                 reason=str(status.get("reason") or f"{name} capability probe returned no reason"),
                 version=(str(status["version"]) if status.get("version") is not None else None),
@@ -156,20 +201,84 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                     else ("parametric",)
                 ),
                 symmetry_domains=_symmetry_domains(name),
-                field_traces=(
-                    bool(status.get("surface_traces"))
-                    if name == "beat"
-                    else name in {"metal", "bempp"}
-                ),
+                field_traces=True,
                 di_sphere=True,
-                cancellation_granularity=(
-                    "intra-frequency"
-                    if name in {"metal", "bempp"}
-                    else "between-frequencies"
+                cancellation_granularity="intra-frequency",
+            )
+        )
+
+    # BEAT is one solver with four interchangeable execution backends, and it
+    # is advertised as four engines rather than one so a host that has both a
+    # GPU and the portable CPU path can choose between them. A single "beat"
+    # entry could only ever offer whichever backend the package's probe named
+    # first, which on this project's own Macs means a user who wants to compare
+    # BEAT-CPU against BEAT-Metal has no way to ask for it.
+    #
+    # The four share every capability below: the backend is an execution
+    # choice, not a formulation, and the same Julia solver runs on each.
+    try:
+        backend_statuses = beat_backend_statuses()
+    except Exception as exc:  # a broken optional stack is unavailable, not fatal
+        backend_statuses = {
+            backend: {
+                "available": False,
+                "reason": f"beat detection failed: {exc}",
+                "version": None,
+            }
+            for backend in BEAT_BACKENDS
+        }
+    for backend in BEAT_BACKENDS:
+        status = backend_statuses.get(backend, {})
+        name = beat_engine_name(backend)
+        engines.append(
+            EngineInfo(
+                name=name,
+                label=BEAT_BACKEND_LABELS.get(backend, name),
+                available=bool(status.get("available")),
+                reason=str(
+                    status.get("reason") or f"{name} capability probe returned no reason"
                 ),
+                version=(str(status["version"]) if status.get("version") is not None else None),
+                formulations=("full-3d",),
+                mountings=("free-standing",),
+                geometry_sources=("parametric",),
+                symmetry_domains=_symmetry_domains(name),
+                field_traces=bool(status.get("surface_traces")),
+                di_sphere=True,
+                cancellation_granularity="between-frequencies",
             )
         )
     return engines
+
+
+def _beat_engine_backend(name: str) -> str | None:
+    """``beat_engine_backend`` without importing the optional stack eagerly."""
+
+    from server.solver.beat import beat_engine_backend
+
+    return beat_engine_backend(name)
+
+
+def resolve_legacy_beat_engine(
+    capabilities: Sequence[EngineInfo],
+) -> str | None:
+    """The BEAT variant the bare legacy ``beat`` name means on this host.
+
+    Design files and stored solve options written before the backends became
+    separately selectable still say ``beat``, and they must keep working. The
+    answer is AUTO's own preference restricted to BEAT, so a saved "run this on
+    BEAT" keeps meaning "run this on the best BEAT this machine has" -- which is
+    what it meant when the probe was doing the choosing.
+
+    ``None`` when no BEAT variant is available, which the caller reports as an
+    unavailable engine rather than silently substituting another solver.
+    """
+
+    available = {item.name for item in capabilities if item.available}
+    for candidate in FULL3D_ENGINE_ORDER:
+        if candidate.startswith("beat-") and candidate in available:
+            return candidate
+    return None
 
 
 def create_engine(name: str) -> Any | None:
@@ -191,6 +300,11 @@ def create_engine(name: str) -> Any | None:
         from server.solver.beat import BeatEngine
 
         return BeatEngine()
+    beat_backend = _beat_engine_backend(normalized)
+    if beat_backend is not None:
+        from server.solver.beat import BeatEngine
+
+        return BeatEngine(beat_backend)
     if normalized == "circsym":
         from server.solver.circsym import AxisymmetricEngine
 
@@ -226,22 +340,23 @@ def resolve_auto_engine(
 ) -> str | None:
     """Resolve AUTO to the best engine this host can actually run.
 
-    Solver mode chooses a path inside a backend, not a backend. AUTO prefers
-    Metal, then the GPU BEAT engine, then BEMPP; the gated dry-run engine is
-    only a final development fallback when no physical solver is available.
+    Solver mode chooses a path inside a backend, not a backend. The order is
+    ``FULL3D_ENGINE_ORDER``: Metal, then BEAT's accelerators, then BEMPP, then
+    BEAT's portable CPU path, and only then the gated dry-run engine.
 
-    The order is safe because availability already encodes the platform, but
-    not in the way it once did. "beat" advertises available only when a
-    functional accelerator was probed and never for its internal CPU path --
-    that part is unchanged. What changed is which accelerators count: the
-    package gained an Apple Metal backend, so BEAT is now available on Apple
-    Silicon too, and AUTO no longer reaches it "exactly on GPU-equipped non-Mac
-    hosts". On a Mac both Metal and BEAT are available and Metal is preferred,
-    which is a measured preference rather than a platform accident: on the ATH
-    reference ladder hornlab-metal-bem wins the whole sweep at every size, by
-    1.0x at ~2,000 dofs rising to 6.9x at ~20,000, and all of that margin is
-    the solve stage. BEAT stays explicitly selectable there. BEMPP remains the
-    universal CPU engine.
+    The order is safe because availability already encodes the platform. On a
+    Mac, Metal, BEAT-Metal, BEAT-CPU and BEMPP are all available and Metal is
+    preferred, which is a measured preference rather than a platform accident:
+    on the ATH reference ladder hornlab-metal-bem wins the whole sweep at every
+    size, by 1.0x at ~2,000 dofs rising to 6.9x at ~20,000, and all of that
+    margin is the solve stage. Every BEAT variant stays explicitly selectable
+    there.
+
+    BEAT-CPU sits behind BEMPP deliberately. Now that it is a user-facing
+    engine it is reachable by AUTO at all, which it never was before, but it is
+    the portable last resort rather than a peer of the CPU engine this project
+    has measured and shipped -- and it is still ahead of dryrun, because a slow
+    real solve beats a synthetic one.
 
     ``mounting`` drops candidates that cannot solve the requested mounting at
     all. BEAT rejects every coupled infinite-baffle request, so without this
@@ -260,7 +375,7 @@ def resolve_auto_engine(
         available &= {
             item.name for item in detected if "infinite-baffle" in item.mountings
         }
-    for candidate in ("metal", "beat", "bempp", "dryrun"):
+    for candidate in FULL3D_ENGINE_ORDER:
         if candidate in available:
             return candidate
     return None
@@ -313,6 +428,8 @@ class EngineRegistry:
             return resolve_auto_engine(
                 solver_mode=solver_mode, mounting=mounting, capabilities=capabilities
             )
+        if requested == "beat":
+            return resolve_legacy_beat_engine(capabilities)
         return requested if any(
             item.name == requested and item.available for item in capabilities
         ) else None
@@ -326,4 +443,16 @@ class EngineRegistry:
     async def unavailable_reason(self, name: str) -> str | None:
         capabilities = await self.capabilities()
         item = next((item for item in capabilities if item.name == name), None)
-        return item.reason if item is not None else None
+        if item is not None:
+            return item.reason
+        if name == "beat":
+            # The legacy family name has no entry of its own. The CPU variant
+            # carries the reason worth reporting: it is the one backend every
+            # host could run, so whatever stops it -- no Julia, no package --
+            # is why none of the four is available.
+            fallback = next(
+                (item for item in capabilities if item.name == "beat-cpu"), None
+            )
+            if fallback is not None:
+                return f"No BEAT backend is available here. {fallback.reason}"
+        return None

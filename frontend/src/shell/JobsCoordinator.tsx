@@ -2,7 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
 import { planSolveDesign, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
-import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
+import {
+  useCapabilities,
+  useCapabilityRefreshOnReconnect,
+  useLegacyBeatEngineMigration,
+} from '../jobs/useCapabilities';
 import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
@@ -157,6 +161,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   // This component owns the jobs socket, so it is where a reconnect is visible.
   useCapabilityRefreshOnReconnect(useSyncExternalStore(jobsSocket.subscribe, jobsConnection, jobsConnection));
+  useLegacyBeatEngineMigration();
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const designName = useDocumentStore((state) => state.designName);

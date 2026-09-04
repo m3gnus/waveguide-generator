@@ -126,11 +126,30 @@ has not been solved has no measured rig to show, and WG does not guess one.
 WG plans the **formulation** separately from the full-3D backend. Eligible round
 designs use the portable **Axisymmetric (meridian)** runner on macOS, Windows,
 and Linux; it runs on CPU everywhere and can use Metal acceleration on Apple
-Silicon. Non-axisymmetric designs fall back to **Metal** (Apple GPU), **BEAT**
-(NVIDIA CUDA, AMD ROCm, or Apple GPU), or **BEMPP** (CPU/OpenCL), according to
-the host and the backend selected in Solve options. On Apple Silicon both Metal
-and BEAT can run; Metal is what AUTO picks, because it is measurably faster on
-this hardware, and BEAT is there when you want it.
+Silicon. Non-axisymmetric designs fall back to **Metal** (Apple GPU), one of the
+**BEAT** engines, or **BEMPP** (CPU/OpenCL), according to the host and the
+backend selected in Solve options.
+
+BEAT is one solver with four interchangeable execution backends, and the Solver
+backend list offers each of them separately:
+
+| Engine | Runs on |
+|---|---|
+| **BEAT · CUDA** | an NVIDIA GPU |
+| **BEAT · ROCm** | an AMD GPU |
+| **BEAT · Metal** | an Apple Silicon GPU |
+| **BEAT · CPU** | any machine with a Julia runtime, no GPU needed |
+
+They all solve the same problem and differ only in speed, so on a machine with
+both a GPU and the CPU path you can pick either and compare. Any engine this
+machine cannot run stays in the list, greyed out, with the reason on the row —
+so a missing driver or an uninstalled runtime says so instead of vanishing.
+
+On Apple Silicon, Metal, BEAT · Metal and BEAT · CPU can all run. AUTO picks
+Metal, because it is measurably faster on this hardware; the BEAT engines are
+there when you want them. AUTO reaches BEAT · CPU only when nothing else on the
+machine can solve, since it is the portable fallback rather than the fastest CPU
+route — BEMPP is that.
 
 The infinite-baffle setting is design physics, not a solver choice. Axisymmetric,
 Metal full 3D, and current BEMPP full 3D all implement the coupled interior plus

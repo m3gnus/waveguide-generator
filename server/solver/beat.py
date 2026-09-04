@@ -1,11 +1,13 @@
-"""GPU-gated adapter for ``hornlab-beat-bem`` (the BEAT Engine Julia solver).
+"""Adapter for ``hornlab-beat-bem`` (the BEAT Engine Julia solver).
 
-User-facing availability is GPU-only (CUDA today, ROCm when hardware lands):
-``beat_status`` reports available solely when the package's own probe finds a
-functional accelerator, so BEMPP remains the CPU engine everywhere. The BEAT
-CPU backend still exists behind ``HORNLAB_BEAT_FORCE_CPU=1`` as the internal
-scaffolding this adapter was validated on and as the CI/regression path; it is
-never advertised to users.
+BEAT is not one engine. It is one solver with four interchangeable execution
+backends -- CUDA, ROCm, Metal and a portable CPU path -- and WG advertises each
+of them as its own selectable engine (``beat-cuda``, ``beat-rocm``,
+``beat-metal``, ``beat-cpu``), so a host with both a GPU and a CPU path can
+choose between them instead of being handed whichever one a probe picked first.
+``beat_backend_statuses`` is where that per-backend answer comes from; the bare
+``beat`` name that WG advertised while BEAT was a single entry is still accepted
+from stored preferences and design files and resolves to an available variant.
 
 Import/load behavior, staged solve, and result mapping mirror
 ``server/solver/bempp.py``; absence is a normal capability state.
@@ -68,10 +70,106 @@ class BeatUnavailable(RuntimeError):
     """The optional BEAT Engine package cannot run a solve here."""
 
 
+#: BEAT's execution backends, in the order AUTO should prefer them: the three
+#: accelerators, then the portable path every host with a Julia can run.
+BEAT_CPU_BACKEND = "cpu"
+BEAT_BACKENDS: tuple[str, ...] = ("cuda", "rocm", "metal", BEAT_CPU_BACKEND)
+
 #: Where ``resolve_beat_backend`` lands when a probe reports available without
 #: naming an accelerator. The CPU path is the one backend every host has, so a
 #: wrong guess here costs a slow solve rather than a failed device init.
-BEAT_FALLBACK_BACKEND = "cpu"
+BEAT_FALLBACK_BACKEND = BEAT_CPU_BACKEND
+
+#: The engine name WG advertised while BEAT was a single entry. Design files and
+#: stored solve options written before the split still carry it, so it stays a
+#: valid request and resolves to whichever variant this host can actually run.
+LEGACY_BEAT_ENGINE = "beat"
+
+_BEAT_ENGINE_PREFIX = "beat-"
+
+#: What the selector calls each variant. The accelerator is the part a user
+#: chooses between, so it leads; the hardware it needs is what makes a greyed-out
+#: row legible without reading its reason.
+BEAT_BACKEND_LABELS: dict[str, str] = {
+    "cuda": "BEAT \u00b7 CUDA \u2014 NVIDIA GPU",
+    "rocm": "BEAT \u00b7 ROCm \u2014 AMD GPU",
+    "metal": "BEAT \u00b7 Metal \u2014 Apple GPU",
+    BEAT_CPU_BACKEND: "BEAT \u00b7 CPU \u2014 no GPU needed",
+}
+
+#: Named in an unavailable reason, so a greyed-out row says what it would take.
+_BEAT_BACKEND_PREREQUISITES: dict[str, str] = {
+    "cuda": "an NVIDIA GPU with a functional CUDA.jl",
+    "rocm": "an AMD ROCm runtime with a functional AMDGPU.jl",
+    "metal": "an Apple Silicon GPU with a functional Metal.jl",
+}
+
+#: How the package's probe names each accelerator family in its own prose.
+_BEAT_BACKEND_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "cuda": ("cuda", "nvidia"),
+    "rocm": ("rocm", "amdgpu", "amd"),
+    "metal": ("metal", "apple"),
+}
+
+
+def _probe_reason_is_about(backend: str, reason: str) -> bool:
+    """Whether the probe's verdict is about this accelerator family alone.
+
+    The probe answers for BEAT as a whole, so its reason lands on one of three
+    shapes, and only one of them belongs on a given row. "An NVIDIA GPU is
+    present but the CUDA path is not usable: ..." is exactly what a user with a
+    broken CUDA install needs to read -- and is noise on the Metal row. The
+    verdict for a host with no accelerator at all names every family at once,
+    and belongs on none of them: each row's own prerequisite sentence already
+    says what is missing, and that generic verdict also carries advice about
+    BEAT being GPU-only which stopped being true when the CPU backend became a
+    user-facing engine.
+
+    Naming exactly one family is what separates the two, so that is the test.
+    It is prose matching and it can only ever lose detail: a reason this does
+    not recognise is left off a row that still states its own prerequisite,
+    which is the sentence a user acts on.
+    """
+
+    lowered = reason.lower()
+    mine = _BEAT_BACKEND_KEYWORDS.get(backend, ())
+    others = {
+        word
+        for name, words in _BEAT_BACKEND_KEYWORDS.items()
+        if name != backend
+        for word in words
+    }
+    return any(word in lowered for word in mine) and not any(
+        word in lowered for word in others
+    )
+
+
+def beat_engine_name(backend: str) -> str:
+    """The engine name that selects ``backend``."""
+
+    return f"{_BEAT_ENGINE_PREFIX}{backend}"
+
+
+def beat_engine_backend(engine: str) -> str | None:
+    """The BEAT backend an engine name selects, or ``None`` for any other engine.
+
+    The bare legacy ``beat`` deliberately returns ``None`` rather than a
+    default: it names the family, not a backend, and the caller that can see
+    the host's capabilities is the one entitled to pick which variant it means.
+    """
+
+    normalized = str(engine or "").strip().lower()
+    if not normalized.startswith(_BEAT_ENGINE_PREFIX):
+        return None
+    backend = normalized[len(_BEAT_ENGINE_PREFIX) :]
+    return backend if backend in BEAT_BACKENDS else None
+
+
+def is_beat_engine(engine: str) -> bool:
+    """Whether ``engine`` names BEAT, as a variant or by the legacy family name."""
+
+    normalized = str(engine or "").strip().lower()
+    return normalized == LEGACY_BEAT_ENGINE or beat_engine_backend(normalized) is not None
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +264,138 @@ def beat_status() -> dict[str, Any]:
 beat_status.cache_clear = _cached_successful_beat_status.cache_clear  # type: ignore[attr-defined]
 
 
+def _cpu_julia_project() -> Path | None:
+    """The bundled CPU Julia project directory, or ``None`` if unlocatable."""
+
+    try:
+        runtime = importlib.import_module("hornlab_beat_bem.runtime")
+    except (ImportError, OSError):
+        return None
+    factory = getattr(runtime, "default_project", None)
+    if factory is None:
+        return None
+    try:
+        return Path(factory(BEAT_CPU_BACKEND))
+    except Exception:  # noqa: BLE001 - an unlocatable project is not a probe failure
+        return None
+
+
+def _cpu_backend_status(package: Any) -> tuple[bool, str]:
+    """Whether a BEAT CPU solve could start here, without paying a Julia startup.
+
+    Asked cheaply on purpose. The three accelerator backends each have a device
+    that can be present and still not work, which is why the package pays a
+    Julia launch to ask ``CUDA``/``AMDGPU``/``Metal``.``functional()``. The CPU
+    path has no device to fail on: its bundled project is pure Julia with a
+    checked-in Manifest, so "is there a Julia, and is the project there" is the
+    whole question. Asking it this way keeps a second Julia launch off every
+    boot, including on the GPU hosts that already pay for one.
+
+    What that trades away is first-run package precompilation: a host that has
+    never run the CPU project pays it on the first solve, and an offline host
+    that has never instantiated it fails there rather than here. That is the
+    same honesty the ``HORNLAB_BEAT_FORCE_CPU`` path has always had, and it is
+    the cheap half of the question -- a missing Julia, which is the case that
+    actually happens -- that this answers exactly.
+    """
+
+    try:
+        julia = package.discover_julia()
+    except Exception as exc:  # noqa: BLE001 - a broken optional stack is unavailable
+        return False, f"BEAT CPU detection failed: {exc}"
+    if julia is None:
+        env_var = getattr(package, "JULIA_ENV_VAR", "HORNLAB_BEAT_JULIA")
+        return False, (
+            "No Julia executable was found. Install Julia >= 1.10 and put it on "
+            f"PATH, set {env_var} to its full path, or run: "
+            "python -m hornlab_beat_bem.provision"
+        )
+    project = _cpu_julia_project()
+    if project is not None and not (project / "Project.toml").exists():
+        return False, f"The bundled BEAT CPU Julia project is missing: {project}"
+    return True, (
+        "Julia was found and BEAT's bundled CPU project is present; this backend "
+        "runs on any host and needs no accelerator."
+    )
+
+
+def beat_backend_statuses() -> dict[str, dict[str, Any]]:
+    """One status per BEAT backend, from a single package probe.
+
+    ``hornlab_beat_bem.beat_engine_status`` answers a deliberately different
+    question: which *one* backend a solve would use, taking the first
+    accelerator family whose hardware is present. That is the right answer for
+    AUTO and the wrong one for a selector, which has to say something about
+    every backend a user might pick -- including the CPU path, which the probe
+    only ever names under ``HORNLAB_BEAT_FORCE_CPU`` and which is in fact
+    available wherever a Julia is.
+
+    Nothing here re-implements the package's detection, which is the whole
+    point: the probe runs once, the backend it named is available for the
+    reason it gave, and every other backend reports its own prerequisite
+    alongside what the probe actually found. Two copies of "is there a CUDA
+    device" would be one upstream edit away from disagreeing, and the copy that
+    drifted would be the one in the dropdown.
+
+    The known gap is a host with two accelerator families -- an NVIDIA card and
+    an AMD card in the same box. The probe names the first, so the second reads
+    unavailable here even though it would work. That under-declares rather than
+    over-promises, which is the safe direction, and closing it needs a
+    per-backend probe in ``hornlab-beat-bem`` rather than a second detector in
+    this file.
+    """
+
+    package = _load_api()
+    if package is None:
+        reason = (
+            "hornlab-beat-bem is not importable (optional BEAT engine not installed)."
+        )
+        return {
+            backend: {
+                "available": False,
+                "reason": reason,
+                "version": None,
+                "backend": backend,
+                "surface_traces": False,
+            }
+            for backend in BEAT_BACKENDS
+        }
+
+    status = beat_status()
+    probe_reason = str(status.get("reason") or "beat capability probe returned no reason")
+    selected = str(status.get("backend") or "") if status.get("available") else ""
+    statuses: dict[str, dict[str, Any]] = {}
+    for backend in BEAT_BACKENDS:
+        if backend == selected:
+            available, reason = True, probe_reason
+        elif backend == BEAT_CPU_BACKEND:
+            available, reason = _cpu_backend_status(package)
+        elif selected:
+            available = False
+            reason = (
+                f"Needs {_BEAT_BACKEND_PREREQUISITES[backend]}. The BEAT probe "
+                f"selected the {selected} backend on this host instead."
+            )
+        else:
+            available = False
+            reason = f"Needs {_BEAT_BACKEND_PREREQUISITES[backend]}."
+            if _probe_reason_is_about(backend, probe_reason):
+                # Attributed rather than stated as WG's own: it is the evidence
+                # a user needs, written by a component that is pinned and
+                # re-pinned separately from this sentence.
+                reason += f" The BEAT probe reported: {probe_reason}"
+        statuses[backend] = {
+            "available": available,
+            "reason": reason,
+            "version": status.get("version"),
+            "backend": backend,
+            # Detected, not assumed, and identical across backends: surface-trace
+            # retention is a property of the installed package, not the device.
+            "surface_traces": bool(status.get("surface_traces")),
+        }
+    return statuses
+
+
 def resolve_beat_backend(status: Mapping[str, Any]) -> str:
     """The accelerator a BEAT solve will run on, given a probe result.
 
@@ -218,6 +448,7 @@ def solve_beat_from_msh_text(
     msh_text: str,
     context: SolverContext,
     *,
+    backend: str | None = None,
     mesh_metadata: dict[str, Any] | None = None,
     mesh_stats: Mapping[str, Any] | None = None,
     field_trace_cap_bytes: int | None = None,
@@ -226,7 +457,13 @@ def solve_beat_from_msh_text(
     cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None,
 ) -> dict[str, Any]:
-    """Solve one authoritative Gmsh artifact on the BEAT Engine backend."""
+    """Solve one authoritative Gmsh artifact on a named BEAT Engine backend.
+
+    ``backend`` is the caller's explicit choice, which is what an engine name
+    like ``beat-metal`` means. Omitting it keeps the pre-split behaviour: the
+    package's own probe picks the backend, which is what the legacy ``beat``
+    engine name still asks for.
+    """
 
     context.validate()
     del mesh_metadata
@@ -236,10 +473,23 @@ def solve_beat_from_msh_text(
     package = _load_api()
     if package is None:
         raise BeatUnavailable("hornlab-beat-bem is not installed.")
-    status = beat_status()
-    if not status["available"]:
-        raise BeatUnavailable(status["reason"])
-    backend = resolve_beat_backend(status)
+    if backend is None:
+        status = beat_status()
+        if not status["available"]:
+            raise BeatUnavailable(status["reason"])
+        backend = resolve_beat_backend(status)
+    else:
+        # Availability is asked per backend, not of BEAT as a whole: on a Mac
+        # the package probe reports ``metal``, and answering "is BEAT
+        # available" there would refuse a CPU solve the user explicitly chose.
+        status = beat_backend_statuses().get(backend)
+        if status is None:
+            raise BeatUnavailable(
+                f"Unknown BEAT backend {backend!r}; expected one of "
+                + ", ".join(BEAT_BACKENDS)
+            )
+        if not status["available"]:
+            raise BeatUnavailable(status["reason"])
     field_plane_enabled = (
         getattr(context, "polar_config", {}).get("field_plane", True) is True
     )
@@ -435,7 +685,22 @@ def solve_beat_from_msh_text(
 
 
 class BeatEngine:
-    name = "beat"
+    """One BEAT execution backend, as a selectable WG engine.
+
+    Constructed with the backend its engine name encodes, so the adapter that
+    was chosen is the adapter that runs. ``backend=None`` is the legacy
+    ``beat`` engine: the package probe picks, exactly as it did before the
+    backends became separately selectable.
+    """
+
+    def __init__(self, backend: str | None = None) -> None:
+        if backend is not None and backend not in BEAT_BACKENDS:
+            raise ValueError(
+                f"Unknown BEAT backend {backend!r}; expected one of "
+                + ", ".join(BEAT_BACKENDS)
+            )
+        self.backend = backend
+        self.name = LEGACY_BEAT_ENGINE if backend is None else beat_engine_name(backend)
 
     async def run(
         self,
@@ -463,6 +728,7 @@ class BeatEngine:
             solve_beat_from_msh_text,
             mesh["msh_text"],
             context,
+            backend=self.backend,
             mesh_metadata=mesh["metadata"],
             mesh_stats=mesh["stats"],
             stage_callback=stage_cb,
@@ -486,11 +752,19 @@ class BeatEngine:
 
 
 __all__ = [
+    "BEAT_BACKENDS",
+    "BEAT_BACKEND_LABELS",
+    "BEAT_CPU_BACKEND",
     "BEAT_FALLBACK_BACKEND",
+    "LEGACY_BEAT_ENGINE",
     "BeatEngine",
     "BeatUnavailable",
     "announce_beat_warmup_wait",
+    "beat_backend_statuses",
+    "beat_engine_backend",
+    "beat_engine_name",
     "beat_status",
+    "is_beat_engine",
     "resolve_beat_backend",
     "solve_beat_from_msh_text",
 ]
