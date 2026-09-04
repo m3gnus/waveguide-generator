@@ -201,8 +201,44 @@ async def prewarm_solver() -> None:
     start_solver_warmup()
 
 
-async def bempp_worker_prewarm(engine_registry: EngineRegistry) -> None:
-    """Warm the killable BEMPP worker once AUTO's answer is known.
+async def resolve_prewarm_engine(
+    engine_registry: EngineRegistry, settings: object | None
+) -> str | None:
+    """The engine this host's first solve will actually use.
+
+    AUTO's answer while the picker is on AUTO, and the user's own choice when
+    it is not. That distinction is the whole point: both prewarm hooks used to
+    ask AUTO unconditionally, which is the right question only for a user who
+    never touched the picker. A Mac user who has explicitly selected BEAT gets
+    ``metal`` from AUTO -- correctly, Metal is faster there -- so the hook
+    warmed an engine that user's first solve never reached and left BEAT's
+    40 s of Julia startup, package loading and JIT to be paid on it instead.
+
+    ``EngineRegistry.resolve`` returns ``None`` for an engine this host cannot
+    run, and that is what makes the fallback safe: a saved choice that no
+    longer probes available -- a GPU that has gone, a package that was not
+    installed on this machine -- warms whatever AUTO would reach rather than
+    warming nothing at all.
+    """
+
+    from server.solver.warmup import persisted_engine_preference
+
+    requested = await asyncio.to_thread(persisted_engine_preference, settings)
+    if requested is not None and requested != "auto":
+        selected = await engine_registry.resolve(requested, solver_mode=None)
+        if selected is not None:
+            return selected
+        logging.getLogger("wg.solver.warmup").info(
+            "Selected engine %r is not available here; warming AUTO's choice instead",
+            requested,
+        )
+    return await engine_registry.resolve("auto", solver_mode=None)
+
+
+async def bempp_worker_prewarm(
+    engine_registry: EngineRegistry, settings: object | None = None
+) -> None:
+    """Warm the killable BEMPP worker once the engine to warm is known.
 
     Takes the answer from the registry rather than probing for it. An earlier
     revision called ``resolve_auto_engine()`` on its own thread and so ran a
@@ -216,34 +252,37 @@ async def bempp_worker_prewarm(engine_registry: EngineRegistry) -> None:
     from server.solver.warmup import prewarm_bempp_worker_for_engine
 
     try:
-        engine = await engine_registry.resolve("auto", solver_mode=None)
+        engine = await resolve_prewarm_engine(engine_registry, settings)
     except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
         logging.getLogger("wg.solver.warmup").info(
-            "BEMPP worker prewarm could not resolve AUTO: %s", exc
+            "BEMPP worker prewarm could not resolve an engine: %s", exc
         )
         return
     await asyncio.to_thread(prewarm_bempp_worker_for_engine, engine)
 
 
-async def beat_worker_prewarm(engine_registry: EngineRegistry) -> None:
-    """Warm the BEAT Julia worker once AUTO's answer is known.
+async def beat_worker_prewarm(
+    engine_registry: EngineRegistry, settings: object | None = None
+) -> None:
+    """Warm the BEAT Julia worker once the engine to warm is known.
 
     The same shape as ``bempp_worker_prewarm``, and for the same reason: BEAT
     keeps one persistent Julia worker for the life of this process, so its
     startup, package loading, engine compilation and GPU kernel compilation
     are paid once -- but until this hook existed nothing paid them, and a GPU
     host's first solve waited through all of it before its first frequency.
-    Both hooks are registered; each returns immediately unless AUTO named its
-    own engine, so at most one ever warms anything.
+    Both hooks are registered; each returns immediately unless
+    ``resolve_prewarm_engine`` named its own engine, so at most one ever warms
+    anything.
     """
 
     from server.solver.warmup import prewarm_beat_worker_for_engine
 
     try:
-        engine = await engine_registry.resolve("auto", solver_mode=None)
+        engine = await resolve_prewarm_engine(engine_registry, settings)
     except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
         logging.getLogger("wg.solver.warmup").info(
-            "BEAT worker prewarm could not resolve AUTO: %s", exc
+            "BEAT worker prewarm could not resolve an engine: %s", exc
         )
         return
     await asyncio.to_thread(prewarm_beat_worker_for_engine, engine)
@@ -364,7 +403,9 @@ def create_app(
         """
 
         application.state.bempp_prewarm_task = asyncio.create_task(
-            bempp_worker_prewarm(engine_registry)
+            bempp_worker_prewarm(
+                engine_registry, getattr(application.state, "settings", None)
+            )
         )
 
     async def prewarm_beat_worker() -> None:
@@ -376,7 +417,9 @@ def create_app(
         """
 
         application.state.beat_prewarm_task = asyncio.create_task(
-            beat_worker_prewarm(engine_registry)
+            beat_worker_prewarm(
+                engine_registry, getattr(application.state, "settings", None)
+            )
         )
 
     async def shutdown_beat_worker() -> None:

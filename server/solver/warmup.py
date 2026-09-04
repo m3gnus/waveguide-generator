@@ -66,6 +66,7 @@ pipe -- so it runs as an ordinary task the app can cancel.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -328,6 +329,56 @@ def start_solver_warmup() -> threading.Thread | None:
         return _thread
 
 
+#: The frontend namespace that carries the solve options, and the key inside it
+#: that names the engine. ``server/settings/store.py`` stores every namespace
+#: opaquely because the frontend owns the schema; this reads one string out of
+#: one of them and treats every other shape as "no preference", so a schema
+#: change on that side costs a missed warmup rather than a failed boot.
+SOLVE_OPTIONS_NAMESPACE = "solveOptions"
+
+
+def persisted_engine_preference(settings: object | None) -> str | None:
+    """The engine the user last selected, or ``None`` if they never selected one.
+
+    The prewarm hooks have to answer "which engine will this user's first solve
+    use", and AUTO's answer is only that answer while the picker is left on
+    AUTO. It is wrong precisely where the wait is longest: on a Mac AUTO
+    resolves to Metal -- correctly, it is measurably faster there -- so a user
+    who has explicitly chosen BEAT got no warmup at all, and paid BEAT's whole
+    one-off cost on their first solve, every launch. Measured on the reference
+    Windows box against the CPU backend: 40.2 s for the first warmup and 0.1 s
+    for the second, so this is the difference between a 40 s first solve and an
+    immediate one.
+
+    Returns the raw stored string, lowercased -- including ``"auto"``, which
+    the caller distinguishes from a real engine name. Availability is not
+    checked here; ``EngineRegistry.resolve`` is what knows whether this host
+    can actually run the answer.
+    """
+
+    if settings is None:
+        return None
+    try:
+        stored = settings.get(SOLVE_OPTIONS_NAMESPACE)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - an unreadable setting is no preference
+        return None
+    if isinstance(stored, str):
+        try:
+            stored = json.loads(stored)
+        except ValueError:
+            return None
+    if not isinstance(stored, Mapping):
+        return None
+    # The frontend persists through Zustand, which wraps the store in "state".
+    state = stored.get("state")
+    if not isinstance(state, Mapping):
+        return None
+    engine = state.get("engine")
+    if not isinstance(engine, str):
+        return None
+    return engine.strip().lower() or None
+
+
 def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
     """Warm the BEAT Julia worker, but only where AUTO would reach it.
 
@@ -402,6 +453,7 @@ def solver_warmup_thread() -> threading.Thread | None:
 __all__ = [
     "WARMUP_FREQUENCY_HZ",
     "WARMUP_MESH",
+    "persisted_engine_preference",
     "prewarm_beat_worker_for_engine",
     "prewarm_bempp_worker_for_engine",
     "solver_warmup_thread",

@@ -791,3 +791,149 @@ def test_a_failing_probe_never_escapes_the_warmup() -> None:
         assert task.exception() is None
 
     asyncio.run(scenario())
+
+
+class _StubSettings:
+    """The one method ``persisted_engine_preference`` uses of ``SettingsStore``."""
+
+    def __init__(self, stored: object) -> None:
+        self._stored = stored
+
+    def get(self, namespace: str) -> object | None:
+        return self._stored if namespace == "solveOptions" else None
+
+
+def _persisted(engine: str) -> _StubSettings:
+    """A settings store holding what the frontend actually writes.
+
+    Zustand persists under a ``state`` key, and ``SettingsStore`` keeps the
+    namespace payload as the opaque JSON *string* the frontend PUT, so the
+    real value is doubly encoded. A test that skipped either layer would pass
+    against a reader that cannot parse the file on disk.
+    """
+
+    return _StubSettings(json.dumps({"state": {"engine": engine, "solverMode": "full_3d"}}))
+
+
+def test_the_persisted_engine_preference_is_read_through_both_encodings() -> None:
+    from server.solver.warmup import persisted_engine_preference
+
+    assert persisted_engine_preference(_persisted("beat")) == "beat"
+    assert persisted_engine_preference(_persisted("AUTO")) == "auto"
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        None,
+        "not json at all",
+        json.dumps({"state": {}}),
+        json.dumps({"state": {"engine": 7}}),
+        json.dumps({"engine": "beat"}),  # no Zustand envelope
+        json.dumps([]),
+    ],
+)
+def test_an_unreadable_preference_is_no_preference_rather_than_an_error(
+    stored: object,
+) -> None:
+    """The frontend owns this schema, so every other shape must cost a warmup.
+
+    ``server/settings/store.py`` stores namespaces opaquely precisely so the
+    two sides do not have to agree; a reader that raised on an unexpected
+    shape would turn a frontend schema change into a failed boot.
+    """
+
+    from server.solver.warmup import persisted_engine_preference
+
+    assert persisted_engine_preference(_StubSettings(stored)) is None
+    assert persisted_engine_preference(None) is None
+
+
+def test_the_beat_prewarm_follows_the_users_choice_over_autos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Mac first-solve stall this fixes.
+
+    Both prewarm hooks used to ask AUTO unconditionally. On a Mac AUTO answers
+    ``metal`` -- correctly, it is faster there -- so a user who had explicitly
+    selected BEAT got no warmup, and paid BEAT's Julia startup, package load
+    and JIT on their first solve of every session. Measured against the CPU
+    backend on the reference Windows box: 40.2 s the first time, 0.1 s the
+    second.
+    """
+
+    from server.app import beat_worker_prewarm
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    warmed: list[str | None] = []
+    monkeypatch.setattr(
+        solver_warmup,
+        "prewarm_beat_worker_for_engine",
+        lambda engine: warmed.append(engine) or True,
+    )
+
+    registry = EngineRegistry(
+        detector=lambda: [
+            EngineInfo("metal", True, "test", "0.1.0"),
+            EngineInfo("beat", True, "test", "0.1.0"),
+        ]
+    )
+
+    # AUTO prefers Metal on this host, so the old code warmed Metal and left
+    # the engine the user actually solves with cold.
+    assert asyncio.run(registry.resolve("auto", solver_mode=None)) == "metal"
+
+    asyncio.run(beat_worker_prewarm(registry, _persisted("beat")))
+
+    assert warmed == ["beat"]
+
+
+def test_a_saved_engine_this_host_cannot_run_falls_back_to_auto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A GPU that has gone must cost the optimisation, not the whole warmup."""
+
+    from server.app import bempp_worker_prewarm
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    warmed: list[str | None] = []
+    monkeypatch.setattr(
+        solver_warmup,
+        "prewarm_bempp_worker_for_engine",
+        lambda engine: warmed.append(engine) or True,
+    )
+
+    registry = EngineRegistry(detector=lambda: [EngineInfo("bempp", True, "test", "0.1.0")])
+
+    asyncio.run(bempp_worker_prewarm(registry, _persisted("beat")))
+
+    assert warmed == ["bempp"]
+
+
+def test_leaving_the_picker_on_auto_still_warms_autos_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-existing behaviour, which the change above must not disturb."""
+
+    from server.app import bempp_worker_prewarm
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    warmed: list[str | None] = []
+    monkeypatch.setattr(
+        solver_warmup,
+        "prewarm_bempp_worker_for_engine",
+        lambda engine: warmed.append(engine) or True,
+    )
+
+    registry = EngineRegistry(detector=lambda: [EngineInfo("bempp", True, "test", "0.1.0")])
+
+    asyncio.run(bempp_worker_prewarm(registry, _persisted("auto")))
+    asyncio.run(bempp_worker_prewarm(registry, None))
+
+    assert warmed == ["bempp", "bempp"]
