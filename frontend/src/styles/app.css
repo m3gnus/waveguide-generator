@@ -30,6 +30,19 @@ button:disabled { cursor: default; }
 
 /* top rail */
 .topbar { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 8px 0 12px; border-bottom: 1px solid var(--hair); background: var(--topbar-grad); box-shadow: 0 1px 0 var(--edge-hi) inset; }
+/* Everything in the top bar except the window controls, in the one flex item
+ * that is allowed to give. The controls sit at the trailing end on Windows
+ * and are the only pointer route to minimize, maximize or close a window
+ * whose caption has been removed, so they must never be what an overflowing
+ * bar pushes past the window edge -- and as the last item of the row that is
+ * what they were. Measured before this existed: at the launcher's own 1100 px
+ * minimum window width the bar wanted 1119 px and 19 px of the close button
+ * hung outside the window; at 733 px -- that same minimum on a 150% display --
+ * the bar wanted 971 px and all three buttons sat wholly outside it, leaving
+ * the window with no pointer way to close. `min-width: 0` is what lets the
+ * shrink land here instead. `gap: inherit` takes whatever spacing the media
+ * queries below set on `.topbar`, so that spacing still has one owner. */
+.topbar-main { display: flex; align-items: center; gap: inherit; flex: 1 1 auto; min-width: 0; }
 .brand { display: flex; align-items: center; gap: 8px; flex: none; }
 .brand-mark { width: 21px; height: 21px; color: var(--fg); }
 .brand-name { display: block; color: var(--fg); font-size: var(--text-micro); font-weight: 650; letter-spacing: .155em; opacity: .88; white-space: nowrap; }

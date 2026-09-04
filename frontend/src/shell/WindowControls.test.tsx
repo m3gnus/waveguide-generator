@@ -302,3 +302,47 @@ describe('the drag exemptions', () => {
     expect(inCss).toEqual(inTs);
   });
 });
+
+/**
+ * The controls have to survive a top bar too crowded to fit in the window.
+ *
+ * `.topbar` is a flex row and the trailing controls are its last item, so
+ * every pixel the row overflowed by pushed them further past the window's
+ * right edge -- and they are the only pointer route to minimize, maximize or
+ * close a window whose caption has been removed. Measured against the shipped
+ * 0.3.0 build before the wrapper existed: at the launcher's own 1100 px
+ * minimum window width the bar wanted 1119 px and 19 px of the close button
+ * hung outside; at 733 px -- that same minimum window on a 150% display --
+ * the bar wanted 971 px and all three buttons sat wholly outside the window.
+ *
+ * macOS never showed it because its controls are the *first* item, which is
+ * why this reads as a Windows-only bug rather than as a layout bug.
+ */
+describe('an overflowing top bar gives before the window controls do', () => {
+  it('mounts both control groups outside the shrinkable wrapper', () => {
+    const tsx = new TextDecoder().decode(readFileSync('src/shell/TopBar.tsx'));
+    const open = tsx.indexOf('<div className="topbar-main">');
+    expect(open).toBeGreaterThan(-1);
+    // The wrapper's own closing tag is the one at the header's indentation;
+    // everything nested inside it closes further in.
+    const close = tsx.indexOf('\n    </div>', open);
+    expect(close).toBeGreaterThan(open);
+    // Inside the wrapper they would be carried out of the window by the very
+    // content the wrapper exists to absorb.
+    expect(tsx.slice(open, close)).not.toContain('<WindowControls');
+    expect(tsx).toContain('<WindowControls side="leading"/>');
+    expect(tsx).toContain('<WindowControls side="trailing"/>');
+  });
+
+  it('lets the wrapper, and only the wrapper, take the shrink', () => {
+    const css = new TextDecoder().decode(readFileSync('src/styles/app.css'));
+    const rule = /\.topbar-main \{([^}]*)\}/.exec(css);
+    expect(rule).not.toBeNull();
+    const declarations = rule?.[1] ?? '';
+    // `min-width: 0` is the whole of the fix. Without it the wrapper's
+    // min-content width is its children's, the row overflows exactly as
+    // before, and the controls are again what leaves the window.
+    expect(declarations).toMatch(/min-width:\s*0/);
+    expect(declarations).toMatch(/flex:\s*1\s+1\s+auto/);
+  });
+});

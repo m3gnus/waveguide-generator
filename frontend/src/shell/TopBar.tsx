@@ -302,25 +302,33 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
 
   return <header className="topbar">
     <WindowControls side="leading"/>
-    <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>
-    <i className="v-separator" />
-    <DesignFileMenu />
-    <div className="button-group">
-      <button className="icon-button" disabled={!canUndo} onClick={undo} title="Undo"><Icon name="undo"/></button>
-      <button className="icon-button" disabled={!canRedo} onClick={redo} title="Redo"><Icon name="redo"/></button>
+    {/* Everything except the window controls, in one shrinkable box.
+      * The controls are the only way to minimize, maximize or close a
+      * window whose caption has been removed, so they must never be what
+      * a crowded top bar pushes out of the window -- and as the last item
+      * of an overflowing flex row that is exactly what they were. This
+      * wrapper is `min-width: 0`, so the row shrinks here instead. */}
+    <div className="topbar-main">
+      <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>
+      <i className="v-separator" />
+      <DesignFileMenu />
+      <div className="button-group">
+        <button className="icon-button" disabled={!canUndo} onClick={undo} title="Undo"><Icon name="undo"/></button>
+        <button className="icon-button" disabled={!canRedo} onClick={redo} title="Redo"><Icon name="redo"/></button>
+      </div>
+      <CommandPalette entries={paletteEntries}/>
+      <WorkspaceModeSwitch/>
+      <SolveActions/>
+      <i className="v-separator" />
+      <div className="theme-toggle" aria-label="Color theme">
+        <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme" aria-pressed={theme === 'dark'}><Icon name="moon"/></button>
+        <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')} aria-label="Light theme" aria-pressed={theme === 'light'}><Icon name="sun"/></button>
+      </div>
+      <button className="icon-button" onClick={() => setReportOpen(true)} title="Report a problem" aria-label="Report a problem"><Icon name="info"/></button>
+      <button className="icon-button" onClick={showSettings} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
+      <button className="icon-button" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
+      <span className="revision-chip" title="Design revision">r{revision}</span>
     </div>
-    <CommandPalette entries={paletteEntries}/>
-    <WorkspaceModeSwitch/>
-    <SolveActions/>
-    <i className="v-separator" />
-    <div className="theme-toggle" aria-label="Color theme">
-      <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme" aria-pressed={theme === 'dark'}><Icon name="moon"/></button>
-      <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')} aria-label="Light theme" aria-pressed={theme === 'light'}><Icon name="sun"/></button>
-    </div>
-    <button className="icon-button" onClick={() => setReportOpen(true)} title="Report a problem" aria-label="Report a problem"><Icon name="info"/></button>
-    <button className="icon-button" onClick={showSettings} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
-    <button className="icon-button" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
-    <span className="revision-chip" title="Design revision">r{revision}</span>
     <WindowControls side="trailing"/>
     <SettingsDialog open={settingsOpen} theme={theme} focusSection={settingsSection} onThemeChange={setTheme} onClose={closeSettings}/>
     <UpdateDialog open={updateOpen} snapshot={update} onRefresh={update.refresh} onClose={() => setUpdateOpen(false)}/>
