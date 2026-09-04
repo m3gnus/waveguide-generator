@@ -1793,6 +1793,30 @@
         "title": "DriverHit",
         "type": "object"
       },
+      "DriverKindCount": {
+        "description": "What the library holds of one driver type.",
+        "properties": {
+          "complete": {
+            "default": 0,
+            "title": "Complete",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "total"
+        ],
+        "title": "DriverKindCount",
+        "type": "object"
+      },
       "DriverLibraryFile": {
         "properties": {
           "bundled": {
@@ -1834,6 +1858,14 @@
             "title": "Folder",
             "type": "string"
           },
+          "kinds": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DriverKindCount"
+            },
+            "title": "Kinds",
+            "type": "array"
+          },
           "last_scan": {
             "anyOf": [
               {
@@ -1871,6 +1903,14 @@
             },
             "title": "Items",
             "type": "array"
+          },
+          "matches_by_kind": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Matches By Kind",
+            "type": "object"
           },
           "total": {
             "title": "Total",
