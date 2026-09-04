@@ -37,6 +37,7 @@ from server.platform.origin import (
     parse_extra_websocket_origins,
     request_origin_allowed,
 )
+from server.platform.acl_migration import repair_legacy_acls
 from server.platform.paths import app_root, default_runs_dir, resolve_data_dir
 from shared.build_identity import build_identity, build_label
 from server.preview.service import mount_preview
@@ -244,6 +245,7 @@ async def worker_prewarm(
     *,
     engine: str,
     warm: Callable[[str | None], bool],
+    owns: Callable[[str], bool] | None = None,
 ) -> None:
     """Warm one engine's worker, starting before the probe when we may.
 
@@ -255,6 +257,13 @@ async def worker_prewarm(
     when the user has *explicitly* named an engine: the saved preference is the
     engine their first solve will use, and it is readable from disk in
     microseconds.
+
+    ``owns`` says which saved names belong to this hook, and defaults to the
+    one ``engine`` names. BEAT needs more than that: its four execution
+    backends are four selectable engines, so a user who picked one has
+    ``beat-metal`` saved, not ``beat`` -- and an equality test would have
+    silently withheld the head start from exactly the users this was measured
+    for, since BEAT's is the long warmup.
 
     So a saved name starts its warmup immediately, on a thread, and the probe
     is reconciled with it afterwards rather than gating it. The reconciliation
@@ -269,9 +278,10 @@ async def worker_prewarm(
     from server.solver.warmup import persisted_engine_preference
 
     log = logging.getLogger("wg.solver.warmup")
+    claims = owns if owns is not None else (lambda name: name == engine)
     requested = await asyncio.to_thread(persisted_engine_preference, settings)
     head_start: asyncio.Task[bool] | None = None
-    if requested == engine:
+    if requested is not None and claims(requested):
         log.info(
             "%s worker prewarm starting from the saved engine preference without "
             "waiting for the capability probe",
@@ -285,7 +295,9 @@ async def worker_prewarm(
             log.info("%s worker prewarm could not resolve an engine: %s", engine, exc)
             resolved = None
         # Always awaited, so a head start is never left running behind a return.
-        if head_start is not None and (await head_start or resolved == engine):
+        if head_start is not None and (
+            await head_start or (resolved is not None and claims(resolved))
+        ):
             return
         if resolved is not None:
             await asyncio.to_thread(warm, resolved)
@@ -337,10 +349,18 @@ async def beat_worker_prewarm(
     exactly the user whose first solve is otherwise blocked behind it.
     """
 
+    from server.solver.beat import is_beat_engine
     from server.solver.warmup import prewarm_beat_worker_for_engine
 
     await worker_prewarm(
-        engine_registry, settings, engine="beat", warm=prewarm_beat_worker_for_engine
+        engine_registry,
+        settings,
+        engine="beat",
+        warm=prewarm_beat_worker_for_engine,
+        # Every ``beat-*`` variant, plus the legacy bare name: each backend is
+        # its own engine and its own Julia worker, and all of them are this
+        # hook's to warm.
+        owns=is_beat_engine,
     )
 
 
@@ -672,11 +692,30 @@ def create_app(
         # they also opt into a separate user-document workspace.
         resolved_workspace_dir = resolved_data_dir / "workspace"
         legacy_workspace_dirs = ()
-    mount_workspace(
+    workspace_state = mount_workspace(
         application,
         default_path=resolved_workspace_dir,
         legacy_defaults=legacy_workspace_dirs,
     )
+
+    async def _repair_legacy_acls() -> None:
+        # Files this application published before `publish_staging_directory`
+        # carry a private, non-inheriting ACL, and become unreadable to the app
+        # itself the first time their owner changes. See
+        # `server/platform/acl_repair.py`. Off the loop: it is filesystem work,
+        # and on a large workspace it is not instantaneous.
+        try:
+            workspace_root = workspace_state.path()
+        except OSError:
+            # An unavailable selected workspace is the workspace layer's
+            # problem to report, not a reason to skip the data directory.
+            workspace_root = None
+        await asyncio.to_thread(
+            repair_legacy_acls, resolved_data_dir, workspace_root
+        )
+
+    if os.name == "nt":
+        application.router.add_event_handler("startup", _repair_legacy_acls)
     mount_cadlink(application)
     mount_onshape(application)
     mount_charts(application)

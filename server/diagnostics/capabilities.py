@@ -12,6 +12,7 @@ import asyncio
 from dataclasses import asdict
 from typing import Any, Protocol
 
+from server.engines.registry import FULL3D_ENGINE_ORDER
 from server.integration.installed import measure_installed_stack
 from server.integration.provenance import pinned_dependency_shas
 from server.platform.sqlite import journal_mode_statuses
@@ -36,10 +37,7 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
 
     engines = [asdict(engine) for engine in await engine_registry.capabilities()]
     available = {item["name"] for item in engines if item.get("available") is True}
-    resolved = next(
-        (name for name in ("metal", "beat", "bempp", "dryrun") if name in available),
-        None,
-    )
+    resolved = next((name for name in FULL3D_ENGINE_ORDER if name in available), None)
     # "What can this host do" is incomplete without "and is this host the stack
     # it claims to be". A drifted module changes what the probes above report
     # while every version string stays put.
@@ -50,7 +48,7 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
         "engineSelection": {
             "default": "auto",
             "resolvedDefault": resolved,
-            "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
+            "full3dOrder": list(FULL3D_ENGINE_ORDER),
             "axisymmetricRunner": "axisym",
         },
         "dependencies": {"pinned": pinned, "installed": installed, "drift": drift},

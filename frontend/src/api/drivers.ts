@@ -8,6 +8,8 @@
  */
 
 export type DriverKind = 'lf' | 'cd' | 'unknown';
+/** What the picker's type filter can be set to: one type, or the whole library. */
+export type DriverSearchKind = DriverKind | 'all';
 export type DriverCompleteness = 'full' | 'partial' | 'catalogue';
 
 export interface DriverVariantSummary {
@@ -60,12 +62,25 @@ export interface DriverLibraryFile {
   bundled?: boolean;
 }
 
+export interface DriverKindCount {
+  kind: string;
+  total: number;
+  /** Of those, how many can drive a channel -- what the picker will offer. */
+  complete?: number;
+}
+
 export interface DriverLibraryInfo {
   folder: string;
   files: DriverLibraryFile[];
   total_drivers: number;
   /** How many of them can actually drive a channel -- what a search offers. */
   complete_drivers?: number;
+  /**
+   * What the library holds of each driver type, in the order the filter lists
+   * it. Absent from a server older than this field, which is why every reader
+   * goes through `driverKindCounts` rather than indexing it directly.
+   */
+  kinds?: DriverKindCount[];
   last_scan?: string | null;
 }
 
@@ -79,7 +94,7 @@ async function errorMessage(response: Response): Promise<string> {
 
 export interface DriverSearchQuery {
   q?: string;
-  kind?: DriverKind | 'all';
+  kind?: DriverSearchKind;
   z?: number | null;
   limit?: number;
   /**
@@ -95,6 +110,12 @@ export interface DriverSearchResult {
   items: DriverHit[];
   /** Matches the library holds but cannot drive a channel with. */
   hiddenIncomplete: number;
+  /**
+   * How many drivers of each type this query matches with the type filter
+   * lifted. It is how an empty result can name the type that would have
+   * answered instead of dead-ending; `{}` from a server that predates it.
+   */
+  matchesByKind: Partial<Record<DriverKind, number>>;
 }
 
 export async function searchDrivers(
@@ -106,10 +127,20 @@ export async function searchDrivers(
   if (complete) params.set('complete', 'true');
   const response = await fetcher(`/api/drivers?${params.toString()}`);
   if (!response.ok) throw new Error(await errorMessage(response));
-  const body = await response.json() as { items?: DriverHit[]; hidden_incomplete?: number };
+  const body = await response.json() as {
+    items?: DriverHit[];
+    hidden_incomplete?: number;
+    matches_by_kind?: Record<string, unknown>;
+  };
+  const matchesByKind: Partial<Record<DriverKind, number>> = {};
+  for (const name of ['lf', 'cd', 'unknown'] as const) {
+    const count = body.matches_by_kind?.[name];
+    if (typeof count === 'number' && Number.isFinite(count)) matchesByKind[name] = count;
+  }
   return {
     items: Array.isArray(body.items) ? body.items : [],
     hiddenIncomplete: typeof body.hidden_incomplete === 'number' ? body.hidden_incomplete : 0,
+    matchesByKind,
   };
 }
 

@@ -20,7 +20,7 @@ import pytest
 from launch import serve
 from server import app as app_module
 from server.engines.dryrun import DryRunEngine
-from server.engines.registry import EngineInfo
+from server.engines.registry import FULL3D_ENGINE_ORDER, EngineInfo
 from server.mesh import gmsh_worker
 from server.mesh.gmsh_worker import shutdown_gmsh_worker
 from server.platform import console, instance, logging_setup
@@ -589,12 +589,13 @@ def test_capability_probe_runs_off_thread_and_is_cached(
                     "field_traces": False,
                     "di_sphere": True,
                     "cancellation_granularity": "between-frequencies",
+                    "label": "",
                 }
             ],
             "engineSelection": {
                 "default": "auto",
                 "resolvedDefault": None,
-                "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
+                "full3dOrder": list(FULL3D_ENGINE_ORDER),
                 "axisymmetricRunner": "axisym",
             },
         }

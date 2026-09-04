@@ -37,6 +37,10 @@ _COMPLETENESS_RANK = {"full": 0, "partial": 1, "catalogue": 2}
 _WORD_SPLIT = re.compile(r"\s+")
 _NON_ALNUM = re.compile(r"[^a-z0-9]")
 
+#: The order the picker's type filter lists them in, so a caller can render the
+#: breakdown without deciding on one of its own.
+KIND_ORDER = ("lf", "cd", "unknown")
+
 
 @dataclass(frozen=True, slots=True)
 class DriverVariant:
@@ -59,6 +63,11 @@ class DriverRecord:
     kind: str
     size: str | None
     variants: list[DriverVariant] = field(default_factory=list)
+    #: ``brand model`` normalised once, at index time. The search matches every
+    #: record on every request -- it has to count the matches the type filter
+    #: is hiding, not just the ones it lets through -- so tokenising per request
+    #: would mean re-splitting a thousand names on every keystroke.
+    tokens: tuple[str, ...] = ()
 
     @property
     def primary(self) -> DriverVariant:
@@ -282,6 +291,7 @@ def _build_index(
                 kind=group_kind,
                 size=classify_size(primary.fields, group_kind),
                 variants=variants,
+                tokens=tuple(_normalize_tokens(f"{brand} {model}")),
             )
         )
 
@@ -384,6 +394,37 @@ class DriverLibrary:
         self._last_scan = datetime.now(timezone.utc).isoformat()
         return self.info()
 
+    def _kind_counts(self) -> list[dict[str, object]]:
+        """How many drivers of each type the index holds, and how many are drivable.
+
+        The picker filters by type, so without this the only honest thing it can
+        say about a type it has no match for is nothing. The shipped library is
+        1,045 cone drivers and one compression driver, and a horn designer whose
+        search starts on the compression half needs to be told that *before*
+        concluding the database is empty -- the breakdown is what turns "no
+        results" into "one compression driver exists, and 1,045 cone ones".
+
+        Derived from the records already in memory, so it costs a pass over the
+        index rather than any extra file reading.
+        """
+
+        totals: dict[str, int] = {}
+        complete: dict[str, int] = {}
+        for record in self._records:
+            totals[record.kind] = totals.get(record.kind, 0) + 1
+            if record.usable_variants():
+                complete[record.kind] = complete.get(record.kind, 0) + 1
+        # A type the library holds none of is left out rather than reported as a
+        # zero: an empty filter button is noise, and the caller renders whatever
+        # this lists. Anything the classifier grows later still appears, after
+        # the two the picker knows by name.
+        ordered = [kind for kind in KIND_ORDER if kind in totals]
+        ordered += sorted(kind for kind in totals if kind not in KIND_ORDER)
+        return [
+            {"kind": kind, "total": totals[kind], "complete": complete.get(kind, 0)}
+            for kind in ordered
+        ]
+
     def info(self) -> dict[str, object]:
         return {
             "folder": str(self.folder),
@@ -395,6 +436,7 @@ class DriverLibrary:
             "complete_drivers": sum(
                 1 for record in self._records if record.usable_variants()
             ),
+            "kinds": self._kind_counts(),
             "last_scan": self._last_scan,
         }
 
@@ -419,30 +461,45 @@ class DriverLibrary:
         limit: int = 20,
         complete: bool = False,
     ) -> dict[str, object]:
-        """Ranked matches, plus how many were withheld for missing T/S data.
+        """Ranked matches, how many were withheld, and what the other types hold.
 
-        The count is what keeps ``complete`` from reading as a broken library:
-        most compression-driver rows are catalogue entries with no motor data
-        at all, so a filtered search over them comes back empty, and the caller
-        needs to be able to say why rather than just showing nothing.
+        ``hidden_incomplete`` is what keeps ``complete`` from reading as a broken
+        library: most compression-driver rows are catalogue entries with no motor
+        data at all, so a filtered search over them comes back empty, and the
+        caller needs to be able to say why rather than just showing nothing.
+
+        ``matches_by_kind`` is the same argument applied to the type filter,
+        which is the one that actually dead-ends people. The shipped library has
+        a thousand cone drivers and one compression driver, so a search that
+        starts on the compression half answers nothing for almost every query --
+        and the useful thing to say is not "no matches" but "none of this type,
+        seven of the other". It counts what each type *would* offer, so it is
+        the same rule as ``items``: query, ``z`` and ``complete`` all apply, and
+        only the type filter is lifted.
         """
 
         self.ensure_indexed()
         query_tokens = _normalize_tokens(q or "")
         ranked: list[tuple[tuple[float, bool, int, str, str], dict[str, object]]] = []
         hidden = 0
+        matches_by_kind: dict[str, int] = {name: 0 for name in KIND_ORDER}
         for record in self._records:
-            if kind != "all" and record.kind != kind:
-                continue
-            driver_tokens = _normalize_tokens(f"{record.brand} {record.model}")
-            score = _match_score(query_tokens, driver_tokens)
+            in_kind = kind == "all" or record.kind == kind
+            score = _match_score(query_tokens, list(record.tokens))
             if score is None:
                 continue
             listed = record.usable_variants() if complete else None
             variant = record.variant_for(z, among=listed)
             if variant is None:
                 # Matched the query, but no winding of it can drive a channel.
-                hidden += 1
+                # It is not counted as a match of its type either: the point of
+                # that count is what the caller could offer instead, and this is
+                # a driver nothing can offer.
+                if in_kind:
+                    hidden += 1
+                continue
+            matches_by_kind[record.kind] = matches_by_kind.get(record.kind, 0) + 1
+            if not in_kind:
                 continue
             z_match = (
                 z is not None
@@ -461,6 +518,7 @@ class DriverLibrary:
         return {
             "items": [payload for _, payload in ranked[:limit]],
             "hidden_incomplete": hidden,
+            "matches_by_kind": matches_by_kind,
         }
 
     def get(self, driver_id: str, *, complete: bool = False) -> dict[str, object] | None:
@@ -480,4 +538,4 @@ class DriverLibrary:
         return _detail_payload(record, variant, listed)
 
 
-__all__ = ["DriverLibrary", "DriverRecord", "DriverVariant"]
+__all__ = ["KIND_ORDER", "DriverLibrary", "DriverRecord", "DriverVariant"]

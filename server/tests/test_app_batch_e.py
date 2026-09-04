@@ -159,12 +159,16 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
     # environment-dependent; assert the report contract, not the environment.
     names = [engine["name"] for engine in engines]
     assert {"axisym", "metal", "bempp"}.issubset(set(names))
+    # BEAT is advertised per execution backend, not as one entry.
+    assert {"beat-cuda", "beat-rocm", "beat-metal", "beat-cpu"}.issubset(set(names))
+    assert "beat" not in names
     assert "circsym" not in names
     assert "dryrun" not in names
     assert all(
         set(engine)
         == {
             "name",
+            "label",
             "available",
             "reason",
             "version",
@@ -179,6 +183,7 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
         }
         for engine in engines
     )
+    assert all(engine["label"] for engine in engines)
     assert all(engine["reason"] for engine in engines if engine["available"] is False)
 
     monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")

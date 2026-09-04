@@ -61,6 +61,7 @@ vi.mock('../jobs/useCapabilities', () => ({
     isLoading: false,
   }),
   useCapabilityRefreshOnReconnect: () => undefined,
+  useLegacyBeatEngineMigration: () => undefined,
 }));
 vi.mock('../jobs/useSolvePlan', () => ({
   useSolvePlan: () => ({

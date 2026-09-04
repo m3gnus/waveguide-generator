@@ -1150,13 +1150,27 @@ const LIBRARY_HIT = {
  * and another for a stocked library whose search happens to answer nothing --
  * the case a driver that is not in any CSV actually presents.
  */
+interface DriverApiStub {
+  files?: number;
+  hits?: number;
+  hiddenIncomplete?: number;
+  /** The library's breakdown by type. Absent means a server that predates it,
+   * which is what most of these tests want: the picker then honours the
+   * channel's own preferred type instead of re-seeding the filter. */
+  kinds?: { kind: string; total: number; complete?: number }[];
+  /** What each type would answer with the filter lifted, keyed as the wire
+   * sends it. `hits` decides what the filtered search itself returns. */
+  matchesByKind?: Record<string, number>;
+}
+
 function stubDriverApi(
-  { files = 1, hits = files, hiddenIncomplete = 0 }: { files?: number; hits?: number; hiddenIncomplete?: number } = {},
+  { files = 1, hits = files, hiddenIncomplete = 0, kinds, matchesByKind }: DriverApiStub = {},
 ) {
   const library = {
     folder: '/library/driver-databases',
     files: files ? [{ name: 'compression-drivers.csv', rows: 1 }] : [],
     total_drivers: files ? 1 : 0,
+    ...(kinds ? { kinds } : {}),
     last_scan: null,
   };
   const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
@@ -1164,7 +1178,12 @@ function stubDriverApi(
     const url = String(input);
     if (url.startsWith('/api/drivers/library')) return json(library);
     if (url.startsWith('/api/drivers?')) {
-      return json({ items: hits ? [LIBRARY_HIT] : [], total: hits, hidden_incomplete: hiddenIncomplete });
+      return json({
+        items: hits ? [LIBRARY_HIT] : [],
+        total: hits,
+        hidden_incomplete: hiddenIncomplete,
+        ...(matchesByKind ? { matches_by_kind: matchesByKind } : {}),
+      });
     }
     if (url.startsWith('/api/drivers/')) return json({ ...LIBRARY_HIT, fields: {}, extras: {} });
     return Promise.resolve(new Response('not found', { status: 404 }));
@@ -1222,7 +1241,7 @@ describe('driver picker', () => {
     vi.unstubAllGlobals();
   });
 
-  const mountWithLibrary = async (options?: { files?: number; hits?: number; hiddenIncomplete?: number }) => {
+  const mountWithLibrary = async (options?: DriverApiStub) => {
     const fetchMock = stubDriverApi(options);
     act(() => {
       setCadReady();
@@ -1386,7 +1405,7 @@ describe('driver picker', () => {
     act(() => input.focus());
     await settle();
     expect(resultNames()).toEqual(['Acme HD-1', 'Enter T/S manually…']);
-    expect(channelCard().textContent).not.toContain('No driver matches that search.');
+    expect(channelCard().querySelector('.driver-empty')).toBeNull();
   });
 
   it('offers hand entry beside the empty-search line rather than instead of it', async () => {
@@ -1399,7 +1418,86 @@ describe('driver picker', () => {
     await type(input, 'radian 745');
     await settle();
     expect(resultNames()).toEqual(['Enter T/S manually…']);
-    expect(channelCard().textContent).toContain('No driver matches that search.');
+    // Not a bare "no matches": what was searched, what the library holds, and
+    // a way on -- because "no matches" is equally true of an empty library and
+    // of a thousand-driver one, and the user cannot tell which they have.
+    const empty = channelCard().querySelector<HTMLElement>('.driver-empty')!;
+    expect(empty.querySelector('b')?.textContent).toBe('No compression driver matches “radian 745”');
+    expect(empty.textContent).toContain('The library has 1 driver.');
+    expect(empty.querySelector('.driver-empty-action')?.textContent).toBe('Search all 1 driver');
+  });
+
+  it('says which type would have answered, and switches to it in one press', async () => {
+    // The reported failure, reproduced: the compression half is one driver
+    // deep, so a search inside it answers nothing for almost every query.
+    await mountWithLibrary({
+      files: 1,
+      hits: 0,
+      kinds: [{ kind: 'lf', total: 1045, complete: 1045 }, { kind: 'cd', total: 1, complete: 1 }],
+      matchesByKind: { lf: 7, cd: 0 },
+    });
+    const kindButton = (label: string) => [...channelCard()
+      .querySelectorAll<HTMLButtonElement>('.driver-kind-toggle button')]
+      .find((button) => button.textContent?.startsWith(label))!;
+    act(() => kindButton('Compression').click());
+    await settle();
+
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'b&c 15');
+    await settle();
+
+    const empty = channelCard().querySelector<HTMLElement>('.driver-empty')!;
+    expect(empty.textContent).toContain('7 cone drivers do.');
+    expect(empty.textContent).toContain('1,046 drivers — 1,045 cone and 1 compression');
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockClear();
+    act(() => empty.querySelector<HTMLButtonElement>('.driver-empty-action')!.click());
+    await settle();
+    // The press widens the filter and keeps the query, so the seven are one
+    // request away rather than one retyping away.
+    const searched = fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.startsWith('/api/drivers?'));
+    expect(searched.some((url) => url.includes('kind=all') && url.includes('q=b%26c+15'))).toBe(true);
+  });
+
+  it('counts the whole match above the rows, not the page it fetched', async () => {
+    // The search asks for a page of forty, so the page size alone understates
+    // how much of the library actually answered.
+    await mountWithLibrary({
+      files: 1,
+      hits: 1,
+      kinds: [{ kind: 'lf', total: 1045, complete: 1045 }, { kind: 'cd', total: 1, complete: 1 }],
+      matchesByKind: { lf: 214, cd: 0 },
+    });
+    act(() => searchInput().focus());
+    await settle();
+    expect(channelCard().querySelector('.driver-results-head')?.textContent).toBe('1 of 214 drivers');
+  });
+
+  it('never counts fewer matches than the rows it is showing', async () => {
+    // A server that sends no breakdown at all must not turn real rows into
+    // "0 drivers": the count can never be below what came back.
+    await mountWithLibrary({ files: 1, hits: 1 });
+    act(() => searchInput().focus());
+    await settle();
+    expect(channelCard().querySelector('.driver-results-head')?.textContent).toBe('1 compression driver');
+  });
+
+  it('writes what each type holds on the filter, before anything is typed', async () => {
+    await mountWithLibrary({
+      files: 1,
+      kinds: [{ kind: 'lf', total: 1045, complete: 1045 }, { kind: 'cd', total: 1, complete: 1 }],
+    });
+    // Nothing focused, nothing typed: the shape of the library is already on
+    // screen, which is the whole answer to "is this database empty?".
+    const buttons = [...channelCard().querySelectorAll<HTMLButtonElement>('.driver-kind-toggle button')];
+    expect(buttons.map((button) => button.textContent)).toEqual(['Cone1,045', 'Compression1', 'All1,046']);
+    expect(buttons.map((button) => button.getAttribute('aria-label')))
+      .toEqual(['Cone, 1,045 cone drivers', 'Compression, 1 compression driver', 'All, 1,046 drivers']);
+    // And an HF channel does not open inside the one-driver half.
+    expect(buttons.find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent).toBe('All1,046');
   });
 
   it('lands a hand-entered driver in the sheet, submits it, and never calls it edited', async () => {
@@ -1533,11 +1631,12 @@ describe('driver picker', () => {
     await type(input, 'de250');
     await settle();
 
-    const card = channelCard();
-    // Not "no driver matches that search": the library does know them.
-    expect(card.textContent).not.toContain('No driver matches that search.');
-    expect(card.textContent).toContain('2 more drivers match');
-    expect(card.textContent).toContain('cannot be driven');
+    const empty = channelCard().querySelector<HTMLElement>('.driver-empty')!;
+    // "The library does not know it" and "the library cannot drive it" are
+    // different answers, and only the second one is true here.
+    expect(empty.querySelector('b')?.textContent).toBe('All 2 matches for \u201cde250\u201d lack Thiele-Small data');
+    expect(empty.textContent).toContain('no moving mass or compliance');
+    expect(empty.textContent).toContain('cannot drive a channel');
     // And the way out is still the last row.
     expect(resultNames()).toEqual(['Enter T/S manually\u2026']);
   });

@@ -5,7 +5,11 @@ import {
   type EngineCapability,
   type EngineSelection,
 } from './actions';
-import { activeBackendCapability, plannedBackendCapabilities } from '../design/backendSupport';
+import {
+  activeBackendCapability,
+  migratedLegacyBeatEngine,
+  plannedBackendCapabilities,
+} from '../design/backendSupport';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 
 /**
@@ -78,6 +82,30 @@ export function usePlannedBackendCapabilities(): readonly EngineCapability[] {
   const solverMode = useSolveOptionsStore((state) => state.solverMode);
   const { engines, engineSelection } = useCapabilities();
   return plannedBackendCapabilities(engine, engines, engineSelection, solverMode);
+}
+
+/**
+ * Rewrite a stored bare `beat` selection to the BEAT variant it means here.
+ *
+ * BEAT's execution backends became separately selectable engines, so the one
+ * name that used to cover all of them no longer matches any option the server
+ * advertises. Left alone, the picker would render with nothing selected while
+ * the store still said `beat` -- and the status bar would report an engine that
+ * is not in the capability list. Submission itself is safe either way: the
+ * server accepts the legacy name and resolves it the same way this does.
+ *
+ * Runs once per capability answer rather than on a timer, and only ever
+ * narrows `beat` to a `beat-*`, so it cannot fight a user who then picks
+ * something else.
+ */
+export function useLegacyBeatEngineMigration(): void {
+  const engine = useSolveOptionsStore((state) => state.engine);
+  const setEngine = useSolveOptionsStore((state) => state.setEngine);
+  const { engines, engineSelection } = useCapabilities();
+  useEffect(() => {
+    const migrated = migratedLegacyBeatEngine(engine, engines, engineSelection);
+    if (migrated !== null) setEngine(migrated);
+  }, [engine, engines, engineSelection, setEngine]);
 }
 
 /**

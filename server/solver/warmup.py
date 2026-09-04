@@ -202,7 +202,7 @@ def _warm_metal() -> None:
     solve(str(WARMUP_MESH), config)
 
 
-def _warm_beat(status: Mapping[str, object]) -> None:
+def _warm_beat(backend: str) -> None:
     """Start and exercise the BEAT Engine's persistent Julia worker.
 
     BEAT is the one engine whose cost was never being paid off the user's
@@ -227,23 +227,23 @@ def _warm_beat(status: Mapping[str, object]) -> None:
     ``HORNLAB_BEAT_PERSISTENT_HOST=0`` -- so this thread is only ever waiting
     on a pipe.
 
-    The backend comes from ``resolve_beat_backend`` rather than being read out
-    of ``status`` here, so that the accelerator this warms is by construction
-    the one the solve will run on. Warming a different one is worse than not
-    warming at all: it pays a device initialisation twice and leaves the path
-    the user waits on cold.
+    The backend is the caller's, not this function's to guess. Each BEAT
+    backend is its own selectable engine and its own persistent Julia worker
+    (the package keys workers by Julia project, and the four backends have four
+    projects), so warming a different one is worse than not warming at all: it
+    pays a device initialisation twice and leaves the path the user waits on
+    cold. ``prewarm_beat_worker_for_engine`` reads the backend off the engine
+    name that was actually selected.
     """
 
     import hornlab_beat_bem
-
-    from .beat import resolve_beat_backend
 
     # Recorded around the call, not inside the package: a solve that arrives
     # now waits for the same worker, and ``beat_warmup_in_progress`` is what
     # lets ``server/solver/beat.py`` say so instead of leaving the user on
     # "Configuring BEAT Engine BEM solve" for the length of the compile.
     with beat_warmup_recorded():
-        hornlab_beat_bem.warm_up(beat_backend=resolve_beat_backend(status), mode="tiny")
+        hornlab_beat_bem.warm_up(beat_backend=backend, mode="tiny")
 
 
 def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
@@ -308,17 +308,19 @@ def _run_warmup() -> None:
             engine = "Metal"
             _warm_metal()
         else:
-            # AUTO's order is metal, beat, bempp (see
-            # server/engines/registry.resolve_auto_engine). Leaving BEAT out
-            # here did not merely skip a warmup: on a CUDA host, where AUTO
-            # resolves to BEAT, this fell through and warmed BEMPP -- an
-            # engine that host's first solve never reaches.
+            # AUTO's order is metal, BEAT's accelerators, bempp, BEAT-CPU (see
+            # FULL3D_ENGINE_ORDER). Leaving BEAT out here did not merely skip a
+            # warmup: on a CUDA host, where AUTO resolves to BEAT, this fell
+            # through and warmed BEMPP -- an engine that host's first solve
+            # never reaches. The package probe is the right question at this
+            # point precisely because it reports available only for an
+            # accelerator, which is the half of BEAT that outranks BEMPP.
             from server.solver import beat as beat_adapter
 
             beat_status = beat_adapter.beat_status()
             if beat_status.get("available"):
                 engine = "BEAT"
-                _warm_beat(beat_status)
+                _warm_beat(beat_adapter.resolve_beat_backend(beat_status))
             else:
                 from server.solver import bempp as bempp_adapter
 
@@ -431,7 +433,7 @@ def persisted_engine_preference(settings: object | None) -> str | None:
 
 
 def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
-    """Warm the BEAT Julia worker, but only where AUTO would reach it.
+    """Warm the BEAT Julia worker for the backend this host will actually solve on.
 
     The sibling of ``prewarm_bempp_worker_for_engine``, and registered the same
     way, for the same reason: BEAT's initialization is the largest thing
@@ -456,19 +458,26 @@ def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
     if os.environ.get("WG2_SOLVER_WARMUP") == "0":
         log.info("BEAT worker prewarm disabled by WG2_SOLVER_WARMUP=0")
         return False
-    if engine != "beat":
+    from server.solver import beat as beat_adapter
+
+    # The backend is read off the engine name rather than re-derived from a
+    # probe: each BEAT backend is its own selectable engine and its own
+    # persistent Julia worker, so "which engine will the first solve use" is
+    # already the whole answer.
+    backend = beat_adapter.beat_engine_backend(engine or "")
+    if backend is None and (engine or "").strip().lower() != beat_adapter.LEGACY_BEAT_ENGINE:
         log.info("BEAT worker prewarm skipped: the first solve uses %s", engine)
         return False
     began = time.monotonic()
     try:
-        from server.solver import beat as beat_adapter
-
-        status = beat_adapter.beat_status()
-        log.info(
-            "BEAT worker prewarm starting on the %s backend",
-            beat_adapter.resolve_beat_backend(status),
-        )
-        _warm_beat(status)
+        if backend is None:
+            # A stored preference written before the backends became separately
+            # selectable, which the registry could not map to an available
+            # variant. Letting the package's own probe choose is what this hook
+            # did for that name before the split, and it beats warming nothing.
+            backend = beat_adapter.resolve_beat_backend(beat_adapter.beat_status())
+        log.info("BEAT worker prewarm starting on the %s backend", backend)
+        _warm_beat(backend)
     except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
         log.info(
             "BEAT worker prewarm failed after %.1f s: %s", time.monotonic() - began, exc

@@ -94,14 +94,25 @@ def report_dependency_drift() -> list[str]:
 
 def main() -> int:
     from server.solver.bempp import _missing_windows_runtime_dlls, bempp_status
-    from server.solver.beat import beat_status
+    from server.solver.beat import (
+        BEAT_BACKENDS,
+        BEAT_BACKEND_LABELS,
+        beat_backend_statuses,
+    )
     from server.solver.circsym import circsym_status
     from server.solver.metal import metal_status
 
     print("Solve backends:")
     axisym = _report("Axisymmetric (portable CPU)", circsym_status())
     metal = _report("Metal (Apple Silicon)", metal_status())
-    beat = _report("BEAT (CUDA/ROCm)", beat_status())
+    # One line per BEAT execution backend, the same four the app offers. A
+    # single "BEAT" line here could only report whichever one the probe named,
+    # which is exactly the question a person running this script is asking.
+    beat_statuses = beat_backend_statuses()
+    beat = False
+    for backend in BEAT_BACKENDS:
+        label = BEAT_BACKEND_LABELS.get(backend, f"BEAT ({backend})")
+        beat = _report(label, beat_statuses[backend]) or beat
     bempp = _report("bempp (cross-platform)", bempp_status())
 
     report_dependency_drift()

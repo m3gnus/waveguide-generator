@@ -82,6 +82,33 @@ describe('solve and directivity control help', () => {
     expect(host.textContent).not.toContain("design's sweep start");
   });
 
+  it("lists BEAT's backends as separate engines and greys out the ones this host lacks", () => {
+    // BEAT is one solver with four interchangeable execution backends. Offered
+    // as a single entry it could only ever run whichever one a probe picked
+    // first, so a Mac user with both a GPU and the portable CPU path had no way
+    // to ask for the other. Each is its own row now, and a row this machine
+    // cannot run is disabled and says why rather than disappearing.
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [
+        { name: 'metal', label: 'Metal — Apple GPU', available: true, reason: null, version: 'test', fast_paths: [] },
+        { name: 'beat-cuda', label: 'BEAT · CUDA — NVIDIA GPU', available: false, reason: 'Needs an NVIDIA GPU with a functional CUDA.jl.', version: null, fast_paths: [] },
+        { name: 'beat-metal', label: 'BEAT · Metal — Apple GPU', available: true, reason: null, version: '0.1.0', fast_paths: [] },
+        { name: 'beat-cpu', label: 'BEAT · CPU — no GPU needed', available: true, reason: null, version: '0.1.0', fast_paths: [] },
+      ],
+    });
+    render(<SolveOptionsControls />);
+    const control = host.querySelector<HTMLSelectElement>('#solve-engine')!;
+    const options = [...control.options];
+    expect(options.map((option) => option.value)).toEqual([
+      'auto', 'metal', 'beat-cuda', 'beat-metal', 'beat-cpu',
+    ]);
+    // The label carries the hardware; the wire name would not.
+    expect(options[3].textContent).toBe('BEAT · Metal — Apple GPU · 0.1.0');
+    expect(options.filter((option) => option.disabled).map((option) => option.value))
+      .toEqual(['beat-cuda']);
+    expect(options[2].textContent).toContain('unavailable: Needs an NVIDIA GPU');
+  });
+
   it('replaces forced imported backend and domain controls with ingest facts', () => {
     const ingestRecord = { symmetry: { cut_planes: ['x0', 'y0'] } } as CadReturnIngestRecord;
     render(<SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/>);

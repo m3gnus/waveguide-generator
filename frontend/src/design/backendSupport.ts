@@ -118,6 +118,53 @@ export function plannedBackendCapabilities(
   return planned;
 }
 
+/** The engine name WG advertised while BEAT's backends were one entry. */
+export const LEGACY_BEAT_ENGINE = 'beat';
+
+/** Whether `name` is one of BEAT's per-backend engines. */
+export function isBeatBackendEngine(name: string): boolean {
+  return name.toLowerCase().startsWith('beat-');
+}
+
+/**
+ * What a stored `beat` selection should become, or `null` to leave it alone.
+ *
+ * BEAT is four engines now -- `beat-cuda`, `beat-rocm`, `beat-metal`,
+ * `beat-cpu` -- and design files and persisted solve options written before the
+ * split still say `beat`. The server still accepts that name and resolves it,
+ * so a solve submitted with it runs; what it cannot do is put a matching option
+ * in the picker, which would render with nothing selected while the store still
+ * said `beat`. Migrating the stored value is what keeps the control and the
+ * request agreeing about what will run.
+ *
+ * The preferred answer is the first *available* variant in the server's own
+ * full-3D order, so "run this on BEAT" keeps meaning "on the best BEAT this
+ * machine has" -- which is what it meant when a probe was choosing. Failing
+ * that it is the first advertised variant, available or not: a greyed-out
+ * BEAT row carrying its reason tells the user why their saved choice cannot
+ * run here, where a silent jump to AUTO would not.
+ *
+ * `null` when the engine is not `beat`, when capabilities have not loaded, or
+ * when the server advertises no BEAT variants at all -- an older server, whose
+ * bare `beat` option is still the right thing to have selected.
+ */
+export function migratedLegacyBeatEngine(
+  engine: string,
+  engines: readonly EngineCapability[],
+  selection?: Readonly<EngineSelection>,
+): string | null {
+  if (engine.trim().toLowerCase() !== LEGACY_BEAT_ENGINE) return null;
+  const variants = engines.filter((item) => isBeatBackendEngine(item.name));
+  if (variants.length === 0) return null;
+  const order = selection?.full3dOrder?.map((name) => name.toLowerCase()) ?? [];
+  const preferred = order
+    .flatMap((name) => variants.filter((item) => item.available
+      && item.name.toLowerCase() === name))[0]
+    ?? variants.find((item) => item.available)
+    ?? variants[0];
+  return preferred.name.toLowerCase();
+}
+
 function backendName(backend: BackendIdentity): string | null {
   if (backend === null) return null;
   return (typeof backend === 'string' ? backend : backend.name).trim().toLowerCase();

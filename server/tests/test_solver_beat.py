@@ -1,4 +1,4 @@
-"""BEAT engine adapter gating: GPU-only availability, honest refusals."""
+"""BEAT engine adapter gating: per-backend availability, honest refusals."""
 
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def test_the_warmup_publishes_that_it_holds_the_worker(monkeypatch) -> None:
     )
 
     assert solver_warmup.beat_warmup_in_progress() is False
-    solver_warmup._warm_beat({"available": True, "backend": "metal"})
+    solver_warmup._warm_beat("metal")
     assert seen == [True]
     assert solver_warmup.beat_warmup_in_progress() is False
 
@@ -134,7 +134,7 @@ def test_the_warmup_publishes_that_it_holds_the_worker(monkeypatch) -> None:
         sys.modules, "hornlab_beat_bem", types.SimpleNamespace(warm_up=explode)
     )
     with pytest.raises(RuntimeError):
-        solver_warmup._warm_beat({"available": True, "backend": "metal"})
+        solver_warmup._warm_beat("metal")
     assert solver_warmup.beat_warmup_in_progress() is False
 
 
@@ -179,3 +179,157 @@ def test_a_solve_during_the_warmup_says_what_it_is_waiting_for(monkeypatch) -> N
     assert "Configuring BEAT Engine BEM solve (metal)" in messages
     assert solver_warmup.BEAT_WARMUP_STAGE_MESSAGE in messages
     assert messages.index(solver_warmup.BEAT_WARMUP_STAGE_MESSAGE) == 1
+
+def _probe(available: bool, backend: str | None, reason: str) -> dict[str, object]:
+    return {
+        "available": available,
+        "reason": reason,
+        "version": "1",
+        "backend": backend,
+        "surface_traces": True,
+    }
+
+
+def test_backend_statuses_answer_for_every_backend_from_one_probe(monkeypatch) -> None:
+    """The selector needs four answers; the package probe gives one.
+
+    ``beat_engine_status`` reports *the* backend a solve would use, taking the
+    first accelerator family whose hardware is present. That cannot populate a
+    picker: it says nothing about the three backends it did not choose, and it
+    never names the CPU path at all outside ``HORNLAB_BEAT_FORCE_CPU``, even
+    though the CPU path is available wherever a Julia is.
+    """
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(
+        beat, "beat_status", lambda: _probe(True, "metal", "Apple Silicon GPU detected")
+    )
+    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "Julia found"))
+
+    statuses = beat.beat_backend_statuses()
+
+    assert set(statuses) == set(beat.BEAT_BACKENDS)
+    assert statuses["metal"]["available"] is True
+    assert statuses["metal"]["reason"] == "Apple Silicon GPU detected"
+    # The CPU path is available beside the accelerator, which is the whole
+    # point: a Mac user can now choose between BEAT-Metal and BEAT-CPU.
+    assert statuses["cpu"]["available"] is True
+    # An unselected accelerator says what it would take and what was found,
+    # rather than repeating a reason that is about different hardware.
+    assert statuses["cuda"]["available"] is False
+    assert "NVIDIA GPU" in statuses["cuda"]["reason"]
+    assert "selected the metal backend" in statuses["cuda"]["reason"]
+    # Surface-trace retention is a property of the package, so every backend
+    # reports it, not just the one the probe named.
+    assert all(status["surface_traces"] is True for status in statuses.values())
+
+
+def test_backend_statuses_report_the_probe_reason_when_nothing_was_selected(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(
+        beat, "beat_status", lambda: _probe(False, None, "No supported GPU was detected")
+    )
+    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "Julia found"))
+
+    statuses = beat.beat_backend_statuses()
+
+    assert [name for name, item in statuses.items() if item["available"]] == ["cpu"]
+    # A verdict about the whole engine names every family at once and belongs
+    # on no single row: each already states its own prerequisite, and that
+    # generic message also advises that BEAT is GPU-only, which stopped being
+    # true when the CPU backend became a user-facing engine.
+    assert statuses["rocm"]["reason"] == (
+        "Needs an AMD ROCm runtime with a functional AMDGPU.jl."
+    )
+
+
+def test_a_diagnostic_about_one_family_is_quoted_on_that_row_only(monkeypatch) -> None:
+    """A broken CUDA install is the message that actually helps someone.
+
+    "An NVIDIA GPU is present but the CUDA path is not usable" tells a user
+    what to fix. On the Metal row of the same Windows box it is noise, so the
+    quote follows the family the probe was talking about.
+    """
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(
+        beat,
+        "beat_status",
+        lambda: _probe(
+            False,
+            None,
+            "An NVIDIA GPU is present but the CUDA path is not usable: "
+            "CUDA.functional() is false (no driver)",
+        ),
+    )
+    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "Julia found"))
+
+    statuses = beat.beat_backend_statuses()
+
+    assert "CUDA.functional() is false" in statuses["cuda"]["reason"]
+    assert "CUDA" not in statuses["metal"]["reason"]
+    assert statuses["metal"]["reason"] == (
+        "Needs an Apple Silicon GPU with a functional Metal.jl."
+    )
+
+
+def test_a_missing_package_is_a_capability_state_for_every_backend(monkeypatch) -> None:
+    monkeypatch.setattr(beat, "_load_api", lambda: None)
+
+    statuses = beat.beat_backend_statuses()
+
+    assert set(statuses) == set(beat.BEAT_BACKENDS)
+    assert not any(item["available"] for item in statuses.values())
+    assert all("not importable" in item["reason"] for item in statuses.values())
+
+
+def test_a_chosen_backend_is_gated_on_its_own_availability(monkeypatch) -> None:
+    """Not on BEAT's as a whole, which is a different question on a GPU host.
+
+    On a Mac the package probe reports ``metal``. Asking "is BEAT available"
+    before a CPU solve would have said yes and then run on Metal; asking it
+    before a CUDA solve would have said yes and then failed on a device this
+    host does not have. The backend the user picked is the one whose
+    availability decides.
+    """
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(
+        beat,
+        "beat_backend_statuses",
+        lambda: {
+            "metal": _probe(True, "metal", "Apple Silicon GPU detected"),
+            "cuda": _probe(False, "cuda", "Needs an NVIDIA GPU"),
+            "rocm": _probe(False, "rocm", "Needs an AMD ROCm runtime"),
+            "cpu": _probe(True, "cpu", "Julia found"),
+        },
+    )
+
+    with pytest.raises(beat.BeatUnavailable, match="Needs an NVIDIA GPU"):
+        beat.solve_beat_from_msh_text("$MeshFormat\n", _context(), backend="cuda")
+    with pytest.raises(beat.BeatUnavailable, match="Unknown BEAT backend"):
+        beat.solve_beat_from_msh_text("$MeshFormat\n", _context(), backend="vulkan")
+
+
+def test_engine_names_and_backends_round_trip() -> None:
+    for backend in beat.BEAT_BACKENDS:
+        name = beat.beat_engine_name(backend)
+        assert name == f"beat-{backend}"
+        assert beat.beat_engine_backend(name) == backend
+        assert beat.is_beat_engine(name)
+        assert beat.BEAT_BACKEND_LABELS[backend]
+        assert beat.BeatEngine(backend).name == name
+
+    # The bare family name is a valid request but names no backend: the caller
+    # that can see the host's capabilities picks which variant it means.
+    assert beat.beat_engine_backend(beat.LEGACY_BEAT_ENGINE) is None
+    assert beat.is_beat_engine(beat.LEGACY_BEAT_ENGINE)
+    assert beat.BeatEngine().name == beat.LEGACY_BEAT_ENGINE
+    assert beat.BeatEngine().backend is None
+
+    assert beat.beat_engine_backend("beat-vulkan") is None
+    assert not beat.is_beat_engine("bempp")
+    with pytest.raises(ValueError, match="Unknown BEAT backend"):
+        beat.BeatEngine("vulkan")

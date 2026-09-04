@@ -29,12 +29,38 @@ from server.solver.field_traces_store import (
 )
 
 
+def _stub_beat_backends(monkeypatch, **available: bool) -> None:
+    """Pin every BEAT backend's availability, so detection is not host-dependent.
+
+    ``beat_backend_statuses`` asks the package probe about the accelerators and
+    the filesystem about the CPU path, both of which vary by machine. Tests that
+    are about the registry's fan-out, not about this laptop, state the four
+    answers outright.
+    """
+
+    from server.solver import beat
+
+    def statuses() -> dict[str, dict[str, object]]:
+        return {
+            backend: {
+                "available": bool(available.get(backend, False)),
+                "reason": f"{backend} stub",
+                "version": "1",
+                "backend": backend,
+                "surface_traces": False,
+            }
+            for backend in beat.BEAT_BACKENDS
+        }
+
+    monkeypatch.setattr(beat, "beat_backend_statuses", statuses)
+
+
 def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> None:
-    from server.solver import beat, bempp, circsym, metal
+    from server.solver import bempp, circsym, metal
 
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "helper loadable", "version": "1"})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "package absent", "version": None})
-    monkeypatch.setattr(beat, "beat_status", lambda: {"available": False, "reason": "no supported GPU", "version": None})
+    _stub_beat_backends(monkeypatch, cpu=True)
     monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": True, "reason": "meridian ready", "version": "2"})
     detected = registry.detect_engines(environ={"WG2_ENABLE_DRYRUN": "1"})
     assert [(item.name, item.available, item.reason) for item in detected] == [
@@ -42,13 +68,51 @@ def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> Non
         ("axisym", True, "meridian ready"),
         ("metal", True, "helper loadable"),
         ("bempp", False, "package absent"),
-        ("beat", False, "no supported GPU"),
+        ("beat-cuda", False, "cuda stub"),
+        ("beat-rocm", False, "rocm stub"),
+        ("beat-metal", False, "metal stub"),
+        ("beat-cpu", True, "cpu stub"),
     ]
     assert detected[1].formulations == ("axisymmetric",)
     assert detected[1].mountings == ("free-standing", "infinite-baffle")
     assert detected[1].cancellation_granularity == "intra-frequency"
     assert detected[2].fast_paths == ()
     assert all(item.name != "circsym" for item in detected)
+    # The wire name is an identifier; the label is what the picker shows.
+    labels = {item.name: item.display_label() for item in detected}
+    assert labels["beat-cuda"] == "BEAT \u00b7 CUDA \u2014 NVIDIA GPU"
+    assert labels["beat-cpu"] == "BEAT \u00b7 CPU \u2014 no GPU needed"
+    assert labels["metal"] == "Metal \u2014 Apple GPU"
+
+
+def test_every_beat_backend_is_selectable_and_ordered(monkeypatch) -> None:
+    """The registry's engine names and BEAT's backend list must not drift apart.
+
+    ``FULL3D_ENGINE_ORDER`` spells the four ``beat-*`` names out rather than
+    importing them, because the registry is imported at boot and the BEAT
+    adapter pulls the optional Julia package with it. That is the price of a
+    fast boot; this is what stops it becoming a silently missing engine when a
+    fifth backend lands.
+    """
+
+    from server.solver import beat
+
+    expected = {beat.beat_engine_name(backend) for backend in beat.BEAT_BACKENDS}
+    assert expected <= set(registry.FULL3D_ENGINE_ORDER)
+    assert expected <= registry.SELECTABLE_ENGINE_NAMES
+    assert beat.LEGACY_BEAT_ENGINE in registry.SELECTABLE_ENGINE_NAMES
+    # AUTO must not reach the portable CPU path ahead of the CPU engine this
+    # project ships and has measured.
+    order = list(registry.FULL3D_ENGINE_ORDER)
+    assert order.index("bempp") < order.index("beat-cpu") < order.index("dryrun")
+    assert order.index("metal") == 0
+
+    _stub_beat_backends(monkeypatch, metal=True, cpu=True)
+    engine = registry.create_engine("beat-metal")
+    assert engine is not None and engine.name == "beat-metal" and engine.backend == "metal"
+    legacy = registry.create_engine("beat")
+    assert legacy is not None and legacy.name == "beat" and legacy.backend is None
+    assert registry.create_engine("beat-vulkan") is None
 
 
 def test_beat_advertises_the_reduced_domains_and_di_sphere_it_really_has(
@@ -68,15 +132,16 @@ def test_beat_advertises_the_reduced_domains_and_di_sphere_it_really_has(
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no helper", "version": None})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "package absent", "version": None})
     monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": False, "reason": "absent", "version": None})
-    monkeypatch.setattr(
-        beat,
-        "beat_status",
-        lambda: {"available": True, "reason": "cuda", "version": "1", "surface_traces": False},
-    )
+    _stub_beat_backends(monkeypatch, cuda=True)
     detected = {item.name: item for item in registry.detect_engines(environ={})}
-    assert detected["beat"].di_sphere is True
-    assert detected["beat"].symmetry_domains == ("full", "half-yz", "quarter")
-    assert "half" not in detected["beat"].symmetry_domains
+    # The backend is an execution choice, not a formulation: every variant
+    # advertises the same reduced domains, because the same solver runs on each.
+    for backend in beat.BEAT_BACKENDS:
+        variant = detected[beat.beat_engine_name(backend)]
+        assert variant.di_sphere is True
+        assert variant.symmetry_domains == ("full", "half-yz", "quarter")
+        assert "half" not in variant.symmetry_domains
+        assert variant.mountings == ("free-standing",)
     assert detected["bempp"].symmetry_domains == ("full", "half", "quarter")
 
 
@@ -98,36 +163,68 @@ def test_beat_field_trace_capability_follows_the_installed_package(
     for supported in (False, True):
         monkeypatch.setattr(
             beat,
-            "beat_status",
+            "beat_backend_statuses",
             lambda supported=supported: {
-                "available": True,
-                "reason": "cuda",
-                "version": "1",
-                "surface_traces": supported,
+                backend: {
+                    "available": backend == "cuda",
+                    "reason": "cuda",
+                    "version": "1",
+                    "backend": backend,
+                    "surface_traces": supported,
+                }
+                for backend in beat.BEAT_BACKENDS
             },
         )
         detected = {item.name: item for item in registry.detect_engines(environ={})}
-        assert detected["beat"].field_traces is supported
+        # A property of the installed package, so it is the same on every
+        # backend -- and reported on every backend, not just the selected one.
+        for backend in beat.BEAT_BACKENDS:
+            assert detected[beat.beat_engine_name(backend)].field_traces is supported
 
 
-def test_auto_resolution_prefers_metal_then_beat_then_bempp() -> None:
-    """AUTO: metal > beat (GPU-only by its own probe) > bempp > dryrun.
+def test_auto_resolution_prefers_metal_then_beat_gpus_then_bempp() -> None:
+    """AUTO: metal > BEAT's accelerators > bempp > BEAT-CPU > dryrun.
 
-    Availability encodes the platform split: Metal is macOS-only and beat
-    advertises available only for a functional CUDA/ROCm device, never its
-    internal CPU path, so this order cannot route a CPU host onto beat.
+    The CPU path's position is the deliberate part. It is user-facing now, so
+    AUTO can reach it at all, but it sits behind BEMPP: it is the portable last
+    resort, not a peer of the CPU engine this project has measured and shipped.
+    Every host with a Julia advertises it, so putting it any earlier would take
+    solves away from BEMPP on every CPU-only machine.
     """
 
     def info(name: str, available: bool) -> registry.EngineInfo:
         return registry.EngineInfo(name, available, "test", "1")
 
-    everything = [info("metal", True), info("beat", True), info("bempp", True)]
-    assert registry.resolve_auto_engine(capabilities=everything) == "metal"
-    gpu_windows = [info("metal", False), info("beat", True), info("bempp", True)]
-    assert registry.resolve_auto_engine(capabilities=gpu_windows) == "beat"
-    cpu_windows = [info("metal", False), info("beat", False), info("bempp", True)]
+    mac = [info("metal", True), info("beat-metal", True), info("beat-cpu", True), info("bempp", True)]
+    assert registry.resolve_auto_engine(capabilities=mac) == "metal"
+    gpu_windows = [info("metal", False), info("beat-cuda", True), info("beat-cpu", True), info("bempp", True)]
+    assert registry.resolve_auto_engine(capabilities=gpu_windows) == "beat-cuda"
+    cpu_windows = [info("metal", False), info("beat-cuda", False), info("beat-cpu", True), info("bempp", True)]
     assert registry.resolve_auto_engine(capabilities=cpu_windows) == "bempp"
-    assert registry.get_engine("beat", capabilities=gpu_windows) is not None
+    no_bempp = [info("bempp", False), info("beat-cpu", True), info("dryrun", True)]
+    assert registry.resolve_auto_engine(capabilities=no_bempp) == "beat-cpu"
+    assert registry.get_engine("beat-cuda", capabilities=gpu_windows) is not None
+
+
+def test_legacy_beat_name_resolves_to_the_best_available_variant() -> None:
+    """A design file or stored preference written before the split still works.
+
+    ``beat`` named the family, and the package probe chose the backend. It now
+    means the same thing -- the best BEAT this host has -- resolved against the
+    same order AUTO uses, so an old file does not quietly become a different
+    solver or an unavailable engine.
+    """
+
+    def info(name: str, available: bool) -> registry.EngineInfo:
+        return registry.EngineInfo(name, available, "test", "1")
+
+    gpu = [info("beat-cuda", True), info("beat-cpu", True), info("metal", True)]
+    assert registry.resolve_legacy_beat_engine(gpu) == "beat-cuda"
+    cpu_only = [info("beat-cuda", False), info("beat-cpu", True), info("metal", True)]
+    assert registry.resolve_legacy_beat_engine(cpu_only) == "beat-cpu"
+    # No BEAT at all is an unavailable engine, not a silent swap to Metal.
+    none_at_all = [info("beat-cuda", False), info("beat-cpu", False), info("metal", True)]
+    assert registry.resolve_legacy_beat_engine(none_at_all) is None
 
 
 def _planner_request(
@@ -320,6 +417,120 @@ def test_submission_plan_endpoint_uses_the_submitted_design(
         "Axisymmetric, Metal, BEAT, or BEMPP; explicitly enable dry-run "
         "with WG2_ENABLE_DRYRUN=1 for synthetic development solves."
     )
+
+
+def test_a_stored_legacy_beat_request_still_submits(monkeypatch) -> None:
+    """A design file written before the backends were separately selectable.
+
+    It says ``engine: beat``, which no longer matches an advertised engine. The
+    submission must resolve it to a variant this host can run -- and it must do
+    so *after* the axisymmetric planner, which resolves an explicit ``beat``
+    request to the meridian runner for eligible circular geometry without ever
+    consulting BEAT's availability.
+    """
+
+    from server.solver import circsym
+
+    monkeypatch.setattr(
+        circsym,
+        "axisymmetric_eligibility_reasons",
+        lambda _request: ["mouth is not circular"],
+    )
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("axisym", True, "portable CPU", "1"),
+            registry.EngineInfo("beat-cuda", False, "no NVIDIA GPU", None),
+            registry.EngineInfo("beat-cpu", True, "Julia found", "1"),
+        ],
+        factory=lambda name: object() if name in {"axisym", "beat-cpu"} else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(_planner_request(engine="beat"), engine_registry)
+    )
+
+    assert resolution.engine_name == "beat-cpu"
+    # The request itself is rewritten, so the job records the engine that ran.
+    assert resolution.request.options.engine == "beat-cpu"
+    assert resolution.symmetry_metadata["solver_plan"]["engine"] == "beat-cpu"
+
+
+def test_a_legacy_beat_request_with_no_beat_backend_substitutes_and_says_why(
+    monkeypatch,
+) -> None:
+    """The two mechanisms compose: resolve the name first, substitute second.
+
+    With no BEAT backend on the host there is nothing to resolve ``beat`` to,
+    so it falls through to the ordinary unavailable-engine substitution and the
+    user is told which engine ran instead and why -- rather than being refused,
+    which is what this did before the substitution fallback existed.
+    """
+
+    from server.solver import circsym
+
+    monkeypatch.setattr(
+        circsym,
+        "axisymmetric_eligibility_reasons",
+        lambda _request: ["mouth is not circular"],
+    )
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("bempp", True, "CPU", "1"),
+            registry.EngineInfo("beat-cpu", False, "No Julia executable was found.", None),
+        ],
+        factory=lambda name: object() if name == "bempp" else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(_planner_request(engine="beat"), engine_registry)
+    )
+
+    assert resolution.engine_name == "bempp"
+    substitution = resolution.symmetry_metadata["solver_plan"]["engine_substitution"]
+    assert substitution["requested"] == "beat"
+    assert substitution["resolved"] == "bempp"
+    # The CPU variant carries the reason worth reporting: it is the one backend
+    # every host could run, so whatever stops it is why none of the four works.
+    assert "No Julia executable was found." in substitution["reason"]
+
+
+def test_a_beat_variant_this_host_lacks_substitutes_like_any_other_engine(
+    monkeypatch,
+) -> None:
+    """A preference made on a CUDA box, opened on a Mac.
+
+    Backend-level selection has to compose with the substitution fallback, or
+    the new engine names would be the one class of stored selection that
+    refuses instead of falling back.
+    """
+
+    from server.solver import circsym
+
+    monkeypatch.setattr(
+        circsym,
+        "axisymmetric_eligibility_reasons",
+        lambda _request: ["mouth is not circular"],
+    )
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("metal", True, "helper loadable", "1"),
+            registry.EngineInfo("beat-cuda", False, "Needs an NVIDIA GPU.", None),
+            registry.EngineInfo("beat-cpu", True, "Julia found", "1"),
+        ],
+        factory=lambda name: object() if name in {"metal", "beat-cpu"} else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(_planner_request(engine="beat-cuda"), engine_registry)
+    )
+
+    assert resolution.engine_name == "metal"
+    substitution = resolution.symmetry_metadata["solver_plan"]["engine_substitution"]
+    assert substitution == {
+        "requested": "beat-cuda",
+        "resolved": "metal",
+        "reason": "Needs an NVIDIA GPU.",
+    }
 
 
 def test_bempp_coupled_infinite_baffle_planner_requires_full_domain() -> None:
@@ -683,16 +894,17 @@ def test_real_runtime_persists_advisory_mesh_warning_in_job_log(
 def test_auto_skips_beat_for_a_coupled_infinite_baffle_solve() -> None:
     """AUTO must resolve against the mounting, not just the host's engine list.
 
-    On a GPU host AUTO prefers beat over bempp. BeatEngine.run rejects every
-    coupled infinite-baffle request, so for such a design that preference
-    persisted a job which could only fail, while the coupling-capable BEMPP
-    sitting beside it on the same host could have solved it.
+    On a GPU host AUTO prefers BEAT's accelerator over bempp. BeatEngine.run
+    rejects every coupled infinite-baffle request, so for such a design that
+    preference persisted a job which could only fail, while the
+    coupling-capable BEMPP sitting beside it on the same host could have
+    solved it.
     """
 
     def gpu_host(*, coupled_bempp: bool) -> list[registry.EngineInfo]:
         return [
             registry.EngineInfo(
-                "beat",
+                "beat-cuda",
                 True,
                 "CUDA",
                 "1",
@@ -731,7 +943,7 @@ def test_auto_skips_beat_for_a_coupled_infinite_baffle_solve() -> None:
     free_standing = asyncio.run(
         resolve_submission(_planner_request(solver_mode="full_3d"), coupled)
     )
-    assert free_standing.engine_name == "beat"
+    assert free_standing.engine_name == "beat-cuda"
 
     # With a pre-coupling BEMPP nothing on the host can do it, and AUTO now
     # says so at submission instead of persisting a doomed job.

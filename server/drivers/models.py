@@ -57,6 +57,10 @@ class DriverSearchResponse(BaseModel):
     #: Matches withheld because no winding of them carries enough T/S data to
     #: drive a channel. Always 0 unless the request asked for ``complete``.
     hidden_incomplete: int = 0
+    #: How many drivers of each type this query matches with the type filter
+    #: lifted, so a search that answers nothing can say which type would have
+    #: answered instead of dead-ending on "no matches".
+    matches_by_kind: dict[str, int] = {}
 
 
 class DriverDetail(DriverHit):
@@ -70,6 +74,15 @@ class DriverLibraryFile(BaseModel):
     bundled: bool = False
 
 
+class DriverKindCount(BaseModel):
+    """What the library holds of one driver type."""
+
+    kind: str
+    total: int
+    #: Of those, how many can drive a channel -- what the picker will offer.
+    complete: int = 0
+
+
 class DriverLibraryInfo(BaseModel):
     folder: str
     files: list[DriverLibraryFile]
@@ -77,6 +90,9 @@ class DriverLibraryInfo(BaseModel):
     #: How many of them carry enough Thiele-Small data to drive a channel, and
     #: so are the ones a ``complete`` search will offer.
     complete_drivers: int = 0
+    #: The breakdown by driver type, in the order a filter should list it. Types
+    #: the library holds none of are absent rather than zero.
+    kinds: list[DriverKindCount] = []
     last_scan: str | None = None
 
 
@@ -84,6 +100,7 @@ __all__ = [
     "DriverDetail",
     "DriverDisplay",
     "DriverHit",
+    "DriverKindCount",
     "DriverLibraryFile",
     "DriverLibraryInfo",
     "DriverSearchResponse",

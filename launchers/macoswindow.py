@@ -331,14 +331,6 @@ class MacFrame:
         except Exception:  # noqa: BLE001 - cosmetic, and never worth a crash
             log.exception("Could not re-apply the custom frame after a full-screen change")
 
-    def menu_bar_is_hidden(self) -> bool:
-        try:
-            appkit = _appkit()
-            options = appkit.NSApplication.sharedApplication().presentationOptions()
-            return bool(int(options) & PRESENTATION_HIDE_MENU_BAR)
-        except Exception:  # noqa: BLE001
-            return False
-
     def _frame(self) -> Rect:
         frame = self.window.frame()
         return Rect(
@@ -371,29 +363,22 @@ class MacFrame:
     def top_inset(self) -> float:
         """How far down the interface must start to clear the menu bar.
 
-        Full screen is the only case, and AppKit does not answer for it: with
-        the content view full-size, ``contentLayoutRect`` and
-        ``safeAreaInsets.top`` both report 0 there (measured -- windowed they
-        report the 28 px title bar). The menu bar is not part of the window at
-        all; it slides down over whatever is beneath it when the pointer reaches
-        the top of the screen, and what is beneath it here is the top bar, whose
-        brand, menus and Solve button all end up under it.
+        This used to reserve the menu bar's height (24 px) in full screen,
+        deliberately: the menu bar is not part of the window, and it slides
+        down over whatever is beneath it when the pointer reaches the top of
+        the screen, which in full screen is the top bar -- so its brand,
+        menus and Solve button could end up under it. Reserving a permanent
+        strip kept the top bar always clickable at the cost of 24 px of a
+        full screen, every time.
 
-        So the height comes from the menu itself. Reserving it costs 24 px of a
-        full screen and buys a top bar that can always be clicked.
+        Magnus reversed that trade-off on 2026-09-04: the always-on margin
+        costs more than the transient overlay it was bought to avoid, so this
+        now returns 0 unconditionally, full screen or windowed. In full
+        screen the menu bar may briefly cover the top bar on hover; nothing
+        is reserved for it any more.
         """
 
-        if not self.fullscreen() or self.menu_bar_is_hidden():
-            # Nothing slides down over a menu bar that is not there.
-            return 0.0
-        try:
-            appkit = _appkit()
-            menu = appkit.NSApplication.sharedApplication().mainMenu()
-            height = float(menu.menuBarHeight()) if menu is not None else 0.0
-        except Exception:  # noqa: BLE001 - a nicety, not a requirement
-            return 0.0
-        # A menu bar that reports nothing is one we should not reserve for.
-        return height if 0.0 < height < 64.0 else 0.0
+        return 0.0
 
     def fullscreen(self) -> bool:
         return bool(on_main(lambda: bool(self.window.styleMask() & FULL_SCREEN)))
