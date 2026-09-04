@@ -37,6 +37,12 @@ UPDATE_PREFIX = "update"
 
 MACOS_PLATFORM = "macos-arm64"
 WINDOWS_PLATFORM = "windows-x86_64"
+#: Linux, as one qualified target rather than "Linux". The runtime is a
+#: glibc python-build-standalone build and every wheel in the locked set is a
+#: manylinux x86-64 one, so the claim this name makes is Ubuntu 24.04 LTS on
+#: x86-64 and the distributions close enough to it -- not Linux in general, and
+#: not arm64. See docs/DEVELOPMENT.md for what was measured.
+LINUX_PLATFORM = "linux-x86_64"
 
 #: What every file built for a person rather than for the updater is named
 #: after. It marks a file as *not* machinery; it does not decide which release
@@ -50,7 +56,9 @@ def installer_name(platform: str, version: str) -> str | None:
 
     On macOS that is the disk image, which is also what a person downloads. On
     Windows it is the portable folder as a .zip, which is *not*: the setup .exe
-    is. Use ``user_download_name`` for the question "what does a person click".
+    is. On Linux it is a .tar.gz carrying the application folder beside an
+    ``install.sh``, and that one *is* the download -- the same shape as the
+    macOS disk image, which also ships its installer next to the payload.
 
     Dots rather than spaces because those are the names GitHub serves; the
     installed application and the extracted Windows folder keep their spaces.
@@ -60,6 +68,11 @@ def installer_name(platform: str, version: str) -> str | None:
         return f"{INSTALLER_PREFIX}{version}-{MACOS_PLATFORM}.dmg"
     if platform == WINDOWS_PLATFORM:
         return f"{INSTALLER_PREFIX}{version}-{WINDOWS_PLATFORM}.zip"
+    if platform == LINUX_PLATFORM:
+        # A ``.tar.gz`` again, which is the suffix that once made update-spa
+        # look like a Linux build. The names are what tell them apart now, and
+        # they have to: this one really is the Linux download.
+        return f"{INSTALLER_PREFIX}{version}-{LINUX_PLATFORM}.tar.gz"
     return None
 
 
@@ -86,13 +99,16 @@ def user_download_name(platform: str, version: str) -> str | None:
 
     This is the release page's whole contract: one row per platform, one file
     per row. macOS gets the disk image; Windows gets the setup .exe rather than
-    the portable .zip beside it.
+    the portable .zip beside it; Linux gets the tarball, which is its only
+    build and so is both.
     """
 
     if platform == MACOS_PLATFORM:
         return installer_name(MACOS_PLATFORM, version)
     if platform == WINDOWS_PLATFORM:
         return windows_setup_name(version)
+    if platform == LINUX_PLATFORM:
+        return installer_name(LINUX_PLATFORM, version)
     return None
 
 
@@ -105,6 +121,11 @@ def user_download_names(version: str) -> tuple[str, ...]:
     publish job asserts the release equals this set -- so a build that produced
     the right files and staged them into the wrong halves fails rather than
     shipping a page nobody meant.
+
+    Linux joined at 0.3.2, and the rule it joined under is the one that was
+    already written down: *one installer per supported platform*. The page held
+    exactly two files for as long as there were exactly two platforms, and the
+    tests that said "two" were describing that, not fixing it.
     """
 
     return tuple(
@@ -112,6 +133,7 @@ def user_download_names(version: str) -> tuple[str, ...]:
         for name in (
             user_download_name(MACOS_PLATFORM, version),
             user_download_name(WINDOWS_PLATFORM, version),
+            user_download_name(LINUX_PLATFORM, version),
         )
         if name is not None
     )
@@ -152,7 +174,10 @@ def spa_archive_name(version: str) -> str:
     Named with the update prefix like the other layers even though installs
     consume it too, because the question it has to answer on a release page is
     "is this the thing I download?", and the answer is no. Its ``.tar.gz``
-    suffix is why it was mistaken for a Linux build; there is no Linux binary.
+    suffix once made it look like a Linux build when there was none. There is
+    one now -- ``installer_name(LINUX_PLATFORM, ...)``, also a ``.tar.gz`` --
+    so the suffix has stopped being the distinguishing mark and the ``update-``
+    prefix is doing the whole job. That is what the prefix was for.
     """
 
     return f"{UPDATE_PREFIX}-spa-{version}.tar.gz"
@@ -220,8 +245,10 @@ def is_release_tag(tag: str) -> bool:
 # two constants that named that cycle, the predicates over them, the branch they
 # guarded in release.yml and the tests named after them retired together, which
 # is how they were written. The user-facing release is now exactly
-# `user_download_names` -- two files, one per platform, and the publish job
-# asserts that equality rather than a count.
+# `user_download_names` -- one file per supported platform, and the publish job
+# asserts that equality rather than a count. Adding Linux at 0.3.2 therefore
+# cost one entry there and no change to the publish job at all, which is what
+# asserting a set rather than a number bought.
 
 
 def checksum_name(asset: str) -> str:

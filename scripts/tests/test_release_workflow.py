@@ -210,6 +210,12 @@ def _publish_inputs(
                 release_assets.WINDOWS_PLATFORM, runtime_id
             ),
         ],
+        "linux": [
+            release_assets.installer_name(release_assets.LINUX_PLATFORM, version),
+            release_assets.runtime_layer_name(
+                release_assets.LINUX_PLATFORM, runtime_id
+            ),
+        ],
     }
     for job, names in layout.items():
         for name in names:
@@ -228,17 +234,22 @@ def _run_staging(tmp_path: Path) -> "subprocess.CompletedProcess[str]":
     )
 
 
-def test_the_publish_step_stages_two_downloads_and_everything_else_apart(
+def test_the_publish_step_stages_one_download_per_platform_and_the_rest_apart(
     tmp_path: Path,
 ) -> None:
     """The split, end to end, on the code that actually runs in CI.
 
-    Every asset the three build jobs produce goes in; what comes out has to be
-    two disjoint sets, and the user-facing one has to be exactly two files: the
-    macOS disk image and the Windows setup .exe. Everything else goes to the
-    companion -- the update layers, the SPA archive, and the portable Windows
-    .zip, which is a real download and still not the one to put in front of
-    someone who came here to install the application.
+    Every asset the four build jobs produce goes in; what comes out has to be
+    two disjoint sets, and the user-facing one has to be exactly one file per
+    supported platform: the macOS disk image, the Windows setup .exe and the
+    Linux tarball. Everything else goes to the companion -- the update layers,
+    the SPA archive, and the portable Windows .zip, which is a real download
+    and still not the one to put in front of someone who came here to install
+    the application.
+
+    This asserted "exactly two" until 0.3.2, when Linux became the third
+    platform. The rule it was describing was one file per platform; the count
+    was how many platforms there were.
     """
 
     layout = _publish_inputs(tmp_path)
@@ -265,22 +276,25 @@ def test_the_publish_step_stages_two_downloads_and_everything_else_apart(
         [
             f"Waveguide.Generator-{VERSION}-macos-arm64.dmg",
             f"Waveguide.Generator-{VERSION}-windows-x86_64-setup.exe",
+            f"Waveguide.Generator-{VERSION}-linux-x86_64.tar.gz",
         ]
     )
     # And derived as well, because that set is what the publish job asserts the
     # release equals -- so the two spellings are pinned to each other here.
     assert downloads == sorted(release_assets.user_download_names(VERSION))
-    assert len(downloads) == 2
     assert not set(downloads) & set(layers)
+    # The Linux download and the SPA archive are both .tar.gz and land on
+    # opposite sides. Nothing about the split may rest on the suffix.
+    assert release_assets.spa_archive_name(VERSION) in layers
     # The portable .zip is built, and it is on the companion rather than nowhere.
     assert f"Waveguide.Generator-{VERSION}-windows-x86_64.zip" in layers
 
 
 @pytest.mark.parametrize("version", ["0.3.1", "0.3.2", "0.4.0-beta.1"])
-def test_no_version_puts_a_third_file_on_the_user_facing_release(
+def test_no_version_puts_an_extra_file_on_the_user_facing_release(
     tmp_path: Path, version: str
 ) -> None:
-    """The update bridge is gone: two files, at every version, with no exception.
+    """The update bridge is gone: installers only, at every version, no exception.
 
     v0.3.1 published its app layer and manifest to both releases for one cycle,
     because 0.3.0's updater read the layers off the release it landed on and its
@@ -291,7 +305,7 @@ def test_no_version_puts_a_third_file_on_the_user_facing_release(
     0.3.1 itself is parametrised here rather than left out: it is the one
     version a resurrected branch would special-case, so it is the one worth
     asserting is no longer special. Rebuilding it would now produce the plain
-    two-file page, which is the point.
+    installers-only page, which is the point.
     """
 
     _publish_inputs(tmp_path, version=version)
@@ -302,7 +316,17 @@ def test_no_version_puts_a_third_file_on_the_user_facing_release(
     layers = sorted(p.name for p in (tmp_path / "build/update-assets").iterdir())
 
     assert downloads == sorted(release_assets.user_download_names(version))
-    assert len(downloads) == 2
+    # Every download is an installer for a supported platform, and there is
+    # exactly one per platform -- the property, rather than the count, which
+    # moved from two to three when Linux was added at 0.3.2.
+    assert downloads == sorted(
+        release_assets.user_download_name(platform, version)
+        for platform in (
+            release_assets.MACOS_PLATFORM,
+            release_assets.WINDOWS_PLATFORM,
+            release_assets.LINUX_PLATFORM,
+        )
+    )
     # Nothing is on both sides any more -- the split is a partition again.
     assert not set(downloads) & set(layers)
     for name in (
@@ -311,6 +335,7 @@ def test_no_version_puts_a_third_file_on_the_user_facing_release(
         release_assets.spa_archive_name(version),
         release_assets.runtime_layer_name(release_assets.MACOS_PLATFORM, RUNTIME_ID),
         release_assets.runtime_layer_name(release_assets.WINDOWS_PLATFORM, RUNTIME_ID),
+        release_assets.runtime_layer_name(release_assets.LINUX_PLATFORM, RUNTIME_ID),
     ):
         assert name in layers
         assert name not in downloads

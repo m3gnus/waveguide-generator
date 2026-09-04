@@ -307,10 +307,86 @@ jobs:
             build/bundle/update-runtime-windows-x86_64-*.zip.sha256
           if-no-files-found: error
 
+  linux-bundle:
+    name: Build the Linux standalone app
+    # Pinned to the distribution this build claims to support rather than
+    # ubuntu-latest, so the glibc the runtime links against cannot move under a
+    # release without someone deciding to move it. That claim is narrow on
+    # purpose: one distribution, one architecture, and no promise about Linux
+    # in general -- see docs/DEVELOPMENT.md.
+    runs-on: ubuntu-24.04
+    # Same reason as the Windows job: the macOS job produces the canonical app
+    # archive, so waiting for it lets this one prove its independently
+    # materialized Git blobs are exact.
+    needs: [spa, macos-bundle]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.2"
+
+      - name: Download the verified SPA inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: release-spa
+          path: build/spa
+
+      - name: Download the macOS-built app layer
+        uses: actions/download-artifact@v4
+        with:
+          name: standalone-app-layer
+          path: build/app-reference
+
+      - name: Build and verify the standalone app
+        run: |
+          set -euo pipefail
+          version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          spa="build/spa/update-spa-$version.tar.gz"
+          test -f "$spa"
+          test -f "$spa.sha256"
+          uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform linux --spa "$spa" --output build/bundle
+
+      - name: Assert this platform built the same app layer
+        # The digest, not the archive: same rule as the Windows job, and the
+        # third platform has to meet it or the update layer a Linux install
+        # downloads is not the one the other two verified.
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import json
+
+          local = glob.glob("build/bundle/update-app-*.manifest.json")
+          reference = glob.glob("build/app-reference/update-app-*.manifest.json")
+          if len(local) != 1 or len(reference) != 1:
+              raise SystemExit("Expected exactly one local and one macOS-built app manifest.")
+          trees = [json.load(open(path))["treeSha256"] for path in (local[0], reference[0])]
+          if not all(trees):
+              raise SystemExit("An app manifest carries no treeSha256; the builder did not write one.")
+          if trees[0] != trees[1]:
+              raise SystemExit(f"Linux and macOS app layers differ: {trees[0]} != {trees[1]}")
+          print(f"Cross-platform app layer treeSha256: {trees[0]}")
+          PY
+
+      - name: Share the complete Linux release asset set
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-linux-assets
+          path: |
+            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
+            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz.sha256
+            build/bundle/update-runtime-linux-x86_64-*.zip
+            build/bundle/update-runtime-linux-x86_64-*.zip.sha256
+          if-no-files-found: error
+
   publish:
     name: Validate and publish the complete release
     runs-on: ubuntu-latest
-    needs: [spa, macos-bundle, windows-bundle]
+    needs: [spa, macos-bundle, windows-bundle, linux-bundle]
     permissions:
       contents: write
     env:
@@ -341,6 +417,12 @@ jobs:
           name: standalone-windows-assets
           path: build/publish-inputs/windows
 
+      - name: Download Linux assets
+        uses: actions/download-artifact@v4
+        with:
+          name: standalone-linux-assets
+          path: build/publish-inputs/linux
+
       - name: Validate the exact inventory and every checksum
         run: |
           python - <<'PY'
@@ -370,6 +452,8 @@ jobs:
               ("windows", re.escape(release_assets.windows_setup_name(version))),
               ("windows", re.escape(release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version))),
               ("windows", rf"{re.escape(release_assets.UPDATE_PREFIX)}-runtime-windows-x86_64-[0-9a-f]{{12}}\.zip"),
+              ("linux", re.escape(release_assets.installer_name(release_assets.LINUX_PLATFORM, version))),
+              ("linux", rf"{re.escape(release_assets.UPDATE_PREFIX)}-runtime-linux-x86_64-[0-9a-f]{{12}}\.zip"),
           )
           expected_paths: set[Path] = set()
           public_keys: set[str] = set()
@@ -511,7 +595,7 @@ jobs:
 
             Install Waveguide Generator from
             [${{ env.RELEASE_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.RELEASE_TAG }})
-            instead — one file for macOS, one for Windows, and nothing else to choose between.
+            instead — one file per platform, and nothing else to choose between.
 
             The `update-` files exist so an update fetches only the layer that
             changed — usually about 4 MB rather than the whole application. The
@@ -542,6 +626,7 @@ jobs:
             |---|---|
             | macOS (Apple silicon) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-macos-arm64.dmg` |
             | Windows (x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64-setup.exe` |
+            | Linux (Ubuntu 24.04 LTS, x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-linux-x86_64.tar.gz` |
 
             **macOS: open the disk image and double-click `Install Waveguide Generator.command`.**
             macOS refuses it with "Apple could not verify ... is free of malware" -
@@ -578,6 +663,27 @@ jobs:
             break every later update. It also refuses an over-long install folder up
             front instead of failing partway through.
 
+            **Linux: extract the `.tar.gz` and run `./install.sh` inside it.** No root, no
+            package manager, nothing installed system-wide: it copies the application to
+            `~/.local/share/waveguide-generator`, adds a menu entry and an icon, and puts
+            `waveguide-generator` on your PATH. Run it again to upgrade in place, and
+            `uninstall.sh` — kept next to the installed application — to remove it.
+            Per-user is deliberate and is the same reason Windows installs to
+            `%LOCALAPPDATA%`: the in-app updater replaces files inside the installation
+            and cannot elevate, so a root-owned copy under `/opt` would never update.
+
+            The tarball carries its own Python, its own Tcl/Tk and every Python package,
+            but not the system OpenGL and X11 libraries the mesher loads at start. A
+            desktop system already has them; `install.sh` checks first and stops with the
+            exact command rather than installing something that cannot mesh. Linux gets
+            the status window and your browser rather than the single native window; that
+            is the documented behaviour on that platform, not a fault of this build.
+
+            **This is Ubuntu 24.04 LTS on x86-64**, and distributions close enough to it —
+            not "Linux". There is no arm64 Linux build and no musl build. Other
+            distributions may well work; they are not what this was built and verified
+            against.
+
             Prefer a portable copy? The `.zip` is still published, on
             [${{ env.UPDATES_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.UPDATES_TAG }}) —
             off this page so there is one file per platform to choose from here, not
@@ -601,13 +707,15 @@ jobs:
             [${{ env.UPDATES_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.UPDATES_TAG }}),
             a pre-release you do not need to visit: `update-app-*.zip` and its
             manifest are the platform-neutral application layer;
-            `update-runtime-*-<id>.zip` are the two runtime layers, addressed by
+            `update-runtime-*-<id>.zip` are the three runtime layers, addressed by
             content so releases that do not change the interpreter share one and
             the updater downloads only what moved; `update-spa-*.tar.gz` is the
             prebuilt frontend, so a source install needs no Node runtime.
 
-            There is no Linux build. Linux installs from source — see the README.
-            That `.tar.gz` is the frontend, not a Linux binary.
+            Two `.tar.gz` files exist and they are not interchangeable:
+            `Waveguide.Generator-…-linux-x86_64.tar.gz` on the page above is the Linux
+            application, and `update-spa-…tar.gz` here is the frontend. The `update-`
+            prefix is the difference, which is what it is for.
 
             </details>
 

@@ -978,9 +978,17 @@ class UpdateService:
 
     def _bundle_platform(self) -> str:
         if self.platform_name == "darwin":
-            return "macos-arm64"
+            return release_assets.MACOS_PLATFORM
         if self.platform_name == "win32":
-            return "windows-x86_64"
+            return release_assets.WINDOWS_PLATFORM
+        if self.platform_name.startswith("linux"):
+            # ``sys.platform`` is "linux" with no architecture in it, and the
+            # only Linux bundle published is x86-64. An arm64 machine running
+            # this would be running a bundle that cannot exist, so naming the
+            # x86-64 layer here cannot mislead an install that got here
+            # legitimately -- and if one ever could, the runtime layer it asks
+            # for is simply absent and no update is offered.
+            return release_assets.LINUX_PLATFORM
         return self.platform_name
 
     def _bundle_installer_name(self, version: str) -> str | None:

@@ -136,14 +136,74 @@ included `WaveguideGenerator.ico` can be selected for a shortcut; setting the ic
 `Waveguide Generator.exe` itself requires a Windows PE resource edit and is deferred
 until the executable-signing work.
 
+### The Linux bundle
+
+`--platform linux` builds `Waveguide.Generator-<version>-linux-x86_64.tar.gz`: the
+application folder `waveguide-generator/` — `app`, `runtime`, the `waveguide-generator`
+launcher, a `.desktop` template and a 512px icon — beside `install.sh`, `uninstall.sh`
+and `READ ME FIRST.txt` at the archive root. That layout is the Windows one, not the
+macOS one, so `apply_update.bundle_from_app_layer` resolves it with the rule it already
+has and the in-app updater needs no third case.
+
+**What "Linux" means here is Ubuntu 24.04 LTS on x86-64**, and distributions close
+enough to it. That is a narrow claim on purpose. The release job runs on `ubuntu-24.04`
+rather than `ubuntu-latest` so the glibc the runtime links against cannot move under a
+release without someone deciding to move it, and the interpreter is requested as
+`cpython-<version>-linux-x86_64-gnu` so a build on a musl or arm64 host cannot silently
+produce a runtime the asset name does not describe. There is no arm64 and no musl build.
+
+The build must run on Linux. `uv` *can* unpack the Linux interpreter on any host — it is
+a tarball — but the layer installed on top of it is compiled manylinux x86-64 wheels
+plus a source build of the pinned HornLab modules, which no macOS or Windows `pip`
+resolves; a cross-built bundle would carry the right interpreter and the wrong
+extensions, and fail at import in a user's hands rather than at build time.
+
+Three things differ from the other two platforms, each for a measured reason:
+
+- **Tcl/Tk is kept, not pruned.** On Linux there is no native window, so
+  `launchers.desktop` falls back to the tkinter status window — the status window *is*
+  the desktop application there. Pruning Tk as macOS and Windows do would have shipped a
+  bundle whose only interface cannot start, and it would have looked like a size win.
+  It costs nothing else: measured 2026-09-04 on a bare `ubuntu:24.04` container with no
+  X11 package installed, the pinned runtime imports `tkinter` (Tk 9.0) and reaches
+  `couldn't connect to display ":99"` — a Tcl-level error, so Tk initialised and its
+  X11 client code is statically linked rather than resolved from the system. The Tcl/Tk
+  trees and their two shared objects are about 8 MB of a 102 MB runtime.
+- **The system OpenGL and X11 libraries are not in the bundle.** The `gmsh` wheel
+  dlopens them at import, and gmsh is the single geometry authority, so an install
+  without them opens the interface and meshes nothing. Measured the same day on the same
+  container, adding one package at a time until `import gmsh` succeeded: `libglu1-mesa
+  libgl1 libgomp1 libfontconfig1 libxrender1 libxcursor1 libxft2 libxinerama1 libxi6
+  libxext6`. A desktop system has all of them; the bare container had none, which is why
+  it is a useful floor and not a description of a user's machine. `install.sh`
+  preflights by importing gmsh with the bundled interpreter and stops before copying
+  anything, printing the failing library from the real error and the apt command.
+- **The install is per-user and refuses root.** The in-app updater replaces `app` and
+  `runtime` inside the installation as the user and cannot elevate, so a root-owned copy
+  under `/opt` would install once and refuse every update afterwards — the same reason
+  the Windows installer writes to `%LOCALAPPDATA%\Programs`. `install.sh` puts the
+  application in `$XDG_DATA_HOME/waveguide-generator`, the entry in
+  `$XDG_DATA_HOME/applications`, the icon in `hicolor/512x512/apps`, and a symlink in
+  `~/.local/bin`; `uninstall.sh` removes exactly those, takes the PATH symlink only when
+  it still points into the installation being removed, and keeps the workspace unless
+  `--data` is passed. Both refuse a directory with no `app/APP-MANIFEST.json` in it,
+  because `rm -rf` over a path built from `--prefix` is how a home directory is lost.
+
+Bundle verification is the same shape as the other two: `scripts/check_backends.py`
+must report the bempp/numba backend ready, `/` and `/health` must answer, and then the
+*shipped launcher* is started with `--no-gui` and must serve the application — the gate
+that covers the script the desktop entry actually executes, which running the
+interpreter directly says nothing about. It is headless by request; the status window
+itself needs a display and is not covered.
+
 The runtime id is content-addressed from the two direct requirement files, the full
 constraint lock, the exact Python patch and python-build-standalone build, and the
 versioned bundle recipe. Runtime ZIPs use sorted entries, fixed timestamps, and preserved
-modes. Both release jobs materialize the platform-neutral app ZIP from the same committed
-blobs and verified SPA, with canonical modes and stored entries, so platform line-ending
-filters and zlib versions cannot change its bytes. Release CI compares the two SHA-256
-values before uploading any Windows assets, and only the macOS job uploads the shared app
-layer. The builder and extractor reject links, absolute paths, `..` traversal,
+modes. All three release jobs materialize the platform-neutral app ZIP from the same
+committed blobs and verified SPA, with canonical modes and stored entries, so platform
+line-ending filters and zlib versions cannot change its bytes. Release CI compares each
+platform's SHA-256 against the macOS one before uploading that platform's assets, and
+only the macOS job uploads the shared app layer. The builder and extractor reject links, absolute paths, `..` traversal,
 Windows-reserved names, case-insensitive collisions, and AppleDouble metadata. Complete
 installer assets use `Waveguide.Generator-<version>-<platform>.<extension>` before their
 checksum sidecars are written, matching the filenames GitHub serves.
@@ -152,12 +212,12 @@ checksum sidecars are written, matching the filenames GitHub serves.
 
 The server keeps release discovery read-only. In bundle mode (`WG2_BUNDLE=1`) it reads
 the installed version and runtime id from `Resources/app` and `Resources/runtime` on
-macOS, or the executable's sibling `app` and `runtime` directories on Windows. A newer
+macOS, or the launcher's sibling `app` and `runtime` directories on Windows and Linux. A newer
 release is installable only
 after its separate app manifest has been size-limited, checksum-verified, and read; the
 app ZIP and its checksum must exist, and a different runtime id must resolve to a
-runtime ZIP/checksum pair. Current releases attach both platform runtime ZIP/checksum
-pairs even when their content-addressed ids are unchanged. The updater can also find a
+runtime ZIP/checksum pair. Current releases attach every platform's runtime ZIP/checksum
+pair even when their content-addressed ids are unchanged. The updater can also find a
 matching runtime in one of the 20 most recent older releases, preserving compatibility
 with releases created before that publication rule.
 

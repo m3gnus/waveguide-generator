@@ -59,6 +59,10 @@ RELAUNCH_CONFIRM_INTERVAL = 0.25
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_DETACHED_PROCESS = 0x00000008
 WINDOWS_LAUNCHER_NAME = "Waveguide Generator.exe"
+#: The Linux bundle's entry point, at the root of the installation beside
+#: ``app`` and ``runtime`` -- the same position the Windows launcher holds,
+#: which is why ``bundle_from_app_layer`` resolves both with one rule.
+LINUX_LAUNCHER_NAME = "waveguide-generator"
 BUNDLE_LAYERS = ("app", "runtime")
 PREVIOUS_SUFFIX = ".previous"
 FAILED_SUFFIX = ".failed"
@@ -912,6 +916,12 @@ def relaunch_command(bundle: Path, platform_name: str, arguments: Sequence[str] 
         return command
     if platform_name == "win32":
         return [str(bundle / WINDOWS_LAUNCHER_NAME)]
+    if platform_name.startswith("linux"):
+        # The plainest of the three. The launcher is a shell script that execs
+        # the bundled interpreter, so it takes the arguments directly: there is
+        # no LaunchServices in the way as on macOS, and no renamed pythonw.exe
+        # parsing them as interpreter options as on Windows.
+        return [str(bundle / LINUX_LAUNCHER_NAME), *arguments]
     raise ApplyUpdateError(f"Bundle updates are unsupported on {platform_name}.")
 
 
@@ -1045,7 +1055,14 @@ def apply_update(
     def live_installation_is_complete() -> bool:
         if not all((resources / name).is_dir() for name in ("app", "runtime")):
             return False
-        return platform_name != "win32" or (resources / "Waveguide Generator.exe").is_file()
+        # macOS reaches its executable through the bundle, which `open` refuses
+        # if it is malformed; the other two are plain files beside the layers
+        # and a swap that lost one leaves a directory that looks installed.
+        if platform_name == "win32":
+            return (resources / WINDOWS_LAUNCHER_NAME).is_file()
+        if platform_name.startswith("linux"):
+            return (resources / LINUX_LAUNCHER_NAME).is_file()
+        return True
 
     def relaunch_current() -> str | None:
         if not live_installation_is_complete():
