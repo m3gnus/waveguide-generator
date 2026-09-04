@@ -1,4 +1,4 @@
-"""Pure contracts for the macOS and Windows standalone bundle builder."""
+"""Pure contracts for the macOS, Windows and Linux standalone bundle builder."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ import pytest
 
 from launchers.macos import generate_icon
 from scripts import build_bundle, fetch_spa
+from shared import release_assets
 from scripts.build_bundle import (
     BundleBuilder,
     BundleError,
@@ -29,6 +30,17 @@ from scripts.build_bundle import (
     PRUNE_LIBRARY_GLOBS,
     PRUNE_RELATIVE_PATHS,
     RUNTIME_RECIPE,
+    LINUX_BUNDLE_DIRECTORY,
+    LINUX_DESKTOP_ENTRY_NAME,
+    LINUX_ICON_NAME,
+    LINUX_INSTALLER_NAME,
+    LINUX_INSTALLER_SOURCE,
+    LINUX_LAUNCHER_NAME,
+    LINUX_PLATFORM,
+    LINUX_PRUNE_RELATIVE_PATHS,
+    LINUX_README_NAME,
+    LINUX_UNINSTALLER_NAME,
+    LINUX_UNINSTALLER_SOURCE,
     WINDOWS_CREATE_NEW_PROCESS_GROUP,
     WINDOWS_CREATE_NO_WINDOW,
     WINDOWS_ICON_NAME,
@@ -42,7 +54,10 @@ from scripts.build_bundle import (
     WINDOWS_RUNTIME_PTH_NAME,
     build,
     copy_tracked_app_files,
+    deterministic_tar_gz,
     deterministic_zip,
+    linux_desktop_entry,
+    linux_launcher,
     install_spa_layer,
     locate_inno_compiler,
     max_payload_depth,
@@ -963,7 +978,7 @@ def test_release_workflow_publishes_one_complete_draft_inventory() -> None:
     # Exactly one of them is the user-facing release, and it is the drafted one.
     assert workflow.count("draft: true") == 1
     assert workflow.count("prerelease: true") == 1
-    assert "needs: [spa, macos-bundle, windows-bundle]" in workflow
+    assert "needs: [spa, macos-bundle, windows-bundle, linux-bundle]" in workflow
     assert 'gh release edit "$RELEASE_TAG" --draft=false' in workflow
     assert "Reuse a runtime already published" not in workflow
     # The count is derived from the spec list rather than spelled out. Adding the
@@ -974,6 +989,11 @@ def test_release_workflow_publishes_one_complete_draft_inventory() -> None:
     assert "Waveguide.Generator-*-windows-x86_64.zip" in workflow
     assert "Waveguide.Generator-*-windows-x86_64-setup.exe" in workflow
     assert "release_assets.windows_setup_name(version)" in workflow
+    assert "Waveguide.Generator-*-linux-x86_64.tar.gz" in workflow
+    assert "update-runtime-linux-x86_64-*.zip" in workflow
+    # Named as the distribution the build was verified against, not as
+    # "ubuntu-latest": the runner is what fixes the glibc the runtime links to.
+    assert "runs-on: ubuntu-24.04" in workflow
 
 
 def test_release_notes_give_both_platforms_their_first_launch_wall() -> None:
@@ -2072,3 +2092,932 @@ def test_the_installer_script_refuses_to_run_away_from_the_app(tmp_path: Path) -
     assert result.returncode == 1
     assert "is not beside this installer" in result.stdout
     assert 'xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"' in result.stdout
+
+
+# --------------------------------------------------------------------------
+# Linux: the third bundle, added at 0.3.2.
+# --------------------------------------------------------------------------
+
+
+def _linux_payload(root: Path) -> Path:
+    """A bundle-shaped folder: enough for the scripts, none of the 100 MB."""
+
+    bundle = root / LINUX_BUNDLE_DIRECTORY
+    (bundle / "app").mkdir(parents=True)
+    (bundle / "runtime" / "bin").mkdir(parents=True)
+    (bundle / "app" / "APP-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "version": "1.2.3"}), encoding="utf-8"
+    )
+    (bundle / "runtime" / "RUNTIME-MANIFEST.json").write_text("{}", encoding="utf-8")
+    launcher = bundle / LINUX_LAUNCHER_NAME
+    launcher.write_text(linux_launcher(), encoding="utf-8")
+    launcher.chmod(0o755)
+    (bundle / LINUX_DESKTOP_ENTRY_NAME).write_text(linux_desktop_entry(), encoding="utf-8")
+    (bundle / LINUX_ICON_NAME).write_bytes(b"\x89PNG\r\n\x1a\n")
+    return bundle
+
+
+def _install_linux(
+    tmp_path: Path,
+    *,
+    arguments: list[str],
+    home: Path | None = None,
+    environment: dict[str, str] | None = None,
+) -> "subprocess.CompletedProcess[str]":
+    """Run the shipped installer against a throwaway HOME.
+
+    ``--skip-checks`` because the payload above has no interpreter to import
+    gmsh with; the preflight has its own test.
+    """
+
+    home = home or (tmp_path / "home")
+    home.mkdir(exist_ok=True)
+    scripts = {
+        LINUX_INSTALLER_NAME: LINUX_INSTALLER_SOURCE,
+        LINUX_UNINSTALLER_NAME: LINUX_UNINSTALLER_SOURCE,
+    }
+    for name, source in scripts.items():
+        target = tmp_path / name
+        if not target.exists():
+            shutil.copy2(Path(__file__).resolve().parents[2] / source, target)
+            target.chmod(0o755)
+    run_environment = {
+        "HOME": str(home),
+        "PATH": os.environ.get("PATH", ""),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+    }
+    run_environment.update(environment or {})
+    return subprocess.run(
+        ["bash", str(tmp_path / LINUX_INSTALLER_NAME), *arguments],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env=run_environment,
+    )
+
+
+def _desktop_exec_argv(entry: str) -> list[str]:
+    """Decode the two escaping layers the desktop-entry Exec key applies."""
+
+    encoded = next(line.removeprefix("Exec=") for line in entry.splitlines() if line.startswith("Exec="))
+    decoded: list[str] = []
+    index = 0
+    string_escapes = {"s": " ", "n": "\n", "t": "\t", "r": "\r", "\\": "\\"}
+    while index < len(encoded):
+        if encoded[index] == "\\" and index + 1 < len(encoded):
+            following = encoded[index + 1]
+            if following in string_escapes:
+                decoded.append(string_escapes[following])
+                index += 2
+                continue
+        decoded.append(encoded[index])
+        index += 1
+    command = "".join(decoded)
+    assert command.startswith('"')
+    argument: list[str] = []
+    index = 1
+    while index < len(command):
+        character = command[index]
+        if character == '"':
+            break
+        if character == "\\" and index + 1 < len(command):
+            following = command[index + 1]
+            if following in {'"', "`", "$", "\\"}:
+                argument.append(following)
+                index += 2
+                continue
+        argument.append(character)
+        index += 1
+    assert index < len(command), "unterminated quoted Exec argument"
+    fields = command[index + 1 :].split()
+    return ["".join(argument).replace("%%", "%"), *fields]
+
+
+def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path) -> None:
+    """One root holding ``app``, ``runtime`` and the launcher, and nothing else.
+
+    That is the layout ``apply_update.bundle_from_app_layer`` already resolves
+    for every non-macOS platform, so the in-app updater's swap, rollback and
+    relaunch need no third rule. A nested macOS-style container here would have
+    been invisible until the first update tried to rename a directory that was
+    one level from where it looked.
+    """
+
+    builder = BundleBuilder(Path(__file__).resolve().parents[2], system=lambda: "Linux")
+    runtime = tmp_path / "runtime"
+    (runtime / "bin").mkdir(parents=True)
+    (runtime / "bin" / "python3.13").write_text("#!/bin/sh\n", encoding="utf-8")
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "APP-MANIFEST.json").write_text("{}", encoding="utf-8")
+    written: list[tuple[Path, int]] = []
+    bundle = tmp_path / LINUX_BUNDLE_DIRECTORY
+
+    builder.assemble_linux_bundle(
+        bundle,
+        runtime_root=runtime,
+        app_root=app,
+        icon_writer=lambda path, size: (
+            path.write_bytes(b"\x89PNG"),
+            written.append((path, size)),
+        )[0],
+    )
+
+    assert sorted(entry.name for entry in bundle.iterdir()) == sorted(
+        ["app", "runtime", LINUX_LAUNCHER_NAME, LINUX_DESKTOP_ENTRY_NAME, LINUX_ICON_NAME]
+    )
+    assert (bundle / "app" / "APP-MANIFEST.json").is_file()
+    assert written == [(bundle / LINUX_ICON_NAME, 512)]
+    # The bit that decides whether a double-click runs the application or opens
+    # it in a text editor, and the one a checkout cannot be trusted to carry.
+    assert (bundle / LINUX_LAUNCHER_NAME).stat().st_mode & 0o111
+
+
+def test_the_linux_launcher_establishes_the_bundle_environment() -> None:
+    """What the .desktop entry runs has to do what launcher.c does on macOS."""
+
+    script = linux_launcher()
+
+    assert script.startswith("#!/bin/sh\n")
+    # Resolved from the file, not from $0: the installer puts a symlink on PATH.
+    assert "readlink -f" in script
+    assert "WG2_BUNDLE=1" in script
+    assert "WG2_APP_ROOT=$app" in script
+    assert "export WG2_BUNDLE WG2_APP_ROOT" in script
+    # Caches out of the installation, so a layer swap is not racing a
+    # __pycache__ directory being written into the directory it is renaming.
+    assert "PYTHONPYCACHEPREFIX" in script
+    assert "NUMBA_CACHE_DIR" in script
+    assert 'exec "$python" -m launchers.desktop "$@"' in script
+    # It may not reach into a checkout: it runs from an installed copy.
+    assert "REPO_DIR" not in script
+    assert ".venv" not in script
+
+
+def test_the_linux_desktop_entry_is_substituted_not_guessed() -> None:
+    entry = linux_desktop_entry()
+
+    assert entry.startswith("[Desktop Entry]\n")
+    assert "Type=Application" in entry
+    assert f"Exec=@INSTALL_DIR@/{LINUX_LAUNCHER_NAME} %U" in entry
+    # The icon is named by theme key, not by path, so the hicolor lookup the
+    # installer feeds is the one the desktop performs.
+    assert "Icon=waveguide-generator\n" in entry
+    assert "Terminal=false" in entry
+
+
+def test_the_linux_tarball_carries_an_executable_installer(tmp_path: Path) -> None:
+    """A .tar.gz because tar keeps the executable bit and .zip does not.
+
+    A user who has to ``chmod +x install.sh`` before anything happens is the
+    Linux form of a .command that opens in TextEdit, and this project has met
+    that failure once already.
+    """
+
+    builder = BundleBuilder(Path(__file__).resolve().parents[2], system=lambda: "Linux")
+    bundle = _linux_payload(tmp_path)
+    archive = tmp_path / "out.tar.gz"
+
+    builder.create_linux_tarball(bundle, archive)
+
+    with tarfile.open(archive, "r:gz") as opened:
+        members = {member.name: member for member in opened.getmembers()}
+    for name in (LINUX_INSTALLER_NAME, LINUX_UNINSTALLER_NAME):
+        assert members[name].mode & 0o111, f"{name} must arrive executable"
+    assert members[LINUX_README_NAME].mode & 0o111 == 0
+    assert members[f"{LINUX_BUNDLE_DIRECTORY}/{LINUX_LAUNCHER_NAME}"].mode & 0o111
+    # The instructions and the scripts sit BESIDE the folder, so they are
+    # reachable without entering it -- the same placement as the Windows
+    # readme, and for the same reason.
+    assert LINUX_INSTALLER_NAME in members
+    assert f"{LINUX_BUNDLE_DIRECTORY}/app/APP-MANIFEST.json" in members
+    assert members[LINUX_INSTALLER_NAME].uid == 0
+    assert members[LINUX_INSTALLER_NAME].uname == ""
+
+
+def test_the_linux_tarball_is_reproducible(tmp_path: Path) -> None:
+    """Two builds of one commit are the same bytes, header included."""
+
+    builder = BundleBuilder(Path(__file__).resolve().parents[2], system=lambda: "Linux")
+    bundle = _linux_payload(tmp_path)
+    first = tmp_path / "first.tar.gz"
+    second = tmp_path / "second.tar.gz"
+
+    builder.create_linux_tarball(bundle, first)
+    builder.create_linux_tarball(bundle, second)
+
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_a_tarball_symlink_out_of_the_bundle_fails_the_build(tmp_path: Path) -> None:
+    """The same refusal the .zip makes, so neither archive can carry a link out."""
+
+    bundle = _linux_payload(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    (bundle / "escape").symlink_to(outside)
+
+    with pytest.raises(BundleError, match="does not resolve to a file inside"):
+        deterministic_tar_gz(
+            bundle, tmp_path / "out.tar.gz", archive_root=LINUX_BUNDLE_DIRECTORY
+        )
+
+
+def test_the_linux_runtime_keeps_tcl_and_tk(tmp_path: Path) -> None:
+    """On Linux the status window IS the application, so Tk cannot be pruned.
+
+    ``launchers.desktop.main`` falls back to the tkinter status window on
+    Linux because there is no native window there. Pruning Tk as the macOS and
+    Windows builds do would have shipped a bundle whose only user interface
+    cannot start -- and it would have looked like a size win.
+    """
+
+    runtime = tmp_path / "runtime"
+    for relative in ("lib/tk9.0", "lib/tcl9.0", "lib/python3.13/tkinter"):
+        (runtime / relative).mkdir(parents=True)
+    for relative in ("lib/python3.13/idlelib", "lib/python3.13/ensurepip"):
+        (runtime / relative).mkdir(parents=True)
+    (runtime / "lib" / "libtcl9tk9.0.so").write_bytes(b"")
+
+    removed = prune_runtime(runtime, platform_name=LINUX_PLATFORM)
+
+    assert (runtime / "lib" / "python3.13" / "tkinter").is_dir()
+    assert (runtime / "lib" / "tk9.0").is_dir()
+    assert (runtime / "lib" / "libtcl9tk9.0.so").is_file()
+    # Everything else the macOS build drops still goes.
+    assert "lib/python3.13/idlelib" in removed
+    assert "lib/python3.13/ensurepip" in removed
+    assert "lib/python3.13/tkinter" not in LINUX_PRUNE_RELATIVE_PATHS
+
+
+def test_the_linux_bundle_refuses_to_build_off_linux(tmp_path: Path) -> None:
+    """uv can unpack the interpreter anywhere; the wheels on top of it cannot.
+
+    A cross-built bundle would carry the right interpreter and extensions
+    compiled for the wrong operating system, which fails at import rather than
+    at build time -- in a user's hands.
+    """
+
+    builder = BundleBuilder(tmp_path, system=lambda: "Darwin", machine=lambda: "arm64")
+    args = SimpleNamespace(
+        platform="linux",
+        python_version="3.13.12",
+        output=tmp_path / "output",
+        app_only=False,
+        runtime_only=False,
+        spa=None,
+        skip_verify=False,
+    )
+
+    with pytest.raises(BundleError, match="must be built on Linux"):
+        build(args, builder=builder)
+
+
+def test_a_missing_linux_installer_script_fails_the_build(tmp_path: Path) -> None:
+    """Never build a tarball whose installer is silently absent.
+
+    A tarball with only the folder in it hands every Linux user a directory and
+    no instructions, which looks like a successful build.
+    """
+
+    builder = BundleBuilder(tmp_path, system=lambda: "Linux")
+    with pytest.raises(BundleError, match="bundle installer is missing"):
+        builder.linux_installer()
+    with pytest.raises(BundleError, match="bundle uninstaller is missing"):
+        builder.linux_uninstaller()
+
+
+@_NEEDS_POSIX_BASH
+@pytest.mark.parametrize("source", (LINUX_INSTALLER_SOURCE, LINUX_UNINSTALLER_SOURCE))
+def test_the_linux_scripts_are_valid_bash(source: str) -> None:
+    script = Path(__file__).resolve().parents[2] / source
+    result = subprocess.run(
+        ["bash", "-n", str(script)], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_installer_places_the_application_menu_entry_and_command(
+    tmp_path: Path,
+) -> None:
+    """Everything install.sh promises, checked where it puts it.
+
+    Run against a throwaway ``HOME``, so this exercises the real script rather
+    than a description of it. It is not native qualification: the payload is a
+    fixture, not a built bundle.
+    """
+
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+
+    result = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    share = home / ".local" / "share"
+    installed = share / LINUX_BUNDLE_DIRECTORY
+    assert (installed / "app" / "APP-MANIFEST.json").is_file()
+    assert (installed / LINUX_LAUNCHER_NAME).stat().st_mode & 0o111
+    # The uninstaller travels into the installation, so removing it does not
+    # require still having the download.
+    assert (installed / LINUX_UNINSTALLER_NAME).stat().st_mode & 0o111
+
+    entry = (share / "applications" / LINUX_DESKTOP_ENTRY_NAME).read_text(encoding="utf-8")
+    assert "@INSTALL_DIR@" not in entry
+    assert _desktop_exec_argv(entry) == [str(installed / LINUX_LAUNCHER_NAME), "%U"]
+    assert (share / "icons" / "hicolor" / "512x512" / "apps" / LINUX_ICON_NAME).is_file()
+
+    command = home / ".local" / "bin" / LINUX_LAUNCHER_NAME
+    assert command.is_symlink()
+    assert command.resolve() == (installed / LINUX_LAUNCHER_NAME).resolve()
+
+
+@_NEEDS_POSIX_BASH
+def test_linux_desktop_exec_quotes_and_invokes_a_special_character_path(tmp_path: Path) -> None:
+    """Exec has two escape layers and percent introduces freedesktop field codes."""
+
+    bundle = _linux_payload(tmp_path)
+    launch_record = tmp_path / "launched.txt"
+    launcher = bundle / LINUX_LAUNCHER_NAME
+    launcher.write_text(
+        "#!/bin/sh\nprintf '%s' \"$0\" > \"$WG_TEST_LAUNCH_RECORD\"\n",
+        encoding="utf-8",
+    )
+    launcher.chmod(0o755)
+    home = tmp_path / "home"
+    prefix = tmp_path / "space & pipe| slash\\"
+
+    result = _install_linux(
+        tmp_path,
+        arguments=["--prefix", str(prefix), "--no-launch", "--skip-checks"],
+        home=home,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    entry_path = home / ".local" / "share" / "applications" / LINUX_DESKTOP_ENTRY_NAME
+    entry = entry_path.read_text(encoding="utf-8")
+    executable = prefix / LINUX_BUNDLE_DIRECTORY / LINUX_LAUNCHER_NAME
+    argv = _desktop_exec_argv(entry)
+    assert argv == [str(executable), "%U"]
+    validation_tool = shutil.which("desktop-file-validate")
+    if validation_tool:
+        validated = subprocess.run(
+            [validation_tool, str(entry_path)], capture_output=True, text=True, check=False
+        )
+        assert validated.returncode == 0, validated.stdout + validated.stderr
+    invoked = subprocess.run(
+        [argv[0]],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "WG_TEST_LAUNCH_RECORD": str(launch_record)},
+    )
+    assert invoked.returncode == 0, invoked.stdout + invoked.stderr
+    assert launch_record.read_text(encoding="utf-8") == str(executable)
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_installer_canonicalizes_prefix_before_writing_paths(tmp_path: Path) -> None:
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    prefix_with_parent = tmp_path / "missing" / ".." / "canonical"
+
+    result = _install_linux(
+        tmp_path,
+        arguments=["--prefix", str(prefix_with_parent), "--no-launch", "--skip-checks"],
+        home=home,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    installed = tmp_path / "canonical" / LINUX_BUNDLE_DIRECTORY
+    assert installed.is_dir()
+    entry = (
+        home / ".local" / "share" / "applications" / LINUX_DESKTOP_ENTRY_NAME
+    ).read_text(encoding="utf-8")
+    assert _desktop_exec_argv(entry)[0] == str(installed / LINUX_LAUNCHER_NAME)
+    assert ".." not in os.readlink(home / ".local" / "bin" / LINUX_LAUNCHER_NAME)
+
+
+@_NEEDS_POSIX_BASH
+def test_linux_prefix_canonicalization_resolves_symlinks_before_parent_segments(
+    tmp_path: Path,
+) -> None:
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    linked_parent = tmp_path / "linked-parent"
+    real_parent = tmp_path / "real-parent" / "nested"
+    real_parent.mkdir(parents=True)
+    linked_parent.mkdir()
+    (linked_parent / "link").symlink_to(real_parent, target_is_directory=True)
+    prefix = linked_parent / "link" / ".." / "canonical"
+
+    result = _install_linux(
+        tmp_path,
+        arguments=["--prefix", str(prefix), "--no-launch", "--skip-checks"],
+        home=home,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    target = tmp_path / "real-parent" / "canonical" / LINUX_BUNDLE_DIRECTORY
+    assert target.is_dir()
+    entry = (
+        home / ".local" / "share" / "applications" / LINUX_DESKTOP_ENTRY_NAME
+    ).read_text(encoding="utf-8")
+    assert _desktop_exec_argv(entry)[0] == str(target / LINUX_LAUNCHER_NAME)
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_installer_rejects_a_percent_path_before_mutation(tmp_path: Path) -> None:
+    """Ubuntu GLib rejects spec ``%%`` while the validator rejects raw ``%``."""
+
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    prefix = tmp_path / "percent%"
+
+    result = _install_linux(
+        tmp_path,
+        arguments=["--prefix", str(prefix), "--no-launch", "--skip-checks"],
+        home=home,
+    )
+
+    assert result.returncode == 1
+    assert "cannot contain a percent sign" in result.stdout
+    assert not prefix.exists()
+    assert not (home / ".local").exists()
+
+
+@_NEEDS_POSIX_BASH
+@pytest.mark.parametrize(
+    ("arguments", "environment", "message"),
+    [
+        (["--prefix", "relative"], {}, "--prefix must be an absolute path"),
+        ([], {"XDG_DATA_HOME": "relative"}, "XDG_DATA_HOME must be an absolute path"),
+    ],
+)
+def test_the_linux_installer_rejects_relative_paths_before_mutation(
+    tmp_path: Path,
+    arguments: list[str],
+    environment: dict[str, str],
+    message: str,
+) -> None:
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+
+    result = _install_linux(
+        tmp_path,
+        arguments=[*arguments, "--no-launch", "--skip-checks"],
+        home=home,
+        environment=environment,
+    )
+
+    assert result.returncode == 1
+    assert message in result.stdout
+    assert not (home / ".local").exists()
+
+
+@_NEEDS_POSIX_BASH
+@pytest.mark.parametrize("inside_source", [False, True])
+def test_the_linux_installer_refuses_source_target_overlap(
+    tmp_path: Path, inside_source: bool
+) -> None:
+    source = _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    prefix = source / "nested" if inside_source else tmp_path
+
+    result = _install_linux(
+        tmp_path,
+        arguments=["--prefix", str(prefix), "--no-launch", "--skip-checks"],
+        home=home,
+    )
+
+    assert result.returncode == 1
+    expected = "inside the extracted application" if inside_source else "are the same"
+    assert expected in result.stdout
+    assert (source / "app" / "APP-MANIFEST.json").is_file()
+
+
+@_NEEDS_POSIX_BASH
+def test_reinstalling_replaces_rather_than_nesting_or_failing(tmp_path: Path) -> None:
+    """Upgrade in place is the common path, and it must not accumulate."""
+
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+
+    first = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+    assert first.returncode == 0, first.stdout + first.stderr
+    marker = home / ".local" / "share" / LINUX_BUNDLE_DIRECTORY / "app" / "left-over.txt"
+    marker.write_text("from the previous version", encoding="utf-8")
+
+    again = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+
+    assert again.returncode == 0, again.stdout + again.stderr
+    share = home / ".local" / "share"
+    assert sorted(p.name for p in share.iterdir()) == sorted(
+        [LINUX_BUNDLE_DIRECTORY, "applications", "icons"]
+    )
+    # A replacement, not a merge: a file the old version left behind is gone.
+    assert not marker.exists()
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_installer_refuses_to_run_away_from_the_application(
+    tmp_path: Path,
+) -> None:
+    """Copied out of the tarball on its own, it must say so, not half-install."""
+
+    result = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"])
+
+    assert result.returncode == 1
+    assert "is not beside this installer" in result.stdout
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_installer_refuses_to_replace_a_directory_it_did_not_make(
+    tmp_path: Path,
+) -> None:
+    """``rm -rf`` on a path from ``--prefix`` is how a home directory is lost.
+
+    The manifest the builder writes is the evidence required before anything is
+    displaced, so only a directory this project produced can be replaced.
+    """
+
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    occupied = tmp_path / "elsewhere" / LINUX_BUNDLE_DIRECTORY
+    occupied.mkdir(parents=True)
+    (occupied / "someone-elses-work.txt").write_text("do not delete", encoding="utf-8")
+
+    result = _install_linux(
+        tmp_path,
+        arguments=["--prefix", str(tmp_path / "elsewhere"), "--no-launch", "--skip-checks"],
+        home=home,
+    )
+
+    assert result.returncode == 1
+    assert "not a Waveguide Generator installation" in result.stdout
+    assert (occupied / "someone-elses-work.txt").is_file()
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_installer_refuses_root(tmp_path: Path) -> None:
+    """A root-owned copy would install once and never update again.
+
+    The in-app updater replaces ``app`` and ``runtime`` in place as the user and
+    cannot elevate, which is the same reason the Windows installer writes to
+    %LOCALAPPDATA% rather than Program Files.
+    """
+
+    script = (
+        Path(__file__).resolve().parents[2] / LINUX_INSTALLER_SOURCE
+    ).read_text(encoding="utf-8")
+
+    assert 'if [ "$(id -u)" = "0" ]; then' in script
+    assert "Do not install Waveguide Generator as root." in script
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_uninstaller_removes_exactly_what_the_installer_added(
+    tmp_path: Path,
+) -> None:
+    """And leaves the workspace, which is the reason people run it."""
+
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    installed = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    share = home / ".local" / "share"
+    workspace = share / "WaveguideGenerator"
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "design.mwg").write_text("a design", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(share / LINUX_BUNDLE_DIRECTORY / LINUX_UNINSTALLER_NAME)],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", ""),
+            "XDG_DATA_HOME": str(share),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (share / LINUX_BUNDLE_DIRECTORY).exists()
+    assert not (share / "applications" / LINUX_DESKTOP_ENTRY_NAME).exists()
+    assert not (share / "icons" / "hicolor" / "512x512" / "apps" / LINUX_ICON_NAME).exists()
+    assert not (home / ".local" / "bin" / LINUX_LAUNCHER_NAME).exists()
+    # The whole point of the default: reinstalling is the common reason to run
+    # this, and a workspace lost to it is unrecoverable.
+    assert (workspace / "design.mwg").read_text(encoding="utf-8") == "a design"
+    assert "--data" in result.stdout
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_uninstaller_refuses_a_directory_it_did_not_make(tmp_path: Path) -> None:
+    """The mirror of the installer's guard, on the operation that deletes."""
+
+    home = tmp_path / "home"
+    home.mkdir()
+    share = home / ".local" / "share"
+    stranger = share / LINUX_BUNDLE_DIRECTORY
+    stranger.mkdir(parents=True)
+    (stranger / "not-ours.txt").write_text("keep", encoding="utf-8")
+    script = tmp_path / LINUX_UNINSTALLER_NAME
+    shutil.copy2(Path(__file__).resolve().parents[2] / LINUX_UNINSTALLER_SOURCE, script)
+
+    result = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", ""), "XDG_DATA_HOME": str(share)},
+    )
+
+    assert result.returncode == 1
+    assert "not a Waveguide Generator installation" in result.stdout
+    assert (stranger / "not-ours.txt").is_file()
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_uninstaller_leaves_another_installations_command_alone(
+    tmp_path: Path,
+) -> None:
+    """The PATH symlink is shared ground; only its own may be removed."""
+
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    installed = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    share = home / ".local" / "share"
+    other = tmp_path / "other" / LINUX_LAUNCHER_NAME
+    other.parent.mkdir(parents=True)
+    other.write_text("#!/bin/sh\n", encoding="utf-8")
+    command = home / ".local" / "bin" / LINUX_LAUNCHER_NAME
+    command.unlink()
+    command.symlink_to(other)
+
+    result = subprocess.run(
+        ["bash", str(share / LINUX_BUNDLE_DIRECTORY / LINUX_UNINSTALLER_NAME)],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", ""), "XDG_DATA_HOME": str(share)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert command.is_symlink(), "a link into another installation was taken with this one"
+    assert not (share / LINUX_BUNDLE_DIRECTORY).exists()
+
+
+@_NEEDS_POSIX_BASH
+def test_uninstalling_a_preserves_installation_bs_shared_desktop_assets(tmp_path: Path) -> None:
+    """Desktop entry, icon, and PATH command all belong to the latest install."""
+
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    prefix_a = tmp_path / "install-a"
+    prefix_b = tmp_path / "install-b"
+    for prefix in (prefix_a, prefix_b):
+        result = _install_linux(
+            tmp_path,
+            arguments=["--prefix", str(prefix), "--no-launch", "--skip-checks"],
+            home=home,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    target_a = prefix_a / LINUX_BUNDLE_DIRECTORY
+    target_b = prefix_b / LINUX_BUNDLE_DIRECTORY
+    share = home / ".local" / "share"
+    result = subprocess.run(
+        ["bash", str(target_a / LINUX_UNINSTALLER_NAME)],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", ""), "XDG_DATA_HOME": str(share)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not target_a.exists()
+    assert target_b.is_dir()
+    desktop = share / "applications" / LINUX_DESKTOP_ENTRY_NAME
+    icon = share / "icons" / "hicolor" / "512x512" / "apps" / LINUX_ICON_NAME
+    assert _desktop_exec_argv(desktop.read_text(encoding="utf-8"))[0] == str(
+        target_b / LINUX_LAUNCHER_NAME
+    )
+    assert icon.is_file()
+    assert (desktop.parent / ".waveguide-generator.owner").read_text().strip() == str(target_b)
+    assert (icon.parent / ".waveguide-generator.owner").read_text().strip() == str(target_b)
+    assert (home / ".local" / "bin" / LINUX_LAUNCHER_NAME).resolve() == (
+        target_b / LINUX_LAUNCHER_NAME
+    ).resolve()
+    assert "belongs to another installation" in result.stdout
+
+
+@_NEEDS_POSIX_BASH
+def test_a_commit_failure_restores_the_previous_linux_installation(tmp_path: Path) -> None:
+    """A failure after target displacement restores every prior artefact."""
+
+    source = _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    first = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+    assert first.returncode == 0, first.stdout + first.stderr
+    share = home / ".local" / "share"
+    target = share / LINUX_BUNDLE_DIRECTORY
+    desktop = share / "applications" / LINUX_DESKTOP_ENTRY_NAME
+    icon = share / "icons" / "hicolor" / "512x512" / "apps" / LINUX_ICON_NAME
+    command = home / ".local" / "bin" / LINUX_LAUNCHER_NAME
+    before = {
+        "manifest": (target / "app" / "APP-MANIFEST.json").read_bytes(),
+        "desktop": desktop.read_bytes(),
+        "icon": icon.read_bytes(),
+        "link": os.readlink(command),
+    }
+    (source / "app" / "APP-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "version": "9.9.9"}), encoding="utf-8"
+    )
+    (source / LINUX_ICON_NAME).write_bytes(b"new icon")
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    failure_marker = tmp_path / "mv-failed-once"
+    real_mv = shutil.which("mv")
+    assert real_mv
+    mv = fake_bin / "mv"
+    mv.write_text(
+        "#!/bin/bash\n"
+        "if [ \"${1:-}\" = -- ]; then shift; fi\n"
+        f"case \"${{1:-}}\" in */.waveguide-generator.*.desktop) "
+        f"if [ \"${{2:-}}\" = \"{desktop}\" ] && [ ! -e \"{failure_marker}\" ]; then "
+        f"touch \"{failure_marker}\"; echo injected desktop move failure >&2; exit 23; fi;; esac\n"
+        f'exec "{real_mv}" "$@"\n',
+        encoding="utf-8",
+    )
+    mv.chmod(0o755)
+
+    again = _install_linux(
+        tmp_path,
+        arguments=["--no-launch", "--skip-checks"],
+        home=home,
+        environment={"PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"},
+    )
+
+    assert again.returncode == 1
+    assert "Could not install the rendered desktop entry" in again.stdout
+    assert "Restored the previous installation and desktop integration" in again.stdout
+    assert (target / "app" / "APP-MANIFEST.json").read_bytes() == before["manifest"]
+    assert desktop.read_bytes() == before["desktop"]
+    assert icon.read_bytes() == before["icon"]
+    assert os.readlink(command) == before["link"]
+    assert not list(share.glob(".waveguide-generator.install.*"))
+    assert not list(share.glob(".waveguide-generator.previous.*"))
+
+
+@_NEEDS_POSIX_BASH
+@pytest.mark.parametrize("failure_mode", ["restore", "remove"])
+def test_a_failed_rollback_preserves_and_reports_the_backup_path(tmp_path: Path, failure_mode: str) -> None:
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    first = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+    assert first.returncode == 0, first.stdout + first.stderr
+    share = home / ".local" / "share"
+    target = share / LINUX_BUNDLE_DIRECTORY
+    desktop = share / "applications" / LINUX_DESKTOP_ENTRY_NAME
+
+    fake_bin = tmp_path / "fake-bin-restore"
+    fake_bin.mkdir()
+    real_mv = shutil.which("mv")
+    assert real_mv
+    mv = fake_bin / "mv"
+    mv.write_text(
+        "#!/bin/bash\n"
+        "if [ \"${1:-}\" = -- ]; then shift; fi\n"
+        f"case \"${{1:-}}\" in\n"
+        f"  */.waveguide-generator.*.desktop) "
+        f"if [ \"${{2:-}}\" = \"{desktop}\" ]; then exit 23; fi;;\n"
+        f"  */.waveguide-generator.previous.*) "
+        f"if [ \"${{2:-}}\" = \"{target}\" ]; then exit 24; fi;;\n"
+        "esac\n"
+        f'exec "{real_mv}" "$@"\n',
+        encoding="utf-8",
+    )
+    mv.chmod(0o755)
+    if failure_mode == "remove":
+        # If removing the replacement fails, mv must not nest the backup
+        # inside it and then falsely report that recovery succeeded.
+        mv.write_text(mv.read_text().replace("then exit 24;", "then :;"))
+        real_rm = shutil.which("rm")
+        assert real_rm
+        rm = fake_bin / "rm"
+        rm.write_text(
+            "#!/bin/bash\n"
+            f'if [ "${{@: -1}}" = "{target}" ]; then exit 25; fi\n'
+            f'exec "{real_rm}" "$@"\n', encoding="utf-8",
+        )
+        rm.chmod(0o755)
+
+    again = _install_linux(
+        tmp_path,
+        arguments=["--no-launch", "--skip-checks"],
+        home=home,
+        environment={"PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"},
+    )
+
+    assert again.returncode == 1
+    assert "rollback was incomplete" in again.stderr
+    assert "Its backup remains at:" in again.stderr
+    assert "Restored the previous installation" not in again.stdout
+    backups = list(share.glob(".waveguide-generator.previous.*"))
+    assert len(backups) == 1
+    assert (backups[0] / "app" / "APP-MANIFEST.json").is_file()
+
+
+@_NEEDS_POSIX_BASH
+def test_staging_failure_leaves_the_previous_linux_installation_untouched(tmp_path: Path) -> None:
+    source = _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    first = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+    assert first.returncode == 0, first.stdout + first.stderr
+    target = home / ".local" / "share" / LINUX_BUNDLE_DIRECTORY
+    manifest = target / "app" / "APP-MANIFEST.json"
+    before = manifest.read_bytes()
+    (source / LINUX_DESKTOP_ENTRY_NAME).unlink()
+
+    again = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+
+    assert again.returncode == 1
+    assert "is incomplete" in again.stdout
+    assert manifest.read_bytes() == before
+    assert not list(target.parent.glob(".waveguide-generator.install.*"))
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_installer_stops_before_installing_a_mesher_that_cannot_load(
+    tmp_path: Path,
+) -> None:
+    """The system libraries the bundle does not bring, checked by importing gmsh.
+
+    Measured 2026-09-04 on a bare ubuntu:24.04 with the pinned runtime:
+    ``import gmsh`` raises ``OSError: libGLU.so.1: cannot open shared object
+    file``, and then names the next missing library each time one is installed.
+    gmsh is the single geometry authority here, so an install without them
+    opens the interface and meshes nothing -- worth refusing before anything is
+    copied, with the command that fixes it.
+
+    The probe is the real import rather than a package-name lookup, so the
+    message carries the library the loader actually failed on.
+    """
+
+    bundle = _linux_payload(tmp_path)
+    interpreter = bundle / "runtime" / "bin" / "python3.13"
+    interpreter.write_text(
+        "#!/bin/sh\n"
+        "echo 'OSError: libGLU.so.1: cannot open shared object file' >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    interpreter.chmod(0o755)
+
+    result = _install_linux(tmp_path, arguments=["--no-launch"])
+
+    assert result.returncode == 1
+    assert "libGLU.so.1" in result.stdout
+    assert "sudo apt install libglu1-mesa libgl1 libgomp1" in result.stdout
+    assert "Nothing has been installed yet." in result.stdout
+    assert not (tmp_path / "home" / ".local" / "share" / LINUX_BUNDLE_DIRECTORY).exists()
+
+
+def test_the_rc_build_offers_every_platform_the_release_page_does() -> None:
+    """The hand-test gate has to cover what a user will actually download.
+
+    rc-build.yml exists so Magnus tries the installers before a version is
+    spent (hornlab-policy/PLAN.md step 5). A platform that ships on the release
+    page and has no RC artifact is one nobody can try first, and that gap is
+    invisible -- the workflow still goes green.
+    """
+
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "rc-build.yml"
+    ).read_text(encoding="utf-8")
+
+    for job in ("macos-bundle:", "windows-bundle:", "linux-bundle:"):
+        assert job in workflow
+    # One upload glob per user-facing download, spelled as the builder names it.
+    for pattern in (
+        "Waveguide.Generator-*-macos-arm64.dmg",
+        "Waveguide.Generator-*-windows-x86_64-setup.exe",
+        "Waveguide.Generator-*-linux-x86_64.tar.gz",
+    ):
+        assert pattern in workflow, f"the RC build does not publish {pattern}"
+    # Every platform is one entry in one place; if that list grows, this fails.
+    assert len(release_assets.user_download_names("1.2.3")) == 3
+    # Same runner pin as the release job: an RC built against a different glibc
+    # would be a hand-test of something that is not going to ship.
+    assert "runs-on: ubuntu-24.04" in workflow

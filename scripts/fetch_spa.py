@@ -195,8 +195,9 @@ def asset_name(version: str) -> str:
 def release_base_url(repo: str, version: str) -> str:
     """Where the prebuilt interface lives: the companion pre-release.
 
-    The user-facing release holds only the two installers, so a person landing on
-    it is not asked to choose between seven files. Everything else -- this archive
+    The user-facing release holds only the installers -- one per supported
+    platform -- so a person landing on it is not asked to choose between eight
+    files. Everything else -- this archive
     included -- is published to ``v<version>-updates``. Source installs therefore
     fetch from there, not from the release page they would read.
     """

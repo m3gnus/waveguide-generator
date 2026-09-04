@@ -80,11 +80,11 @@ def _release(  # noqa: PLR0913
         # What the release page offers: the disk image on macOS, the setup .exe
         # on Windows. The portable Windows .zip is published to the companion and
         # is deliberately not here -- the updater must not point at it.
-        download = (
-            f"Waveguide.Generator-{version}-macos-arm64.dmg"
-            if platform == "macos-arm64"
-            else f"Waveguide.Generator-{version}-windows-x86_64-setup.exe"
-        )
+        download = {
+            "macos-arm64": f"Waveguide.Generator-{version}-macos-arm64.dmg",
+            "windows-x86_64": f"Waveguide.Generator-{version}-windows-x86_64-setup.exe",
+            "linux-x86_64": f"Waveguide.Generator-{version}-linux-x86_64.tar.gz",
+        }[platform]
         user_assets += _pair(download, 9_000)
     checksum = f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n".encode()
     return (
@@ -504,6 +504,36 @@ def test_windows_release_uses_the_windows_runtime_and_points_at_the_setup_exe(
     assert "Waveguide.Generator-2.0.1-windows-x86_64.zip" not in names
     assert result["action"]["assets"][1]["name"] == (
         f"update-runtime-windows-x86_64-{NEW_RUNTIME}.zip"
+    )
+
+
+def test_a_linux_bundle_asks_for_the_linux_runtime_layer_and_tarball(
+    tmp_path: Path,
+) -> None:
+    """``sys.platform`` is "linux"; the layers are named "linux-x86_64".
+
+    Before 0.3.2 the mapping fell through and the service asked for
+    ``update-runtime-linux-<id>.zip``, which no release has ever carried -- so
+    a Linux bundle would have reported every release incomplete rather than
+    offering an update. The recorded download is the tarball, which is both the
+    installer and the whole Linux build.
+    """
+
+    payload, fetched, updates = _release(include_runtime=True, platform="linux-x86_64")
+
+    result = _service(
+        tmp_path,
+        payload,
+        fetched,
+        platform_name="linux",
+        recent_releases_fetcher=lambda: [updates],
+    ).get_status()
+
+    names = {asset["name"] for asset in result["release"]["bundleAssets"]}
+    assert f"update-runtime-linux-x86_64-{NEW_RUNTIME}.zip" in names
+    assert "Waveguide.Generator-2.0.1-linux-x86_64.tar.gz" in names
+    assert result["action"]["assets"][1]["name"] == (
+        f"update-runtime-linux-x86_64-{NEW_RUNTIME}.zip"
     )
 
 

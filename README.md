@@ -73,6 +73,35 @@ payload itself and nothing it writes carries the download mark. It installs to
 updater replace files in place later, and it refuses an over-long install folder
 up front instead of failing partway through.
 
+For a self-contained Linux install, download
+**Waveguide.Generator-&lt;version&gt;-linux-x86_64.tar.gz**, extract it, and run
+`./install.sh` inside the extracted folder. It needs no root and no package
+manager: it copies the application to `~/.local/share/waveguide-generator`, adds
+a menu entry and icon, and puts `waveguide-generator` on your `PATH` at
+`~/.local/bin`. Run it again to upgrade in place. `uninstall.sh` is kept next to
+the installed application, so removing it does not need the download; add
+`--data` to remove designs and job history too.
+
+Per-user is deliberate, and it is the same reason the Windows installer avoids
+Program Files: the in-app updater replaces files inside the installation and
+cannot elevate, so a root-owned copy under `/opt` would install once and then
+refuse every update it was offered.
+
+The bundle brings its own Python, its own Tcl/Tk and every Python package. What
+it does not carry is the system OpenGL and X11 libraries the mesher loads at
+start — ordinary desktop libraries that a desktop system already has and a
+server install may not. `install.sh` checks by importing gmsh with the bundled
+interpreter and stops before copying anything, printing the exact command; on
+Ubuntu 24.04 that is `sudo apt install libglu1-mesa libgl1 libgomp1
+libfontconfig1 libxrender1 libxcursor1 libxft2 libxinerama1 libxi6 libxext6`.
+Linux gets the status window and your browser rather than the single native
+window, as it does from a checkout.
+
+**This build is Ubuntu 24.04 LTS on x86-64**, and distributions close enough to
+it — not "Linux". There is no arm64 build and no musl build. Other
+distributions may well work; they are not what it was built and verified
+against.
+
 A portable copy is still published, as
 **Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip** on the
 `v<version>-updates` companion release rather than on the release page, so

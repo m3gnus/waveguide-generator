@@ -12,6 +12,13 @@ in a native desktop window instead; closing it also stops the server. Pass
 reports that the native window is unavailable in this release and falls back
 to the status window. `--no-gui` keeps the terminal-only mode on every platform.
 
+The installed Linux build behaves the same way: its menu entry and the
+`waveguide-generator` command both open the status window, and the standalone
+bundle carries the Tcl/Tk that window needs, so nothing has to be installed for
+it. What it does need from the system are the ordinary OpenGL and X11 libraries
+the mesher loads; the installer checks for those before it copies anything and
+names the ones that are missing.
+
 ## Design and preview
 
 Start with a new OSSE, R-OSSE, ICW, or FREEFORM design, or open an ATH-style

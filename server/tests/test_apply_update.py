@@ -355,6 +355,18 @@ def test_relaunch_commands_name_the_bundle_or_windows_executable(tmp_path: Path)
     assert relaunch_command(folder, "win32", arguments) == [
         str(folder / "Waveguide Generator.exe")
     ]
+    # Linux is the plainest of the three: the launcher is a shell script that
+    # execs the bundled interpreter, so the arguments go straight on the
+    # command line -- no LaunchServices in the way, and no renamed pythonw.exe
+    # reading them as interpreter options.
+    linux_folder = tmp_path / "waveguide-generator"
+    assert relaunch_command(linux_folder, "linux") == [
+        str(linux_folder / "waveguide-generator")
+    ]
+    assert relaunch_command(linux_folder, "linux", arguments) == [
+        str(linux_folder / "waveguide-generator"),
+        *arguments,
+    ]
     assert build_parser().parse_args(
         [
             "--bundle",

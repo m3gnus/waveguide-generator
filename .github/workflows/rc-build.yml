@@ -163,3 +163,59 @@ jobs:
             build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
             build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe.sha256
           if-no-files-found: error
+
+  linux-bundle:
+    name: Build the Linux standalone app
+    # Pinned to the distribution the build claims to support rather than
+    # ubuntu-latest, so the glibc the runtime is linked against cannot move
+    # under the release without anyone deciding to move it.
+    runs-on: ubuntu-24.04
+    needs: [spa, macos-bundle]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.2"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-spa
+          path: build/spa
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-app-layer
+          path: build/app-reference
+      - name: Build and verify the standalone app
+        run: |
+          set -euo pipefail
+          version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          spa="build/spa/update-spa-$version.tar.gz"
+          test -f "$spa"
+          test -f "$spa.sha256"
+          uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform linux --spa "$spa" --output build/bundle
+      - name: Assert this platform built the same app layer
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import json
+
+          local = glob.glob("build/bundle/update-app-*.manifest.json")
+          reference = glob.glob("build/app-reference/update-app-*.manifest.json")
+          if len(local) != 1 or len(reference) != 1:
+              raise SystemExit("Expected exactly one local and one macOS-built app manifest.")
+          trees = [json.load(open(path))["treeSha256"] for path in (local[0], reference[0])]
+          if not all(trees) or trees[0] != trees[1]:
+              raise SystemExit(f"Linux and macOS app layers differ: {trees[0]} != {trees[1]}")
+          print(f"Cross-platform app layer treeSha256: {trees[0]}")
+          PY
+      - name: Share the Linux RC assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc-linux-tarball
+          path: |
+            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
+            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
