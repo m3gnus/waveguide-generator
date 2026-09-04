@@ -408,27 +408,15 @@ jobs:
                   if release_assets.is_user_download(name, version)
                   else machinery
               )
-              copies = [target]
-              if target is machinery and release_assets.duplicate_on_user_release(
-                  name, version
-              ):
-                  # TRANSITIONAL, and self-deleting: see
-                  # release_assets.LAYER_DUPLICATION_VERSION. One version
-                  # publishes the layers the release before it cannot otherwise
-                  # reach -- it cannot see a `-updates` tag at all -- to both
-                  # places. Removing it is this branch and nothing else, which is
-                  # why the copying below is written once rather than per case.
-                  copies.append(destination)
               # The sidecar is built and verified above; that is what proves the
               # artifact is what the builder thinks it is. Only the SPA's is
               # published. GitHub serves a per-asset digest and the updater reads
               # that, but scripts/fetch_spa.py fetches by URL for source installs
               # and never touches the releases API, so it still needs the file.
               keeps_sidecar = asset.name == release_assets.spa_archive_name(version)
-              for into in copies:
-                  shutil.copy2(asset, into / asset.name)
-                  if keeps_sidecar:
-                      shutil.copy2(sidecar, into / sidecar.name)
+              shutil.copy2(asset, target / asset.name)
+              if keeps_sidecar:
+                  shutil.copy2(sidecar, target / sidecar.name)
 
           actual_paths = {path for path in root.rglob("*") if path.is_file()}
           if actual_paths != expected_paths:
@@ -437,17 +425,13 @@ jobs:
               raise SystemExit(f"Release inventory mismatch; missing={missing}, extra={extra}")
           downloads = sorted(path.name for path in destination.iterdir())
           layers = sorted(path.name for path in machinery.iterdir())
-          expected_duplicates = sorted(
-              name
-              for name in layers
-              if release_assets.duplicate_on_user_release(name, version)
-          )
           # One file per asset, plus the single surviving sidecar -- not pairs.
-          if len(downloads) + len(layers) != len(specs) + 1 + len(expected_duplicates):
+          # Every asset lands in exactly one half now that the 0.3.1 update
+          # bridge is gone, so this is a partition and the sum is exact.
+          if len(downloads) + len(layers) != len(specs) + 1:
               raise SystemExit(
                   f"Release staging did not produce exactly {len(specs)} assets and "
-                  f"one sidecar (plus {len(expected_duplicates)} duplicated); "
-                  f"downloads={downloads}, layers={layers}"
+                  f"one sidecar; downloads={downloads}, layers={layers}"
               )
           spa_sidecar = release_assets.checksum_name(
               release_assets.spa_archive_name(version)
@@ -466,9 +450,7 @@ jobs:
           # into the wrong halves, and the failure mode of that is the one this
           # whole change exists to avoid: an updater pointed at a release with
           # nothing on it, or a user pointed at a page of machinery.
-          wanted_downloads = sorted(
-              [*release_assets.user_download_names(version), *expected_duplicates]
-          )
+          wanted_downloads = sorted(release_assets.user_download_names(version))
           if downloads != wanted_downloads:
               strays = sorted(set(downloads) - set(wanted_downloads))
               missing_downloads = sorted(set(wanted_downloads) - set(downloads))
@@ -491,14 +473,8 @@ jobs:
               )
           print(
               f"Validated {len(specs)} release assets and one SPA sidecar: "
-              f"{len(downloads) - len(expected_duplicates)} on the user-facing "
-              f"release, {len(layers)} on the companion pre-release"
-              + (
-                  f", of which {expected_duplicates} are also published to the "
-                  "user-facing release so the previous version can still update."
-                  if expected_duplicates
-                  else "."
-              )
+              f"{len(downloads)} on the user-facing release, "
+              f"{len(layers)} on the companion pre-release."
           )
           PY
 

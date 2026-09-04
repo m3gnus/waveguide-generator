@@ -267,126 +267,74 @@ def test_the_publish_step_stages_two_downloads_and_everything_else_apart(
             f"Waveguide.Generator-{VERSION}-windows-x86_64-setup.exe",
         ]
     )
+    # And derived as well, because that set is what the publish job asserts the
+    # release equals -- so the two spellings are pinned to each other here.
+    assert downloads == sorted(release_assets.user_download_names(VERSION))
     assert len(downloads) == 2
     assert not set(downloads) & set(layers)
     # The portable .zip is built, and it is on the companion rather than nowhere.
     assert f"Waveguide.Generator-{VERSION}-windows-x86_64.zip" in layers
 
 
-def test_the_transitional_version_duplicates_only_the_two_small_layers(
-    tmp_path: Path,
+@pytest.mark.parametrize("version", ["0.3.1", "0.3.2", "0.4.0-beta.1"])
+def test_no_version_puts_a_third_file_on_the_user_facing_release(
+    tmp_path: Path, version: str
 ) -> None:
-    """One version ships two extra files, so the release before it can update.
+    """The update bridge is gone: two files, at every version, with no exception.
 
-    0.3.0's updater reads layers from the release it lands on and cannot even
-    see a ``-updates`` tag, so a clean split would leave it reporting "update
-    preparing" forever. For `LAYER_DUPLICATION_VERSION` only, the app layer and
-    its manifest are published to the user-facing release as well -- 4.4 MB and
-    218 bytes, which is the price that was agreed.
+    v0.3.1 published its app layer and manifest to both releases for one cycle,
+    because 0.3.0's updater read the layers off the release it landed on and its
+    tag pattern could not see a ``-updates`` tag at all. Every 0.3.1+ install
+    reads the companion first, so that duplication retired at 0.3.2 along with
+    the two constants that named it.
 
-    The runtime layers are not copied, and that is the whole reason to be
-    selective: 0.3.0's two runtime layers are 178 MB and 200 MB, and a 0.3.0
-    install already has that interpreter, so copying them would put 378 MB on
-    the page to serve a client that would not download it.
-
-    The companion stays complete -- this adds copies, it never moves anything --
-    so a client reading the companion is unaffected either way.
+    0.3.1 itself is parametrised here rather than left out: it is the one
+    version a resurrected branch would special-case, so it is the one worth
+    asserting is no longer special. Rebuilding it would now produce the plain
+    two-file page, which is the point.
     """
 
-    version = release_assets.LAYER_DUPLICATION_VERSION
-    _publish_inputs(
-        tmp_path, version=version, runtime_id=release_assets.PRE_SPLIT_RUNTIME_ID
-    )
+    _publish_inputs(tmp_path, version=version)
     result = _run_staging(tmp_path)
 
     assert result.returncode == 0, result.stderr
     downloads = sorted(p.name for p in (tmp_path / "build/release-assets").iterdir())
     layers = sorted(p.name for p in (tmp_path / "build/update-assets").iterdir())
 
-    assert downloads == sorted(
-        [
-            f"Waveguide.Generator-{version}-macos-arm64.dmg",
-            f"Waveguide.Generator-{version}-windows-x86_64-setup.exe",
-            release_assets.app_layer_name(version),
-            release_assets.app_manifest_name(version),
-        ]
-    )
-    # The big ones stayed put.
-    for platform in (release_assets.MACOS_PLATFORM, release_assets.WINDOWS_PLATFORM):
-        runtime = release_assets.runtime_layer_name(
-            platform, release_assets.PRE_SPLIT_RUNTIME_ID
-        )
-        assert runtime in layers
-        assert runtime not in downloads
-    # And the copies are copies: the companion still carries both.
-    assert release_assets.app_layer_name(version) in layers
-    assert release_assets.app_manifest_name(version) in layers
-
-
-def test_the_transitional_version_copies_the_runtime_only_if_it_moved(
-    tmp_path: Path,
-) -> None:
-    """Correctness outranks a tidy page when the interpreter actually changes.
-
-    Skipping the runtime layers is safe only because a 0.3.0 install is already
-    running ``PRE_SPLIT_RUNTIME_ID``. Build 0.3.1 on a different interpreter and
-    that install needs the layer from somewhere, and there is nowhere else: its
-    ``_earlier_runtime_asset`` scan rejects the ``-updates`` tag too. So the
-    copies come back, the page is briefly ugly, and nobody is stranded.
-    """
-
-    version = release_assets.LAYER_DUPLICATION_VERSION
-    moved = "ffffffffffff"
-    assert moved != release_assets.PRE_SPLIT_RUNTIME_ID
-    _publish_inputs(tmp_path, version=version, runtime_id=moved)
-    result = _run_staging(tmp_path)
-
-    assert result.returncode == 0, result.stderr
-    downloads = sorted(p.name for p in (tmp_path / "build/release-assets").iterdir())
-
-    for platform in (release_assets.MACOS_PLATFORM, release_assets.WINDOWS_PLATFORM):
-        assert release_assets.runtime_layer_name(platform, moved) in downloads
-
-
-def test_only_the_transitional_version_duplicates_its_layers() -> None:
-    """The rule is pinned to one version, not left to drift on as a default."""
-
-    assert release_assets.duplicate_layers_on_user_release(
-        release_assets.LAYER_DUPLICATION_VERSION
-    )
-    assert not release_assets.duplicate_layers_on_user_release("0.3.0")
-    assert not release_assets.duplicate_layers_on_user_release("0.3.2")
-    assert not release_assets.duplicate_layers_on_user_release(VERSION)
-    # Nothing is duplicated at a version the rule does not name, whatever it is.
+    assert downloads == sorted(release_assets.user_download_names(version))
+    assert len(downloads) == 2
+    # Nothing is on both sides any more -- the split is a partition again.
+    assert not set(downloads) & set(layers)
     for name in (
-        release_assets.app_layer_name("0.3.2"),
-        release_assets.app_manifest_name("0.3.2"),
-        release_assets.runtime_layer_name(release_assets.MACOS_PLATFORM, "abcdef012345"),
-        release_assets.spa_archive_name("0.3.2"),
+        release_assets.app_layer_name(version),
+        release_assets.app_manifest_name(version),
+        release_assets.spa_archive_name(version),
+        release_assets.runtime_layer_name(release_assets.MACOS_PLATFORM, RUNTIME_ID),
+        release_assets.runtime_layer_name(release_assets.WINDOWS_PLATFORM, RUNTIME_ID),
     ):
-        assert not release_assets.duplicate_on_user_release(name, "0.3.2")
+        assert name in layers
+        assert name not in downloads
 
 
-def test_the_spa_archive_is_never_duplicated_onto_the_user_release() -> None:
-    """A source install runs the new fetcher, so it needs no copy on the old page.
+def test_the_update_bridge_constants_are_gone() -> None:
+    """The recipe the original author wrote down, asserted as carried out.
 
-    ``install-and-update.bat`` checks out the new tag before calling
-    ``scripts/install.bat``, which is what runs ``scripts/fetch_spa.py`` -- so
-    the fetcher that runs is the new version's, and it already looks on the
-    companion. Copying a 909 KB archive for a reader that does not exist is
-    exactly the kind of "while we are here" that makes the page a list again.
+    ``LAYER_DUPLICATION_VERSION``, ``PRE_SPLIT_RUNTIME_ID`` and the predicates
+    over them were documented as retiring together with the branch in
+    release.yml. A leftover constant is harmless on its own and is exactly how a
+    one-cycle exception becomes permanent, so its absence is checked rather than
+    assumed -- and the workflow is checked for the spelling too, since the branch
+    lives only inside YAML.
     """
 
-    version = release_assets.LAYER_DUPLICATION_VERSION
-    archive = release_assets.spa_archive_name(version)
-    assert not release_assets.duplicate_on_user_release(archive, version)
-    assert not release_assets.duplicate_on_user_release(
-        release_assets.checksum_name(archive), version
-    )
-    # The portable .zip is not a layer and is never copied back either.
-    assert not release_assets.duplicate_on_user_release(
-        release_assets.installer_name(release_assets.WINDOWS_PLATFORM, version), version
-    )
+    for retired in (
+        "LAYER_DUPLICATION_VERSION",
+        "PRE_SPLIT_RUNTIME_ID",
+        "duplicate_layers_on_user_release",
+        "duplicate_on_user_release",
+    ):
+        assert not hasattr(release_assets, retired)
+        assert retired not in WORKFLOW
 
 
 def test_only_the_spa_archive_keeps_its_checksum_sidecar(tmp_path: Path) -> None:

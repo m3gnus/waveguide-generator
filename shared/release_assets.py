@@ -146,25 +146,6 @@ def runtime_layer_name(platform: str, runtime_id: str) -> str:
     return f"{UPDATE_PREFIX}-runtime-{platform}-{runtime_id}.zip"
 
 
-def runtime_id_of(name: str) -> str | None:
-    """The runtime id a runtime layer's filename carries, or None.
-
-    The inverse of ``runtime_layer_name``, and the only place that parsing is
-    written: the transitional duplication has to ask "is this the interpreter
-    the previous release already installed?", and answering it from the filename
-    means the publish job needs no network call to find out.
-    """
-
-    prefix = f"{UPDATE_PREFIX}-runtime-"
-    if not name.startswith(prefix) or not name.endswith(".zip"):
-        return None
-    remainder = name[len(prefix) : -len(".zip")]
-    platform, separator, runtime_id = remainder.rpartition("-")
-    if not separator or not platform or not runtime_id:
-        return None
-    return runtime_id
-
-
 def spa_archive_name(version: str) -> str:
     """The prebuilt frontend, so a source install needs no Node runtime.
 
@@ -231,62 +212,16 @@ def is_release_tag(tag: str) -> bool:
 
     return TAG_RE.fullmatch(tag.removesuffix(UPDATES_TAG_SUFFIX)) is not None
 
-#: The one version whose update layers are published to BOTH releases.
-#:
-#: 0.3.0's updater reads the layers from the release it lands on, and its
-#: ``TAG_RE`` (``^v\d+\.\d+\.\d+$``) rejects the ``-updates`` suffix outright,
-#: so a clean split would leave every 0.3.0 install reporting "update preparing"
-#: forever -- confidently telling people to wait for something that can never
-#: arrive, which is worse than failing visibly. Publishing the layers twice for
-#: one version lets 0.3.0 update once. From the next version every install reads
-#: the companion, and this constant, the branch it guards in release.yml, and
-#: the test named after it all go together.
-LAYER_DUPLICATION_VERSION = "0.3.1"
 
-#: The runtime id 0.3.0 shipped, on both platforms.
-#:
-#: An install already has its runtime, and the updater skips the runtime layer
-#: when the release names the one it is running -- so what a 0.3.0 client needs
-#: duplicated is the app layer and its manifest, and the runtime layers only if
-#: the interpreter actually moved. That is the difference between 4.4 MB and
-#: 382 MB: 0.3.0's two runtime layers are 178 MB and 200 MB, and putting those
-#: on the page a user lands on would be a worse page than the one this whole
-#: change exists to fix. Read off the published v0.3.0 assets, which are
-#: immutable, so this constant cannot go stale; it retires with the duplication.
-PRE_SPLIT_RUNTIME_ID = "75ecf8fdbb99"
-
-
-def duplicate_layers_on_user_release(version: str) -> bool:
-    """Whether ``version`` also publishes layers to the user-facing release."""
-
-    return version == LAYER_DUPLICATION_VERSION
-
-
-def duplicate_on_user_release(name: str, version: str) -> bool:
-    """Whether this one companion asset is *also* put on the user-facing release.
-
-    Not every layer, only what a 0.3.0 install actually resolves from the
-    release it lands on:
-
-    * the app layer and its manifest, always -- without them the release reports
-      ``assetsReady: False`` and offers nothing;
-    * a runtime layer only when the interpreter changed, since a client running
-      ``PRE_SPLIT_RUNTIME_ID`` needs no runtime at all. If it did change, both
-      platforms' layers are copied and the page is briefly ugly, which is the
-      right trade against stranding those installs.
-
-    The SPA archive and its sidecar are never copied. A bundle install does not
-    read them, and a source install checks out the new tag before running
-    ``scripts/fetch_spa.py``, so it runs the new fetcher, which already knows to
-    look on the companion.
-    """
-
-    if not duplicate_layers_on_user_release(version):
-        return False
-    if name in {app_layer_name(version), app_manifest_name(version)}:
-        return True
-    runtime_id = runtime_id_of(name)
-    return runtime_id is not None and runtime_id != PRE_SPLIT_RUNTIME_ID
+# The update bridge is gone, as of 0.3.2. v0.3.1 published its app layer and
+# manifest to BOTH releases for one cycle, because 0.3.0's updater read the
+# layers off the release it landed on and its tag pattern could not see a
+# `-updates` tag at all. Every 0.3.1+ install reads the companion first, so the
+# two constants that named that cycle, the predicates over them, the branch they
+# guarded in release.yml and the tests named after them retired together, which
+# is how they were written. The user-facing release is now exactly
+# `user_download_names` -- two files, one per platform, and the publish job
+# asserts that equality rather than a count.
 
 
 def checksum_name(asset: str) -> str:
