@@ -1232,3 +1232,131 @@ def test_an_unreadable_export_file_is_refused_as_unreadable_not_as_different(
     # Still a refusal, and the file is untouched: the guard was always right.
     monkeypatch.undo()
     assert published.read_text() == "frequency,level\n100,90\n"
+
+
+def _ordinary_root() -> Path:
+    """A directory whose permissions inherit normally.
+
+    Not `tmp_path`, for the reason recorded in
+    `test_published_files_are_readable_by_more_than_their_writer` and again in
+    `test_acl_repair.py`: pytest's base directory carries the very descriptor
+    this is about, so a file published underneath it inherits correctly and the
+    defect cannot be reproduced there.
+    """
+
+    root = Path(tempfile.gettempdir()) / f"wg2-repair-{os.getpid()}-{id(object())}"
+    root.mkdir()
+    return root
+
+
+def _publish_via_staging(parent: Path, name: str, text: str) -> Path:
+    """Reproduce the defect exactly: stage under mkdtemp, then `os.replace`."""
+
+    staging = Path(tempfile.mkdtemp(prefix=".wg2-test-staging-", dir=parent))
+    staged = staging / name
+    staged.write_text(text, encoding="utf-8")
+    published = parent / name
+    os.replace(staged, published)
+    os.rmdir(staging)
+    return published
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Security descriptors are a Windows concept")
+def test_an_unreadable_legacy_file_is_repaired_and_read_rather_than_refused() -> None:
+    """The 409 is a last resort now, not a first response.
+
+    The app is what made these files unreadable. Where the descriptor is still
+    reachable, the honest thing is to put it back and carry on, so the user
+    never sees a refusal for damage this application did and can undo.
+
+    The read is failed once deliberately. A poisoned file whose owner has not
+    changed is still readable -- OWNER RIGHTS grants its writer full control --
+    so nothing but a forced failure exercises the retry, while the descriptor
+    being repaired underneath it is entirely real.
+    """
+
+    from server.platform.acl_repair import descriptor_is_poisoned
+
+    root = _ordinary_root()
+    try:
+        published = _publish_via_staging(root, "design.json", '{"schemaVersion": 1}')
+        assert descriptor_is_poisoned(published), "test setup failed to reproduce it"
+
+        attempts: list[int] = []
+
+        def read_once_failing() -> bytes:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise PermissionError(13, "Permission denied")
+            return published.read_bytes()
+
+        value = workspace_api._retry_after_acl_repair(published, read_once_failing)
+
+        assert value == b'{"schemaVersion": 1}'
+        assert len(attempts) == 2, "the read must be retried exactly once"
+        assert not descriptor_is_poisoned(published), "the descriptor must be repaired"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Security descriptors are a Windows concept")
+def test_a_file_this_app_did_not_break_is_never_touched(tmp_path: Path) -> None:
+    """No repair, no retry, and the caller's refusal stands.
+
+    A descriptor that does not match staging's is somebody's deliberate choice.
+    Widening it would be a worse failure than the refusal it replaces.
+    """
+
+    ordinary = tmp_path / "restricted.json"
+    ordinary.write_text("{}", encoding="utf-8")
+    attempts: list[int] = []
+
+    def always_failing() -> bytes:
+        attempts.append(1)
+        raise PermissionError(13, "Permission denied")
+
+    with pytest.raises(PermissionError):
+        workspace_api._retry_after_acl_repair(ordinary, always_failing)
+
+    assert len(attempts) == 1, "an unrepairable file must not be read twice"
+
+
+def test_a_read_that_fails_after_a_repair_reports_the_original_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Repaired and still unreadable is a different fault, and stays a refusal."""
+
+    target = tmp_path / "design.json"
+    target.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        workspace_api, "repair_path", lambda _path: workspace_api.Outcome.REPAIRED
+    )
+    attempts: list[int] = []
+
+    def always_failing() -> bytes:
+        attempts.append(1)
+        raise PermissionError(13, "Permission denied")
+
+    with pytest.raises(PermissionError, match="Permission denied"):
+        workspace_api._retry_after_acl_repair(target, always_failing)
+
+    assert len(attempts) == 2
+
+
+def test_a_successful_read_never_looks_at_the_descriptor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The ordinary path must not pay for this at all.
+
+    Every export member goes through here, so a descriptor read per file would
+    be a cost on every export in exchange for nothing.
+    """
+
+    target = tmp_path / "design.json"
+
+    def refuse_to_repair(_path):
+        raise AssertionError("repair must not be attempted when the read succeeds")
+
+    monkeypatch.setattr(workspace_api, "repair_path", refuse_to_repair)
+
+    assert workspace_api._retry_after_acl_repair(target, lambda: b"ok") == b"ok"

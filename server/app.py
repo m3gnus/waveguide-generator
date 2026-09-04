@@ -37,6 +37,7 @@ from server.platform.origin import (
     parse_extra_websocket_origins,
     request_origin_allowed,
 )
+from server.platform.acl_migration import repair_legacy_acls
 from server.platform.paths import app_root, default_runs_dir, resolve_data_dir
 from shared.build_identity import build_identity, build_label
 from server.preview.service import mount_preview
@@ -672,11 +673,30 @@ def create_app(
         # they also opt into a separate user-document workspace.
         resolved_workspace_dir = resolved_data_dir / "workspace"
         legacy_workspace_dirs = ()
-    mount_workspace(
+    workspace_state = mount_workspace(
         application,
         default_path=resolved_workspace_dir,
         legacy_defaults=legacy_workspace_dirs,
     )
+
+    async def _repair_legacy_acls() -> None:
+        # Files this application published before `publish_staging_directory`
+        # carry a private, non-inheriting ACL, and become unreadable to the app
+        # itself the first time their owner changes. See
+        # `server/platform/acl_repair.py`. Off the loop: it is filesystem work,
+        # and on a large workspace it is not instantaneous.
+        try:
+            workspace_root = workspace_state.path()
+        except OSError:
+            # An unavailable selected workspace is the workspace layer's
+            # problem to report, not a reason to skip the data directory.
+            workspace_root = None
+        await asyncio.to_thread(
+            repair_legacy_acls, resolved_data_dir, workspace_root
+        )
+
+    if os.name == "nt":
+        application.router.add_event_handler("startup", _repair_legacy_acls)
     mount_cadlink(application)
     mount_onshape(application)
     mount_charts(application)

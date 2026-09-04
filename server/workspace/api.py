@@ -16,7 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Literal
+from typing import Any, Callable, Literal, TypeVar
 import unicodedata
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
@@ -26,10 +26,13 @@ from starlette.datastructures import UploadFile
 
 from server.platform.paths import data_paths, proposed_cadlink_dir
 from server.platform.process import background_process_kwargs
+from server.platform.acl_repair import Outcome, repair_path
 from server.platform.staging import publish_staging_directory
 
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 MAX_EXPORT_MEMBERS = 100
 # Automatic bundles can include tessellated STL/STEP geometry and rendered
@@ -219,6 +222,41 @@ async def _decode_multipart_export_request(
             )
         members.append((relative_path, content))
     return subdirectory, existing, members
+
+
+def _retry_after_acl_repair(destination: Path, read: Callable[[], _T]) -> _T:
+    """Run `read`; if it fails, try repairing a legacy ACL and run it once more.
+
+    The app is what made these files unreadable -- a staging descriptor that
+    named nobody but their writer, carried to the destination by `os.replace`
+    (see `server/platform/acl_repair.py`). Repairing on encounter matters even
+    with the boot sweep in place: the sweep is bounded and can be truncated, a
+    workspace can be selected after it ran, and a file can arrive from a backup
+    at any time.
+
+    Only a descriptor matching the exact staging pattern is touched; anything
+    else re-raises the original error, so a file a user restricted deliberately
+    still produces a refusal rather than a silent widening of access.
+    """
+
+    try:
+        return read()
+    except OSError as first:
+        if repair_path(destination) is not Outcome.REPAIRED:
+            raise first
+        logger.info(
+            "Repaired a legacy staging ACL on %s while reading it back; "
+            "the file was written by this application with permissions only "
+            "its writer could use.",
+            destination,
+        )
+        try:
+            return read()
+        except OSError:
+            # Repaired and still unreadable is a different fault from the one
+            # this function exists for. The caller's refusal is the right
+            # answer, and the original error is the honest one to report.
+            raise first
 
 
 def _streaming_file_matches(path: Path, content: bytes) -> bool:
@@ -785,7 +823,9 @@ def _write_export_sync(
                 pending.append((segments, content, destination))
                 continue
             try:
-                identical = _streaming_file_matches(destination, content)
+                identical = _retry_after_acl_repair(
+                    destination, lambda: _streaming_file_matches(destination, content)
+                )
             except OSError as exc:
                 # "Different content" would be a claim about bytes nobody read.
                 # Say which it is, because the two need different answers: one
@@ -820,7 +860,9 @@ def _write_export_sync(
                 incoming_record, incoming_lineage = _archive_design_lineage(content)
                 if incoming_record:
                     try:
-                        existing = destination.read_bytes()
+                        existing = _retry_after_acl_repair(
+                            destination, destination.read_bytes
+                        )
                     except OSError as exc:
                         # A pointer file that cannot be opened and one that
                         # names another design both mean "do not overwrite",

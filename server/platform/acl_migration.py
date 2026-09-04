@@ -1,0 +1,177 @@
+"""The one-time boot sweep that repairs legacy staging ACLs.
+
+`server/platform/acl_repair.py` explains the descriptor and does the work. This
+module decides *where* to look, *when* to stop looking, and reports what it did.
+
+## Where
+
+Two roots, not one: the application data directory, and the run-export
+workspace.
+
+The workspace matters more, and it is the one a "repair the app's own data
+directory" reading would have missed. Measured on an affected install: the data
+directory held two poisoned directories, while the workspace held 53 poisoned
+paths -- including every `design.json` the export refusal is about. The run
+archive is written into the workspace, so that is where the damage is. It is a
+folder the user chose rather than one the app owns, which is why the sweep is
+bounded, refuses to follow reparse points, and only ever resets a descriptor
+this application is responsible for creating.
+
+## When
+
+Once, and then never again -- unless something was left unrepaired.
+
+The blocking condition is not stable across boots. A descriptor whose owner has
+changed cannot be read or rewritten by an unelevated process, but the same
+process started elevated can do both, because the descriptor names
+Administrators. So the marker records both the outcome and whether the sweep ran
+elevated, and a root is revisited only when a later run could actually reach
+further than the one before it -- damage left behind *and* an elevated token
+this time that the last sweep did not have.
+
+Without that second test the rule degenerates: damage that is permanent on an
+unelevated machine would make the app walk the whole workspace at every boot,
+forever, to arrive at the same answer. A root that came back clean is finished
+outright and costs nothing thereafter.
+
+Nothing here is allowed to fail a startup. A repair that does not happen leaves
+the export refusal exactly as it is today, which is a bad outcome; a repair that
+raises would leave the user with no application at all, which is a worse one.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict
+import json
+import logging
+import os
+from pathlib import Path
+import time
+
+from server.platform.acl_repair import RepairCounts, process_is_elevated, sweep
+
+log = logging.getLogger("wg.acl")
+
+__all__ = ["MARKER_NAME", "SWEEP_VERSION", "repair_legacy_acls"]
+
+MARKER_NAME = "acl_repair_state.json"
+
+# Bump when the matcher or the repair changes in a way that should make a
+# previously "clean" root worth revisiting.
+SWEEP_VERSION = 1
+
+
+def _read_marker(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    roots = payload.get("roots")
+    return roots if isinstance(roots, dict) else {}
+
+
+def _write_marker(path: Path, roots: dict) -> None:
+    try:
+        path.write_text(
+            json.dumps({"schemaVersion": 1, "roots": roots}, indent=2),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        # Losing the marker costs a repeated sweep, not correctness.
+        log.debug("Could not record the ACL repair marker at %s: %s", path, exc)
+
+
+def _already_finished(record: object, *, elevated_now: bool) -> bool:
+    """Whether re-sweeping this root could possibly do anything new.
+
+    A root that came back clean is finished for good. A root with damage left
+    is only worth revisiting when this process could reach further than the one
+    that swept it -- which means exactly one thing: an elevated token, whose
+    enabled Administrators SID the staging descriptor names. Without that test
+    a permanently damaged workspace would be walked in full at every boot,
+    forever, to reach the same answer.
+    """
+
+    if not isinstance(record, dict):
+        return False
+    if record.get("version") != SWEEP_VERSION:
+        return False
+    counts = record.get("counts")
+    if not isinstance(counts, dict):
+        return False
+    if counts.get("truncated"):
+        # The walk stopped early, so "nothing left" was never established.
+        return False
+    if not (counts.get("unreadable") or counts.get("failed")):
+        return True
+    return not (elevated_now and not record.get("elevated", False))
+
+
+def repair_legacy_acls(
+    data_root: Path | str,
+    workspace_root: Path | str | None = None,
+) -> dict[str, RepairCounts]:
+    """Sweep the roots that still need it, and record the result.
+
+    Returns the counts per root actually swept, for tests and for the caller's
+    log line. Roots already finished are absent rather than reported as zero.
+    """
+
+    if os.name != "nt":
+        return {}
+
+    data_root = Path(data_root)
+    marker_path = data_root / MARKER_NAME
+    roots = _read_marker(marker_path)
+
+    candidates: list[Path] = [data_root]
+    if workspace_root is not None:
+        workspace_root = Path(workspace_root)
+        if workspace_root not in candidates:
+            candidates.append(workspace_root)
+
+    elevated = process_is_elevated()
+    results: dict[str, RepairCounts] = {}
+    for root in candidates:
+        key = str(root)
+        if _already_finished(roots.get(key), elevated_now=elevated):
+            continue
+        if not root.is_dir():
+            continue
+        try:
+            counts = sweep(root)
+        except Exception as exc:  # pragma: no cover - defence, not a path
+            # Deliberately broad. This runs at boot; nothing it can raise is
+            # worth more than the application starting.
+            log.warning("Legacy ACL repair failed for %s: %s", root, exc)
+            continue
+        results[key] = counts
+        roots[key] = {
+            "version": SWEEP_VERSION,
+            "completedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "elevated": elevated,
+            "counts": asdict(counts),
+        }
+        if counts.repaired or counts.unreadable or counts.failed:
+            log.info(
+                "Legacy ACL repair under %s: %s%s",
+                root,
+                counts.as_log_fields(),
+                " (walk truncated)" if counts.truncated else "",
+            )
+        if counts.unreadable or counts.failed:
+            log.info(
+                "%d path(s) under %s could not be repaired: their owner is no "
+                "longer this account, so an unelevated process holds neither "
+                "READ_CONTROL nor WRITE_DAC over them. Running Waveguide "
+                "Generator once as an administrator repairs them; this "
+                "application will not take ownership on its own.",
+                counts.unreadable + counts.failed,
+                root,
+            )
+
+    if results:
+        _write_marker(marker_path, roots)
+    return results
