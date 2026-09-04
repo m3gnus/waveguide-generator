@@ -584,7 +584,10 @@ async def resolve_submission(
         # a coupling-capable BEMPP on the same host could have solved.
         mounting = request.design.root.simulation.sim_type
         engine_name = await engine_registry.resolve(
-            "auto", solver_mode=request.options.solver_mode, mounting=mounting
+            "auto",
+            solver_mode=request.options.solver_mode,
+            mounting=mounting,
+            resolved_quadrants=resolved_quadrants,
         )
         if engine_name is None:
             unsupported = (
@@ -651,7 +654,10 @@ async def resolve_submission(
             unavailable_reason = await engine_registry.unavailable_reason(engine_name)
             mounting = request.design.root.simulation.sim_type
             substitute = await engine_registry.resolve(
-                "auto", solver_mode=request.options.solver_mode, mounting=mounting
+                "auto",
+                solver_mode=request.options.solver_mode,
+                mounting=mounting,
+                resolved_quadrants=resolved_quadrants,
             )
             if substitute is None:
                 unsupported = (
@@ -685,6 +691,21 @@ async def resolve_submission(
                 unavailable_reason or "No capability reason was reported.",
             )
             engine_name = substitute
+    if (
+        engine_name not in {"axisym", "dryrun"}
+        and await engine_registry.get_engine(engine_name) is not None
+        and not await engine_registry.supports_symmetry(engine_name, resolved_quadrants)
+    ):
+        domain = {
+            1234: "full",
+            12: "the xz half",
+            14: "the yz half",
+            1: "quarter",
+        }.get(resolved_quadrants, f"quadrants {resolved_quadrants}")
+        raise SymmetryValidationError(
+            f"Solve engine '{engine_name}' does not support {domain} symmetry; "
+            "choose a compatible engine or change the requested symmetry"
+        )
     if (
         engine_name == "bempp"
         and request.design.root.simulation.sim_type == "infinite-baffle"
