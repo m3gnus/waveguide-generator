@@ -34,6 +34,13 @@ function luminance(hex: string): number {
   return red * 0.2126 + green * 0.7152 + blue * 0.0722;
 }
 
+/** A `--*-rgb` triple ("224, 103, 63") as the six-digit hex `contrast` reads. */
+function hexOf(tokens: Record<string, string>, name: string): string {
+  const value = tokens[name];
+  if (!value) throw new Error(`Missing token: ${name}`);
+  return `#${value.split(',').map((part) => Number(part.trim()).toString(16).padStart(2, '0')).join('')}`;
+}
+
 function contrast(left: string, right: string): number {
   const values = [luminance(left), luminance(right)].sort((a, b) => b - a);
   return (values[0] + 0.05) / (values[1] + 0.05);
@@ -43,6 +50,24 @@ describe('normal text token contrast', () => {
   it('uses the readable foreground token for the run-filter placeholder', () => {
     const rule = appCss.match(/\.jobs-filter input::placeholder\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(rule).toContain('color: var(--fg2)');
+  });
+
+  // The update dialog's verdict row sets its label to a state hue on the raised
+  // surface, so each label hue is body text and is held to the body floor. The
+  // accent is deliberately absent: it measures 4.27:1 there in Console, which is
+  // why `.update-state.reload` tints only its dot and leaves the word on --fg.
+  it.each(Object.entries(themes))('%s update verdict label hues stay at or above 4.5:1', (_theme, tokens) => {
+    const ground = resolveToken(tokens, '--surface-raised');
+    (['--green-rgb', '--amber-rgb', '--red-rgb'] as const).forEach((hue) => {
+      expect(contrast(hexOf(tokens, hue), ground), `${hue} on --surface-raised`).toBeGreaterThanOrEqual(4.5);
+    });
+  });
+
+  it.each(Object.entries(themes))('%s update verdict dots stay at or above the 3:1 non-text floor', (_theme, tokens) => {
+    const ground = resolveToken(tokens, '--surface-raised');
+    (['--green-rgb', '--amber-rgb', '--red-rgb', '--acc-rgb'] as const).forEach((hue) => {
+      expect(contrast(hexOf(tokens, hue), ground), `${hue} dot on --surface-raised`).toBeGreaterThanOrEqual(3);
+    });
   });
 
   it.each(Object.entries(themes))('%s foreground usages stay at or above 4.5:1', (_theme, tokens) => {

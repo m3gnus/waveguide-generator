@@ -109,6 +109,12 @@ function Harness({ value, refresh = async () => value }: { value: UpdateStatus; 
   </QueryClientProvider>;
 }
 
+/** The dialog's fact list, read back the way a user reads it. */
+function facts(): Record<string, string> {
+  return Object.fromEntries([...document.querySelectorAll('.update-facts > div')]
+    .map((row) => [row.querySelector('dt')!.textContent!, row.querySelector('dd')!.textContent!]));
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((settle) => { resolve = settle; });
@@ -183,7 +189,7 @@ describe('UpdateControl', () => {
     const value = bundleStatus();
     act(() => root.render(<Harness value={value}/>));
     await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    expect(host.textContent).toContain('Download size 5.5 MB');
+    expect(facts()).toMatchObject({ Installed: __WG2_VERSION__, Latest: '2.0.1', Channel: 'Stable', Download: '5.5 MB' });
     expect(host.textContent).toContain('stays open while it downloads and verifies');
     expect(host.textContent).toContain('then closes and restarts to install it');
     expect(host.textContent).toContain('Install update');
@@ -196,7 +202,7 @@ describe('UpdateControl', () => {
     ['downloading', 2_000_000, 'Downloading 2.0 of 5.5 MB'],
     ['verifying', 5_500_000, 'Verifying downloaded update'],
     ['ready', 5_500_000, 'Update ready — WG will close and restart'],
-    ['failed', 3_000_000, 'Update failed: disk full'],
+    ['failed', 3_000_000, 'disk full'],
   ] as const)('renders bundle install state %s', async (installState, downloadedBytes, expected) => {
     const value = bundleStatus({
       installState,
@@ -208,11 +214,26 @@ describe('UpdateControl', () => {
 
     expect(host.textContent).toContain(expected);
     expect(host.textContent).not.toContain('Copy update command');
-    const installButtons = [...host.querySelectorAll<HTMLButtonElement>('.bundle-update button')];
+    // One install control, in the footer where every dialog puts its primary
+    // action -- not a second one buried in the section above it.
+    const installButtons = [...host.querySelectorAll<HTMLButtonElement>('footer button.primary')];
     expect(installButtons).toHaveLength(1);
     if (installState === 'downloading' || installState === 'verifying' || installState === 'ready') {
       expect(installButtons[0].disabled).toBe(true);
     }
+  });
+
+  it('reports download progress in the run-progress idiom', async () => {
+    act(() => root.render(<Harness value={bundleStatus({
+      installState: 'downloading',
+      downloadedBytes: 2_750_000,
+    })}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+
+    const bar = host.querySelector<HTMLElement>('.update-progress .progress[role="progressbar"]')!;
+    expect(bar.getAttribute('aria-valuenow')).toBe('50');
+    expect(bar.querySelector<HTMLElement>('i')!.style.width).toBe('50%');
+    expect(host.querySelector('.update-progress-line')!.textContent).toContain('50%');
   });
 
   it('hands a ready release to the in-app installer', async () => {
@@ -289,9 +310,9 @@ describe('UpdateControl', () => {
   });
 
   it.each([
-    ['downloading', 'failed', 'Update failed: disk full'],
+    ['downloading', 'failed', 'disk full'],
     ['verifying', 'ready', 'Update ready — WG will close and restart'],
-  ] as const)('keeps polling through two unchanged %s samples until %s', async (activeState, terminalState, expected) => {
+  ] as const)('keeps polling through two unchanged %s samples until %s', async (activeState, terminalState, expected: string) => {
     vi.useFakeTimers();
     const downloadedBytes = activeState === 'downloading' ? 2_000_000 : 5_500_000;
     const statuses = [
@@ -365,6 +386,83 @@ describe('UpdateControl', () => {
     });
 
     expect(polledSignal?.aborted).toBe(true);
+  });
+
+  it.each([
+    ['up to date', { data: status({ availability: 'current', release: null, action: null, canInstall: false }), error: null, isPending: false }, 'current', 'Up to date', `${__WG2_VERSION__} · up to date`],
+    ['an offered release', { data: status(), error: null, isPending: false }, 'available', 'Update available', `${__WG2_VERSION__} · update available (v2.0.1)`],
+    ['a first check in flight', { data: undefined, error: null, isPending: true }, 'checking', 'Checking…', `${__WG2_VERSION__} · checking…`],
+    ['a transport failure', { data: undefined, error: new Error('Update status response is invalid'), isPending: false }, 'failed', 'Check failed', `${__WG2_VERSION__} · check failed`],
+  ] as const)('resolves the indicator to %s', (_label, snapshot, state, dialogLabel, wide) => {
+    const presentation = updatePresentation(snapshot);
+    expect(presentation.state).toBe(state);
+    expect(presentation.label).toBe(dialogLabel);
+    expect(presentation.wide).toBe(wide);
+  });
+
+  it.each([
+    ['a server-reported check failure', status({ availability: 'unknown', freshness: 'unknown', release: null, action: null, canInstall: false, checkedAt: null, lastError: 'GitHub rate limit exceeded' }), 'GitHub rate limit exceeded'],
+    ['a verdict-free payload with no stated reason', status({ availability: 'unknown', freshness: 'unknown', release: null, action: null, canInstall: false, checkedAt: null }), 'The last update check did not return a result.'],
+  ] as [string, UpdateStatus, string][])('never settles on a permanent unknown for %s', async (_label, value, reason) => {
+    // The regression this replaces: a packaged install showed "status unknown"
+    // for its whole life, with no reason anywhere and nothing a user could do.
+    const presentation = updatePresentation({ data: value, error: null, isPending: false });
+    expect(presentation.state).toBe('failed');
+    expect(presentation.wide).toContain('check failed');
+    expect(presentation.wide).not.toContain('unknown');
+    expect(presentation.detail).toBe(reason);
+
+    act(() => root.render(<Harness value={value}/>));
+    const indicator = host.querySelector<HTMLButtonElement>('.update-indicator')!;
+    expect(indicator.className).toContain('failed');
+    expect(indicator.getAttribute('title')).toBe(reason);
+
+    await act(async () => indicator.click());
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('Update check failed');
+    expect(dialog.textContent).toContain(reason);
+    expect(facts().Latest).toBe('Unknown');
+    // A failed check still offers the one action that can resolve it.
+    expect(dialog.querySelector<HTMLButtonElement>('footer button.primary')!.textContent).toBe('Check again');
+  });
+
+  it('keeps a stale verdict rather than replacing it with a failure, and says why', async () => {
+    const value = status({
+      availability: 'current',
+      freshness: 'stale',
+      release: null,
+      action: null,
+      canInstall: false,
+      lastError: 'GitHub timed out',
+    });
+    const presentation = updatePresentation({ data: value, error: null, isPending: false });
+    expect(presentation.state).toBe('current');
+    expect(presentation.wide).toBe(`${__WG2_VERSION__} · up to date`);
+    expect(presentation.stale).toBe(true);
+
+    act(() => root.render(<Harness value={value}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+    expect(host.textContent).toContain('Showing the last successful result');
+    expect(host.textContent).toContain('GitHub timed out');
+  });
+
+  it('reads its own surface rather than borrowing the settings dialog shell', async () => {
+    // `.settings-dialog` is a fixed-height scrolling shell; wearing it gave this
+    // five-line dialog a 760px box with its content pinned to the top edge.
+    act(() => root.render(<Harness value={status()}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.className).toBe('update-dialog');
+    expect(dialog.querySelector('footer')).not.toBeNull();
+  });
+
+  it('focuses the primary action rather than the close button', async () => {
+    act(() => root.render(<Harness value={status()}/>));
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.update-indicator')!.click();
+      await new Promise((settle) => requestAnimationFrame(() => settle(undefined)));
+    });
+    expect(document.activeElement).toBe(host.querySelector('footer button.primary'));
   });
 
   it('prioritizes frontend/backend skew over release status', () => {

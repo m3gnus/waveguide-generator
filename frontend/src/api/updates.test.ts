@@ -93,6 +93,46 @@ const bundlePayload = {
   totalBytes: 1_500,
 } as const;
 
+const APP_DIGEST = 'a'.repeat(64);
+const MANIFEST_DIGEST = 'b'.repeat(64);
+
+/**
+ * The live shape: no sidecar files, one `sha256` per asset.
+ *
+ * Taken from a real `/api/updates/status` response for the v0.3.1 standalone
+ * app, with the URLs and digests shortened.
+ */
+const inlineDigestPayload = {
+  ...bundlePayload,
+  release: {
+    ...bundlePayload.release,
+    bundleAssets: [{
+      name: 'update-app-2.0.1.zip',
+      url: 'https://github.com/example/app.zip',
+      sha256: APP_DIGEST,
+      bytes: 1_500,
+      layer: 'app',
+    }, {
+      name: 'update-app-2.0.1.manifest.json',
+      url: 'https://github.com/example/manifest.json',
+      sha256: MANIFEST_DIGEST,
+      bytes: 180,
+      layer: 'manifest',
+    }],
+  },
+  action: {
+    kind: 'bundle_download',
+    assets: [{
+      name: 'update-app-2.0.1.zip',
+      url: 'https://github.com/example/app.zip',
+      sha256: APP_DIGEST,
+      bytes: 1_500,
+      layer: 'app',
+    }],
+    downloadBytes: 1_500,
+  },
+} as const;
+
 function jsonResponse(value: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -122,6 +162,33 @@ describe('getUpdateStatus', () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(bundlePayload)));
 
     await expect(getUpdateStatus()).resolves.toEqual(bundlePayload);
+  });
+
+  it("accepts GitHub's own per-asset digest in place of a .sha256 sidecar", async () => {
+    // The shape every release cut since the server moved to `digest` actually
+    // publishes -- see `UpdateService._paired_asset`. Refusing it rejected the
+    // whole status payload, and every packaged install read "status unknown"
+    // for its entire life as a result.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(inlineDigestPayload)));
+
+    await expect(getUpdateStatus()).resolves.toEqual(inlineDigestPayload);
+  });
+
+  it('accepts a release that mixes both digest shapes across its assets', async () => {
+    // A release published across the changeover carries one of each.
+    const mixed = {
+      ...inlineDigestPayload,
+      release: {
+        ...inlineDigestPayload.release,
+        bundleAssets: [
+          inlineDigestPayload.release.bundleAssets[0],
+          bundlePayload.release.bundleAssets[1],
+        ],
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mixed)));
+
+    await expect(getUpdateStatus()).resolves.toEqual(mixed);
   });
 
   it.each([
@@ -169,6 +236,34 @@ describe('getUpdateStatus', () => {
       release: {
         ...bundlePayload.release,
         bundleAssets: [{ ...bundlePayload.release.bundleAssets[0], sha256Bytes: undefined }],
+      },
+    }],
+    ['release asset with no proof at all', {
+      ...inlineDigestPayload,
+      release: {
+        ...inlineDigestPayload.release,
+        bundleAssets: [{ ...inlineDigestPayload.release.bundleAssets[0], sha256: undefined }],
+      },
+    }],
+    ['release asset with a truncated digest', {
+      ...inlineDigestPayload,
+      release: {
+        ...inlineDigestPayload.release,
+        bundleAssets: [{ ...inlineDigestPayload.release.bundleAssets[0], sha256: 'a'.repeat(63) }],
+      },
+    }],
+    ['release asset whose digest is not hex', {
+      ...inlineDigestPayload,
+      release: {
+        ...inlineDigestPayload.release,
+        bundleAssets: [{ ...inlineDigestPayload.release.bundleAssets[0], sha256: `${'a'.repeat(63)}z` }],
+      },
+    }],
+    ['bundle action asset with no proof at all', {
+      ...inlineDigestPayload,
+      action: {
+        ...inlineDigestPayload.action,
+        assets: [{ ...inlineDigestPayload.action.assets[0], sha256: undefined }],
       },
     }],
     ['unknown action', { ...payload, action: { kind: 'surprise' } }],

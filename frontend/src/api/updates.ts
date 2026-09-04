@@ -11,22 +11,45 @@ export type UpdateFreshness = 'fresh' | 'stale' | 'unknown';
 export type CheckoutKind = 'release' | 'development' | 'detached' | 'modified' | 'unsupported' | 'bundle';
 export type UpdateInstallState = 'idle' | 'downloading' | 'verifying' | 'ready' | 'failed';
 
-export interface BundleUpdateAsset {
+/**
+ * How the server proves a downloaded asset, in the two shapes it publishes.
+ *
+ * `sha256` is the digest GitHub reports on the release asset itself. It arrives
+ * inside the same authenticated release response as the download URL, so it is
+ * the shape every release cut since that change carries, and there is no second
+ * file to be stale or missing. `sha256Url` is the older `.sha256` sidecar, kept
+ * so an install can still move off a release published before GitHub served
+ * per-asset digests.
+ *
+ * The server counterpart is `UpdateService._paired_asset` in
+ * `server/updates/service.py`, which emits exactly one of the two. Accepting
+ * only the sidecar is what made every packaged install read "status unknown":
+ * the whole status payload was refused over an asset field the server had
+ * stopped sending, and the client turned that into an unknown check rather than
+ * a current one.
+ */
+export type AssetDigest =
+  | { sha256: string; sha256Url?: never; sha256Bytes?: never }
+  | { sha256?: never; sha256Url: string; sha256Bytes: number };
+
+/** The action's handoff carries no sidecar size -- the installer re-reads it. */
+export type ActionAssetDigest =
+  | { sha256: string; sha256Url?: never }
+  | { sha256?: never; sha256Url: string };
+
+export type BundleUpdateAsset = {
   name: string;
   url: string;
-  sha256Url: string;
   bytes: number;
   layer: 'app' | 'runtime';
-}
+} & ActionAssetDigest;
 
-export interface BundleReleaseAsset {
+export type BundleReleaseAsset = {
   name: string;
   url: string;
-  sha256Url: string;
   bytes: number;
-  sha256Bytes: number;
   layer: 'app' | 'runtime' | 'manifest' | 'installer';
-}
+} & AssetDigest;
 
 export interface CheckoutUpdateRelease {
   version: string;
@@ -176,14 +199,23 @@ function isNullableNonNegativeInteger(value: unknown): value is number | null {
   return value === null || (isNonNegativeNumber(value) && Number.isInteger(value));
 }
 
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+/** GitHub's own per-asset digest, in the lower-case hex shape the server emits. */
+function hasInlineDigest(value: Record<string, unknown>): boolean {
+  return typeof value.sha256 === 'string' && SHA256_RE.test(value.sha256);
+}
+
 function isBundleReleaseAsset(value: unknown): value is BundleReleaseAsset {
   return isRecord(value)
     && typeof value.name === 'string'
     && typeof value.url === 'string'
-    && typeof value.sha256Url === 'string'
     && isPositiveInteger(value.bytes)
-    && isPositiveInteger(value.sha256Bytes)
-    && (value.layer === 'app' || value.layer === 'runtime' || value.layer === 'manifest' || value.layer === 'installer');
+    && (value.layer === 'app' || value.layer === 'runtime' || value.layer === 'manifest' || value.layer === 'installer')
+    && (
+      hasInlineDigest(value)
+      || (typeof value.sha256Url === 'string' && isPositiveInteger(value.sha256Bytes))
+    );
 }
 
 function isUpdateRelease(value: unknown): value is UpdateRelease {
@@ -225,9 +257,9 @@ function isBundleUpdateAsset(value: unknown): value is BundleUpdateAsset {
   return isRecord(value)
     && typeof value.name === 'string'
     && typeof value.url === 'string'
-    && typeof value.sha256Url === 'string'
     && isPositiveInteger(value.bytes)
-    && (value.layer === 'app' || value.layer === 'runtime');
+    && (value.layer === 'app' || value.layer === 'runtime')
+    && (hasInlineDigest(value) || typeof value.sha256Url === 'string');
 }
 
 function isUpdateAction(value: unknown): value is UpdateAction | null {

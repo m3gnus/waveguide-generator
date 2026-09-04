@@ -921,6 +921,18 @@ class UpdateService:
     def _paired_asset(
         cls, uploaded: dict[str, dict[str, Any]], name: str, layer: str, *, tag: str
     ) -> dict[str, Any] | None:
+        """One release asset with a proof of its contents, in one of two shapes.
+
+        Either ``sha256`` -- GitHub's own per-asset digest, which is what every
+        release cut since that change carries -- or the older ``sha256Url`` plus
+        ``sha256Bytes`` sidecar pair. **The client validates both.** Its
+        counterpart is ``AssetDigest`` in ``frontend/src/api/updates.ts``; when
+        the digest shape shipped and that guard still demanded a sidecar, the
+        whole status payload was refused client-side and every packaged install
+        reported an update status it could never resolve. A third shape needs
+        the guard widened in the same change.
+        """
+
         asset = uploaded.get(name)
         if asset is None:
             return None
