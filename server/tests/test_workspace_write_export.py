@@ -1329,7 +1329,9 @@ def test_a_read_that_fails_after_a_repair_reports_the_original_error(
     target = tmp_path / "design.json"
     target.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
-        workspace_api, "repair_path", lambda _path: workspace_api.Outcome.REPAIRED
+        workspace_api,
+        "repair_path",
+        lambda _path, **_kwargs: workspace_api.Outcome.REPAIRED,
     )
     attempts: list[int] = []
 
@@ -1354,7 +1356,7 @@ def test_a_successful_read_never_looks_at_the_descriptor(
 
     target = tmp_path / "design.json"
 
-    def refuse_to_repair(_path):
+    def refuse_to_repair(_path, **_kwargs):
         raise AssertionError("repair must not be attempted when the read succeeds")
 
     monkeypatch.setattr(workspace_api, "repair_path", refuse_to_repair)

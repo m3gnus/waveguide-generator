@@ -13,16 +13,19 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+from unittest.mock import patch
 
 import pytest
 
 from server.platform import acl_migration
+from server.platform import acl_repair
 from server.platform.acl_repair import (
     ADMINISTRATORS_SID,
     AccessEntry,
     FILE_ALL_ACCESS,
     OWNER_RIGHTS_SID,
     Outcome,
+    RepairCounts,
     SYSTEM_SID,
     entries_match_staging_pattern,
     repair_path,
@@ -140,6 +143,217 @@ class TestMatcher:
 
     def test_an_empty_dacl_is_not_the_staging_pattern(self) -> None:
         assert not entries_match_staging_pattern(True, [], is_directory=False)
+
+
+class TestReparseBoundary:
+    """Links are rejected before descriptor reads, repairs, or traversal."""
+
+    def test_repair_path_rejects_a_file_link_before_reading_its_descriptor(
+        self, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside.txt"
+        outside.write_text("unchanged", encoding="utf-8")
+        link = tmp_path / "external-link"
+        link.symlink_to(outside)
+
+        with (
+            patch.object(acl_repair, "WINDOWS", True),
+            patch.object(
+                acl_repair,
+                "read_dacl",
+                side_effect=AssertionError("descriptor read crossed a link"),
+            ),
+            patch.object(
+                acl_repair,
+                "_reset_to_inherit",
+                side_effect=AssertionError("ACL reset crossed a link"),
+            ),
+        ):
+            assert repair_path(link) is Outcome.NOT_POISONED
+
+        assert outside.read_text(encoding="utf-8") == "unchanged"
+
+    def test_repair_path_rechecks_before_the_acl_reset(self, tmp_path: Path) -> None:
+        target = tmp_path / "design.json"
+        target.write_text("unchanged", encoding="utf-8")
+
+        with (
+            patch.object(acl_repair, "WINDOWS", True),
+            patch.object(acl_repair, "descriptor_is_poisoned", return_value=True),
+            patch.object(acl_repair, "path_has_reparse_point", return_value=True),
+            patch.object(
+                acl_repair,
+                "_reset_to_inherit",
+                side_effect=AssertionError("ACL reset crossed a replacement link"),
+            ),
+        ):
+            assert repair_path(target) is Outcome.NOT_POISONED
+
+        assert target.read_text(encoding="utf-8") == "unchanged"
+
+    def test_repair_path_rejects_an_ordinary_leaf_below_a_directory_link(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "workspace"
+        root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        child = outside / "design.json"
+        child.write_text("unchanged", encoding="utf-8")
+        linked_directory = root / "linked-directory"
+        linked_directory.symlink_to(outside, target_is_directory=True)
+
+        with (
+            patch.object(acl_repair, "WINDOWS", True),
+            patch.object(
+                acl_repair,
+                "read_dacl",
+                side_effect=AssertionError("descriptor read crossed a linked parent"),
+            ),
+            patch.object(
+                acl_repair,
+                "_reset_to_inherit",
+                side_effect=AssertionError("ACL reset crossed a linked parent"),
+            ),
+        ):
+            assert (
+                repair_path(linked_directory / child.name, root=root)
+                is Outcome.NOT_POISONED
+            )
+
+        assert child.read_text(encoding="utf-8") == "unchanged"
+
+    def test_sweep_excludes_file_and_directory_links_before_repair_or_walk(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "workspace"
+        root.mkdir()
+        ordinary = root / "ordinary.txt"
+        ordinary.write_text("inside", encoding="utf-8")
+        outside_file = tmp_path / "outside.txt"
+        outside_file.write_text("unchanged", encoding="utf-8")
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        outside_child = outside_dir / "child.txt"
+        outside_child.write_text("unchanged", encoding="utf-8")
+        file_link = root / "file-link"
+        file_link.symlink_to(outside_file)
+        directory_link = root / "directory-link"
+        directory_link.symlink_to(outside_dir, target_is_directory=True)
+        seen: list[Path] = []
+
+        def record(path: Path, **_kwargs) -> Outcome:
+            seen.append(path)
+            return Outcome.NOT_POISONED
+
+        with (
+            patch.object(acl_repair, "WINDOWS", True),
+            patch.object(acl_repair, "repair_path", side_effect=record),
+        ):
+            counts = sweep(root)
+
+        assert root in seen
+        assert ordinary in seen
+        assert file_link not in seen
+        assert directory_link not in seen
+        assert outside_child not in seen
+        assert counts.skipped >= 2
+        assert outside_file.read_text(encoding="utf-8") == "unchanged"
+        assert outside_child.read_text(encoding="utf-8") == "unchanged"
+
+    def test_a_link_used_as_the_chosen_root_is_never_repaired_or_walked(
+        self, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        child = outside / "child.txt"
+        child.write_text("unchanged", encoding="utf-8")
+        root_link = tmp_path / "selected-workspace"
+        root_link.symlink_to(outside, target_is_directory=True)
+
+        with (
+            patch.object(acl_repair, "WINDOWS", True),
+            patch.object(
+                acl_repair,
+                "repair_path",
+                side_effect=AssertionError("selected link reached repair"),
+            ),
+        ):
+            counts = sweep(root_link)
+
+        assert counts.scanned == 1
+        assert counts.skipped == 1
+        assert child.read_text(encoding="utf-8") == "unchanged"
+
+    def test_an_ordinary_root_below_a_link_is_never_repaired_or_walked(
+        self, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside"
+        nested = outside / "nested"
+        nested.mkdir(parents=True)
+        child = nested / "child.txt"
+        child.write_text("unchanged", encoding="utf-8")
+        redirected = tmp_path / "redirected"
+        redirected.symlink_to(outside, target_is_directory=True)
+
+        with (
+            patch.object(acl_repair, "WINDOWS", True),
+            patch.object(
+                acl_repair,
+                "repair_path",
+                side_effect=AssertionError("descendant of link reached repair"),
+            ),
+        ):
+            counts = sweep(redirected / nested.name)
+
+        assert counts.scanned == 1
+        assert counts.skipped == 1
+        assert child.read_text(encoding="utf-8") == "unchanged"
+
+    @WINDOWS_ONLY
+    def test_a_windows_junction_is_excluded_before_repair_or_traversal(
+        self, ordinary_dir: Path
+    ) -> None:
+        import subprocess
+
+        root = ordinary_dir / "workspace"
+        root.mkdir()
+        outside = ordinary_dir / "outside"
+        outside.mkdir()
+        child = outside / "child.txt"
+        child.write_text("unchanged", encoding="utf-8")
+        junction = root / "junction"
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        with (
+            patch.object(
+                acl_repair,
+                "read_dacl",
+                side_effect=AssertionError("descriptor read crossed a junction"),
+            ),
+            patch.object(
+                acl_repair,
+                "_reset_to_inherit",
+                side_effect=AssertionError("ACL reset crossed a junction"),
+            ),
+        ):
+            assert repair_path(junction / child.name, root=root) is Outcome.NOT_POISONED
+        seen: list[Path] = []
+
+        def record(path: Path, **_kwargs) -> Outcome:
+            seen.append(path)
+            return Outcome.NOT_POISONED
+
+        with patch.object(acl_repair, "repair_path", side_effect=record):
+            sweep(root)
+
+        assert junction not in seen
+        assert child not in seen
+        assert child.read_text(encoding="utf-8") == "unchanged"
 
 
 @WINDOWS_ONLY
@@ -260,6 +474,89 @@ class TestBootSweep:
     def test_a_missing_or_malformed_record_is_not_finished(self) -> None:
         for record in (None, {}, "done", {"version": acl_migration.SWEEP_VERSION}):
             assert not acl_migration._already_finished(record, elevated_now=False)
+
+    def test_a_reparse_point_cannot_be_used_as_a_migration_root(
+        self, tmp_path: Path
+    ) -> None:
+        data_root = tmp_path / "data"
+        data_root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        nested = outside / "nested"
+        nested.mkdir()
+        redirected_parent = tmp_path / "redirected-parent"
+        redirected_parent.symlink_to(outside, target_is_directory=True)
+        selected = redirected_parent / nested.name
+        swept: list[Path] = []
+
+        def record(root: Path) -> RepairCounts:
+            swept.append(root)
+            return RepairCounts()
+
+        with (
+            patch.object(acl_migration, "WINDOWS", True),
+            patch.object(acl_migration, "process_is_elevated", return_value=False),
+            patch.object(acl_migration, "sweep", side_effect=record),
+            patch.object(acl_migration, "_write_marker"),
+        ):
+            acl_migration.repair_legacy_acls(data_root, selected)
+
+        assert swept == [data_root]
+
+    def test_a_redirected_data_root_is_rejected_before_marker_access(
+        self, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        redirected = tmp_path / "redirected-data"
+        redirected.symlink_to(outside, target_is_directory=True)
+
+        with (
+            patch.object(acl_migration, "WINDOWS", True),
+            patch.object(
+                acl_migration,
+                "_read_marker",
+                side_effect=AssertionError("marker read crossed a redirected root"),
+            ),
+            patch.object(
+                acl_migration,
+                "_write_marker",
+                side_effect=AssertionError("marker write crossed a redirected root"),
+            ),
+        ):
+            assert acl_migration.repair_legacy_acls(redirected) == {}
+
+    def test_a_marker_symlink_cannot_redirect_migration_state_writes(
+        self, tmp_path: Path
+    ) -> None:
+        data_root = tmp_path / "data"
+        data_root.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("unchanged", encoding="utf-8")
+        marker = data_root / acl_migration.MARKER_NAME
+        marker.symlink_to(outside)
+
+        with (
+            patch.object(acl_migration, "WINDOWS", True),
+            patch.object(
+                acl_migration,
+                "_read_marker",
+                side_effect=AssertionError("marker read followed a symlink"),
+            ),
+            patch.object(acl_migration, "process_is_elevated", return_value=False),
+            patch.object(
+                acl_migration, "sweep", return_value=RepairCounts(repaired=1)
+            ),
+            patch.object(
+                acl_migration,
+                "_write_marker",
+                side_effect=AssertionError("marker write followed a symlink"),
+            ),
+        ):
+            results = acl_migration.repair_legacy_acls(data_root)
+
+        assert results[str(data_root)].repaired == 1
+        assert outside.read_text(encoding="utf-8") == "unchanged"
 
     @WINDOWS_ONLY
     def test_the_sweep_records_a_marker_and_then_skips_the_root(
