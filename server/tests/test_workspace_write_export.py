@@ -1171,3 +1171,64 @@ def test_workspace_select_refuses_a_typed_path_that_is_not_a_folder(tmp_path: Pa
 
     assert refusal.value.status_code == 400
     assert state.selected_path() is None
+
+
+def test_an_unreadable_export_file_is_refused_as_unreadable_not_as_different(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The results export path needs the same split the archive pointer got.
+
+    This is the flow the Windows report actually came in on. Results exports
+    are written with ``existing="merge_identical"`` (chart CSVs, plot PNGs,
+    the report), and that branch compared the incoming bytes against the
+    existing file to decide whether a retry was a no-op. When the existing file
+    could not be opened, the comparison raised, the handler swallowed it as
+    ``identical = False``, and the user was told the export "already exists
+    with different content" -- a claim about bytes nobody had managed to read.
+
+    Every file the app published carried the private staging ACL, so this is
+    the message an installed 0.3.1 produced for an entire export set once the
+    owner changed. The companion archive-pointer case is covered by
+    ``test_an_unreadable_pointer_is_refused_as_unreadable_not_as_another_lineage``;
+    only that one path was given the honest message when the ACL bug was fixed.
+    """
+
+    state, workspace = selected_state(tmp_path)
+    call(state, request("Horn_A", [("Horn_A.csv", "frequency,level\n100,90\n")]))
+    published = workspace / "Horn_A/Horn_A.csv"
+
+    # Stands in for a file this account cannot open. Reproducing the real cause
+    # needs a second Windows account, and the refusal under test is driven by
+    # the read failing, so the read is what the test controls.
+    real_open = Path.open
+
+    def refuse_the_export(self: Path, *args: object, **kwargs: object):
+        if self == published:
+            raise PermissionError(13, "Permission denied")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", refuse_the_export)
+
+    with pytest.raises(HTTPException) as caught:
+        call(
+            state,
+            workspace_api.WriteExportRequest(
+                subdirectory="Horn_A",
+                existing="merge_identical",
+                members=[
+                    {"relative_path": "Horn_A.csv", "text": "frequency,level\n100,90\n"}
+                ],
+            ),
+        )
+
+    assert caught.value.status_code == 409
+    detail = str(caught.value.detail)
+    assert "Cannot read" in detail
+    # The old message, and the reason this was misdiagnosed for so long.
+    assert "different content" not in detail
+    assert str(published) in detail
+    assert "Permission denied" in detail
+
+    # Still a refusal, and the file is untouched: the guard was always right.
+    monkeypatch.undo()
+    assert published.read_text() == "frequency,level\n100,90\n"
