@@ -18,6 +18,7 @@ from functools import lru_cache
 import importlib
 import inspect
 import logging
+import threading
 import time
 from pathlib import Path
 import tempfile
@@ -54,6 +55,7 @@ from .result_mapping import (
     observation_config,
     response_solver_log,
 )
+from .warmup import BEAT_WARMUP_STAGE_MESSAGE, beat_warmup_in_progress
 
 
 try:
@@ -126,6 +128,14 @@ def _probe_beat_status() -> dict[str, Any]:
     }
 
 
+#: Serialises a *miss*, which ``lru_cache`` does not. Two threads probing at
+#: once is now the normal case at boot, not a corner: the capability snapshot
+#: runs on the registry's thread while the prewarm's head start (see
+#: ``server/app.py``) warms the saved engine on another, and both ask for this
+#: status. Without the lock each one pays the package's own probe.
+_status_probe_lock = threading.Lock()
+
+
 @lru_cache(maxsize=1)
 def _cached_successful_beat_status() -> dict[str, Any]:
     status = _probe_beat_status()
@@ -145,10 +155,11 @@ def beat_status() -> dict[str, Any]:
     successful probes are cached here, following ``bempp_status``.
     """
 
-    try:
-        status = _cached_successful_beat_status()
-    except _BeatProbeUnavailable as exc:
-        status = exc.status
+    with _status_probe_lock:
+        try:
+            status = _cached_successful_beat_status()
+        except _BeatProbeUnavailable as exc:
+            status = exc.status
     return dict(status)
 
 
@@ -176,6 +187,31 @@ def resolve_beat_backend(status: Mapping[str, Any]) -> str:
     """
 
     return str(status.get("backend") or BEAT_FALLBACK_BACKEND)
+
+
+def announce_beat_warmup_wait(stage_callback: StageCallback | None) -> bool:
+    """Say why a solve that arrived during the boot warmup is standing still.
+
+    ``hornlab_beat_bem`` keeps one Julia worker per process and the boot
+    prewarm is inside it, so a solve started before the warmup finishes waits
+    for that lock -- 10-16 s on the packaged 0.3.1 app, all of it under
+    "Configuring BEAT Engine BEM solve (metal)". Pre-empting the warmup was
+    measured and is not the fix (the solves that won the race still took 16-19
+    s: the compile is the cost, not the queueing), so what is left is telling
+    the user the truth -- that this wait is the one-off compilation and their
+    next solve will not pay it.
+
+    Emitted through the ordinary ``setup`` stage callback, so it reaches the
+    job's stage events with no new mechanism, and is replaced by the first
+    real progress message the moment the solve gets the worker.
+
+    Returns whether a message was emitted, for tests and diagnostics.
+    """
+
+    if stage_callback is None or not beat_warmup_in_progress():
+        return False
+    stage_callback("setup", 0.0, BEAT_WARMUP_STAGE_MESSAGE)
+    return True
 
 
 def solve_beat_from_msh_text(
@@ -223,6 +259,7 @@ def solve_beat_from_msh_text(
     started = time.time()
     if stage_callback:
         stage_callback("setup", 0.0, f"Configuring BEAT Engine BEM solve ({backend})")
+    announce_beat_warmup_wait(stage_callback)
 
     observation = observation_config(
         context,
@@ -452,6 +489,7 @@ __all__ = [
     "BEAT_FALLBACK_BACKEND",
     "BeatEngine",
     "BeatUnavailable",
+    "announce_beat_warmup_wait",
     "beat_status",
     "resolve_beat_backend",
     "solve_beat_from_msh_text",

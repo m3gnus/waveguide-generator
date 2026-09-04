@@ -66,13 +66,14 @@ pipe -- so it runs as an ordinary task the app can cancel.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import threading
 import time
 from pathlib import Path
-from typing import Mapping
+from typing import Iterator, Mapping
 
 
 log = logging.getLogger("wg.solver.warmup")
@@ -96,6 +97,49 @@ _lock = threading.Lock()
 _thread: threading.Thread | None = None
 
 WARMUP_THREAD_NAME = "wg2-solver-warmup"
+
+#: What a solve says while it is queued behind the boot warmup.
+#:
+#: BEAT keeps one Julia worker per server process, so a solve that arrives
+#: while the warmup is still inside it simply waits for the lock -- measured at
+#: 10-16 s on the packaged 0.3.1 app, under the *previous* stage message,
+#: "Configuring BEAT Engine BEM solve (metal)". That message is true and
+#: useless: the user is not waiting on configuration, and nothing on screen
+#: said that the wait is the one-off compilation their next solve will not pay.
+BEAT_WARMUP_STAGE_MESSAGE = (
+    "Waiting for engine warm-up to finish "
+    "(first solve after start pays engine compilation)"
+)
+
+_beat_warmup_lock = threading.Lock()
+_beat_warmup_since: float | None = None
+
+
+@contextlib.contextmanager
+def beat_warmup_recorded() -> Iterator[None]:
+    """Publish "the BEAT worker is being warmed" for the duration of the block.
+
+    A plain timestamp under a lock rather than anything the solve can wait on:
+    the solve must not block on the warmup here, it already blocks on the
+    worker lock inside the package. All this state is for is telling the user
+    *why*.
+    """
+
+    global _beat_warmup_since
+    with _beat_warmup_lock:
+        _beat_warmup_since = time.monotonic()
+    try:
+        yield
+    finally:
+        with _beat_warmup_lock:
+            _beat_warmup_since = None
+
+
+def beat_warmup_in_progress() -> bool:
+    """Whether a BEAT warmup currently holds the Julia worker."""
+
+    with _beat_warmup_lock:
+        return _beat_warmup_since is not None
 
 
 class _QuietWarmupFilter(logging.Filter):
@@ -192,7 +236,12 @@ def _warm_beat(status: Mapping[str, object]) -> None:
 
     from .beat import resolve_beat_backend
 
-    hornlab_beat_bem.warm_up(beat_backend=resolve_beat_backend(status), mode="tiny")
+    # Recorded around the call, not inside the package: a solve that arrives
+    # now waits for the same worker, and ``beat_warmup_in_progress`` is what
+    # lets ``server/solver/beat.py`` say so instead of leaving the user on
+    # "Configuring BEAT Engine BEM solve" for the length of the compile.
+    with beat_warmup_recorded():
+        hornlab_beat_bem.warm_up(beat_backend=resolve_beat_backend(status), mode="tiny")
 
 
 def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
@@ -393,21 +442,41 @@ def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
     quietly warmed the other would be worse than two honest ones.
 
     Returns whether a worker was warmed, for tests and diagnostics.
+
+    Every branch logs at INFO, including the skip. PLAN calls this step a hard
+    requirement and six consecutive boots of ``server.log`` recorded nothing
+    about it at all: the success path logged nothing and the skip logged at
+    DEBUG, which the shipped configuration does not emit. An optimisation whose
+    absence is invisible cannot be diagnosed from a user's log, and this one
+    was diagnosed from a packaged app's ``job_events`` instead.
     """
 
     if os.environ.get("WG2_SOLVER_WARMUP") == "0":
         log.info("BEAT worker prewarm disabled by WG2_SOLVER_WARMUP=0")
         return False
     if engine != "beat":
-        log.debug("BEAT worker prewarm skipped: AUTO resolves to %s", engine)
+        log.info("BEAT worker prewarm skipped: the first solve uses %s", engine)
         return False
+    began = time.monotonic()
     try:
         from server.solver import beat as beat_adapter
 
-        _warm_beat(beat_adapter.beat_status())
+        status = beat_adapter.beat_status()
+        log.info(
+            "BEAT worker prewarm starting on the %s backend",
+            beat_adapter.resolve_beat_backend(status),
+        )
+        _warm_beat(status)
     except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
-        log.info("BEAT worker prewarm did not start: %s", exc)
+        log.info(
+            "BEAT worker prewarm failed after %.1f s: %s", time.monotonic() - began, exc
+        )
         return False
+    log.info(
+        "BEAT worker prewarm finished in %.1f s; the first solve no longer pays "
+        "the engine's one-off compilation",
+        time.monotonic() - began,
+    )
     return True
 
 
@@ -451,8 +520,11 @@ def solver_warmup_thread() -> threading.Thread | None:
 
 
 __all__ = [
+    "BEAT_WARMUP_STAGE_MESSAGE",
     "WARMUP_FREQUENCY_HZ",
     "WARMUP_MESH",
+    "beat_warmup_in_progress",
+    "beat_warmup_recorded",
     "persisted_engine_preference",
     "prewarm_beat_worker_for_engine",
     "prewarm_bempp_worker_for_engine",

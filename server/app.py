@@ -9,6 +9,7 @@ import logging
 import os
 from pathlib import Path
 import time
+from typing import Callable
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
@@ -202,7 +203,7 @@ async def prewarm_solver() -> None:
 
 
 async def resolve_prewarm_engine(
-    engine_registry: EngineRegistry, settings: object | None
+    engine_registry: EngineRegistry, requested: str | None
 ) -> str | None:
     """The engine this host's first solve will actually use.
 
@@ -219,11 +220,13 @@ async def resolve_prewarm_engine(
     longer probes available -- a GPU that has gone, a package that was not
     installed on this machine -- warms whatever AUTO would reach rather than
     warming nothing at all.
+
+    ``requested`` is the saved preference, already read by ``worker_prewarm``:
+    it needs the answer before this coroutine can give it one (that is the
+    head start), and reading the store twice could hand the two halves
+    different answers.
     """
 
-    from server.solver.warmup import persisted_engine_preference
-
-    requested = await asyncio.to_thread(persisted_engine_preference, settings)
     if requested is not None and requested != "auto":
         selected = await engine_registry.resolve(requested, solver_mode=None)
         if selected is not None:
@@ -233,6 +236,65 @@ async def resolve_prewarm_engine(
             requested,
         )
     return await engine_registry.resolve("auto", solver_mode=None)
+
+
+async def worker_prewarm(
+    engine_registry: EngineRegistry,
+    settings: object | None,
+    *,
+    engine: str,
+    warm: Callable[[str | None], bool],
+) -> None:
+    """Warm one engine's worker, starting before the probe when we may.
+
+    The capability snapshot costs 2.7-6.6 s per boot on the reference Mac, and
+    until now every prewarm waited out all of it before it could even begin --
+    so a warmup meant to finish before the user's first solve was still
+    compiling at T+19 s while they solved at T+3-8 s, and whoever won the
+    single Julia worker paid the compile. Nothing about that wait is needed
+    when the user has *explicitly* named an engine: the saved preference is the
+    engine their first solve will use, and it is readable from disk in
+    microseconds.
+
+    So a saved name starts its warmup immediately, on a thread, and the probe
+    is reconciled with it afterwards rather than gating it. The reconciliation
+    keeps the pre-existing handling of an engine this host cannot run: a
+    warmup for a gone GPU or an uninstalled package raises inside
+    ``prewarm_*_for_engine``, which catches it, logs the reason and returns
+    False -- and then, exactly as before, whatever AUTO resolved to is warmed
+    instead. The cost of guessing early is therefore a failed warmup that is
+    logged, never a missing one.
+    """
+
+    from server.solver.warmup import persisted_engine_preference
+
+    log = logging.getLogger("wg.solver.warmup")
+    requested = await asyncio.to_thread(persisted_engine_preference, settings)
+    head_start: asyncio.Task[bool] | None = None
+    if requested == engine:
+        log.info(
+            "%s worker prewarm starting from the saved engine preference without "
+            "waiting for the capability probe",
+            engine,
+        )
+        head_start = asyncio.create_task(asyncio.to_thread(warm, requested))
+    try:
+        try:
+            resolved = await resolve_prewarm_engine(engine_registry, requested)
+        except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
+            log.info("%s worker prewarm could not resolve an engine: %s", engine, exc)
+            resolved = None
+        # Always awaited, so a head start is never left running behind a return.
+        if head_start is not None and (await head_start or resolved == engine):
+            return
+        if resolved is not None:
+            await asyncio.to_thread(warm, resolved)
+    finally:
+        # Only reachable when this coroutine was cancelled -- the shutdown hook
+        # cancels it -- and awaiting a task does not cancel that task, so
+        # without this the head start would outlive the app as a pending task.
+        if head_start is not None and not head_start.done():
+            head_start.cancel()
 
 
 async def bempp_worker_prewarm(
@@ -251,14 +313,9 @@ async def bempp_worker_prewarm(
 
     from server.solver.warmup import prewarm_bempp_worker_for_engine
 
-    try:
-        engine = await resolve_prewarm_engine(engine_registry, settings)
-    except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
-        logging.getLogger("wg.solver.warmup").info(
-            "BEMPP worker prewarm could not resolve an engine: %s", exc
-        )
-        return
-    await asyncio.to_thread(prewarm_bempp_worker_for_engine, engine)
+    await worker_prewarm(
+        engine_registry, settings, engine="bempp", warm=prewarm_bempp_worker_for_engine
+    )
 
 
 async def beat_worker_prewarm(
@@ -274,18 +331,17 @@ async def beat_worker_prewarm(
     Both hooks are registered; each returns immediately unless
     ``resolve_prewarm_engine`` named its own engine, so at most one ever warms
     anything.
+
+    BEAT is the engine the head start in ``worker_prewarm`` was measured for:
+    its warmup is the long one, and a user who selected it explicitly is
+    exactly the user whose first solve is otherwise blocked behind it.
     """
 
     from server.solver.warmup import prewarm_beat_worker_for_engine
 
-    try:
-        engine = await resolve_prewarm_engine(engine_registry, settings)
-    except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation
-        logging.getLogger("wg.solver.warmup").info(
-            "BEAT worker prewarm could not resolve an engine: %s", exc
-        )
-        return
-    await asyncio.to_thread(prewarm_beat_worker_for_engine, engine)
+    await worker_prewarm(
+        engine_registry, settings, engine="beat", warm=prewarm_beat_worker_for_engine
+    )
 
 
 class _HashedAssetStaticFiles(StaticFiles):

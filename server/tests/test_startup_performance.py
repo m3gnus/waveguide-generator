@@ -11,6 +11,7 @@ Two independent findings from the 2026-08-06 load review:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gzip
 import json
 import logging
@@ -937,3 +938,186 @@ def test_leaving_the_picker_on_auto_still_warms_autos_answer(
     asyncio.run(bempp_worker_prewarm(registry, None))
 
     assert warmed == ["bempp", "bempp"]
+
+
+def test_a_saved_engine_warms_without_waiting_for_the_capability_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The head start, and the reason the boot prewarm was late.
+
+    ``detect_engines()`` measured 2.7-6.6 s per boot on the reference Mac, and
+    every prewarm used to wait out all of it before it could begin -- so on the
+    packaged 0.3.1 app the BEAT warmup was still compiling at T+19 s while the
+    user solved at T+3-8 s, and whoever won the single Julia worker paid the
+    compile. A saved engine name needs none of that probe: it *is* the engine
+    the first solve will use.
+
+    The detector here refuses to answer until the warmup has started, so a
+    prewarm that awaits the probe first deadlocks the test rather than passing
+    it slowly.
+    """
+
+    from server.app import beat_worker_prewarm
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    warming = threading.Event()
+    warmed: list[str | None] = []
+
+    def warm(engine: str | None) -> bool:
+        warmed.append(engine)
+        warming.set()
+        return True
+
+    def detector() -> list[EngineInfo]:
+        assert warming.wait(10.0), "the prewarm waited for the probe"
+        return [
+            EngineInfo("metal", True, "test", "0.1.0"),
+            EngineInfo("beat", True, "test", "0.1.0"),
+        ]
+
+    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", warm)
+
+    asyncio.run(beat_worker_prewarm(EngineRegistry(detector=detector), _persisted("beat")))
+
+    assert warmed == ["beat"]
+
+
+def test_the_probe_still_gates_a_prewarm_with_no_saved_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AUTO's answer is only knowable from the snapshot, so that path waits."""
+
+    from server.app import bempp_worker_prewarm
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    warmed: list[str | None] = []
+
+    def detector() -> list[EngineInfo]:
+        assert warmed == [], "nothing may be warmed before AUTO has an answer"
+        return [EngineInfo("bempp", True, "test", "0.1.0")]
+
+    monkeypatch.setattr(
+        solver_warmup,
+        "prewarm_bempp_worker_for_engine",
+        lambda engine: warmed.append(engine) or True,
+    )
+
+    registry = EngineRegistry(detector=detector)
+    asyncio.run(bempp_worker_prewarm(registry, _persisted("auto")))
+
+    assert warmed == ["bempp"]
+
+
+def test_a_head_start_that_could_not_warm_still_falls_back_to_autos_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guessing early must cost a failed warmup, never a missing one.
+
+    ``prewarm_*_for_engine`` catches its own failures and returns False -- a
+    GPU that has gone, a package this machine never installed -- so the
+    reconciliation after the probe is what keeps the pre-existing behaviour:
+    whatever AUTO resolved to is warmed instead.
+    """
+
+    from server.app import beat_worker_prewarm
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    warmed: list[str | None] = []
+    monkeypatch.setattr(
+        solver_warmup,
+        "prewarm_beat_worker_for_engine",
+        lambda engine: bool(warmed.append(engine)),
+    )
+
+    registry = EngineRegistry(
+        detector=lambda: [EngineInfo("metal", True, "test", "0.1.0")]
+    )
+
+    asyncio.run(beat_worker_prewarm(registry, _persisted("beat")))
+
+    assert warmed == ["beat", "metal"]
+
+
+def test_a_cancelled_prewarm_does_not_leave_its_head_start_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``shutdown_beat_worker`` cancels this task, and awaiting one does not cancel it."""
+
+    from server.app import beat_worker_prewarm
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    warming = threading.Event()
+    release = threading.Event()
+
+    def warm(engine: str | None) -> bool:
+        warming.set()
+        return release.wait(10.0)
+
+    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", warm)
+
+    async def scenario() -> asyncio.Task[bool]:
+        task = asyncio.create_task(
+            beat_worker_prewarm(
+                EngineRegistry(detector=lambda: [EngineInfo("beat", True, "t", "0.1.0")]),
+                _persisted("beat"),
+            )
+        )
+        while not warming.is_set():
+            await asyncio.sleep(0.01)
+        head_start = next(
+            item
+            for item in asyncio.all_tasks()
+            if item is not asyncio.current_task() and item is not task
+        )
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        release.set()
+        with contextlib.suppress(asyncio.CancelledError):
+            await head_start
+        return head_start
+
+    head_start = asyncio.run(scenario())
+    assert head_start.cancelled()
+
+
+def test_the_beat_prewarm_records_every_outcome_in_the_log(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Six consecutive boots of ``server.log`` said nothing about this step.
+
+    PLAN calls the prewarm a hard requirement, and it logged nothing on success
+    and DEBUG on skip -- so the only way to tell whether it had run was a
+    packaged app's ``job_events``. Engine, backend, start, duration and failure
+    reason are all INFO now.
+    """
+
+    from server.solver import beat as beat_adapter
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    monkeypatch.setattr(
+        beat_adapter, "beat_status", lambda: {"available": True, "backend": "metal"}
+    )
+    monkeypatch.setattr(solver_warmup, "_warm_beat", lambda status: None)
+
+    with caplog.at_level(logging.INFO, logger="wg.solver.warmup"):
+        assert solver_warmup.prewarm_beat_worker_for_engine("beat") is True
+        assert solver_warmup.prewarm_beat_worker_for_engine("metal") is False
+
+        def explode(status: object) -> None:
+            raise RuntimeError("no Julia here")
+
+        monkeypatch.setattr(solver_warmup, "_warm_beat", explode)
+        assert solver_warmup.prewarm_beat_worker_for_engine("beat") is False
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("starting on the metal backend" in message for message in messages)
+    assert any("prewarm finished in" in message for message in messages)
+    assert any("skipped: the first solve uses metal" in message for message in messages)
+    assert any("failed after" in message and "no Julia here" in message for message in messages)
+    assert {record.levelno for record in caplog.records} == {logging.INFO}
