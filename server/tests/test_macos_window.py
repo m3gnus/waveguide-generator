@@ -430,50 +430,23 @@ class TestArming:
 
 
 class TestTopInset:
-    """What the interface has to leave clear at the top, and when.
+    """What the interface has to leave clear at the top -- nothing, either way.
 
-    AppKit answers 0 for this in full screen -- `contentLayoutRect` and
-    `safeAreaInsets.top` were both measured at 0 there, against 28 windowed --
-    because the menu bar is not part of the window. It slides down over whatever
-    is beneath it, and what is beneath it is the top bar.
+    Full screen used to reserve the menu bar's height here, deliberately: the
+    menu bar is not part of the window, and it slides down over whatever is
+    beneath it -- the top bar, in full screen -- when the pointer reaches the
+    top of the screen. Magnus reversed that trade-off on 2026-09-04: the
+    always-on margin cost more than the transient overlay it bought, so this
+    now returns 0 unconditionally, full screen or windowed.
     """
 
-    def _frame(self, monkeypatch: pytest.MonkeyPatch, window: FakeWindow, height: object) -> MacFrame:
-        import launchers.macoswindow as macoswindow
+    def test_a_windowed_window_reserves_nothing(self, on_main_here: None) -> None:
+        assert MacFrame(FakeWindow()).top_inset() == 0.0
 
-        menu = None if height is None else SimpleNamespace(menuBarHeight=lambda: height)
-        monkeypatch.setattr(
-            macoswindow,
-            "_appkit",
-            lambda: SimpleNamespace(
-                NSApplication=SimpleNamespace(sharedApplication=lambda: SimpleNamespace(
-                    mainMenu=lambda: menu))
-            ),
-        )
-        return MacFrame(window)
-
-    def test_a_windowed_window_reserves_nothing(
-        self, on_main_here: None, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        window = FakeWindow()
-        assert self._frame(monkeypatch, window, 24.0).top_inset() == 0.0
-
-    def test_full_screen_reserves_the_menu_bar(
-        self, on_main_here: None, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_full_screen_window_reserves_nothing(self, on_main_here: None) -> None:
         window = FakeWindow()
         window.style |= 1 << 14
-        assert self._frame(monkeypatch, window, 24.0).top_inset() == 24.0
-
-    # A menu that answers nothing, or something absurd, must not push the whole
-    # interface down the screen.
-    @pytest.mark.parametrize("height", [None, 0.0, -5.0, 900.0])
-    def test_an_unusable_answer_reserves_nothing(
-        self, on_main_here: None, monkeypatch: pytest.MonkeyPatch, height: object
-    ) -> None:
-        window = FakeWindow()
-        window.style |= 1 << 14
-        assert self._frame(monkeypatch, window, height).top_inset() == 0.0
+        assert MacFrame(window).top_inset() == 0.0
 
 
 class TestDeferredClose:
