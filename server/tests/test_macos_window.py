@@ -382,11 +382,24 @@ class TestInstallCustomFrame:
         monkeypatch.setattr(
             macoswindow, "on_main", lambda fn, wait=True, timeout=0.0: fn(), raising=True
         )
-        window = FakeWindow()
         monkeypatch.setattr(
-            window, "setStyleMask_", lambda value: (_ for _ in ()).throw(RuntimeError("no"))
+            macoswindow, "hide_menu_bar_in_full_screen", lambda: True, raising=True
+        )
+        window = FakeWindow()
+
+        failed_at_style_mask = False
+
+        def refuse_style_mask(value: int) -> None:
+            nonlocal failed_at_style_mask
+            del value
+            failed_at_style_mask = True
+            raise RuntimeError("no")
+
+        monkeypatch.setattr(
+            window, "setStyleMask_", refuse_style_mask
         )
         assert install_custom_frame(window) is None
+        assert failed_at_style_mask is True
 
 
 class FakeEvent:
