@@ -655,11 +655,22 @@ def test_solver_warmup_follows_auto_engine_priority(
 def test_solver_warmup_falls_back_to_bempp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Metal and BEAT both absent, so AUTO's next stop is BEMPP.
+
+    ``beat_status`` must be stubbed unavailable here, not left to the host: on
+    any machine where BEAT reports available (an Apple Silicon Mac included),
+    the real probe would route ``_run_warmup`` into the BEAT branch instead of
+    the BEMPP one this test is asserting, and the test would fail for a reason
+    that has nothing to do with the fallback logic under test.
+    """
+
+    from server.solver import beat as beat_adapter
     from server.solver import bempp, metal, warmup
 
     calls: list[tuple[str, object]] = []
     status = {"available": True, "assembly_backend": "numba"}
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False})
+    monkeypatch.setattr(beat_adapter, "beat_status", lambda: {"available": False})
     monkeypatch.setattr(bempp, "bempp_status", lambda: status)
     monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append(("metal", None)))
     monkeypatch.setattr(warmup, "_warm_bempp", lambda value: calls.append(("bempp", value)))
@@ -672,10 +683,20 @@ def test_solver_warmup_falls_back_to_bempp(
 def test_solver_warmup_skips_when_no_physical_engine_is_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Every engine unavailable, so the warmup must warm nothing.
+
+    Same host-dependence as the sibling test above: without stubbing
+    ``beat_status`` unavailable too, a BEAT-capable host would take the BEAT
+    branch and call the unstubbed ``_warm_beat``, not the "skip" path this
+    test means to exercise.
+    """
+
+    from server.solver import beat as beat_adapter
     from server.solver import bempp, metal, warmup
 
     calls: list[str] = []
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no Metal"})
+    monkeypatch.setattr(beat_adapter, "beat_status", lambda: {"available": False, "reason": "no BEAT"})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "no BEMPP"})
     monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append("metal"))
     monkeypatch.setattr(warmup, "_warm_bempp", lambda _status: calls.append("bempp"))
