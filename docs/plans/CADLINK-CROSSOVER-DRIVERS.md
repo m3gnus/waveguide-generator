@@ -264,6 +264,15 @@ per-user library folder and exposes a search API.
   `hidden_incomplete` counts the matches withheld, so a search over a
   catalogue-only CSV can say why it answered nothing instead of reading as a
   broken library.
+- `matches_by_kind` counts what each type would have answered with the `kind`
+  filter lifted — the same rule as `items` in every other respect, so `q`, `z`
+  and `complete` all still apply, and a row nothing can drive is counted in
+  `hidden_incomplete` rather than here. It is the type filter's version of the
+  argument above: the shipped library is a thousand cone drivers and one
+  compression driver, so a search on the compression half answers nothing for
+  almost every query, and "none of this type, seven of the other" is the only
+  useful thing to say. The picker turns it into the one press that widens the
+  filter and keeps the query.
 - `GET /api/drivers/{id}?complete=` — the full record with provenance.
   `complete=true` applies the same narrowing to `variants`, but always keeps
   the winding the id named, so a driver already on a channel keeps its own
@@ -272,6 +281,11 @@ per-user library folder and exposes a search API.
   `total_drivers` is every indexed row; `complete_drivers` is how many of
   them a `complete` search will offer. Settings shows both, because a
   catalogue CSV indexes thousands of rows and can drive none of them.
+  `kinds` breaks both counts down by driver type (`{kind, total, complete}`,
+  in filter order, omitting a type the library holds none of). The picker
+  writes it onto the type filter itself — *Cone 1,045 · Compression 1 · All
+  1,046* — so the shape of the library is legible before the first keystroke
+  rather than inferred from a search that answered nothing.
 - Variants: rows that differ only in impedance group into one driver with
   a variant list.
 - User-saved drivers live in a `driverLibrary` durable-settings namespace
@@ -287,13 +301,17 @@ every column WG's own alias table names and withholds the commercial half —
 prices, retailer URLs, store lists, working notes, programme power. Provenance
 (`Source_URL`) travels with the data because it is how a number gets checked.
 
-Only rows that satisfy `DriverSpec` are published: 1,047 drivers, every one of
-them solvable, 1,038 carrying a power rating. Catalogue rows are withheld
+Only rows that satisfy `DriverSpec` are published: 1,046 drivers, every one of
+them solvable, 1,037 carrying a power rating. Catalogue rows are withheld
 because the picker never offers them and counting them would make the library
 promise what the Drivers rail cannot deliver — which is why `total_drivers` and
 `complete_drivers` are equal for the shipped set.
 
-**It is cone drivers almost exclusively.** Compression-driver manufacturers
+**It is cone drivers almost exclusively — 1,045 of them, against one compression
+driver.** That split is now on the picker's own type filter rather than left for
+a user to infer: a horn designer who searches the compression half, gets nothing
+and concludes the database is broken is a reported failure, not a hypothetical.
+Compression-driver manufacturers
 publish a throat, a rating and a sensitivity but no moving mass, compliance or
 diaphragm area — verified against B&C, Beyma, 18Sound, Faital and Eminence, and
 across 292 fetched product pages that yielded none of the three. A lumped model
@@ -311,10 +329,22 @@ inside the user's own files are left alone — those are theirs to keep.
 
 - *Drive channels & drivers*: each channel card keeps its toggle; the
   field grid is replaced by an inline search (results drop down under the
-  field; ↑↓ ↵ Esc; the first hit pre-selected; `kind` defaults to `cd` for
-  HF and `lf` otherwise, with a toggle). A picked driver collapses to a
+  field; ↑↓ ↵ Esc; the first hit pre-selected). A picked driver collapses to a
   name chip, four key numbers and *Edit T/S…*. Catalogue-only drivers say
   so and fall back to manual fields.
+- The type filter is a full-width row under the field carrying each setting's
+  count — *Cone 1,045 · Compression 1 · All 1,046*. It opens on the channel's
+  own type (`cd` for HF, `lf` otherwise) only while that type holds more than
+  one driver; otherwise it opens on *All*, because a filter that can answer
+  with a single row is a dead end with a button on it. An older server sends no
+  `kinds`, so the counts are dropped and the channel's preference stands.
+- An empty result is never a bare "no matches". It answers what was searched,
+  what the library holds, and what to press: *No compression driver matches
+  "B&C 15" / 7 cone drivers do. The library has 1,046 drivers — 1,045 cone and
+  1 compression. [Show all 7]*. The branches are `driverEmptyState` in
+  `frontend/src/design/driverLibraryCounts.ts`, which also separates "the
+  library does not know it" from "the library cannot drive it"
+  (`hidden_incomplete`). Hand entry stays the last row in every case.
 - *Edit T/S* sheet: datasheet inputs (Sd, Bl, Re, Le, Mms, Fs, Vas, Qms,
   Xmax, Count, Rear volume); derived read-only Cms, Qes, Qts and 1 W
   sensitivity; edited fields outlined and counted in the header; impedance

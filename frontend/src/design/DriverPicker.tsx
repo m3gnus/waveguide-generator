@@ -5,6 +5,7 @@ import {
   type DriverDetail,
   type DriverHit,
   type DriverKind,
+  type DriverSearchKind,
 } from '../api/drivers';
 import {
   DRIVER_INSTALLATION_KEYS,
@@ -33,6 +34,15 @@ import {
   CAD_DRIVER_SHEET_FIELDS,
 } from './cadControlRegistry';
 import { driverDerivedValues, driverValuesDisagree } from './driverDerived';
+import {
+  driverCountText,
+  driverEmptyState,
+  driverKindCounts,
+  driverKindLabel,
+  driverKindTotal,
+  openingSearchKind,
+  type DriverKindTally,
+} from './driverLibraryCounts';
 
 
 /**
@@ -116,19 +126,37 @@ function shortfallText(form: ChannelDriverForm): string | null {
   return missing ? `Needs ${missing}` : null;
 }
 
-function KindToggle({ kind, onChange, channelId }: {
-  kind: DriverKind;
-  onChange: (kind: DriverKind) => void;
+/**
+ * The type filter, with what each setting holds written on it.
+ *
+ * The counts are the whole point. This library is a thousand cone drivers and
+ * one compression driver, and a filter that says only "Compression" invites a
+ * user to search inside it, find nothing, and conclude the database is empty.
+ * A filter that says "Compression 1" has already answered them, before they
+ * type -- and "All 1,046" beside it is the way on. Counts are dropped rather
+ * than guessed when the server did not send a breakdown.
+ */
+function KindToggle({ kind, counts, onChange, channelId }: {
+  kind: DriverSearchKind;
+  counts: DriverKindTally;
+  onChange: (kind: DriverSearchKind) => void;
   channelId: string;
 }) {
   return <div className="driver-kind-toggle" role="group" aria-label={`Driver type for ${channelId}`}>
-    {(['lf', 'cd'] as const).map((option) => <button
-      key={option}
-      type="button"
-      className={kind === option ? 'on' : ''}
-      aria-pressed={kind === option}
-      onClick={() => onChange(option)}
-    >{option === 'lf' ? 'Cone' : 'Compression'}</button>)}
+    {(['lf', 'cd', 'all'] as const).map((option) => {
+      const held = driverKindTotal(counts, option);
+      return <button
+        key={option}
+        type="button"
+        className={kind === option ? 'on' : ''}
+        aria-pressed={kind === option}
+        aria-label={counts.known ? `${driverKindLabel(option)}, ${driverCountText(held, option)}` : undefined}
+        onClick={() => onChange(option)}
+      >
+        {driverKindLabel(option)}
+        {counts.known && <b>{held.toLocaleString()}</b>}
+      </button>;
+    })}
   </div>;
 }
 
@@ -254,13 +282,21 @@ interface Candidate {
   render: (props: { active: boolean; id: string; onPick: () => void; onHover: () => void }) => ReactElement;
 }
 
-function DriverSearch({ channel, roleHint, onPick }: {
+function DriverSearch({ channel, roleHint, counts, onPick }: {
   channel: CadDriveChannel;
   roleHint: string | undefined;
+  counts: DriverKindTally;
   onPick: (preset: DriverPreset, options?: { edit?: boolean }) => void;
 }) {
   const saved = useDriverLibraryStore((state) => state.saved);
-  const [kind, setKind] = useState<DriverKind>(() => defaultDriverKind(channel.id, roleHint));
+  // The type a driver typed by hand into this channel is, whatever the filter
+  // happens to be pointed at: the filter is a way of reading the library, the
+  // channel's own role is what the driver actually is.
+  const preferredKind = useMemo(
+    () => defaultDriverKind(channel.id, roleHint),
+    [channel.id, roleHint],
+  );
+  const [kind, setKind] = useState<DriverSearchKind>(() => openingSearchKind(preferredKind, counts));
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [hits, setHits] = useState<DriverHit[]>([]);
@@ -268,9 +304,29 @@ function DriverSearch({ channel, roleHint, onPick }: {
   // number a search for a catalogue-only compression driver comes back empty
   // and reads as a broken library rather than as missing datasheet numbers.
   const [hiddenIncomplete, setHiddenIncomplete] = useState(0);
+  // What every type would have answered, so an empty result can name the one
+  // that would have. Empty until a search has run.
+  const [matchesByKind, setMatchesByKind] = useState<Partial<Record<DriverKind, number>>>({});
   const [activeIndex, setActiveIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
+  const input = useRef<HTMLInputElement>(null);
+  // The counts normally arrive before this component mounts at all -- the card
+  // shows the manual grid until the library report has landed -- but the
+  // opening filter is chosen from them, so a build that renders the search
+  // earlier must not be left seeding it from nothing. Re-seeding is therefore
+  // allowed exactly once, and never after the user has touched the filter
+  // themselves: their choice outranks any count that arrives later.
+  const settled = useRef(counts.known);
+  const chooseKind = useCallback((next: DriverSearchKind) => {
+    settled.current = true;
+    setKind(next);
+  }, []);
+  useEffect(() => {
+    if (settled.current || !counts.known) return;
+    settled.current = true;
+    setKind(openingSearchKind(preferredKind, counts));
+  }, [counts, preferredKind]);
 
   useEffect(() => {
     if (!open) return;
@@ -280,12 +336,14 @@ function DriverSearch({ channel, roleHint, onPick }: {
         if (request !== generation.current) return;
         setHits(result.items);
         setHiddenIncomplete(result.hiddenIncomplete);
+        setMatchesByKind(result.matchesByKind);
         setError(null);
       },
       (reason: unknown) => {
         if (request !== generation.current) return;
         setHits([]);
         setHiddenIncomplete(0);
+        setMatchesByKind({});
         setError(reason instanceof Error ? reason.message : String(reason));
       },
     );
@@ -303,7 +361,8 @@ function DriverSearch({ channel, roleHint, onPick }: {
     // corrections, and burying them would defeat the point of saving one, but
     // leading with them would hide the library the query was aimed at.
     const fromSaved = saved
-      .filter((driver) => savedDriverMatches(driver, query) && (driver.kind === kind || driver.kind === 'unknown'))
+      .filter((driver) => savedDriverMatches(driver, query)
+        && (kind === 'all' || driver.kind === kind || driver.kind === 'unknown'))
       .map((driver): Candidate => ({
         key: `mine:${driver.id}`,
         preset: () => savedDriverPreset(driver),
@@ -320,10 +379,10 @@ function DriverSearch({ channel, roleHint, onPick }: {
   const candidates = useMemo<Candidate[]>(() => [...matches, {
     key: 'manual',
     manual: true,
-    preset: () => manualDriverPreset(query, kind),
+    preset: () => manualDriverPreset(query, kind === 'all' ? preferredKind : kind),
     render: ({ active, id, onPick: pick, onHover }) =>
       <ManualResultRow key="manual" query={query} active={active} id={id} onPick={pick} onHover={onHover}/>,
-  }], [kind, matches, query]);
+  }], [kind, matches, preferredKind, query]);
 
   useEffect(() => setActiveIndex(0), [query, kind]);
 
@@ -356,9 +415,26 @@ function DriverSearch({ channel, roleHint, onPick }: {
 
   const listId = `driver-results-${channel.id}`;
   const activeId = candidates[activeIndex] ? `${listId}-${activeIndex}` : undefined;
+
+  // The true match count, not the page: the search asks for forty rows, and
+  // "40 drivers" where there are six hundred is a worse answer than none. Never
+  // below the rows actually returned, which is also what keeps a server that
+  // sends no breakdown from being reported as nought matches above real hits.
+  const matchTotal = Math.max(
+    kind === 'all'
+      ? Object.values(matchesByKind).reduce((sum, count) => sum + count, 0)
+      : matchesByKind[kind] ?? 0,
+    hits.length,
+  );
+  const empty = !error && !matches.length
+    ? driverEmptyState({ query, kind, counts, matchesByKind, hiddenIncomplete })
+    : null;
+  const escape = empty?.action ?? null;
+
   return <div className="driver-search" data-control-reveal-id={CAD_CONTROLS.driverSearch.reveal.id}>
     <div className="driver-search-row">
       <input
+        ref={input}
         type="search"
         role="combobox"
         aria-expanded={open}
@@ -372,8 +448,11 @@ function DriverSearch({ channel, roleHint, onPick }: {
         onChange={(event) => { setQuery(event.target.value); setOpen(true); }}
         onKeyDown={onKeyDown}
       />
-      <KindToggle kind={kind} channelId={channel.id} onChange={setKind}/>
     </div>
+    {/* What the library holds, on the control that filters by it, before a
+        single keystroke. A user who never opens the dropdown still learns that
+        the compression half is one driver deep and where the rest of them are. */}
+    <KindToggle kind={kind} counts={counts} channelId={channel.id} onChange={chooseKind}/>
     {/* The dropdown carries hand entry as its last row, but that row only
         exists once the field has been opened. A user whose driver is not in
         the library has no reason to open it, so the way in is also stated
@@ -383,23 +462,51 @@ function DriverSearch({ channel, roleHint, onPick }: {
       <button
         type="button"
         className="driver-manual-link"
-        onClick={() => { setOpen(false); onPick(manualDriverPreset(query, kind), { edit: true }); }}
+        onClick={() => {
+          setOpen(false);
+          onPick(manualDriverPreset(query, kind === 'all' ? preferredKind : kind), { edit: true });
+        }}
       >Enter its T/S by hand</button>
     </p>
-    {open && <div id={listId} className="driver-results" role="listbox" aria-label={`Driver matches for ${channel.id}`}>
+    {open && <div className="driver-results">
       {error && <p className="cad-driver-hint" role="status">{error}</p>}
-      {!error && !matches.length && hiddenIncomplete === 0
-        && <p className="cad-driver-hint" role="status">No driver matches that search.</p>}
-      {!error && hiddenIncomplete > 0 && <p className="cad-driver-hint" role="status">{hiddenIncomplete === 1
+      {!error && hits.length > 0 && <p className="driver-results-head">
+        {matchTotal > hits.length
+          ? `${hits.length.toLocaleString()} of ${driverCountText(matchTotal, kind)}`
+          : driverCountText(matchTotal, kind)}
+        {query.trim() ? ' match' : ''}
+      </p>}
+      {empty && <div className="empty-state driver-empty" role="status">
+        <b>{empty.title}</b>
+        <span>{empty.detail}</span>
+        {escape && <button
+          type="button"
+          className="driver-empty-action"
+          // Without this the input blurs, the dropdown closes, and the button
+          // is gone before its own click lands.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            if (escape.clearQuery) setQuery('');
+            chooseKind(escape.kind);
+            input.current?.focus();
+          }}
+        >{escape.label}</button>}
+      </div>}
+      {/* Matches the library knows and cannot drive. When they are the only
+          answer the empty state above has already said so; this line is for
+          when they sit behind rows that did come back. */}
+      {!error && matches.length > 0 && hiddenIncomplete > 0 && <p className="cad-driver-hint" role="status">{hiddenIncomplete === 1
         ? 'One more driver matches, but the library lists no Thiele-Small data for it, so it cannot be driven.'
         : `${hiddenIncomplete} more drivers match, but the library lists no Thiele-Small data for them, so they cannot be driven.`
       } Enter the values by hand instead.</p>}
-      {candidates.map((candidate, index) => candidate.render({
-        active: index === activeIndex,
-        id: `${listId}-${index}`,
-        onPick: () => pick(candidate),
-        onHover: () => setActiveIndex(index),
-      }))}
+      <div id={listId} className="driver-results-list" role="listbox" aria-label={`Driver matches for ${channel.id}`}>
+        {candidates.map((candidate, index) => candidate.render({
+          active: index === activeIndex,
+          id: `${listId}-${index}`,
+          onPick: () => pick(candidate),
+          onHover: () => setActiveIndex(index),
+        }))}
+      </div>
     </div>}
   </div>;
 }
@@ -727,6 +834,7 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
   useEffect(() => { void load(); }, [load]);
 
   const hasLibrary = driverLibraryHasFiles({ status, info });
+  const counts = useMemo(() => driverKindCounts(info), [info]);
   const preset = form?.preset ?? null;
 
   if (!hasLibrary) {
@@ -749,6 +857,7 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
       ? <DriverSearch
           channel={channel}
           roleHint={roleHint}
+          counts={counts}
           onPick={(picked, options) => {
             state.setChannelDriverPreset(channel.id, picked);
             // A hand-entered driver arrives with nothing in it, so the sheet is

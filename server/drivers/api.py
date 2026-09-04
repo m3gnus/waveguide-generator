@@ -31,6 +31,7 @@ def create_drivers_router(library: DriverLibrary) -> APIRouter:
             "items": page["items"],
             "total": len(page["items"]),
             "hidden_incomplete": page["hidden_incomplete"],
+            "matches_by_kind": page["matches_by_kind"],
         }
 
     # Static paths ("/library", "/library/rescan") must be declared before the

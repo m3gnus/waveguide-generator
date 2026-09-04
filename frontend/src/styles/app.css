@@ -1214,11 +1214,33 @@ textarea:disabled { opacity: .48; }
 .driver-search-row { display: flex; align-items: center; gap: 6px; }
 .driver-search-row input { flex: 1; min-width: 0; height: 22px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
 .driver-search-row input:focus { border-color: rgba(var(--acc-rgb), .5); outline: none; }
-.driver-kind-toggle { display: flex; flex: none; gap: 0; border: 1px solid var(--hair); border-radius: var(--r3); overflow: hidden; }
-.driver-kind-toggle button { height: 20px; padding: 0 6px; border: 0; background: transparent; color: var(--fg3); font-size: var(--text-micro); }
+/* The type filter is its own full-width row rather than a chip beside the
+   search field, because it now carries what each setting holds. The library is
+   a thousand cone drivers and one compression driver, and "Compression 1" said
+   before the first keystroke is the difference between a user who knows that
+   and one who concludes the database is broken. Millimetres well spent. */
+.driver-kind-toggle { display: flex; gap: 0; border: 1px solid var(--hair); border-radius: var(--r3); overflow: hidden; }
+.driver-kind-toggle button { display: flex; flex: 1; min-width: 0; align-items: baseline; justify-content: center; gap: 5px; height: 20px; padding: 0 6px; border: 0; background: transparent; color: var(--fg3); font-size: var(--text-micro); }
+.driver-kind-toggle button + button { border-left: 1px solid var(--hair); }
+.driver-kind-toggle button b { color: var(--fg2); font: var(--text-micro) var(--mono); font-weight: 400; letter-spacing: .02em; }
 .driver-kind-toggle button:hover { background: var(--ov3); color: var(--fg1); }
 .driver-kind-toggle button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
+.driver-kind-toggle button.on b { color: var(--acc); }
 .driver-results { display: grid; gap: 1px; max-height: 302px; overflow-y: auto; padding: 2px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--float-bg); box-shadow: var(--float-sh); }
+.driver-results-list { display: grid; gap: 1px; }
+/* How much of the library answered, above the rows that did. The search asks
+   for forty at a time, so the page size alone would understate a wide match. */
+.driver-results-head { margin: 0; padding: 3px 5px 4px; border-bottom: 1px solid var(--hair-soft); color: var(--fg3); font: var(--text-micro) var(--mono); letter-spacing: .02em; }
+/* The shared empty state, at the picker's density. This is the block that has
+   to answer "is this database empty?", so it keeps its border and its title
+   instead of collapsing into one more grey hint line. */
+.driver-results .driver-empty { gap: 5px; margin: 0; padding: 8px 8px 9px; }
+/* Sentence case here alone: the title quotes back what the user typed, and the
+   shared block's uppercase tracking mangles a driver model. */
+.driver-results .driver-empty b { font: 600 var(--text-micro) var(--ui); letter-spacing: 0; text-transform: none; }
+.driver-results .driver-empty span { font-size: var(--text-micro); }
+.driver-empty-action { align-self: flex-start; height: 20px; margin-top: 3px; padding: 0 8px; border: 1px solid rgba(var(--acc-rgb), .45); border-radius: var(--r3); background: rgba(var(--acc-rgb), .12); color: var(--acc); font-size: var(--text-micro); }
+.driver-empty-action:hover { background: rgba(var(--acc-rgb), .2); }
 .driver-result { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; width: 100%; padding: 3px 5px; border: 0; border-radius: var(--r3); background: transparent; text-align: left; }
 .driver-result.active, .driver-result:hover { background: var(--ov3); }
 .driver-result-name { overflow: hidden; color: var(--fg1); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
@@ -1265,7 +1287,10 @@ textarea:disabled { opacity: .48; }
 .driver-sheet-actions button:hover:not(:disabled) { border-color: var(--hair-hi); color: var(--fg1); }
 .driver-sheet-actions button:disabled { opacity: .45; }
 .driver-sheet-actions button.primary { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .14); color: var(--acc); }
-.driver-library-counts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.driver-library-counts { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; }
+/* The split by driver type, on its own line under the totals: it is the number
+   the note beneath is about, so it reads before the explanation, not inside it. */
+.driver-library-kinds { flex-basis: 100%; color: var(--fg3); font-size: var(--text-micro); }
 
 /* ---- Crossover editors -------------------------------------------------
    One set of controls, three hosts: the pre-solve rail, the results strip and

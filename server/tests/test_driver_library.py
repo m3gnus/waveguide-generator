@@ -867,6 +867,165 @@ def test_a_rewrite_inside_one_timestamp_tick_still_reindexes(tmp_path: Path) -> 
     }
 
 
+# --- what the library holds, by driver type ---------------------------------
+
+
+def _kinds(info: dict) -> dict[str, tuple[int, int]]:
+    return {entry["kind"]: (entry["total"], entry["complete"]) for entry in info["kinds"]}
+
+
+def test_library_info_breaks_the_count_down_by_driver_type(tmp_path: Path) -> None:
+    """The number a picker needs before its type filter can be honest.
+
+    The filter is what dead-ends people: a library that is almost all cone
+    drivers answers nothing on its compression half, and without this the only
+    thing the filter can say about that half is nothing.
+    """
+
+    _write_csv(
+        tmp_path,
+        "mixed.csv",
+        ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Throat_in", "Size_in"],
+        [
+            ["Acme", "Cone1", "300", "9.5", "6.0", "18", "40", "", "12"],
+            ["Acme", "Cone2", "300", "9.5", "6.0", "18", "40", "", "15"],
+            ["Acme", "Horn1", "26", "12.4", "6.2", "2.4", "620", "1", ""],
+            ["Acme", "HornCatalogue", "", "", "", "", "", "1", ""],
+        ],
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    info = library.rescan()
+    assert _kinds(info) == {"lf": (2, 2), "cd": (2, 1)}
+    # The breakdown adds up to the totals it sits beside, so a caller can put
+    # them on one line without them contradicting each other.
+    assert sum(total for total, _ in _kinds(info).values()) == info["total_drivers"]
+    assert sum(done for _, done in _kinds(info).values()) == info["complete_drivers"]
+
+
+def test_library_info_leaves_out_a_type_it_holds_none_of(tmp_path: Path) -> None:
+    _write_csv(
+        tmp_path,
+        "cones.csv",
+        ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Size_in"],
+        [["Acme", "Cone1", "300", "9.5", "6.0", "18", "40", "12"]],
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    # An empty filter button is noise, so the type is absent rather than zero.
+    assert _kinds(library.rescan()) == {"lf": (1, 1)}
+
+
+def test_library_info_lists_the_types_in_the_order_a_filter_shows_them(tmp_path: Path) -> None:
+    _write_csv(
+        tmp_path,
+        "mixed.csv",
+        ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Throat_in", "Size_in"],
+        [
+            ["Acme", "Horn1", "26", "12.4", "6.2", "2.4", "620", "1", ""],
+            ["Acme", "Mystery", "", "", "", "", "", "", ""],
+            ["Acme", "Cone1", "300", "9.5", "6.0", "18", "40", "", "12"],
+        ],
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    assert [entry["kind"] for entry in library.rescan()["kinds"]] == ["lf", "cd", "unknown"]
+
+
+def test_search_counts_the_matches_the_type_filter_is_hiding(tmp_path: Path) -> None:
+    """The number that turns "no matches" into "none here, seven there".
+
+    Without it a search filtered to a type the library barely has comes back
+    empty and reads as a broken database -- which is exactly what happened to
+    a user of the shipped library, where the compression half is one driver.
+    """
+
+    _write_csv(
+        tmp_path,
+        "mixed.csv",
+        ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Throat_in", "Size_in"],
+        [
+            ["Acme", "Thunder12", "300", "9.5", "6.0", "18", "40", "", "12"],
+            ["Acme", "Thunder15", "300", "9.5", "6.0", "18", "40", "", "15"],
+            ["Acme", "Whisper1", "26", "12.4", "6.2", "2.4", "620", "1", ""],
+        ],
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+
+    page = library.search_page(q="thunder", kind="cd", limit=20, complete=True)
+    assert page["items"] == []
+    # The filter answered nothing; the library answered two.
+    assert page["matches_by_kind"] == {"lf": 2, "cd": 0, "unknown": 0}
+
+    # And the count is the query's, not the library's: a query nothing matches
+    # gets zeroes rather than the shelf count.
+    nothing = library.search_page(q="nosuchdriver", kind="cd", limit=20, complete=True)
+    assert nothing["matches_by_kind"] == {"lf": 0, "cd": 0, "unknown": 0}
+
+
+def test_matches_by_kind_applies_every_filter_except_the_type(tmp_path: Path) -> None:
+    _write_csv(
+        tmp_path,
+        "mixed.csv",
+        ["Brand", "Model", "Z_ohm", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Size_in", "Throat_in"],
+        [
+            ["Acme", "Thunder12", "8", "300", "9.5", "6.0", "18", "40", "12", ""],
+            ["Acme", "ThunderCatalogue", "8", "", "", "", "", "", "12", ""],
+            ["Acme", "Thunderhorn", "8", "26", "12.4", "6.2", "2.4", "620", "", "1"],
+        ],
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+
+    # A driver nothing can drive is not something to send the user to, so it is
+    # not counted as a match of its type either -- it is only `hidden`.
+    page = library.search_page(q="thunder", kind="cd", limit=20, complete=True)
+    assert page["matches_by_kind"]["lf"] == 1
+    assert page["hidden_incomplete"] == 0
+
+    # `hidden` stays what the *selected* type withheld, so the two numbers do
+    # not double-count the same row.
+    within = library.search_page(q="thunder", kind="lf", limit=20, complete=True)
+    assert within["hidden_incomplete"] == 1
+    assert within["matches_by_kind"] == {"lf": 1, "cd": 1, "unknown": 0}
+
+
+def test_search_route_passes_the_type_breakdown_through(tmp_path: Path) -> None:
+    _write_csv(
+        tmp_path,
+        "mixed.csv",
+        ["Brand", "Model", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Size_in"],
+        [["Acme", "Thunder12", "300", "9.5", "6.0", "18", "40", "12"]],
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    router = create_drivers_router(library)
+    search = _routes(router)[("/api/drivers", ("GET",))].endpoint
+    result = asyncio.run(search(q="thunder", kind="cd", z=None, limit=20, complete=True))
+    assert result["items"] == []
+    assert result["matches_by_kind"]["lf"] == 1
+
+
+def test_the_shipped_library_reports_its_one_compression_driver(tmp_path: Path) -> None:
+    """The fact behind the reported bug, pinned.
+
+    A user searched the shipped library for a compression driver, found nothing,
+    and concluded it was empty. It is not: it is 1,045 cone drivers and one
+    compression driver, and the breakdown is what lets the picker say so.
+    """
+
+    folder = bundled_library_dir()
+    assert folder is not None, "server/drivers/bundled is missing from this checkout"
+    library = DriverLibrary(tmp_path / "empty-user-folder", bundled=folder)
+    kinds = _kinds(library.rescan())
+    assert kinds["cd"][0] >= 1
+    assert kinds["lf"][0] > 900
+    # Every shipped driver is drivable, so the count the picker offers is the
+    # count it holds -- for both types.
+    assert all(total == complete for total, complete in kinds.values())
+
+    # And the query that started this reports zero of its own type while the
+    # library plainly holds another thousand.
+    page = library.search_page(q="DE250", kind="cd", limit=40, complete=True)
+    assert page["items"] == []
+    assert page["matches_by_kind"]["cd"] == 0
+
+
 def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> None:
     """The real file in this repo, not a fixture: it is a shipped artifact."""
 
