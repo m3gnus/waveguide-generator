@@ -1044,6 +1044,62 @@ def test_a_saved_engine_this_host_cannot_run_falls_back_to_auto(
     assert warmed == ["bempp"]
 
 
+@pytest.mark.parametrize("replacement", ["beat-cpu", "beat-metal"])
+def test_failed_beat_head_start_warms_the_resolved_backend(
+    monkeypatch: pytest.MonkeyPatch, replacement: str
+) -> None:
+    """A failed CUDA guess does not count as warming another BEAT backend."""
+
+    from server.app import beat_worker_prewarm
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.solver import warmup as solver_warmup
+
+    warmed: list[str | None] = []
+
+    def warm(engine: str | None) -> bool:
+        warmed.append(engine)
+        return engine == replacement
+
+    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", warm)
+    registry = EngineRegistry(
+        detector=lambda: [
+            EngineInfo("beat-cuda", False, "CUDA unavailable", None),
+            EngineInfo(replacement, True, "available", "1"),
+        ]
+    )
+
+    asyncio.run(beat_worker_prewarm(registry, _persisted("beat-cuda")))
+
+    assert warmed == ["beat-cuda", replacement]
+
+
+def test_successful_head_start_does_not_hide_a_different_resolved_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the exact backend selected after probing can be considered warm."""
+
+    from server.app import beat_worker_prewarm
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.solver import warmup as solver_warmup
+
+    warmed: list[str | None] = []
+    monkeypatch.setattr(
+        solver_warmup,
+        "prewarm_beat_worker_for_engine",
+        lambda engine: warmed.append(engine) or True,
+    )
+    registry = EngineRegistry(
+        detector=lambda: [
+            EngineInfo("beat-cuda", False, "CUDA unavailable", None),
+            EngineInfo("beat-cpu", True, "available", "1"),
+        ]
+    )
+
+    asyncio.run(beat_worker_prewarm(registry, _persisted("beat-cuda")))
+
+    assert warmed == ["beat-cuda", "beat-cpu"]
+
+
 def test_leaving_the_picker_on_auto_still_warms_autos_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1102,7 +1158,7 @@ def test_a_saved_engine_warms_without_waiting_for_the_capability_probe(
         assert warming.wait(10.0), "the prewarm waited for the probe"
         return [
             EngineInfo("metal", True, "test", "0.1.0"),
-            EngineInfo("beat", True, "test", "0.1.0"),
+            EngineInfo("beat-cpu", True, "test", "0.1.0"),
         ]
 
     monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", warm)

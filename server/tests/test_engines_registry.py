@@ -206,6 +206,17 @@ def test_auto_resolution_prefers_metal_then_beat_gpus_then_bempp() -> None:
     assert registry.get_engine("beat-cuda", capabilities=gpu_windows) is not None
 
 
+def test_auto_keeps_synthetic_dryrun_available_for_reduced_geometry() -> None:
+    dryrun = registry.EngineInfo(
+        "dryrun", True, "enabled", "builtin", symmetry_domains=("full",)
+    )
+
+    assert (
+        registry.resolve_auto_engine(capabilities=[dryrun], resolved_quadrants=1)
+        == "dryrun"
+    )
+
+
 def test_legacy_beat_name_resolves_to_the_best_available_variant() -> None:
     """A design file or stored preference written before the split still works.
 
@@ -530,6 +541,104 @@ def test_a_beat_variant_this_host_lacks_substitutes_like_any_other_engine(
         "requested": "beat-cuda",
         "resolved": "metal",
         "reason": "Needs an NVIDIA GPU.",
+    }
+
+
+@pytest.mark.parametrize("symmetry", ["half_xz", "auto"])
+def test_auto_skips_a_backend_that_cannot_solve_the_resolved_symmetry(
+    monkeypatch: pytest.MonkeyPatch, symmetry: str
+) -> None:
+    """Planning must not hand BEAT the xz half it rejects after meshing."""
+
+    from server.solver.symmetry import SymmetryResolution
+
+    if symmetry == "auto":
+        monkeypatch.setattr(
+            "server.jobs.runtime.resolve_symmetry",
+            lambda _design: SymmetryResolution(
+                quadrants=12,
+                xz=True,
+                yz=False,
+                reasons={"xz": [], "yz": ["asymmetric"]},
+                tolerance_mm=0.01,
+            ),
+        )
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo(
+                "beat-cuda", True, "CUDA", "1", symmetry_domains=("full", "half-yz", "quarter")
+            ),
+            registry.EngineInfo(
+                "bempp", True, "CPU", "1", symmetry_domains=("full", "half", "quarter")
+            ),
+        ],
+        factory=lambda name: object() if name in {"beat-cuda", "bempp"} else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(
+            _planner_request(engine="auto", solver_mode="full_3d", symmetry=symmetry),
+            engine_registry,
+        )
+    )
+
+    assert resolution.engine_name == "bempp"
+    assert resolution.symmetry_metadata["resolved_quadrants"] == 12
+
+
+def test_forced_backend_refuses_unsupported_symmetry_during_planning() -> None:
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo(
+                "beat-cuda", True, "CUDA", "1", symmetry_domains=("full", "half-yz", "quarter")
+            )
+        ],
+        factory=lambda _name: object(),
+    )
+
+    with pytest.raises(SymmetryValidationError, match="does not support the xz half"):
+        asyncio.run(
+            resolve_submission(
+                _planner_request(
+                    engine="beat-cuda", solver_mode="full_3d", symmetry="half_xz"
+                ),
+                engine_registry,
+            )
+        )
+
+
+def test_unavailable_engine_substitution_skips_incompatible_beat_backend() -> None:
+    """The original regression: a missing Metal choice, BEAT-CUDA, and xz half."""
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo(
+                "metal", False, "Metal is unavailable", None, symmetry_domains=("full", "half", "quarter")
+            ),
+            registry.EngineInfo(
+                "beat-cuda", True, "CUDA", "1", symmetry_domains=("full", "half-yz", "quarter")
+            ),
+            registry.EngineInfo(
+                "bempp", True, "CPU", "1", symmetry_domains=("full", "half", "quarter")
+            ),
+        ],
+        factory=lambda name: object() if name in {"beat-cuda", "bempp"} else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(
+            _planner_request(
+                engine="metal", solver_mode="full_3d", symmetry="half_xz"
+            ),
+            engine_registry,
+        )
+    )
+
+    assert resolution.engine_name == "bempp"
+    assert resolution.symmetry_metadata["solver_plan"]["engine_substitution"] == {
+        "requested": "metal",
+        "resolved": "bempp",
+        "reason": "Metal is unavailable",
     }
 
 

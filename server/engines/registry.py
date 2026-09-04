@@ -335,6 +335,7 @@ def resolve_auto_engine(
     *,
     solver_mode: str | None = None,
     mounting: str | None = None,
+    resolved_quadrants: int | None = None,
     environ: Mapping[str, str] | None = None,
     capabilities: Sequence[EngineInfo] | None = None,
 ) -> str | None:
@@ -375,10 +376,38 @@ def resolve_auto_engine(
         available &= {
             item.name for item in detected if "infinite-baffle" in item.mountings
         }
+    if resolved_quadrants is not None:
+        available &= {
+            item.name
+            for item in detected
+            if engine_supports_symmetry(item, resolved_quadrants)
+        }
     for candidate in FULL3D_ENGINE_ORDER:
         if candidate in available:
             return candidate
     return None
+
+
+def engine_supports_symmetry(info: EngineInfo, resolved_quadrants: int) -> bool:
+    """Whether an engine can solve the already validated fundamental domain."""
+
+    # Dry-run is synthetic: its capability says "full" because it has no native
+    # mirror implementation, but it accepts every validated mesh domain so the
+    # gated development fallback remains useful on reduced designs.
+    if info.name == "dryrun":
+        return True
+    # Every built-in detector publishes this field. Keep hand-built/legacy
+    # EngineInfo objects compatible; they predate capability-level symmetry
+    # filtering and are used by embedders and focused tests.
+    if not info.symmetry_domains:
+        return True
+    required = {
+        1234: ("full",),
+        12: ("half", "half-xz"),
+        14: ("half", "half-yz"),
+        1: ("quarter",),
+    }.get(resolved_quadrants, ())
+    return bool(set(required) & set(info.symmetry_domains))
 
 
 class EngineRegistry:
@@ -422,17 +451,26 @@ class EngineRegistry:
         *,
         solver_mode: str | None,
         mounting: str | None = None,
+        resolved_quadrants: int | None = None,
     ) -> str | None:
         capabilities = await self.capabilities()
         if requested == "auto":
             return resolve_auto_engine(
-                solver_mode=solver_mode, mounting=mounting, capabilities=capabilities
+                solver_mode=solver_mode,
+                mounting=mounting,
+                resolved_quadrants=resolved_quadrants,
+                capabilities=capabilities,
             )
         if requested == "beat":
             return resolve_legacy_beat_engine(capabilities)
         return requested if any(
             item.name == requested and item.available for item in capabilities
         ) else None
+
+    async def supports_symmetry(self, name: str, resolved_quadrants: int) -> bool:
+        capabilities = await self.capabilities()
+        item = next((item for item in capabilities if item.name == name), None)
+        return item is not None and engine_supports_symmetry(item, resolved_quadrants)
 
     async def get_engine(self, name: str) -> Any | None:
         capabilities = await self.capabilities()

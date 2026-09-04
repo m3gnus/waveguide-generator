@@ -295,10 +295,15 @@ async def worker_prewarm(
             log.info("%s worker prewarm could not resolve an engine: %s", engine, exc)
             resolved = None
         # Always awaited, so a head start is never left running behind a return.
-        if head_start is not None and (
-            await head_start or (resolved is not None and claims(resolved))
-        ):
-            return
+        if head_start is not None:
+            head_start_succeeded = await head_start
+            resolved_matches_request = requested == resolved or (
+                requested == "beat"
+                and resolved is not None
+                and resolved.startswith("beat-")
+            )
+            if head_start_succeeded and resolved_matches_request:
+                return
         if resolved is not None:
             await asyncio.to_thread(warm, resolved)
     finally:
