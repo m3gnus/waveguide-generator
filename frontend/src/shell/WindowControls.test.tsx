@@ -346,3 +346,173 @@ describe('an overflowing top bar gives before the window controls do', () => {
     expect(declarations).toMatch(/flex:\s*1\s+1\s+auto/);
   });
 });
+
+/**
+ * Reserving the space is not the same as owning the pixels.
+ *
+ * The `.topbar-main` wrapper above keeps the controls inside the window by
+ * letting the wrapper shrink past its own content -- and the wrapper's
+ * children, which do not shrink, then overflow it and run straight across the
+ * controls. Measured in Chromium at 1101 px with the Windows custom frame
+ * emulated, before the rules below existed: 112 px of overflow, the minimize
+ * dash drawn between the report and settings icons, the maximize outline drawn
+ * inside the reset-layout icon. `elementFromPoint` returned the *window
+ * control* at every one of those centres, so the overlap never cost a click --
+ * it redirected one. A pointer aimed at the visible reset-layout icon pressed
+ * Close.
+ *
+ * Two rules answer that, and neither is enough alone: the strip is on its own
+ * layer so nothing can be drawn into it, and the bar drops controls before it
+ * reaches the strip so nothing invites a press that lands somewhere else.
+ */
+describe('the window controls own their strip', () => {
+  const read = (path: string) => new TextDecoder().decode(readFileSync(path));
+
+  /** The declarations of the rule for exactly this class selector. */
+  function ruleFor(source: string, selector: string): string {
+    // `<selector> {` rather than a pattern, so `.window-controls` cannot match
+    // the start of `.window-controls-windows`.
+    const marker = `${selector} {`;
+    const start = source.indexOf(marker);
+    expect(start, `no rule for ${selector}`).toBeGreaterThan(-1);
+    const end = source.indexOf('}', start);
+    expect(end).toBeGreaterThan(start);
+    return source.slice(start + marker.length, end);
+  }
+
+  it('puts the controls on their own layer', () => {
+    const declarations = ruleFor(read('src/styles/windowControls.css'), '.window-controls');
+    // Without a layer the strip is only as safe as document order, and an
+    // overflowing child carrying a z-index of its own would take it back.
+    expect(declarations).toMatch(/position:\s*relative/);
+    expect(declarations).toMatch(/z-index:\s*1\b/);
+  });
+
+  it("paints the strip in the top bar's own colour", () => {
+    // Being on top is not enough while the buttons themselves are
+    // transparent: an overflowing icon still showed through the glyph painted
+    // over it. The two backgrounds have to be the same token or the fix reads
+    // as a patch of the wrong colour in the corner -- and they live in
+    // different stylesheets, so nothing but this holds them together.
+    const controls = ruleFor(read('src/styles/windowControls.css'), '.window-controls-windows');
+    expect(controls).toMatch(/background:\s*var\(--surface-panel\)/);
+    expect(read('src/styles/app.css')).toMatch(
+      /\.topbar \{[^}]*background:\s*var\(--surface-panel\)/,
+    );
+  });
+
+  it('reaches the window corner in every band', () => {
+    // A caption button the pointer can be thrown at is a Fitts's-law target;
+    // one that stops four pixels short of the corner is not. The bar's inline
+    // padding changes with the band, so the margin that cancels it has to
+    // change with it -- which is why both read one variable rather than each
+    // repeating 8px and drifting apart, as they had.
+    const controls = ruleFor(read('src/styles/windowControls.css'), '.window-controls-windows');
+    expect(controls).toMatch(/margin:\s*0\s+calc\(-1\s*\*\s*var\(--topbar-pad-inline[^)]*\)\)\s+0\s+4px/);
+    expect(read('src/styles/app.css')).toMatch(/padding-inline:\s*var\(--topbar-pad-inline\)/);
+  });
+});
+
+/**
+ * What the bar gives up, at the widths where it has to give something up.
+ *
+ * The launcher's own minimum window is 1100 px, which is 733 CSS px on a 150%
+ * display, and the bar's content does not fit there however it is compacted.
+ * Something has to go; the rule is that it may only be something the command
+ * palette can still reach, so the cost is a keystroke rather than the feature.
+ */
+describe('an overcrowded top bar drops controls, not the window buttons', () => {
+  const read = (path: string) => new TextDecoder().decode(readFileSync(path));
+
+  /**
+   * Every `<tag …>` opening tag in a stretch of JSX, attributes included.
+   *
+   * Scanned rather than matched: an `onClick={() => …}` attribute contains a
+   * `>` of its own, so the first `>` after `<button` is not the end of the
+   * tag, and a pattern that assumes it is silently reads half the attributes.
+   */
+  function openTags(source: string, tag: string): string[] {
+    const found: string[] = [];
+    for (let at = source.indexOf(`<${tag}`); at > -1; at = source.indexOf(`<${tag}`, at + 1)) {
+      let depth = 0;
+      for (let i = at; i < source.length; i += 1) {
+        if (source[i] === '{') depth += 1;
+        else if (source[i] === '}') depth -= 1;
+        else if (source[i] === '>' && depth === 0) {
+          found.push(source.slice(at, i + 1));
+          break;
+        }
+      }
+    }
+    return found;
+  }
+
+  /** The body of one `@media (max-width: <width>px)` block. */
+  function band(source: string, width: number): string {
+    const start = source.indexOf(`@media (max-width: ${width}px) {`);
+    expect(start, `no max-width: ${width}px band`).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = source.indexOf('{', start); i < source.length; i += 1) {
+      if (source[i] === '{') depth += 1;
+      else if (source[i] === '}') {
+        depth -= 1;
+        if (depth === 0) return source.slice(start, i);
+      }
+    }
+    throw new Error(`unterminated max-width: ${width}px band`);
+  }
+
+  it('drops the duplicated utilities before the bar can overflow', () => {
+    // Measured: no overflow at 1280 px, 14 px of it at 1200 px, 112 px by
+    // 1101 px -- all of it above the 1100 px compact breakpoint that was
+    // supposed to rescue the bar. That gap is what let the RC ship a top bar
+    // overlapping its own window controls at an ordinary window size.
+    expect(band(read('src/styles/app.css'), 1280)).toMatch(
+      /\.topbar-utility \{[^}]*display:\s*none/,
+    );
+  });
+
+  it('drops the history pair only at the narrowest window the launcher allows', () => {
+    const css = read('src/styles/app.css');
+    expect(band(css, 800)).toMatch(/\.topbar-history \{[^}]*display:\s*none/);
+    // Still there in the band above: undo and redo are the last thing to go,
+    // not part of the first cut.
+    expect(band(css, 1280)).not.toContain('.topbar-history');
+  });
+
+  it('leaves every dropped control reachable from the command palette', () => {
+    const source = read('src/shell/TopBar.tsx');
+    const paletteLabels = new Set(
+      [...source.matchAll(/\blabel: '([^']*)'/g)].map((match) => match[1]),
+    );
+    expect(paletteLabels.size).toBeGreaterThan(4);
+
+    // Every button inside something the narrow bar hides has to name a command
+    // the palette also offers. An icon added to these groups without a palette
+    // entry would simply vanish below 1280 px with no way back to it.
+    const dropped = [...source.matchAll(
+      /<(\w+)[^>]*className="[^"]*\btopbar-(?:utility|history)\b[^"]*"/g,
+    )];
+    expect(dropped.length).toBeGreaterThan(3);
+    for (const match of dropped) {
+      const tag = match[1];
+      const open = match.index ?? 0;
+      const close = source.indexOf(`</${tag}>`, open);
+      expect(close).toBeGreaterThan(open);
+      const extent = source.slice(open, close);
+      // The first closing tag is this element's own only while nothing of the
+      // same kind is nested inside it. Fail loudly if that stops being true,
+      // rather than quietly checking a prefix of the group.
+      expect(extent.indexOf(`<${tag}`, 1), `nested <${tag}> in a droppable group`).toBe(-1);
+      const buttons = openTags(extent, 'button');
+      expect(buttons.length).toBeGreaterThan(0);
+      for (const button of buttons) {
+        const name = /aria-label="([^"]+)"/.exec(button)?.[1]
+          ?? /title="([^"]+)"/.exec(button)?.[1];
+        expect(name, `a droppable control with no name: ${button}`).toBeTruthy();
+        expect([...paletteLabels], `${name} is dropped below 1280px with no palette route`)
+          .toContain(name as string);
+      }
+    }
+  });
+});

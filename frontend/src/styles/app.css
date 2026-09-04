@@ -802,7 +802,7 @@ select:disabled,
 textarea:disabled { opacity: .48; }
 
 .app-shell { grid-template-rows: 48px minmax(0, 1fr) 28px; }
-.topbar { gap: var(--space-8); padding-inline: var(--space-12); background: var(--surface-panel); box-shadow: none; }
+.topbar { --topbar-pad-inline: var(--space-12); gap: var(--space-8); padding-inline: var(--topbar-pad-inline); background: var(--surface-panel); box-shadow: none; }
 .brand { gap: var(--space-8); }
 .brand-mark { width: 24px; height: 24px; }
 .brand-name { font-size: var(--text-base); letter-spacing: .13em; }
@@ -1004,9 +1004,20 @@ textarea:disabled { opacity: .48; }
 .job-name-preview { font-size: var(--text-micro); }
 .viewer-preferences-note { padding: 12px 16px 16px; font-size: var(--text-base); }
 
+/* The bar's content stops fitting well above the compact breakpoint, and the
+   window controls are what it overflows into. Measured in Chromium with the
+   Windows custom frame emulated, before this band existed: 112 px of overflow
+   at 1101 px and 14 px at 1200 px, which put the report, settings and
+   reset-layout icons on the same pixels as minimize, maximize and close. The
+   dead band the wrapper fix left behind is closed here, by dropping controls
+   rather than by hoping the row gives. */
+@media (max-width: 1280px) {
+  .topbar-utility { display: none; }
+}
+
 @media (max-width: 1100px) {
   .statusbar .status-drop-2 { display: none; }
-  .topbar { gap: 6px; padding-inline: 8px; }
+  .topbar { --topbar-pad-inline: 8px; gap: 6px; }
   .revision-chip,
   .v-separator { display: none; }
   .update-wide { display: none; }
@@ -1028,6 +1039,7 @@ textarea:disabled { opacity: .48; }
 @media (max-width: 800px) {
   .app-shell { grid-template-rows: 48px minmax(0, 1fr) 28px; }
   .brand-name { display: none; }
+  .topbar-history { display: none; }
   .file-chip { max-width: 132px; }
   .command-affordance span,
   .command-affordance kbd,

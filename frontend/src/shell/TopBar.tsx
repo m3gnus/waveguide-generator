@@ -312,7 +312,12 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>
       <i className="v-separator" />
       <DesignFileMenu />
-      <div className="button-group">
+      {/* Dropped last, and only at the narrowest window the launcher allows --
+        * 1100 px at 150% display scaling is 733 CSS px, and the bar does not
+        * fit there even with every `topbar-utility` gone. Undo and redo are
+        * the only remaining controls that have both a keyboard shortcut and a
+        * palette entry, which is what makes them the ones to go. */}
+      <div className="button-group topbar-history">
         <button className="icon-button" disabled={!canUndo} onClick={undo} title="Undo"><Icon name="undo"/></button>
         <button className="icon-button" disabled={!canRedo} onClick={redo} title="Redo"><Icon name="redo"/></button>
       </div>
@@ -320,13 +325,20 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       <WorkspaceModeSwitch/>
       <SolveActions/>
       <i className="v-separator" />
-      <div className="theme-toggle" aria-label="Color theme">
+      {/* `topbar-utility` marks a control the bar may drop when it runs out of
+        * room. Every one of them is also a command-palette entry, so dropping
+        * it costs a keystroke rather than the feature -- and the alternative
+        * is not "keep it", it is "draw it on the same pixels as the window
+        * controls", which is how pressing the reset-layout icon came to close
+        * the window. `WindowControls.test.tsx` holds each of these to having a
+        * palette route out. */}
+      <div className="theme-toggle topbar-utility" aria-label="Color theme">
         <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme" aria-pressed={theme === 'dark'}><Icon name="moon"/></button>
         <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')} aria-label="Light theme" aria-pressed={theme === 'light'}><Icon name="sun"/></button>
       </div>
-      <button className="icon-button" onClick={() => setReportOpen(true)} title="Report a problem" aria-label="Report a problem"><Icon name="info"/></button>
-      <button className="icon-button" onClick={showSettings} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
-      <button className="icon-button" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
+      <button className="icon-button topbar-utility" onClick={() => setReportOpen(true)} title="Report a problem" aria-label="Report a problem"><Icon name="info"/></button>
+      <button className="icon-button topbar-utility" onClick={showSettings} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
+      <button className="icon-button topbar-utility" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
       <span className="revision-chip" title="Design revision">r{revision}</span>
     </div>
     <WindowControls side="trailing"/>

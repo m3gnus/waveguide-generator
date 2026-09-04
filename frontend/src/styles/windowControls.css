@@ -74,6 +74,18 @@
   align-self: stretch;
   -webkit-app-region: no-drag;
   app-region: no-drag;
+  /* The controls' own layer. `.topbar-main` is allowed to shrink past its
+   * content -- that is what keeps this group inside the window at all -- and
+   * its children, which do not shrink, then overflow it and run straight
+   * across this strip. Reserving the space is therefore not enough: the strip
+   * also has to own its pixels. Measured in Chromium with the Windows custom
+   * frame emulated, before this rule: 112 px of overflow at 1101 px, 210 px at
+   * 733 px. `elementFromPoint` at each button's centre already returned the
+   * window control, so the overlap was never a lost click -- it was the
+   * opposite. A pointer aimed at the *visible* reset-layout icon pressed
+   * Close. */
+  position: relative;
+  z-index: 1;
 }
 
 /* 46x32 is the caption-button metric Windows itself uses, and matching it is
@@ -81,8 +93,16 @@
  * pulled to the panel edges so the close button reaches the true corner --
  * a Fitts's-law target the user can hit without aiming. */
 .window-controls-windows {
-  margin: 0 -8px 0 4px;
+  margin: 0 calc(-1 * var(--topbar-pad-inline, 8px)) 0 4px;
   align-items: stretch;
+  /* Opaque, because being on top is only half of it. These buttons have
+   * transparent backgrounds, so an overflowing icon button still showed
+   * through the glyph that was painted over it: at 1101 px the minimize dash
+   * sat between the report and settings icons and the maximize outline was
+   * drawn inside the reset-layout icon, at 733 px the close cross was drawn
+   * inside the report icon. One opaque strip in the bar's own colour is what
+   * makes the three buttons read as three buttons at every width. */
+  background: var(--surface-panel);
 }
 
 .window-controls-windows button {
