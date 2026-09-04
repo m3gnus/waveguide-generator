@@ -16,7 +16,6 @@ import math
 import os
 from pathlib import Path
 import shutil
-import tempfile
 from typing import Any
 
 from server.cadlink.identity import mint_id
@@ -25,6 +24,7 @@ from server.cadlink.isolated import inspect_returned_step
 from server.cadlink.isolation import ChildRefusal
 from server.cadlink.step_evidence import ReturnedStepError
 from server.cadlink.store import CadLinkStore
+from server.platform.staging import publish_staging_directory
 
 
 RETURN_SUBDIRECTORY = Path("cadlink") / "onshape" / "wgreturn"
@@ -226,7 +226,7 @@ def write_return_bundle(
     created_at = _utc_now()
     root = Path(data_dir).resolve() / RETURN_SUBDIRECTORY
     root.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=".onshape-return-", dir=root))
+    temporary = publish_staging_directory(root, ".onshape-return-")
     target = root / f"{return_id}.wgreturn"
     # API-created links always carry WG's durable opaque identity. Direct unit
     # callers and pre-v8 fixtures retain the old single-Part-Studio fallback;

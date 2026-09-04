@@ -11,7 +11,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import tempfile
 import threading
 from typing import Any, Literal, Mapping
 
@@ -26,6 +25,7 @@ from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
 from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.platform.paths import app_root
+from server.platform.staging import publish_staging_directory
 from server.preview.translate import design_to_mesher_config
 from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
 
@@ -529,7 +529,7 @@ def _export_wglink_sync(
             _bundle_destination(wglink_root, bundle_stem, identity.design_id)
         except ValueError as exc:
             raise _BundleNameConflict(str(exc)) from exc
-        temporary_root = Path(tempfile.mkdtemp(prefix=".wg2-wglink-", dir=wglink_root))
+        temporary_root = publish_staging_directory(wglink_root, ".wg2-wglink-")
         staged = temporary_root / "bundle.wglink"
         bundle_identity = WgLinkIdentity(
             bundle={"id": facts["bundleId"], "created_at": facts["createdAt"]},

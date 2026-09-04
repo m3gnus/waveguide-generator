@@ -12,7 +12,6 @@ from pathlib import Path
 import shutil
 import signal
 import sys
-import tempfile
 import threading
 from typing import Any, TextIO
 
@@ -39,6 +38,7 @@ from server.platform.signal_rearm import (
     register_signal_rearm,
     unregister_signal_rearm,
 )
+from server.platform.staging import publish_staging_directory
 
 from .request import build_request
 from .outcome import write_outcome
@@ -296,9 +296,7 @@ async def _write_output(
     if output.exists():
         raise FileExistsError(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(
-        tempfile.mkdtemp(prefix=f".{output.name}.staging-", dir=output.parent)
-    )
+    staging = publish_staging_directory(output.parent, f".{output.name}.staging-")
     try:
         job_id = str(job["id"])
         effective_request = await runtime.get_effective_request(job_id)

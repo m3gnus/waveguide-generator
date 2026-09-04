@@ -630,6 +630,11 @@ def isolated_step_task(
             "another external-STEP import is already running; the gate allows "
             f"{MAX_CONCURRENT_STEP_CHILDREN} at a time",
         )
+    # The one staging root that keeps `mkdtemp`: it is a sandbox for an
+    # untrusted child, it lives in the shared system temp directory rather than
+    # beside a destination, and nothing here is published anywhere a later run
+    # has to read. Its 0o700 is the point, not the hazard
+    # `server/platform/staging.py` describes.
     root = Path(tempfile.mkdtemp(prefix="wg-cad-child-"))
     try:
         staged_input = root / "input"

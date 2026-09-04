@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import tempfile
 from typing import Any
 
 from server.cadlink.isolated import (
@@ -27,6 +26,7 @@ from server.mesh.imported import (
 )
 from server.mesh.artifact import mesh_text_sha256
 from server.platform.paths import data_paths
+from server.platform.staging import publish_staging_directory
 
 from .wgreturn import WgReturnBundle, read_wgreturn
 
@@ -356,7 +356,7 @@ def _stage_bundle_cas(
     if destination.is_dir():
         return destination, None, None
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=".wg2-import-bundle-", dir=destination.parent))
+    temporary = publish_staging_directory(destination.parent, ".wg2-import-bundle-")
     staged = temporary / destination.name
     # A captured Fusion archive is tens of megabytes and is not geometry WG
     # solves from -- it is there for the user's own archive. Copying it here too
@@ -499,7 +499,7 @@ def _load_cached_mesh(mesh_path: Path, metadata_path: Path) -> dict[str, Any] | 
 
 def _write_cache(mesh_path: Path, metadata_path: Path, result: Mapping[str, Any]) -> None:
     mesh_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=".wg2-import-mesh-", dir=mesh_path.parent))
+    temporary = publish_staging_directory(mesh_path.parent, ".wg2-import-mesh-")
     try:
         staged_mesh = temporary / mesh_path.name
         staged_meta = temporary / metadata_path.name
@@ -556,7 +556,7 @@ def _write_viewport_cache(
         "metadata": viewport["metadata"],
     }
     mesh_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=".wg2-import-viewport-", dir=mesh_path.parent))
+    temporary = publish_staging_directory(mesh_path.parent, ".wg2-import-viewport-")
     try:
         staged_mesh = temporary / mesh_path.name
         staged_meta = temporary / metadata_path.name

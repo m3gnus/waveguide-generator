@@ -25,6 +25,8 @@ import tempfile
 from typing import Any, Mapping
 import unicodedata
 
+from server.platform.staging import publish_staging_directory
+
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +247,7 @@ def archive_cad_document(
     relative = f"{CAD_SUBDIRECTORY}/{destination.name}"
 
     destination_directory.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".wg2-cad-document-", dir=destination_directory))
+    staging = publish_staging_directory(destination_directory, ".wg2-cad-document-")
     try:
         staged = staging / destination.name
         shutil.copy2(source, staged)
@@ -341,7 +343,7 @@ def place_run_cad_document(
         return relative
 
     destination_directory.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".wg2-run-document-", dir=destination_directory))
+    staging = publish_staging_directory(destination_directory, ".wg2-run-document-")
     try:
         staged = staging / destination.name
         shutil.copy2(source, staged)

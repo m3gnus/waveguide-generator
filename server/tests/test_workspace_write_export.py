@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -61,6 +64,22 @@ def selected_state(tmp_path: Path) -> tuple[workspace_api.WorkspaceState, Path]:
 
 def call(state: workspace_api.WorkspaceState, payload: workspace_api.WriteExportRequest):
     return asyncio.run(endpoint(state)(payload))
+
+
+def _windows_acl(path: Path) -> list[str]:
+    """The file's access-control entries, as `icacls` reports them."""
+
+    output = subprocess.run(
+        ["icacls", str(path)], capture_output=True, text=True, check=True
+    ).stdout
+    # icacls prints `<path> <entry>` then one indented entry per line, then a
+    # blank line and a summary. Keep the entries, drop the path they hang off.
+    entries = []
+    for line in output.splitlines():
+        if not line.strip() or line.startswith("Successfully"):
+            break
+        entries.append(line.replace(str(path), "").strip())
+    return sorted(entries)
 
 
 def test_write_export_happy_path(tmp_path: Path) -> None:
@@ -281,13 +300,13 @@ def test_large_multipart_export_is_responsive_and_identical_retry_writes_nothing
     destination = workspace / "large-run" / "large.bin"
     initial_mtime = destination.stat().st_mtime_ns
     staging_calls: list[object] = []
-    original_mkdtemp = workspace_api.tempfile.mkdtemp
+    original_staging = workspace_api.publish_staging_directory
 
-    def counted_mkdtemp(*args, **kwargs):
+    def counted_staging(*args, **kwargs):
         staging_calls.append((args, kwargs))
-        return original_mkdtemp(*args, **kwargs)
+        return original_staging(*args, **kwargs)
 
-    monkeypatch.setattr(workspace_api.tempfile, "mkdtemp", counted_mkdtemp)
+    monkeypatch.setattr(workspace_api, "publish_staging_directory", counted_staging)
     retry_request, retry_stream = multipart_request()
     try:
         retry = asyncio.run(endpoint(state)(retry_request))
@@ -462,6 +481,119 @@ def test_archive_pointer_refuses_to_overwrite_another_lineage(tmp_path: Path) ->
 
     assert caught.value.status_code == 409
     assert (workspace / "Horn_A/design.json").read_text() == original
+
+
+def test_an_unreadable_pointer_is_refused_as_unreadable_not_as_another_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two refusals are different problems and must not share a message.
+
+    Reported as one, the message sent everyone looking for colliding lineage
+    identifiers when the file was simply unreadable -- and `lineageId: null`
+    for an Untitled design compares equal to `lineageId: null`, so a lineage
+    collision was never what was happening.
+    """
+
+    state, workspace = selected_state(tmp_path)
+    pointer = json.dumps({"schemaVersion": 1, "folder": "Horn_A", "lineageId": None})
+    call(
+        state,
+        workspace_api.WriteExportRequest(
+            subdirectory="Horn_A",
+            existing="merge_identical",
+            members=[{"relative_path": "design.json", "text": pointer}],
+        ),
+    )
+    published = workspace / "Horn_A/design.json"
+
+    # Standing in for a file this account cannot open: on Windows that came
+    # from an earlier run under another owner, and reproducing *that* needs a
+    # second account. The refusal under test is driven by the read failing, so
+    # the read is what the test controls.
+    real_read_bytes = Path.read_bytes
+
+    def refuse_the_pointer(self: Path, *args: object, **kwargs: object) -> bytes:
+        if self == published:
+            raise PermissionError(13, "Permission denied")
+        return real_read_bytes(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", refuse_the_pointer)
+
+    with pytest.raises(HTTPException) as caught:
+        call(
+            state,
+            workspace_api.WriteExportRequest(
+                subdirectory="Horn_A",
+                existing="overwrite",
+                members=[{"relative_path": "design.json", "text": pointer}],
+            ),
+        )
+
+    assert caught.value.status_code == 409
+    detail = str(caught.value.detail)
+    assert "Cannot read" in detail
+    assert "another lineage" not in detail
+    # Actionable: which file, why, and what to do about it.
+    assert str(published) in detail
+    assert "Permission denied" in detail
+    assert "Delete that file" in detail
+    # Still a refusal: the guard is right, only its explanation was wrong.
+    assert real_read_bytes(published).decode() == pointer
+
+
+def test_published_files_are_readable_by_more_than_their_writer() -> None:
+    """A published file inherits the destination's permissions, not staging's.
+
+    `tempfile.mkdtemp` gives its directory mode 0o700, Windows implements that
+    as a DACL naming only SYSTEM, Administrators and OWNER RIGHTS, and
+    `os.replace` carries a file's DACL to the destination instead of letting
+    the destination directory's inheritable entries apply. Every file the app
+    published therefore landed unreadable to anyone but its writer -- including
+    to the app itself once the owner changed, which is the refusal the previous
+    test describes.
+
+    Deliberately not `tmp_path`: pytest builds its base directory with the very
+    mode this is about, so everything underneath already carries that ACL and a
+    published file is indistinguishable from a correct one there. The workspace
+    has to sit somewhere with ordinary permissions -- as a user's Documents
+    folder does -- for the comparison to mean anything.
+    """
+
+    root = Path(tempfile.gettempdir()) / f"wg2-acl-{os.getpid()}-{id(object())}"
+    root.mkdir()
+    try:
+        state = workspace_api.WorkspaceState(root / "data")
+        workspace = root / "chosen"
+        workspace.mkdir()
+        state.select(workspace)
+        workspace = workspace.resolve()
+
+        # An ordinary file in the workspace, to compare the published one
+        # against. It sits outside the export folder because with
+        # `existing="reject"` the whole staging directory is moved into place,
+        # so the export folder itself carried the private ACL and anything
+        # created inside it inherited that rather than the workspace's.
+        reference = workspace / "written-in-place.json"
+        reference.write_bytes(b"{}")
+
+        # `reject` moves the staging directory; `overwrite` moves each file.
+        call(state, request("Horn_A", [("run.json", "{}")]))
+        call(
+            state,
+            workspace_api.WriteExportRequest(
+                subdirectory="Horn_A",
+                existing="overwrite",
+                members=[{"relative_path": "run.json", "text": "{ }"}],
+            ),
+        )
+
+        if os.name == "nt":
+            assert _windows_acl(workspace / "Horn_A/run.json") == _windows_acl(reference)
+            assert _windows_acl(workspace / "Horn_A") == _windows_acl(workspace)
+        else:
+            assert (workspace / "Horn_A/run.json").stat().st_mode == reference.stat().st_mode
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_overwrite_refuses_to_replace_a_directory_with_a_file(tmp_path: Path) -> None:

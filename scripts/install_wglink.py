@@ -23,6 +23,7 @@ if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
 from server.platform.paths import app_root  # noqa: E402
+from server.platform.staging import publish_staging_directory  # noqa: E402
 
 
 REPO_ROOT = app_root()
@@ -275,7 +276,7 @@ def _materialize_runtime(
     parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         shutil.rmtree(destination)
-    staging = Path(tempfile.mkdtemp(prefix=".wglink-payload-", dir=parent))
+    staging = publish_staging_directory(parent, ".wglink-payload-")
     try:
         for name, data in payloads.items():
             path = staging.joinpath(*PurePosixPath(name).parts)
@@ -347,7 +348,7 @@ def install(
 
     addins_dir = target.parent
     addins_dir.mkdir(parents=True, exist_ok=True)
-    staging_parent = Path(tempfile.mkdtemp(prefix=".WGLink-install-", dir=addins_dir))
+    staging_parent = publish_staging_directory(addins_dir, ".WGLink-install-")
     staging = staging_parent / "WGLink"
     previous = staging_parent / "previous"
     try:

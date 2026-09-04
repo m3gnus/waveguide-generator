@@ -26,6 +26,7 @@ from starlette.datastructures import UploadFile
 
 from server.platform.paths import data_paths, proposed_cadlink_dir
 from server.platform.process import background_process_kwargs
+from server.platform.staging import publish_staging_directory
 
 
 logger = logging.getLogger(__name__)
@@ -785,8 +786,19 @@ def _write_export_sync(
                 continue
             try:
                 identical = _streaming_file_matches(destination, content)
-            except OSError:
-                identical = False
+            except OSError as exc:
+                # "Different content" would be a claim about bytes nobody read.
+                # Say which it is, because the two need different answers: one
+                # is a name collision, the other is a file this account cannot
+                # open. See `server/platform/staging.py` for how the app used
+                # to write files it could not read back.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot read the existing export file {destination} "
+                        f"({exc.strerror or exc}); refusing to merge into it."
+                    ),
+                ) from exc
             if not identical:
                 raise HTTPException(
                     status_code=409,
@@ -808,18 +820,36 @@ def _write_export_sync(
                 incoming_record, incoming_lineage = _archive_design_lineage(content)
                 if incoming_record:
                     try:
-                        existing_record, existing_lineage = _archive_design_lineage(
-                            destination.read_bytes()
-                        )
-                    except OSError:
-                        existing_record = False
-                        existing_lineage = None
+                        existing = destination.read_bytes()
+                    except OSError as exc:
+                        # A pointer file that cannot be opened and one that
+                        # names another design both mean "do not overwrite",
+                        # and they mean nothing else alike. Reported as one,
+                        # this read the way it was meant to -- as two
+                        # Untitled designs colliding -- and sent everyone
+                        # looking at lineage identifiers, when the file was
+                        # simply unreadable: written by an earlier run under a
+                        # different owner, with an ACL that named nobody else.
+                        # `server/platform/staging.py` is why that could
+                        # happen; this is what it looked like when it did.
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "Cannot read the run archive's design.json at "
+                                f"{destination} ({exc.strerror or exc}); refusing to "
+                                "overwrite a pointer file whose lineage cannot be "
+                                "checked. Delete that file or restore read access to "
+                                "it, and the next run will write it again."
+                            ),
+                        ) from exc
+                    existing_record, existing_lineage = _archive_design_lineage(existing)
                     if not existing_record or existing_lineage != incoming_lineage:
                         raise HTTPException(
                             status_code=409,
                             detail=(
                                 "Archive design.json belongs to another lineage "
-                                "or has unreadable lineage metadata; refusing overwrite."
+                                "or is not a run-archive pointer file; refusing "
+                                "overwrite."
                             ),
                         )
 
@@ -833,8 +863,8 @@ def _write_export_sync(
         return response
 
     export_directory.parent.mkdir(parents=True, exist_ok=True)
-    staging_directory = Path(
-        tempfile.mkdtemp(prefix=".wg2-export-staging-", dir=export_directory.parent)
+    staging_directory = publish_staging_directory(
+        export_directory.parent, ".wg2-export-staging-"
     )
     try:
         for segments, content, _destination in pending:

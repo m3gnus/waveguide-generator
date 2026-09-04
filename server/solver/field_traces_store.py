@@ -8,7 +8,6 @@ import math
 import os
 from pathlib import Path
 import shutil
-import tempfile
 from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
@@ -16,6 +15,7 @@ from numpy.typing import NDArray
 
 from server.mesh.artifact import mesh_text_sha256
 from server.platform.paths import data_paths
+from server.platform.staging import publish_staging_directory
 
 
 FIELD_TRACES_VERSION = 2
@@ -335,7 +335,7 @@ def write_field_traces(
         raise FileExistsError(f"field-trace artifact already exists for job {job_id}")
 
     validated = _validated_artifact(job_id, artifact)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{target.name}.tmp-", dir=root))
+    temporary = publish_staging_directory(root, f".{target.name}.tmp-")
     published = False
     try:
         mesh_path = temporary / "mesh.msh"
