@@ -475,6 +475,109 @@ def test_asset_urls_are_repository_bound_and_api_override_is_literal_loopback(
         bundle_module.updates_api_base()
 
 
+def test_the_app_layer_may_be_served_from_the_release_or_its_companion() -> None:
+    """The install step has to accept the URL the status step resolves.
+
+    This is the one every other test in the split missed, because the tests that
+    exercise ``request_install`` hand the service a stub installer and never
+    reach the real validation. The status step resolves the app layer from the
+    companion release; this step pinned it to ``v<version>``; so a user would be
+    offered an update, click install, and get "the bundle update action contains
+    an invalid asset" -- for every release published after the split, not only
+    for betas.
+
+    Both tags are accepted rather than swapping one pin for the other: one
+    version publishes the layers to both, and either URL is a correct answer.
+    """
+
+    from server.updates import bundle as bundle_module
+
+    root = "https://github.com/m3gnus/waveguide-generator/releases/download"
+
+    def app_layer(tag: str, version: str = "0.3.2") -> list[dict[str, object]]:
+        return [
+            {
+                "name": f"update-app-{version}.zip",
+                "url": f"{root}/{tag}/update-app-{version}.zip",
+                "bytes": 4_424_263,
+                "sha256": "a" * 64,
+                "layer": "app",
+            }
+        ]
+
+    for tag in ("v0.3.2-updates", "v0.3.2"):
+        assert bundle_module.BundleUpdateInstaller._validated_assets(
+            "0.3.2", app_layer(tag)
+        ), tag
+
+    # Still pinned to the version: another release's page is not an origin for
+    # this version's application layer, whichever half of the pair it is.
+    for tag in ("v0.3.1", "v0.3.1-updates", "v9.9.9-updates"):
+        with pytest.raises(bundle_module.BundleInstallError):
+            bundle_module.BundleUpdateInstaller._validated_assets("0.3.2", app_layer(tag))
+
+    # And a runtime layer stays unpinned, because it is shared across releases
+    # by content -- but still bound to this repository.
+    runtime = [
+        *app_layer("v0.3.2-updates"),
+        {
+            "name": "update-runtime-macos-arm64-75ecf8fdbb99.zip",
+            "url": f"{root}/v0.3.0/update-runtime-macos-arm64-75ecf8fdbb99.zip",
+            "bytes": 177_768_059,
+            "sha256": "b" * 64,
+            "layer": "runtime",
+        },
+    ]
+    assert bundle_module.BundleUpdateInstaller._validated_assets("0.3.2", runtime)
+    runtime[1]["url"] = "https://example.com/update-runtime-macos-arm64-75ecf8fdbb99.zip"
+    with pytest.raises(bundle_module.BundleInstallError):
+        bundle_module.BundleUpdateInstaller._validated_assets("0.3.2", runtime)
+
+
+def test_a_beta_and_its_companion_are_trusted_and_installable_tag_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every tag this project publishes, on the two checks that gate an update.
+
+    A beta is a pre-release, and its layers live on a companion pre-release, so
+    the four shapes here are `v0.4.0`, `v0.4.0-updates`, `v0.4.0-beta.1` and
+    `v0.4.0-beta.1-updates`. The updater's parser learned all four when the beta
+    channel landed; these two checks kept the old `v\\d+\\.\\d+\\.\\d+`, which
+    refused every beta asset as untrusted and refused to start an install for a
+    beta version -- a beta channel that could see a beta and do nothing with it.
+
+    Negative controls below, because a check that accepts everything would pass
+    the first half of this test without meaning anything.
+    """
+
+    from server.updates import bundle as bundle_module
+
+    monkeypatch.delenv(bundle_module.UPDATES_API_BASE_ENV, raising=False)
+    root = "https://github.com/m3gnus/waveguide-generator/releases/download"
+    for tag in ("v0.4.0", "v0.4.0-updates", "v0.4.0-beta.1", "v0.4.0-beta.1-updates"):
+        url = f"{root}/{tag}/update-app-0.4.0.zip"
+        assert bundle_module.trusted_asset_url(
+            url, tag=tag, asset_name="update-app-0.4.0.zip"
+        ), tag
+    for tag in ("v0.4", "v0.4.0.", "v0.4.0-", "v0.4.0-..", "nightly", "0.4.0", "v"):
+        url = f"{root}/{tag}/update-app-0.4.0.zip"
+        assert not bundle_module.trusted_asset_url(
+            url, tag=tag, asset_name="update-app-0.4.0.zip"
+        ), tag
+    # Still bound to the tag it was found under: a real shape from the wrong
+    # release is as untrusted as a made-up one.
+    assert not bundle_module.trusted_asset_url(
+        f"{root}/v0.4.0-beta.1/update-app-0.4.0.zip",
+        tag="v0.4.0",
+        asset_name="update-app-0.4.0.zip",
+    )
+
+    for version in ("0.4.0", "0.4.0-beta.1"):
+        assert bundle_module.VERSION_RE.fullmatch(version) is not None, version
+    for version in ("0.4", "0.4.0-", "..", "v0.4.0"):
+        assert bundle_module.VERSION_RE.fullmatch(version) is None, version
+
+
 def test_every_redirect_hop_stays_on_the_configured_loopback_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

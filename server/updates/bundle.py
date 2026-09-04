@@ -20,7 +20,8 @@ import urllib.request
 import zipfile
 
 from scripts.fetch_spa import SpaError, expected_digest, file_digest
-from shared.release_assets import UPDATES_TAG_SUFFIX
+from shared import release_assets
+from shared.release_assets import is_release_tag
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name
 
 
@@ -47,7 +48,11 @@ RUNTIME_MAX_MEMBER_BYTES = 256 * MEBIBYTE
 MAX_COMPRESSION_RATIO = 2_000.0
 DISK_SPACE_HEADROOM_BYTES = 64 * MEBIBYTE
 MAX_ARCHIVE_BYTES = RUNTIME_MAX_ARCHIVE_BYTES
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+#: A version an install job may be started for. Shared with the updater's
+#: parser, so it admits a beta's ``0.4.0-beta.1``: a beta whose layers can be
+#: found and trusted but not installed is a beta channel that cannot exercise
+#: the install path, which is the one thing the channel exists to do.
+VERSION_RE = release_assets.VERSION_RE
 RUNTIME_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 ProgressCallback = Callable[[int], None]
@@ -55,6 +60,33 @@ ArchiveDownloader = Callable[[str, Path, int, ProgressCallback], None]
 SmallFetcher = Callable[[str, int], bytes]
 VolumeProbe = Callable[[Path], object]
 FreeSpaceProbe = Callable[[Path], int]
+
+
+def _layer_url_is_bound(url: object, *, version: str, layer: object, name: str) -> bool:
+    """Is this URL an acceptable origin for this layer of this version's update?
+
+    The app layer is pinned to the version being installed, so a release cannot
+    hand over some other version's application. Since the release split that is
+    two acceptable tags, not one: the layers are published to the companion
+    ``v<version>-updates``, and ``v<version>`` itself stays acceptable because
+    one transitional version publishes them to both and a repaired release may
+    carry them directly. Pinning only the release -- as this did when the split
+    landed -- refuses the very URL the updater now resolves, which fails every
+    in-app update at the install step after telling the user one was available.
+
+    Runtime layers are addressed by content and deliberately shared across
+    releases, so they are bound to this repository and to their name, not to a
+    tag; the name carries the runtime id, and the digest is checked on download.
+    """
+
+    if not isinstance(url, str):
+        return False
+    if layer != "app":
+        return trusted_asset_url(url, asset_name=name)
+    return any(
+        trusted_asset_url(url, tag=tag, asset_name=name)
+        for tag in (f"v{version}", release_assets.updates_tag(version))
+    )
 
 
 def _valid_proof(
@@ -77,10 +109,8 @@ def _valid_proof(
     if isinstance(digest, str) and digest:
         lowered = digest.lower()
         return len(lowered) == 64 and all(c in "0123456789abcdef" for c in lowered)
-    return isinstance(checksum_url, str) and trusted_asset_url(
-        checksum_url,
-        tag=f"v{version}" if layer == "app" else None,
-        asset_name=safe_name + ".sha256",
+    return _layer_url_is_bound(
+        checksum_url, version=version, layer=layer, name=safe_name + ".sha256"
     )
 
 
@@ -215,13 +245,12 @@ def _github_release_asset_url(
     repository_parts = GITHUB_REPOSITORY.split("/")
     if parts[:4] != [*repository_parts, "releases", "download"]:
         return False
-    # A tag is either a version, v<major>.<minor>.<patch>, or that version with
-    # the companion suffix -- the pre-release that carries the update layers, so
-    # the release a user downloads from holds only the two installers. Both are
-    # bound to this repository by the checks above; the suffix widens the tag
-    # shape, not the origin.
-    tag_part = parts[4].removesuffix(UPDATES_TAG_SUFFIX)
-    if VERSION_RE.fullmatch(tag_part.removeprefix("v")) is None or not tag_part.startswith("v"):
+    # A tag is a release of this project or the companion carrying its update
+    # layers -- one shape, shared with the updater's parser so the two cannot
+    # drift. It admits pre-release labels, which is what a beta is; every such
+    # asset is still bound to this repository by the checks above, so this widens
+    # the tag shape and not the origin.
+    if not is_release_tag(parts[4]):
         return False
     if any("/" in part or "\\" in part for part in parts):
         return False
@@ -792,11 +821,8 @@ class BundleUpdateInstaller:
             if (
                 safe_name is None
                 or not safe_name.endswith(".zip")
-                or not isinstance(url, str)
-                or not trusted_asset_url(
-                    url,
-                    tag=f"v{version}" if layer == "app" else None,
-                    asset_name=safe_name,
+                or not _layer_url_is_bound(
+                    url, version=version, layer=layer, name=safe_name
                 )
                 or not _valid_proof(
                     digest,

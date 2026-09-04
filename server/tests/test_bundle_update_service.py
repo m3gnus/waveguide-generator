@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from server.settings.store import SettingsStore
 from server.updates.service import ReleaseResponse, UpdateService, checkout_status
 
 
@@ -76,10 +77,15 @@ def _release(  # noqa: PLR0913
         )
     user_assets: list[dict[str, Any]] = []
     if include_installer:
-        extension = "dmg" if platform == "macos-arm64" else "zip"
-        user_assets += _pair(
-            f"Waveguide.Generator-{version}-{platform}.{extension}", 9_000
+        # What the release page offers: the disk image on macOS, the setup .exe
+        # on Windows. The portable Windows .zip is published to the companion and
+        # is deliberately not here -- the updater must not point at it.
+        download = (
+            f"Waveguide.Generator-{version}-macos-arm64.dmg"
+            if platform == "macos-arm64"
+            else f"Waveguide.Generator-{version}-windows-x86_64-setup.exe"
         )
+        user_assets += _pair(download, 9_000)
     checksum = f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n".encode()
     return (
         {
@@ -468,9 +474,17 @@ def test_install_request_carries_release_and_installed_runtime_ids(tmp_path: Pat
     assert update.get_status()["activeVersion"] == "2.0.1"
 
 
-def test_windows_release_uses_windows_runtime_and_full_zip_asset_names(
+def test_windows_release_uses_the_windows_runtime_and_points_at_the_setup_exe(
     tmp_path: Path,
 ) -> None:
+    """On Windows the recorded download is the installer, not the portable .zip.
+
+    Both are real files with the same prefix, and only one is on the release page
+    a person would be sent to. The updater never installs from either -- it
+    applies layers -- so this asset is a pointer, and a pointer at the .zip would
+    name a file that is not on the release it names.
+    """
+
     payload, fetched, updates = _release(
         include_runtime=True,
         platform="windows-x86_64",
@@ -486,10 +500,81 @@ def test_windows_release_uses_windows_runtime_and_full_zip_asset_names(
 
     names = {asset["name"] for asset in result["release"]["bundleAssets"]}
     assert f"update-runtime-windows-x86_64-{NEW_RUNTIME}.zip" in names
-    assert "Waveguide.Generator-2.0.1-windows-x86_64.zip" in names
+    assert "Waveguide.Generator-2.0.1-windows-x86_64-setup.exe" in names
+    assert "Waveguide.Generator-2.0.1-windows-x86_64.zip" not in names
     assert result["action"]["assets"][1]["name"] == (
         f"update-runtime-windows-x86_64-{NEW_RUNTIME}.zip"
     )
+
+
+def test_a_beta_resolves_its_layers_from_its_own_companion(tmp_path: Path) -> None:
+    """#58 from the resolution side: a beta's companion is `-beta.N-updates`.
+
+    Betas and companions are both pre-releases, and the scan already refuses to
+    offer a companion as a release. The other half is this one: having offered
+    `v2.1.0-beta.1`, the service must look for `v2.1.0-beta.1-updates` and not
+    `v2.1.0-updates`, which belongs to a stable version that may not exist yet.
+    Getting it wrong is not a crash -- it is a beta that reports "incomplete"
+    forever, which is the failure mode this whole area keeps producing.
+    """
+
+    version = "2.1.0-beta.1"
+    manifest = _manifest(version, NEW_RUNTIME)
+    app_name = f"update-app-{version}.zip"
+    manifest_name = f"update-app-{version}.manifest.json"
+    companion_tag = f"v{version}-updates"
+    beta = {
+        "tag_name": f"v{version}",
+        "prerelease": True,
+        "published_at": "2026-08-22T12:00:00Z",
+        "assets": _pair(
+            f"Waveguide.Generator-{version}-macos-arm64.dmg", 9_000, f"v{version}"
+        ),
+    }
+    companion = {
+        "tag_name": companion_tag,
+        "prerelease": True,
+        "published_at": "2026-08-22T12:00:00Z",
+        "assets": [
+            *_pair(app_name, 1_500, companion_tag),
+            *_pair(manifest_name, len(manifest), companion_tag),
+            *_pair(
+                f"update-runtime-macos-arm64-{NEW_RUNTIME}.zip", 7_500, companion_tag
+            ),
+        ],
+    }
+    # A stable companion for a version that does not exist, to catch a lookup
+    # that drops the pre-release label: its layers are for another release and
+    # must never be picked up here.
+    decoy = {
+        "tag_name": "v2.1.0-updates",
+        "prerelease": True,
+        "published_at": "2026-08-22T12:00:00Z",
+        "assets": [*_pair("update-app-2.1.0.zip", 1_500, "v2.1.0-updates")],
+    }
+    checksum = f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n".encode()
+
+    settings = SettingsStore(tmp_path, settings_path=tmp_path / "ui_settings.json")
+    service = _service(
+        tmp_path,
+        beta,
+        {manifest_name: manifest, manifest_name + ".sha256": checksum},
+        settings=settings,
+        recent_releases_fetcher=lambda: [decoy, companion, beta],
+    )
+    service.set_channel("beta")
+
+    result = service.get_status()
+
+    assert result["release"]["tag"] == f"v{version}"
+    assert result["release"]["assetsReady"] is True
+    assert result["availability"] == "available"
+    urls = {asset["name"]: asset["url"] for asset in result["release"]["bundleAssets"]}
+    assert app_name in urls
+    assert f"/download/{companion_tag}/" in urls[app_name]
+    assert "update-app-2.1.0.zip" not in urls
+    # And the install path accepts the beta version, which the layers are for.
+    assert service.request_install()["accepted"] is True
 
 
 def test_a_missing_companion_release_is_incomplete_not_a_partial_update(
@@ -521,14 +606,24 @@ def test_a_missing_companion_release_is_incomplete_not_a_partial_update(
     assert "bundleAssets" not in result["release"]
 
 
-def test_layers_left_on_the_user_facing_release_are_not_used(tmp_path: Path) -> None:
-    """The split asserted from the other side: no fallback to the old layout.
+def test_layers_left_on_the_user_facing_release_are_still_usable(
+    tmp_path: Path,
+) -> None:
+    """The old layout still updates: the companion is preferred, not required.
 
     This fixture is exactly what every release up to and including 0.3.0 looked
     like -- app layer, manifest and runtime on the release the installers are on,
-    and no companion at all. Before the split it was the happy path. If the
-    service still reads layers from the main release when the companion is
-    missing, this passes, and the split is decorative.
+    and an empty companion.
+
+    This assertion is the reverse of the one it replaces, and deliberately.
+    Refusing a layer here was meant to keep the split honest, but the split is
+    enforced where it is decided -- the publish job stages the two sets and fails
+    if either is wrong, which `scripts/tests/test_release_workflow.py` holds it
+    to. A client refusing a correctly named, tag-bound, digest-verified layer
+    because of *which* of this repository's two releases served it buys no safety
+    and costs the ability to repair a release by hand. It is also what lets the
+    transitional duplication end: 0.3.2 can publish to the companion alone
+    knowing no installed client depends on where the layers sit.
     """
 
     payload, fetched, updates = _release(
@@ -537,14 +632,50 @@ def test_layers_left_on_the_user_facing_release_are_not_used(tmp_path: Path) -> 
     assert any(
         asset["name"] == "update-app-2.0.1.zip" for asset in payload["assets"]
     ), "the fixture must actually put the layers on the user-facing release"
+    assert updates["assets"] == [], "and the companion must be empty"
 
     result = _service(
         tmp_path, payload, fetched, recent_releases_fetcher=lambda: [updates]
     ).get_status()
 
-    assert result["availability"] == "incomplete"
-    assert result["release"]["assetsReady"] is False
-    assert result["action"] is None
+    assert result["availability"] == "available"
+    assert result["release"]["assetsReady"] is True
+    assert result["action"] is not None
+    # Served from the release itself, which is where they were found.
+    urls = {asset["name"]: asset["url"] for asset in result["release"]["bundleAssets"]}
+    assert urls["update-app-2.0.1.zip"].startswith(
+        "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/"
+    )
+
+
+def test_the_companion_wins_when_both_releases_carry_a_layer(
+    tmp_path: Path,
+) -> None:
+    """Preference order, which is what the transitional duplication needs.
+
+    0.3.1 publishes its app layer twice. A client that can read either must read
+    the companion, or the fallback would quietly become the path everything takes
+    and the duplication could never be dropped without stranding someone.
+    """
+
+    payload, fetched, updates = _release(include_runtime=True)
+    # The duplicate: the same layers, also on the user-facing release.
+    duplicated, _, _ = _release(include_runtime=True, layers_on_user_release=True)
+    payload["assets"] = duplicated["assets"]
+    assert any(asset["name"] == "update-app-2.0.1.zip" for asset in payload["assets"])
+    assert any(asset["name"] == "update-app-2.0.1.zip" for asset in updates["assets"])
+
+    result = _service(
+        tmp_path, payload, fetched, recent_releases_fetcher=lambda: [updates]
+    ).get_status()
+
+    assert result["availability"] == "available"
+    urls = {asset["name"]: asset["url"] for asset in result["release"]["bundleAssets"]}
+    for name in ("update-app-2.0.1.zip", "update-app-2.0.1.manifest.json"):
+        assert urls[name].startswith(
+            "https://github.com/m3gnus/waveguide-generator/releases/download/"
+            "v2.0.1-updates/"
+        ), name
 
 
 def _digest_asset(name: str, *, digest: str | None, size: int = 4096) -> dict[str, object]:

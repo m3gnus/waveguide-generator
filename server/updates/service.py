@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import functools
 import hashlib
 import json
 import logging
@@ -52,10 +53,13 @@ def recent_releases_api() -> str:
 
 RELEASE_PAGE_ROOT = f"https://github.com/{REPOSITORY}/releases/tag"
 # A release tag is `v<major>.<minor>.<patch>`, optionally followed by a SemVer
-# pre-release label: `v0.4.0-beta.1`. Betas are published from `next` as GitHub
-# pre-releases, which `releases/latest` does not return, so a stable install
-# never sees one -- the label only has to parse for the beta channel's own scan.
-TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$")
+# pre-release label: `v0.4.0-beta.1`. Betas are pre-releases, which
+# `releases/latest` does not return, so a stable install never sees one -- the
+# label only has to parse for the beta channel's own scan. Taken from
+# `shared.release_assets` rather than spelled again: the URL and install checks
+# in `server/updates/bundle.py` match the same shape, and when this widened
+# without them every beta asset was refused as untrusted.
+TAG_RE = release_assets.TAG_RE
 # The strict shape, for the places that must not accept a pre-release: a beta is
 # not a stable release, and the companion that carries the update layers is a
 # pre-release too. See `_is_update_layer_carrier`.
@@ -968,7 +972,11 @@ class UpdateService:
         return self.platform_name
 
     def _bundle_installer_name(self, version: str) -> str | None:
-        return release_assets.installer_name(self._bundle_platform(), version)
+        # The file a person downloads, which on Windows is the setup .exe and not
+        # the portable .zip beside it. This asset is recorded for the release
+        # description only -- an update installs from the layers -- so it has to
+        # name the file someone would actually be sent to.
+        return release_assets.user_download_name(self._bundle_platform(), version)
 
     def _manifest_runtime_id(
         self,
@@ -1028,6 +1036,33 @@ class UpdateService:
             if release.get("tag_name") == wanted:
                 return release
         return None
+
+    def _layer_asset(
+        self,
+        name: str,
+        layer: str,
+        *,
+        layers: dict[str, dict[str, Any]],
+        uploaded: dict[str, dict[str, Any]],
+        updates_tag: str,
+        tag: str,
+    ) -> dict[str, Any] | None:
+        """One update layer, from the companion release or from the release itself.
+
+        The companion is asked first, because from 0.3.2 that is the only place
+        the layers are published. The release's own assets are the fallback, and
+        it is what lets the transitional duplication stop: 0.3.1 publishes its
+        layers to both, so an install that reads either one is served, and no
+        version has to be the first to require the new arrangement.
+
+        Both lookups bind the asset URL to the tag it was found under, so this
+        widens where a layer may live and not who may serve it.
+        """
+
+        found = self._paired_asset(layers, name, layer, tag=updates_tag)
+        if found is None:
+            found = self._paired_asset(uploaded, name, layer, tag=tag)
+        return found
 
     def _beta_release_payload(self) -> dict[str, Any]:
         """The highest version among recent releases, pre-releases included.
@@ -1111,17 +1146,22 @@ class UpdateService:
         if checkout is not None and checkout.get("kind") == "bundle":
             app_name = release_assets.app_layer_name(version)
             manifest_name = release_assets.app_manifest_name(version)
-            # The layers live on the companion pre-release, not on the release the
-            # user downloads from. Absent, the release is simply reported
-            # incomplete and no update is offered -- which is the correct answer:
-            # there is nothing to install.
+            # The layers live on the companion pre-release, with the release's own
+            # assets as a fallback -- see `_layer_asset`. Found in neither, the
+            # release is reported incomplete and no update is offered, which is
+            # the correct answer: there is nothing to install.
             updates_release = self._updates_release(version)
             updates_tag = release_assets.updates_tag(version)
             layers = self._uploaded_assets(updates_release) if updates_release else {}
-            app_asset = self._paired_asset(layers, app_name, "app", tag=updates_tag)
-            manifest_asset = self._paired_asset(
-                layers, manifest_name, "manifest", tag=updates_tag
+            resolve = functools.partial(
+                self._layer_asset,
+                layers=layers,
+                uploaded=uploaded,
+                updates_tag=updates_tag,
+                tag=tag,
             )
+            app_asset = resolve(app_name, "app")
+            manifest_asset = resolve(manifest_name, "manifest")
             base_release = {
                 "version": version,
                 "tag": tag,
@@ -1139,9 +1179,7 @@ class UpdateService:
             runtime_name = release_assets.runtime_layer_name(
                 self._bundle_platform(), runtime_id
             )
-            runtime_asset = self._paired_asset(
-                layers, runtime_name, "runtime", tag=updates_tag
-            )
+            runtime_asset = resolve(runtime_name, "runtime")
             installed_runtime = checkout.get("runtimeId")
             if runtime_asset is None and installed_runtime != runtime_id:
                 runtime_asset = self._earlier_runtime_asset(runtime_id)

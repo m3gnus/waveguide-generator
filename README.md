@@ -65,15 +65,29 @@ Apple removed that bypass in macOS Sequoia. The transcripts are in
 [docs/validation/2026-09/MACOS-GATEKEEPER.md](docs/validation/2026-09/MACOS-GATEKEEPER.md).
 
 For a self-contained Windows install, download
-**Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip**, extract the complete **Waveguide Generator**
-folder, and double-click **Waveguide Generator.exe** inside it. **Extract it to a
-short path such as `C:\wg`.** The bundle's deepest internal path is 133
+**Waveguide.Generator-&lt;version&gt;-windows-x86_64-setup.exe** from the release page
+and run it. It is unsigned, so Microsoft Defender SmartScreen asks once — **More
+info → Run anyway** — and then never again, because the installer writes its
+payload itself and nothing it writes carries the download mark. It installs to
+`%LOCALAPPDATA%\Programs` without elevation, which is what lets the in-app
+updater replace files in place later, and it refuses an over-long install folder
+up front instead of failing partway through.
+
+A portable copy is still published, as
+**Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip** on the
+`v<version>-updates` companion release rather than on the release page, so
+there is one file per platform to choose from there. It needs both of the steps
+the installer does for you: right-click the ZIP → Properties → tick **Unblock**
+*before* extracting, or Explorer copies the download mark onto every extracted
+file and the unsigned launcher meets a SmartScreen dialog whose only visible
+button is "Don't run"; and **extract it to a short path such as `C:\wg`.** The
+bundle's deepest internal path is 133
 characters, so an install root longer than roughly 127 characters exceeds
 Windows' 260-character limit and extraction fails with a flood of "cannot find
 path" errors rather than one clear message. `C:\Program Files\...` is fine; a
-OneDrive-redirected Documents folder with a long company name may not be. The executable is
-not publisher-signed, so Microsoft Defender SmartScreen may require **More info →
-Run anyway** on first launch. The native window requires the **Microsoft Edge
+OneDrive-redirected Documents folder with a long company name may not be. Then
+double-click **Waveguide Generator.exe** in the extracted folder. The native
+window requires the **Microsoft Edge
 WebView2 Evergreen Runtime (x64)**, which is normally present on current Windows
 10 and Windows 11 systems; when it is missing or its pythonnet bridge cannot load,
 WG shows repair instructions containing the WebView2 download URL and opens the
@@ -349,9 +363,25 @@ Its SPA job attaches `update-spa-<version>.tar.gz`; the macOS job
 builds the canonical platform-neutral app ZIP and manifest, the macOS runtime ZIP,
 and `Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job checks its
 independently built app ZIP against the canonical one by content digest and builds
-the Windows runtime ZIP plus `Waveguide.Generator-<version>-windows-x86_64.zip`.
-Every attached file has a `.sha256` sidecar. A final publisher job validates the
-exact seven asset pairs, uploads them to a draft, **then** creates the annotated
+the Windows runtime ZIP, `Waveguide.Generator-<version>-windows-x86_64-setup.exe`,
+and the portable `Waveguide.Generator-<version>-windows-x86_64.zip`.
+
+A final publisher job validates the exact inventory and every checksum, then
+splits it across **two releases**. The user-facing `v<version>` carries exactly
+two files, the macOS disk image and the Windows installer, so the page a person
+lands on is one row per platform. Everything else — the update layers, the SPA
+archive, and the portable Windows ZIP — goes to a companion release tagged
+`v<version>-updates`, flagged as a pre-release so it is never "Latest" and the
+stable update channel never sees it. It is a separate *release* rather than a
+separate repository deliberately: the assets stay in this repository, so the
+updater's `trusted_asset_url` keeps rejecting anything served from elsewhere.
+The in-app updater reads the companion and falls back to the release's own
+assets, so where a layer sits is not something an installed client depends on.
+
+Checksums are computed and verified for every asset; only the SPA archive's
+`.sha256` is published, because GitHub serves a per-asset digest the updater
+reads and `scripts/fetch_spa.py` fetches by URL without touching the releases
+API. The publisher uploads to a draft, **then** creates the annotated
 tag and makes the release public.
 
 That order is deliberate. The tag used to be pushed by hand and was what

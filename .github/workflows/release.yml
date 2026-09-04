@@ -361,7 +361,6 @@ jobs:
           machinery = Path("build/update-assets")
           machinery.mkdir()
           version = json.loads(Path("shared/version.json").read_text(encoding="utf-8"))["version"]
-          duplicate_layers = release_assets.duplicate_layers_on_user_release(version)
           specs = (
               ("spa", re.escape(release_assets.spa_archive_name(version))),
               ("macos", re.escape(release_assets.installer_name(release_assets.MACOS_PLATFORM, version))),
@@ -399,22 +398,25 @@ jobs:
               if sidecar.read_text(encoding="ascii") != expected_line:
                   raise SystemExit(f"Invalid checksum sidecar for {asset.name}")
               expected_paths.update((asset, sidecar))
-              # Two destinations: the release page a person lands on holds only
-              # installers, and everything the updater consumes goes to the
-              # companion pre-release. Splitting here rather than at upload time
-              # keeps one inventory check over both sets.
+              # Two destinations: the release page a person lands on holds
+              # exactly one file per platform, and everything else -- the update
+              # layers, the SPA archive, and the portable Windows .zip -- goes to
+              # the companion pre-release. Splitting here rather than at upload
+              # time keeps one inventory check over both sets.
               target = (
                   destination
-                  if name.startswith(release_assets.INSTALLER_PREFIX)
+                  if release_assets.is_user_download(name, version)
                   else machinery
               )
               copies = [target]
-              if target is machinery and duplicate_layers:
+              if target is machinery and release_assets.duplicate_on_user_release(
+                  name, version
+              ):
                   # TRANSITIONAL, and self-deleting: see
                   # release_assets.LAYER_DUPLICATION_VERSION. One version
-                  # publishes its layers twice so the previous release, which
-                  # cannot see the companion tag at all, can still update.
-                  # Removing it is these two lines, and nothing else -- which is
+                  # publishes the layers the release before it cannot otherwise
+                  # reach -- it cannot see a `-updates` tag at all -- to both
+                  # places. Removing it is this branch and nothing else, which is
                   # why the copying below is written once rather than per case.
                   copies.append(destination)
               # The sidecar is built and verified above; that is what proves the
@@ -435,12 +437,16 @@ jobs:
               raise SystemExit(f"Release inventory mismatch; missing={missing}, extra={extra}")
           downloads = sorted(path.name for path in destination.iterdir())
           layers = sorted(path.name for path in machinery.iterdir())
-          duplicated = len(layers) if duplicate_layers else 0
+          expected_duplicates = sorted(
+              name
+              for name in layers
+              if release_assets.duplicate_on_user_release(name, version)
+          )
           # One file per asset, plus the single surviving sidecar -- not pairs.
-          if len(downloads) + len(layers) != len(specs) + 1 + duplicated:
+          if len(downloads) + len(layers) != len(specs) + 1 + len(expected_duplicates):
               raise SystemExit(
                   f"Release staging did not produce exactly {len(specs)} assets and "
-                  f"one sidecar (plus {duplicated} duplicated); "
+                  f"one sidecar (plus {len(expected_duplicates)} duplicated); "
                   f"downloads={downloads}, layers={layers}"
               )
           spa_sidecar = release_assets.checksum_name(
@@ -455,24 +461,28 @@ jobs:
               raise SystemExit(
                   f"Unexpected checksum sidecars staged for publication: {stray_sidecars}"
               )
-          # The split is asserted, not assumed. Counting the two directories would
-          # pass a release that staged the right number of files into the wrong
-          # halves, and the failure mode of that is the one this whole change
-          # exists to avoid: an updater pointed at a release with nothing on it.
-          prefix = release_assets.INSTALLER_PREFIX
-          strays = sorted(
-              name
-              for name in downloads
-              if not name.startswith(prefix)
-              # A layer on the user-facing release is a defect, except in the one
-              # version that deliberately publishes it to both.
-              and not (duplicate_layers and name in layers)
+          # The split is asserted as an exact set, not assumed and not counted.
+          # Counting would pass a release that staged the right number of files
+          # into the wrong halves, and the failure mode of that is the one this
+          # whole change exists to avoid: an updater pointed at a release with
+          # nothing on it, or a user pointed at a page of machinery.
+          wanted_downloads = sorted(
+              [*release_assets.user_download_names(version), *expected_duplicates]
           )
-          hidden = sorted(name for name in layers if name.startswith(prefix))
-          if strays or hidden:
+          if downloads != wanted_downloads:
+              strays = sorted(set(downloads) - set(wanted_downloads))
+              missing_downloads = sorted(set(wanted_downloads) - set(downloads))
               raise SystemExit(
-                  "Release split is wrong; machinery on the user-facing release="
-                  f"{strays}, downloads hidden on the companion release={hidden}"
+                  "The user-facing release must hold exactly "
+                  f"{wanted_downloads}; unexpected={strays}, "
+                  f"missing={missing_downloads}"
+              )
+          hidden = sorted(
+              name for name in layers if release_assets.is_user_download(name, version)
+          )
+          if hidden:
+              raise SystemExit(
+                  f"Downloads hidden on the companion release: {hidden}"
               )
           if not downloads or not layers:
               raise SystemExit(
@@ -481,12 +491,12 @@ jobs:
               )
           print(
               f"Validated {len(specs)} release assets and one SPA sidecar: "
-              f"{len(downloads) - duplicated} on the user-facing release, "
-              f"{len(layers)} on the companion pre-release"
+              f"{len(downloads) - len(expected_duplicates)} on the user-facing "
+              f"release, {len(layers)} on the companion pre-release"
               + (
-                  f", {duplicated} of which are also published to the user-facing "
-                  "release so the previous version can still update."
-                  if duplicate_layers
+                  f", of which {expected_duplicates} are also published to the "
+                  "user-facing release so the previous version can still update."
+                  if expected_duplicates
                   else "."
               )
           )
@@ -521,16 +531,23 @@ jobs:
           fail_on_unmatched_files: true
           name: "Update layers for ${{ env.RELEASE_TAG }}"
           body: |
-            Machinery for the in-app updater. **This is not a download.**
+            Machinery for the in-app updater. **This is not where you install from.**
 
             Install Waveguide Generator from
             [${{ env.RELEASE_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.RELEASE_TAG }})
-            instead.
+            instead — one file for macOS, one for Windows, and nothing else to choose between.
 
-            These files exist so an update fetches only the layer that changed —
-            usually about 4 MB rather than the whole application. The runtime
-            layer is addressed by content, so releases that do not change the
-            interpreter share one.
+            The `update-` files exist so an update fetches only the layer that
+            changed — usually about 4 MB rather than the whole application. The
+            runtime layer is addressed by content, so releases that do not change
+            the interpreter share one.
+
+            One file here is a real download, kept off the install page because it
+            is the harder path and not the one to offer first:
+            `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64.zip`
+            is the portable Windows folder, for people who want a copy they can
+            move rather than an install. Unblock the .zip **before** extracting it,
+            and extract to a short path such as `C:\wg`.
 
       - name: Upload the validated inventory to a draft release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
@@ -585,10 +602,13 @@ jobs:
             break every later update. It also refuses an over-long install folder up
             front instead of failing partway through.
 
-            Prefer a portable copy? The `.zip` is still published. Right-click it →
-            Properties → tick **Unblock** before extracting, then extract to a short path
-            such as `C:\wg`; `READ ME FIRST.txt` inside it explains both. The installer
-            exists because doing neither by hand is the easier path.
+            Prefer a portable copy? The `.zip` is still published, on
+            [${{ env.UPDATES_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.UPDATES_TAG }}) —
+            off this page so there is one file per platform to choose from here, not
+            two for Windows. Right-click it → Properties → tick **Unblock** before
+            extracting, then extract to a short path such as `C:\wg`;
+            `READ ME FIRST.txt` inside it explains both. The installer exists because
+            doing neither by hand is the easier path.
 
             **Updating from 0.2.x is not possible in-app.** v0.2.2 to v0.2.4 published
             only the prebuilt frontend, with no application bundle, and v0.2.7 was
@@ -600,8 +620,8 @@ jobs:
 
             <details><summary>Where the in-app updater's files went</summary>
 
-            This page holds only installers. Everything named `update-…` is
-            machinery, and it is published to
+            This page holds one file per platform and nothing else. Everything
+            named `update-…` is machinery, and it is published to
             [${{ env.UPDATES_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.UPDATES_TAG }}),
             a pre-release you do not need to visit: `update-app-*.zip` and its
             manifest are the platform-neutral application layer;
