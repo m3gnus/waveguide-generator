@@ -70,6 +70,13 @@ export function SurfaceMesh({ surface, mode, visible, sectionCut, materials, sch
     {edgeFillMaterial && <mesh geometry={manager.geometry} material={edgeFillMaterial} renderOrder={2} />}
     {mode === 'solid-wire' && <mesh geometry={manager.geometry} material={materials.wire} renderOrder={2} />}
     {mode === 'edges' && boundary && <lineSegments geometry={boundary} material={materials.edge} renderOrder={3} />}
+    {/* An open cut looks through the shell at the back of the far wall, and
+        every solid mode culls back faces -- so without this pass the inside of
+        the waveguide is not dark, it is absent, and the cut model reads as a
+        shell with a hole rather than as a solid opened up. Drawn before the
+        front faces; both write depth, so the two never fight. */}
+    {sectionCut && materials.interior
+      && <mesh geometry={manager.geometry} material={materials.interior} renderOrder={0} />}
     {sectionCut && <>
       <mesh geometry={manager.geometry} material={materials.stencilBack} renderOrder={100} />
       <mesh geometry={manager.geometry} material={materials.stencilFront} renderOrder={101} />

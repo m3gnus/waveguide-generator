@@ -1,9 +1,12 @@
-import { DoubleSide, FrontSide, MeshStandardMaterial, Plane, ShaderMaterial, Vector3 } from 'three';
+import { BackSide, Color, DoubleSide, FrontSide, MeshStandardMaterial, Plane, ShaderMaterial, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { createMaterialLibrary } from './materials';
 import type { DisplayMode } from './types';
 
 const surfaceModes: DisplayMode[] = ['clay', 'solid-wire', 'wireframe', 'xray', 'zebra', 'curvature', 'edges'];
+
+/** Rec. 709 relative luminance, enough to say which of two clays is darker. */
+const luminance = (color: Color) => 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
 
 describe('viewport material mode matrix', () => {
   it('shares the mutable clip-plane reference and compiles unclipped materials separately', () => {
@@ -98,6 +101,38 @@ describe('viewport material mode matrix', () => {
     expect((library.solvedSurfaces['hf-smooth'] as MeshStandardMaterial).color.getHexString())
       .toBe((library.surfaces['hf-smooth'] as MeshStandardMaterial).color.getHexString());
     library.all.forEach((material) => material.dispose());
+  });
+
+  it('paints the exposed interior of a cut in a back-facing material that clips with the model', () => {
+    const plane = new Plane(new Vector3(1, 0, 0), 0);
+    for (const theme of ['dark', 'light'] as const) {
+      const library = createMaterialLibrary('clay', plane, theme);
+      const interior = library.interior as MeshStandardMaterial;
+      expect(interior.side).toBe(BackSide);
+      // Without this the interior paints straight through the clipped-away half.
+      expect(interior.clippingPlanes?.[0]).toBe(plane);
+      expect(library.all).toContain(interior);
+      // Darker than the shell it is the inside of, in both themes -- an
+      // interior lighter than its own exterior does not read as an interior.
+      const shell = library.surfaces['horn-smooth'] as MeshStandardMaterial;
+      expect(luminance(interior.color)).toBeLessThan(luminance(shell.color));
+      library.all.forEach((material) => material.dispose());
+    }
+  });
+
+  it('leaves back faces alone in the modes that already own them', () => {
+    // xray is double-sided already, normals flags its back faces as a fault,
+    // wireframe paints no surface, and edges writes no colour from this pass.
+    for (const mode of ['xray', 'normals', 'wireframe', 'edges'] as DisplayMode[]) {
+      const library = createMaterialLibrary(mode, null);
+      expect(library.interior).toBeNull();
+      library.all.forEach((material) => material.dispose());
+    }
+    for (const mode of ['clay', 'solid-wire', 'curvature', 'zebra'] as DisplayMode[]) {
+      const library = createMaterialLibrary(mode, null);
+      expect(library.interior).not.toBeNull();
+      library.all.forEach((material) => material.dispose());
+    }
   });
 
   it('falls back to the neutral cap material when role colouring is off', () => {

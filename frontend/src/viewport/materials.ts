@@ -27,6 +27,11 @@ const classes: SurfaceMaterialClass[] = families.flatMap(
  * the neutral source cap instead. */
 const roleFamilies = new Set<SurfaceMaterialFamily>(['hf', 'mf', 'lf', 'port']);
 
+/** The display modes that paint an opaque front-side-only surface, and so are
+ * the ones a section cut leaves showing nothing where the far wall's back
+ * faces are. See `interior` in createMaterialLibrary for why the rest are out. */
+const INTERIOR_MODES = new Set<DisplayMode>(['clay', 'solid-wire', 'curvature', 'zebra']);
+
 // Fallbacks only, for a document-less render; the tokens above them are what
 // actually ships. They used to be blue-greys from the pre-Console skin, which
 // meant a token lookup failure silently swapped the model to a palette the
@@ -243,12 +248,32 @@ export function createMaterialLibrary(
     stencilWrite: true, stencilFunc: AlwaysStencilFunc, stencilFail: KeepStencilOp,
     stencilZFail: KeepStencilOp, stencilZPass: DecrementWrapStencilOp,
   });
+  // Painted onto the far wall's back faces while a cut is open, so the inside
+  // of the model reads as the inside instead of as a hole through to the
+  // background. Only the modes that both cull back faces and paint an opaque
+  // surface get one: `xray` is already double-sided, `normals` uses its back
+  // faces as a fault indicator, `wireframe` paints no surface at all, and
+  // `edges` deliberately writes no colour from the surface pass.
+  const interior = INTERIOR_MODES.has(mode)
+    ? new MeshStandardMaterial({
+        color: tokenColor('--vp-interior-material', theme === 'light' ? '#6b6f68' : '#6f665c'),
+        // Matte and barely metallic: an interior is read by its form under the
+        // same key light, and a specular highlight in there reads as a second
+        // object. Flat shading is deliberately not mirrored per class — the
+        // faceting of a wall seen edge-on through a cut is not what the cut is
+        // being opened to inspect.
+        roughness: 0.86, metalness: 0.0, side: BackSide, clippingPlanes,
+      })
+    : null;
   const cap = new MeshStandardMaterial({
     color: tokenColor('--vp-cap-material', theme === 'light' ? '#a5674a' : '#c07a4e'),
     metalness: 0.02, roughness: 0.72, side: FrontSide,
     stencilWrite: true, stencilRef: 0, stencilFunc: NotEqualStencilFunc,
     stencilFail: ReplaceStencilOp, stencilZFail: ReplaceStencilOp, stencilZPass: ReplaceStencilOp,
   });
-  const all = [...new Set([...Object.values(surfaces), ...Object.values(solvedSurfaces), wire, edge, stencilBack, stencilFront, cap])];
-  return { surfaces, solvedSurfaces, wire, edge, stencilBack, stencilFront, cap, all };
+  const all = [...new Set([
+    ...Object.values(surfaces), ...Object.values(solvedSurfaces),
+    wire, edge, stencilBack, stencilFront, cap, ...(interior ? [interior] : []),
+  ])];
+  return { surfaces, solvedSurfaces, wire, edge, stencilBack, stencilFront, cap, interior, all };
 }

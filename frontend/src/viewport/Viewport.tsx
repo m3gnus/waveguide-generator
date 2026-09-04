@@ -30,7 +30,7 @@ import {
   type FieldPlaneDisplayMode,
   type FieldPlaneValueWindow,
 } from './fieldPlaneColor';
-import type { ModelClipMode } from './fieldPlaneClipping';
+import { nextSectionCut, SECTION_AXES, type ModelClipMode, type SectionAxis } from './fieldPlaneClipping';
 import {
   fieldPlaneOffsetMetres,
   fieldPlanePreset,
@@ -447,6 +447,7 @@ export function Viewport() {
   );
   const [mode, setMode] = useState<DisplayMode>('clay');
   const [clipMode, setClipMode] = useState<ModelClipMode>('off');
+  const [sectionAxis, setSectionAxis] = useState<SectionAxis>(SECTION_AXES[0]);
   const [invertFieldClip, setInvertFieldClip] = useState(false);
   const [showEnclosure, setShowEnclosure] = useState(true);
   const [showStats, setShowStats] = useState(false);
@@ -594,6 +595,13 @@ export function Viewport() {
     || Boolean(activeScene?.surfaces.some((surface) => Math.floor(surface.indices.length / 3) > MAX_EDGE_TRIANGLES));
   const activeMode = modes.find((item) => item.mode === mode) ?? modes[0];
   const upcomingMode = modes.find((item) => item.mode === nextDisplayMode(mode)) ?? modes[0];
+  const sectionOn = clipMode === 'section';
+  const upcomingSection = nextSectionCut({ clipMode, sectionAxis });
+  // Says where the cut is and where the next press puts it, in one sentence, and
+  // names the whole cycle so nobody has to press three times to discover it.
+  const sectionCutLabel = `${sectionOn ? `Section cut on ${sectionAxis.toUpperCase()}` : 'Section cut off'}. `
+    + `Click to ${upcomingSection.clipMode === 'section' ? `cut on ${upcomingSection.sectionAxis.toUpperCase()}` : 'switch it off'}`
+    + ' — cycles X, Y, Z, off.';
   const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
   const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
   const previewError = preview.error ? previewErrorMessage(preview.error, preview.errorRevision, designRevision) : null;
@@ -909,6 +917,7 @@ export function Viewport() {
       mode={mode}
       showEnclosure={showEnclosure}
       clipMode={clipMode}
+      sectionAxis={sectionAxis}
       invertFieldClip={invertFieldClip}
       cameraRequest={cameraRequest}
       zoomRequest={zoomRequest}
@@ -1216,7 +1225,23 @@ export function Viewport() {
       </div>
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group">
-        <button className={clipMode === 'section' ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={clipMode === 'section'} onClick={() => setClipMode((value) => value === 'section' ? 'off' : 'section')}><Icon name="section"/></button>
+        <button
+          type="button"
+          className={`section-cut-toggle${sectionOn ? ' on' : ''}`}
+          title={sectionCutLabel}
+          aria-label={sectionCutLabel}
+          aria-pressed={sectionOn}
+          onClick={() => {
+            const upcoming = nextSectionCut({ clipMode, sectionAxis });
+            setClipMode(upcoming.clipMode);
+            setSectionAxis(upcoming.sectionAxis);
+          }}
+        >
+          <Icon name="section"/>
+          {/* Which of the three cuts is open, on the control that changes it --
+              the icon alone cannot say, and the tooltip only answers on hover. */}
+          {sectionOn && <span className="section-cut-axis" aria-hidden="true">{sectionAxis.toUpperCase()}</span>}
+        </button>
       </div>
       {/* Only offered once a run has published the frame it measured in. The
           arc is where the solve put its microphones, and nothing here guesses

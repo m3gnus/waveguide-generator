@@ -8,7 +8,7 @@ import { calculateCameraFit, clippingRange, presetDirection, viewDirection, zoom
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
 import { FieldPlane } from './FieldPlane';
 import { ObservationOverlay } from './ObservationOverlay';
-import { deriveCapQuad, fieldPlaneToClipPlane, staticSectionClipPlane, type ModelClipMode } from './fieldPlaneClipping';
+import { deriveCapQuad, fieldPlaneToClipPlane, sectionClipPlane, type ModelClipMode, type SectionAxis } from './fieldPlaneClipping';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 import { useFieldPlaneStore } from './fieldPlaneStore';
 import type { FrameScene } from './frameScene';
@@ -31,6 +31,7 @@ interface ViewportCanvasProps {
   mode: DisplayMode;
   showEnclosure: boolean;
   clipMode: ModelClipMode;
+  sectionAxis: SectionAxis;
   invertFieldClip: boolean;
   cameraRequest: CameraRequest;
   zoomRequest: ZoomRequest;
@@ -699,7 +700,7 @@ function useRepaintWhenShown(scheduler: DemandRenderScheduler): void {
   useEffect(() => observeCanvasVisibility(gl.domElement, () => scheduler.schedule()), [gl, scheduler]);
 }
 
-function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, invertFieldClip, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
+function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, sectionAxis, invertFieldClip, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
   const invalidate = useThree((state) => state.invalidate);
   const scheduler = useMemo(() => new DemandRenderScheduler(invalidate), [invalidate]);
   useFrame(() => scheduler.flush(), 0);
@@ -709,12 +710,12 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, invertFieldC
   const maskState = useFieldPlaneMaskStore((state) => state);
   const stableClipPlane = useMemo(() => new Plane(new Vector3(1, 0, 0), 0), []);
   const clipDefinition = useMemo(() => {
-    if (clipMode === 'section') return staticSectionClipPlane();
+    if (clipMode === 'section') return sectionClipPlane(sectionAxis, scene.bounds);
     if (clipMode === 'field-plane' && fieldPlane) {
       return fieldPlaneToClipPlane(fieldPlane, scene.unitsPerMetre, invertFieldClip);
     }
     return null;
-  }, [clipMode, fieldPlane, invertFieldClip, scene.unitsPerMetre]);
+  }, [clipMode, fieldPlane, invertFieldClip, scene.bounds, scene.unitsPerMetre, sectionAxis]);
   const clipActive = clipDefinition !== null;
   const materials = useMemo(
     () => createMaterialLibrary(
@@ -747,7 +748,7 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, invertFieldC
   }, [clipDefinition, scheduler, stableClipPlane]);
   useEffect(() => {
     scheduler.schedule();
-  }, [clipMode, invertFieldClip, mode, scheduler, showEnclosure]);
+  }, [clipMode, invertFieldClip, mode, scheduler, sectionAxis, showEnclosure]);
   useEffect(() => () => materials.all.forEach((material) => material.dispose()), [materials]);
 
   return <>

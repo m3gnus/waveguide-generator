@@ -45,5 +45,8 @@ export interface MaterialLibrary {
   stencilBack: Material;
   stencilFront: Material;
   cap: Material;
+  /** Back-face paint for the far wall of an open section cut. Null in the modes
+   * that already draw or deliberately withhold their back faces. */
+  interior: Material | null;
   all: Material[];
 }

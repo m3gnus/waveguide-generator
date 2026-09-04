@@ -221,8 +221,31 @@ describe('Viewport preview errors', () => {
     expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')).toBeNull();
     expect(host.querySelector('[aria-label="Clip model to field plane"]')).toBeNull();
     expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).toBeNull();
-    expect(host.querySelector<HTMLButtonElement>('[aria-label="Section cut at X=0"]')).not.toBeNull();
+    expect(host.querySelector<HTMLButtonElement>('.section-cut-toggle')).not.toBeNull();
     expect(host.querySelectorAll('.viewport-tools .viewport-tool-group:empty')).toHaveLength(0);
+  });
+
+  it('cycles the section cut through three axes and back off from one button', () => {
+    const section = host.querySelector<HTMLButtonElement>('.section-cut-toggle');
+    const axis = () => section?.querySelector('.section-cut-axis')?.textContent ?? null;
+
+    expect(section?.getAttribute('aria-pressed')).toBe('false');
+    expect(axis()).toBeNull();
+    // The tooltip has to say the button cycles; three presses is not something
+    // to discover by accident.
+    expect(section?.title).toContain('cycles X, Y, Z, off');
+
+    for (const expected of ['X', 'Y', 'Z']) {
+      act(() => section?.click());
+      expect(section?.getAttribute('aria-pressed')).toBe('true');
+      expect(axis()).toBe(expected);
+      expect(section?.getAttribute('aria-label')).toContain(`Section cut on ${expected}`);
+    }
+
+    act(() => section?.click());
+    expect(section?.getAttribute('aria-pressed')).toBe('false');
+    expect(axis()).toBeNull();
+    expect(section?.getAttribute('aria-label')).toContain('Section cut off');
   });
 
   it('shows overlay alone until enabled, then shows clip and invert', () => {

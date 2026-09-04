@@ -52,6 +52,16 @@
 .viewer-preferences footer { padding: 8px 12px; border-top: 1px solid var(--hair); }
 .viewer-preferences footer button { padding: 4px 8px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font-size: var(--text-micro); }
 .wg2-viewport .viewport-tools .projection-toggle { min-width: calc(var(--tool-size) * 1.42); color: var(--fg2); }
+/* The open cut's axis, in the corner of the button that changes it. The button
+   is a centring grid, so the letter is taken out of flow and the icon leans off
+   centre to clear it -- both sized from --tool-size, which is fluid down to
+   19px, with a floor where the letter would stop being readable. */
+.wg2-viewport .viewport-tools .section-cut-toggle { position: relative; }
+.wg2-viewport .viewport-tools .section-cut-toggle.on svg { transform: translate(-13%, -13%); }
+.wg2-viewport .viewport-tools .section-cut-axis {
+  position: absolute; right: max(1px, calc(var(--tool-size) * .07)); bottom: max(1px, calc(var(--tool-size) * .04));
+  font: 700 max(8px, calc(var(--tool-size) * .36))/1 var(--mono); letter-spacing: 0; pointer-events: none;
+}
 .wg2-viewport .wg2-stats { top: 52px; left: 12px; width: min(390px, calc(100% - 24px)); transform: none; }
 .wg2-viewport .wg2-stats .surface-list { max-height: min(240px, 38vh); }
 .wg2-tool-divider { width: 1px; height: 19px; margin: 2px 2px; background: var(--hair-hi); }

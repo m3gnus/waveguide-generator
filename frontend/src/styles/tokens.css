@@ -114,6 +114,11 @@
   --vp-edge-material: var(--acc);
   --vp-cap-material: #c07a4e;
   --vp-solved-domain-material: #d58c62;
+  /* What a section cut exposes on the far wall: the back of the shell. It is
+     the shell's own clay taken several steps down, so the cut model reads as
+     one solid object lit from outside rather than as a hole. Kept clear of the
+     cap terracotta, which is the cut face itself. */
+  --vp-interior-material: #6f665c;
   /* Acoustic source roles, in the Fusion appearance colours WGLink paints:
      HF red, MF amber, LF blue, port exit green. They are identity, not
      decoration, so both themes carry the same hues. */
@@ -310,6 +315,10 @@
   --vp-edge-material: var(--acc);
   --vp-cap-material: #a5674a;
   --vp-solved-domain-material: #a96b4d;
+  /* Vellum's interior: the same role in this theme's cooler shell family, still
+     well below the shell so the inside stays legibly the inside on a light
+     ground. */
+  --vp-interior-material: #6b6f68;
   /* Acoustic source roles, in the Fusion appearance colours WGLink paints:
      HF red, MF amber, LF blue, port exit green. They are identity, not
      decoration, so both themes carry the same hues. */
