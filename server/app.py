@@ -467,9 +467,11 @@ def create_app(
     async def prewarm_beat_worker() -> None:
         """Schedule the BEAT worker prewarm alongside the BEMPP one.
 
-        Registered by default for the same reason: the work happens in a child
-        process, and ``shutdown_beat_worker`` below terminates it, so warming
-        it cannot lengthen a Quit.
+        Registered by default for the same reason: the work happens outside
+        this process, and ``shutdown_beat_worker`` below lets go of it in
+        bounded time -- detaching from a persistent host, terminating a child
+        under ``HORNLAB_BEAT_PERSISTENT_HOST=0`` -- so warming it cannot
+        lengthen a Quit.
         """
 
         application.state.beat_prewarm_task = asyncio.create_task(
@@ -479,11 +481,30 @@ def create_app(
         )
 
     async def shutdown_beat_worker() -> None:
-        """Stop the prewarm and retire the Julia worker with the app.
+        """Stop the prewarm and let go of the Julia worker without killing it.
 
         ``hornlab_beat_bem`` keeps its workers in a module-level registry with
         no exit hook of its own, and the prewarm means one can be alive for a
-        session that never solved.
+        session that never solved -- so this hook has to run either way.
+
+        What it releases changed with the pin to ``94deec1``: the worker now
+        lives in a persistent host process that outlives this one, so
+        ``detach_workers`` closes our connections and leaves the Julia runtime
+        running for the next launch to adopt, instead of throwing away a warm
+        runtime the user has already paid for. The hosts retire themselves
+        after ``HORNLAB_BEAT_WORKER_IDLE_S``, so nothing accumulates, and
+        ``HORNLAB_BEAT_PERSISTENT_HOST=0`` puts the worker back in a child
+        process -- which this hook terminates, exactly as it always did, since
+        such a worker has nothing to detach from.
+
+        ``detach_workers`` is ``shutdown_workers(detach=True)``; the named
+        sibling is what the package's application contract points a quit hook
+        at, and it says at the call site which of the two lifetimes we mean.
+
+        The guard below is what keeps an older ``hornlab_beat_bem`` -- one
+        predating ``detach_workers`` -- from turning Quit into a traceback:
+        importing a name a module does not have raises ``ImportError``, which
+        is already in the tuple.
         """
 
         task = getattr(application.state, "beat_prewarm_task", None)
@@ -492,10 +513,10 @@ def create_app(
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         try:
-            from hornlab_beat_bem import shutdown_workers
+            from hornlab_beat_bem import detach_workers
         except (ImportError, OSError):
             return
-        await asyncio.to_thread(shutdown_workers)
+        await asyncio.to_thread(detach_workers)
 
     async def shutdown_bempp_worker() -> None:
         """Stop the prewarm and the worker with the app, not at interpreter exit.

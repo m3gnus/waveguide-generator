@@ -221,9 +221,11 @@ def _warm_beat(status: Mapping[str, object]) -> None:
 
     Unlike ``_warm_metal`` this needs no ``WG2_SOLVER_WARMUP=1`` opt-in. The
     objection that gates the Metal branch is that a non-cancellable native
-    solve on a daemon thread can hold Quit open; BEAT's work happens in a
-    child process that ``shutdown_workers`` terminates, so this thread is only
-    ever waiting on a pipe.
+    solve on a daemon thread can hold Quit open; BEAT's work happens in
+    another process that ``shutdown_beat_worker`` lets go of in bounded time
+    -- detaching from a persistent host, terminating a child under
+    ``HORNLAB_BEAT_PERSISTENT_HOST=0`` -- so this thread is only ever waiting
+    on a pipe.
 
     The backend comes from ``resolve_beat_backend`` rather than being read out
     of ``status`` here, so that the accelerator this warms is by construction

@@ -271,6 +271,71 @@ def test_the_beat_worker_prewarm_is_registered_and_stopped_by_default(
     assert "shutdown_beat_worker" in shutdown
 
 
+def _beat_quit_hook(application: Any) -> Any:
+    """``shutdown_beat_worker`` itself, out of the router it is registered on.
+
+    It is a closure over ``create_app``'s locals, so there is no other handle
+    on it -- and the registration is what the test above pins, not the body.
+    """
+
+    return next(
+        handler
+        for handler in application.router.on_shutdown
+        if handler.__name__ == "shutdown_beat_worker"
+    )
+
+
+def test_quitting_detaches_the_beat_worker_rather_than_killing_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A warm Julia runtime should survive Quit, not be thrown away by it.
+
+    Since ``hornlab_beat_bem`` 94deec1 the worker lives in a persistent host
+    process that outlives this one, and the next launch adopts it instead of
+    paying the cold start again. That is opt-in at exactly one call site: the
+    quit hook asks for ``detach_workers``, not ``shutdown_workers``. Calling
+    the wrong sibling costs a user the whole Julia start-up on every launch
+    and would be invisible -- both hooks quit cleanly.
+    """
+
+    application = create_app(data_dir=tmp_path)
+
+    called: list[str] = []
+    package = types.ModuleType("hornlab_beat_bem")
+    package.detach_workers = lambda: called.append("detach")  # type: ignore[attr-defined]
+    package.shutdown_workers = lambda **_: called.append("shutdown")  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+
+    asyncio.run(_beat_quit_hook(application)())
+
+    assert called == ["detach"]
+
+
+def test_quitting_survives_a_beat_package_that_predates_detach_workers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An older module pin must not turn Quit into a traceback.
+
+    ``pins.json`` and the installed environment can disagree -- an editable
+    development install is the ordinary way it happens -- and the failure mode
+    is asymmetric: a missing name here fires while the app is already tearing
+    down. ``from ... import detach_workers`` raises ``ImportError`` against a
+    package that only has ``shutdown_workers``, which the hook's existing
+    ``(ImportError, OSError)`` guard already catches; this pins that, because
+    nothing else does.
+    """
+
+    application = create_app(data_dir=tmp_path)
+
+    package = types.ModuleType("hornlab_beat_bem")
+    package.shutdown_workers = lambda **_: pytest.fail(  # type: ignore[attr-defined]
+        "an old package has no persistent host, so nothing should be stopped here"
+    )
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+
+    asyncio.run(_beat_quit_hook(application)())
+
+
 def test_the_beat_worker_prewarm_only_warms_the_engine_auto_chose(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
