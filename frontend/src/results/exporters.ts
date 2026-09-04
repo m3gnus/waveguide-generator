@@ -200,6 +200,31 @@ function patternDb(value: unknown): number | null {
   return finite(value);
 }
 
+/**
+ * Refuse to label a directivity frame with a frequency it was never solved at.
+ *
+ * Every frame in a plane's pattern array is one frequency, in the same order as
+ * `frequencies`. A frame count that disagrees with the frequency axis (or a
+ * non-finite frequency) cannot be aligned honestly, so this throws rather than
+ * clamping the extra frames onto the last known frequency -- clamping produced
+ * rows that looked like real per-frequency samples but repeated one label
+ * silently.
+ */
+function requireAlignedFrames(frequencies: number[], frameCount: number, label: string): void {
+  if (!frequencies.length || !frequencies.every((frequency) => Number.isFinite(frequency))) {
+    throw new Error(`${label}: the frequency axis is missing or contains a non-finite value.`);
+  }
+  if (frameCount !== frequencies.length) {
+    throw new Error(`${label}: has ${frameCount} frame(s) but the frequency axis has ${frequencies.length} point(s); refusing to mislabel a frame with the wrong frequency.`);
+  }
+}
+
+function requireFiniteAngles(pattern: ReadonlyArray<readonly [unknown, unknown]>, label: string): void {
+  if (pattern.some(([angle]) => !Number.isFinite(angle))) {
+    throw new Error(`${label}: contains a non-finite angle.`);
+  }
+}
+
 export function buildPolarCsv(result: ResultPayload): string {
   // The header states the reference the levels below it are relative to, which
   // is the one thing a bare `SPL_norm_dB` column cannot say for itself.
@@ -208,14 +233,20 @@ export function buildPolarCsv(result: ResultPayload): string {
     ...(finite(reference) ? [`# Normalization: per-frequency polar level; 0 dB at ${reference} deg`] : []),
     'Frequency_Hz,Plane,Theta_deg,SPL_norm_dB',
   ];
-  const frequencies = resultFrequencies(result);
+  const frequencies = result.frequencies;
   const directivity = (result.directivity ?? {}) as Record<string, NonNullable<ResultPayload['directivity']>['horizontal']>;
   const planeOrder = ['horizontal', 'vertical', 'diagonal'];
   const rank = (plane: string) => { const index = planeOrder.indexOf(plane); return index < 0 ? planeOrder.length : index; };
   const order = Object.keys(directivity).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-  order.forEach((plane) => (directivity[plane] ?? []).forEach((pattern, frequencyIndex) => {
-    pattern.forEach(([angle, value]) => rows.push(`${frequencies[Math.min(frequencyIndex, Math.max(0, frequencies.length - 1))] ?? ''},${plane},${angle},${patternDb(value) ?? ''}`));
-  }));
+  order.forEach((plane) => {
+    const frames = directivity[plane] ?? [];
+    if (!frames.length) return;
+    requireAlignedFrames(frequencies, frames.length, `Polar CSV export (${plane})`);
+    frames.forEach((pattern, frequencyIndex) => {
+      requireFiniteAngles(pattern, `Polar CSV export (${plane}, ${frequencies[frequencyIndex]} Hz)`);
+      pattern.forEach(([angle, value]) => rows.push(`${frequencies[frequencyIndex]},${plane},${angle},${patternDb(value) ?? ''}`));
+    });
+  });
   return `${rows.join('\n')}\n`;
 }
 
@@ -281,14 +312,50 @@ export function buildVacs(result: ResultPayload, now = new Date()): string {
   const patterns = plane ? result.directivity?.[plane as keyof NonNullable<ResultPayload['directivity']>] ?? [] : [];
   const lines = ['// Waveguide Generator Spectrum Data', `// ${now.toISOString()}`, 'SourceDesc=VACS_Data_Text', 'Version=1.1.0'];
   if (impedance?.frequencies?.length) {
+    const frequencies = impedance.frequencies;
+    requireAlignedFrames(frequencies, impedance.real?.length ?? 0, 'VACS export (impedance real)');
+    requireAlignedFrames(frequencies, impedance.imaginary?.length ?? 0, 'VACS export (impedance imaginary)');
     lines.push('Data_Format=Complex', 'Data_LevelType=Impedance10', 'Data_Domain=Frequency', 'Data_AbscUnit=Hz', 'Data');
-    impedance.frequencies.forEach((frequency, index) => lines.push(`${frequency}   ${finite(impedance.real?.[index]) ?? 0} ${finite(impedance.imaginary?.[index]) ?? 0}`));
+    frequencies.forEach((frequency, index) => {
+      const real = finite(impedance.real?.[index]);
+      const imaginary = finite(impedance.imaginary?.[index]);
+      if (real === null || imaginary === null) {
+        throw new Error(`VACS export (impedance, ${frequency} Hz): missing complex sample; use Impedance CSV to preserve gaps.`);
+      }
+      lines.push(`${frequency}   ${real} ${imaginary}`);
+    });
     lines.push('Data_End');
   }
   if (patterns.length) {
-    lines.push('Data_Format=Complex', 'Data_LevelType=Peak', 'Data_Domain=Frequency', `Data_Legend="Polar, Pressure, ${plane}"`, 'Data');
-    patterns.forEach((pattern, index) => lines.push(`${resultFrequencies(result)[Math.min(index, resultFrequencies(result).length - 1)] ?? ''}${pattern.map(([, value]) => `   ${Math.pow(10, (patternDb(value) ?? -Infinity) / 20) || 0} 0`).join('')}`));
-    lines.push('Data_End');
+    const frequencies = result.frequencies;
+    requireAlignedFrames(frequencies, patterns.length, `VACS export (${plane} polar magnitude)`);
+    const angles = patterns[0].map(([angle]) => angle);
+    patterns.forEach((pattern, index) => {
+      requireFiniteAngles(pattern, `VACS export (${plane}, ${frequencies[index]} Hz)`);
+      if (pattern.length !== angles.length || pattern.some(([angle], column) => angle !== angles[column])) {
+        throw new Error('VACS export: polar angle grids differ between frequencies; use Polar CSV to preserve each measured angle.');
+      }
+    });
+    // VACS Import Control Settings Part 1 defines Real for scalar amplitudes.
+    // Separate curves retain each angle without pretending these normalized
+    // magnitudes are absolute complex pressure or supplying an invented phase.
+    angles.forEach((angle, column) => {
+      lines.push('Data_Format=Real', 'Data_LevelType=Peak', 'Data_Domain=Frequency', 'Data_AbscUnit=Hz',
+        `Data_Legend="Polar normalized magnitude (no phase), ${plane}, ${angle} deg"`, 'Data');
+      patterns.forEach((pattern, index) => {
+        const value = pattern[column][1];
+        const db = patternDb(value);
+        const magnitude = Array.isArray(value) && value.length === 2
+          && value.every((part) => typeof part === 'number' && Number.isFinite(part))
+          ? Math.hypot(value[0], value[1])
+          : db === null ? NaN : Math.pow(10, db / 20);
+        if (!Number.isFinite(magnitude)) {
+          throw new Error(`VACS export (${plane}, ${angle} deg, ${frequencies[index]} Hz): missing or non-finite magnitude; use Polar CSV to preserve gaps.`);
+        }
+        lines.push(`${frequencies[index]}   ${magnitude}`);
+      });
+      lines.push('Data_End');
+    });
   }
   return `${lines.join('\n')}\n`;
 }

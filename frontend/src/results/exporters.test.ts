@@ -3,7 +3,7 @@ import { designForFamily } from '../stores/design';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
-import { archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
+import { archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, buildVacs, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 
 const cadIdentity: CadIdentityProvenance = {
@@ -97,6 +97,136 @@ describe('result exporters', () => {
     expect(buildSummaryText(result, preferences, new Date('2026-08-04T10:00:00Z'))).toContain('Average SPL: 90.00 dB');
     expect(buildPolarCsv(result)).toContain('200,horizontal,-90,-20');
     expect(buildImpedanceCsv(result)).toContain('200,,-0.5');
+  });
+
+  describe('polar frame/frequency alignment', () => {
+    it('refuses fewer directivity frames than frequency labels', () => {
+      const misaligned: ResultPayload = {
+        frequencies: [100, 200, 300],
+        directivity: { horizontal: [[[0, -1]], [[0, -2]]] },
+      };
+      expect(() => buildPolarCsv(misaligned)).toThrow(/2 frame\(s\).*3 point\(s\)/);
+    });
+
+    it('refuses a non-finite angle rather than emitting a NaN label', () => {
+      const badAngle: ResultPayload = {
+        frequencies: [100],
+        directivity: { horizontal: [[[Number.NaN, -1]]] },
+      };
+      expect(() => buildPolarCsv(badAngle)).toThrow(/non-finite angle/);
+    });
+
+    it('exports normally when every plane is aligned with the frequency axis', () => {
+      const aligned: ResultPayload = {
+        frequencies: [100, 200],
+        directivity: {
+          horizontal: [[[0, -1], [30, -4]], [[0, -2], [30, -5]]],
+          vertical: [[[0, -1.5]], [[0, -2.5]]],
+        },
+      };
+      const csv = buildPolarCsv(aligned);
+      expect(csv).toContain('100,horizontal,0,-1');
+      expect(csv).toContain('200,horizontal,30,-5');
+      expect(csv).toContain('200,vertical,0,-2.5');
+    });
+  });
+
+  describe('buildVacs', () => {
+    it('never claims Data_Format=Complex for the polar pressure block', () => {
+      // A genuinely complex directivity sample (real, imaginary pressure): the
+      // previous implementation wrote its magnitude next to a fabricated zero
+      // under a Data_Format=Complex header, which is indistinguishable from a
+      // real zero-phase measurement to any reader of this file.
+      const withComplexSamples: ResultPayload = {
+        frequencies: [100, 200],
+        directivity: { horizontal: [[[0, [3, 4]]], [[0, [0, -2]]]] },
+      };
+      const text = buildVacs(withComplexSamples, new Date('2026-09-04T00:00:00Z'));
+      expect(text).not.toContain('Data_Format=Complex\nData_LevelType=Peak');
+      expect(text).toContain('Data_Format=Real');
+      expect(text).toContain('Data_Legend="Polar normalized magnitude (no phase), horizontal, 0 deg"');
+      // magnitude of (3,4) is 5; magnitude of (0,-2) is 2. No trailing zero column.
+      expect(text).toMatch(/^100 {3}5(\.\d+)?$/m);
+      expect(text).toMatch(/^200 {3}2(\.\d+)?$/m);
+    });
+
+    it('still exports impedance as genuine complex data', () => {
+      const impedanceOnly: ResultPayload = {
+        frequencies: [100, 200],
+        impedance: { frequencies: [100, 200], real: [1, 2], imaginary: [0.5, -0.5] },
+      };
+      const text = buildVacs(impedanceOnly, new Date('2026-09-04T00:00:00Z'));
+      expect(text).toContain('Data_Format=Complex\nData_LevelType=Impedance10');
+      expect(text).toContain('100   1 0.5');
+      expect(text).toContain('200   2 -0.5');
+    });
+
+    it('refuses a directivity frame count that disagrees with the frequency axis', () => {
+      const misaligned: ResultPayload = {
+        frequencies: [100, 200, 300],
+        directivity: { horizontal: [[[0, -1]], [[0, -2]]] },
+      };
+      expect(() => buildVacs(misaligned)).toThrow(/2 frame\(s\).*3 point\(s\)/);
+    });
+
+    it('uses the polar grid even when SPL has a different equally sized grid', () => {
+      const independent: ResultPayload = {
+        frequencies: [100, 200],
+        spl_on_axis: { frequencies: [110, 220], spl: [80, 81] },
+        directivity: { horizontal: [[[0, 0]], [[0, 0]]] },
+      };
+      expect(buildPolarCsv(independent)).toContain('200,horizontal,0,0');
+      expect(buildVacs(independent)).toMatch(/^200 {3}1$/m);
+      expect(buildVacs(independent)).not.toMatch(/^220 /m);
+    });
+
+    it('refuses an extra frame rather than repeating the last frequency', () => {
+      const extra: ResultPayload = { frequencies: [100], directivity: { horizontal: [[[0, 0]], [[0, -3]]] } };
+      expect(() => buildPolarCsv(extra)).toThrow(/2 frame.*1 point/);
+      expect(() => buildVacs(extra)).toThrow(/2 frame.*1 point/);
+    });
+
+    it('retains separate angle labels and refuses shifted angle grids', () => {
+      const angular: ResultPayload = { frequencies: [100, 200], directivity: {
+        horizontal: [[[0, 0], [30, -6]], [[0, 0], [30, -6]]],
+      } };
+      expect(buildVacs(angular)).toContain('horizontal, 30 deg');
+      expect(buildVacs(angular).match(/Data_Format=Real/g)).toHaveLength(2);
+      angular.directivity!.horizontal![1][1][0] = 40;
+      expect(() => buildVacs(angular)).toThrow(/angle grids differ/);
+      expect(buildPolarCsv(angular)).toContain('200,horizontal,40,-6');
+    });
+
+    it('refuses missing samples but preserves a genuine complex zero', () => {
+      const missing: ResultPayload = { frequencies: [100], directivity: { horizontal: [[[0, null]]] } };
+      expect(() => buildVacs(missing)).toThrow(/missing or non-finite magnitude/);
+      expect(() => buildVacs({ frequencies: [100], impedance: { frequencies: [100], real: [1], imaginary: [null] } })).toThrow(/missing complex sample/);
+      missing.directivity!.horizontal![0][0][1] = [0, 0];
+      expect(buildVacs(missing)).toMatch(/^100 {3}0$/m);
+    });
+
+    it('produces no Data block at all when there is neither impedance nor directivity', () => {
+      const empty: ResultPayload = { frequencies: [100, 200] };
+      const text = buildVacs(empty, new Date('2026-09-04T00:00:00Z'));
+      expect(text).not.toContain('Data_Format');
+      expect(text).not.toContain('Data_End');
+    });
+
+    it('surfaces a mismatched axis as a bundle-level export failure, not a thrown crash', async () => {
+      const misaligned: ResultPayload = {
+        frequencies: [100, 200, 300],
+        directivity: { horizontal: [[[0, -1]], [[0, -2]]] },
+      };
+      const saveText = vi.fn();
+      const bundle = await runExportBundle({
+        result: misaligned, jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), saveText,
+      }, ['vacs']);
+      expect(saveText).not.toHaveBeenCalled();
+      expect(bundle.files).toEqual([]);
+      expect(bundle.failures).toEqual([
+        { format: 'vacs', reason: expect.stringMatching(/2 frame\(s\).*3 point\(s\)/) },
+      ]);
+    });
   });
 
   it('adds one versioned CAD identity sidecar to a manual result bundle', async () => {
