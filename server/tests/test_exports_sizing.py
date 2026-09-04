@@ -105,6 +105,54 @@ def test_measurement_reports_the_grid_the_builder_actually_resolved() -> None:
     assert angular >= 43
 
 
+def test_a_detuned_probe_catches_geometry_hidden_from_the_nested_lattice() -> None:
+    """A p-expression must not alias to a false sub-tolerance reading."""
+
+    payload = {
+        **SEED_ROSSE,
+        "formula": "OSSE",
+        "L": 120,
+        "a": "45 + 0.1*(1-cos(192*p))",
+    }
+    for key in ("R", "m", "b", "r", "tmax"):
+        payload.pop(key, None)
+    design = DesignConfig.model_validate(payload)
+    params = _params(design)
+    from server.exports.sizing import _distance_to_surface, _point_grid
+
+    aliased, angular, length = _point_grid(params, 96, 56)
+    dense, _, _ = _point_grid(params, 4 * angular, 4 * length)
+    dense_error = float(_distance_to_surface(dense, aliased).max())
+    assert dense_error > 0.5
+
+    plan, _ = _stl_grid_plan(design)
+
+    # The old nested-only check accepted 96x56 at 0.0625 mm because both the
+    # candidate and its 2x reference sampled cos(192*p) at the same phase.
+    assert (plan.angular, plan.length) != (96, 56)
+    assert plan.warning is not None
+    assert plan.triangles <= STL_TRIANGLE_CEILING
+
+
+def test_detuned_cubic_error_can_reject_while_the_chord_is_still_trustworthy() -> None:
+    """CAD acceptance must not fall back to an aliased nested cubic reading."""
+
+    payload = {
+        **SEED_ROSSE,
+        "formula": "OSSE",
+        "L": 120,
+        "a": "45 + 0.003*(1-cos(192*p))",
+    }
+    for key in ("R", "m", "b", "r", "tmax"):
+        payload.pop(key, None)
+    measured = measure_deviation(_params(DesignConfig.model_validate(payload)), 96, 56)
+
+    assert measured is not None
+    deviation = measured[0]
+    assert deviation.angular_linear < 0.35
+    assert deviation.angular_cubic > 0.02
+
+
 def test_for_fit_rejects_a_pairing_no_export_writes() -> None:
     deviation = SurfaceDeviation(1.0, 0.5, 2.0, 0.25)
     assert deviation.for_fit("linear", "linear") == 2.0

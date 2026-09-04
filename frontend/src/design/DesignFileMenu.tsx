@@ -257,7 +257,10 @@ export function DesignFileMenu() {
       // Naming the folder is the point: the desktop window has no download
       // shelf, so an export that does not say where it went looks like one
       // that did not happen.
-      setMessage(`Exported ${kind.toUpperCase()} from revision ${revision} to ${written.directory}`);
+      const warning = written.warning ? ` Warning: ${written.warning}` : '';
+      setMessage(
+        `Exported ${kind.toUpperCase()} from revision ${revision} to ${written.directory}.${warning}`,
+      );
     });
   }
 

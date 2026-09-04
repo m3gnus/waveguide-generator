@@ -347,6 +347,80 @@ def _distance_to_cells(
 _NEIGHBOURING_CELLS = ((-1, -1), (-1, 0), (0, -1), (0, 0))
 
 
+def _distance_to_surface(reference: np.ndarray, surface: np.ndarray) -> np.ndarray:
+    """Measure a separately sampled reference against a candidate surface.
+
+    The proportional index is only a cell locator.  The distance itself is to
+    the nearby triangles, so this remains valid when the builder's axial map is
+    non-uniform and corresponding indices are not corresponding points.
+    """
+
+    surface_rows, surface_columns, _ = surface.shape
+    reference_rows, reference_columns, _ = reference.shape
+    rows = np.floor(
+        np.arange(reference_rows) * surface_rows / reference_rows
+    ).astype(int)
+    columns = np.floor(
+        np.arange(reference_columns)
+        * (surface_columns - 1)
+        / max(1, reference_columns - 1)
+    ).astype(int)
+    columns = np.minimum(columns, surface_columns - 2)
+    return _distance_to_cells(
+        reference, surface, rows, columns, _NEIGHBOURING_CELLS
+    )
+
+
+def _cubic_weights(position: float, nodes: tuple[int, int, int, int]) -> np.ndarray:
+    """Lagrange weights at one parameter position for four sample indices."""
+
+    weights = np.ones(4, dtype=float)
+    for index, node in enumerate(nodes):
+        for other in nodes:
+            if other != node:
+                weights[index] *= (position - other) / (node - other)
+    return weights
+
+
+def _cubic_resample_axis(
+    points: np.ndarray, target_count: int, *, axis: int, periodic: bool
+) -> np.ndarray:
+    """Evaluate the planner's cubic model at an independently sampled lattice."""
+
+    source_count = points.shape[axis]
+    positions = (
+        np.arange(target_count, dtype=float) * source_count / target_count
+        if periodic
+        else np.linspace(0.0, source_count - 1, target_count)
+    )
+    samples = []
+    for position in positions:
+        base = int(math.floor(position))
+        if periodic:
+            nodes = (base - 1, base, base + 1, base + 2)
+            indices = [node % source_count for node in nodes]
+        elif base < 1:
+            nodes = (0, 1, 2, 3)
+            indices = list(nodes)
+        elif base >= source_count - 2:
+            nodes = tuple(range(source_count - 4, source_count))
+            indices = list(nodes)
+        else:
+            nodes = (base - 1, base, base + 1, base + 2)
+            indices = list(nodes)
+        selected = np.take(points, indices, axis=axis)
+        weights = _cubic_weights(position, nodes)
+        shape = [1] * selected.ndim
+        shape[axis] = 4
+        samples.append(np.sum(selected * weights.reshape(shape), axis=axis))
+    return np.stack(samples, axis=axis)
+
+
+def _cubic_resample(coarse: np.ndarray, rows: int, columns: int) -> np.ndarray:
+    angular = _cubic_resample_axis(coarse, rows, axis=0, periodic=True)
+    return _cubic_resample_axis(angular, columns, axis=1, periodic=False)
+
+
 def measure_deviation(
     params: Mapping[str, Any], angular: int, length: int
 ) -> tuple[SurfaceDeviation, int, int] | None:
@@ -384,16 +458,36 @@ def measure_deviation(
     cubic = _distance_to_cells(
         fine, _refined(coarse, "cubic"), rows, cols, _NEIGHBOURING_CELLS
     )
+
+    # A nested 2x lattice alone can alias an expression-capable surface.  For
+    # example, cos(192*p) has exactly the same value at every point of a 96-ring
+    # candidate and its 192-ring reference, despite changing between them.  A
+    # slightly detuned lattice probes different phases.  This is a bounded
+    # numerical check rather than a proof over arbitrary user expressions, but
+    # accepting requires both independent samplings to agree.
+    detuned, detuned_phi, detuned_length = _point_grid(
+        params, 2 * n_phi + 4, 2 * n_length + 1
+    )
+    if detuned_phi == fine_phi and detuned_length == fine_length:
+        return None
+    detuned_linear = float(_distance_to_surface(detuned, coarse).max())
+    detuned_cubic = float(
+        np.linalg.norm(
+            detuned
+            - _cubic_resample(coarse, detuned_phi, detuned_length + 1),
+            axis=2,
+        ).max()
+    )
     # Samples on an angular edge speak for the ring direction and those on an
     # axial edge for the profile direction; a cell's own middle belongs to both,
     # and is where a two-triangle facet is furthest from the surface.
     face_linear = float(linear[1::2, 1::2].max())
     face_cubic = float(cubic[1::2, 1::2].max())
     deviation = SurfaceDeviation(
-        angular_linear=max(float(linear[1::2, ::2].max()), face_linear),
-        angular_cubic=max(float(cubic[1::2, ::2].max()), face_cubic),
-        axial_linear=max(float(linear[::2, 1::2].max()), face_linear),
-        axial_cubic=max(float(cubic[::2, 1::2].max()), face_cubic),
+        angular_linear=max(float(linear[1::2, ::2].max()), face_linear, detuned_linear),
+        angular_cubic=max(float(cubic[1::2, ::2].max()), face_cubic, detuned_cubic),
+        axial_linear=max(float(linear[::2, 1::2].max()), face_linear, detuned_linear),
+        axial_cubic=max(float(cubic[::2, 1::2].max()), face_cubic, detuned_cubic),
     )
     return deviation, n_phi, n_length
 

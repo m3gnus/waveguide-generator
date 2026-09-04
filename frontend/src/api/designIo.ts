@@ -369,6 +369,10 @@ export function downloadText(text: string, filename: string, type = 'text/plain;
 
 export type StepBody = 'solid' | 'surface';
 
+export interface GeometryExportWrite extends OutputFolderWrite {
+  warning?: string;
+}
+
 /**
  * Build a geometry export and write it into the output folder.
  *
@@ -386,7 +390,7 @@ export async function exportGeometryToOutputFolder(
   profileKind?: 'profiles' | 'slices',
   stepBody: StepBody = 'solid',
   fetcher: typeof fetch = fetch,
-): Promise<OutputFolderWrite> {
+): Promise<GeometryExportWrite> {
   const query = kind === 'profiles'
     ? `?kind=${profileKind ?? 'profiles'}`
     : kind === 'step' ? `?body=${stepBody}` : '';
@@ -400,9 +404,13 @@ export async function exportGeometryToOutputFolder(
     }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
+  const warning = response.headers.get('X-Export-Warning')?.trim() || undefined;
   const suffix = kind === 'profiles' ? `_${profileKind ?? 'profiles'}.csv` : `.${kind}`;
   const filename = responseFilename(response, `${baseName}${suffix}`);
   // Overwrite: re-exporting after an edit is the ordinary case, and a stale
   // file of the same name is exactly what the user is replacing.
-  return writeToOutputFolder(baseName, [{ filename, blob: await response.blob() }], fetcher);
+  const written = await writeToOutputFolder(
+    baseName, [{ filename, blob: await response.blob() }], fetcher,
+  );
+  return warning ? { ...written, warning } : written;
 }

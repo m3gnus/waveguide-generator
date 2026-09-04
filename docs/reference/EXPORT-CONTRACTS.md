@@ -44,11 +44,14 @@ adding one would reintroduce the coupling this replaced. The tolerances are cons
 | STL | 0.10 mm | Chord deviation of the written triangles: print resolution, at or below every common layer height and well inside a 0.4 mm nozzle. |
 | STEP inner surface | 0.10 mm chord | Planned to the same chord as the STL. The written surface lands somewhat outside it — it is a *ruled* loft through control-point splines — so the number planned is a chord, not a promise about the file. |
 
-The grid is chosen by measurement, not by formula: the analytic surface is sampled at
-twice the candidate grid and each sample's distance to the cell it falls in is compared
-against the tolerance, so a design whose curvature a formula would misjudge is refined
-until it actually passes. Density therefore follows geometry and part size — the same
-waveguide at twice the scale needs a finer grid to hold the same absolute deviation.
+The grid is chosen by bounded numerical measurement, not by a curvature formula. The
+analytic surface is sampled on both a twice-dense lattice and a slightly detuned lattice;
+each sample's distance to the nearby candidate cells is compared against the tolerance.
+The detuned probe prevents periodic `p` expressions from disappearing merely because
+they share a phase with the candidate grid. This is finite sampling rather than a proof
+over every possible user expression. Density therefore follows measured geometry and
+part size — the same waveguide at twice the scale needs a finer grid to hold the same
+absolute deviation.
 
 **The STL's triangle ceiling is a backstop, not a gate.** A design whose tolerance would
 need more than 150,000 triangles is exported anyway, coarsened to the ceiling, with the
