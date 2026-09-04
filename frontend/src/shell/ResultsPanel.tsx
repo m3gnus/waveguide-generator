@@ -23,7 +23,7 @@ import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
-import { CHART_TYPES, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
+import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
 import { seriesColorsByLabel } from '../results/seriesColors';
@@ -1652,6 +1652,37 @@ function MeasurementAngleControls({ selection, onChange }: {
   </div>;
 }
 
+/**
+ * The ms / cycles rail under the Group Delay card.
+ *
+ * The unit is still one preference -- the export, the report and the title chip
+ * all read the same stored value, and the preferences popover still offers it --
+ * but the place to *change* it is the card, next to the axis it renames. A unit
+ * is chosen while looking at the curve, and a control two panels away in a
+ * settings surface is one nobody finds while reading a chart.
+ *
+ * Chips rather than a select, because the choice is binary and both options fit:
+ * this is the same glass rail as the measurement-angle strip, and pressing one
+ * chip is the whole interaction.
+ */
+function GroupDelayUnitControl({ unit, onChange }: {
+  unit: GroupDelayUnit;
+  onChange: (next: GroupDelayUnit) => void;
+}) {
+  return <div className="frequency-scrub chart-unit-toggle">
+    <div className="angle-chips" role="group" aria-label="Group delay unit">
+      {GROUP_DELAY_UNITS.map(([id, label]) => <button
+        key={id}
+        type="button"
+        aria-pressed={unit === id}
+        // The chip is the axis unit itself; the long name lives in the title.
+        title={`Read the group delay in ${label.toLowerCase()}`}
+        onClick={() => onChange(id)}
+      >{id}</button>)}
+    </div>
+  </div>;
+}
+
 interface RadiationArtifactView {
   status: 'absent' | 'failed' | 'loading' | 'loaded';
   message?: string;
@@ -1753,8 +1784,14 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     }
     if (chartType === 'group_delay') {
       const option = groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit);
+      // The unit rail only rides along with a curve: on the stub there is no
+      // axis to rename, and offering the switch there would suggest the empty
+      // card is the wrong projection rather than a result with no phase.
       return Array.isArray(option.series) && option.series.length
-        ? <EChart option={option} label="Interactive HornLab on-axis group delay by frequency" live={live}/>
+        ? <div className="frequency-canvas">
+          <EChart option={option} label="Interactive HornLab on-axis group delay by frequency" live={live}/>
+          <GroupDelayUnitControl unit={preferences.groupDelayUnit} onChange={(groupDelayUnit) => preferencesStore.update({ groupDelayUnit })}/>
+        </div>
         : <ChartStub reason={groupDelayMissingReason(result)}/>;
     }
     if (chartType === 'drive_power') {

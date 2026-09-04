@@ -7,10 +7,12 @@ import type { NamedResult } from '../results/mappers';
 import type { ResultPayload } from '../results/types';
 
 const chartLabel = vi.hoisted(() => vi.fn());
+const chartOption = vi.hoisted(() => vi.fn());
 
 vi.mock('../results/EChart', () => ({
-  EChart: ({ label }: { label?: string }) => {
+  EChart: ({ label, option }: { label?: string; option?: unknown }) => {
     chartLabel(label);
+    chartOption(option);
     return null;
   },
   useChartTokens: () => tokens,
@@ -31,6 +33,46 @@ function polarResult(frequencies: number[]): NamedResult {
     result: {
       frequencies,
       directivity: { horizontal: frequencies.map(() => [[0, 0], [30, -6], [60, -12]]) },
+    } as unknown as ResultPayload,
+  };
+}
+
+/**
+ * A result carrying a pure 0.3 ms excess delay on top of a 1 m path, so the
+ * group delay chart has a curve to draw and the two units are distinguishable:
+ * 0.3 ms is flat in milliseconds and rises as tau[s] * f in cycles.
+ */
+function groupDelayResult(): NamedResult {
+  const frequencies = Array.from({ length: 40 }, (_, index) => 300 * 1.06 ** index);
+  return {
+    id: 'delayed',
+    label: 'Run A',
+    result: {
+      frequencies,
+      spl_on_axis: {
+        frequencies,
+        spl: frequencies.map(() => 90),
+        phase_degrees: frequencies.map((frequency) => {
+          const radians = 2 * Math.PI * frequency * (1 / 343 + 0.0003);
+          return (((radians + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI) * 180 / Math.PI;
+        }),
+      },
+      metadata: {
+        phase_time_convention: 'exp(+ikr)',
+        observation: { effective_distance_m: 1, sound_speed_m_per_s: 343 },
+      },
+    } as unknown as ResultPayload,
+  };
+}
+
+/** A result with no phase at all: the group delay card can only stub. */
+function phaselessResult(): NamedResult {
+  return {
+    id: 'bare',
+    label: 'Run B',
+    result: {
+      frequencies: [500, 1_000],
+      spl_on_axis: { frequencies: [500, 1_000], spl: [90, 90] },
     } as unknown as ResultPayload,
   };
 }
@@ -59,6 +101,7 @@ describe('results card chrome follows the data it is drawing', () => {
     localStorage.clear();
     preferencesStore.resetForTests();
     chartLabel.mockClear();
+    chartOption.mockClear();
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -137,5 +180,82 @@ describe('results card chrome follows the data it is drawing', () => {
   it('carries no impedance subtitle when every run shares the axis', () => {
     render(['impedance'], [impedanceResult('Driver', true), impedanceResult('Driver 2', true)]);
     expect(host.querySelector('.result-subtitle')).toBeNull();
+  });
+});
+
+describe('the group delay unit is switched at the chart', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as never;
+    localStorage.clear();
+    preferencesStore.resetForTests();
+    chartOption.mockClear();
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => { act(() => root.unmount()); host.remove(); });
+
+  function render(named: NamedResult[]) {
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['group_delay'] as ChartType[], result: named[0].result as ResultPayload, named, tokens,
+    })));
+  }
+
+  const chips = () => [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Group delay unit"] button')];
+  const pressed = () => chips().filter((chip) => chip.getAttribute('aria-pressed') === 'true').map((chip) => chip.textContent);
+  // The card's own unit chip, which is where the unit is actually read: a
+  // compact or regular card drops the axis title, so the chip is the only place
+  // the unit is stated on screen.
+  const titleUnit = () => host.querySelector('.result-title em')?.textContent;
+  const series = () => (chartOption.mock.calls.at(-1)?.[0] as { series?: Array<{ data: number[][] }> } | undefined)?.series;
+
+  it('offers ms and cycles beside the curve, with the stored unit pressed', () => {
+    render([groupDelayResult()]);
+    expect(chips().map((chip) => chip.textContent)).toEqual(['ms', 'cycles']);
+    expect(pressed()).toEqual(['ms']);
+    expect(titleUnit()).toBe('ms');
+  });
+
+  it('redraws in the unit the chip asks for', () => {
+    render([groupDelayResult()]);
+    // A flat 0.3 ms delay in milliseconds; tau[s] * f in cycles, so the very
+    // same samples rise with frequency once the chip is pressed.
+    series()!.forEach(({ data }) => data.forEach(([, value]) => expect(value).toBeCloseTo(0.3, 6)));
+
+    act(() => { chips()[1].click(); });
+    expect(pressed()).toEqual(['cycles']);
+    expect(titleUnit()).toBe('cycles');
+    series()!.forEach(({ data }) => data.forEach(([frequency, value]) => expect(value).toBeCloseTo(0.0003 * frequency, 9)));
+
+    act(() => { chips()[0].click(); });
+    expect(pressed()).toEqual(['ms']);
+    expect(titleUnit()).toBe('ms');
+    series()!.forEach(({ data }) => data.forEach(([, value]) => expect(value).toBeCloseTo(0.3, 6)));
+  });
+
+  /**
+   * The chip and the preferences popover must not become two settings. Both
+   * write the one store, so the unit survives a reload and the export, the
+   * report and the title chip read what the chart was read in.
+   */
+  it('writes the one stored preference the popover and the export also read', () => {
+    render([groupDelayResult()]);
+    act(() => { chips()[1].click(); });
+    expect(preferencesStore.getSnapshot().groupDelayUnit).toBe('cycles');
+
+    // And follows that store when it is changed from anywhere else.
+    act(() => { preferencesStore.update({ groupDelayUnit: 'ms' }); });
+    expect(pressed()).toEqual(['ms']);
+    expect(titleUnit()).toBe('ms');
+  });
+
+  it('offers no unit switch on a card that has no curve to rename', () => {
+    render([phaselessResult()]);
+    expect(host.querySelector('[aria-label="Group delay unit"]')).toBeNull();
   });
 });

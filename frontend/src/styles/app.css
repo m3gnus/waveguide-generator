@@ -576,6 +576,13 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    the anchor the others are compared against rather than as a dead control. */
 .angle-chips button:disabled { cursor: default; }
 .angle-chips button:disabled:not([aria-pressed="true"]) { opacity: .35; }
+/* A unit switch hugs its two chips instead of spanning the card: unlike the
+   scrub and the angle strip it has nothing to stretch, and a full-width glass
+   bar under two chips reads as a control that lost its slider. Right-aligned so
+   it sits under the axis it renames rather than over the low-frequency end of
+   the curve. */
+.chart-unit-toggle { inset: auto 4px 4px auto; gap: 4px; }
+.chart-unit-toggle .angle-chips { flex: none; overflow: visible; }
 .directivity-multiplane { display: flex; width: 100%; height: 100%; min-width: 0; }
 .directivity-multiplane > div { position: relative; flex: 1 1 0; min-width: 0; }
 /* Right-aligned so the first sub-panel's label clears the card's title chip. */

@@ -91,6 +91,18 @@ Exported polar FRD files carry the same per-angle responses, one file per angle,
 their level column (`SPL_rel(dB)`) is relative to the normalization angle rather than
 absolute. The on-axis FRD is the one that carries absolute SPL re 20 µPa.
 
+### Reading group delay in milliseconds or in cycles
+
+The Group Delay card carries a small **ms / cycles** switch in the corner of the plot,
+next to the axis it renames. Milliseconds answers "how late"; cycles answers "how late
+for this frequency", counting the same delay in periods of the frequency it occurs at
+(`tau[s] × f`). It is one estimate drawn two ways — 0.3 ms is a third of a period at
+1 kHz and three periods at 10 kHz — and cycles is usually the reading a group delay is
+judged by, because a fixed time is negligible up high and is not down low.
+
+The choice is remembered, and it is the unit the run report and the results preferences
+popover use as well; changing it in either place changes it in both.
+
 ### Seeing the measurement positions
 
 Once a run has completed, the microphone button in the viewport toolbar draws the rig

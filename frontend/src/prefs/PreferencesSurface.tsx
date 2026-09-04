@@ -58,8 +58,13 @@ function ResultsPreferencesContent() {
       {/* The same excess delay either way. Milliseconds answers "how late";
           cycles answers "how late for this frequency", which is the reading a
           group delay is usually judged by, since a fixed time is a fraction of
-          a period up high and several periods down low. */}
-      <label className="ui-field" title="Group delay as a time, or as periods of the frequency it occurs at (tau x f).">Group delay in<select aria-label="Group delay unit" value={preferences.groupDelayUnit} onChange={(event) => preferencesStore.update({ groupDelayUnit: event.target.value as GroupDelayUnit })}>{GROUP_DELAY_UNITS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+          a period up high and several periods down low.
+
+          The Group Delay card carries the same switch as a chip pair, which is
+          where it is normally used -- a unit is chosen while looking at the
+          axis. Both write this one preference, so there is no second setting to
+          drift; this copy stays so the panel still lists what it governs. */}
+      <label className="ui-field" title="Group delay as a time, or as periods of the frequency it occurs at (tau x f). Also switchable on the Group Delay card itself.">Group delay in<select aria-label="Group delay unit" value={preferences.groupDelayUnit} onChange={(event) => preferencesStore.update({ groupDelayUnit: event.target.value as GroupDelayUnit })}>{GROUP_DELAY_UNITS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       {/* "Match interface" is not a server theme: it resolves to console or
           vellum at export time so a figure leaves on the same ground as the
           window it was taken from. The server never sees the sentinel. */}
