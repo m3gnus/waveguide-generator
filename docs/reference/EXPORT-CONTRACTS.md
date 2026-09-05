@@ -42,7 +42,7 @@ adding one would reintroduce the coupling this replaced. The tolerances are cons
 |---|---|---|
 | STEP solid | 0.02 mm | Deviation of the fitted CAD surface from the analytic formula. Tighter than the print tolerance because downstream CAD operations refine against this master. |
 | STL | 0.10 mm | Chord deviation of the written triangles: print resolution, at or below every common layer height and well inside a 0.4 mm nozzle. |
-| STEP inner surface | 0.10 mm chord | Planned to the same chord as the STL. The written surface lands somewhat outside it — it is a *ruled* loft through control-point splines — so the number planned is a chord, not a promise about the file. |
+| STEP inner surface | 0.10 mm | Deviation of the *written* ruled loft from the analytic bore, not of the chord through its samples. The planner builds the surface it is about to write and measures that; a chord target cannot certify this export, because the loft interpolates each ring with a spline and sits about twice as far out as the chord through the same points. See the finite-sampling limits below for what the number does and does not promise. |
 
 The grid is chosen by bounded numerical measurement, not by a curvature formula. The
 analytic surface is sampled on both a twice-dense lattice and a slightly detuned lattice;
@@ -52,6 +52,67 @@ they share a phase with the candidate grid. This is finite sampling rather than 
 over every possible user expression. Density therefore follows measured geometry and
 part size — the same waveguide at twice the scale needs a finer grid to hold the same
 absolute deviation.
+
+### What a fidelity tolerance guarantees, and what it does not
+
+Every number above is a **sampled** maximum, so it is a lower bound on the true one, and
+the guarantee is only as good as where the reference looks. Three limits are known and
+worth stating plainly.
+
+**A reference has to be refined where the surface is coarse, not merely refined.** A
+rounded-rectangle morph samples its corner arc with three fixed intervals whatever
+angular count is asked for: on the 120x80 r12 morph the arc breakpoints stay at 42.9473,
+44.2581, 45.7419 and 47.0527 degrees from 147 segments up to 2352, while the straight
+sides fall from 2.26 to 0.15 degrees. A reference built by multiplying the requested
+count therefore never samples between them — which is exactly where the ring spline
+overshoots. Measured on the written file, the grid this export chose before 0.3.2 read
+0.0937 mm against such a reference and 0.1138 mm against one that subdivides the arc, so
+a grid certified at 0.098 mm was 0.114 mm out at the mouth corner. The surface planner
+now subdivides the arc in its reference; the reading converges by sixteen subdivisions
+(0.0984 mm, 0.1104 mm, 0.1195 mm, 0.1195 mm at one, four, sixteen and thirty-two), and
+the grid it accepts for that design is measured at 0.0945 mm on the written file.
+
+**The written file is re-measured, and not by projection.** `_surface_grid_plan` reads
+the loft it builds in process; a separate test writes the STEP, imports it back through
+OCC, and measures the geometry that came out of the file against an independent analytic
+reference. That second reading is a point-to-quad distance to the file's own
+rulings rather than an OCC closest-point projection, which converges to a local minimum
+on a trimmed ruled band and read 0.1699 mm for a sample 0.0929 mm from the surface it
+was projecting onto.
+
+That reading is exact against the sampled quad strip rather than against the face, and it
+is worth separating the parts of it that are exact from the parts that are not, because
+they do not all lean the same way. Four things are in play:
+
+| part | direction | size, where measured |
+|---|---|---|
+| The straight ruling across a band | **exact** | The loft is degree one in v, so the segment between two boundary samples is on the face. Checked on the written file, not assumed: interior isoparametric points sit on their own ruling to about 1e-13 mm. |
+| The reference is a finite point set | **one-sided, under-reads** | A sampled maximum is a lower bound on the true maximum over the surface. This is the limit the 5% acceptance margin below exists for. |
+| A quad stands in for the spline through its rulings | **two-sided** | The quad's corners lie on the face and its interior does not, so the sign depends on which side of the local curvature the reference point falls. Measured against an independent minimisation that shares no code with it: at the point setting each qualified design's reported maximum the readings sit -0.000005, -0.000000, +0.000000 and +0.000674 mm from the true distance, and over a 32-point spread on the rounded-rectangle morph they run from 0.000116 mm below it to 0.000674 mm above. |
+| The cell and band search is bounded | **one-sided, over-reads** | Missing a nearer cell can only raise the reading. Not measurable on the qualified designs, and it leans opposite to the row above. |
+
+The two-sided term converges. Holding the reference fixed and doubling only the strip
+density moved the rounded-rectangle maximum from 0.094490 mm to 0.094005 mm, which is
+second order — the directly measured error at the density used was 0.000674 mm, and 4/3
+of that 0.000485 mm difference predicts 0.000647 mm. A difference between two densities
+is a convergence observation, not a bound on either of them; the regression test bounds
+the reading instead by measuring, from the file, how far the strip chord departs from the
+face at the point being checked.
+
+Neither check is a proof over every expression a user can write. They are bounded
+measurements with stated blind spots, and acceptance multiplies the reading by 1.05
+before comparing it to the tolerance — 5% of the reading, which on the rounded-rectangle
+grid is 0.0047 mm, or about 4.7% of the 0.10 mm target.
+
+**Planning this export is measurement, and it costs time.** The surface planner builds
+and measures the loft it is about to write, once per refinement attempt, so the cost
+follows the design rather than a formula. On the rounded-rectangle morph — the most
+expensive of the four qualified designs, and the one that needs the most attempts — a
+plan was observed to take about 49 seconds on one development machine (Apple silicon,
+Python 3.13, gmsh 4.15). That figure is a single observation on one machine and one
+design, recorded so the order of magnitude is not a surprise; it is not a performance
+guarantee, and no part of the export contract depends on it. Other hardware, other
+designs and other gmsh builds will differ.
 
 **The STL's triangle ceiling is a backstop, not a gate.** A design whose tolerance would
 need more than 150,000 triangles is exported anyway, coarsened to the ceiling, with the

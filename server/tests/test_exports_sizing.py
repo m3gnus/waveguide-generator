@@ -20,6 +20,10 @@ import pytest
 
 from server.design.schema import DesignConfig
 from server.exports.core import (
+    _LOFT_SAMPLES_PER_SEGMENT,
+    _WRITTEN_CORNER_ARC_SUBDIVISION,
+    _bare_grid_config,
+    _distance_to_loft,
     _geometry_params,
     _inner_grid,
     _prepared_design,
@@ -27,6 +31,7 @@ from server.exports.core import (
     _stl_mesher_config,
     _surface_grid_plan,
     _write_step,
+    _written_surface_measure,
 )
 from server.exports.sizing import (
     STL_CHORD_TOLERANCE_MM,
@@ -34,6 +39,7 @@ from server.exports.sizing import (
     GridPlan,
     SurfaceDeviation,
     _ceiling_trimmed,
+    axial_band_of_column,
     estimated_triangles,
     measure_deviation,
     plan_cad_resolution,
@@ -464,6 +470,286 @@ def test_surface_step_sizing_ignores_the_solver_mesh_too() -> None:
     assert _surface_grid_plan(_seed(mouth_resolution=3, throat_resolution=1.5)) == default
 
 
+def _mouth_azimuths(grid) -> np.ndarray:
+    points = np.asarray(grid["inner_points"]).reshape(
+        grid["grid_n_phi"], grid["grid_n_length"] + 1, 3
+    )
+    return np.degrees(np.arctan2(points[:, -1, 1], points[:, -1, 0])) % 360.0
+
+
+def test_the_written_surface_reference_samples_inside_the_fixed_corner_arc() -> None:
+    """Refining the count cannot reach the arc; the builder's key can.
+
+    The surface planner's reference leans on a private builder control, so this
+    pins both halves of why. A rounded-rectangle morph samples its corner arc
+    with three intervals whatever the angular count, and a builder that stopped
+    honouring the control would silently hand the planner a reference that
+    never looks between them -- the blind spot that certified a 0.114 mm grid
+    at 0.098 mm. It must also refine only the sampling: the points the two
+    grids share have to be the same points.
+    """
+
+    from hornlab_mesher.config_builder import build_point_grid
+    from hornlab_mesher.profile_sampling import ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY
+
+    params = _geometry_params(_bare_grid_config(_rounded()))
+
+    def grid(angular: int, subdivision: int):
+        return build_point_grid({
+            **params,
+            "angularSegments": angular,
+            "lengthSegments": 56,
+            ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY: subdivision,
+        })
+
+    coarse = grid(147, 1)
+    azimuths = np.sort(_mouth_azimuths(coarse))
+    above = azimuths[azimuths > 45.0].min()
+    below = azimuths[azimuths < 45.0].max()
+    # The arc straddling the diagonal is a single interval, and four times the
+    # angular budget does not divide it.
+    refined = np.sort(_mouth_azimuths(grid(588, 1)))
+    assert not ((refined > below + 1e-9) & (refined < above - 1e-9)).any()
+
+    subdivided = grid(147, _WRITTEN_CORNER_ARC_SUBDIVISION)
+    inside = _mouth_azimuths(subdivided)
+    assert ((inside > below + 1e-9) & (inside < above - 1e-9)).sum() >= 8
+
+    # Same surface, more samples of it: every shared azimuth is the same point,
+    # in every column, or the reference would be measuring another geometry.
+    coarse_points = np.asarray(coarse["inner_points"]).reshape(
+        coarse["grid_n_phi"], coarse["grid_n_length"] + 1, 3
+    )
+    fine_points = np.asarray(subdivided["inner_points"]).reshape(
+        subdivided["grid_n_phi"], subdivided["grid_n_length"] + 1, 3
+    )
+    fine_azimuths = _mouth_azimuths(subdivided)
+    shared = 0
+    for row, azimuth in enumerate(_mouth_azimuths(coarse)):
+        gap = np.abs(((fine_azimuths - azimuth + 180.0) % 360.0) - 180.0)
+        match = int(gap.argmin())
+        if gap[match] < 1e-9:
+            shared += 1
+            assert np.abs(coarse_points[row] - fine_points[match]).max() == 0.0
+    assert shared == coarse["grid_n_phi"]
+
+
+def test_surface_step_rejects_the_grid_that_missed_between_corner_arc_samples() -> None:
+    """The old 147x56 plan claimed 0.098353 mm for a 0.1138 mm mouth deviation.
+
+    Raising AngularSegments does not subdivide the fixed rounded corner arc.
+    This candidate must be rejected rather than certified from reference
+    points that never visit its largest error. Reading it against references
+    that subdivide the arc one, four, sixteen and thirty-two times gives
+    0.098353, 0.110423, 0.119540 and 0.119540 mm, so the correction is
+    converged well inside the subdivision this export uses.
+    """
+
+    design = DesignConfig.model_validate(ROUNDED_RECTANGLE_MORPH)
+    measured = _written_surface_measure(_geometry_params(_bare_grid_config(design)), 147, 56)
+    assert measured is not None
+    assert measured[0].angular_linear > STL_CHORD_TOLERANCE_MM
+
+
+def _strips_of_written_faces(surfaces, n_phi: int, samples: int) -> np.ndarray:
+    """Points on the *written file's* surface: both ends of every ruling.
+
+    ``(bands, n_phi * samples + 1, 2, 3)``, the shape ``_distance_to_loft``
+    reads. The loft is ruled with ``maxDegree=1``, so the segment joining the
+    two boundary samples taken at one parameter lies exactly on the face; both
+    ends come from that same face parameterisation, because evaluating the two
+    section curves separately would pair them by their own chord lengths and
+    skew the strip. Nothing here is rebuilt from the design: the geometry is
+    whatever OCC read back out of the STEP.
+    """
+
+    import gmsh
+
+    count = n_phi * samples
+    strips = np.empty((len(surfaces), count + 1, 2, 3))
+    for band, face in enumerate(surfaces):
+        low, high = gmsh.model.getParametrizationBounds(2, face)
+        u = np.linspace(low[0], high[0], count + 1)
+        for side, v in enumerate((low[1], high[1])):
+            parameters = np.column_stack((u, np.full_like(u, v))).reshape(-1)
+            strips[band, :, side] = np.asarray(
+                gmsh.model.getValue(2, face, parameters.tolist())
+            ).reshape(-1, 3)
+    return strips
+
+
+# --- an independent reading of the written face, sharing no distance code ----
+#
+# The production measurement replaces the face between consecutive strip
+# samples with a chord and takes a point-to-quad distance. These helpers do
+# something different: they use the *ruled* premise directly. ``makeRuled`` with
+# ``maxDegree=1`` makes the face degree one in v, so at a fixed surface
+# parameter u it traces exactly the straight segment between its two boundary
+# points, and the face is the union of those segments. The exact distance from a
+# point to the face is therefore
+#
+#     min over u of  dist(point, segment(S(u, v_lo), S(u, v_hi)))
+#
+# a one-dimensional minimisation whose inner term is closed form. Nothing below
+# calls ``_distance_to_loft``, ``quad_distance`` or ``distance_to_facets``, so a
+# defect in the production kernel cannot hide in the number it is checked
+# against. The premise itself is verified rather than assumed, by
+# ``_off_ruling_residual``.
+
+
+def _ruling_ends(face, u_values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Both ends of the ruling at each surface parameter, from the face itself."""
+
+    import gmsh
+
+    low, high = gmsh.model.getParametrizationBounds(2, face)
+    ends = []
+    for v in (low[1], high[1]):
+        parameters = np.column_stack((u_values, np.full_like(u_values, v))).reshape(-1)
+        ends.append(
+            np.asarray(gmsh.model.getValue(2, face, parameters.tolist())).reshape(-1, 3)
+        )
+    return ends[0], ends[1]
+
+
+def _point_to_segments(point: np.ndarray, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
+    """Closed-form distance from one point to many segments."""
+
+    edge = ends - starts
+    length = (edge * edge).sum(-1)
+    offset = point[None, :] - starts
+    position = np.clip(
+        np.where(length > 0.0, (offset * edge).sum(-1) / np.where(length > 0.0, length, 1.0), 0.0),
+        0.0, 1.0,
+    )
+    delta = offset - position[:, None] * edge
+    return np.sqrt((delta * delta).sum(-1))
+
+
+def _off_ruling_residual(face, samples: int = 129) -> float:
+    """How far an interior isoparametric point sits off its own straight ruling.
+
+    The premise every reading below rests on. If the face were not degree one
+    in v this is where it would show, and the minimisation would be measuring a
+    surface the file does not contain.
+    """
+
+    import gmsh
+
+    low, high = gmsh.model.getParametrizationBounds(2, face)
+    u = np.linspace(low[0], high[0], samples)
+    start, end = _ruling_ends(face, u)
+    worst = 0.0
+    for fraction in (0.25, 0.5, 0.75):
+        v = low[1] + fraction * (high[1] - low[1])
+        parameters = np.column_stack((u, np.full_like(u, v))).reshape(-1)
+        interior = np.asarray(
+            gmsh.model.getValue(2, face, parameters.tolist())
+        ).reshape(-1, 3)
+        edge = end - start
+        length = (edge * edge).sum(-1)
+        offset = interior - start
+        position = np.clip(
+            np.where(length > 0.0, (offset * edge).sum(-1) / np.where(length > 0.0, length, 1.0), 0.0),
+            0.0, 1.0,
+        )
+        delta = offset - position[:, None] * edge
+        worst = max(worst, float(np.sqrt((delta * delta).sum(-1)).max()))
+    return worst
+
+
+def _golden_minimum(face, point: np.ndarray, lo: float, hi: float, iterations: int = 80):
+    """Golden-section on one u bracket. Returns (distance, u, iterate_gap)."""
+
+    ratio = (np.sqrt(5.0) - 1.0) / 2.0
+    left, right = hi - ratio * (hi - lo), lo + ratio * (hi - lo)
+    values = []
+
+    def at(u: float) -> float:
+        start, end = _ruling_ends(face, np.array([u]))
+        return float(_point_to_segments(point, start, end)[0])
+
+    f_left, f_right = at(left), at(right)
+    for _ in range(iterations):
+        if f_left <= f_right:
+            hi, right, f_right = right, left, f_left
+            left = hi - ratio * (hi - lo)
+            f_left = at(left)
+        else:
+            lo, left, f_left = left, right, f_right
+            right = lo + ratio * (hi - lo)
+            f_right = at(right)
+        values.append(min(f_left, f_right))
+    best = min(f_left, f_right)
+    tail = values[-8:]
+    return best, (left if f_left <= f_right else right), float(max(tail) - min(tail))
+
+
+def _independent_distance_to_written_face(faces, bands, point: np.ndarray, scan: int = 4097):
+    """Exact distance from one point to the written faces, by ruling search.
+
+    Seeded by a scan dense enough that the bracket around its discrete minimum
+    contains the continuous one -- the distance along the ring is 1-Lipschitz in
+    arc length, so a scan step bounds how far the true minimum can hide -- and
+    then refined. Two different brackets are refined independently and must
+    agree, so the answer is convergent rather than a lucky seed.
+    """
+
+    import gmsh
+
+    best = (np.inf, None, None, None)
+    for band in bands:
+        face = faces[band]
+        low, high = gmsh.model.getParametrizationBounds(2, face)
+        u = np.linspace(low[0], high[0], scan)
+        start, end = _ruling_ends(face, u)
+        coarse = _point_to_segments(point, start, end)
+        index = int(coarse.argmin())
+        if coarse[index] < best[0]:
+            best = (float(coarse[index]), band, u, index)
+    _coarse, band, u, index = best
+    face = faces[band]
+    narrow, u_narrow, gap = _golden_minimum(
+        face, point, u[max(index - 1, 0)], u[min(index + 1, len(u) - 1)]
+    )
+    wide, _u_wide, wide_gap = _golden_minimum(
+        face, point, u[max(index - 4, 0)], u[min(index + 4, len(u) - 1)]
+    )
+    return {
+        "distance": min(narrow, wide),
+        "band": band,
+        "u": u_narrow,
+        # The face's whole parameter span, so a caller can size a strip
+        # interval without knowing how densely the seed scan was taken.
+        "u_range": float(u[-1] - u[0]),
+        "iterate_gap": max(gap, wide_gap),
+        "seed_gap": abs(narrow - wide),
+    }
+
+
+def _chord_sagitta(face, u_star: float, step: float) -> float:
+    """Largest chord-to-face deviation over the strip intervals around ``u*``.
+
+    This is the bound the production reading's own approximation licenses: it
+    replaces the face between consecutive strip samples with a chord, so the
+    distance it reports cannot differ from the true one by more than how far
+    that chord departs from the face. Measured here from the file rather than
+    assumed, which is what makes the agreement check below a real constraint
+    instead of a restatement of the expected number.
+    """
+
+    edges = u_star + step * np.arange(-2, 3, dtype=float)
+    start, end = _ruling_ends(face, edges)
+    middles = 0.5 * (edges[:-1] + edges[1:])
+    mid_start, mid_end = _ruling_ends(face, middles)
+    chord_start = 0.5 * (start[:-1] + start[1:])
+    chord_end = 0.5 * (end[:-1] + end[1:])
+    return max(
+        float(np.linalg.norm(mid_start - chord_start, axis=1).max()),
+        float(np.linalg.norm(mid_end - chord_end, axis=1).max()),
+    )
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -510,13 +796,56 @@ def test_written_surface_step_meets_its_chord_target_after_occ_round_trip(
 ) -> None:
     """Probe the file, including loft stations, interiors, and periodic seam.
 
-    Each sample is measured against the band it falls in *and its neighbours*.
-    A sample on a loft station lies on the shared edge of two bands, and OCC's
-    projection onto one of them can converge somewhere else: on the 108x56 grid
-    the rounded-rectangle morph used to ship, asking only the band of matching
-    index returned 0.513322 mm for a point 0.152655 mm from the surface --
-    0.355464 mm even by exhaustive search over that one band. A deviation is a
-    distance to the surface, so every band that can hold the minimum is asked.
+    The deviation is measured, not projected. ``gmsh.model.getClosestPoint``
+    used to take this reading, and it over-reports on a trimmed ruled band at
+    its boundary: on the 248x56 rounded-rectangle grid it returned 0.169936 mm
+    for a mouth-ring sample 0.092936 mm from that same written face, and on the
+    grid before it 0.199449 mm for a point 0.1120 mm out. It converges to a
+    local minimum, and asking the two neighbouring bands as well -- which is
+    what an earlier fix here did, after one band alone read 0.513322 mm for a
+    point 0.152655 mm from the surface -- narrows the failure without removing
+    it. So the faces are sampled instead: every ruling is taken from the file's
+    own geometry, and the reading is a point-to-quad distance between
+    neighbouring rulings.
+
+    That reading is exact against the quad strip, not against the face, and it
+    is worth being precise about which parts of it are approximations and which
+    way each one leans. There are four, not one:
+
+    1. *The ruling in v is exact.* ``makeRuled`` with ``maxDegree=1`` makes the
+       face degree one in v, so the segment between the two boundary samples at
+       one parameter lies on the face. Measured, not assumed --
+       ``_off_ruling_residual`` puts interior isoparametric points on their own
+       ruling to about 1e-13 mm.
+    2. *The reference is a finite set of points, so the maximum it finds is a
+       lower bound on the true maximum over the surface.* One-sided, and it
+       under-reads. ``_WRITTEN_SAMPLING_MARGIN`` in the planner exists for this.
+    3. *The quad between two rulings stands in for the spline through them, and
+       its error is two-sided.* The quad's corners are on the face but its
+       interior is not, so whether the chord falls nearer to or further from a
+       reference point depends on which side of the local curvature that point
+       sits. Measured against the independent minimisation below on the
+       rounded-rectangle morph: at 16 samples per segment the readings ran from
+       0.00012 mm below the true distance to 0.00067 mm above it over a spread
+       of sampled points, and at the point that sets the maximum it reads high.
+    4. *The cell and band search is bounded, so it can only over-read* -- see
+       ``_distance_to_loft``. It costs nothing measurable here, but it is a
+       second approximation and it leans the other way from (3).
+
+    (3) converges. Holding the reference fixed and doubling only the strip
+    density, the rounded-rectangle maximum moved 0.094490 mm -> 0.094005 mm,
+    which is second order: the directly measured error at 16 samples was
+    0.00067 mm, and 4/3 of the 0.00048 mm difference predicts 0.00065 mm. Note
+    that the difference between two densities is not itself a bound on either --
+    the bound asserted below is measured from the file, as the largest departure
+    of the strip chord from the face near the point being checked.
+
+    None of this is a proof over every design; it is a measurement with stated
+    limits, and acceptance keeps ``_WRITTEN_SAMPLING_MARGIN`` of the reading in
+    hand on top of it.
+
+    Every column of the reference is measured, not a sample of the bands: this
+    reading costs no OCC projection, so there is no longer a budget to spend.
     """
 
     import gmsh
@@ -524,9 +853,20 @@ def test_written_surface_step_meets_its_chord_target_after_occ_round_trip(
     design = DesignConfig.model_validate(payload)
     plan = _surface_grid_plan(design)
     source = _inner_grid(design, grid=(plan.angular, plan.length))
-    analytic = _inner_grid(
-        design,
-        grid=(2 * source.shape[0], 2 * (source.shape[1] - 1)),
+    # The morph builder keeps three arc intervals regardless of the requested
+    # angular count. A merely 2x/8x angular grid therefore never probes between
+    # those arc samples. Refine them separately in this independent reference.
+    from hornlab_mesher.config_builder import build_point_grid
+    from hornlab_mesher.profile_sampling import ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY
+
+    reference = build_point_grid({
+        **_geometry_params(_bare_grid_config(design)),
+        "angularSegments": 2 * source.shape[0],
+        "lengthSegments": 2 * (source.shape[1] - 1),
+        ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY: 16,
+    })
+    analytic = np.asarray(reference["inner_points"]).reshape(
+        reference["grid_n_phi"], reference["grid_n_length"] + 1, 3,
     )
     step_path = tmp_path / "surface.step"
     step_path.write_text(_write_step(source), encoding="utf-8")
@@ -543,36 +883,58 @@ def test_written_surface_step_meets_its_chord_target_after_occ_round_trip(
         assert len(surfaces) == source.shape[1] - 1
 
         cell_count = len(surfaces)
-        # Fourteen bands spread over the length, plus the last six: the mouth
-        # is where a morph's curvature and a rollback's turn-back live. This
-        # was twenty-four when each sample was measured against one band; every
-        # sample now costs three OCC projections instead of one, and a fourth
-        # design shares the budget.
-        cells = set(np.linspace(0, cell_count - 1, min(14, cell_count), dtype=int))
-        cells.update(range(max(0, cell_count - 6), cell_count))
-        maximum = 0.0
-        for cell in sorted(cells):
-            neighbours = sorted(
-                {max(cell - 1, 0), cell, min(cell + 1, cell_count - 1)}
-            )
-            # Even columns are analytic loft stations; odd columns are newly
-            # evaluated analytic points halfway between adjacent stations.
-            for column in (2 * cell, 2 * cell + 1, 2 * cell + 2):
-                points = analytic[:, column]
-                distance = None
-                for neighbour in neighbours:
-                    closest, _ = gmsh.model.getClosestPoint(
-                        2, surfaces[neighbour], points.reshape(-1).tolist()
-                    )
-                    candidate = np.linalg.norm(
-                        points - np.asarray(closest).reshape(-1, 3), axis=1
-                    )
-                    distance = (
-                        candidate if distance is None
-                        else np.minimum(distance, candidate)
-                    )
-                maximum = max(maximum, float(distance.max()))
+        # Even columns of the reference are analytic loft stations; odd columns
+        # are newly evaluated analytic points halfway between adjacent ones. A
+        # station lies on the shared edge of two bands, so the search covers the
+        # band each column falls in and its neighbours.
+        bands = axial_band_of_column(analytic.shape[1], source.shape[1] - 1)
+        readings = _distance_to_loft(
+            analytic,
+            _strips_of_written_faces(
+                surfaces, source.shape[0], _LOFT_SAMPLES_PER_SEGMENT
+            ),
+            bands,
+            _LOFT_SAMPLES_PER_SEGMENT,
+        )
+        maximum = float(readings.max())
 
+        # The premise the independent reading rests on, checked on the file
+        # rather than taken from how the loft was built.
+        for probe in (0, cell_count // 2, cell_count - 1):
+            assert _off_ruling_residual(surfaces[probe]) < 1e-9
+
+        # Check the reading that decides this test against a minimisation that
+        # shares no code with it. One point keeps the cost to a fraction of a
+        # second on top of a round trip that already dominates the runtime.
+        row, column = np.unravel_index(int(readings.argmax()), readings.shape)
+        worst = analytic[row, column]
+        base = int(bands[column])
+        neighbourhood = sorted({
+            max(base - 1, 0), base, min(base + 1, cell_count - 1),
+        })
+        independent = _independent_distance_to_written_face(
+            surfaces, neighbourhood, worst
+        )
+        # Converged, and not on one lucky bracket: two seeds, and the last
+        # iterates of each no longer move.
+        assert independent["iterate_gap"] < 1e-9
+        assert independent["seed_gap"] < 1e-9
+        # The tolerance itself, decided without the production distance kernel.
+        assert independent["distance"] <= STL_CHORD_TOLERANCE_MM
+        # And the production reading has to agree with it to within what its own
+        # chord approximation licenses, measured from the file at this point.
+        # Twice the sagitta leaves room for an asymmetric interval and for the
+        # nearest point falling in the neighbouring one; the floor keeps a flat
+        # patch, where the sagitta is zero, from asserting exact equality.
+        sagitta = _chord_sagitta(
+            surfaces[independent["band"]],
+            independent["u"],
+            independent["u_range"] / (source.shape[0] * _LOFT_SAMPLES_PER_SEGMENT),
+        )
+        assert abs(float(readings[row, column]) - independent["distance"]) <= (
+            2.0 * sagitta + 1e-6
+        )
+        for cell in range(cell_count):
             low, high = gmsh.model.getParametrizationBounds(2, surfaces[cell])
             midpoint = 0.5 * (low[1] + high[1])
             parameters = [low[0], midpoint, high[0], midpoint]

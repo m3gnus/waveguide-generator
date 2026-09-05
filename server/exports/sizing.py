@@ -794,6 +794,7 @@ def plan_grid(
     axial: tuple[str, float],
     triangle_ceiling: int | None = None,
     measure: Measurement = measure_deviation,
+    max_attempts: int = _GRID_ATTEMPTS,
 ) -> GridPlan:
     """Choose the coarsest grid that meets each direction's own tolerance.
 
@@ -808,6 +809,10 @@ def plan_grid(
     one above, which is right for an artifact whose surface *is* the sampled
     grid; the surface STEP passes its own, because a spline lofted through the
     same points is not the chord between them.
+
+    ``max_attempts`` bounds the probes. The default suits a reading that falls
+    about as fast as the step model expects; a measurement whose error decays
+    more slowly needs more of them to arrive, and says so where it asks.
 
     The counts a plan carries are *requests*, not the grid the builder resolves
     them to, because every consumer hands them straight back to the builder.
@@ -827,7 +832,7 @@ def plan_grid(
     tolerance_for_report = min(angular_tolerance, axial_tolerance)
     best: GridPlan | None = None
     finest: GridPlan | None = None
-    for _ in range(_GRID_ATTEMPTS):
+    for _ in range(max_attempts):
         measured = measure(params, angular_count, length_count)
         if measured is None:
             plan = GridPlan(

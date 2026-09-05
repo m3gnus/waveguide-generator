@@ -340,6 +340,25 @@ _LOFT_SEARCH_WINDOW = 2
 #: Sampled at 8x with 16 strip samples the reading is about 0.10090 mm.
 _WRITTEN_REFERENCE_MULTIPLE = 8
 _WRITTEN_REFERENCE_OFFSET = 9
+#: The reference's own blind spot, and why the multiple above cannot close it.
+#: A rounded-rectangle morph samples its corner arc with three fixed intervals
+#: whatever the angular count, so asking for more segments refines the straight
+#: sides and leaves the arc alone: on the 120x80 r12 morph the arc breakpoints
+#: sit at 42.9473, 44.2581, 45.7419 and 47.0527 degrees at every count from 147
+#: to 2352, while the sides fall from 2.26 to 0.15 degrees. A reference built by
+#: multiplying the count therefore never samples between them -- which is where
+#: the ring spline's overshoot lives. Measured on the written file, the 147x56
+#: grid this export used to choose read 0.0937 mm against such a reference and
+#: 0.1138 mm against one that subdivides the arc.
+#:
+#: ``ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY`` is the builder's own private control
+#: for exactly this, and it moves only the sampling: subdividing gives the same
+#: analytic points at every shared azimuth plus new ones inside the arc. This
+#: changes the measurement reference alone -- never the profile grid, and never
+#: the surface written for the user. A test pins the dependency on that key,
+#: because a builder that stopped honouring it would silently restore the blind
+#: spot rather than fail.
+_WRITTEN_CORNER_ARC_SUBDIVISION = 16
 #: What the dense reference still cannot see. A sampled maximum is a lower
 #: bound on the real one, and the spike above is narrow enough that lower-density
 #: phases read below the roughly 0.10146 mm converged value. Accepting requires
@@ -573,9 +592,16 @@ def _written_surface_measure(
     strips = _loft_strips(coarse, _LOFT_SAMPLES_PER_SEGMENT)
     band = axial_band_of_column(2 * n_length + 1, n_length)
 
+    from hornlab_mesher.profile_sampling import ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY
+
+    reference_params = {
+        **params,
+        ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY: _WRITTEN_CORNER_ARC_SUBDIVISION,
+    }
+
     def against(multiple: int, offset: int) -> float | None:
         reference, _, reference_length = _point_grid(
-            params, multiple * angular + offset, 2 * n_length
+            reference_params, multiple * angular + offset, 2 * n_length
         )
         if reference_length != 2 * n_length:
             return None
@@ -615,6 +641,13 @@ def _surface_grid_plan(design: DesignConfig) -> GridPlan:
         angular=("linear", STL_CHORD_TOLERANCE_MM),
         axial=("linear", STL_CHORD_TOLERANCE_MM),
         measure=_written_surface_measure,
+        # Corner-spline deviation falls more slowly than the chord model each
+        # refinement step is sized from, so this reading needs more probes to
+        # arrive than the chord one does. Measured on the 120x80 r12 morph, the
+        # generic six stop at 177x56 and 0.1108 mm -- a grid that misses -- and
+        # the budget reaches 248x56 and 0.0992 mm at sixteen. Twenty changes
+        # nothing, so this is bounded work with room, not a ceiling to sit on.
+        max_attempts=16,
     )
 
 
