@@ -135,7 +135,16 @@ export function GroundPlaneControls() {
   const plan = plannedBackendCapabilities(store.engine, engines, engineSelection, store.solverMode);
   const limitation = backendLimitation(backend, 'ground-plane', plan);
   const belowGround = ground.enabled ? belowGroundNote(ground.height_m, store.polar) : undefined;
-  const axes = backend?.ground_plane_axes;
+  // The union over the plan, for the same reason the limitation is plan-based:
+  // AUTO's active backend is only the first candidate the server walks. Judging
+  // the axis list on it alone is worse than judging the warning that way, because
+  // the server sends `ground_plane_axes: []` for an engine with no ground plane
+  // and `[]` is truthy -- so an AUTO Mac got no warning AND all three axes
+  // disabled, with nothing on screen saying why. An engine with no axes simply
+  // contributes none.
+  const axes = plan.length === 0
+    ? backend?.ground_plane_axes
+    : [...new Set(plan.flatMap((item) => item.ground_plane_axes ?? []))];
   return <>
     <ToggleRow
       id="solve-ground-plane"

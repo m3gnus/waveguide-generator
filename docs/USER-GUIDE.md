@@ -198,7 +198,8 @@ height that works rather than solved with the horn buried. Standing the model
 off the surface removes the matching mirror plane, so Auto symmetry drops to
 the reduction that survives -- a floor costs the horizontal cut but keeps the
 left/right one. The ground plane needs BEMPP full 3D on this build; asking any
-other engine for one is refused rather than solved without the surface. It
+other engine for one is refused rather than solved without the surface, and it
+is not available for imported CAD geometry at all, which solves on Metal. It
 cannot be combined with an infinite baffle -- the two are different half-space
 boundaries, each claiming the whole exterior, and the pair is refused when the
 solve is submitted whichever engine you choose.

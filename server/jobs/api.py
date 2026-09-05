@@ -172,6 +172,7 @@ class FieldPlaneUnavailableResponse(BaseModel):
         "unsupported_axisymmetric_formulation",
         "unsupported_coupled_infinite_baffle",
         "unsupported_per_band_mesh_ladder",
+        "unsupported_ground_plane",
     ]
     message: str
     remedy: str

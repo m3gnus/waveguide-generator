@@ -1179,3 +1179,44 @@ def test_real_bempp_engine_traces_round_trip_through_field_plane_pipeline(
             await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_a_grounded_solve_refuses_the_field_plane_with_a_remedy(
+    tmp_path: Path,
+) -> None:
+    """The refusal must arrive as the versioned envelope, not a bare token.
+
+    Without a branch here the reason falls through to ArtifactMissing and the
+    caller gets 410 with the raw token, while the viewport renders its default
+    "no completed run has retained field traces" -- which reads as the solve
+    having failed rather than as one output being withheld.
+    """
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        _create_job(
+            store,
+            "grounded",
+            traces=False,
+            unavailable_reason="unsupported_ground_plane",
+        )
+
+        status, raw, _headers = await _request(
+            app, "/api/results/grounded/field-plane", _body()
+        )
+
+        assert status == 422
+        payload = json.loads(raw)
+        assert payload["code"] == "unsupported_ground_plane"
+        assert payload["error_contract_version"] == 1
+        assert payload["remedy"] == "Turn the ground plane off and re-solve."
+        # It must say what is still trustworthy, or the refusal reads as a
+        # failed solve.
+        assert "polar and impedance results do include the ground" in (
+            payload["message"].lower()
+        )
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())

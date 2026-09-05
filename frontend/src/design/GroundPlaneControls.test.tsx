@@ -12,10 +12,17 @@ import { GroundPlaneControls } from './SolveOptionsSections';
  * error. These pin that the UI says so, rather than offering two similar names
  * and leaving the difference to be inferred.
  */
-const engine = (name: string, mountings: string[], groundPlaneAxes?: string[]) => ({
+/**
+ * Wire-faithful: the server always emits `ground_plane_axes`, as `[]` for an
+ * engine with no ground plane -- `asdict(EngineInfo)` has no omit-empty. An
+ * earlier version of this helper dropped the key when no axes were given, so a
+ * fixture engine had `undefined` where the real payload has `[]`. That hid a
+ * live bug, because `[]` is truthy in JS and `undefined` is not.
+ */
+const engine = (name: string, mountings: string[], groundPlaneAxes: string[] = []) => ({
   name, available: true, reason: 'ok', version: null, fast_paths: [],
   formulations: ['full-3d'], mountings, geometry_sources: ['parametric'],
-  ...(groundPlaneAxes ? { ground_plane_axes: groundPlaneAxes } : {}),
+  ground_plane_axes: groundPlaneAxes,
 });
 
 const capabilities = (engines: ReturnType<typeof engine>[], resolvedDefault = 'bempp') => ({
@@ -152,6 +159,25 @@ describe('ground plane controls', () => {
     act(() => { useSolveOptionsStore.getState().updateGroundPlane({ enabled: true }); });
     expect(container.querySelector('[role="alert"]')?.textContent)
       .toContain('does not support a rigid ground plane');
+  });
+
+  it('offers every axis the plan can reach, not just the first candidate\'s', () => {
+    // The regression this pairs with: the warning went plan-based while the
+    // axis list stayed active-backend-based. On an AUTO Mac the active backend
+    // is Metal, whose wire payload is ground_plane_axes: [] -- truthy -- so
+    // every axis was disabled while no warning explained it. A user could not
+    // pick a side or rear wall and was told nothing.
+    useSolveOptionsStore.getState().setEngine('auto');
+    render(capabilities([
+      engine('metal', ['free-standing', 'infinite-baffle']),
+      engine('bempp', ['free-standing', 'ground-plane'], ['x', 'y', 'z']),
+    ], 'metal'));
+    act(() => { useSolveOptionsStore.getState().updateGroundPlane({ enabled: true }); });
+    const options = Array.from(
+      container.querySelectorAll<HTMLOptionElement>('#ground-plane-axis option'),
+    );
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.filter((option) => option.disabled)).toHaveLength(0);
   });
 
   it('only sends ground_plane once it is enabled', () => {

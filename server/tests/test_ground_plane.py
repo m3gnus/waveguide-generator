@@ -608,35 +608,37 @@ def test_a_baffle_and_a_ground_plane_are_refused_on_every_engine(engine):
         asyncio.run(resolve_submission(request, engine_registry))
 
 
-def test_a_grounded_solve_keeps_no_field_traces():
-    """Refused, not relabelled.
 
-    The field evaluator reloads the mesh with the symmetry plane alone and has
-    no notion of a ground image, so retained traces would be integrated in free
-    space and drawn as a room with no floor. They are also taken on the
-    translated mesh while the persisted artifact is the untranslated one, so a
-    plane requested at the design origin would land height_m below the model.
+def test_imported_cad_geometry_refuses_a_ground_plane():
+    """Imported solves never reach the submission-boundary refusal.
+
+    They are refused earlier as a separate path, so a ground plane left enabled
+    in the parametric panel and carried into a CAD solve reached Metal, whose
+    adapter does not read it -- a free-standing answer with full field traces
+    and no warning. Refused where the imported context is built, which is the
+    one place every imported solve passes through.
     """
-    from server.solver.field_traces_store import (
-        describe_retention_refusal,
-        field_trace_retention_plan,
+    from server.jobs.models import SolveRequest
+    from server.solver.context import SolverContext
+
+    request = SolveRequest.model_validate(
+        {
+            "geometry": {
+                "type": "imported",
+                "ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C",
+                "manifest_sha256": "sha256:" + "a" * 64,
+                "artifact_sha256": "sha256:" + "b" * 64,
+                "drive_channels": [{"id": "main", "source_ids": ["source-main"]}],
+                "mesh": {"rigid_size_mm": 20, "transition_mm": 40, "source_size_mm": {"source-main": 4}},
+            },
+            "options": {
+                "engine": "metal",
+                "frequency_range": [500, 8000],
+                "num_frequencies": 3,
+                "ground_plane": {"enabled": True, "axis": "y", "height_m": 1.0},
+            },
+        }
     )
 
-    retain, reason, _estimated, _cap = field_trace_retention_plan(
-        "",
-        mesh_stats=None,
-        frequency_count=3,
-        channel_count=1,
-        enabled=True,
-        supported=False,
-        unsupported_reason="unsupported_ground_plane",
-        cap_bytes=1 << 30,
-    )
-    assert retain is False
-    assert reason == "unsupported_ground_plane"
-
-    detail = describe_retention_refusal(reason, None, 1 << 30)
-    assert detail is not None
-    assert "ground plane" in detail
-    # It must say what still IS trustworthy, or the user reads it as a failure.
-    assert "Polar and impedance results are unaffected" in detail
+    with pytest.raises(ValueError, match="not available for imported CAD"):
+        SolverContext.from_imported_request(request, quadrants=1234, source_motion="normal")

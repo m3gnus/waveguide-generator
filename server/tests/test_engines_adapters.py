@@ -663,3 +663,57 @@ def test_circsym_adapter_solves_an_explicit_list_verbatim(monkeypatch) -> None:
     response = circsym.solve_circsym_design(context)
     assert seen["freqs"] == list(frequencies)
     assert response["metadata"]["frequency_source"] == "explicit_list"
+
+
+def test_bempp_retains_no_field_traces_above_a_ground_plane(monkeypatch) -> None:
+    """A grounded solve must reach the retention plan as unsupported.
+
+    Not asserted by handing `field_trace_retention_plan` a `supported=False` it
+    was told to use -- that tests the plan, not the decision. This drives the
+    adapter and reads the reason it put on the response, so reverting the
+    `ground_plane is None` term in `solve_bempp_from_msh_text` fails here.
+
+    The field evaluator reloads the mesh with the symmetry plane alone and has
+    no ground image, so retained traces would be integrated in free space and
+    drawn as a room with no floor.
+    """
+    from server.solver.ground_plane import GroundPlane
+
+    def config_factory(**kwargs):
+        return _Config(source_motion="normal", **kwargs)
+
+    def solve(_path, _config):
+        result = _result()
+        result.surface_pressure_complex = np.ones((2, 9), dtype=np.complex128)
+        result.surface_neumann_complex = np.ones((2, 3), dtype=np.complex128)
+        return result
+
+    monkeypatch.setattr(bempp, "SolveConfig", config_factory)
+    monkeypatch.setattr(bempp, "bempp_solve", solve)
+    monkeypatch.setattr(bempp, "BIEFormulation", SimpleNamespace(COMPLEX_K="complex_k"))
+    monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        bempp,
+        "bempp_status",
+        lambda: {
+            "available": True,
+            "reason": "mock CPU",
+            "assembly_backend": "numba",
+            "coupled_infinite_baffle": True,
+            "ground_plane_axes": ("x", "y", "z"),
+        },
+    )
+
+    grounded = _context()
+    grounded.ground_plane = GroundPlane(axis="y", height_m=1.0)
+    response = bempp.solve_bempp_from_msh_text(_cabinet_msh(), grounded)
+    assert response["_field_traces"] is None
+    assert response["_field_trace_unavailable_reason"] == "unsupported_ground_plane"
+
+    # And the same solve without the plane still retains them, so the refusal
+    # is the ground plane rather than anything else in this fixture.
+    free = _context()
+    free.ground_plane = None
+    kept = bempp.solve_bempp_from_msh_text(_cabinet_msh(), free)
+    assert kept["_field_trace_unavailable_reason"] is None
+    assert kept["_field_traces"] is not None

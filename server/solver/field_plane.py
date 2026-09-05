@@ -272,6 +272,7 @@ class FieldPlaneService:
             "unsupported_axisymmetric_formulation",
             "unsupported_coupled_infinite_baffle",
             "unsupported_per_band_mesh_ladder",
+            "unsupported_ground_plane",
         }
         if unavailable_reason == "unsupported_per_band_mesh_ladder":
             raise FieldPlaneUnsupported(
@@ -289,6 +290,15 @@ class FieldPlaneService:
                     "For a coupled infinite-baffle design, also change Simulation "
                     "type to Free-standing."
                 ),
+            )
+        if unavailable_reason == "unsupported_ground_plane":
+            raise FieldPlaneUnsupported(
+                "A rigid ground plane is not represented in the field "
+                "evaluation, so a field plane from this solve would show the "
+                "horn in free space with no floor in it. The polar and "
+                "impedance results do include the ground.",
+                code="unsupported_ground_plane",
+                remedy="Turn the ground plane off and re-solve.",
             )
         if unavailable_reason == "unsupported_coupled_infinite_baffle":
             raise FieldPlaneUnsupported(
