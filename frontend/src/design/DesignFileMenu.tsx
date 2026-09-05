@@ -41,11 +41,17 @@ const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; det
   missing: { label: 'unlinked', detail: 'Unlinked: this file has no CAD-link identity yet. Its first CAD-linked export will create one.' },
 };
 
-function reportText(report: ImportReport): string {
-  const migrations = report.migrationsApplied.length
-    ? report.migrationsApplied.map((item) => item.name).join(', ')
-    : 'none';
-  return `${report.dialect.toUpperCase()} · migrations: ${migrations} · passthrough: ${report.passthrough.blockCount} blocks, ${report.passthrough.keyCount} keys preserved`;
+/**
+ * What an opened file's parse report says, in the status line.
+ *
+ * Show each migration's note, not its identifier: the server sends a sentence
+ * with every one, and `006_machine_solver_mode_not_portable` is not something a
+ * user can look up.
+ */
+export function reportText(report: ImportReport): string {
+  const summary = `${report.dialect.toUpperCase()} · migrations: ${report.migrationsApplied.length || 'none'} · passthrough: ${report.passthrough.blockCount} blocks, ${report.passthrough.keyCount} keys preserved`;
+  const notes = report.migrationsApplied.map((item) => item.note.trim()).filter(Boolean);
+  return notes.length ? `${summary} · ${notes.join(' ')}` : summary;
 }
 
 export async function exportProfileArtifacts(

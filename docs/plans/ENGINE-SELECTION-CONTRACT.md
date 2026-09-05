@@ -1,6 +1,11 @@
 # Proposal: the `WG.Solve` `Engine` / `SolverMode` contract
 
-**Status:** proposal, awaiting a decision. Nothing here is implemented.
+**Status:** partly enacted, 2026-09-05. **C2b, C3 and C4 are done**;
+`CFG-FORMAT.md` no longer advertises `Engine` in its canonical block and no
+longer claims the key is validated, and the open report now shows each
+migration's note instead of its internal identifier. **C1 is not taken and not decided** —
+see "Why C1 is still open", below, which corrects this proposal's own reasoning
+about what it would cost.
 **Answers:** the plan's "Engine selection contract — `WG.Solve`'s `Engine` and
 `SolverMode` are silently ignored and stripped; `CFG-FORMAT.md` implies
 otherwise. Decide and document."
@@ -95,14 +100,54 @@ the prose section that explains *why* the keys are not portable, and keep the
 table rows — but move them to a short "keys WG accepts and discards" list, so a
 reader meets them as history rather than as configuration.
 
-### C4 — make the migration note reachable
+### C4 — make the migration note reachable — DONE, and it was cheap
 
-Recorded as a known gap rather than a new one: migration notes currently do not
-reach the browser status line, which shows names only. C1 is worth little if its
-note lands somewhere no user reads. Either surface notes on the status line, or
-attach them to the import result the design panel already renders. **This is the
-one part of the proposal with a real cost, and it is the part that decides
-whether C1 is worth doing at all.**
+This proposal called C4 "the one part with a real cost". That was wrong, and the
+error is worth recording because it was what held C1. The note was never
+missing from the wire: `server/design_io/api.py` has always sent
+`migrationsApplied[].note`, and `frontend/src/api/designIo.ts` has always typed
+it. Only `reportText` in `frontend/src/design/DesignFileMenu.tsx` threw it away,
+joining `item.name` — so an opened file that silently lost a setting reported
+`006_machine_solver_mode_not_portable` to a user with nowhere to look that up.
+
+Fixed by showing the notes. Every existing migration gained an explanation at
+once, `Simulation.SolverMode` included. The gate this section set is therefore
+met: a note added by C1 would reach the screen.
+
+### Why C1 is still open
+
+C1 is blocked on something this proposal did not anticipate, not on C4.
+
+**Its proposed implementation site is the wrong one.**
+`_block_without_machine_solve_keys` runs from `_emit_block`, i.e. at
+*serialize* time. Import does not strip these keys at all: after
+`parse()`, `WG.Solve.Engine` is still in `extra_blocks["WG.Solve"].items`. A
+diagnostic emitted from there would fire when WG writes a file, not when a user
+opens one, which is the opposite of what C1 is for.
+
+**Reporting at parse has no channel, and making one is not free.** The open
+report's only per-item channel is `migrations`, whose entries are
+`MigrationApplication` — a record that an applied migration *changed the
+payload*. Nothing changes at parse here, so either:
+
+- a no-op migration is registered, which makes the report claim a transform
+  that did not happen; or
+- `ParsedDesign`, the `/design/open` and `/design/inspect` payloads,
+  `openapi.v1.json`, the CLI's `migrationsApplied` rendering and the frontend
+  `ImportReport` type all gain a second notes channel.
+
+**And stripping at parse instead is ruled out by a tested contract.**
+`test_modified_legacy_design_drops_machine_solver_path_from_ordered_block`
+asserts `serialize(parse(source)) == source` for a file carrying
+`Engine = bempp`: opening a file is not editing it, so an untouched save
+returns the author's own bytes. Dropping the keys at import breaks that.
+
+C1 is therefore not taken here, and nothing about it is decided. It remains a
+proposal: a diagnostic channel for keys that are accepted and discarded could be
+added after 0.3.2 without changing the serialization contract, since the strip
+already happens at write time and would not move. Its cost is the extra channel
+and its tests, and nobody has approved that. Until it is taken, `CFG-FORMAT.md`
+states plainly that these two keys are removed without a note.
 
 ## What this deliberately does not do
 
@@ -137,8 +182,12 @@ settings, not the portable design file. That is a separate proposal.
 
 ## Recommendation
 
-Take **C1 + C2b + C3**, and treat **C4** as the gate: if migration notes cannot
-be surfaced to the user in this cycle, C1 is a log line nobody reads, and the
-cheap honest subset is C2b + C3 alone — fix the document so it stops promising
-something the code does not do, and revisit the diagnostic when notes have a
-route to the screen.
+Original recommendation: take **C1 + C2b + C3**, and treat **C4** as the gate.
+
+What was taken, 2026-09-05: **C2b + C3 + C4**. C4 turned out to be one function
+rather than the expensive part, so the gate this proposal set for C1 — that a
+note would reach a user — is no longer what blocks it. C1 was left because it
+needs a report channel that does not exist; the section above sets out why, and
+that remains an unapproved proposal for after 0.3.2. Nothing ships wrong in the
+meantime, because the document no longer claims a validation or advertises the
+key.

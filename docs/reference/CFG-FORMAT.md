@@ -91,7 +91,6 @@ stays readable by both tools:
 
 ```cfg
 WG.Solve = {
-Engine = metal
 Symmetry = auto
 MeshValidation = strict
 Verbose = 0
@@ -105,7 +104,6 @@ Frequencies = 500, 1000, 2500, 8000
 
 | Key | Values | Notes |
 | --- | --- | --- |
-| `Engine` | backend name, or `auto` | Validated for shape only; the backend registry owns the names. |
 | `Symmetry` | `auto`, `full`, `half_xz`, `half_yz`, `quarter` | The solved full-3D domain. Axisymmetric solves use exact continuous rotational symmetry. |
 | `MeshValidation` | `warn`, `strict`, `off` | |
 | `Verbose` | `0`, `1` | |
@@ -120,13 +118,31 @@ is, and a value that cannot be read as written is dropped rather than guessed
 at. `SweepPoints = list` is honoured only alongside a `Frequencies` list that
 parses, so a hand-edited file cannot leave WG in a mode that refuses to solve.
 
+### Keys WG accepts and discards
+
 Two settings are deliberately not portable, because they describe the machine
 rather than the design: which backend runs the solve, and which formulation it
-uses. `Engine` and `SolverMode` in a `WG.Solve` block, and the legacy top-level
-`Simulation.SolverMode`, are therefore not honoured on any host and are stripped
-from a design WG writes. `Simulation.SolverMode` reports itself when dropped —
-see [SYMMETRY-CONTRACT.md](SYMMETRY-CONTRACT.md) — so stating one cannot be
-mistaken for setting one.
+uses. A `.cfg` moves between machines, and `Engine = metal` means nothing on a
+host with no Metal device, so honouring a stored name would make one design file
+behave differently — or fail — depending on where it was opened.
+
+| Key | Status |
+| --- | --- |
+| `WG.Solve.Engine` | Accepted for backward compatibility, never honoured, and removed from any file WG writes. |
+| `WG.Solve.SolverMode` | The same. |
+| `Simulation.SolverMode` | The legacy top-level spelling. Dropped at import, and named in the open report. |
+
+Neither `WG.Solve` key is validated: an unreadable or misspelled name is not a
+parse error, because rejecting a value that is about to be discarded would
+punish old files while changing nothing about the solve. The legacy
+`Simulation.SolverMode` is the only one of the three that reports itself when
+dropped — see [SYMMETRY-CONTRACT.md](SYMMETRY-CONTRACT.md). Its `WG.Solve`
+siblings are removed without a note; `docs/plans/ENGINE-SELECTION-CONTRACT.md`
+records why, and what closing that gap would cost.
+
+Opening a file is not editing it, so an untouched open and save returns the
+author's own bytes, these keys included. They are removed the first time WG
+rewrites the design.
 
 Exporting a config from a finished run writes that run's own recorded solve
 options, never the settings currently on screen.
