@@ -13,6 +13,10 @@ import pytest
 
 from server.engines.registry import EngineInfo, _mountings, detect_engines
 from server.jobs.models import GroundPlaneConfig, SolveOptions
+from server.solver import beat as _beat_module
+from server.solver import bempp as _bempp_module
+from server.solver import circsym as _circsym_module
+from server.solver import metal as _metal_module
 from server.solver.ground_plane import (
     GROUND_PLANE_AXES,
     NATIVE_GROUND_PLANE,
@@ -23,6 +27,43 @@ from server.solver.ground_plane import (
     place_above_ground,
 )
 from server.solver.symmetry import SymmetryResolution, restrict_for_ground_plane
+
+
+#: Capability probes are NOT run by the tests in this file.
+#:
+#: ``detect_engines()`` calls the real probes, and on Windows and Linux the
+#: BEAT-CPU one is not a lookup: ``server/engines/registry.py`` records that
+#: "available" for that row means hornlab-beat-bem has instantiated the CPU
+#: project and solved a 1 kHz probe through the precompiled engine bundle on
+#: this machine. A unit test asking what an engine advertises has no business
+#: starting a solver, and the work can outlive the test that started it -- this
+#: module runs immediately before test_statusapp_controller.py, whose waits are
+#: on child processes.
+#:
+#: The probes are imported inside ``detect_engines`` at call time, so stubbing
+#: them on their own modules is what takes effect.
+_STUB_STATUS = {"available": True, "reason": "stubbed for tests", "version": "test"}
+
+
+@pytest.fixture(autouse=True)
+def _no_real_solver_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        _beat_module,
+        "beat_backend_statuses",
+        lambda: {
+            backend: {**_STUB_STATUS, "backend": backend, "surface_traces": False}
+            for backend in _beat_module.BEAT_BACKENDS
+        },
+    )
+    monkeypatch.setattr(_bempp_module, "bempp_status", lambda: {
+        **_STUB_STATUS,
+        "coupled_infinite_baffle": True,
+        "ground_plane_axes": ("x", "y", "z"),
+        "ground_plane_composes_with_symmetry": True,
+    })
+    monkeypatch.setattr(_metal_module, "metal_status", lambda: dict(_STUB_STATUS))
+    monkeypatch.setattr(_circsym_module, "circsym_status", lambda: dict(_STUB_STATUS))
+
 
 
 def _msh(vertices):
@@ -470,3 +511,42 @@ def test_an_axisymmetric_plan_does_not_smuggle_a_ground_plane_past_the_gate():
             )
     finally:
         circsym.axisymmetric_eligibility_reasons = original
+
+
+def test_capability_tests_here_launch_no_solver_and_no_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe stub is the point of this file's autouse fixture, so pin it.
+
+    ``detect_engines()`` is called by several tests here to read what an engine
+    advertises. On Windows and Linux the real BEAT-CPU probe solves a 1 kHz
+    problem through the precompiled engine bundle to decide "available", which
+    is a solver run inside a unit test and can outlive it.
+
+    Two independent assertions, because either alone is weak: no subprocess is
+    created at all, and the BEAT probe specifically is the stub rather than the
+    real one. Neutralise the fixture and the second fires immediately.
+    """
+    import subprocess
+
+    def refuse(*args, **kwargs):  # pragma: no cover - the assertion is the point
+        raise AssertionError(f"a unit test spawned a subprocess: {args!r}")
+
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+    monkeypatch.setattr(subprocess, "run", refuse)
+
+    probed: list[str] = []
+    real = _beat_module.beat_backend_statuses
+    monkeypatch.setattr(
+        _beat_module,
+        "beat_backend_statuses",
+        lambda: probed.append("beat") or real(),
+    )
+
+    engines = {engine.name: engine for engine in detect_engines()}
+
+    assert probed == ["beat"], "detect_engines must have asked the stubbed probe"
+    assert engines["bempp"].available is True
+    assert engines["bempp"].reason == "stubbed for tests", (
+        "the real bempp probe ran; the autouse stub is not in effect"
+    )
