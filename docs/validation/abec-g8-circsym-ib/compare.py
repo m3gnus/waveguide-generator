@@ -37,11 +37,12 @@ HERE = Path(__file__).resolve().parent
 
 TAG_DOME, TAG_WALL, TAG_DISC = 2, 3, 4
 
-# ABEC defaults, stated in its manual. air_density we can match through
-# SolveConfig; the sound speed we cannot -- hornlab_metal_bem hardcodes
-# _constants.SPEED_OF_SOUND = 343.0 with no config knob, so the shipped solver
-# runs 0.093% slow against ABEC. Small, but reported rather than hidden, and
-# an odd asymmetry given air_density is configurable.
+# ABEC defaults, stated in its manual. Both are matched through SolveConfig:
+# `air_density` always was configurable, and `speed_of_sound` became so in
+# hornlab-metal-bem ce1b747, which WG's pin now carries. Before that knob
+# existed this harness ran the package default 343.0 m/s, 0.093% slow against
+# ABEC -- a fixed bias in every number it produced. Matching c here removes it;
+# see the README for the residual it does and does not explain.
 RHO = 1.205
 C_ABEC = 343.32
 P_REF = 20e-6
@@ -152,6 +153,7 @@ def solve_ours(mesh, frequencies, angle_count):
         velocity_mode=VelocityMode.VELOCITY,
         circsym_aperture_tag=TAG_DISC,
         air_density=RHO,
+        speed_of_sound=C_ABEC,
         observation=ObservationConfig(
             distance_m=2.0,
             angle_min_deg=0.0,
@@ -226,18 +228,21 @@ def main():
     )
     print()
 
-    import hornlab_metal_bem.circsym as circsym_mod
+    from hornlab_metal_bem._constants import SPEED_OF_SOUND as C_PACKAGE_DEFAULT
 
-    c_shipped = circsym_mod.SPEED_OF_SOUND
-    c_used = c_shipped
+    c_used = C_ABEC
     print(f"element cap {max_len * 1000:.2f} mm (ABEC's lambda/2 at "
-          f"{ABEC_MESH_FREQUENCY / 1000:g} kHz); sound speed ours {c_shipped} vs "
-          f"ABEC {C_ABEC} m/s, {100 * (C_ABEC - c_shipped) / C_ABEC:.3f}% apart")
+          f"{ABEC_MESH_FREQUENCY / 1000:g} kHz); sound speed {c_used} m/s on "
+          f"both sides (package default {C_PACKAGE_DEFAULT} m/s, overridden "
+          f"through SolveConfig.speed_of_sound)")
     print()
     result = solve_ours(mesh, freqs, angle_count)
-    # Empirically our impedance conjugates ABEC's (real parts agree to <0.5%,
-    # imaginary parts are equal and opposite), so the two use opposite time
-    # conventions. Conjugate ours into ABEC's before any phase-bearing compare.
+    # Our results are ABEC's complex conjugate, and that is the documented
+    # convention pair rather than a defect in either: this solver states the
+    # e^{-iwt} time factor with the outgoing e^{+ikr} Green's kernel, ABEC
+    # documents e^{-jkr} and so uses e^{+jwt}. Measured here too -- radiation
+    # impedance real parts agree to <0.5% while the imaginary parts are equal
+    # and opposite. Conjugate ours into ABEC's before any phase-bearing compare.
     ours = np.conj(result.pressure_complex[:, 0, :])  # (F, A), horizontal plane
 
     # ABEC drives acceleration a = 100 m/s^2; we drive v_n = 1 m/s. Under the
