@@ -128,21 +128,33 @@ behave differently — or fail — depending on where it was opened.
 
 | Key | Status |
 | --- | --- |
-| `WG.Solve.Engine` | Accepted for backward compatibility, never honoured, and removed from any file WG writes. |
+| `WG.Solve.Engine` | Accepted for backward compatibility, never honoured, and named in the open report. Removed from any file WG writes. |
 | `WG.Solve.SolverMode` | The same. |
 | `Simulation.SolverMode` | The legacy top-level spelling. Dropped at import, and named in the open report. |
 
+**Stating one cannot be mistaken for setting one.** All three report themselves.
+`Simulation.SolverMode` is dropped at import and reported as a migration — see
+[SYMMETRY-CONTRACT.md](SYMMETRY-CONTRACT.md). The two `WG.Solve` keys are not
+migrated, because they are not touched at import at all; they are reported
+separately, under `ignoredSettings`, with a sentence naming the key, the value
+the file gave, and where to choose the setting instead:
+
+> `WG.Solve.Engine` states `'metal'`. Which backend runs a solve depends on the
+> host, so the solve ignores it. Choose the engine in Solve options.
+
+That note reaches the interface's open report, `POST /api/design/open`,
+`POST /api/design/import-report`, and `wg validate` in both its JSON and text
+output. The field is additive and always present, empty when a file states
+neither key.
+
 Neither `WG.Solve` key is validated: an unreadable or misspelled name is not a
 parse error, because rejecting a value that is about to be discarded would
-punish old files while changing nothing about the solve. The legacy
-`Simulation.SolverMode` is the only one of the three that reports itself when
-dropped — see [SYMMETRY-CONTRACT.md](SYMMETRY-CONTRACT.md). Its `WG.Solve`
-siblings are removed without a note; `docs/plans/ENGINE-SELECTION-CONTRACT.md`
-records why, and what closing that gap would cost.
+punish old files while changing nothing about the solve. The value is repeated
+back as written, whatever it says.
 
 Opening a file is not editing it, so an untouched open and save returns the
-author's own bytes, these keys included. They are removed the first time WG
-rewrites the design.
+author's own bytes, these keys included — the report is what tells the user, not
+a rewrite. They are removed the first time WG rewrites the design.
 
 Exporting a config from a finished run writes that run's own recorded solve
 options, never the settings currently on screen.

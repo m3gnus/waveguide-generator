@@ -45,6 +45,12 @@ def _report(parsed: ParsedDesign) -> dict[str, Any]:
     return {
         "dialect": parsed.dialect,
         "migrationsApplied": migrations,
+        # Settings the file states that the solve does not read. Additive and
+        # optional: an older client that ignores the key sees what it always saw.
+        "ignoredSettings": [
+            {"key": item.key, "value": item.value, "note": item.note}
+            for item in parsed.ignored_settings
+        ],
         "passthrough": {
             "keysPreserved": sorted(parsed.extra_keys),
             "blocksPreserved": sorted(parsed.extra_blocks),

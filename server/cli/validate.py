@@ -47,6 +47,7 @@ def _base_payload(
         "file": str(path),
         "dialect": None,
         "migrationsApplied": [],
+        "ignoredSettings": [],
         "settingsSource": "defaults",
         "clientRequestId": None,
         "frequencies": None,
@@ -229,6 +230,10 @@ async def validate_path(
             payload["migrationsApplied"] = [
                 {"name": application.name, "note": application.note}
                 for application in parsed.migrations
+            ]
+            payload["ignoredSettings"] = [
+                {"key": item.key, "value": item.value, "note": item.note}
+                for item in parsed.ignored_settings
             ]
             file_settings = has_solve_blocks(parsed.extra_blocks)
             if overlay is not None:

@@ -34,6 +34,12 @@ def render_human(payload: dict[str, Any], stream: TextIO) -> None:
         ", ".join(migration_names) if migration_names else "none",
     )
 
+    # One line per stated-but-unread setting, carrying the note rather than the
+    # key alone: the key on its own does not say what happened to it.
+    for ignored in payload.get("ignoredSettings") or []:
+        if isinstance(ignored, dict) and ignored.get("note"):
+            _line(stream, "Ignored", str(ignored["note"]))
+
     frequencies = payload.get("frequencies")
     if isinstance(frequencies, dict):
         _line(

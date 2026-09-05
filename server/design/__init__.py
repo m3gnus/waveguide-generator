@@ -2,11 +2,12 @@
 
 from .migrate import MIGRATIONS, MigrationApplication, apply_migrations
 from .schema import DesignConfig, Expr
-from .textcfg import ParsedDesign, TextConfigError, parse, serialize
+from .textcfg import IgnoredSetting, ParsedDesign, TextConfigError, parse, serialize
 
 __all__ = [
     "DesignConfig",
     "Expr",
+    "IgnoredSetting",
     "MIGRATIONS",
     "MigrationApplication",
     "ParsedDesign",

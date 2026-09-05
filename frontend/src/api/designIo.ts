@@ -18,9 +18,18 @@ export interface MigrationApplication {
   note: string;
 }
 
+/** A setting the file states that the solve does not read. */
+export interface IgnoredSetting {
+  key: string;
+  value: string;
+  note: string;
+}
+
 export interface ImportReport {
   dialect: 'mwg' | 'ath';
   migrationsApplied: MigrationApplication[];
+  /** Optional: a server that predates the field simply sends nothing. */
+  ignoredSettings?: IgnoredSetting[];
   passthrough: {
     keysPreserved: string[];
     blocksPreserved: string[];
