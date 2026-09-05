@@ -108,14 +108,41 @@ def _controller(tmp_path: Path, **kwargs: object) -> StatusController:
     )
 
 
-def _wait_for(predicate, timeout: float = 5.0):
+#: A bound no test run could sit out, not a budget any of these waits should
+#: approach. Every caller below is waiting on a child Python that has to start,
+#: import and answer, and a hosted Windows runner spends seconds on that before
+#: any of this code runs -- so a bound near the real duration measures the
+#: machine rather than the code. 5.0 s did exactly that:
+#: test_busy_preferred_port_is_left_for_the_child_instance_check failed
+#: deterministically on Server (windows-latest), twice, on a commit touching
+#: nothing it reads, with "condition did not become true" -- reproduced here by
+#: sleeping 6 s in the child. 20 s matches what a750a861 used for the same
+#: family. pytest's 300 s faulthandler stays the real backstop for a hang.
+_CHILD_WAIT_TIMEOUT = 20.0
+
+
+def _wait_for(predicate, timeout: float = _CHILD_WAIT_TIMEOUT, describe=None):
+    """Wait for ``predicate``, and on failure say what was actually observed.
+
+    ``describe`` is called once, only when the wait gives up. Without it the
+    only evidence a CI failure leaves is "condition did not become true", which
+    cannot distinguish a wait that was too short from a state that was never
+    going to arrive -- and those want opposite fixes. A caller that can cheaply
+    name the last observed state should pass one.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
         if value:
             return value
         time.sleep(0.03)
-    raise AssertionError("condition did not become true")
+    observed = ""
+    if describe is not None:
+        try:
+            observed = f" Last observed: {describe()}"
+        except Exception as exc:  # noqa: BLE001 - diagnosis must not mask the failure
+            observed = f" (describing the last state raised {exc!r})"
+    raise AssertionError(f"condition did not become true in {timeout}s.{observed}")
 
 
 def test_start_poll_quit_lifecycle_checks_health_and_spa_probes(tmp_path: Path) -> None:
@@ -308,13 +335,34 @@ def test_busy_preferred_port_is_left_for_the_child_instance_check(
         started = controller.start()
         assert started.url == ""
 
+        # The child's exit is an event, so wait on the handle rather than
+        # sampling the controller while a Python interpreter starts. That takes
+        # seconds on a hosted Windows runner and was the whole of what the old
+        # 5 s bound was measuring. What is left timed is only the reader thread
+        # appending a line it has already been handed.
+        process = controller.process
+        assert process is not None
+        process.wait(timeout=_CHILD_WAIT_TIMEOUT)
+
         snapshot = _wait_for(
             lambda: (
                 current
                 if (current := controller.poll()).backend.state is ServiceState.OK
                 else None
-            )
+            ),
+            # If this ever fails again, the reason distinguishes the two causes
+            # that look identical from here: a wait that was too short, versus a
+            # child that exited with something other than 2 -- an assertion on
+            # the port it was handed, say -- which no bound would ever fix.
+            describe=lambda: (
+                f"backend={controller.poll().backend.reason!r} "
+                f"exit_code={controller.poll().exit_code!r}"
+            ),
         )
+        # Name the outcome: exit 2 is what says the child found the port held
+        # and deferred to the running instance, rather than the lamp merely
+        # having gone green for some other reason.
+        assert snapshot.exit_code == 2
         assert snapshot.url == "http://127.0.0.1:3199/"
         assert "already-running instance" in snapshot.backend.reason
     finally:
@@ -347,7 +395,7 @@ def test_server_death_underneath_the_window_reports_exit_reason(tmp_path: Path) 
     _wait_for(lambda: controller.poll().backend.state is ServiceState.OK)
 
     process.kill()
-    process.wait(timeout=3)
+    process.wait(timeout=_CHILD_WAIT_TIMEOUT)
     snapshot = controller.poll()
 
     assert snapshot.backend.state is ServiceState.ERROR
