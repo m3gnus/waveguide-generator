@@ -2532,7 +2532,7 @@ class MetalEngine:
             raise ValueError("solver_mode must be auto, full_3d, or circsym")
 
         eligibility_reasons: list[str] = []
-        if mode in {"auto", "circsym"}:
+        if mode == "circsym":
             eligibility_reasons = await asyncio.to_thread(
                 _circsym_eligibility_reasons, request
             )
@@ -2556,9 +2556,6 @@ class MetalEngine:
                 metadata["axisymmetric_eligibility_reasons"] = []
                 metadata["solve_path_reason"] = (
                     "forced by solver_mode='circsym'"
-                    if mode == "circsym"
-                    else "solver_mode='auto' selected the eligible Metal "
-                    "axisymmetric meridian fast path"
                 )
                 outcome.field_trace_unavailable_reason = (
                     "unsupported_axisymmetric_formulation"
@@ -2609,12 +2606,10 @@ class MetalEngine:
         metadata["solve_path"] = "full-3d"
         metadata["axisymmetric_eligibility_reasons"] = eligibility_reasons
         metadata["solve_path_reason"] = (
-            "solver_mode='full_3d' explicitly opts out of the meridian fast path"
+            "solver_mode='full_3d' selected native full 3D"
             if mode == "full_3d"
             else (
-                "solver_mode='auto' selected native full 3D because the "
-                "axisymmetric meridian fast path is not eligible: "
-                + "; ".join(eligibility_reasons)
+                "solver_mode='auto' selected native full 3D"
             )
         )
         field_traces = results.pop("_field_traces", None)

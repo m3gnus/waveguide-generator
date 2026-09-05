@@ -61,11 +61,22 @@ describe('solve and directivity options', () => {
     expect(useSolveOptionsStore.getState().options().symmetry).toBe('half_yz');
   });
 
-  it('persists solver path as a machine-local execution choice', () => {
+  it('migrates a retired solver path to AUTO', () => {
     useSolveOptionsStore.getState().setSolverMode('circsym');
     const stored = JSON.parse(localStorage.getItem('waveguide-v2-solve-options') ?? '{}') as { state?: { solverMode?: string } };
-    expect(stored.state?.solverMode).toBe('circsym');
-    expect(useSolveOptionsStore.getState().options().solver_mode).toBe('circsym');
+    expect(stored.state?.solverMode).toBe('auto');
+    expect(useSolveOptionsStore.getState().options().solver_mode).toBe('auto');
+  });
+
+  it('rehydrates legacy axisymmetric preferences to AUTO and sanitizes submission', async () => {
+    // Include stale live state, because durable settings rehydrate over it.
+    useSolveOptionsStore.setState({ engine: 'axisym', solverMode: 'circsym' });
+    expect(useSolveOptionsStore.getState().options()).toMatchObject({ engine: 'auto', solver_mode: 'auto' });
+    localStorage.setItem('waveguide-v2-solve-options', JSON.stringify({
+      state: { engine: 'axisym', solverMode: 'circsym' }, version: 0,
+    }));
+    await useSolveOptionsStore.persist.rehydrate();
+    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'auto', solverMode: 'auto' });
   });
 
   it('converts angular step to a sample count and never allows zero enabled planes', () => {

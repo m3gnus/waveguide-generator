@@ -4,7 +4,7 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { runContext, runMatchesContext, useRunContext, type RunContext } from '../results/runCoherence';
-import { postSolvePlan, postSymmetry, solvePlanRequestBody, toSolveDesign } from '../jobs/actions';
+import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { postSolverMesh, solverMeshArtifactToken, solverMeshScene } from '../api/solverMesh';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -292,7 +292,7 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
     case 'artifact_persistence_failed': return 'Field plane unavailable — the solve could not retain its field traces';
     case 'size_cap_exceeded': return 'Field plane unavailable — reduce the mesh or sweep size, then re-solve';
     case 'trace_output_missing': return 'Field plane unavailable — the solver returned no field traces; re-solve the design';
-    case 'unsupported_axisymmetric_formulation': return 'Field plane unavailable — switch Solver mode to Full 3D with Metal or BEMPP; coupled infinite baffle must also be changed to Free-standing';
+    case 'unsupported_axisymmetric_formulation': return 'Field plane unavailable for this saved run — solve again with Metal or BEMPP in Free-standing mode';
     case 'unsupported_coupled_infinite_baffle': return 'Field plane unavailable — switch Simulation type to Free-standing and re-solve with Metal or BEMPP';
     case 'unsupported_per_band_mesh_ladder': return 'Field plane unavailable — turn the per-band mesh ladder off and re-solve';
     case 'unsupported_ground_plane': return 'Field plane unavailable — the field carries no ground image; turn the ground plane off and re-solve. Polar and impedance results do include the ground';
@@ -359,7 +359,6 @@ export function Viewport() {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
-  const solveSolverMode = useSolveOptionsStore((state) => state.solverMode);
   const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadRecord = useCadReturnStore((state) => state.ingestRecord);
@@ -494,7 +493,6 @@ export function Viewport() {
   const [solverMeshState, setSolverMeshState] = useState<SolverMeshRefreshState>({
     building: false, stale: false, staleReason: null, error: null,
   });
-  const [axisymPlanned, setAxisymPlanned] = useState(false);
   // Created once: the build reads the design, symmetry mode, and job list at
   // call time, so the latest design always wins without re-instantiating.
   const solverRefreshRef = useRef<SolverMeshRefreshController | null>(null);
@@ -784,36 +782,6 @@ export function Viewport() {
     };
   }, [cadIngestId, cadName, cadSolverMesh, cadSolverRetry, cadSolverViewSelected]);
 
-  // The axisymmetric formulation never integrates over this 3D mesh, so say so
-  // while it is what the solve plan resolves to.
-  useEffect(() => {
-    if (!solverViewSelected) {
-      setAxisymPlanned(false);
-      return undefined;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      let body: string;
-      try {
-        body = solvePlanRequestBody(design);
-      } catch {
-        setAxisymPlanned(false);
-        return;
-      }
-      void postSolvePlan(body, fetch, controller.signal)
-        .then((plan) => {
-          if (!controller.signal.aborted) setAxisymPlanned(plan.formulation === 'axisymmetric');
-        })
-        .catch(() => {
-          if (!controller.signal.aborted) setAxisymPlanned(false);
-        });
-    }, SYMMETRY_TINT_DEBOUNCE_MS);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [design, solveSolverMode, solveSymmetry, solverViewSelected]);
-
   useEffect(() => {
     if (availableFieldJob || !fieldEnabled) return;
     useFieldPlaneStore.getState().reportUnavailable('re-solve to enable field planes');
@@ -997,9 +965,6 @@ export function Viewport() {
       <span><i />Solve mesh unavailable</span>
       <b title={cadSolverError}>{cadSolverError}</b>
       <button type="button" disabled={cadSolverLoading} onClick={() => setCadSolverRetry((value) => value + 1)}>Retry</button>
-    </div>}
-    {solverViewSelected && axisymPlanned && <div className="solver-axisym-note" role="note">
-      Axisymmetric solve planned: the solver uses a meridian discretisation of the profile, not these 3D triangles.
     </div>}
     {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
       <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>

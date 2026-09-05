@@ -65,24 +65,25 @@ On the development Mac in this batch, warm median time over seven calls with the
 
 FREEFORM is slower because its authoritative continuous cross-section reconstruction is substantially more expensive even at this coarse grid. Callers should debounce live edit requests and discard stale responses by design revision, just as they do for preview work.
 
-## Axisymmetric formulation planner
+## Formulation selection
 
 Symmetry-domain reduction, formulation, and execution backend are independent
-decisions. The solve planner considers the machine-local `solver_mode` before it
-chooses a full-3D backend:
+decisions. AUTO uses the selected ordinary backend (Metal, BEAT or BEMPP),
+with applicable full/half/quarter-domain symmetry reduction. It never selects
+the axisymmetric implementation, even for eligible circular geometry.
 
-- `auto`: use the platform-neutral `axisym` meridian runner when the authoritative
-  mesher eligibility predicate succeeds; otherwise use the selected/AUTO full-3D
-  backend and record every rejection reason.
-- `full_3d`: always use Metal, BEAT, or BEMPP full 3D.
-- `circsym`: force the axisymmetric formulation and fail with the eligibility
-  reasons if it cannot run. `circsym` remains the compatibility wire spelling;
-  the product label is **Axisymmetric (meridian)**.
+The UI no longer offers the formulation selector or axisymmetric planning
+status hints. Saved axisymmetric engine/mode preferences migrate to AUTO.
+The backend selector chooses the ordinary solver that runs the job.
 
-`axisym` is advertised independently by `/api/capabilities` and runs on CPU on
-all supported operating systems, with optional Metal acceleration where present.
-The backend selector therefore chooses the *full-3D fallback*, not the
-axisymmetric implementation. `Simulation.SolverMode` in legacy design text is a
+Explicit API requests using `solver_mode='circsym'` or `engine='axisym'`
+remain available for experiments; they still require eligible geometry and
+an available runner. `full_3d` also remains accepted for API compatibility.
+Existing axisymmetric results remain readable. A bounded prototype and honest
+speed/accuracy go/no-go are planned for 0.3.3, before deciding whether to
+remove the implementation or invest in improvements.
+
+`Simulation.SolverMode` in legacy design text is a
 machine setting, not a portable one, so it is never read from a design and
 design export never writes it. A file that states one still opens: the value is
 dropped during import and the drop is reported as migration
@@ -94,7 +95,7 @@ author's bytes unchanged and the line survives there; the first real edit
 serializes canonically and removes it.
 
 Result/job symmetry metadata records `solver_plan` with the chosen
-formulation, engine, reason, and eligibility reasons. Axisymmetric AUTO plans
+formulation, engine, reason, and eligibility reasons. Explicit axisymmetric plans
 also include `cost_evidence`: deterministic counts from the frequency-refined
 meridian (unknowns, azimuthal quadrature work, matrix memory, and a revolved
 full-3D triangle scale for the requested symmetry domain). These are transparent

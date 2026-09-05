@@ -42,7 +42,7 @@ describe('solve and directivity control help', () => {
 
   it('documents every solve option', () => {
     render(<SolveOptionsControls />);
-    for (const id of ['solve-engine', 'solve-mode', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {
+    for (const id of ['solve-engine', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {
       const control = host.querySelector(`#${id}`)!;
       expect(control, id).not.toBeNull();
       // The hover target is the labelled row, not the input itself.
@@ -51,7 +51,7 @@ describe('solve and directivity control help', () => {
     }
   });
 
-  it('keeps the portable axisymmetric path in machine-local solve options', () => {
+  it('hides axisymmetric controls even when the backend is available', () => {
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
       engines: [
         { name: 'metal', available: true, reason: null, version: 'test', fast_paths: [] },
@@ -59,16 +59,9 @@ describe('solve and directivity control help', () => {
       ],
     });
     render(<SolveOptionsControls />);
-    const control = host.querySelector<HTMLSelectElement>('#solve-mode')!;
-    expect([...control.options].map((option) => option.textContent)).toEqual([
-      'Auto (fastest eligible)', 'Full 3D', 'Axisymmetric (meridian)',
-    ]);
-    act(() => {
-      control.value = 'circsym';
-      control.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(useSolveOptionsStore.getState().solverMode).toBe('circsym');
-    expect(useSolveOptionsStore.getState().options().solver_mode).toBe('circsym');
+    expect(host.querySelector('#solve-mode')).toBeNull();
+    expect(host.querySelector('option[value="axisym"]')).toBeNull();
+    expect(host.textContent).not.toMatch(/axisymmetric|meridian|fastest eligible/i);
   });
 
   it('keeps design and CAD-import sweep ids unique with working labels', () => {
@@ -189,7 +182,7 @@ describe('solve and directivity control help', () => {
     expect(hoverText(host.querySelector('.axis-toggles')!)).toContain('planes through the horn axis');
     expect(hoverText(host.querySelector('#polar-spherical-sampling')!.closest('.toggle-row')!)).toContain('balloon');
     const fieldPlaneHelp = hoverText(host.querySelector('#polar-field-plane')!.closest('.toggle-row')!);
-    expect(fieldPlaneHelp).toContain('full-3D solve');
+    expect(fieldPlaneHelp).toContain('surface data');
     expect(fieldPlaneHelp).toContain('0.1–1 MB');
     expect(fieldPlaneHelp).toContain('CAD-link imports');
   });
