@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Sequence
 import base64
 import binascii
@@ -13,9 +14,11 @@ import os
 from pathlib import Path
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Any, Callable, Literal, TypeVar
 import unicodedata
 
@@ -41,6 +44,50 @@ MAX_EXPORT_BYTES = 256 * 1024 * 1024
 # Legacy JSON clients use base64 (4/3 expansion), while current clients send
 # multipart binary parts. Keep the larger route-only envelope for compatibility.
 MAX_EXPORT_REQUEST_BODY_BYTES = 384 * 1024 * 1024
+#: How long a chosen export destination stays usable, and how many are kept.
+#:
+#: A handle is **not** single-use. One export legitimately writes through it more
+#: than once: a profile export writes two files with two calls, and an
+#: ``existing=confirm`` refusal is repeated as ``overwrite`` once the user has
+#: answered. It expires by time instead, and the bounds exist so a long-lived
+#: server does not accumulate handles to folders whose user moved on.
+EXPORT_DESTINATION_TTL_SECONDS = 30 * 60
+MAX_EXPORT_DESTINATIONS = 8
+EXISTING_FILE_POLICIES = frozenset({"reject", "merge_identical", "overwrite", "confirm"})
+
+
+class ExportCollision(Exception):
+    """An ``existing=confirm`` export would replace files that differ.
+
+    Carries every one of them, not the first: the caller asks the user once
+    about the whole export, and a question that named one file at a time would
+    be the per-file prompt this exists to avoid. Nothing has been written when
+    this is raised.
+    """
+
+    def __init__(self, directory: Path, paths: Sequence[Path]) -> None:
+        self.directory = directory
+        self.paths = [str(path) for path in paths]
+        super().__init__(
+            f"{len(self.paths)} file(s) in {directory} would be replaced with "
+            "different content"
+        )
+
+
+def _export_collision_response(exc: ExportCollision) -> JSONResponse:
+    """A refusal the client can turn into one question and one retry."""
+
+    return JSONResponse(
+        status_code=409,
+        content={
+            "code": "export_collision",
+            "detail": str(exc),
+            "directory": str(exc.directory),
+            "paths": exc.paths,
+        },
+    )
+
+
 _WINDOWS_DEVICE_NAME = re.compile(
     r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE
 )
@@ -64,7 +111,11 @@ class ExportMember(BaseModel):
 class WriteExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    subdirectory: str = Field(min_length=1)
+    #: Where inside the destination the set lands. Required for the workspace,
+    #: which is shared by every export and needs each one in its own folder.
+    #: Empty means "the destination itself", which only a ``destination`` handle
+    #: may ask for -- see ``ExportDestinationStore``.
+    subdirectory: str = ""
     members: list[ExportMember] = Field(min_length=1, max_length=MAX_EXPORT_MEMBERS)
     #: ``reject`` refuses an existing directory outright. ``merge_identical``
     #: adds only what is missing and refuses to change a file that differs; it
@@ -73,10 +124,41 @@ class WriteExportRequest(BaseModel):
     #: is for a user asking for an export a second time: several builders stamp
     #: the current time into their output, so a repeat export is *never* byte
     #: identical and ``merge_identical`` rejected the whole bundle.
-    existing: Literal["reject", "merge_identical", "overwrite"] = "reject"
+    #:
+    #: ``confirm`` is ``overwrite`` with the replacements shown first. It writes
+    #: what is missing and skips what is byte identical, and if any member would
+    #: change a file that differs it writes **nothing** and names every one of
+    #: them, so the client can ask once and repeat the request as ``overwrite``.
+    #: A manual export now goes to a folder the user chose, which may hold files
+    #: WG never wrote; a basename collision there must not be settled by a
+    #: report after the fact.
+    existing: Literal["reject", "merge_identical", "overwrite", "confirm"] = "reject"
+    #: A handle from ``POST /api/workspace/export-destination``, naming the
+    #: folder the user chose for this one export. Absent means the workspace,
+    #: which is what every automatic export uses.
+    destination: str | None = None
+
+    @model_validator(mode="after")
+    def subdirectory_or_destination(self) -> "WriteExportRequest":
+        if not self.subdirectory and self.destination is None:
+            raise ValueError("subdirectory is required")
+        return self
 
 
 class SelectCadWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class ChooseExportDestinationRequest(BaseModel):
+    """A folder typed instead of chosen from the native picker.
+
+    Same reasoning as ``SelectWorkspaceRequest``: the picker runs on the machine
+    hosting the server, so a browser on another machine needs a way to name a
+    folder that does not open a dialog nobody is sitting in front of.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(min_length=1, max_length=4096)
@@ -176,7 +258,7 @@ def _archive_design_lineage(content: bytes) -> tuple[bool, object]:
 
 def _decode_json_export_request(
     payload: bytes | WriteExportRequest,
-) -> tuple[str, str, list[tuple[str, bytes]]]:
+) -> tuple[str, str, list[tuple[str, bytes]], str | None]:
     request = (
         payload
         if isinstance(payload, WriteExportRequest)
@@ -186,21 +268,27 @@ def _decode_json_export_request(
         request.subdirectory,
         request.existing,
         [(member.relative_path, _member_bytes(member)) for member in request.members],
+        request.destination,
     )
 
 
 async def _decode_multipart_export_request(
     request: Request,
-) -> tuple[str, str, list[tuple[str, bytes]]]:
+) -> tuple[str, str, list[tuple[str, bytes]], str | None]:
     form = await request.form()
-    subdirectory = form.get("subdirectory")
+    subdirectory = form.get("subdirectory", "")
     existing = form.get("existing", "reject")
+    destination = form.get("destination") or None
     relative_paths = form.getlist("relative_path")
     files = form.getlist("file")
-    if not isinstance(subdirectory, str) or not subdirectory:
+    if destination is not None and not isinstance(destination, str):
+        raise ValueError("destination must be an export-destination handle")
+    if not isinstance(subdirectory, str) or (not subdirectory and destination is None):
         raise ValueError("subdirectory is required")
-    if existing not in {"reject", "merge_identical", "overwrite"}:
-        raise ValueError("existing must be reject, merge_identical, or overwrite")
+    if existing not in EXISTING_FILE_POLICIES:
+        raise ValueError(
+            "existing must be one of " + ", ".join(sorted(EXISTING_FILE_POLICIES))
+        )
     if not 1 <= len(files) <= MAX_EXPORT_MEMBERS:
         raise ValueError(f"file count must be between 1 and {MAX_EXPORT_MEMBERS}")
     if len(relative_paths) != len(files) or not all(
@@ -221,7 +309,7 @@ async def _decode_multipart_export_request(
                 f"Export set exceeds the {MAX_EXPORT_BYTES}-byte binary size limit"
             )
         members.append((relative_path, content))
-    return subdirectory, existing, members
+    return subdirectory, existing, members, destination
 
 
 def _retry_after_acl_repair(
@@ -509,6 +597,89 @@ class WorkspaceState:
         self._loaded = True
 
 
+class ExportDestinationStore:
+    """The folder a manual export was last sent to, and the handles for it.
+
+    Deliberately separate from ``WorkspaceState``. Choosing where one export
+    goes must not repoint the workspace: the workspace is where automatic
+    exports, run archives and CAD projects live, and a user answering "put this
+    STL on the Desktop" is not asking for their run history to move there.
+
+    **The handle is a lifecycle, not a privilege boundary.** What keeps a page
+    on the internet out of these endpoints is the loopback Host and Origin guard
+    in ``server/app.py``; a client that passes it can name any directory by
+    typing one, exactly as it already can for the workspace. What a handle does
+    add is that ``write-export`` has no path parameter at all: the destination
+    of a write is a folder resolved in an earlier, explicit request, so a
+    mistyped or stale path fails when it is chosen rather than when files are
+    landing, and the write endpoint cannot be aimed somewhere by a request that
+    never asked for it.
+    """
+
+    SETTINGS_NAME = "export_settings.json"
+    SETTINGS_KEY = "lastExportPath"
+
+    def __init__(self, root: Path) -> None:
+        self.settings_path = (Path(root) / self.SETTINGS_NAME).resolve()
+        self._handles: "OrderedDict[str, tuple[Path, float]]" = OrderedDict()
+
+    def remembered(self) -> Path | None:
+        """The last folder an export was actually written to, if it still is one."""
+
+        try:
+            payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        raw_path = str(payload.get(self.SETTINGS_KEY) or "").strip()
+        if not raw_path:
+            return None
+        candidate = Path(raw_path).expanduser().resolve()
+        return candidate if candidate.is_dir() else None
+
+    def remember(self, path: Path) -> None:
+        """Record where an export landed, so the next one opens there."""
+
+        _write_json_atomic(
+            self.settings_path,
+            {"schemaVersion": 1, self.SETTINGS_KEY: str(path)},
+        )
+
+    def issue(self, path: Path, *, now: float | None = None) -> str:
+        """Hand out one handle to a directory this server resolved.
+
+        Reusable until it expires -- see ``EXPORT_DESTINATION_TTL_SECONDS``.
+        """
+
+        resolved = Path(path).expanduser().resolve()
+        if not resolved.is_dir():
+            raise ValueError(f"Selected path is not a directory: {resolved}")
+        token = secrets.token_urlsafe(18)
+        self._handles[token] = (resolved, time.monotonic() if now is None else now)
+        while len(self._handles) > MAX_EXPORT_DESTINATIONS:
+            self._handles.popitem(last=False)
+        return token
+
+    def resolve(self, token: str, *, now: float | None = None) -> Path:
+        """The directory a handle names, or a refusal a user can act on."""
+
+        moment = time.monotonic() if now is None else now
+        entry = self._handles.get(token)
+        if entry is not None and moment - entry[1] > EXPORT_DESTINATION_TTL_SECONDS:
+            del self._handles[token]
+            entry = None
+        if entry is None:
+            raise KeyError(
+                "That export destination is no longer available. "
+                "Choose the folder again."
+            )
+        path = entry[0]
+        if not path.is_dir():
+            raise ValueError(f"The chosen export folder is unavailable: {path}")
+        return path
+
+
 class CadWorkspaceState(WorkspaceState):
     """The user-visible folder shared by WG and Fusion's WGLink add-in.
 
@@ -772,13 +943,32 @@ def _write_export_sync(
     existing: str,
     members: list[tuple[str, bytes]],
 ) -> dict[str, Any]:
-    """Validate and publish an export set from a worker thread."""
+    """Validate and publish an export set from a worker thread.
+
+    An empty ``subdirectory`` writes into the root itself. Only a folder the
+    user chose for this one export reaches that branch -- the route refuses it
+    for the workspace -- because the whole point of choosing a destination is
+    that the files land in it rather than in a folder invented underneath it.
+    """
 
     workspace_root = workspace_path.resolve()
     try:
-        subdirectory_segments = _path_segments(subdirectory, "subdirectory")
-        export_directory = workspace_root.joinpath(*subdirectory_segments).resolve()
-        _strictly_inside(export_directory, workspace_root, "subdirectory")
+        subdirectory_segments = (
+            _path_segments(subdirectory, "subdirectory") if subdirectory else []
+        )
+        if subdirectory_segments:
+            export_directory = workspace_root.joinpath(*subdirectory_segments).resolve()
+            _strictly_inside(export_directory, workspace_root, "subdirectory")
+        else:
+            if existing == "reject":
+                # `reject` publishes by renaming a staging directory over the
+                # export directory. Aimed at a folder the user already had, that
+                # would replace its entire contents.
+                raise ValueError(
+                    "An export into the chosen folder itself cannot use "
+                    "existing=reject"
+                )
+            export_directory = workspace_root
 
         prepared: list[tuple[list[str], bytes, Path]] = []
         total_bytes = 0
@@ -818,12 +1008,22 @@ def _write_export_sync(
             )
 
     pending = prepared
-    if export_exists and existing == "merge_identical":
+    if export_exists and existing in {"merge_identical", "confirm"}:
+        # One pass answers both policies: what is missing is written, what is
+        # byte identical is a no-op, and what differs is either the refusal
+        # (`merge_identical`) or the list the user is asked about once
+        # (`confirm`).
         pending = []
+        differing: list[Path] = []
         for segments, content, destination in prepared:
             if not (destination.exists() or destination.is_symlink()):
                 pending.append((segments, content, destination))
                 continue
+            if existing == "confirm" and destination.is_dir() and not destination.is_symlink():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Export path is a directory, not a file: {destination}",
+                )
             try:
                 identical = _retry_after_acl_repair(
                     destination,
@@ -844,6 +1044,10 @@ def _write_export_sync(
                     ),
                 ) from exc
             if not identical:
+                if existing == "confirm":
+                    differing.append(destination)
+                    pending.append((segments, content, destination))
+                    continue
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -851,6 +1055,10 @@ def _write_export_sync(
                         f"{destination}"
                     ),
                 )
+        if differing:
+            # Before anything is staged, so a declined question leaves the
+            # folder exactly as it was.
+            raise ExportCollision(export_directory, differing)
     if export_exists and existing == "overwrite":
         # Replacing a file is the point here; replacing a *directory* with a
         # file is not, and would surface as an opaque write failure below.
@@ -904,15 +1112,29 @@ def _write_export_sync(
     response = {
         "directory": str(export_directory),
         "files": [str(destination) for _segments, _content, destination in prepared],
+        # Named, not merely counted: a manual export into a folder the user
+        # chose may sit next to files WG did not write, and "3 files written"
+        # says nothing about which of them used to be something else.
+        "replaced": [
+            str(destination)
+            for _segments, _content, destination in pending
+            if destination.exists() or destination.is_symlink()
+        ],
     }
     # A byte-identical merge retry is a genuine no-op: do not even create and
     # remove a staging directory, since that still generates watcher traffic.
     if not pending:
         return response
 
-    export_directory.parent.mkdir(parents=True, exist_ok=True)
+    # Staging lives beside the files it publishes, so `os.replace` stays on one
+    # filesystem. For a chosen destination that is the folder itself: its parent
+    # is the user's, not ours, and may not even be writable.
+    staging_parent = (
+        export_directory if export_directory == workspace_root else export_directory.parent
+    )
+    staging_parent.mkdir(parents=True, exist_ok=True)
     staging_directory = publish_staging_directory(
-        export_directory.parent, ".wg2-export-staging-"
+        staging_parent, ".wg2-export-staging-"
     )
     try:
         for segments, content, _destination in pending:
@@ -949,8 +1171,20 @@ _WRITE_EXPORT_OPENAPI = {
                         "subdirectory": {"type": "string"},
                         "existing": {
                             "type": "string",
-                            "enum": ["reject", "merge_identical", "overwrite"],
+                            "enum": [
+                                "reject",
+                                "merge_identical",
+                                "overwrite",
+                                "confirm",
+                            ],
                             "default": "reject",
+                        },
+                        "destination": {
+                            "type": "string",
+                            "description": (
+                                "Handle from POST /api/workspace/export-destination. "
+                                "Absent writes into the workspace."
+                            ),
                         },
                         "relative_path": {
                             "type": "array",
@@ -968,8 +1202,13 @@ _WRITE_EXPORT_OPENAPI = {
 }
 
 
-def create_workspace_router(state: WorkspaceState) -> APIRouter:
+def create_workspace_router(
+    state: WorkspaceState, destinations: ExportDestinationStore | None = None
+) -> APIRouter:
     router = APIRouter(prefix="/api/workspace", tags=["workspace"])
+    export_destinations = destinations or ExportDestinationStore(
+        state.settings_path.parent
+    )
 
     def available_path() -> Path | JSONResponse:
         try:
@@ -1027,6 +1266,74 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"Failed to open folder: {exc}") from exc
         return {"status": "opened", "path": str(path)}
 
+    def destination_offer(selected: bool, *, with_token: bool = True) -> dict[str, Any]:
+        """The folder the next manual export would default to, and its handle.
+
+        The remembered folder wins; with none, the workspace is the suggestion,
+        which keeps a first export landing where every export landed before this
+        dialog existed. Only the handle is usable, so the path here is for the
+        user to read.
+        """
+
+        remembered = export_destinations.remembered()
+        path = remembered
+        if path is None:
+            try:
+                path = state.path()
+            except Exception:
+                path = state.selected_path()
+        token: str | None = None
+        if path is not None and with_token:
+            try:
+                token = export_destinations.issue(path)
+            except (OSError, ValueError):
+                path, token = None, None
+        return {
+            "selected": selected,
+            "path": str(path) if path is not None else None,
+            "remembered": remembered is not None,
+            "token": token,
+        }
+
+    @router.get("/export-destination")
+    async def export_destination() -> Any:
+        return destination_offer(False)
+
+    @router.post("/export-destination")
+    async def choose_export_destination(
+        payload: ChooseExportDestinationRequest | None = None,
+    ) -> Any:
+        """Ask the user where this export goes, without moving the workspace.
+
+        Cancelling answers ``selected: false`` and writes nothing -- neither a
+        file nor the remembered folder, which only a completed export moves.
+        """
+
+        chosen = (
+            payload.path
+            if payload is not None
+            else await asyncio.to_thread(
+                _select_workspace_folder,
+                "Choose export folder",
+                export_destinations.remembered() or picker_start(),
+            )
+        )
+        if not chosen:
+            # No handle: cancelling answers "you chose nothing", and the client
+            # keeps whatever folder it was already showing. Minting one here
+            # would evict a live handle to hand back a folder nobody asked for.
+            return destination_offer(False, with_token=False)
+        try:
+            token = export_destinations.issue(Path(chosen))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "selected": True,
+            "path": str(Path(chosen).expanduser().resolve()),
+            "remembered": False,
+            "token": token,
+        }
+
     @router.post(
         "/write-export",
         openapi_extra=_WRITE_EXPORT_OPENAPI,
@@ -1042,40 +1349,62 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
         },
     )
     async def workspace_write_export(request: Request) -> Any:
-        # Automatic exports must work on first launch without a native folder
-        # picker. Production supplies ``<checkout>/output`` as this fallback;
-        # an explicit selection still overrides it.
-        workspace_path = available_path()
-        if isinstance(workspace_path, JSONResponse):
-            return workspace_path
         try:
             if isinstance(request, WriteExportRequest):
                 # Direct endpoint calls in unit tests retain the legacy model
                 # shape; actual ASGI requests always take one branch below.
-                subdirectory, existing, members = await asyncio.to_thread(
+                subdirectory, existing, members, destination = await asyncio.to_thread(
                     _decode_json_export_request, request
                 )
             elif request.headers.get("content-type", "").lower().startswith(
                 "multipart/form-data"
             ):
-                subdirectory, existing, members = (
+                subdirectory, existing, members, destination = (
                     await _decode_multipart_export_request(request)
                 )
             else:
                 raw = await request.body()
-                subdirectory, existing, members = await asyncio.to_thread(
+                subdirectory, existing, members, destination = await asyncio.to_thread(
                     _decode_json_export_request, raw
                 )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        return await asyncio.to_thread(
-            _write_export_sync,
-            workspace_path,
-            subdirectory,
-            existing,
-            members,
-        )
+        if destination is None:
+            # Automatic exports must work on first launch without a native
+            # folder picker. Production supplies ``<checkout>/output`` as this
+            # fallback; an explicit selection still overrides it.
+            root = available_path()
+            if isinstance(root, JSONResponse):
+                return root
+            if not subdirectory:
+                raise HTTPException(status_code=422, detail="subdirectory is required")
+        else:
+            try:
+                root = export_destinations.resolve(destination)
+            except KeyError as exc:
+                raise HTTPException(status_code=409, detail=exc.args[0]) from exc
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        try:
+            written = await asyncio.to_thread(
+                _write_export_sync,
+                root,
+                subdirectory,
+                existing,
+                members,
+            )
+        except ExportCollision as collision:
+            return _export_collision_response(collision)
+        if destination is not None:
+            # "Last used", not "last chosen": a cancelled or refused export must
+            # not move the folder the next one opens in.
+            try:
+                await asyncio.to_thread(export_destinations.remember, root)
+            except OSError:
+                logger.warning("Could not remember the export folder %s", root)
+        return written
 
     return router
 
@@ -1092,7 +1421,9 @@ def mount_workspace(
         legacy_defaults=legacy_defaults,
     )
     application.state.workspace = state
-    application.include_router(create_workspace_router(state))
+    destinations = ExportDestinationStore(state.settings_path.parent)
+    application.state.export_destinations = destinations
+    application.include_router(create_workspace_router(state, destinations))
     cad_state = CadWorkspaceState(Path(application.state.data_dir))
     application.state.cad_workspace = cad_state
     application.include_router(create_cad_workspace_router(cad_state))
@@ -1102,6 +1433,9 @@ def mount_workspace(
 __all__ = [
     "WorkspaceState",
     "CadWorkspaceState",
+    "ChooseExportDestinationRequest",
+    "ExportCollision",
+    "ExportDestinationStore",
     "CaptureDocumentRequest",
     "WriteExportRequest",
     "SelectCadWorkspaceRequest",

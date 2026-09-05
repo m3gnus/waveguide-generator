@@ -10,6 +10,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { CadLinkCoordinator } from '../shell/CadLinkCoordinator';
+import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
 import { DesignFileMenu } from './DesignFileMenu';
 
 /**
@@ -35,6 +36,11 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  // Every manual export asks where it goes; the top bar's dialog is what
+  // answers in the application, and this is the user answering it here.
+  provideExportDestinationPrompt(async () => ({
+    token: 'destination-handle', directory: '/chosen',
+  }));
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     requested.push(String(url));
     return new Response('ISO-10303-21;', {
@@ -49,6 +55,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  provideExportDestinationPrompt(null);
   act(() => root.unmount());
   container.remove();
   importedMeshStore.clear();
@@ -183,6 +190,82 @@ describe('design file export menu', () => {
     const item = itemNamed('STEP inner surface');
     await act(async () => { item.click(); });
     expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=surface']);
+  });
+
+  it('asks where a STEP export goes, and writes nothing when that is cancelled', async () => {
+    const asked: string[] = [];
+    provideExportDestinationPrompt(async (request) => { asked.push(request.title); return null; });
+    const item = itemNamed('STEP solid');
+
+    await act(async () => { item.click(); });
+
+    expect(asked).toEqual(['Export STEP']);
+    // Not even the geometry request: cancelling costs nothing, and the build
+    // is not started for a file that is not going anywhere.
+    expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual([]);
+    expect(requested).not.toContain('/api/workspace/write-export');
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toBe('Export cancelled. No files were written.');
+  });
+
+  it('sends the chosen destination with the geometry it writes', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          directory: '/Users/tester/Desktop',
+          files: ['/Users/tester/Desktop/horn.step'],
+          replaced: ['/Users/tester/Desktop/horn.step'],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      // jsdom's Response.blob() does not return a Blob this FormData accepts.
+      return Object.assign(new Response('ISO-10303-21;', { status: 200 }), {
+        blob: async () => new Blob(['ISO-10303-21;'], { type: 'model/step' }),
+      });
+    });
+    const item = itemNamed('STEP solid');
+
+    await act(async () => { item.click(); });
+
+    const write = vi.mocked(fetch).mock.calls
+      .find(([url]) => String(url) === '/api/workspace/write-export')!;
+    const form = write[1]?.body as FormData;
+    expect(form.get('destination')).toBe('destination-handle');
+    // The chosen folder receives the file, not a design-named folder under it.
+    expect(form.get('subdirectory')).toBe('');
+    // Replacing a file in a folder that is the user's own is worth saying.
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toContain('Replaced 1 existing file.');
+  });
+
+  it('writes nothing when the chosen folder already holds those files and nothing can ask', async () => {
+    // No dialog is mounted here, so the replace question answers "no" -- which
+    // is the point: an unanswerable question must not become an overwrite of
+    // files WG never wrote.
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          code: 'export_collision',
+          detail: '1 file(s) would be replaced',
+          directory: '/chosen',
+          paths: ['/chosen/horn.step'],
+        }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      return Object.assign(new Response('ISO-10303-21;', { status: 200 }), {
+        blob: async () => new Blob(['ISO-10303-21;'], { type: 'model/step' }),
+      });
+    });
+    const item = itemNamed('STEP solid');
+
+    await act(async () => { item.click(); });
+
+    // One attempt, refused: no second request repeating it as an overwrite.
+    expect(requested.filter((path) => path === '/api/workspace/write-export')).toHaveLength(1);
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toBe('Export cancelled. No files were written.');
   });
 
   it('surfaces an STL fidelity warning after reporting the successful write', async () => {
@@ -415,7 +498,10 @@ describe('design file export menu', () => {
     const write = vi.mocked(fetch).mock.calls[1];
     expect(String(write[0])).toBe('/api/workspace/write-export');
     const form = write[1]?.body as FormData;
-    expect(form.get('subdirectory')).toBe('copied-horn');
+    // The folder the user chose receives the file itself: no design-named
+    // subdirectory is invented inside it, and the handle is what names it.
+    expect(form.get('subdirectory')).toBe('');
+    expect(form.get('destination')).toBe('destination-handle');
     expect(form.get('relative_path')).toBe('copied-horn.cfg');
     expect(await (form.get('file') as File).text()).toBe('serialized copy');
     expect(click).not.toHaveBeenCalled();

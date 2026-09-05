@@ -12,6 +12,7 @@ import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import type { PolarConfig } from '../stores/solveOptions';
 import type { CadLinkClassification, DesignIdentity } from '../stores/document';
 import { writeToOutputFolder, type OutputFolderWrite } from './workspace';
+import type { ConfirmReplacements } from './exportDestination';
 
 export interface MigrationApplication {
   name: string;
@@ -399,6 +400,8 @@ export async function exportGeometryToOutputFolder(
   profileKind?: 'profiles' | 'slices',
   stepBody: StepBody = 'solid',
   fetcher: typeof fetch = fetch,
+  destination?: string,
+  confirmReplacements?: ConfirmReplacements,
 ): Promise<GeometryExportWrite> {
   const query = kind === 'profiles'
     ? `?kind=${profileKind ?? 'profiles'}`
@@ -419,7 +422,10 @@ export async function exportGeometryToOutputFolder(
   // Overwrite: re-exporting after an edit is the ordinary case, and a stale
   // file of the same name is exactly what the user is replacing.
   const written = await writeToOutputFolder(
+    // `confirm` only when there is a folder to collide in: a workspace export
+    // keeps replacing its own last output without asking.
     baseName, [{ filename, blob: await response.blob() }], fetcher,
+    destination ? 'confirm' : 'overwrite', destination, confirmReplacements,
   );
   return warning ? { ...written, warning } : written;
 }

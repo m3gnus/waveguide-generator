@@ -7,9 +7,16 @@ import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { runWorkspaceExportBundle } from '../results/exporters';
+import {
+  askForExportDestination,
+  askToReplaceExports,
+  replacedNotice,
+  EXPORT_CANCELLED_MESSAGE,
+} from './exportDestinationPrompt';
+import { ExportCancelledError } from '../api/exportDestination';
 import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
-import { copyChartPng, downloadChartPng } from '../results/chartImage';
+import { copyChartPng, saveChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
 import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutputOf, memberLabelOf } from '../results/maxOutput';
@@ -1969,11 +1976,22 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     setImageOperation(operation);
     setImageStatus(null);
     try {
-      if (operation === 'copy') await copyChartPng(target, tokens.background);
-      else await downloadChartPng(target, chartImageFilename(chartType, job, channelId), tokens.background);
-      setImageStatus(operation === 'copy' ? 'Copied PNG' : 'Downloaded PNG');
-    } catch {
-      setImageStatus(operation === 'copy' ? 'Copy failed' : 'Download failed');
+      if (operation === 'copy') {
+        await copyChartPng(target, tokens.background);
+        setImageStatus('Copied PNG');
+      } else {
+        const filename = chartImageFilename(chartType, job, channelId);
+        const destination = await askForExportDestination({ title: 'Export chart PNG', detail: filename });
+        if (!destination) { setImageStatus('Export cancelled'); return; }
+        await saveChartPng(
+          target, filename, destination.token, tokens.background, askToReplaceExports,
+        );
+        setImageStatus('Saved PNG');
+      }
+    } catch (reason) {
+      setImageStatus(reason instanceof ExportCancelledError
+        ? 'Export cancelled'
+        : operation === 'copy' ? 'Copy failed' : 'Export failed');
     } finally {
       setImageOperation(null);
       if (imageStatusTimer.current !== null) window.clearTimeout(imageStatusTimer.current);
@@ -1999,7 +2017,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
         <span className="result-chrome-spacer"/>
         {imageReady && <>
           <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Copy panel ${index + 1} as PNG`} title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
-          <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Download panel ${index + 1} as PNG`} title="Download chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
+          <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Export panel ${index + 1} as PNG`} title="Export chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
         </>}
         <button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button>
         <button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button>
@@ -2015,7 +2033,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
               larger should not offer less to do with it. */}
           {chartType !== 'summary' && <>
             <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Copy chart as PNG" title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
-            <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Download chart as PNG" title="Download chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
+            <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Export chart as PNG" title="Export chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
           </>}
           {imageStatus && <span className="result-image-status" role="status">{imageStatus}</span>}
           <button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button>
@@ -2499,6 +2517,11 @@ export function ResultsPanel() {
     try {
       const job = jobs.find(({ id }) => id === selection.primary);
       if (!job) throw new Error('The selected run is no longer available for export.');
+      const destination = await askForExportDestination({
+        title: 'Export these results',
+        detail: `${preferences.exportFormats.length} format${preferences.exportFormats.length === 1 ? '' : 's'} from the selected run.`,
+      });
+      if (!destination) { setExportStatus(EXPORT_CANCELLED_MESSAGE); return; }
       // The envelope plus the active channel, not the channel alone: the file
       // suffix is allocated from the channel id against its siblings, and the
       // formats that fan out across members (VituixCAD) need the envelope to
@@ -2516,13 +2539,21 @@ export function ResultsPanel() {
         // anywhere, so it is not a candidate.
         normalizationAngle: useSolveOptionsStore.getState().polar.normAngle,
         preferences,
-      }, preferences.exportFormats);
+        destinationToken: destination.token,
+        confirmReplacements: askToReplaceExports,
+        // The user asked for these files: asking again must produce them again,
+        // even though several builders stamp the time into their output. What
+        // it must not do is replace files WG never wrote without asking, which
+        // is what `confirm` adds over `overwrite`.
+      }, preferences.exportFormats, 'confirm');
       if (selection.primary && result.files.length) {
         await jobsSocket.patchMetadata(selection.primary, { exported_files: [...new Set([...(job?.exported_files ?? []), ...result.files])] });
       }
-      const destination = result.directory ? ` written to ${result.directory}` : ' written to Workspace';
-      setExportStatus(`${result.files.length} file${result.files.length === 1 ? '' : 's'}${destination}${result.failures.length ? ` · ${result.failures.length} failed: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}` : ''}`);
+      const written = result.directory ? ` written to ${result.directory}` : ' written to Workspace';
+      setExportStatus(`${result.files.length} file${result.files.length === 1 ? '' : 's'}${written}${replacedNotice(result.replaced)}${result.failures.length ? ` · ${result.failures.length} failed: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}` : ''}`);
     } catch (reason) { setExportStatus(reason instanceof Error ? reason.message : String(reason)); }
+    // A declined replacement arrives as `ExportCancelledError`, whose message
+    // is the cancellation line, so it reads the same as a dismissed dialog.
     finally { setExporting(false); }
   };
 

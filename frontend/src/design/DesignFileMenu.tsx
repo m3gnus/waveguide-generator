@@ -9,6 +9,12 @@ import {
   type StepBody,
 } from '../api/designIo';
 import { writeToOutputFolder } from '../api/workspace';
+import {
+  askForExportDestination,
+  askToReplaceExports,
+  replacedNotice,
+  EXPORT_CANCELLED_MESSAGE,
+} from '../shell/exportDestinationPrompt';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
 import { documentIsUnsaved, resetDocumentStore, useDocumentStore, type CadLinkClassification } from '../stores/document';
@@ -226,6 +232,13 @@ export function DesignFileMenu() {
 
   async function exportCopy() {
     await act(async () => {
+      // Asked before the file is built: cancelling must cost nothing, and the
+      // question is where this export goes, not whether it can be serialized.
+      const destination = await askForExportDestination({
+        title: 'Export a copy',
+        detail: 'A text copy of this design.',
+      });
+      if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       const solveState = useSolveOptionsStore.getState();
       const polarConfig = polarConfigFromUi(solveState.polar);
       const response = await serializeDesignDocument(
@@ -234,8 +247,11 @@ export function DesignFileMenu() {
       const written = await writeToOutputFolder(designNameSlug(designName), [{
         filename: response.suggestedFilename,
         blob: new Blob([response.text], { type: 'text/plain;charset=utf-8' }),
-      }]);
-      setMessage(`Exported a copy as ${response.suggestedFilename} to ${written.directory}`);
+      }], fetch, 'confirm', destination.token, askToReplaceExports);
+      setMessage(
+        `Exported a copy as ${response.suggestedFilename} to ${written.directory}`
+        + replacedNotice(written.replaced),
+      );
     });
   }
 
@@ -260,23 +276,40 @@ export function DesignFileMenu() {
 
   async function exportOne(kind: 'step' | 'stl', stepBody: StepBody = 'solid') {
     await act(async () => {
+      const destination = await askForExportDestination({
+        title: `Export ${kind.toUpperCase()}`,
+        detail: `${designNameSlug(designName)}.${kind} from revision ${revision}.`,
+      });
+      if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       const written = await exportGeometryToOutputFolder(
-        kind, design, revision, designNameSlug(designName), undefined, stepBody,
+        kind, design, revision, designNameSlug(designName), undefined, stepBody, fetch,
+        destination.token, askToReplaceExports,
       );
       // Naming the folder is the point: the desktop window has no download
       // shelf, so an export that does not say where it went looks like one
       // that did not happen.
       const warning = written.warning ? ` Warning: ${written.warning}` : '';
       setMessage(
-        `Exported ${kind.toUpperCase()} from revision ${revision} to ${written.directory}.${warning}`,
+        `Exported ${kind.toUpperCase()} from revision ${revision} to ${written.directory}.`
+        + `${replacedNotice(written.replaced)}${warning}`,
       );
     });
   }
 
   async function exportProfiles() {
     await act(async () => {
+      // One dialog for both files: profiles and slices are halves of one
+      // export, and asking twice would be asking the same question twice.
+      const destination = await askForExportDestination({
+        title: 'Export profiles',
+        detail: 'Profile and slice CSV files.',
+      });
+      if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       const result = await exportProfileArtifacts(
-        (kind) => exportGeometryToOutputFolder('profiles', design, revision, designNameSlug(designName), kind),
+        (kind) => exportGeometryToOutputFolder(
+          'profiles', design, revision, designNameSlug(designName), kind, 'solid', fetch,
+          destination.token, askToReplaceExports,
+        ),
         revision,
       );
       setMessage(result);

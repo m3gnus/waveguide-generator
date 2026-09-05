@@ -12,6 +12,13 @@ import {
   type ExportContext,
 } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
+import { ExportCancelledError } from '../api/exportDestination';
+import {
+  askForExportDestination,
+  askToReplaceExports,
+  replacedNotice,
+  EXPORT_CANCELLED_MESSAGE,
+} from '../shell/exportDestinationPrompt';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { canLoadJobDesign, hydrateJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
@@ -95,15 +102,34 @@ function unavailableFormatReason(
   return undefined;
 }
 
+/**
+ * Run an export, reporting a declined replacement as a cancellation.
+ *
+ * Declining "replace these files?" is an answer, not a failure, and this
+ * control shows a thrown error in red beside the run.
+ */
+async function declinable<T>(run: () => Promise<T>): Promise<T | null> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof ExportCancelledError) return null;
+    throw error;
+  }
+}
+
 function jobName(job: JobItem): string {
   return job.label?.trim() || `${String(job.config_summary.formula_type ?? 'design').toLowerCase()}_${job.id.slice(0, 8)}`;
 }
 
-function workspaceNotice(label: string, result: Pick<ExportBundleResult, 'directory' | 'files'>): string {
+function workspaceNotice(
+  label: string,
+  result: Pick<ExportBundleResult, 'directory' | 'files' | 'replaced'>,
+): string {
   const count = `${result.files.length} file${result.files.length === 1 ? '' : 's'}`;
-  return result.directory
+  const written = result.directory
     ? `${label} · ${count} written to ${result.directory}`
     : `${label} · ${count} written to Workspace`;
+  return `${written}${replacedNotice(result.replaced)}`;
 }
 
 export function RunExportControl({ job, compact = false, onOpenExportSettings }: RunExportControlProps) {
@@ -137,7 +163,17 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   // 'overwrite': these two are the user asking for an export, and asking again
   // must produce the file again. See `ExistingFilePolicy`.
   const exportOne = (format: ExportFormat) => execute(job.id, [format], async (): Promise<RunExportOutcome> => {
-    const result = await runWorkspaceExportBundle(await buildContext([format]), [format], 'overwrite');
+    const destination = await askForExportDestination({
+      title: `Export ${formatLabel(format)}`,
+      detail: `From run ${jobName(job)}.`,
+    });
+    if (!destination) return { notice: EXPORT_CANCELLED_MESSAGE };
+    const result = await declinable(async () => runWorkspaceExportBundle({
+      ...await buildContext([format]),
+      destinationToken: destination.token,
+      confirmReplacements: askToReplaceExports,
+    }, [format], 'confirm'));
+    if (!result) return { notice: EXPORT_CANCELLED_MESSAGE };
     await recordFiles(result.files);
     const notice = workspaceNotice(formatLabel(format), result);
     return result.failures.length ? {
@@ -150,7 +186,17 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const exportPreferred = () => {
     const formats = [...preferences.exportFormats];
     return execute(job.id, formats, async (): Promise<RunExportOutcome> => {
-      const result = await runWorkspaceExportBundle(await buildContext(formats), formats, 'overwrite');
+      const destination = await askForExportDestination({
+        title: 'Export this run',
+        detail: `${formats.length} format${formats.length === 1 ? '' : 's'} from run ${jobName(job)}.`,
+      });
+      if (!destination) return { notice: EXPORT_CANCELLED_MESSAGE };
+      const result = await declinable(async () => runWorkspaceExportBundle({
+        ...await buildContext(formats),
+        destinationToken: destination.token,
+        confirmReplacements: askToReplaceExports,
+      }, formats, 'confirm'));
+      if (!result) return { notice: EXPORT_CANCELLED_MESSAGE };
       await recordFiles(result.files);
       const fileText = workspaceNotice('Export', result);
       if (!result.failures.length) return { notice: fileText };
