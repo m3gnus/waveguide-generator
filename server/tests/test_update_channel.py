@@ -20,6 +20,7 @@ import pytest
 
 from server.settings.store import SettingsStore
 from server.updates.api import mount_updates
+from server.updates.bundle import trusted_asset_url
 from server.updates.service import (
     BETA_CHANNEL,
     STABLE_CHANNEL,
@@ -539,6 +540,74 @@ def test_request_install_refuses_a_companion_tag(tmp_path: Path) -> None:
     update.get_status = companion_status  # type: ignore[method-assign]
     with pytest.raises(UpdateInstallUnavailable):
         update.request_install()
+
+
+# --- a build of `main`, if one is ever published ---------------------------
+#
+# The beta channel offers the newest *published* release, pre-releases included.
+# "The newest build of `main`" is a different promise, and what these record is
+# which half of it the client already keeps: the tag shape, the ordering and the
+# install path work today, so the missing half is publication -- a workflow that
+# publishes a main build as a pre-release with its installer assets on it. See
+# `docs/reference/UPDATE-CHANNELS.md`.
+
+
+def test_a_main_build_published_as_a_prerelease_is_already_offerable(
+    tmp_path: Path,
+) -> None:
+    """Nothing in the client needs to change to offer one.
+
+    `v2.0.1-main.7` is a SemVer pre-release like `v2.0.1-beta.1`: the parser
+    admits it, the beta scan ranks it, and the install path takes its tag.
+    """
+
+    result = beta_service(
+        tmp_path, [release("2.0.1-main.7"), release("2.0.0")]
+    ).get_status()
+
+    assert result["availability"] == "available"
+    assert result["release"]["tag"] == "v2.0.1-main.7"
+    assert result["action"]["command"].endswith(" --tag v2.0.1-main.7")
+
+
+def test_a_main_build_must_advertise_the_next_version_to_be_offered_at_all(
+    tmp_path: Path,
+) -> None:
+    """The constraint any such workflow has to satisfy, stated as a test.
+
+    SemVer rule 11: a pre-release sorts *below* the release sharing its core
+    numbers. So a build of `main` tagged from the version in `shared/version.json`
+    -- which still names the last release -- is older than the copy already
+    installed, and the honest answer is "ahead", not an update. A main build has
+    to carry the next version, `v<next>-main.<n>`.
+    """
+
+    behind = beta_service(tmp_path, [release("2.0.0-main.7")]).get_status()
+    assert behind["availability"] == "ahead"
+    assert behind["action"] is None
+
+    ahead = beta_service(
+        tmp_path / "next", [release("2.0.1-main.7")]
+    ).get_status()
+    assert ahead["availability"] == "available"
+
+
+def test_a_main_builds_assets_are_trusted_by_the_transport(tmp_path: Path) -> None:
+    """The other half a rolling channel needs: the asset URL must be reachable.
+
+    Only a release download of this repository is, which is why an Actions
+    artifact cannot serve one -- it lives on a different origin and needs an
+    authenticated request.
+    """
+
+    assert trusted_asset_url(
+        "https://github.com/m3gnus/waveguide-generator/releases/download/"
+        "v2.0.1-main.7/Waveguide.Generator-2.0.1-main.7-macos-arm64.dmg"
+    )
+    assert not trusted_asset_url(
+        "https://api.github.com/repos/m3gnus/waveguide-generator/actions/"
+        "artifacts/12345/zip"
+    )
 
 
 # --- the endpoints ---------------------------------------------------------

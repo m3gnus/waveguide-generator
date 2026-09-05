@@ -864,6 +864,12 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
   .update-progress .progress.indeterminate i { animation: none; }
   .update-progress .progress i { transition: none; }
 }
+/* The channel selector, in the dialog rather than in Settings. It borrows the
+   settings idiom for the two buttons so one control does not read as two. */
+.update-channel { display: grid; gap: var(--space-8); padding: var(--space-12); border: 1px solid var(--hair); border-radius: var(--r); background: var(--surface-raised); }
+.update-channel h3 { margin: 0; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; text-transform: uppercase; }
+.update-channel .cad-settings-note { margin: 0; }
+
 /* The export destination dialog wears the update dialog's shape -- one modal
    idiom in this application -- and adds only the folder it is asking about. */
 .export-dialog { width: min(520px, calc(100vw - 36px)); }

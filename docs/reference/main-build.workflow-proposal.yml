@@ -1,0 +1,127 @@
+# PROPOSAL — this file is deliberately NOT under .github/workflows/.
+#
+# GitHub only registers workflows inside .github/workflows, so nothing here has
+# a trigger, a token or a permission until someone moves it there. Moving it is
+# two separate authorizations under hornlab-policy/GIT-WORKFLOW.md: §1.2.5 for a
+# workflow that requests `contents: write`, and §1.2.3 for the releases it then
+# publishes. Read docs/reference/UPDATE-CHANNELS.md first; this file is the
+# mechanics of the design described there.
+#
+# What it does: builds every installer from a commit on main, exactly as
+# rc-build.yml already does, and publishes them as an immutable pre-release so
+# the in-app beta channel can install one. No tag is ever moved or deleted, no
+# signing identity is introduced, and the updater's trusted origins are
+# untouched -- the assets are ordinary release downloads of this repository.
+
+name: Main build
+
+on:
+  # Deliberately dispatch-only, even after activation. `push: [main]` is a
+  # second decision, and UPDATE-CHANNELS.md's disposition 2 depends on being
+  # able to bound how many live pre-releases exist while old clients still
+  # resolve the update companion by scanning 20 recent releases.
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit on main to build and publish"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    name: Name this build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.name.outputs.version }}
+      tag: v${{ steps.name.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+      - id: name
+        name: Next patch, plus a monotonic main label
+        run: |
+          set -euo pipefail
+          # NOT shared/version.json as it stands: a pre-release sorts BELOW the
+          # release sharing its core numbers, so a build named from the current
+          # version is older than the installed copy and reads as "ahead".
+          # github.run_number never repeats and never goes backwards, so every
+          # build outranks the last, and the next real release outranks all of
+          # them.
+          base="$(python -c 'import json;print(json.load(open("shared/version.json"))["version"])')"
+          next="$(python - "$base" <<'PY'
+          import sys
+          major, minor, patch = (int(part) for part in sys.argv[1].split("."))
+          print(f"{major}.{minor}.{patch + 1}")
+          PY
+          )"
+          echo "version=$next-main.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+  # spa / macos-bundle / windows-bundle / linux-bundle: the jobs in
+  # rc-build.yml, unchanged except that they take the version from `identity`
+  # instead of reading shared/version.json, and that each stamps it in before
+  # packaging:
+  #
+  #   python scripts/bump_version.py --set "${{ needs.identity.outputs.version }}"
+  #
+  # Two product prerequisites, neither of them in the branch that proposed this
+  # file, both reviewable on their own:
+  #   * `--set` validates against SEMVER = ^(\d+)\.(\d+)\.(\d+)$ and refuses a
+  #     pre-release label. Widening it also moves package.json, the npm lockfile
+  #     and the macOS Info.plist, which npm and Gatekeeper read.
+  #   * scripts/build_bundle.py should record `sourceSha: ${{ github.sha }}` in
+  #     update-app-<version>.manifest.json, so an installed main build names the
+  #     commit it came from rather than a run number. The manifest is a shipped
+  #     artifact contract, so it is a release-owner decision when to add it.
+
+  publish:
+    name: Publish an immutable main build
+    needs: [identity, spa, macos-bundle, windows-bundle, linux-bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      # <-- The authorization. GIT-WORKFLOW.md §1.2.5; this is exactly why the
+      #     file is not a workflow yet.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: build
+      - name: Publish, as a pre-release, once
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # `--prerelease` is what keeps this off the stable channel:
+          # releases/latest never returns one, so no stable install can be
+          # offered a main build. Re-check that property before changing this.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists. A build is never republished." >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --prerelease \
+            --title "main build ${{ needs.identity.outputs.version }}" \
+            --notes "Automatic build of main@${{ github.sha }}. Not a release." \
+            build/**/*
+      - name: Publish the update layers as this build's own companion
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATES_TAG: ${{ needs.identity.outputs.tag }}-updates
+        run: |
+          set -euo pipefail
+          # The same split release.yml publishes: installers on the build's own
+          # page, update layers on `<tag>-updates`. `_layer_asset` reads the
+          # companion first and falls back to the release's own assets, so
+          # either arrangement resolves; matching release.yml keeps one shape.
+          gh release create "$UPDATES_TAG" --prerelease \
+            --title "main build layers" --notes "Update layers for $UPDATES_TAG." \
+            build/layers/*
+      # No cleanup step, deliberately. Deleting an older main build would delete
+      # a published tag (§1.2.1) and would be the tag mutation this design
+      # exists to avoid. If live pre-releases have to be bounded for old
+      # clients, bound how often this workflow runs -- see
+      # UPDATE-CHANNELS.md, "Old-client compatibility".

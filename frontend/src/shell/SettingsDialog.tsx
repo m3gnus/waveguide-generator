@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
 import { getAclRepairStatus, type AclRepairRootStatus } from '../api/aclRepair';
-import { getUpdateChannel, setUpdateChannel, type UpdateChannel } from '../api/updates';
 import {
   getCadWorkspace,
   openCadWorkspace,
@@ -12,10 +11,8 @@ import {
 import { driverCountText, driverKindCounts } from '../design/driverLibraryCounts';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
-import { appQueryClient } from '../queryClient';
 import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { Icon } from './icons';
-import { UPDATE_QUERY_KEY } from './UpdateControl';
 import { WorkspaceFolderControls } from './WorkspaceFolderControls';
 import type { SettingsSection } from './settingsNavigation';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
@@ -71,80 +68,18 @@ function DriverLibrarySettings() {
 }
 
 /**
- * Stable or beta, as a preference rather than a per-update action.
+ * Where the update channel went.
  *
- * It lives here and not in the update dialog because it is not a decision about
- * one release: it says which releases this installation is offered from now on,
- * and it has to survive the update it controls. That is also why the value is
- * stored on the server -- a browser-scoped copy would be back on stable the
- * first time the update it asked for actually landed.
+ * The Stable/Beta buttons moved into the dialog the version opens, beside the
+ * verdict they decide: someone who wants a beta is already looking at what WG
+ * would install, and switching there re-checks while it is on screen. This
+ * pointer stays because Settings is where the choice used to be, and a setting
+ * that vanishes reads as one that was removed.
  */
-function UpdateChannelSettings() {
-  const [channel, setChannel] = useState<UpdateChannel>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const generation = useRef(0);
-  const confirmed = useRef<UpdateChannel>('stable');
-
-  useEffect(() => {
-    const request = ++generation.current;
-    void getUpdateChannel().then(
-      (value) => {
-        if (request !== generation.current) return;
-        confirmed.current = value;
-        setChannel(value);
-      },
-      (reason: unknown) => { if (request === generation.current) setError(reason instanceof Error ? reason.message : String(reason)); },
-    );
-    return () => { generation.current += 1; };
-  }, []);
-
-  const choose = async (next: UpdateChannel) => {
-    if (next === channel) return;
-    // Optimistic, and rolled back on refusal, so the buttons never disagree
-    // with what the server will actually check.
-    const request = ++generation.current;
-    setChannel(next); setBusy(true); setError(undefined);
-    try {
-      const saved = await setUpdateChannel(next);
-      if (request !== generation.current) return;
-      confirmed.current = saved;
-      setChannel(saved);
-      // The cached status answers the other channel's question, so the
-      // indicator must not keep showing it. The app-wide client is used
-      // directly because Dockview mounts independent React roots and this
-      // dialog is not guaranteed to sit under a provider.
-      await appQueryClient.invalidateQueries({ queryKey: UPDATE_QUERY_KEY });
-    } catch (reason) {
-      if (request !== generation.current) return;
-      setChannel(confirmed.current);
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      if (request === generation.current) setBusy(false);
-    }
-  };
-
+function UpdateChannelPointer() {
   return <section id="settings-updates" className="settings-theme update-channel-settings" aria-labelledby="settings-updates-title" tabIndex={-1}>
     <h3 id="settings-updates-title">Updates</h3>
-    <div className="settings-theme-options" role="group" aria-label="Update channel">
-      <button
-        className={channel === 'stable' ? 'on' : ''}
-        aria-pressed={channel === 'stable'}
-        disabled={channel === undefined || busy}
-        onClick={() => void choose('stable')}
-      >Stable</button>
-      <button
-        className={channel === 'beta' ? 'on' : ''}
-        aria-pressed={channel === 'beta'}
-        disabled={channel === undefined || busy}
-        onClick={() => void choose('beta')}
-      >Beta</button>
-    </div>
-    <p className="cad-settings-note">{channel === 'beta'
-      ? 'Beta builds arrive first, before a stable version number is committed to them. They are published to test packaging and installation on every platform, so expect rough edges — and report them.'
-      : 'Only finished releases. This is the right choice unless you want to help test a release before it ships.'}</p>
-    <p className="cad-settings-note">This preference is stored with WG&rsquo;s application data, not in this browser, so it survives the updates it controls. Switching back to <b>Stable</b> while running a beta leaves WG ahead of the latest release; it stays on that beta until the release catches up.</p>
-    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+    <p className="cad-settings-note">Choose <b>Stable</b> or <b>Beta</b> in the update dialog: click the version beside the Waveguide Generator name in the top bar. The choice is stored with WG&rsquo;s application data, so it survives the updates it controls.</p>
   </section>;
 }
 
@@ -456,7 +391,7 @@ export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClo
         <CadSettings/>
         <DriverLibrarySettings/>
         <WorkspaceSettings/>
-        <UpdateChannelSettings/>
+        <UpdateChannelPointer/>
         <ResultsPreferencesSurface expanded/>
         <JobsPreferencesSurface expanded/>
         <p className="viewer-preferences-note">Viewer preferences remain available in the Viewport panel.</p>
