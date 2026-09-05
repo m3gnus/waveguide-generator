@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { useCapabilities } from '../jobs/useCapabilities';
-import { activeBackendCapability, backendLimitation } from './backendSupport';
+import { activeBackendCapability, backendLimitation, plannedBackendCapabilities } from './backendSupport';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { widenPolarToDerivation } from '../jobs/importedSubmission';
 import { HelpTipRow, useHelpTip } from './HelpTip';
@@ -123,10 +123,17 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
  */
 export function GroundPlaneControls() {
   const store = useSolveOptionsStore();
-  const { engines } = useCapabilities();
+  const { engines, engineSelection } = useCapabilities();
   const ground = store.groundPlane;
-  const backend = activeBackendCapability(store.engine, engines);
-  const limitation = backendLimitation(backend, 'ground-plane');
+  const backend = activeBackendCapability(store.engine, engines, engineSelection);
+  // Judged against the whole plan, as the coupled-baffle control is. With
+  // engine AUTO the "active" backend is only the first candidate the server
+  // would walk -- Metal on a Mac -- so limiting on it alone reported "METAL
+  // does not support a rigid ground plane" for a solve the server routes to
+  // BEMPP and runs. A warning that fires on a solve which succeeds teaches a
+  // user to ignore the warning.
+  const plan = plannedBackendCapabilities(store.engine, engines, engineSelection, store.solverMode);
+  const limitation = backendLimitation(backend, 'ground-plane', plan);
   const belowGround = ground.enabled ? belowGroundNote(ground.height_m, store.polar) : undefined;
   const axes = backend?.ground_plane_axes;
   return <>

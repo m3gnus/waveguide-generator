@@ -246,6 +246,14 @@ def describe_retention_refusal(
 
     if reason is None:
         return None
+    if reason == "unsupported_ground_plane":
+        return (
+            "Field-plane surface traces were not retained: a rigid ground "
+            "plane is not represented in the field evaluation, which would "
+            "otherwise show this solve in free space with no floor. Polar and "
+            "impedance results are unaffected and do include the ground. Turn "
+            "the ground plane off if you need the field plane."
+        )
     if reason != "size_cap_exceeded" or estimated_bytes is None:
         return f"Field-plane surface traces were not retained ({reason})."
     return (

@@ -397,10 +397,13 @@ def _requested_mounting(request: SolveRequest) -> str | None:
     solve options. A solve has one mounting either way, so they are collapsed
     here rather than at every consumer.
 
-    They cannot both be set -- ``server/solver/bempp.py`` refuses the pair, as
-    two half-space models each claiming the whole exterior -- but this runs
-    before that check, so the baffle wins here and the adapter reports the
-    conflict with the fuller explanation.
+    They cannot both be set, and the refusal is at the submission boundary
+    below rather than in an adapter. It used to be in ``server/solver/bempp.py``
+    alone, which meant the pair was refused only on the engine that happened to
+    implement it: on Metal it was accepted, silently, and cost a symmetry plane
+    as well, because ``restrict_for_ground_plane`` had already subtracted the
+    matching mirror before any adapter saw the request. The baffle still wins
+    here, so AUTO resolves against a mounting that exists.
     """
 
     if request.design.root.simulation.sim_type == "infinite-baffle":
@@ -732,6 +735,22 @@ async def resolve_submission(
                 unavailable_reason or "No capability reason was reported.",
             )
             engine_name = substitute
+    if (
+        _ground_plane_axis(request) is not None
+        and request.design.root.simulation.sim_type == "infinite-baffle"
+    ):
+        # Two half-space models, each claiming the whole exterior. Refused here
+        # rather than in an adapter because only bempp's implemented it, so the
+        # pair went through on any other engine -- and paid for it twice, since
+        # restrict_for_ground_plane subtracts the ground axis's mirror plane
+        # before the engine is even chosen. The user was charged roughly double
+        # the mesh for a boundary the solve then discarded.
+        raise SymmetryValidationError(
+            "A coupled infinite baffle and a rigid ground plane are two "
+            "different half-space boundaries and cannot be combined. The "
+            "baffle already mounts the mouth in an unbounded wall; turn the "
+            "ground plane off, or set the simulation type to free-standing."
+        )
     if _ground_plane_axis(request) is not None:
         # Every path that picks an engine converges here, which is the point.
         # The AUTO gate above filters candidates by mounting, but it is only

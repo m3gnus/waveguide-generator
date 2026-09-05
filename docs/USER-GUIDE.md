@@ -197,12 +197,19 @@ clear the surface, and a solve that would not is refused with the smallest
 height that works rather than solved with the horn buried. Standing the model
 off the surface removes the matching mirror plane, so Auto symmetry drops to
 the reduction that survives -- a floor costs the horizontal cut but keeps the
-left/right one. The ground plane needs BEMPP full 3D on this build, and it
-cannot be combined with an infinite baffle.
+left/right one. The ground plane needs BEMPP full 3D on this build; asking any
+other engine for one is refused rather than solved without the surface. It
+cannot be combined with an infinite baffle -- the two are different half-space
+boundaries, each claiming the whole exterior, and the pair is refused when the
+solve is submitted whichever engine you choose.
 
 Imported CAD geometry still requires Metal. Field-plane traces are available
-from free-standing Metal and BEMPP full-3D solves; Axisymmetric and coupled-IB
-solves report that traces are unavailable. The capability response drives these
+from free-standing Metal and BEMPP full-3D solves; Axisymmetric, coupled-IB and
+ground-plane solves report that traces are unavailable. A grounded solve keeps
+none because the field evaluation carries no ground image: it would draw the
+horn in free space with no floor in the picture, while the polar and impedance
+results it is shown beside do include the surface. Turn the ground plane off if
+you need the field plane. The capability response drives these
 controls, so an older optional solver package cannot advertise a feature it does
 not implement. Designs carrying an unavailable option remain editable and show
 an actionable reason instead of silently changing the physics.

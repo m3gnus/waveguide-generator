@@ -753,8 +753,23 @@ def solve_bempp_from_msh_text(
             frequency_count=len(live_execution_frequencies(context)),
             channel_count=1,
             enabled=field_plane_enabled,
-            supported=aperture_tag is None,
-            unsupported_reason="unsupported_coupled_infinite_baffle",
+            # A grounded solve is refused traces as firmly as a coupled baffle,
+            # and for a sharper reason. The field evaluator reloads the mesh
+            # with the symmetry plane alone and has no notion of a ground
+            # image, so it would integrate these traces in free space and
+            # return a field with no floor in it -- a plausible picture of the
+            # wrong room. The traces are also taken on the TRANSLATED mesh
+            # while the persisted artifact is the untranslated one, so the
+            # plane a user asks for at the design origin would land height_m
+            # below the model. Retaining them cannot be made correct by
+            # relabelling; evaluating with the image is a real feature, and
+            # until it exists the honest answer is no field.
+            supported=aperture_tag is None and ground_plane is None,
+            unsupported_reason=(
+                "unsupported_coupled_infinite_baffle"
+                if aperture_tag is not None
+                else "unsupported_ground_plane"
+            ),
             cap_bytes=field_trace_cap_bytes,
         )
     )

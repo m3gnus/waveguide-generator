@@ -188,6 +188,14 @@ def _solver_mesher_config(
     # is acoustically inert (the observation frame is derived from the solved
     # mesh), so nothing is lost: the placement is applied only at the CAD
     # boundary, by the solid STEP and the CAD-link exports.
+    #
+    # A ground plane is a SECOND, unrelated placement and the sentence above
+    # does not cover it. It is applied inside the adapter, after this function,
+    # and results DO depend on it -- that is the physics being asked for. The
+    # mesh artifact still does not: the untranslated text is what is persisted
+    # and drawn. Field traces would have depended on it, since they are taken
+    # on the translated mesh, which is one of the two reasons a grounded solve
+    # retains none (server/solver/bempp.py).
     _strict_scalar(root.mesh.vertical_offset, 0.0, "mesh.vertical_offset")
     if not keep_placement:
         mesh["verticalOffset"] = 0.0

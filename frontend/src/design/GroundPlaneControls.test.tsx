@@ -18,11 +18,17 @@ const engine = (name: string, mountings: string[], groundPlaneAxes?: string[]) =
   ...(groundPlaneAxes ? { ground_plane_axes: groundPlaneAxes } : {}),
 });
 
-const capabilities = (engines: ReturnType<typeof engine>[]) => ({
+const capabilities = (engines: ReturnType<typeof engine>[], resolvedDefault = 'bempp') => ({
   engines,
   engineSelection: {
-    default: 'auto', resolvedDefault: 'bempp',
-    full3dOrder: ['metal', 'beat', 'bempp', 'dryrun'], axisymmetricRunner: 'axisym',
+    default: 'auto', resolvedDefault,
+    // The server's real order since BEAT was split into per-backend engines.
+    // The pre-split ['metal','beat','bempp','dryrun'] fixture named an engine
+    // the registry no longer advertises, which mattered the moment this
+    // component started judging AUTO against the planned order rather than
+    // against one active backend.
+    full3dOrder: ['metal', 'beat-metal', 'beat-cpu', 'bempp', 'dryrun'],
+    axisymmetricRunner: 'axisym',
   },
 });
 
@@ -118,6 +124,34 @@ describe('ground plane controls', () => {
     expect(alert?.textContent).toContain('BEAT does not support a rigid ground plane');
     // The remedy must not suggest the baffle as a substitute for the plane.
     expect(alert?.textContent).toMatch(/not a substitute/i);
+  });
+
+  it('does not warn on AUTO when a later planned engine can ground', () => {
+    // The regression: AUTO's "active" backend is only the first candidate the
+    // server would walk. On a Mac that is Metal, which has no ground plane, so
+    // judging the warning on it alone put a red alert on a solve the server
+    // routes to BEMPP and runs. A warning that fires on a solve which succeeds
+    // teaches a user to ignore warnings.
+    useSolveOptionsStore.getState().setEngine('auto');
+    // resolvedDefault 'metal' is the Mac case: AUTO's active backend is Metal,
+    // which has no ground plane, while BEMPP later in the same plan does.
+    render(capabilities([
+      engine('metal', ['free-standing', 'infinite-baffle']),
+      engine('bempp', ['free-standing', 'ground-plane'], ['x', 'y', 'z']),
+    ], 'metal'));
+    act(() => { useSolveOptionsStore.getState().updateGroundPlane({ enabled: true }); });
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('still warns on AUTO when no planned engine can ground', () => {
+    useSolveOptionsStore.getState().setEngine('auto');
+    render(capabilities([
+      engine('metal', ['free-standing', 'infinite-baffle']),
+      engine('beat-cpu', ['free-standing']),
+    ], 'metal'));
+    act(() => { useSolveOptionsStore.getState().updateGroundPlane({ enabled: true }); });
+    expect(container.querySelector('[role="alert"]')?.textContent)
+      .toContain('does not support a rigid ground plane');
   });
 
   it('only sends ground_plane once it is enabled', () => {

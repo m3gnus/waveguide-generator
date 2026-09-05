@@ -550,3 +550,93 @@ def test_capability_tests_here_launch_no_solver_and_no_subprocess(
     assert engines["bempp"].reason == "stubbed for tests", (
         "the real bempp probe ran; the autouse stub is not in effect"
     )
+
+
+@pytest.mark.parametrize("engine", ["metal", "bempp"])
+def test_a_baffle_and_a_ground_plane_are_refused_on_every_engine(engine):
+    """The pair was refused only by the engine that implemented the check.
+
+    bempp raised; Metal accepted the request and solved it, discarding one of
+    the two half-space boundaries without saying which. It also cost a symmetry
+    plane for nothing, because restrict_for_ground_plane subtracts the ground
+    axis's mirror before any adapter sees the request -- so the user paid
+    roughly double the mesh for a boundary the solve then threw away.
+    """
+    import asyncio
+
+    from server.engines import registry
+    from server.jobs.models import SolveRequest
+    from server.jobs.runtime import SymmetryValidationError, resolve_submission
+
+    request = SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "L": 120,
+                "a": 45,
+                "simulation": {
+                    "f1": 500,
+                    "f2": 8000,
+                    "num_frequencies": 3,
+                    "sim_type": "infinite-baffle",
+                },
+            },
+            "options": {
+                "engine": engine,
+                "solver_mode": "auto",
+                "symmetry": "auto",
+                "ground_plane": {"enabled": True, "axis": "y", "height_m": 1.0},
+            },
+        }
+    )
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo(
+                "metal", True, "test", "1",
+                mountings=("free-standing", "infinite-baffle"),
+            ),
+            registry.EngineInfo(
+                "bempp", True, "test", "1",
+                mountings=("free-standing", "infinite-baffle", "ground-plane"),
+                ground_plane_axes=("x", "y", "z"),
+            ),
+        ],
+        factory=lambda name: object(),
+    )
+
+    with pytest.raises(SymmetryValidationError, match="cannot be combined"):
+        asyncio.run(resolve_submission(request, engine_registry))
+
+
+def test_a_grounded_solve_keeps_no_field_traces():
+    """Refused, not relabelled.
+
+    The field evaluator reloads the mesh with the symmetry plane alone and has
+    no notion of a ground image, so retained traces would be integrated in free
+    space and drawn as a room with no floor. They are also taken on the
+    translated mesh while the persisted artifact is the untranslated one, so a
+    plane requested at the design origin would land height_m below the model.
+    """
+    from server.solver.field_traces_store import (
+        describe_retention_refusal,
+        field_trace_retention_plan,
+    )
+
+    retain, reason, _estimated, _cap = field_trace_retention_plan(
+        "",
+        mesh_stats=None,
+        frequency_count=3,
+        channel_count=1,
+        enabled=True,
+        supported=False,
+        unsupported_reason="unsupported_ground_plane",
+        cap_bytes=1 << 30,
+    )
+    assert retain is False
+    assert reason == "unsupported_ground_plane"
+
+    detail = describe_retention_refusal(reason, None, 1 << 30)
+    assert detail is not None
+    assert "ground plane" in detail
+    # It must say what still IS trustworthy, or the user reads it as a failure.
+    assert "Polar and impedance results are unaffected" in detail
