@@ -60,46 +60,81 @@ renames, and fully pinned release-action and tool provenance. These are release 
 not properties implied by the macOS happy-path evidence above.
 
 **Where each of those three stands, re-checked against the code 2026-09-05.** They
-were one sentence and they are not one gate; two have moved and one has not.
+were written as one sentence and are three different pieces of work. None of them
+is closed here: what follows records what the code does today and what each still
+needs, so the release owner can decide. **Whether these three gates hold 0.3.2 or
+move to 0.3.3 is an open question with the release owner, not settled below.**
 
-- **Publisher authentication — still open, and it is a purchase, not a patch.**
-  `server/updates/bundle.py` verifies integrity only: GitHub's per-asset `digest`
-  over TLS, with the `.sha256` sidecar as fallback. Nothing authenticates who
-  produced the bytes. The bundle itself is ad-hoc signed — `codesign --sign -`, in
-  both `scripts/build_bundle.py` and the post-swap reseal in
-  `launchers/apply_update.py` — which lets the app run but carries no publisher
-  identity, and the build notes already say so. Closing this needs a signing
-  identity on each platform and somewhere to root the trust; it is a decision about
-  what to buy and hold, not work that can be done here.
-- **Power-loss recovery across the layer swap — implemented, by reconciliation
-  rather than by a journal.** `swap_staged_layers` is still not atomic and still
-  cannot run its rollback handler through process death; that part of the docstring
-  stands. What changed is that the *next start* now detects and repairs the result.
-  `DesktopWindow._recover_interrupted_bundle_update` handles both interruption
-  shapes: a layer missing mid-rename is restored from `.previous`, and the harder
-  case — both layers present but from different updates, which is what death
-  between the two renames leaves — is caught by comparing `runtimeId` in
-  `app/APP-MANIFEST.json` against `runtime/RUNTIME-MANIFEST.json` and rolled back.
-  Manifests ship inside the layers, so a rename cannot half-write one; an absent or
-  unreadable manifest is deliberately not treated as disagreement, because an older
-  bundle predates the field. Covered by
-  `test_an_update_interrupted_between_its_two_renames_is_rolled_back` and
-  `test_matching_layers_and_unreadable_manifests_both_start_normally`. A journal
-  would add a file that can itself be torn; this reads state that cannot be.
-  **Residual:** the evidence is unit-level and macOS-shaped. A real interrupted
-  upgrade on both platforms is still owed, and is listed with the other hand tests.
-- **Release-action and tool provenance — mostly pinned; name the residual instead
-  of carrying the whole sentence.** The two third-party actions are SHA-pinned with
-  the version in a trailing comment (`astral-sh/setup-uv`,
-  `softprops/action-gh-release`). uv is pinned to an exact version, and the Python
-  runtime is pinned twice over: `PYTHON_VERSION = "3.13.12"` plus
-  `PYTHON_BUILD = "20260325"`, with `require_python_build` failing the build if
-  uv's catalog resolves a different python-build-standalone release. What is not
-  pinned is `actions/checkout`, `actions/setup-node`, `actions/github-script`,
-  `actions/upload-artifact` and `actions/download-artifact`, all on floating major
-  tags, and `node-version: "20"`. That is a defensible line — first-party actions
-  from the host running the workflow — but it is a line somebody chose, so it
-  should be stated as a decision rather than left reading as unfinished work.
+- **Publisher authentication — open.** `server/updates/bundle.py` verifies
+  integrity only: GitHub's per-asset `digest` over TLS, with the `.sha256` sidecar
+  as fallback. That establishes the bytes match what the API described; it
+  establishes nothing about who produced them. The bundle is ad-hoc signed —
+  `codesign --force --deep --sign -`, in `scripts/build_bundle.py` and again in the
+  post-swap reseal in `launchers/apply_update.py` — which lets the app run but
+  carries no publisher identity.
+
+  Closing this is a trust anchor, a signing step and key management, plus the
+  release decision about which of those to adopt. Two independent routes exist and
+  should not be conflated: **platform signing** (a Developer ID / Authenticode
+  identity, which also addresses Gatekeeper and SmartScreen) and **an updater
+  signature of WG's own** — signing the release manifest with a key whose public
+  half ships inside the installed updater, verified before a layer is swapped in.
+  The second does not depend on the first and is ordinary code plus a key to
+  protect. Which to take, and where the private key lives, is the decision.
+
+- **Recovery across the layer swap — partly implemented; not established as
+  power-loss durable.** Two next-start recovery paths exist in
+  `DesktopWindow._recover_interrupted_bundle_update` and are unit-tested:
+
+  1. a live layer directory missing, restored from its `.previous`
+     (`test_startup_recovers_a_missing_live_layer_before_starting_the_server` in
+     `server/tests/test_desktop_launcher.py`);
+  2. both layers present but declaring different `runtimeId`s in
+     `app/APP-MANIFEST.json` and `runtime/RUNTIME-MANIFEST.json` — the state a stop
+     between the two renames leaves — detected and rolled back
+     (`test_an_update_interrupted_between_its_two_renames_is_rolled_back`), with
+     an absent or unreadable manifest deliberately not counted as disagreement so
+     an older bundle still starts
+     (`test_matching_layers_and_unreadable_manifests_both_start_normally`).
+
+  **That is the tested scope, and it is narrower than the gate.** What it does not
+  establish, and what would be needed to call the gate met:
+
+  - **Crash durability.** `os.replace` is atomic with respect to concurrent
+    readers; it is not a promise that the directory entry reached stable storage
+    before the next one was issued. `launchers/apply_update.py` contains no
+    `fsync` of the layer parents, so after power loss the two renames may be
+    observed in an order the process never produced. Logical rename atomicity is
+    not crash durability, and only the two shapes above were tested.
+  - **Arbitrary interruption points.** Both tests construct a specific end state.
+    Interruption inside `rollback_previous_layers`, during launcher-file
+    replacement, or with a partially populated staging directory is untested.
+  - **macOS reseal.** The ad-hoc signature is restored *after* the swap. A stop in
+    between leaves a bundle whose seal does not match its contents, and the
+    mixed-generation path (`_roll_back_mixed_generation`) returns without calling
+    `repair_bundle`, unlike the missing-layer path beside it. Whether that state
+    launches, and what Gatekeeper does with it, has not been measured.
+  - **Windows.** None of this has run on a Windows host. `os.replace` over a
+    directory there is a different operation with different failure modes, which
+    is why `_rename` retries at all.
+
+  A durable journal is one way to attack the first point; manifest reconciliation
+  is not a substitute for it, because the manifests are only read after the fact
+  and cannot say which renames were persisted. A real interrupted upgrade on both
+  platforms remains owed either way.
+
+- **Release-action and tool provenance — partly pinned; this is the residual.**
+  SHA-pinned with the version in a trailing comment: `astral-sh/setup-uv` and
+  `softprops/action-gh-release`. uv is pinned to an exact version. The Python
+  runtime is pinned twice — `PYTHON_VERSION = "3.13.12"` and
+  `PYTHON_BUILD = "20260325"` — and `require_python_build` fails the build when
+  uv's catalog resolves a different python-build-standalone release.
+
+  Not pinned: `actions/checkout`, `actions/setup-node`, `actions/github-script`,
+  `actions/upload-artifact` and `actions/download-artifact`, each on a floating
+  major tag, and `node-version: "20"`. A major tag moves, so the release build is
+  not reproducible from its workflow text alone and its inputs are whatever those
+  tags pointed at on the day.
 
 Not verifiable here, and therefore open:
 

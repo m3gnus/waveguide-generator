@@ -44,13 +44,9 @@ const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; det
 /**
  * What an opened file's parse report says, in the status line.
  *
- * The migration notes are the part a user can act on -- "the stated solver
- * path was ignored, set one in Solve options" -- and the server has always
- * sent one with every applied migration. This line used to join the internal
- * identifiers instead (`006_machine_solver_mode_not_portable`), so a design
- * that quietly lost a setting reported a code naming the change to nobody who
- * could look it up. The counts stay: they are the evidence that nothing else
- * was dropped.
+ * Show each migration's note, not its identifier: the server sends a sentence
+ * with every one, and `006_machine_solver_mode_not_portable` is not something a
+ * user can look up.
  */
 export function reportText(report: ImportReport): string {
   const summary = `${report.dialect.toUpperCase()} · migrations: ${report.migrationsApplied.length || 'none'} · passthrough: ${report.passthrough.blockCount} blocks, ${report.passthrough.keyCount} keys preserved`;

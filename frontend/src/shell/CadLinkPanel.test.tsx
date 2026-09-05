@@ -734,6 +734,33 @@ describe('CadLinkPanel', () => {
     expect(newestReturnArrival([replaced], null, Date.parse('2026-08-12T15:31:05Z'))).toBe(replaced);
   });
 
+  it('shows which WGLink the connected add-in reports, and nothing when it reports none', async () => {
+    const withFusion = (status: FusionCadStatus) => {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.endsWith('/returns')) return json(listing);
+        if (path.endsWith('/fusion-status')) return json(status);
+        return json(record);
+      }));
+    };
+
+    withFusion({ ...currentFusion, adapterVersion: '0.1.1' });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    const shown = host.querySelector('.cad-addin-version')!;
+    expect(shown.textContent).toContain('WGLink add-in 0.1.1');
+    // Informational only. The heartbeat reports the add-in manifest's version,
+    // which does not establish the commit it was built from.
+    expect(shown.getAttribute('title')).toContain('not the commit');
+    // It must not turn into a connection problem: the workflow state is untouched.
+    expect(host.querySelector('.cad-connection-dot-current')).not.toBeNull();
+
+    await act(async () => { root.unmount(); });
+    root = createRoot(host);
+    withFusion({ ...currentFusion, adapterVersion: null });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    expect(host.querySelector('.cad-addin-version')).toBeNull();
+  });
+
   it('selects the newest readable return when CAD Link first mounts', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(listing.items[0].bundlePath);

@@ -3,8 +3,8 @@
 **Status:** partly enacted, 2026-09-05. **C2b, C3 and C4 are done**;
 `CFG-FORMAT.md` no longer advertises `Engine` in its canonical block and no
 longer claims the key is validated, and the open report now shows each
-migration's note instead of its internal identifier. **C1 is deferred** — see
-"Why C1 is still open", below, which corrects this proposal's own reasoning
+migration's note instead of its internal identifier. **C1 is not taken and not decided** —
+see "Why C1 is still open", below, which corrects this proposal's own reasoning
 about what it would cost.
 **Answers:** the plan's "Engine selection contract — `WG.Solve`'s `Engine` and
 `SolverMode` are silently ignored and stripped; `CFG-FORMAT.md` implies
@@ -142,10 +142,12 @@ asserts `serialize(parse(source)) == source` for a file carrying
 `Engine = bempp`: opening a file is not editing it, so an untouched save
 returns the author's own bytes. Dropping the keys at import breaks that.
 
-So C1 costs a small API addition across five files plus its tests. That is a
-scope decision, not a defect fix, and it is recorded here rather than taken.
-Until it is taken, `CFG-FORMAT.md` states plainly that these two keys are
-removed without a note — which is the honest half, and is done.
+C1 is therefore not taken here, and nothing about it is decided. It remains a
+proposal: a diagnostic channel for keys that are accepted and discarded could be
+added after 0.3.2 without changing the serialization contract, since the strip
+already happens at write time and would not move. Its cost is the extra channel
+and its tests, and nobody has approved that. Until it is taken, `CFG-FORMAT.md`
+states plainly that these two keys are removed without a note.
 
 ## What this deliberately does not do
 
@@ -183,8 +185,9 @@ settings, not the portable design file. That is a separate proposal.
 Original recommendation: take **C1 + C2b + C3**, and treat **C4** as the gate.
 
 What was taken, 2026-09-05: **C2b + C3 + C4**. C4 turned out to be one function
-rather than the expensive part, so it was done first and the gate it set is now
-met. C1 was left because its real cost is a new report channel, which the
-section above sets out. Whether to spend that is a scope call for the release
-owner; nothing ships wrong in the meantime, because the document no longer
-claims a validation or advertises the key.
+rather than the expensive part, so the gate this proposal set for C1 — that a
+note would reach a user — is no longer what blocks it. C1 was left because it
+needs a report channel that does not exist; the section above sets out why, and
+that remains an unapproved proposal for after 0.3.2. Nothing ships wrong in the
+meantime, because the document no longer claims a validation or advertises the
+key.
