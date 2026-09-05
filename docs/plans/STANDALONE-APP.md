@@ -59,6 +59,48 @@ not authenticate the publisher), a durable journal for power loss between multi-
 renames, and fully pinned release-action and tool provenance. These are release gates,
 not properties implied by the macOS happy-path evidence above.
 
+**Where each of those three stands, re-checked against the code 2026-09-05.** They
+were one sentence and they are not one gate; two have moved and one has not.
+
+- **Publisher authentication — still open, and it is a purchase, not a patch.**
+  `server/updates/bundle.py` verifies integrity only: GitHub's per-asset `digest`
+  over TLS, with the `.sha256` sidecar as fallback. Nothing authenticates who
+  produced the bytes. The bundle itself is ad-hoc signed — `codesign --sign -`, in
+  both `scripts/build_bundle.py` and the post-swap reseal in
+  `launchers/apply_update.py` — which lets the app run but carries no publisher
+  identity, and the build notes already say so. Closing this needs a signing
+  identity on each platform and somewhere to root the trust; it is a decision about
+  what to buy and hold, not work that can be done here.
+- **Power-loss recovery across the layer swap — implemented, by reconciliation
+  rather than by a journal.** `swap_staged_layers` is still not atomic and still
+  cannot run its rollback handler through process death; that part of the docstring
+  stands. What changed is that the *next start* now detects and repairs the result.
+  `DesktopWindow._recover_interrupted_bundle_update` handles both interruption
+  shapes: a layer missing mid-rename is restored from `.previous`, and the harder
+  case — both layers present but from different updates, which is what death
+  between the two renames leaves — is caught by comparing `runtimeId` in
+  `app/APP-MANIFEST.json` against `runtime/RUNTIME-MANIFEST.json` and rolled back.
+  Manifests ship inside the layers, so a rename cannot half-write one; an absent or
+  unreadable manifest is deliberately not treated as disagreement, because an older
+  bundle predates the field. Covered by
+  `test_an_update_interrupted_between_its_two_renames_is_rolled_back` and
+  `test_matching_layers_and_unreadable_manifests_both_start_normally`. A journal
+  would add a file that can itself be torn; this reads state that cannot be.
+  **Residual:** the evidence is unit-level and macOS-shaped. A real interrupted
+  upgrade on both platforms is still owed, and is listed with the other hand tests.
+- **Release-action and tool provenance — mostly pinned; name the residual instead
+  of carrying the whole sentence.** The two third-party actions are SHA-pinned with
+  the version in a trailing comment (`astral-sh/setup-uv`,
+  `softprops/action-gh-release`). uv is pinned to an exact version, and the Python
+  runtime is pinned twice over: `PYTHON_VERSION = "3.13.12"` plus
+  `PYTHON_BUILD = "20260325"`, with `require_python_build` failing the build if
+  uv's catalog resolves a different python-build-standalone release. What is not
+  pinned is `actions/checkout`, `actions/setup-node`, `actions/github-script`,
+  `actions/upload-artifact` and `actions/download-artifact`, all on floating major
+  tags, and `node-version: "20"`. That is a defensible line — first-party actions
+  from the host running the workflow — but it is a line somebody chose, so it
+  should be stated as a decision rather than left reading as unfinished work.
+
 Not verifiable here, and therefore open:
 
 - Everything Windows: nothing for this branch has executed on a Windows host yet. The
