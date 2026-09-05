@@ -691,7 +691,10 @@ async def resolve_submission(
             # its own message, and `dryrun`, a development toggle whose entire point
             # is that a real engine must never quietly stand in for it.
             unavailable_reason = await engine_registry.unavailable_reason(engine_name)
-            mounting = request.design.root.simulation.sim_type
+            # The requested mounting, not the design's sim_type: a ground plane
+            # lives in SolveOptions, so reading sim_type here would let a
+            # substitution hand a grounded solve to an engine that ignores it.
+            mounting = _requested_mounting(request)
             substitute = await engine_registry.resolve(
                 "auto",
                 solver_mode=request.options.solver_mode,
@@ -699,11 +702,10 @@ async def resolve_submission(
                 resolved_quadrants=resolved_quadrants,
             )
             if substitute is None:
-                unsupported = (
-                    " that supports a coupled infinite-baffle mounting"
-                    if mounting == "infinite-baffle"
-                    else ""
-                )
+                unsupported = {
+                    "infinite-baffle": " that supports a coupled infinite-baffle mounting",
+                    "ground-plane": " that supports a rigid ground-plane mounting",
+                }.get(mounting or "", "")
                 raise EngineUnavailableError(
                     f"Solve engine '{engine_name}' is unavailable, and no other "
                     f"engine on this host{unsupported} can take its place. "
@@ -730,6 +732,32 @@ async def resolve_submission(
                 unavailable_reason or "No capability reason was reported.",
             )
             engine_name = substitute
+    if _ground_plane_axis(request) is not None:
+        # Every path that picks an engine converges here, which is the point.
+        # The AUTO gate above filters candidates by mounting, but it is only
+        # reached when the engine is literally "auto": an axisymmetric plan is
+        # chosen before it, an explicitly selected engine skips it, and a
+        # substitution for an unavailable engine resolves separately. All three
+        # would otherwise accept a ground plane and hand it to an adapter that
+        # never reads it, returning a free-standing answer to a question about
+        # a floor -- no error, a wrong number, which is the failure mode this
+        # mounting was split out of "infinite baffle" to avoid.
+        #
+        # Advertising is the contract: an engine offers "ground-plane" only
+        # once its adapter consumes SolverContext.ground_plane.
+        capable = {
+            info.name
+            for info in await engine_registry.capabilities()
+            if "ground-plane" in info.mountings
+        }
+        if engine_name not in capable:
+            offer = ", ".join(sorted(capable)) if capable else "none on this host"
+            raise SymmetryValidationError(
+                f"Solve engine '{engine_name}' cannot solve above a rigid ground "
+                f"plane; it would silently return a free-standing result. "
+                f"Engines that can: {offer}. Choose one, or turn the ground "
+                "plane off."
+            )
     if (
         engine_name not in {"axisym", "dryrun"}
         and await engine_registry.get_engine(engine_name) is not None

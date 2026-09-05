@@ -346,3 +346,127 @@ def test_the_beat_adapter_really_does_not_consume_the_ground_plane():
     # And no escape hatch that would reach the field without naming it.
     for escape in ("vars(context", "asdict(context", "context.__dict__", "**context"):
         assert escape not in source, escape
+
+
+def _grounded_request(*, engine: str = "auto", solver_mode: str = "auto"):
+    from server.jobs.models import SolveRequest
+
+    return SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "L": 120,
+                "a": 45,
+                "simulation": {
+                    "f1": 500,
+                    "f2": 8000,
+                    "num_frequencies": 3,
+                    "sim_type": "freestanding",
+                },
+            },
+            "options": {
+                "engine": engine,
+                "solver_mode": solver_mode,
+                "symmetry": "auto",
+                "ground_plane": {"enabled": True, "axis": "y", "height_m": 1.0},
+            },
+        }
+    )
+
+
+@pytest.mark.parametrize("engine", ["beat-cpu", "metal", "dryrun"])
+def test_an_explicitly_chosen_engine_that_cannot_ground_is_refused(engine):
+    """The AUTO mounting gate does not cover an explicitly selected engine.
+
+    It runs only inside ``if engine_name == "auto"``. An engine named outright
+    skips it entirely, so without a refusal at the submission boundary the
+    solve is accepted and handed to an adapter that never reads
+    ``SolverContext.ground_plane`` -- a free-standing answer to a question
+    about a floor, with no error anywhere.
+    """
+    import asyncio
+
+    from server.engines import registry
+    from server.jobs.runtime import SymmetryValidationError, resolve_submission
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo(engine, True, "test", "1", mountings=("free-standing",)),
+            registry.EngineInfo(
+                "bempp", True, "test", "1",
+                mountings=("free-standing", "ground-plane"),
+                ground_plane_axes=("x", "y", "z"),
+            ),
+        ],
+        factory=lambda name: object(),
+    )
+
+    with pytest.raises(SymmetryValidationError, match="rigid ground plane"):
+        asyncio.run(
+            resolve_submission(_grounded_request(engine=engine), engine_registry)
+        )
+
+
+def test_an_engine_that_can_ground_is_accepted():
+    """The refusal must not reject the engine that actually implements it."""
+    import asyncio
+
+    from server.engines import registry
+    from server.jobs.runtime import resolve_submission
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo(
+                "bempp", True, "test", "1",
+                mountings=("free-standing", "ground-plane"),
+                ground_plane_axes=("x", "y", "z"),
+            ),
+        ],
+        factory=lambda name: object(),
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(_grounded_request(engine="bempp"), engine_registry)
+    )
+    assert resolution.engine_name == "bempp"
+
+
+def test_an_axisymmetric_plan_does_not_smuggle_a_ground_plane_past_the_gate():
+    """Finding that motivated the boundary refusal, pinned.
+
+    The axisymmetric formulation is chosen BEFORE the AUTO mounting gate and
+    sets the engine itself, so the gate never sees it. ``server/solver/
+    circsym.py`` has no ground-plane handling at all, and this path is
+    reachable from default frontend settings -- AUTO engine, AUTO solver mode,
+    an axisym-eligible design -- with no explicit engine choice by the user.
+    """
+    import asyncio
+
+    from server.engines import registry
+    from server.jobs.runtime import SymmetryValidationError, resolve_submission
+    from server.solver import circsym
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("axisym", True, "test", "1", mountings=("free-standing",)),
+            registry.EngineInfo(
+                "bempp", True, "test", "1",
+                mountings=("free-standing", "ground-plane"),
+                ground_plane_axes=("x", "y", "z"),
+            ),
+        ],
+        factory=lambda name: object(),
+    )
+
+    original = circsym.axisymmetric_eligibility_reasons
+    circsym.axisymmetric_eligibility_reasons = lambda _request: []
+    try:
+        with pytest.raises(SymmetryValidationError, match="rigid ground plane"):
+            asyncio.run(
+                resolve_submission(
+                    _grounded_request(engine="auto", solver_mode="circsym"),
+                    engine_registry,
+                )
+            )
+    finally:
+        circsym.axisymmetric_eligibility_reasons = original
