@@ -61,7 +61,7 @@ describe('frontend result and status labels', () => {
     expect(engineStatusLabel(engines, selection, 'auto', 'auto')).toBe('METAL · 1.0');
   });
 
-  it('labels the advertised Axisym dependency offline when forced mode cannot run', () => {
+  it('reports an invalid legacy forced mode without advertising an axisymmetric dependency', () => {
     const engines = [
       { name: 'metal', available: true, reason: null, version: '1.0', fast_paths: [] },
       { name: 'axisym', available: false, reason: 'runner unavailable', version: null, fast_paths: [] },
@@ -69,8 +69,8 @@ describe('frontend result and status labels', () => {
     const selection = {
       default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal'], axisymmetricRunner: 'axisym',
     };
-    expect(engineStatusLabel(engines, selection, 'auto', 'circsym')).toBe('AXISYM · OFFLINE');
-    expect(engineStatusLabel(engines, selection, 'metal', 'circsym')).toBe('AXISYM · OFFLINE');
+    expect(engineStatusLabel(engines, selection, 'auto', 'circsym')).toBe('AUTO · INVALID');
+    expect(engineStatusLabel(engines, selection, 'metal', 'circsym')).toBe('METAL · INVALID');
   });
 
   it('labels invalid engine/mode pairs without implying Axisym will run', () => {

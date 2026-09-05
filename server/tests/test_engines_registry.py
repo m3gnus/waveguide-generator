@@ -602,7 +602,7 @@ def _planner_request(
     )
 
 
-@pytest.mark.parametrize("solver_mode", ["auto", "circsym"])
+@pytest.mark.parametrize("solver_mode", ["circsym"])
 def test_formulation_planner_uses_portable_axisym_without_revolved_symmetry(
     monkeypatch,
     solver_mode: str,
@@ -700,8 +700,8 @@ def test_formulation_planner_falls_back_to_selected_full_3d_backend(
     assert resolution.symmetry_metadata["solver_plan"] == {
         "formulation": "full-3d",
         "engine": "bempp",
-        "reason": "axisymmetric formulation was not eligible",
-        "eligibility_reasons": ["mouth is not circular"],
+        "reason": "AUTO uses the selected full-3D backend",
+        "eligibility_reasons": [],
     }
 
 
@@ -741,7 +741,7 @@ def test_submission_plan_endpoint_uses_the_submitted_design(
         for route in create_jobs_router(runtime).routes
         if getattr(route, "path", None) == "/api/solve/plan"
     )
-    request = _planner_request(engine="beat", solver_mode="auto")
+    request = _planner_request(engine="beat", solver_mode="circsym")
 
     eligible = asyncio.run(endpoint(request))
     assert eligible.engine == "axisym"
@@ -750,19 +750,9 @@ def test_submission_plan_endpoint_uses_the_submitted_design(
 
     eligibility_reasons.append("mouth is not circular")
     ineligible = asyncio.run(endpoint(request))
-    assert ineligible.status_code == 503
+    assert ineligible.status_code == 422
     refusal = json.loads(ineligible.body)
-    assert refusal["error"]["code"] == "engine_unavailable"
-    # Still a refusal, and it must stay one: the axisymmetric runner is the
-    # only registered engine and this design is not eligible for it, so there
-    # is genuinely nothing to fall back to. The message now says that rather
-    # than naming BEAT alone, because "install BEAT" is not the only remedy.
-    assert refusal["error"]["message"] == (
-        "Solve engine 'beat' is unavailable, and no other engine on this "
-        "host can take its place. GPU backend is offline Install/enable "
-        "Axisymmetric, Metal, BEAT, or BEMPP; explicitly enable dry-run "
-        "with WG2_ENABLE_DRYRUN=1 for synthetic development solves."
-    )
+    assert "not eligible" in str(refusal)
 
 
 def test_a_stored_legacy_beat_request_still_submits(monkeypatch) -> None:
@@ -1628,3 +1618,19 @@ def test_an_available_engine_reports_no_substitution() -> None:
     )
 
     assert "engine_substitution" not in resolution.symmetry_metadata["solver_plan"]
+
+
+@pytest.mark.parametrize("engine", ["auto", "metal", "bempp", "beat-metal", "beat-cpu", "beat-cuda", "beat-rocm"])
+def test_auto_formulation_never_probes_or_selects_axisymmetric(monkeypatch, engine):
+    from server.solver import circsym
+
+    monkeypatch.setattr(circsym, "axisymmetric_eligibility_reasons", lambda _request: pytest.fail("AUTO must not consider axisymmetric eligibility"))
+    names = {"metal", "bempp", "beat-metal", "beat-cpu", "beat-cuda", "beat-rocm"}
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [registry.EngineInfo(name, True, "ready", "1") for name in sorted(names | {"axisym"})],
+        factory=lambda name: pytest.fail("AUTO must not instantiate axisymmetric") if name == "axisym" else object(),
+    )
+    resolution = asyncio.run(resolve_submission(_planner_request(engine=engine), engine_registry))
+    assert resolution.engine_name in names
+    assert resolution.symmetry_metadata["solver_plan"]["formulation"] == "full-3d"
+    assert resolution.symmetry_metadata["resolved_quadrants"] == 1

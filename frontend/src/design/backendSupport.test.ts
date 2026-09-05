@@ -72,11 +72,7 @@ describe('backend feature support', () => {
     expect(backendSupports(engine('axisym', true), 'meridian-fast-path')).toBe(true);
   });
 
-  it('offers coupled IB in AUTO when a planned Axisym candidate supports it', () => {
-    // The planner reaches for the meridian runner before any full-3D fallback,
-    // so a BEAT+Axisym host solves an eligible circular infinite-baffle design
-    // even though BEAT refuses one. Gating on the full-3D record alone removed
-    // the option from designs the server would have accepted.
+  it('does not offer coupled IB based on an unselected axisymmetric candidate', () => {
     const beat = { ...engine('beat', true), formulations: ['full-3d'], mountings: ['free-standing'] };
     const axisym = { ...engine('axisym', true), formulations: ['axisymmetric'], mountings: ['free-standing', 'infinite-baffle'] };
 
@@ -84,14 +80,13 @@ describe('backend feature support', () => {
       ...selection, resolvedDefault: 'beat', full3dOrder: ['beat'],
     });
     expect(backendSupports(beat, 'infinite-baffle')).toBe(false);
-    expect(backendSupports(beat, 'infinite-baffle', autoPlan)).toBe(true);
-    expect(backendLimitation(beat, 'infinite-baffle', autoPlan)).toBeUndefined();
+    expect(backendSupports(beat, 'infinite-baffle', autoPlan)).toBe(false);
+    expect(backendLimitation(beat, 'infinite-baffle', autoPlan)).toBeDefined();
 
-    // Solver mode AUTO considers the eligible Axisym formulation even when
-    // BEAT was chosen explicitly as the eventual full-3D fallback.
+    // Explicit backend selection also excludes the axisymmetric candidate.
     const explicitAutoPlan = plannedBackendCapabilities('beat', [beat, axisym], selection, 'auto');
-    expect(explicitAutoPlan.map((item) => item.name)).toEqual(['axisym', 'beat']);
-    expect(backendSupports(beat, 'infinite-baffle', explicitAutoPlan)).toBe(true);
+    expect(explicitAutoPlan.map((item) => item.name)).toEqual(['beat']);
+    expect(backendSupports(beat, 'infinite-baffle', explicitAutoPlan)).toBe(false);
     const explicitFull3dPlan = plannedBackendCapabilities('beat', [beat, axisym], selection, 'full_3d');
     expect(explicitFull3dPlan.map((item) => item.name)).toEqual(['beat']);
     expect(backendSupports(beat, 'infinite-baffle', explicitFull3dPlan)).toBe(false);

@@ -35,11 +35,11 @@ const FEATURE_LABELS: Record<BackendFeature, string> = {
 /** What to do instead, so a warning is actionable rather than just a refusal. */
 const FEATURE_REMEDIES: Record<BackendFeature, string> = {
   'infinite-baffle':
-    'Use Metal or BEMPP full 3D, or the Axisymmetric meridian path for eligible circular geometry.',
+    'Use Metal or BEMPP for coupled infinite-baffle solves.',
   'ground-plane':
     'Ground-plane solves need BEMPP full 3D on this build. Note that an infinite baffle is a different boundary, not a substitute.',
   'meridian-fast-path':
-    'Use Auto or Force full 3D; this geometry cannot use the platform-neutral meridian runner.',
+    'Use an available ordinary solver backend.',
   'imported-geometry':
     'Imported CAD solves need the Metal backend. The parametric workspace solves on this machine.',
 };
@@ -85,17 +85,8 @@ export function activeBackendCapability(
 /**
  * Available capabilities the server may plan for the requested engine.
  *
- * Solver mode AUTO can first select the advertised meridian runner for
- * eligible geometry, even with an explicit non-dryrun backend chosen as the
- * full-3D fallback. An AUTO engine then walks the server-advertised full-3D
- * order. Forced Full 3D excludes the meridian runner; forced CircSym includes
- * only that runner. Keeping the whole AUTO-engine plan matters on a GPU host:
- * BEAT can be the resolved free-standing default while BEMPP later in the plan
- * handles coupled infinite-baffle solves.
- *
- * Geometry eligibility and final routing stay the server planner's call. This
- * list only prevents the frontend from hiding an option no planned candidate
- * could run.
+ * AUTO considers ordinary backends in server-advertised order.
+ * Explicit experimental formulation requests remain supported by the API.
  */
 export function plannedBackendCapabilities(
   engine: string,

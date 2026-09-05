@@ -193,7 +193,7 @@ function engineModePlan(
  * Server-advertised candidates the formulation planner may reach, in order.
  *
  * This is shared by capability gating and submission resolution so AUTO's
- * conditional Axisym-first path cannot drift between those two UI surfaces.
+ * backend order cannot drift between those two UI surfaces.
  */
 export function plannedEngineNames(
   engine: string,
@@ -211,10 +211,7 @@ export function plannedEngineNames(
   if (plan.requested === 'dryrun' || plan.requested === plan.runner) {
     return [plan.requested];
   }
-  const axisymFirst = plan.runner ? [plan.runner] : [];
-  return plan.requested === 'auto'
-    ? [...axisymFirst, ...plan.full3dOrder]
-    : [...axisymFirst, plan.requested];
+  return plan.requested === 'auto' ? plan.full3dOrder : [plan.requested];
 }
 
 export function resolveEngine(
@@ -242,24 +239,11 @@ export function resolveEngine(
   const order = plan.full3dOrder;
   const resolvedDefault = selection?.resolvedDefault?.toLowerCase() ?? null;
   const available = capabilities.engines.find((item) => item.available
-    && item.name.toLowerCase() === resolvedDefault)
+    && item.name.toLowerCase() === resolvedDefault && order.includes(item.name.toLowerCase()))
     ?? order.flatMap((name) => capabilities.engines.filter((item) => item.available
       && item.name.toLowerCase() === name))[0];
   if (available) return available.name.toLowerCase();
-  // An Axisym-only host is not a host without a solver. The server planner
-  // selects the meridian runner for an eligible circular design before any
-  // full-3D fallback, so throwing here left JobsCoordinator with no capability
-  // and Run blocked on a design the server would have solved -- escapable only
-  // by knowing to force the meridian mode by hand. Geometry eligibility is the
-  // planner's to judge, not this function's.
-  if (solverMode === 'full_3d') {
-    throw new Error('No full-3D solver backend is currently available');
-  }
-  const runner = plan.runner;
-  const axisym = capabilities.engines.find((item) => item.available
-    && item.name.toLowerCase() === runner);
-  if (axisym) return runner!;
-  throw new Error('No solver backend is currently available');
+  throw new Error('No full-3D solver backend is currently available');
 }
 
 export async function fetchSymmetry(
