@@ -114,9 +114,10 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
     mixed-generation path (`_roll_back_mixed_generation`) returns without calling
     `repair_bundle`, unlike the missing-layer path beside it. Whether that state
     launches, and what Gatekeeper does with it, has not been measured.
-  - **Windows.** None of this has run on a Windows host. `os.replace` over a
-    directory there is a different operation with different failure modes, which
-    is why `_rename` retries at all.
+  - **Windows.** The local review ran on macOS. Existing Windows CI exercises
+    unit tests, but no real interrupted Windows upgrade was qualified here.
+    Directory replacement and file-handle behavior still need that platform
+    acceptance; `_rename` already retries transient replacement failures.
 
   A durable journal is one way to attack the first point; manifest reconciliation
   is not a substitute for it, because the manifests are only read after the fact
