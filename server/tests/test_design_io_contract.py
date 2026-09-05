@@ -81,6 +81,42 @@ def test_import_report_is_dry_run_and_invalid_text_has_parse_detail() -> None:
     assert "could not find" in caught.value.detail["message"]
 
 
+def test_both_endpoints_report_the_wg_solve_keys_the_solve_ignores() -> None:
+    """`WG.Solve.Engine` and `SolverMode` are stated, kept, and never honoured.
+
+    They are not migrated away, so they carry no migration note; the report
+    names them separately instead, and both endpoints that classify a document
+    have to say the same thing.
+    """
+
+    source = (
+        "; Parameter config\nOSSE = {\nL = 120\na = 45\n}\n"
+        "WG.Solve = {\nEngine = metal\nSolverMode = circsym\n}\n"
+    )
+
+    opened = asyncio.run(open_design(source))
+    inspected = asyncio.run(import_report(source))
+
+    assert opened["ignoredSettings"] == inspected["ignoredSettings"]
+    assert [item["key"] for item in opened["ignoredSettings"]] == [
+        "WG.Solve.Engine",
+        "WG.Solve.SolverMode",
+    ]
+    assert [item["value"] for item in opened["ignoredSettings"]] == ["metal", "circsym"]
+    for item in opened["ignoredSettings"]:
+        assert "Solve options" in item["note"]
+    # Reported, not migrated: the block is still passed through whole.
+    assert opened["migrationsApplied"] == []
+    assert "WG.Solve" in opened["passthrough"]["blocksPreserved"]
+
+
+def test_a_design_without_machine_keys_reports_an_empty_list() -> None:
+    """Present and empty, not absent: a client can read the key unconditionally."""
+
+    opened = asyncio.run(open_design("OSSE = {\nL = 120\na = 45\n}\n"))
+    assert opened["ignoredSettings"] == []
+
+
 def test_open_report_names_the_machine_solver_mode_it_refused_to_honour() -> None:
     """The one thing a stated solver mode must not do is vanish without a word.
 

@@ -37,7 +37,21 @@ _DESIGN_FORMAT = 2
 # ATH's report block, which carries the design's name in its ``Title``.
 _REPORT_BLOCK = "Report"
 _WG_SOLVE_BLOCK = "WG.Solve"
-_MACHINE_SOLVE_KEYS = frozenset({"Engine", "SolverMode"})
+# `WG.Solve` keys that describe the machine rather than the design: what a host
+# can run is not a property of a file that moves between hosts. They are kept
+# verbatim on read and dropped only when WG rewrites the design, so the set is
+# also what the open report names -- one source of truth, so the keys that are
+# ignored and the keys that are reported cannot drift apart. Each entry carries
+# why it is not portable and what to choose instead.
+_MACHINE_SOLVE_ADVICE: tuple[tuple[str, str, str], ...] = (
+    ("Engine", "Which backend runs a solve depends on the host", "the engine"),
+    (
+        "SolverMode",
+        "Which formulations a host can run depends on the machine",
+        "the solver path",
+    ),
+)
+_MACHINE_SOLVE_KEYS = frozenset(key for key, _why, _choose in _MACHINE_SOLVE_ADVICE)
 _DESIGN_FORMAT_STAMP = re.compile(r"\bdesign-format\s*:\s*(\d+)\b", re.IGNORECASE)
 
 
@@ -55,6 +69,32 @@ class _RawBlock:
 
 def _semantic_fingerprint(design: DesignConfig) -> str:
     return json.dumps(design.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
+class IgnoredSetting:
+    """A setting the file states, the solve does not read, and the report names.
+
+    `key` is the fully qualified spelling as written, `value` is what the file
+    said, and `note` is the sentence shown to the user. The value is reported,
+    never checked: a key that is not honoured must not also be a parse error.
+    """
+
+    key: str
+    value: str
+    note: str
+
+
+def _ignored_setting(key: str, value: str, why: str, choose: str) -> IgnoredSetting:
+    stated = f"states {value!r}" if value else "is stated without a value"
+    return IgnoredSetting(
+        key=f"{_WG_SOLVE_BLOCK}.{key}",
+        value=value,
+        note=(
+            f"{_WG_SOLVE_BLOCK}.{key} {stated}. {why}, so the solve ignores "
+            f"it. Choose {choose} in Solve options."
+        ),
+    )
 
 
 @dataclass
@@ -85,6 +125,25 @@ class ParsedDesign:
     @property
     def migration_names(self) -> list[str]:
         return [item.name for item in self.migrations]
+
+    @property
+    def ignored_settings(self) -> list[IgnoredSetting]:
+        """Stated `WG.Solve` keys the solve never reads, in a fixed order.
+
+        Computed from the retained passthrough block on every read rather than
+        recorded at parse, because parse must stay lossless: an untouched open
+        and save still returns the author's own bytes, keys included, and they
+        leave only when WG rewrites the design.
+        """
+
+        block = self.extra_blocks.get(_WG_SOLVE_BLOCK)
+        if block is None:
+            return []
+        return [
+            _ignored_setting(key, value, why, choose)
+            for key, why, choose in _MACHINE_SOLVE_ADVICE
+            if (value := block.items.get(key)) is not None
+        ]
 
     def semantic_data(self) -> dict[str, Any]:
         """Return the JSON/API meaning used by the corpus round-trip law."""
@@ -1096,4 +1155,10 @@ def serialize(
     raise TypeError("serialize expects ParsedDesign or DesignConfig")
 
 
-__all__ = ["ParsedDesign", "TextConfigError", "parse", "serialize"]
+__all__ = [
+    "IgnoredSetting",
+    "ParsedDesign",
+    "TextConfigError",
+    "parse",
+    "serialize",
+]

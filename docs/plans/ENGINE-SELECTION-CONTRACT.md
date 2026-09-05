@@ -1,11 +1,12 @@
 # Proposal: the `WG.Solve` `Engine` / `SolverMode` contract
 
-**Status:** partly enacted, 2026-09-05. **C2b, C3 and C4 are done**;
+**Status: enacted in full, 2026-09-05.** C1, C2b, C3 and C4 are all done.
 `CFG-FORMAT.md` no longer advertises `Engine` in its canonical block and no
-longer claims the key is validated, and the open report now shows each
-migration's note instead of its internal identifier. **C1 is not taken and not decided** —
-see "Why C1 is still open", below, which corrects this proposal's own reasoning
-about what it would cost.
+longer claims the key is validated; the open report shows each migration's note
+instead of its internal identifier; and a stated `WG.Solve.Engine` or
+`SolverMode` is now named in that report rather than passing in silence. The
+contract as built differs from the proposal below in two places, both recorded
+under "How C1 was built".
 **Answers:** the plan's "Engine selection contract — `WG.Solve`'s `Engine` and
 `SolverMode` are silently ignored and stripped; `CFG-FORMAT.md` implies
 otherwise. Decide and document."
@@ -78,6 +79,52 @@ Proposed wording, matching the existing note's voice:
 This makes the document's own claim — *"stating one cannot be mistaken for
 setting one"* — true for both spellings instead of one.
 
+#### How C1 was built, and why it is not the paragraph above
+
+The intent stands; two details of the sketch were wrong, and correcting them
+made the change smaller rather than larger.
+
+**It is not a migration, and the note does not say "dropped".** The proposal put
+the diagnostic in `_block_without_machine_solve_keys`, which runs from
+`_emit_block` — at *serialize*. Import strips nothing: after `parse()`,
+`WG.Solve.Engine` is still in `extra_blocks["WG.Solve"].items`, and it has to
+stay there, because `serialize(parse(source)) == source` for an untouched file is
+a tested contract. So the keys are neither dropped at import nor migrated, and a
+note claiming either would be false. A no-op migration was rejected for the same
+reason: `MigrationApplication` records a transform that happened.
+
+**It is a computed property, not stored state.** `ParsedDesign.ignored_settings`
+derives the list from the retained block on each read:
+
+```python
+@property
+def ignored_settings(self) -> list[IgnoredSetting]:
+    block = self.extra_blocks.get(_WG_SOLVE_BLOCK)
+    ...
+```
+
+Nothing is recorded at parse, so there is no second copy to keep in step with the
+block, and lossless round-tripping is unaffected by construction. The key set is
+`_MACHINE_SOLVE_ADVICE`, the same tuple the serializer's strip set is derived
+from, so the keys that are ignored and the keys that are reported cannot drift.
+
+**The wire cost was one additive field**, not the five-file API change this
+document previously estimated. `ignoredSettings` — a list of `{key, value, note}`
+— joins `migrationsApplied` in `server/design_io/api.py:_report`, so both
+`/design/open` and `/design/import-report` carry it, and in the `wg validate`
+payload, where `render.py` prints one `Ignored` line per entry. Both endpoints
+return `dict[str, Any]`, so the OpenAPI snapshot is byte-unchanged;
+`scripts/gen_openapi.py --check` passes without regeneration. On the client the
+field is optional, so a server without it changes nothing.
+
+**Wording.** The note names the key, quotes the value as written, says the solve
+ignores it, and says where to choose the setting:
+
+> `WG.Solve.Engine` states `'metal'`. Which backend runs a solve depends on the
+> host, so the solve ignores it. Choose the engine in Solve options.
+
+It does not say the key was removed, because at that moment it was not.
+
 ### C2 — validate the shape, since the document promises it
 
 Two honest options, and I recommend the second:
@@ -114,40 +161,24 @@ Fixed by showing the notes. Every existing migration gained an explanation at
 once, `Simulation.SolverMode` included. The gate this section set is therefore
 met: a note added by C1 would reach the screen.
 
-### Why C1 is still open
+### What C1 cost, once its site was right
 
-C1 is blocked on something this proposal did not anticipate, not on C4.
+Recorded because this proposal's own estimate was wrong twice, in opposite
+directions, and both errors were about *where* the diagnostic belongs.
 
-**Its proposed implementation site is the wrong one.**
-`_block_without_machine_solve_keys` runs from `_emit_block`, i.e. at
-*serialize* time. Import does not strip these keys at all: after
-`parse()`, `WG.Solve.Engine` is still in `extra_blocks["WG.Solve"].items`. A
-diagnostic emitted from there would fire when WG writes a file, not when a user
-opens one, which is the opposite of what C1 is for.
+It first read as cheap — "reuse the existing note mechanism" — which it is not:
+`MigrationApplication` records an applied transform, and nothing here transforms
+anything. It then read as expensive — a second notes channel across
+`ParsedDesign`, both endpoints, `openapi.v1.json`, the CLI renderer and the
+frontend type. That was closer, but it counted the OpenAPI snapshot, which does
+not move because both endpoints return `dict[str, Any]`, and it counted a
+persisted field where a computed property does.
 
-**Reporting at parse has no channel, and making one is not free.** The open
-report's only per-item channel is `migrations`, whose entries are
-`MigrationApplication` — a record that an applied migration *changed the
-payload*. Nothing changes at parse here, so either:
-
-- a no-op migration is registered, which makes the report claim a transform
-  that did not happen; or
-- `ParsedDesign`, the `/design/open` and `/design/inspect` payloads,
-  `openapi.v1.json`, the CLI's `migrationsApplied` rendering and the frontend
-  `ImportReport` type all gain a second notes channel.
-
-**And stripping at parse instead is ruled out by a tested contract.**
-`test_modified_legacy_design_drops_machine_solver_path_from_ordered_block`
-asserts `serialize(parse(source)) == source` for a file carrying
-`Engine = bempp`: opening a file is not editing it, so an untouched save
-returns the author's own bytes. Dropping the keys at import breaks that.
-
-C1 is therefore not taken here, and nothing about it is decided. It remains a
-proposal: a diagnostic channel for keys that are accepted and discarded could be
-added after 0.3.2 without changing the serialization contract, since the strip
-already happens at write time and would not move. Its cost is the extra channel
-and its tests, and nobody has approved that. Until it is taken, `CFG-FORMAT.md`
-states plainly that these two keys are removed without a note.
+What it actually took: one frozen `IgnoredSetting` record and one property in
+`server/design/textcfg.py`, one list comprehension in each of `_report` and the
+`wg validate` payload, one line in `render.py`, an optional field in the frontend
+type, and a `[...migrations, ...ignored]` spread in `reportText`. See "How C1 was
+built" above for the two design points that made it that small.
 
 ## What this deliberately does not do
 
@@ -184,10 +215,9 @@ settings, not the portable design file. That is a separate proposal.
 
 Original recommendation: take **C1 + C2b + C3**, and treat **C4** as the gate.
 
-What was taken, 2026-09-05: **C2b + C3 + C4**. C4 turned out to be one function
-rather than the expensive part, so the gate this proposal set for C1 — that a
-note would reach a user — is no longer what blocks it. C1 was left because it
-needs a report channel that does not exist; the section above sets out why, and
-that remains an unapproved proposal for after 0.3.2. Nothing ships wrong in the
-meantime, because the document no longer claims a validation or advertises the
-key.
+Taken, 2026-09-05: **C1 + C2b + C3 + C4**. C4 turned out to be one function
+rather than the expensive part, so it went first and the gate it set — that a
+note would reach a user — was met before C1 was written. C1 then followed, as a
+computed property and one additive report field rather than the migration this
+document sketched; `CFG-FORMAT.md` now describes the built contract, and the
+recommendation against making `Engine` a soft preference stands unchanged.

@@ -177,6 +177,87 @@ SolverMode = circsym
     assert "; portable settings remain ordered\nSymmetry = quarter" in emitted
 
 
+def test_stated_wg_solve_machine_keys_are_reported_without_being_touched() -> None:
+    """The keys stay in the file and in the report, and are honoured by neither.
+
+    Nothing reads ``WG.Solve.Engine`` or ``WG.Solve.SolverMode``: which backend
+    and which formulation a host can run are machine facts, so both travel in
+    solve options. Reporting them is the whole change -- the block is still
+    passed through verbatim, and an untouched save still returns the author's
+    own bytes.
+    """
+
+    source = SOURCE + """WG.Solve = {
+; portable settings remain ordered
+Engine = bempp
+Symmetry = quarter
+SolverMode = circsym
+}
+"""
+    parsed = parse(source)
+
+    keys = [item.key for item in parsed.ignored_settings]
+    assert keys == ["WG.Solve.Engine", "WG.Solve.SolverMode"], "fixed order"
+    engine, solver_mode = parsed.ignored_settings
+    assert engine.value == "bempp"
+    assert "WG.Solve.Engine states 'bempp'" in engine.note
+    assert "Solve options" in engine.note
+    assert solver_mode.value == "circsym"
+    assert "Solve options" in solver_mode.note
+    # The report is not a rewrite, and says nothing about import.
+    for item in parsed.ignored_settings:
+        assert "import" not in item.note.lower()
+
+    # Nothing was stripped, migrated, or recorded: the block is still whole and
+    # the bytes still come back.
+    assert parsed.migrations == []
+    assert parsed.extra_blocks["WG.Solve"].items["Engine"] == "bempp"
+    assert serialize(parsed) == source
+
+    # Editing the design is what removes them, exactly as before.
+    parsed.design.root.L = Expr(value=121)  # type: ignore[union-attr]
+    emitted = serialize(parsed)
+    assert "Engine =" not in emitted
+    assert "SolverMode =" not in emitted
+    assert "Symmetry = quarter" in emitted
+
+
+@pytest.mark.parametrize(
+    ("block", "expected"),
+    [
+        ("", []),
+        ("Symmetry = quarter\n", []),
+        ("Engine = metal\n", ["WG.Solve.Engine"]),
+        ("SolverMode = circsym\n", ["WG.Solve.SolverMode"]),
+        ("SolverMode = circsym\nEngine = metal\n", ["WG.Solve.Engine", "WG.Solve.SolverMode"]),
+    ],
+)
+def test_only_the_two_machine_keys_are_reported(block: str, expected: list[str]) -> None:
+    parsed = parse(SOURCE + "WG.Solve = {\n" + block + "}\n")
+    assert [item.key for item in parsed.ignored_settings] == expected
+
+
+def test_a_wg_solve_value_is_reported_never_checked() -> None:
+    """A key that is discarded must not also be a parse error.
+
+    Validating a name WG is about to ignore would reject files WG itself can no
+    longer produce, and change nothing about the solve. An unknown value and an
+    empty one are both reported as written.
+    """
+
+    unknown = parse(SOURCE + "WG.Solve = {\nEngine = mteal\n}\n")
+    assert unknown.ignored_settings[0].value == "mteal"
+    assert "states 'mteal'" in unknown.ignored_settings[0].note
+
+    empty = parse(SOURCE + "WG.Solve = {\nEngine =\n}\n")
+    assert empty.ignored_settings[0].value == ""
+    assert "stated without a value" in empty.ignored_settings[0].note
+
+
+def test_a_design_with_no_wg_solve_block_reports_nothing() -> None:
+    assert parse(SOURCE).ignored_settings == []
+
+
 def test_parse_rejects_design_format_from_a_future_writer() -> None:
     source = "; Parameter config\n; Waveguide Generator design-format: 3\nOSSE = {\n}\n"
 

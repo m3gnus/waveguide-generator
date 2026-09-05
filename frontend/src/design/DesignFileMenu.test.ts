@@ -39,6 +39,33 @@ describe('opened-file report line', () => {
       .toBe('MWG · migrations: none · passthrough: 1 blocks, 3 keys preserved');
   });
 
+  it('carries an ignored-setting note alongside the migration explanation', () => {
+    const text = reportText({
+      ...base,
+      migrationsApplied: [{
+        name: '006_machine_solver_mode_not_portable',
+        note: 'Dropped Simulation.SolverMode. Set the solver path in Solve options.',
+      }],
+      ignoredSettings: [{
+        key: 'WG.Solve.Engine',
+        value: 'metal',
+        note: "WG.Solve.Engine states 'metal'. Which backend runs a solve depends on the host, so the solve ignores it. Choose the engine in Solve options.",
+      }],
+    });
+    expect(text).toContain('Dropped Simulation.SolverMode.');
+    expect(text).toContain("WG.Solve.Engine states 'metal'.");
+    // The two are different things: one key was migrated away, the other is
+    // still in the file and simply not read.
+    expect(text).toContain('migrations: 1');
+  });
+
+  it('is unchanged by a server that sends no ignoredSettings at all', () => {
+    const withField = reportText({ ...base, ignoredSettings: [] });
+    const withoutField = reportText(base);
+    expect(withField).toBe(withoutField);
+    expect(withoutField).toBe('ATH · migrations: none · passthrough: 0 blocks, 0 keys preserved');
+  });
+
   it('reports every note when more than one migration applied', () => {
     const text = reportText({
       ...base,

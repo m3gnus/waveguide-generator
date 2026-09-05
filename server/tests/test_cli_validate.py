@@ -334,6 +334,53 @@ def test_validate_no_mesh_skips_worker_and_compilation(
     assert report["refusals"] == []
 
 
+def test_validate_reports_the_wg_solve_keys_it_ignores_in_json_and_in_text(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The fixture states `Engine = dryrun`, and the report has to say so.
+
+    A machine key that is accepted and never read is the one thing this report
+    must not pass over: without it the run looks as though the file chose the
+    backend. The human output carries the sentence, not just the key.
+    """
+
+    path = _design_path(tmp_path)
+
+    async def unexpected(*_args, **_kwargs):
+        raise AssertionError("--no-mesh must not touch the gmsh lifecycle")
+
+    monkeypatch.setattr("server.cli.validate.prewarm_gmsh_worker", unexpected)
+    monkeypatch.setattr("server.cli.validate.build_solver_mesh", unexpected)
+    monkeypatch.setattr("server.cli.validate.shutdown_gmsh_worker", unexpected)
+
+    exit_code = main(
+        ["validate", str(path), "--json", "--no-mesh"], engine_registry=_registry()
+    )
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert report["ignoredSettings"] == [
+        {
+            "key": "WG.Solve.Engine",
+            "value": "dryrun",
+            "note": report["ignoredSettings"][0]["note"],
+        }
+    ]
+    note = report["ignoredSettings"][0]["note"]
+    assert "WG.Solve.Engine states 'dryrun'" in note
+    assert "Solve options" in note
+    # It is a report, not a refusal, and the resolved engine is unaffected.
+    assert report["refusals"] == []
+    assert report["engine"]["resolved"] == "dryrun"
+
+    assert main(["validate", str(path), "--no-mesh"], engine_registry=_registry()) == 0
+    human = capsys.readouterr().out
+    assert "Ignored       WG.Solve.Engine states 'dryrun'." in human
+    assert "Solve options" in human
+
+
 def test_validate_reports_a_design_stated_solver_mode_it_will_not_honour(
     tmp_path: Path,
     monkeypatch,
