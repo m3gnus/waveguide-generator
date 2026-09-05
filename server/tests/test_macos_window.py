@@ -375,13 +375,19 @@ class TestInstallCustomFrame:
 
     # A window that refuses one of the calls must leave the interface drawing
     # nothing, rather than a window with no title bar and no buttons either.
-    def test_a_failure_anywhere_keeps_the_title_bar(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    # ``on_main_here`` rather than a local ``on_main`` patch: ``install`` calls
+    # ``_appkit()`` before it reaches ``setStyleMask_``, and off macOS that
+    # ``import AppKit`` raises. Stubbing only ``on_main`` left the real one in
+    # place, so the frame failed at the import, the assertion below never saw
+    # the style mask, and the test failed on exactly the two platforms that
+    # cannot have pyobjc. The fixture stubs both, which is what keeps this file
+    # hermetic in the way its module docstring claims.
+    def test_a_failure_anywhere_keeps_the_title_bar(
+        self, monkeypatch: pytest.MonkeyPatch, on_main_here: None
+    ) -> None:
         import launchers.macoswindow as macoswindow
 
         monkeypatch.setattr(macoswindow.sys, "platform", "darwin")
-        monkeypatch.setattr(
-            macoswindow, "on_main", lambda fn, wait=True, timeout=0.0: fn(), raising=True
-        )
         monkeypatch.setattr(
             macoswindow, "hide_menu_bar_in_full_screen", lambda: True, raising=True
         )

@@ -2195,6 +2195,19 @@ def _desktop_exec_argv(entry: str) -> list[str]:
     return ["".join(argument).replace("%%", "%"), *fields]
 
 
+#: The executable bit is a POSIX file mode, and Windows has no such thing:
+#: ``chmod`` there is a no-op that reports success, so a file this builder marks
+#: executable still stats as 0o666 and arrives in the tar as 0o644. That is the
+#: host's property, not the artifact's -- the Linux bundle is built on Linux,
+#: where these same assertions are exact. Asserting the bit on Windows tests the
+#: Windows filesystem rather than the builder, which is why it is skipped rather
+#: than weakened: the check stays strict everywhere it means anything.
+_NEEDS_POSIX_MODES = pytest.mark.skipif(
+    os.name != "posix",
+    reason="executable bits are POSIX; Windows chmod is a no-op",
+)
+
+
 def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path) -> None:
     """One root holding ``app``, ``runtime`` and the launcher, and nothing else.
 
@@ -2232,7 +2245,10 @@ def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path)
     assert written == [(bundle / LINUX_ICON_NAME, 512)]
     # The bit that decides whether a double-click runs the application or opens
     # it in a text editor, and the one a checkout cannot be trusted to carry.
-    assert (bundle / LINUX_LAUNCHER_NAME).stat().st_mode & 0o111
+    # Everything above this line is shape and holds on every host; only the mode
+    # needs POSIX, so the rest of the test still runs on Windows.
+    if os.name == "posix":
+        assert (bundle / LINUX_LAUNCHER_NAME).stat().st_mode & 0o111
 
 
 def test_the_linux_launcher_establishes_the_bundle_environment() -> None:
@@ -2268,6 +2284,7 @@ def test_the_linux_desktop_entry_is_substituted_not_guessed() -> None:
     assert "Terminal=false" in entry
 
 
+@_NEEDS_POSIX_MODES
 def test_the_linux_tarball_carries_an_executable_installer(tmp_path: Path) -> None:
     """A .tar.gz because tar keeps the executable bit and .zip does not.
 
