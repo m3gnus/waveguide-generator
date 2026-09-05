@@ -58,7 +58,12 @@ from server.platform.acl_repair import (
 
 log = logging.getLogger("wg.acl")
 
-__all__ = ["MARKER_NAME", "SWEEP_VERSION", "repair_legacy_acls"]
+__all__ = [
+    "MARKER_NAME",
+    "SWEEP_VERSION",
+    "legacy_acl_repair_feedback",
+    "repair_legacy_acls",
+]
 
 WINDOWS = os.name == "nt"
 MARKER_NAME = "acl_repair_state.json"
@@ -127,6 +132,110 @@ def _already_finished(record: object, *, elevated_now: bool) -> bool:
     if not (counts.get("unreadable") or counts.get("failed")):
         return True
     return not (elevated_now and not record.get("elevated", False))
+
+
+def _record_counts(record: object) -> RepairCounts | None:
+    """Read only a current, well-formed marker record into typed counts."""
+
+    if not isinstance(record, dict) or record.get("version") != SWEEP_VERSION:
+        return None
+    if not isinstance(record.get("elevated"), bool):
+        return None
+    raw = record.get("counts")
+    if not isinstance(raw, dict):
+        return None
+    values: dict[str, int] = {}
+    for name in ("scanned", "repaired", "skipped", "unreadable", "failed"):
+        value = raw.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return None
+        values[name] = value
+    truncated = raw.get("truncated")
+    if not isinstance(truncated, bool):
+        return None
+    return RepairCounts(**values, truncated=truncated)
+
+
+def legacy_acl_repair_feedback(
+    data_root: Path | str,
+    workspace_root: Path | str | None,
+    fresh_results: dict[str, RepairCounts],
+) -> dict[str, object]:
+    """Build path-free UI feedback from this sweep and its validated marker.
+
+    A clean root skipped from a previous run stays quiet. An unresolved root
+    remains visible even when the same privilege level makes another sweep
+    pointless, while repairs from an earlier launch are never presented as new.
+    """
+
+    if not WINDOWS:
+        return {"platform": "other", "roots": []}
+
+    data_root = Path(data_root)
+    try:
+        metadata = data_root.lstat()
+        if path_has_reparse_point(data_root) or not stat.S_ISDIR(metadata.st_mode):
+            return {"platform": "windows", "roots": []}
+    except OSError:
+        return {"platform": "windows", "roots": []}
+
+    marker_path = data_root / MARKER_NAME
+    marker_safe = _marker_path_is_safe(marker_path, data_root=data_root)
+    records = _read_marker(marker_path) if marker_safe else {}
+    candidates: list[tuple[str, Path]] = [("appData", data_root)]
+    if workspace_root is not None:
+        workspace = Path(workspace_root)
+        if workspace != data_root:
+            candidates.append(("workspace", workspace))
+
+    roots: list[dict[str, object]] = []
+    for scope, root in candidates:
+        try:
+            metadata = root.lstat()
+            if path_has_reparse_point(root) or not stat.S_ISDIR(metadata.st_mode):
+                continue
+        except OSError:
+            continue
+
+        key = str(root)
+        fresh = fresh_results.get(key)
+        record = records.get(key)
+        counts = fresh if fresh is not None else _record_counts(record)
+        if counts is None:
+            continue
+        remaining = counts.unreadable + counts.failed
+        source = "current" if fresh is not None else "previous"
+        # A previous clean result is the expected one-time marker state. It has
+        # no current user action and must not repeat an old repair claim.
+        if source == "previous" and remaining == 0 and not counts.truncated:
+            continue
+        if (
+            source == "current"
+            and counts.repaired == 0
+            and remaining == 0
+            and not counts.truncated
+        ):
+            continue
+        elevated = (
+            process_is_elevated()
+            if fresh is not None
+            else bool(record.get("elevated", False))
+            if isinstance(record, dict)
+            else False
+        )
+        roots.append(
+            {
+                "scope": scope,
+                "source": source,
+                "repaired": counts.repaired,
+                "remaining": remaining,
+                "unreadable": counts.unreadable,
+                "failed": counts.failed,
+                "truncated": counts.truncated,
+                "administratorMayHelp": remaining if remaining and not elevated else 0,
+            }
+        )
+    return {"platform": "windows", "roots": roots}
 
 
 def repair_legacy_acls(

@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from server import app as app_module
 from server.app import VERSION, create_app
@@ -130,6 +132,37 @@ def test_health_and_placeholder_shell(tmp_path: Path) -> None:
     # a non-empty HTML document rather than pinning wording.
     assert "<!doctype html>" in shell.text.lower()
     assert len(shell.text) > 100
+
+
+def test_windows_acl_repair_status_is_published_after_startup(tmp_path: Path) -> None:
+    expected = {
+        "platform": "windows",
+        "roots": [{
+            "scope": "appData", "source": "current", "repaired": 3,
+            "remaining": 0, "unreadable": 0, "failed": 0,
+            "truncated": False, "administratorMayHelp": 0,
+        }],
+    }
+    fake_os = SimpleNamespace(name="nt", environ=app_module.os.environ)
+    with (
+        patch.object(app_module, "os", fake_os),
+        patch.object(app_module, "repair_legacy_acls", return_value={}) as repair,
+        patch.object(
+            app_module, "legacy_acl_repair_feedback", return_value=expected
+        ) as feedback,
+    ):
+        application = create_app(data_dir=tmp_path)
+        startup = next(
+            handler for handler in application.router.on_startup
+            if handler.__name__ == "_repair_legacy_acls"
+        )
+        asyncio.run(startup())
+
+    response = TestClient(application).get("/api/acl-repair/status")
+    assert response.status_code == 200
+    assert response.json() == expected
+    repair.assert_called_once()
+    feedback.assert_called_once()
 
 
 def test_explicit_workspace_default_is_separate_from_internal_data(

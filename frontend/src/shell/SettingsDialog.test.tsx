@@ -87,6 +87,42 @@ describe('SettingsDialog', () => {
     expect(section.textContent).toContain('/chosen/workspace');
   });
 
+  it('reports fresh Windows repairs and unresolved earlier items honestly', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/acl-repair/status') return new Response(JSON.stringify({
+        platform: 'windows',
+        roots: [
+          { scope: 'appData', source: 'current', repaired: 2, remaining: 0, unreadable: 0, failed: 0, truncated: false, administratorMayHelp: 0 },
+          { scope: 'workspace', source: 'previous', repaired: 4, remaining: 3, unreadable: 3, failed: 0, truncated: false, administratorMayHelp: 3 },
+        ],
+      }), { status: 200 });
+      if (path === '/api/workspace/path') return new Response(JSON.stringify({ path: '/runs', selected: true }), { status: 200 });
+      return new Response('not found', { status: 404 });
+    }));
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('#open-settings')!.click(); });
+
+    const status = host.querySelector<HTMLElement>('[aria-label="Windows file access repair"]')!;
+    expect(status.textContent).toContain('restored access to 2 items in application data during this start');
+    expect(status.textContent).toContain('A previous repair left 3 items in the workspace folder checked at startup');
+    expect(status.textContent).toContain('Run as administrator');
+    expect(status.textContent).not.toContain('restored access to 4');
+  });
+
+  it('stays quiet after a successful repair was completed on an earlier start', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/acl-repair/status') {
+        return new Response(JSON.stringify({ platform: 'windows', roots: [] }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('#open-settings')!.click(); });
+
+    expect(host.querySelector('[aria-label="Windows file access repair"]')).toBeNull();
+  });
+
   it('does not let the initial path response overwrite a newer folder selection', async () => {
     const initial = deferred<Response>();
     const selected = deferred<Response>();

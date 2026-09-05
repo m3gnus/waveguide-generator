@@ -737,6 +737,9 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .cad-settings .ui-field { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 1fr); align-items: center; gap: 12px; color: var(--fg2); }
 .cad-settings-note { margin: 7px 0 0; color: var(--fg3); font-size: var(--text-micro); }
 .workspace-settings-path.not-selected { color: var(--amber); font-family: var(--ui); }
+.windows-repair-status { margin-top: 10px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--hair)); border-radius: var(--r3); background: color-mix(in srgb, var(--amber) 8%, transparent); color: var(--fg2); font-size: var(--text-micro); }
+.windows-repair-status > b { color: var(--fg1); }
+.windows-repair-root p { margin: 5px 0 0; }
 .cad-setup-steps { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; counter-reset: cad-setup; }
 .cad-setup-steps > li { position: relative; display: grid; gap: 2px; min-width: 0; padding: 8px 8px 8px 38px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); counter-increment: cad-setup; }
 .cad-setup-steps > li::before { position: absolute; top: 8px; left: 9px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--inv-bg); color: var(--inv-fg); content: counter(cad-setup); font-size: var(--text-micro); font-weight: 700; }

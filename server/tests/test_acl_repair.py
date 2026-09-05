@@ -606,3 +606,102 @@ class TestBootSweep:
 
         assert acl_migration.repair_legacy_acls(data_root) == {}
         assert not (data_root / acl_migration.MARKER_NAME).exists()
+
+    def test_feedback_labels_fresh_repairs_for_both_roots(self, tmp_path: Path) -> None:
+        data_root = tmp_path / "data"
+        workspace = tmp_path / "runs"
+        data_root.mkdir()
+        workspace.mkdir()
+        fresh = {
+            str(data_root): RepairCounts(repaired=2),
+            str(workspace): RepairCounts(repaired=3, unreadable=1),
+        }
+
+        with (
+            patch.object(acl_migration, "WINDOWS", True),
+            patch.object(acl_migration, "process_is_elevated", return_value=False),
+        ):
+            feedback = acl_migration.legacy_acl_repair_feedback(
+                data_root, workspace, fresh
+            )
+
+        assert feedback == {
+            "platform": "windows",
+            "roots": [
+                {"scope": "appData", "source": "current", "repaired": 2,
+                 "remaining": 0, "unreadable": 0, "failed": 0,
+                 "truncated": False, "administratorMayHelp": 0},
+                {"scope": "workspace", "source": "current", "repaired": 3,
+                 "remaining": 1, "unreadable": 1, "failed": 0,
+                 "truncated": False, "administratorMayHelp": 1},
+            ],
+        }
+
+    def test_successful_repeat_does_not_repeat_an_old_repair_claim(
+        self, tmp_path: Path
+    ) -> None:
+        data_root = tmp_path / "data"
+        data_root.mkdir()
+        self._write_feedback_marker(
+            data_root, RepairCounts(scanned=8, repaired=4, skipped=4)
+        )
+
+        with patch.object(acl_migration, "WINDOWS", True):
+            feedback = acl_migration.legacy_acl_repair_feedback(data_root, None, {})
+
+        assert feedback == {"platform": "windows", "roots": []}
+
+    def test_unresolved_repeat_keeps_the_previous_result_visible(
+        self, tmp_path: Path
+    ) -> None:
+        data_root = tmp_path / "data"
+        data_root.mkdir()
+        self._write_feedback_marker(
+            data_root,
+            RepairCounts(scanned=5, repaired=1, skipped=2, unreadable=2),
+        )
+
+        with patch.object(acl_migration, "WINDOWS", True):
+            feedback = acl_migration.legacy_acl_repair_feedback(data_root, None, {})
+
+        assert feedback["roots"] == [
+            {"scope": "appData", "source": "previous", "repaired": 1,
+             "remaining": 2, "unreadable": 2, "failed": 0,
+             "truncated": False, "administratorMayHelp": 2}
+        ]
+
+    def test_elevated_failure_is_not_reported_as_repairable_by_elevation(
+        self, tmp_path: Path
+    ) -> None:
+        data_root = tmp_path / "data"
+        data_root.mkdir()
+        self._write_feedback_marker(
+            data_root, RepairCounts(scanned=1, failed=1), elevated=True
+        )
+
+        with patch.object(acl_migration, "WINDOWS", True):
+            feedback = acl_migration.legacy_acl_repair_feedback(data_root, None, {})
+
+        root = feedback["roots"][0]
+        assert root["remaining"] == 1
+        assert root["administratorMayHelp"] == 0
+
+    @staticmethod
+    def _write_feedback_marker(
+        data_root: Path, counts: RepairCounts, *, elevated: bool = False
+    ) -> None:
+        (data_root / acl_migration.MARKER_NAME).write_text(
+            json.dumps({"roots": {str(data_root): {
+                "version": acl_migration.SWEEP_VERSION,
+                "elevated": elevated,
+                "counts": {
+                    "scanned": counts.scanned,
+                    "repaired": counts.repaired,
+                    "skipped": counts.skipped,
+                    "unreadable": counts.unreadable,
+                    "failed": counts.failed,
+                    "truncated": counts.truncated,
+                },
+            }}}),
+            encoding="utf-8",
+        )

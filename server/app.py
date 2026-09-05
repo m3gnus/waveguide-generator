@@ -37,7 +37,10 @@ from server.platform.origin import (
     parse_extra_websocket_origins,
     request_origin_allowed,
 )
-from server.platform.acl_migration import repair_legacy_acls
+from server.platform.acl_migration import (
+    legacy_acl_repair_feedback,
+    repair_legacy_acls,
+)
 from server.platform.paths import app_root, default_runs_dir, resolve_data_dir
 from shared.build_identity import build_identity, build_label
 from server.preview.service import mount_preview
@@ -702,6 +705,7 @@ def create_app(
         default_path=resolved_workspace_dir,
         legacy_defaults=legacy_workspace_dirs,
     )
+    application.state.acl_repair_feedback = {"platform": "other", "roots": []}
 
     async def _repair_legacy_acls() -> None:
         # Files this application published before `publish_staging_directory`
@@ -715,12 +719,22 @@ def create_app(
             # An unavailable selected workspace is the workspace layer's
             # problem to report, not a reason to skip the data directory.
             workspace_root = None
-        await asyncio.to_thread(
+        results = await asyncio.to_thread(
             repair_legacy_acls, resolved_data_dir, workspace_root
+        )
+        application.state.acl_repair_feedback = await asyncio.to_thread(
+            legacy_acl_repair_feedback,
+            resolved_data_dir,
+            workspace_root,
+            results,
         )
 
     if os.name == "nt":
         application.router.add_event_handler("startup", _repair_legacy_acls)
+
+    @application.get("/api/acl-repair/status")
+    async def acl_repair_status() -> dict[str, object]:
+        return application.state.acl_repair_feedback
     mount_cadlink(application)
     mount_onshape(application)
     mount_charts(application)

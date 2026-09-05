@@ -7225,6 +7225,26 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/acl-repair/status": {
+      "get": {
+        "operationId": "acl_repair_status_api_acl_repair_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Acl Repair Status Api Acl Repair Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Acl Repair Status"
+      }
+    },
     "/api/cad-workspace/capture-document": {
       "post": {
         "operationId": "cad_workspace_capture_document_api_cad_workspace_capture_document_post",

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
+import { getAclRepairStatus, type AclRepairRootStatus } from '../api/aclRepair';
 import { getUpdateChannel, setUpdateChannel, type UpdateChannel } from '../api/updates';
 import {
   getCadWorkspace,
@@ -147,10 +148,54 @@ function UpdateChannelSettings() {
   </section>;
 }
 
+function itemCount(count: number): string {
+  return `${count.toLocaleString()} item${count === 1 ? '' : 's'}`;
+}
+
+function repairLocation(scope: AclRepairRootStatus['scope']): string {
+  return scope === 'workspace' ? 'the workspace folder checked at startup' : 'application data';
+}
+
+export function WindowsFileAccessStatus() {
+  const [roots, setRoots] = useState<AclRepairRootStatus[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    void getAclRepairStatus().then(
+      (status) => { if (active) setRoots(status.roots); },
+      () => { /* An optional startup report must not turn an offline backend into another warning. */ },
+    );
+    return () => { active = false; };
+  }, []);
+
+  if (roots.length === 0) return null;
+  return <div className="windows-repair-status" role="status" aria-label="Windows file access repair">
+    <b>Windows file access</b>
+    {roots.map((root) => <div key={root.scope} className="windows-repair-root">
+      {root.source === 'current' && root.repaired > 0 && <p>
+        WG restored access to {itemCount(root.repaired)} in {repairLocation(root.scope)} during this start.
+      </p>}
+      {root.remaining > 0 && <p>
+        {root.source === 'previous' ? 'A previous repair' : 'This repair'} left {itemCount(root.remaining)} in {repairLocation(root.scope)} that WG could not read or change.
+      </p>}
+      {root.administratorMayHelp > 0 && <p>
+        Starting WG once with <b>Run as administrator</b> may let it repair more. Close WG first, then return to normal starts afterward.
+      </p>}
+      {root.remaining > 0 && root.administratorMayHelp === 0 && <p>
+        WG has already tried with administrator access. Check that your account can modify this folder; if the problem continues, download a problem report from Help.
+      </p>}
+      {root.truncated && <p>
+        This folder contains more items than WG checks at startup, so some items may not have been checked.
+      </p>}
+    </div>)}
+  </div>;
+}
+
 function WorkspaceSettings() {
   return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title">
     <h3 id="settings-workspace-title">Workspace</h3>
     <WorkspaceFolderControls note={<>Manual and automatic run exports are saved here, and so is every CAD project’s archive folder. The default is <code>Documents/Waveguide Generator/runs</code>; when you choose another workspace, the path shown above is authoritative. The application-data folder continues to hold internal databases and logs, not result exports.</>}/>
+    <WindowsFileAccessStatus/>
   </section>;
 }
 
