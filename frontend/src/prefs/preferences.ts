@@ -331,7 +331,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   };
 }
 
-export const STORAGE_VERSION = 15;
+export const STORAGE_VERSION = 14;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -415,34 +415,6 @@ function migrateV13ToV14(preferences: Partial<Preferences>): Partial<Preferences
 }
 
 /**
- * Retire the VACS spectrum export.
- *
- * The format is gone, so a stored selection naming it can only ever be a
- * format the interface no longer offers -- and while `normalize` already drops
- * an unknown id on read, that leaves the dead id sitting in the durable file
- * until something else happens to rewrite it. Drop exactly this id and carry
- * every other selection through untouched.
- *
- * A selection that named nothing else becomes empty rather than reverting to
- * the shipped default: the other default formats were deliberately turned off,
- * and reinstating them here would export files the user had said no to. An
- * empty selection is a state the interface already states plainly -- the
- * primary action reads "Export (0)" and automatic export warns that it will
- * write nothing.
- *
- * The key is only rewritten when the stored profile owns it, so an absent
- * selection still adopts the default rather than becoming an explicit [].
- */
-function migrateV14ToV15(preferences: Partial<Preferences>): Partial<Preferences> {
-  const carried = { ...preferences } as Record<string, unknown>;
-  for (const key of ['exportFormats', 'autoExportFormats']) {
-    const stored = carried[key];
-    if (Array.isArray(stored)) carried[key] = stored.filter((id) => id !== 'vacs');
-  }
-  return carried as Partial<Preferences>;
-}
-
-/**
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
  * stored length authoritative; v3→v4 adds independent job-version naming;
@@ -453,8 +425,7 @@ function migrateV14ToV15(preferences: Partial<Preferences>): Partial<Preferences
  * design-change number as a configurable suffix; v10→v11 adds the CAD
  * application choice; v11→v12 persists the user-definable directivity
  * guide interval; v12->v13 retires the standalone run name for the document's
- * design name; v13->v14 turns the untouched angular graticule off; v14->v15
- * retires the VACS spectrum export. Each stored version runs every
+ * design name; v13->v14 turns the untouched angular graticule off. Each stored version runs every
  * step from its own onwards -- v3 used to run only its first step, so a v3
  * profile would have skipped v4→v5 entirely.
  */
@@ -472,13 +443,50 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   11: (preferences) => preferences,
   12: migrateV12ToV13,
   13: migrateV13ToV14,
-  14: migrateV14ToV15,
 };
+
+/**
+ * Export format ids this build no longer offers.
+ *
+ * Retiring a format is deliberately *not* a `STORAGE_VERSION` bump. The stored
+ * shape is unchanged -- one id left the accepted set -- and every build already
+ * discards format ids it does not recognise, so an older build reads a profile
+ * written here without losing anything. Bumping the version instead would make
+ * a rollback to a build with the lower number take the reset branch below and
+ * discard the user's whole profile, chart panels and naming and sorting
+ * included, to retire one export format.
+ *
+ * `normalize` already drops these ids on read, so a retired format can never
+ * reach the interface. What it can still do is sit in the durable file until
+ * some unrelated change happens to rewrite it, which is what the detection
+ * below is for.
+ */
+const RETIRED_EXPORT_FORMATS = ['vacs'];
+
+/** Whether a stored profile still names a retired format, so it needs one rewrite. */
+function holdsRetiredFormat(stored: unknown): boolean {
+  if (typeof stored !== 'object' || stored === null) return false;
+  const record = stored as Record<string, unknown>;
+  return ['exportFormats', 'autoExportFormats'].some((key) => {
+    const value = record[key];
+    return Array.isArray(value)
+      && value.some((id) => typeof id === 'string' && RETIRED_EXPORT_FORMATS.includes(id));
+  });
+}
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {
   try {
     const parsed = JSON.parse(raw ?? '{}') as { version?: number; preferences?: Partial<Preferences> };
-    if (parsed.version === STORAGE_VERSION) return { value: normalize(parsed.preferences), migrated: false };
+    if (parsed.version === STORAGE_VERSION) {
+      // Current schema, so nothing is migrated -- but a profile written before
+      // a format was retired still names it, and normalizing it away in memory
+      // leaves the durable copy untouched. Report exactly those as needing the
+      // rewrite `load` performs. Everything else stays byte-stable on disk.
+      return {
+        value: normalize(parsed.preferences),
+        migrated: holdsRetiredFormat(parsed.preferences),
+      };
+    }
     const from = Number(parsed.version);
     if (Number.isInteger(from) && from >= 1 && from < STORAGE_VERSION) {
       let carried = parsed.preferences ?? {};

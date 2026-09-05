@@ -161,6 +161,20 @@ describe('client preferences', () => {
   it('no longer offers the retired VACS spectrum format', () => {
     expect(EXPORT_FORMATS.map(({ id }) => id)).not.toContain('vacs');
   });
+  /**
+   * Retiring a format must not bump the stored schema.
+   *
+   * A stored version above the reader's is not migrated, it is discarded for
+   * the shipped defaults -- so a build that wrote 15 would cost anyone rolling
+   * back to a 14 build their whole profile: panels, naming, sorting, all of it,
+   * to retire one export format. The shape did not change, so the number must
+   * not either, and these tests are what says so.
+   */
+  it('keeps the published storage version, so rolling back to an older build keeps the profile', () => {
+    expect(STORAGE_VERSION).toBe(14);
+    preferencesStore.update({ exportFormats: ['csv'], minRating: 2 });
+    expect(JSON.parse(localStorage.getItem('waveguide-v2-g3-preferences') ?? '{}').version).toBe(14);
+  });
   it('drops a stored VACS selection while keeping every other chosen format', () => {
     const stored = JSON.stringify({ version: 14, preferences: {
       exportFormats: ['csv', 'vacs', 'polar_csv'],
@@ -170,11 +184,13 @@ describe('client preferences', () => {
       jobSort: 'name_asc',
       minRating: 3,
     } });
-    const migrated = readPreferences(stored);
-    expect(migrated.migrated).toBe(true);
-    expect(migrated.value.exportFormats).toEqual(['csv', 'polar_csv']);
-    expect(migrated.value.autoExportFormats).toEqual(['json']);
-    expect(migrated.value).toMatchObject({
+    const cleaned = readPreferences(stored);
+    // Same version, so nothing migrated -- but the durable copy still names the
+    // retired id, and this is the flag that gets it rewritten exactly once.
+    expect(cleaned.migrated).toBe(true);
+    expect(cleaned.value.exportFormats).toEqual(['csv', 'polar_csv']);
+    expect(cleaned.value.autoExportFormats).toEqual(['json']);
+    expect(cleaned.value).toMatchObject({
       autoExportOnComplete: true, chartTypes: ['impedance', 'summary'], jobSort: 'name_asc', minRating: 3,
     });
   });
@@ -184,11 +200,47 @@ describe('client preferences', () => {
     } });
     expect(readPreferences(stored).value).toMatchObject({ exportFormats: [], autoExportFormats: [] });
   });
-  it('adopts the manual default when a pre-VACS-removal profile never stored a selection', () => {
+  it('adopts the manual default when a stored profile never named a selection', () => {
     const stored = JSON.stringify({ version: 14, preferences: { minRating: 2 } });
     expect(readPreferences(stored).value).toMatchObject({
       exportFormats: ['csv', 'png'], autoExportFormats: [], minRating: 2,
     });
+  });
+  it('carries every unrelated setting through the retired-format rewrite and back', () => {
+    const kept = {
+      chartTypes: ['balloon', 'impedance'],
+      chartTheme: 'vellum',
+      smoothing: '1/6',
+      mapReference: -9,
+      directivityGuideInterval: 15,
+      impedanceDisplay: 'magnitude_phase',
+      groupDelayUnit: 'cycles',
+      measurementPlane: 'vertical',
+      showReverseNull: true,
+      autoExportOnComplete: true,
+      archiveRunsOnComplete: false,
+      autoDownloadMesh: true,
+      runNameDatePosition: 'prefix',
+      runSequenceName: 'tritonia',
+      runSequenceNext: 7,
+      jobSort: 'rating_desc',
+      minRating: 4,
+      cadApplication: 'onshape',
+    };
+    const stored = JSON.stringify({ version: 14, preferences: {
+      ...kept, exportFormats: ['vacs', 'csv', 'stl'], autoExportFormats: ['json', 'vacs'],
+    } });
+    const first = readPreferences(stored);
+    expect(first.migrated).toBe(true);
+    expect(first.value).toMatchObject(kept);
+    expect(first.value.exportFormats).toEqual(['csv', 'stl']);
+    expect(first.value.autoExportFormats).toEqual(['json']);
+    // Reopening the rewritten copy changes nothing further, and an older build
+    // reads it as its own current version rather than resetting it.
+    const rewritten = JSON.stringify({ version: STORAGE_VERSION, preferences: first.value });
+    const second = readPreferences(rewritten);
+    expect(second.migrated).toBe(false);
+    expect(second.value).toEqual(first.value);
   });
   it('rewrites the durable copy once, so the retired id does not linger in storage', () => {
     const stored = JSON.stringify({ version: 14, preferences: { exportFormats: ['vacs', 'csv'] } });
@@ -197,6 +249,32 @@ describe('client preferences', () => {
     expect(rewritten).not.toContain('vacs');
     expect(readPreferences(rewritten).migrated).toBe(false);
     expect(readPreferences(rewritten).value.exportFormats).toEqual(['csv']);
+  });
+  it('does not claim a rewrite for a current profile that names no retired format', () => {
+    // The detection has to be narrow: flagging every read would rewrite the
+    // durable file on each launch and defeat the point of the version check.
+    const stored = JSON.stringify({ version: 14, preferences: {
+      exportFormats: ['csv', 'stl'], autoExportFormats: ['json'], minRating: 1,
+    } });
+    expect(readPreferences(stored).migrated).toBe(false);
+  });
+  it('still strips the retired format from a profile old enough to be migrated', () => {
+    // The chain runs and normalize drops the id at the end of it, so no
+    // dedicated migration step -- and no version bump -- is needed for that.
+    // v5->v6 copies the manual selection into the automatic one first, which is
+    // why the retired id has to be stripped after the chain rather than inside
+    // any one step of it.
+    const stored = JSON.stringify({ version: 1, preferences: {
+      chartTypes: ['frequency_response', 'balloon'],
+      exportFormats: ['csv', 'vacs'],
+      autoExportOnComplete: true,
+      minRating: 2,
+    } });
+    const migrated = readPreferences(stored);
+    expect(migrated.migrated).toBe(true);
+    expect(migrated.value.exportFormats).toEqual(['csv']);
+    expect(migrated.value.autoExportFormats).toEqual(['csv']);
+    expect(migrated.value.minRating).toBe(2);
   });
   it('migrates old version/date naming state without keeping the retired fields', () => {
     const stored = JSON.stringify({ version: 4, preferences: {
