@@ -94,8 +94,37 @@ def test_a_volume_anchored_flip_is_reported():
     warnings = _orientation_warnings({"symmetry_volume_fallback_flipped": 1})
     assert len(warnings) == 1
     assert "signed volume" in warnings[0]
+    # The old wording claimed the cap could not anchor the component. That was
+    # never reliably true -- the mesher reaches this fallback for a single-plane
+    # cut that HAS a cap -- so the message must describe what was used, not why
+    # the anchor was missing.
+    assert "no tagged source cap" not in warnings[0]
+
+
+def test_a_source_less_component_is_reported_as_left_alone():
+    """The abstention is invisible unless this key is read.
+
+    A reduced component with no source cap is left exactly as imported. Nothing
+    downstream re-checks it, so an unreported abstention ships a possibly
+    inverted mesh silently.
+    """
+    warnings = _orientation_warnings({"unjudged_symmetry_no_source": 2})
+    assert len(warnings) == 1
+    assert "no tagged source cap" in warnings[0]
+    assert "may be inverted" in warnings[0]
+
+
+def test_the_two_abstention_kinds_are_reported_separately():
+    """A flip and an abstention are different outcomes and must not merge."""
+    warnings = _orientation_warnings(
+        {"symmetry_volume_fallback_flipped": 1, "unjudged_symmetry_no_source": 1}
+    )
+    assert len(warnings) == 2
 
 
 def test_orientation_warnings_tolerate_an_older_pinned_mesher():
     """The keys did not exist before the mesher fix; absence is not a crash."""
     assert _orientation_warnings({"flipped_global": 3, "flipped_consistency": 1}) == []
+    # unjudged_symmetry_no_source is also absent from a mesher older than the
+    # counter itself, and reading it must not turn that into a warning either.
+    assert _orientation_warnings({"unjudged_symmetry_no_source": 0}) == []

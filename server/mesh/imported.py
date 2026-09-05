@@ -1577,15 +1577,29 @@ def measure_surface_deviation(
 def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
     """Surface any component whose global orientation is still a guess.
 
-    The source-cap anchor abstains on a component that was not cut on exactly
-    two principal planes, and the mesher now falls back to the signed volume
-    about the origin -- valid there because a symmetry-reduced component's free
-    edges all lie on coordinate planes through the origin. What that fallback
-    cannot settle is a component of zero signed volume. Nothing else in the
-    pipeline notices an inverted open component, so say so rather than shipping
-    a mesh whose source phase may be reversed.
+    A symmetry-reduced component is oriented from its tagged source cap. The
+    cap projection abstains in two situations that this function must not
+    conflate, because the mesher treats them differently and a reader cannot
+    tell them apart from a count alone:
 
-    Read defensively: an older pinned mesher does not report these keys.
+    * **The component carries a source cap, but was not cut on exactly two
+      principal planes** -- the single-plane cut, where there is no unique
+      non-cut axis to project onto. The mesher falls back to the signed volume
+      about the origin, valid there because a reduced component's free edges
+      all lie on coordinate planes through it. What that fallback cannot settle
+      is a component whose volume is within its own noise floor.
+    * **The component carries no source cap at all**, so nothing says which
+      side of it the fluid is on and the mesher declines to guess. The winding
+      ships exactly as imported.
+
+    Nothing else in the pipeline notices an inverted open component, so say so
+    rather than shipping a mesh whose source phase may be reversed.
+
+    Read defensively: an older pinned mesher does not report these keys, and a
+    mesher before the source-less abstention landed reported
+    ``symmetry_volume_fallback_flipped`` for the source-less case too. The
+    wording below is therefore true under both, which is why it says what the
+    mesher used rather than why the anchor was unavailable.
     """
 
     warnings: list[str] = []
@@ -1593,14 +1607,22 @@ def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
     if unresolved:
         warnings.append(
             f"{unresolved} symmetry-reduced component(s) have no usable orientation "
-            "anchor and zero signed volume; their outward direction was left as "
-            "imported and may be inverted"
+            "anchor and a signed volume within its own noise floor; their outward "
+            "direction was left as imported and may be inverted"
         )
     flipped = int(repair.get("symmetry_volume_fallback_flipped") or 0)
     if flipped:
         warnings.append(
             f"{flipped} symmetry-reduced component(s) were re-oriented from their "
-            "signed volume because no tagged source cap could anchor them"
+            "signed volume rather than from a source cap; that orients outward, "
+            "which is correct only where the meshed region is the solid"
+        )
+    unjudged = int(repair.get("unjudged_symmetry_no_source") or 0)
+    if unjudged:
+        warnings.append(
+            f"{unjudged} symmetry-reduced component(s) carry no tagged source cap, "
+            "so their orientation was left exactly as imported and may be inverted; "
+            "check that every source face kept its label through STEP import"
         )
     return warnings
 
