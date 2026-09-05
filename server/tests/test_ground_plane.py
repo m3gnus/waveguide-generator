@@ -299,3 +299,50 @@ def test_a_sphere_descends_even_with_only_the_horizontal_arc_enabled():
         GroundPlane(axis="y", height_m=0.1),
         {"distance": 2.0, "enabled_axes": ["horizontal"], "spherical_sampling": True},
     ) is not None
+
+
+def test_no_beat_engine_advertises_a_ground_plane_it_cannot_apply():
+    """The advertisement must not outrun the adapter.
+
+    hornlab-beat-bem CAN express a rigid half space at the pin this repository
+    carries -- it exports GroundPlane, SolveConfig.ground_plane and
+    GROUND_PLANE_AXES=("y",), and y is the floor in this application's frame.
+    It is tempting to advertise that. But ``server/solver/beat.py`` never reads
+    ``SolverContext.ground_plane``, and the mounting gate in
+    ``resolve_auto_engine`` is the only thing keeping a grounded solve away
+    from an engine that ignores it. Advertising the mounting first would let
+    AUTO route a grounded solve to BEAT and return a FREE-STANDING answer to a
+    question about a floor -- no error, just a wrong number.
+
+    So this fails the moment someone re-adds the capability without wiring the
+    adapter, which is the order the ``_ground_plane_axes`` docstring states.
+    Delete this test in the same commit that makes BEAT consume the option.
+    """
+    for info in detect_engines():
+        if not info.name.startswith("beat"):
+            continue
+        assert "ground-plane" not in info.mountings, info.name
+        assert info.ground_plane_axes == (), info.name
+
+
+def test_the_beat_adapter_really_does_not_consume_the_ground_plane():
+    """Pins the evidence the decision above rests on, by enumeration.
+
+    Greping for the word proves only that a spelling is absent. This reads
+    every attribute the BEAT adapter takes off a solver context and asserts
+    ``ground_plane`` is not among them, so the day someone wires it up this
+    test fails and points at its sibling above.
+    """
+    import inspect
+    import re
+
+    from server.solver import beat as beat_module
+
+    source = inspect.getsource(beat_module)
+    named = set(re.findall(r"\bcontext\.([A-Za-z_]\w*)", source))
+    dynamic = set(re.findall(r"getattr\(\s*context\s*,\s*[\"'](\w+)[\"']", source))
+
+    assert "ground_plane" not in named | dynamic
+    # And no escape hatch that would reach the field without naming it.
+    for escape in ("vars(context", "asdict(context", "context.__dict__", "**context"):
+        assert escape not in source, escape

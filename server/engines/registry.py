@@ -171,11 +171,30 @@ def _ground_plane_axes(name: str, status: Mapping[str, Any]) -> tuple[str, ...]:
     nothing here and the mounting simply does not appear -- rather than being
     offered and then failing with a TypeError deep in the adapter.
 
-    BEAT is deliberately absent even though the package has a ``:ground``
-    symmetry mode. It is not reachable through the package's own config today,
-    so there is nothing for wg2 to call; when it is, BEAT reports ("y",) alone,
-    because its transform mirrors across y = 0 only and advertising a side wall
-    it cannot solve is the failure this per-axis list exists to prevent.
+    BEAT is absent, and the reason is worth stating precisely because it has
+    changed. hornlab-beat-bem CAN express a rigid half space now: at the pin
+    this application currently carries it exports ``GroundPlane``,
+    ``SolveConfig.ground_plane``, ``reject_unsupported_ground_plane`` and
+    ``GROUND_PLANE_AXES = ("y",)`` -- commented in its own source as the
+    capability advertisement for exactly this probe. Its transform mirrors
+    across y = 0 alone, which in the frame this application builds meshes in
+    (z the horn axis, y vertical, per the same config.py) is the floor: the
+    common case, not a corner.
+
+    What is missing is on this side. ``server/solver/beat.py`` never reads
+    ``SolverContext.ground_plane`` -- enumerated, not grepped: the adapter
+    reads frequency_range, frequency_spacing, mesh_validation_mode,
+    num_frequencies, solver_mode, source_motion, validate and verbose, and its
+    only dynamic attribute access is for polar_config. So a grounded solve
+    dispatched to BEAT would place no mesh, apply no image plane, and return a
+    free-standing answer to a question about a floor.
+
+    The mounting gate in ``resolve_auto_engine`` is the only thing preventing
+    that, so advertising the axis before the adapter exists would not merely
+    be optimistic -- it would let AUTO route a grounded solve to an engine that
+    silently ignores the ground. Withholding it costs a user nothing today
+    (BEMPP does all three axes); advertising it costs a wrong answer that looks
+    right. Wire the adapter, then add BEAT here, in that order.
     """
 
     if name != "bempp":
@@ -496,7 +515,9 @@ def resolve_auto_engine(
     all. BEAT rejects every coupled infinite-baffle request, so without this
     the order above handed such a solve to BEAT ahead of a coupling-capable
     BEMPP on any GPU host -- persisting a job that could only ever fail. The
-    rigid ground plane is filtered the same way and is currently BEMPP-only.
+    rigid ground plane is filtered the same way and is currently BEMPP-only --
+    because only BEMPP's adapter implements it here, not because BEAT's package
+    cannot (see ``_ground_plane_axes``).
     """
 
     detected = list(capabilities) if capabilities is not None else detect_engines(environ=environ)
