@@ -239,7 +239,9 @@ def test_the_posix_wg_command_runs_when_the_environment_path_contains_spaces(
     environment = tmp_path / "checkout with spaces" / ".venv"
     python = bootstrap._venv_python(environment)
     python.parent.mkdir(parents=True)
-    python.symlink_to(sys.executable)
+    # Resolve the base interpreter, not a copies-venv executable whose stdlib
+    # lives elsewhere. Relocatable Python builds have no distro prefix fallback.
+    python.symlink_to(sys._base_executable)
 
     bootstrap._install_cli_entrypoint(environment)
 

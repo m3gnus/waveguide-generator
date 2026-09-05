@@ -341,11 +341,23 @@ Flags: `--no-browser`, `--data-dir` (or `WG2_DATA_DIR`); `WG2_ENABLE_DRYRUN=1` e
 
 ## Test commands
 
-Python: `.venv/bin/python -m pytest server/tests -q`
+Build the frontend **before running the Python tests**, including on a fresh
+clone. The server mounts `frontend/dist`, which is generated and not checked in.
+From the repository root, using Node 20:
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
+.venv/bin/python -m pytest server/tests scripts/tests -v
+```
+
+On Windows use `.venv\Scripts\python.exe` for the Python command. Tests that
+exercise the Tk status view require an importable Tk installation; those view
+tests skip explicitly when Tk cannot load, while controller tests still run.
 
 JS frame codec (explicit file path — directory mode trips the node runner): `node --test shared/js/frame.test.mjs`
 
-Frontend: `cd frontend && npm ci && npm test && npm run build`
+Frontend unit tests: `npm --prefix frontend test`
 
 Real solves are never run in hosted CI; Metal and bempp parity run on owned
 qualification hardware, and their archived reports back the release gates. Use

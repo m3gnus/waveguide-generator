@@ -201,7 +201,7 @@ def test_the_probe_opens_a_window_rather_than_importing(monkeypatch: pytest.Monk
     success on machines where the window never appeared.
     """
 
-    tkinter = pytest.importorskip("tkinter")
+    tkinter = pytest.importorskip("tkinter", exc_type=ImportError)
     if diagnostics.is_headless():
         pytest.skip("no window server to fail against")
     calls: list[str] = []
@@ -221,7 +221,7 @@ def test_the_probe_opens_a_window_rather_than_importing(monkeypatch: pytest.Monk
 def test_the_view_marks_a_window_that_never_opened(monkeypatch: pytest.MonkeyPatch) -> None:
     """So the entry point can tell it from a TclError raised hours later."""
 
-    pytest.importorskip("tkinter")
+    pytest.importorskip("tkinter", exc_type=ImportError)
     from launchers.statusapp import view
 
     def refuse():
@@ -255,4 +255,3 @@ def test_tk_import_errors_are_recognised_by_name_or_by_message() -> None:
     assert diagnostics.concerns_tk(ModuleNotFoundError("x", name="tkinter.ttk")) is True
     assert diagnostics.concerns_tk(ImportError("DLL load failed while importing _tkinter")) is True
     assert diagnostics.concerns_tk(ImportError("Can't find a usable init.tcl")) is True
-

@@ -604,7 +604,10 @@ def _require_supported_python() -> None:
         raise RuntimeError(
             f"CPython {expected} is required to bootstrap Waveguide Generator "
             f"(running {actual}). "
-            f"Run this script with python{expected}."
+            f"Run this script with python{expected}. "
+            f"If it is not installed, use your distribution's python{expected} "
+            f"package or install uv and run: uv python install {expected}; "
+            f"uv run --python {expected} --no-project python scripts/bootstrap.py"
         )
 
 
@@ -765,7 +768,10 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
         )
     if not environment.exists():
         print(f"Creating CPython {PYTHON_SERIES[0]}.{PYTHON_SERIES[1]} environment at {environment}")
-        venv.EnvBuilder(with_pip=True).create(environment)
+        # Keep the copies policy consistent across platforms. Switching existing
+        # environments to symlinks changes their dependency on the base binary;
+        # the environment still needs that installation's standard library.
+        venv.EnvBuilder(with_pip=True, symlinks=False).create(environment)
 
     # Once pip starts mutating an environment, its previous proof is no longer
     # valid. In particular, a failed --force reinstall uses the same manifest
