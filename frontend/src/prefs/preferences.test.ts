@@ -9,7 +9,7 @@ function job(id: string, rating: number | null, created: string, completed = cre
 describe('client preferences', () => {
   beforeEach(() => { localStorage.clear(); preferencesStore.resetForTests(); });
   it('persists the complete format selection and clamps the run sequence', () => {
-    expect(EXPORT_FORMATS).toHaveLength(20);
+    expect(EXPORT_FORMATS).toHaveLength(19);
     expect(CHART_TYPES).toHaveLength(20);
     expect(MAP_REFERENCES).toEqual([-3, -6, -9, -12]);
     preferencesStore.update({ exportFormats: [] });
@@ -157,6 +157,46 @@ describe('client preferences', () => {
     expect(() => loadPreferences('{not json')).not.toThrow();
     expect(loadPreferences('{not json')).toMatchObject({ exportFormats: ['csv', 'png'], autoExportFormats: [] });
     expect(() => loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: null }))).not.toThrow();
+  });
+  it('no longer offers the retired VACS spectrum format', () => {
+    expect(EXPORT_FORMATS.map(({ id }) => id)).not.toContain('vacs');
+  });
+  it('drops a stored VACS selection while keeping every other chosen format', () => {
+    const stored = JSON.stringify({ version: 14, preferences: {
+      exportFormats: ['csv', 'vacs', 'polar_csv'],
+      autoExportFormats: ['vacs', 'json'],
+      autoExportOnComplete: true,
+      chartTypes: ['impedance', 'summary'],
+      jobSort: 'name_asc',
+      minRating: 3,
+    } });
+    const migrated = readPreferences(stored);
+    expect(migrated.migrated).toBe(true);
+    expect(migrated.value.exportFormats).toEqual(['csv', 'polar_csv']);
+    expect(migrated.value.autoExportFormats).toEqual(['json']);
+    expect(migrated.value).toMatchObject({
+      autoExportOnComplete: true, chartTypes: ['impedance', 'summary'], jobSort: 'name_asc', minRating: 3,
+    });
+  });
+  it('leaves a VACS-only selection empty rather than reinstating formats that were turned off', () => {
+    const stored = JSON.stringify({ version: 14, preferences: {
+      exportFormats: ['vacs'], autoExportFormats: ['vacs'],
+    } });
+    expect(readPreferences(stored).value).toMatchObject({ exportFormats: [], autoExportFormats: [] });
+  });
+  it('adopts the manual default when a pre-VACS-removal profile never stored a selection', () => {
+    const stored = JSON.stringify({ version: 14, preferences: { minRating: 2 } });
+    expect(readPreferences(stored).value).toMatchObject({
+      exportFormats: ['csv', 'png'], autoExportFormats: [], minRating: 2,
+    });
+  });
+  it('rewrites the durable copy once, so the retired id does not linger in storage', () => {
+    const stored = JSON.stringify({ version: 14, preferences: { exportFormats: ['vacs', 'csv'] } });
+    const first = readPreferences(stored);
+    const rewritten = JSON.stringify({ version: STORAGE_VERSION, preferences: first.value });
+    expect(rewritten).not.toContain('vacs');
+    expect(readPreferences(rewritten).migrated).toBe(false);
+    expect(readPreferences(rewritten).value.exportFormats).toEqual(['csv']);
   });
   it('migrates old version/date naming state without keeping the retired fields', () => {
     const stored = JSON.stringify({ version: 4, preferences: {

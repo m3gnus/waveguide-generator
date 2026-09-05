@@ -64,7 +64,6 @@ export const EXPORT_FORMATS = [
   { id: 'radiation_impedance_npz', label: 'Radiation Matrix (NPZ)' },
   { id: 'zma', label: 'VituixCAD Impedance (ZMA)' },
   { id: 'vxp', label: 'VituixCAD Project (VXP)' },
-  { id: 'vacs', label: 'ABEC Spectrum (VACS)' },
   { id: 'stl', label: 'Waveguide STL' },
   { id: 'fusion_csv', label: 'Fusion 360 CSV Curves' },
 ] as const;
@@ -332,7 +331,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   };
 }
 
-export const STORAGE_VERSION = 14;
+export const STORAGE_VERSION = 15;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -416,6 +415,34 @@ function migrateV13ToV14(preferences: Partial<Preferences>): Partial<Preferences
 }
 
 /**
+ * Retire the VACS spectrum export.
+ *
+ * The format is gone, so a stored selection naming it can only ever be a
+ * format the interface no longer offers -- and while `normalize` already drops
+ * an unknown id on read, that leaves the dead id sitting in the durable file
+ * until something else happens to rewrite it. Drop exactly this id and carry
+ * every other selection through untouched.
+ *
+ * A selection that named nothing else becomes empty rather than reverting to
+ * the shipped default: the other default formats were deliberately turned off,
+ * and reinstating them here would export files the user had said no to. An
+ * empty selection is a state the interface already states plainly -- the
+ * primary action reads "Export (0)" and automatic export warns that it will
+ * write nothing.
+ *
+ * The key is only rewritten when the stored profile owns it, so an absent
+ * selection still adopts the default rather than becoming an explicit [].
+ */
+function migrateV14ToV15(preferences: Partial<Preferences>): Partial<Preferences> {
+  const carried = { ...preferences } as Record<string, unknown>;
+  for (const key of ['exportFormats', 'autoExportFormats']) {
+    const stored = carried[key];
+    if (Array.isArray(stored)) carried[key] = stored.filter((id) => id !== 'vacs');
+  }
+  return carried as Partial<Preferences>;
+}
+
+/**
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
  * stored length authoritative; v3→v4 adds independent job-version naming;
@@ -426,7 +453,8 @@ function migrateV13ToV14(preferences: Partial<Preferences>): Partial<Preferences
  * design-change number as a configurable suffix; v10→v11 adds the CAD
  * application choice; v11→v12 persists the user-definable directivity
  * guide interval; v12->v13 retires the standalone run name for the document's
- * design name; v13->v14 turns the untouched angular graticule off. Each stored version runs every
+ * design name; v13->v14 turns the untouched angular graticule off; v14->v15
+ * retires the VACS spectrum export. Each stored version runs every
  * step from its own onwards -- v3 used to run only its first step, so a v3
  * profile would have skipped v4→v5 entirely.
  */
@@ -444,6 +472,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   11: (preferences) => preferences,
   12: migrateV12ToV13,
   13: migrateV13ToV14,
+  14: migrateV14ToV15,
 };
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {

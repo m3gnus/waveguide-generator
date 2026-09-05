@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JobItem, JobsSnapshot } from '../api/jobsSocket';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
-import { preferencesStore } from '../prefs/preferences';
+import { EXPORT_FORMATS, preferencesStore } from '../prefs/preferences';
 import { hydrateJobDesign } from './jobDesign';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { useRunExportStore } from '../stores/runExports';
@@ -493,6 +493,26 @@ describe('RunExportControl', () => {
     // 409 on any format whose bytes carry a timestamp.
     expect(mocks.runWorkspaceExportBundle.mock.calls[0][2]).toBe('overwrite');
     expect(mocks.runWorkspaceExportBundle.mock.calls[0][0].design).toEqual(hydrateJobDesign(completeJob()));
+  });
+
+  it('offers every selectable export format, so the primary action cannot be silently dead', async () => {
+    // The preferred-format button requires a run-menu entry for each selected
+    // format and offers nothing at all when one is missing. A format that the
+    // preferences surface can select but this menu never listed therefore
+    // disabled bulk export outright, with no visible reason -- which is what a
+    // retired format left behind in a stored profile used to do.
+    preferencesStore.update({ exportFormats: EXPORT_FORMATS.map(({ id }) => id) });
+    mocks.fetchJobResults.mockResolvedValue(directivityResult());
+    render(completeJob({
+      polar_grid: { angle_step: 5 },
+      has_pressure_basis_artifact: true,
+      has_radiation_impedance_artifact: true,
+    }));
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await settle(); });
+
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledOnce();
+    expect(mocks.runWorkspaceExportBundle.mock.calls[0][1]).toEqual(EXPORT_FORMATS.map(({ id }) => id));
   });
 
   it('disables design formats with the stored reason while leaving result formats enabled', () => {

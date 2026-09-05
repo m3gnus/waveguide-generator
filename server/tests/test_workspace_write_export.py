@@ -417,7 +417,7 @@ def test_merge_refuses_to_overwrite_a_different_existing_export(tmp_path: Path) 
 def test_repeat_manual_export_replaces_changed_files(tmp_path: Path) -> None:
     """A user asking for an export again gets the export again.
 
-    Manual exports cannot merge: the JSON, summary and VACS builders stamp the
+    Manual exports cannot merge: the JSON and summary builders stamp the
     current time into their output, so a second export of the same run is never
     byte-identical and ``merge_identical`` rejected the entire bundle.
     """

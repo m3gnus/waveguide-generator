@@ -306,60 +306,6 @@ export function buildRadiationImpedanceCsv(
   return `${rows.join('\n')}\n`;
 }
 
-export function buildVacs(result: ResultPayload, now = new Date()): string {
-  const impedance = result.impedance;
-  const plane = result.directivity?.horizontal ? 'horizontal' : Object.keys(result.directivity ?? {})[0];
-  const patterns = plane ? result.directivity?.[plane as keyof NonNullable<ResultPayload['directivity']>] ?? [] : [];
-  const lines = ['// Waveguide Generator Spectrum Data', `// ${now.toISOString()}`, 'SourceDesc=VACS_Data_Text', 'Version=1.1.0'];
-  if (impedance?.frequencies?.length) {
-    const frequencies = impedance.frequencies;
-    requireAlignedFrames(frequencies, impedance.real?.length ?? 0, 'VACS export (impedance real)');
-    requireAlignedFrames(frequencies, impedance.imaginary?.length ?? 0, 'VACS export (impedance imaginary)');
-    lines.push('Data_Format=Complex', 'Data_LevelType=Impedance10', 'Data_Domain=Frequency', 'Data_AbscUnit=Hz', 'Data');
-    frequencies.forEach((frequency, index) => {
-      const real = finite(impedance.real?.[index]);
-      const imaginary = finite(impedance.imaginary?.[index]);
-      if (real === null || imaginary === null) {
-        throw new Error(`VACS export (impedance, ${frequency} Hz): missing complex sample; use Impedance CSV to preserve gaps.`);
-      }
-      lines.push(`${frequency}   ${real} ${imaginary}`);
-    });
-    lines.push('Data_End');
-  }
-  if (patterns.length) {
-    const frequencies = result.frequencies;
-    requireAlignedFrames(frequencies, patterns.length, `VACS export (${plane} polar magnitude)`);
-    const angles = patterns[0].map(([angle]) => angle);
-    patterns.forEach((pattern, index) => {
-      requireFiniteAngles(pattern, `VACS export (${plane}, ${frequencies[index]} Hz)`);
-      if (pattern.length !== angles.length || pattern.some(([angle], column) => angle !== angles[column])) {
-        throw new Error('VACS export: polar angle grids differ between frequencies; use Polar CSV to preserve each measured angle.');
-      }
-    });
-    // VACS Import Control Settings Part 1 defines Real for scalar amplitudes.
-    // Separate curves retain each angle without pretending these normalized
-    // magnitudes are absolute complex pressure or supplying an invented phase.
-    angles.forEach((angle, column) => {
-      lines.push('Data_Format=Real', 'Data_LevelType=Peak', 'Data_Domain=Frequency', 'Data_AbscUnit=Hz',
-        `Data_Legend="Polar normalized magnitude (no phase), ${plane}, ${angle} deg"`, 'Data');
-      patterns.forEach((pattern, index) => {
-        const value = pattern[column][1];
-        const db = patternDb(value);
-        const magnitude = Array.isArray(value) && value.length === 2
-          && value.every((part) => typeof part === 'number' && Number.isFinite(part))
-          ? Math.hypot(value[0], value[1])
-          : db === null ? NaN : Math.pow(10, db / 20);
-        if (!Number.isFinite(magnitude)) {
-          throw new Error(`VACS export (${plane}, ${angle} deg, ${frequencies[index]} Hz): missing or non-finite magnitude; use Polar CSV to preserve gaps.`);
-        }
-        lines.push(`${frequencies[index]}   ${magnitude}`);
-      });
-      lines.push('Data_End');
-    });
-  }
-  return `${lines.join('\n')}\n`;
-}
-
 function filenameFromResponse(response: Response, fallback: string): string {
   return response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] ?? fallback;
 }
@@ -398,8 +344,8 @@ function blobFromBase64(content: string, type = 'application/octet-stream'): Blo
  * Automatic post-run export is a background write nobody asked for twice, so
  * it merges and refuses to change anything: `merge_identical`. A user choosing
  * an export a second time is asking for the file again, so it replaces:
- * `overwrite`. Merging a repeat manual export cannot work -- the JSON, summary,
- * and VACS builders stamp the current time into their output, and smoothing or
+ * `overwrite`. Merging a repeat manual export cannot work -- the JSON and
+ * summary builders stamp the current time into their output, and smoothing or
  * chart preferences change the bytes too, so every repeat differed and the
  * whole bundle was rejected with a 409.
  */
@@ -810,7 +756,6 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     polar_csv: () => [buildPolarCsv(result), `${baseName}_polar.csv`, 'text/csv;charset=utf-8'],
     impedance_csv: () => [buildImpedanceCsv(result), `${baseName}_impedance.csv`, 'text/csv;charset=utf-8'],
     zma: () => [buildZma(result), `${baseName}.zma`, 'text/plain;charset=utf-8'],
-    vacs: () => [buildVacs(result, now), `${baseName}_spectrum.txt`, 'text/plain;charset=utf-8'],
   };
   const [content, filename, type] = builders[format]();
   saveText(content, filename, type);
@@ -831,7 +776,7 @@ export async function runExportBundle(inputContext: ExportContext, formats = inp
   const saveText = context.saveText ?? downloadText;
   // Polar FRD owns every channel as one set so its manual Workspace write stays
   // one request. The other result formats dispatch independently per channel.
-  const resultFormats = new Set<ExportFormat>(['png', 'pressure_basis', 'derived_acoustics', 'on_axis_frd', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma', 'vacs']);
+  const resultFormats = new Set<ExportFormat>(['png', 'pressure_basis', 'derived_acoustics', 'on_axis_frd', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma']);
   for (const format of formats) {
     const allChannels = context.result && !context.channelId && resultFormats.has(format)
       ? resultChannels(context.result) : [];

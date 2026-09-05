@@ -42,8 +42,10 @@ describe('preferences surfaces', () => {
     expect([...groupDelayUnit.options].map(({ value }) => value)).toEqual(['ms', 'cycles']);
     expect(groupDelayUnit.value).toBe('ms');
     expect(host.querySelector('[aria-label="Export counter"]')).toBeNull();
-    expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(20);
-    expect(host.querySelectorAll('[aria-label^="Automatic export:"]')).toHaveLength(20);
+    expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(19);
+    expect(host.querySelectorAll('[aria-label^="Automatic export:"]')).toHaveLength(19);
+    // The retired spectrum format is offered in neither list.
+    expect(host.textContent).not.toContain('VACS');
     expect(host.textContent).toContain('Preferred manual export formats');
     expect(host.textContent).toContain('Automatic export formats');
     expect(host.textContent).toContain('Auto-export completed jobs');
