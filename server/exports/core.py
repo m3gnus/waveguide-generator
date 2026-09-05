@@ -357,7 +357,11 @@ _WRITTEN_REFERENCE_OFFSET = 9
 #: changes the measurement reference alone -- never the profile grid, and never
 #: the surface written for the user. A test pins the dependency on that key,
 #: because a builder that stopped honouring it would silently restore the blind
-#: spot rather than fail.
+#: spot rather than fail. The matching half of that contract is recorded at the
+#: key's definition, in the mesher's ``_morph_corner_arc_subdivision``, which
+#: names this planner as its second caller and what it relies on -- a subdivided
+#: grid has to be the unsubdivided one plus arc azimuths, every shared azimuth
+#: on the same point.
 _WRITTEN_CORNER_ARC_SUBDIVISION = 16
 #: What the dense reference still cannot see. A sampled maximum is a lower
 #: bound on the real one, and the spike above is narrow enough that lower-density
