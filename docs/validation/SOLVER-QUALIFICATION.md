@@ -6,6 +6,28 @@ does not own real GPU/OpenCL devices, so passing unit tests is necessary but not
 sufficient. Archive the report under `docs/validation/YYYY-MM/` with the exact
 WG, mesher, Metal-BEM, and BEMPP-BEM SHAs plus hardware/OS details.
 
+## BEAT package contract
+
+The BEAT pin `42bbfcf9ec06921eeec2f996e27b1e6873c5bc65` includes startup
+cleanup, ownership-aware worker retirement and capability schema version 2.
+It preserves `SubmissionClosed` and `backend_capabilities` in the public API.
+A host whose runtime retirement raises still explicitly releases its event
+stream; session cancellation and a later solve remain separate submissions.
+
+Near correction is supported only on CPU. Metal, CUDA and ROCm refuse it at
+configuration time; the refusal is not an implementation of the missing
+accelerator correction. Regular quadrature accepts orders 1, 2 and 4 only;
+complex or non-unit source amplitudes are refused. WG's adapter uses none of
+these refused options. CPU double precision still serializes pressure through
+Float32, so do not interpret a Float64 Python array as full-precision output.
+
+For each packaged candidate, verify the installed distribution's PEP 610 SHA
+against this pin, then test persisted BEAT startup, immediate solve,
+restart/adoption of the same host and Julia child, cancel-then-solve, and an
+explicit Metal-BEM selection that starts no BEAT worker. Use an isolated
+worker registry and application data directory. Source-suite or wheel-level
+lifecycle results do not close the installed-app and physical-platform gates.
+
 ## Apple Silicon owned runner
 
 Build the feature-current native helper, then run the end-to-end formulation and
