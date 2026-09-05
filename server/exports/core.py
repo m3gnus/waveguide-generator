@@ -266,9 +266,17 @@ def _write_step(inner_points: np.ndarray) -> str:
         for column in range(n_columns):
             point_tags = [
                 int(gmsh.model.occ.addPoint(*(float(value) for value in inner_points[index, column])))
-                for index in [*range(n_phi), 0]
+                for index in range(n_phi)
             ]
-            curve = int(gmsh.model.occ.addBSpline(point_tags))
+            point_tags.append(point_tags[0])
+            # The grid points sample the analytic profile, so the profile curve
+            # must interpolate them.  ``addBSpline`` treats the same points as
+            # control poles and pulls the curve inside the intended ring;
+            # ``addSpline`` constructs OCC's interpolating B-spline instead.
+            # Repeating the first point gives OCC a periodic, tangent-continuous
+            # seam (also after STEP round-trip), rather than a separate closing
+            # chord.
+            curve = int(gmsh.model.occ.addSpline(point_tags))
             construction_curves.append(curve)
             wire_tags.append(int(gmsh.model.occ.addWire([curve], checkClosed=True)))
         gmsh.model.occ.addThruSections(
@@ -307,18 +315,9 @@ def _surface_grid_plan(design: DesignConfig) -> GridPlan:
     This export is not the manufacturable part -- that is the solid -- but an
     open reference bore the user lofts or thickens in CAD, and ``_write_step``
     builds it as a *ruled* loft (``makeRuled=True, maxDegree=1``) through
-    ``addBSpline`` rings, whose points are control points rather than points
-    the curve passes through. Both of those smooth the surface away from the
-    grid by more than any interpolation model here predicts: measured on the
-    seed R-OSSE, the written surface lands about 1.5x outside the chord this
-    plans to (0.143 mm against a planned 0.098 mm), with the excess
-    concentrated in the last few rings of the mouth roll-back. So the chord is
-    what is planned and stated, not a tolerance the file would not honour --
-    closing that gap means changing the writer's ruled/control-point
-    construction, which is a separate change.
-
-    Against the retired multipliers this is still a clear gain on the same
-    design: 0.424 mm deviation before at a 100x20 grid, 0.143 mm after.
+    interpolating profile splines.  The planner uses the linear chord target
+    in both directions; export tests separately check the written STEP after
+    an OCC round trip, including samples on and between loft stations.
     """
 
     return plan_grid(
