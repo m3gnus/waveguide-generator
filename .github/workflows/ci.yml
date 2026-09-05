@@ -10,6 +10,9 @@ name: CI
 # releases -- so the tag list, not a branch, is the release history. The old
 # `next` integration branch is retired.
 on:
+  # Qualify an exact topic candidate on every platform before it is landed.
+  # Uses the existing jobs and permissions; publishes no release artifacts.
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:

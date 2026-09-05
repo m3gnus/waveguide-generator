@@ -108,16 +108,11 @@ def _controller(tmp_path: Path, **kwargs: object) -> StatusController:
     )
 
 
-#: A bound no test run could sit out, not a budget any of these waits should
-#: approach. Every caller below is waiting on a child Python that has to start,
-#: import and answer, and a hosted Windows runner spends seconds on that before
-#: any of this code runs -- so a bound near the real duration measures the
-#: machine rather than the code. 5.0 s did exactly that:
-#: test_busy_preferred_port_is_left_for_the_child_instance_check failed
-#: deterministically on Server (windows-latest), twice, on a commit touching
-#: nothing it reads, with "condition did not become true" -- reproduced here by
-#: sleeping 6 s in the child. 20 s matches what a750a861 used for the same
-#: family. pytest's 300 s faulthandler stays the real backstop for a hang.
+#: A generous deadlock guard for child-process events, matching the other
+#: launcher lifecycle tests. Injecting a six-second child delay showed that
+#: the old five-second bound could expire before a valid response. That proves
+#: delay tolerance, not the cause of the Windows CI failure: failed job setup
+#: or a different child exit code can also make the desired state unreachable.
 _CHILD_WAIT_TIMEOUT = 20.0
 
 
@@ -333,15 +328,15 @@ def test_busy_preferred_port_is_left_for_the_child_instance_check(
     )
     try:
         started = controller.start()
+        assert started.backend.state is ServiceState.STARTING, started.backend.reason
         assert started.url == ""
 
         # The child's exit is an event, so wait on the handle rather than
-        # sampling the controller while a Python interpreter starts. That takes
-        # seconds on a hosted Windows runner and was the whole of what the old
-        # 5 s bound was measuring. What is left timed is only the reader thread
-        # appending a line it has already been handed.
+        # sampling the controller while a Python interpreter starts. The
+        # remaining poll waits only for the reader to consume the output;
+        # failures retain the exit code and controller reason below.
         process = controller.process
-        assert process is not None
+        assert process is not None, started.backend.reason
         process.wait(timeout=_CHILD_WAIT_TIMEOUT)
 
         snapshot = _wait_for(
