@@ -52,6 +52,13 @@ _BASE_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
 #: engine bundle on this machine, so AUTO can only reach it on a host where a
 #: CPU solve has demonstrably run. On every host where it has not, this order is
 #: the base order.
+#:
+#: A GPU host reaches this order too, and its first four entries are why that
+#: changes nothing: a provisioned CPU runtime on a CUDA box is now representable
+#: and prepared (readiness is recorded per backend in the package), so
+#: ``beat-cpu`` becomes a row a user can actually select there -- but AUTO still
+#: walks Metal and the three accelerators first, and only reaches the CPU path
+#: when none of them is available.
 _CPU_FIRST_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
     "metal",
     "beat-cuda",

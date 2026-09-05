@@ -127,10 +127,97 @@ def test_with_a_console_no_dialog_is_raised(
     shown: list[str] = []
     monkeypatch.setattr(entrypoint, "_show_startup_failure_dialog", shown.append)
 
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
     entrypoint._report_startup_failure("terminal mode says this out loud")
 
     assert shown == [], "a dialog on top of a readable message is just a second click"
     assert "terminal mode says this out loud" in capsys.readouterr().err
+
+
+def test_a_journal_is_not_a_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A desktop entry hands the process a stderr nobody reads.
+
+    systemd attaches it to the journal, so ``sys.stderr is not None`` -- the
+    only question the reporter used to ask -- answers yes for a launch with no
+    visible output at all. The question that separates them is whether
+    anything is on the other end.
+    """
+
+    class _Stream:
+        def __init__(self, tty: bool) -> None:
+            self._tty = tty
+
+        def isatty(self) -> bool:
+            return self._tty
+
+    monkeypatch.setattr(sys, "stderr", _Stream(tty=True))
+    assert entrypoint._console_is_readable() is True
+
+    monkeypatch.setattr(sys, "stderr", _Stream(tty=False))
+    assert entrypoint._console_is_readable() is False
+
+    monkeypatch.setattr(sys, "stderr", None)
+    assert entrypoint._console_is_readable() is False
+
+
+def test_a_closed_stream_is_answered_rather_than_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The console test runs while something has already gone wrong."""
+
+    class _Closed:
+        def isatty(self) -> bool:
+            raise ValueError("I/O operation on closed file")
+
+    monkeypatch.setattr(sys, "stderr", _Closed())
+    assert entrypoint._console_is_readable() is False
+
+
+def test_the_linux_dialog_does_not_hold_up_what_comes_after_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """zenity and kdialog block until dismissed; the fallback must not.
+
+    Every Linux caller has something to do next -- open the status window, or
+    exit -- and a modal the user may not even have on screen yet must not be
+    what that waits on. Windows and macOS keep their blocking calls, where the
+    dialog is the last thing that happens.
+    """
+
+    import subprocess
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}" if name == "zenity" else None)
+    started: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **_kwargs: started.append(command))
+
+    def _must_not_block(*_args: object, **_kwargs: object) -> None:  # pragma: no cover
+        raise AssertionError("the Linux dialog must not wait for the user")
+
+    monkeypatch.setattr(subprocess, "run", _must_not_block)
+
+    entrypoint._show_startup_failure_dialog("no Qt platform plugin could be initialized")
+
+    assert started and started[0][0] == "/usr/bin/zenity"
+    # The message travels as an argv item, never interpolated into a command
+    # line, so a quote or a newline in a path cannot rewrite what runs.
+    assert started[0][-1] == "no Qt platform plugin could be initialized"
+
+
+def test_a_desktop_with_no_dialog_tool_still_gets_its_log(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """None of zenity, kdialog or xmessage is guaranteed to exist."""
+
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+
+    entrypoint._report_startup_failure("Qt could not start")
+    entrypoint._show_startup_failure_dialog("Qt could not start")
+
+    log = (tmp_path / "logs" / entrypoint.LOG_FILENAME).read_text(encoding="utf-8")
+    assert "Qt could not start" in log
 
 
 def test_reporting_survives_a_log_directory_it_cannot_write(
@@ -236,3 +323,12 @@ def test_a_window_that_never_opened_reports_the_tcl_error_beneath_it(
     message = capsys.readouterr().err
     assert "failed to create a window" in message
     assert "_TclError: Can" in message, "the wrapper is a marker; the cause carries the text"
+
+
+def test_journal_only_startup_failure_displays_dialog(monkeypatch, tmp_path):
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+    shown = []
+    monkeypatch.setattr(entrypoint, "_show_startup_failure_dialog", shown.append)
+    entrypoint._report_startup_failure("Launch failed")
+    assert shown == ["Launch failed"]

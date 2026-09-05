@@ -683,7 +683,8 @@ def _beat_provision_facts(python: Path) -> dict[str, object] | None:
         "import json, hornlab_beat_bem.provision as p; "
         "print(json.dumps({"
         "'cpu': hasattr(p, 'provision_cpu'), "
-        "'gpu': p.detect_gpu_backend() if hasattr(p, 'detect_gpu_backend') else None"
+        "'gpu': p.detect_gpu_backend() if hasattr(p, 'detect_gpu_backend') else None, "
+        "'per_backend': hasattr(p, 'read_backend_states')"
         "}))"
     )
     completed = _capture([str(python), "-c", probe])
@@ -697,12 +698,13 @@ def _beat_provision_facts(python: Path) -> dict[str, object] | None:
 
 
 def _provision_beat_cpu_runtime(python: Path) -> None:
-    """Provision BEAT's CPU runtime on a Windows or Linux host that has no GPU.
+    """Provision BEAT's CPU runtime on a Windows or Linux host.
 
     ``--backend cpu`` is not gated on hardware -- nothing can infer that a
     person wants it -- so the decision is made here: this is a Windows or Linux
-    install, this host has no GPU BEAT could use instead, and the installed
-    package is new enough to provision one. It then downloads a portable Julia,
+    install and the installed package can provision it independently of any
+    GPU runtime. Older packages with a single readiness record still skip CPU
+    preparation on GPU hosts to preserve accelerator readiness. It then downloads a portable Julia,
     instantiates the CPU project (which pulls no accelerator artifacts) and
     proves the result with a real 1 kHz solve, printing its own progress into
     the installer transcript.
@@ -734,7 +736,7 @@ def _provision_beat_cpu_runtime(python: Path) -> None:
             "stays unavailable; every other engine is unaffected."
         )
         return
-    if facts.get("gpu"):
+    if facts.get("gpu") and not facts.get("per_backend"):
         print(
             "Skipping BEAT CPU runtime setup: this host provisions the "
             f"{facts['gpu']} runtime instead."

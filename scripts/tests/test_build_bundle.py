@@ -2271,11 +2271,28 @@ def test_the_linux_desktop_entry_is_substituted_not_guessed() -> None:
 
     assert entry.startswith("[Desktop Entry]\n")
     assert "Type=Application" in entry
-    assert f"Exec=@INSTALL_DIR@/{LINUX_LAUNCHER_NAME} %U" in entry
+    assert f"Exec=@INSTALL_DIR@/{LINUX_LAUNCHER_NAME}\n" in entry
     # The icon is named by theme key, not by path, so the hicolor lookup the
     # installer feeds is the one the desktop performs.
     assert "Icon=waveguide-generator\n" in entry
     assert "Terminal=false" in entry
+
+
+def test_the_linux_desktop_entry_promises_no_file_handling_it_does_not_have() -> None:
+    """No field code, because there is no MimeType and no argument handling.
+
+    ``Exec`` ended in ``%U`` while the entry declared no ``MimeType``, so no
+    association could ever expand it -- and the launcher now answers an
+    argument it does not recognise with a usage message and exit 2 rather than
+    forwarding it to the server. A desktop that did expand ``%U`` would
+    therefore have turned "open with Waveguide Generator" into an application
+    that refuses to start.
+    """
+
+    entry = linux_desktop_entry()
+
+    assert "%U" not in entry and "%F" not in entry and "%u" not in entry and "%f" not in entry
+    assert "MimeType" not in entry
 
 
 def test_the_linux_tarball_carries_an_executable_installer(tmp_path: Path) -> None:
@@ -2449,7 +2466,7 @@ def test_the_linux_installer_places_the_application_menu_entry_and_command(
 
     entry = (share / "applications" / LINUX_DESKTOP_ENTRY_NAME).read_text(encoding="utf-8")
     assert "@INSTALL_DIR@" not in entry
-    assert _desktop_exec_argv(entry) == [str(installed / LINUX_LAUNCHER_NAME), "%U"]
+    assert _desktop_exec_argv(entry) == [str(installed / LINUX_LAUNCHER_NAME)]
     assert (share / "icons" / "hicolor" / "512x512" / "apps" / LINUX_ICON_NAME).is_file()
 
     command = home / ".local" / "bin" / LINUX_LAUNCHER_NAME
@@ -2483,7 +2500,7 @@ def test_linux_desktop_exec_quotes_and_invokes_a_special_character_path(tmp_path
     entry = entry_path.read_text(encoding="utf-8")
     executable = prefix / LINUX_BUNDLE_DIRECTORY / LINUX_LAUNCHER_NAME
     argv = _desktop_exec_argv(entry)
-    assert argv == [str(executable), "%U"]
+    assert argv == [str(executable)]
     validation_tool = shutil.which("desktop-file-validate")
     if validation_tool:
         validated = subprocess.run(

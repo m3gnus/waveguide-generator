@@ -33,7 +33,11 @@ CPU_PROJECT_FILES = ("Project.toml", "Manifest.toml")
 def _no_leaked_provisioning():
     """No test may leave the module thinking a provisioning is running."""
 
+    # Each test supplies its own package; a successful real-package probe from
+    # an earlier test must not answer for that replacement.
+    beat.beat_backend_statuses.cache_clear()
     yield
+    beat.beat_backend_statuses.cache_clear()
     beat_cpu_runtime._provision_thread = None
     beat_cpu_runtime._provision_step = None
     beat_cpu_runtime._preparation_in_flight = False
@@ -54,6 +58,17 @@ def _julia(tmp_path: Path) -> Path:
     return executable
 
 
+def _ready_julia(state: dict[str, object] | None) -> str | None:
+    if (
+        state is not None
+        and state.get("status") == "ready"
+        and state.get("julia_executable")
+        and Path(str(state["julia_executable"])).exists()
+    ):
+        return str(state["julia_executable"])
+    return None
+
+
 def _install_stub_package(
     monkeypatch,
     *,
@@ -63,24 +78,43 @@ def _install_stub_package(
     julia_on_path: str | None = None,
     provision_cpu: object | None = object(),
     detect_gpu_backend: object | None = None,
+    backend_states: dict[str, dict[str, object]] | None = None,
 ) -> SimpleNamespace:
     """Stand in for an installed ``hornlab-beat-bem`` of a chosen vintage.
 
     ``provision_cpu=None`` is the older pinned package: the attribute simply is
     not there, which is exactly how the real one differs.
+
+    ``backend_states`` is the newer one: readiness recorded per backend, which
+    the real package signals by exposing ``read_backend_states`` and by
+    accepting ``backend=`` on ``read_state``/``provisioned_julia``. Passing it
+    also sets ``state`` as the legacy mirror, so a test can have the mirror
+    describe one backend while the CPU record describes another -- which is the
+    situation on any host that provisions both.
     """
 
+    def read_state(runtime_dir=None, *, backend=None):
+        if backend is None:
+            return state
+        if backend_states is None:
+            raise TypeError("read_state() got an unexpected keyword argument 'backend'")
+        return backend_states.get(backend)
+
+    def provisioned_julia(runtime_dir=None, *, backend=None):
+        if backend is None:
+            return _ready_julia(state)
+        if backend_states is None:
+            raise TypeError(
+                "provisioned_julia() got an unexpected keyword argument 'backend'"
+            )
+        return _ready_julia(backend_states.get(backend))
+
     provision = SimpleNamespace(
-        read_state=lambda runtime_dir=None: state,
-        provisioned_julia=lambda runtime_dir=None: (
-            str(state.get("julia_executable"))
-            if state is not None
-            and state.get("status") == "ready"
-            and state.get("julia_executable")
-            and Path(str(state["julia_executable"])).exists()
-            else None
-        ),
+        read_state=read_state,
+        provisioned_julia=provisioned_julia,
     )
+    if backend_states is not None:
+        provision.read_backend_states = lambda runtime_dir=None: dict(backend_states)
     if provision_cpu is not None:
         provision.provision_cpu = provision_cpu
     if detect_gpu_backend is not None:
@@ -420,16 +454,23 @@ def test_provisioning_is_not_offered_on_macos(tmp_path, monkeypatch) -> None:
     assert beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin") is None
 
 
-def test_a_gpu_host_is_left_to_the_gpu_runtime(tmp_path, monkeypatch) -> None:
+def test_a_single_slot_package_leaves_a_gpu_host_to_its_gpu_runtime(
+    tmp_path, monkeypatch
+) -> None:
     """Decided on the worker thread, because ``nvidia-smi`` is a subprocess.
 
     The launcher must not wait on a hardware inventory the package is willing
     to give 15 s to, so the thread starts first and the decision is inside it.
-    Nothing is downloaded, and nothing ever reports itself as provisioning.
+
+    On a package that records readiness in one slot the decision is still "no":
+    provisioning the CPU there would overwrite the record saying the CUDA
+    runtime is ready, and the next GPU hook would re-resolve multi-gigabyte
+    artifacts to get back to where it already was. Nothing is downloaded, and
+    nothing ever reports itself as provisioning.
     """
 
     def provision_cpu(*_args, **_kwargs):
-        pytest.fail("a GPU host must not provision a CPU runtime")
+        pytest.fail("a single-slot package must not have its GPU record overwritten")
 
     _provisioning_host(
         tmp_path,
@@ -444,6 +485,106 @@ def test_a_gpu_host_is_left_to_the_gpu_runtime(tmp_path, monkeypatch) -> None:
     thread.join(timeout=5.0)
     assert not thread.is_alive()
     assert beat_cpu_runtime.cpu_provisioning_step() is None
+
+
+def test_a_gpu_host_prepares_the_cpu_runtime_too_when_records_are_per_backend(
+    tmp_path, monkeypatch
+) -> None:
+    """The reported defect, from this side.
+
+    ``BEAT · CPU -- no GPU needed`` is a row a user can select by name, and on
+    every GPU machine it was permanently unavailable because preparation stopped
+    as soon as ``nvidia-smi`` found a card. With per-backend records nothing is
+    traded for it: the portable Julia is the one the GPU runtime already
+    downloaded, so what remains is instantiating the CPU project and the 1 kHz
+    probe solve.
+    """
+
+    project = _cpu_project(tmp_path)
+    calls: list[str] = []
+
+    def provision_cpu(runtime_dir=None, *, status_cb=print, force=False):
+        calls.append("provisioned")
+        return {"status": "ready"}
+
+    _install_stub_package(
+        monkeypatch,
+        project=project,
+        state={"status": "ready", "backend": "cuda", "project": str(project)},
+        backend_states={
+            "cuda": {"status": "ready", "backend": "cuda", "project": str(project)}
+        },
+        detect_gpu_backend=lambda: "cuda",
+        provision_cpu=provision_cpu,
+    )
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Linux")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == ["provisioned"]
+
+
+def test_the_cpu_record_is_read_even_when_the_mirror_describes_the_gpu(
+    tmp_path, monkeypatch
+) -> None:
+    """Both provisioned is now representable, so read the right record.
+
+    The legacy mirror holds whichever backend was provisioned last. Reading
+    that as the CPU answer is what made a CUDA box report ``beat-cpu``
+    unprovisioned even after it had been provisioned.
+    """
+
+    project = _cpu_project(tmp_path)
+    julia = _julia(tmp_path)
+    package = _install_stub_package(
+        monkeypatch,
+        project=project,
+        state={"status": "ready", "backend": "cuda", "project": str(project)},
+        backend_states={
+            "cuda": {"status": "ready", "backend": "cuda", "project": str(project)},
+            "cpu": _ready_state(project, julia),
+        },
+    )
+
+    readiness = beat_cpu_runtime.cpu_runtime_readiness(package)
+
+    assert readiness.ready is True
+    assert readiness.state == "ready"
+    assert str(julia) in readiness.reason
+
+
+def test_the_provisioning_command_says_it_costs_the_gpu_row_nothing(
+    tmp_path, monkeypatch
+) -> None:
+    """The sentence a user on a GPU box acts on, and the pin it depends on.
+
+    Against a single-slot package the same command really would overwrite the
+    GPU runtime's record, so the reassurance is attached to the capability that
+    makes it true rather than stated unconditionally.
+    """
+
+    project = _cpu_project(tmp_path)
+    julia = _julia(tmp_path)
+    per_backend = _install_stub_package(
+        monkeypatch,
+        project=project,
+        state=None,
+        backend_states={},
+        julia_on_path=str(julia),
+    )
+    assert (
+        "does not disturb a provisioned GPU runtime"
+        in beat_cpu_runtime.cpu_runtime_readiness(per_backend).reason
+    )
+
+    single_slot = _install_stub_package(
+        monkeypatch, project=project, state=None, julia_on_path=str(julia)
+    )
+    assert (
+        "does not disturb a provisioned GPU runtime"
+        not in beat_cpu_runtime.cpu_runtime_readiness(single_slot).reason
+    )
 
 
 def test_preparation_lifecycle_covers_delayed_gpu_inventory(
@@ -694,3 +835,15 @@ def test_macos_keeps_warming_bempp(monkeypatch) -> None:
     warmup._run_warmup()
 
     assert warmed == ["bempp"]
+
+
+def test_older_gpu_record_offers_upgrade_instead_of_overwriting_command(tmp_path, monkeypatch):
+    project = _cpu_project(tmp_path)
+    package = _install_stub_package(
+        monkeypatch, project=project, state={"backend": "cuda", "status": "ready"},
+    )
+    readiness = beat_cpu_runtime.cpu_runtime_readiness(package)
+    assert readiness.ready is False
+    assert "Update Waveguide Generator" in readiness.reason
+    assert "interrupt GPU availability" in readiness.reason
+    assert "--backend cpu" not in readiness.reason

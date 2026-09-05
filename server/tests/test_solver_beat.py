@@ -290,6 +290,103 @@ def test_a_diagnostic_about_one_family_is_quoted_on_that_row_only(monkeypatch) -
     )
 
 
+@pytest.fixture(autouse=True)
+def _forget_probe_caches():
+    """Both probes cache a usable verdict for the process lifetime."""
+
+    beat.beat_backend_statuses.cache_clear()
+    yield
+    beat.beat_backend_statuses.cache_clear()
+
+
+def _package_with_per_backend_probe(statuses: dict[str, object]) -> object:
+    import types
+
+    return types.SimpleNamespace(beat_backend_statuses=lambda: statuses)
+
+
+def test_a_pin_with_a_per_backend_probe_is_asked_per_backend(monkeypatch) -> None:
+    """Two accelerator families in one box, and both answers are true.
+
+    The single probe names the first family whose hardware is present, so the
+    second read unavailable on a machine where it would work. Deriving four rows
+    from one answer could not do better; asking the package per backend can.
+    """
+
+    monkeypatch.setattr(
+        beat,
+        "_load_api",
+        lambda: _package_with_per_backend_probe(
+            {
+                "cuda": {
+                    "available": True,
+                    "reason": "An NVIDIA GPU detected and CUDA.functional() confirmed",
+                    "version": "1",
+                    "state": "ready",
+                },
+                "rocm": {
+                    "available": True,
+                    "reason": "An AMD ROCm runtime detected and AMDGPU.functional() confirmed",
+                    "version": "1",
+                    "state": "ready",
+                },
+                "metal": {
+                    "available": False,
+                    "reason": "No an Apple Silicon GPU was detected",
+                    "version": "1",
+                    "state": "no-hardware",
+                },
+                "cpu": {
+                    "available": True,
+                    "reason": "the package's own CPU verdict",
+                    "version": "1",
+                    "state": "ready",
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        beat, "_cpu_backend_status", lambda _package: (False, "runtime unprovisioned")
+    )
+
+    statuses = beat.beat_backend_statuses()
+
+    assert statuses["cuda"]["available"] is True
+    assert statuses["rocm"]["available"] is True
+    assert "AMDGPU.functional()" in statuses["rocm"]["reason"]
+    assert statuses["metal"]["available"] is False
+    # The CPU row is this application's, not the package's: only this side knows
+    # whether *this process* is provisioning the runtime right now, and whether
+    # the pinned package can provision one at all.
+    assert statuses["cpu"]["available"] is False
+    assert statuses["cpu"]["reason"] == "runtime unprovisioned"
+
+
+def test_a_broken_per_backend_probe_falls_back_instead_of_failing(monkeypatch) -> None:
+    """A capability snapshot must survive an optional stack that raises."""
+
+    import types
+
+    def explode():
+        raise RuntimeError("nvidia-smi hung")
+
+    monkeypatch.setattr(
+        beat,
+        "_load_api",
+        lambda: types.SimpleNamespace(beat_backend_statuses=explode),
+    )
+    monkeypatch.setattr(
+        beat, "beat_status", lambda: _probe(True, "metal", "Apple Silicon GPU detected")
+    )
+    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "Julia found"))
+
+    statuses = beat.beat_backend_statuses()
+
+    assert statuses["metal"]["available"] is True
+    assert statuses["metal"]["reason"] == "Apple Silicon GPU detected"
+    assert statuses["cuda"]["available"] is False
+
+
 def test_a_missing_package_is_a_capability_state_for_every_backend(monkeypatch) -> None:
     monkeypatch.setattr(beat, "_load_api", lambda: None)
 
@@ -348,3 +445,13 @@ def test_engine_names_and_backends_round_trip() -> None:
     assert not beat.is_beat_engine("bempp")
     with pytest.raises(ValueError, match="Unknown BEAT backend"):
         beat.BeatEngine("vulkan")
+
+
+def test_unavailable_package_backends_are_probed_once_per_request(monkeypatch):
+    calls = []
+    statuses = {"cuda": {"available": False}, "cpu": {"available": False}}
+    monkeypatch.setattr(beat, "_probe_package_backend_statuses", lambda: calls.append(1) or statuses)
+    beat.beat_backend_statuses.cache_clear()
+    assert beat._package_backend_statuses() == statuses
+    assert beat._package_backend_statuses() == statuses
+    assert len(calls) == 2

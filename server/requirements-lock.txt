@@ -43,6 +43,16 @@ pyobjc-framework-uniformtypeidentifiers==12.2.2; sys_platform == "darwin"
 pyobjc-framework-webkit==12.2.2; sys_platform == "darwin"
 pyopencl==2026.1.2
 pyparsing==3.3.2
+# The Linux desktop-window backend, and everything the PySide6 metapackage
+# pulls with it. QtWebEngine -- the widget pywebview's qt backend puts the
+# interface in -- ships in PySide6-Addons, so all three are required and not
+# only the metapackage. Marked, like pythonnet and the pyobjc set, because
+# they exist on exactly one platform: bootstrap only demands a locked entry
+# whose marker evaluates true. The version is held at 6.9.3 for its
+# manylinux_2_28 wheels; requirements-runtime.txt carries the reasoning.
+PySide6==6.9.3; sys_platform == "linux"
+PySide6-Addons==6.9.3; sys_platform == "linux"
+PySide6-Essentials==6.9.3; sys_platform == "linux"
 pytest==9.0.3
 pytools==2026.1.1
 python-dateutil==2.9.0.post0
@@ -51,8 +61,12 @@ python-multipart==0.0.32
 pythonnet==3.0.5; sys_platform == "win32"
 pywebview==6.2.1
 pyyaml==6.0.3
+# The binding layer pywebview's qt backend imports through, and the one PySide6
+# builds its own modules on. Both are pure dependencies of the entries above.
+QtPy==2.4.3; sys_platform == "linux"
 rich==15.0.0
 scipy==1.17.1
+shiboken6==6.9.3; sys_platform == "linux"
 siphash24==1.8
 six==1.17.0
 starlette==1.3.1

@@ -102,3 +102,94 @@ def test_no_gui_consumes_desktop_display_flags(monkeypatch, tmp_path: Path) -> N
 
     assert entrypoint.main(["--window", "--no-gui", "--port", "3199"]) == 0
     assert seen == [["--port", "3199"]]
+
+
+def test_help_prints_usage_and_starts_nothing(monkeypatch, capsys) -> None:
+    """The one flag guaranteed never to open a window, or start a server."""
+
+    def _must_not_run(_arguments):  # pragma: no cover - the point is that it is not called
+        raise AssertionError("--help must not start the server")
+
+    monkeypatch.setattr("launch.serve.main", _must_not_run)
+
+    assert entrypoint.main(["--help"]) == 0
+    printed = capsys.readouterr().out
+    assert printed.startswith("usage: waveguide-generator")
+    assert "display mode" in printed
+
+
+def test_usage_is_titled_by_the_command_users_type(capsys) -> None:
+    """It said ``desktop.py``: a file in the bundle, not a command anyone ran.
+
+    argparse derives ``prog`` from ``sys.argv[0]``, which under the installed
+    launcher is whichever module the interpreter was handed.
+    """
+
+    assert entrypoint.main(["--help"]) == 0
+    assert "desktop.py" not in capsys.readouterr().out
+
+
+def test_an_unknown_flag_is_named_and_refused(monkeypatch, capsys) -> None:
+    """``--no-brwoser`` used to be forwarded, and hung a window instead."""
+
+    def _must_not_run(_arguments):  # pragma: no cover
+        raise AssertionError("an unrecognised argument must not reach the server")
+
+    monkeypatch.setattr("launch.serve.main", _must_not_run)
+
+    assert entrypoint.main(["--no-brwoser"]) == 2
+    reported = capsys.readouterr().err
+    assert "--no-brwoser" in reported
+    assert "usage: waveguide-generator" in reported
+
+
+def test_an_abbreviated_display_flag_is_refused_rather_than_forwarded(capsys) -> None:
+    """argparse would accept ``--wind``; the verbatim filter would not strip it.
+
+    It matches the display flags by name, so an abbreviation argparse resolved
+    would survive into the server's argument list as something the server has
+    never heard of. ``allow_abbrev=False`` removes the whole class.
+    """
+
+    assert entrypoint.main(["--wind"]) == 2
+    assert "--wind" in capsys.readouterr().err
+
+
+def test_the_launcher_accepts_exactly_what_the_server_accepts() -> None:
+    """One option surface, two parsers. Two definitions would drift silently.
+
+    They already had: the launcher had no definition at all, so every server
+    option and every typo were the same thing to it.
+    """
+
+    from launch.serve import build_parser as server_parser
+
+    def options(parser) -> set[str]:
+        return {
+            option
+            for action in parser._actions
+            for option in action.option_strings
+            if option != "-h" and option != "--help"
+        }
+
+    launcher = options(entrypoint.build_parser())
+    server = options(server_parser())
+
+    assert server <= launcher, "the launcher must not reject an argument the server takes"
+    assert launcher - server == set(entrypoint.DISPLAY_FLAGS)
+
+
+def test_the_display_flags_are_the_ones_the_launcher_consumes() -> None:
+    """The filter that builds the server's argument list matches by name."""
+
+    _options, forwarded = entrypoint.parse_arguments(
+        ["--window", "--browser", "--no-gui", "--port", "3199"]
+    )
+    assert forwarded == ["--port", "3199"]
+
+
+def test_a_bad_option_value_is_reported_rather_than_raised(capsys) -> None:
+    """A non-integer port is the server's rule, enforced before a window opens."""
+
+    assert entrypoint.main(["--port", "three thousand"]) == 2
+    assert "--port" in capsys.readouterr().err

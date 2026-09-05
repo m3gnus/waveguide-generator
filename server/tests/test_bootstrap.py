@@ -241,7 +241,9 @@ def test_the_posix_wg_command_runs_when_the_environment_path_contains_spaces(
     python.parent.mkdir(parents=True)
     # Resolve the base interpreter, not a copies-venv executable whose stdlib
     # lives elsewhere. Relocatable Python builds have no distro prefix fallback.
-    python.symlink_to(sys._base_executable)
+    base_python = Path(sys._base_executable)
+    assert base_python.is_file(), f"The test interpreter's base Python is missing: {base_python}"
+    python.symlink_to(base_python)
 
     bootstrap._install_cli_entrypoint(environment)
 
@@ -437,6 +439,20 @@ def test_a_gpu_host_provisions_no_cpu_runtime(tmp_path, monkeypatch, capsys) -> 
 
     assert [command[-1] for command in _provision_calls(commands)] == ["--if-gpu"]
     assert "cuda runtime instead" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("system", ["Linux", "Windows"])
+def test_gpu_host_prepares_cpu_when_backend_records_are_independent(tmp_path, monkeypatch, system):
+    bootstrap = _load_bootstrap()
+    commands = _provisioning_double(
+        bootstrap, monkeypatch, system=system,
+        facts={"cpu": True, "gpu": "cuda", "per_backend": True},
+    )
+    bootstrap._provision_beat_runtime(tmp_path / "python")
+    assert [command[command.index("-m") + 1:] for command in _provision_calls(commands)] == [
+        ["hornlab_beat_bem.provision", "--if-gpu"],
+        ["hornlab_beat_bem.provision", "--backend", "cpu"],
+    ]
 
 
 def test_macos_is_left_to_the_gpu_step(tmp_path, monkeypatch) -> None:

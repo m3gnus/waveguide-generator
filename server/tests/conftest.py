@@ -32,6 +32,7 @@ portable Julia. See the switch below.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import sys
 
 import pytest
@@ -45,6 +46,18 @@ os.environ.setdefault("WG2_SOLVER_WARMUP", "0")
 # through the same switch an operator would use; the tests that are about the
 # gate call ``start_cpu_provisioning`` with an explicit environment.
 os.environ.setdefault("WG2_SKIP_BEAT_CPU_PROVISION", "1")
+
+
+def pytest_sessionstart(session):
+    """Refuse one missing prerequisite instead of cascading app-mount failures."""
+
+    index = Path(__file__).resolve().parents[2] / "frontend" / "dist" / "index.html"
+    if not index.is_file():
+        raise pytest.UsageError(
+            "The server test suite requires the built frontend. From the repository "
+            "root, run:\n  npm --prefix frontend ci\n"
+            "  npm --prefix frontend run build\nThen rerun pytest."
+        )
 
 
 @pytest.fixture(autouse=True)
