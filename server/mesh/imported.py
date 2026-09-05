@@ -1577,29 +1577,33 @@ def measure_surface_deviation(
 def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
     """Surface any component whose global orientation is still a guess.
 
-    A symmetry-reduced component is oriented from its tagged source cap. The
-    cap projection abstains in two situations that this function must not
-    conflate, because the mesher treats them differently and a reader cannot
-    tell them apart from a count alone:
+    A symmetry-reduced component is oriented from its tagged source cap. That
+    projection abstains for several reasons, and the mesher answers each
+    differently, so a reader cannot tell them apart from one count:
 
-    * **The component carries a source cap, but was not cut on exactly two
-      principal planes** -- the single-plane cut, where there is no unique
-      non-cut axis to project onto. The mesher falls back to the signed volume
-      about the origin, valid there because a reduced component's free edges
-      all lie on coordinate planes through it. What that fallback cannot settle
-      is a component whose volume is within its own noise floor.
+    * **A cap is present but cannot be projected** -- no unique non-cut axis
+      (a single-plane cut, or a three-plane octant), or a degenerate net cap
+      normal. The mesher asks the throat collar, one cap at a time, requiring
+      agreement. That verdict is the acoustic one and needs no warning.
+    * **The collar declines too** -- no wall band, a cancelling cap, or a
+      reading too near an even split. Only then does the signed volume decide,
+      and it answers "outward from the capped region", which is the acoustic
+      contract only where the meshed region is the solid.
+    * **The volume is within its own noise floor**, so nothing decides and the
+      winding ships as imported.
     * **The component carries no source cap at all**, so nothing says which
-      side of it the fluid is on and the mesher declines to guess. The winding
-      ships exactly as imported.
+      side the fluid is on and the mesher declines to guess.
 
     Nothing else in the pipeline notices an inverted open component, so say so
     rather than shipping a mesh whose source phase may be reversed.
 
-    Read defensively: an older pinned mesher does not report these keys, and a
-    mesher before the source-less abstention landed reported
-    ``symmetry_volume_fallback_flipped`` for the source-less case too. The
-    wording below is therefore true under both, which is why it says what the
-    mesher used rather than why the anchor was unavailable.
+    Read defensively, and note that the counters are not interchangeable across
+    pins. Against a mesher older than the collar there is no
+    ``bore_alignment_*`` at all and every judged component reports as a volume
+    fallback; against a mesher older than the source-less abstention, the
+    source-less case reported as a volume fallback too. Each branch below
+    therefore says what the mesher *used*, which stays true under every pin,
+    rather than why some other oracle was unavailable.
     """
 
     warnings: list[str] = []
@@ -1623,6 +1627,20 @@ def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
             f"{unjudged} symmetry-reduced component(s) carry no tagged source cap, "
             "so their orientation was left exactly as imported and may be inverted; "
             "check that every source face kept its label through STEP import"
+        )
+    # Deliberately not warned about: bore_alignment_kept and
+    # bore_alignment_flipped are the collar reaching a verdict from the source
+    # cap, which is the contract rather than a fallback from it. Warning on a
+    # correct answer is how a user learns to ignore warnings. They are counted
+    # so a reader can tell a collar verdict from a volume guess, and the flip
+    # is surfaced -- quietly, as information -- because a component arriving
+    # inverted is worth knowing even when the mesher fixed it.
+    corrected = int(repair.get("bore_alignment_flipped") or 0)
+    if corrected:
+        warnings.append(
+            f"{corrected} symmetry-reduced component(s) were imported wound away "
+            "from the bore and re-oriented from their source cap; the solve uses "
+            "the corrected winding, and no action is needed"
         )
     return warnings
 

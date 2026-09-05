@@ -128,3 +128,40 @@ def test_orientation_warnings_tolerate_an_older_pinned_mesher():
     # unjudged_symmetry_no_source is also absent from a mesher older than the
     # counter itself, and reading it must not turn that into a warning either.
     assert _orientation_warnings({"unjudged_symmetry_no_source": 0}) == []
+
+
+def test_a_collar_verdict_that_kept_the_winding_is_not_warned_about():
+    """The collar agreeing with the mesh is the contract working, not a risk.
+
+    ``bore_alignment_kept`` means the source cap decided and the winding was
+    already acoustic. Warning on a correct answer is how a reader learns to
+    skip the warnings that matter.
+    """
+    assert _orientation_warnings({"bore_alignment_kept": 3}) == []
+
+
+def test_a_collar_correction_is_reported_without_asking_for_action():
+    """An inverted import is worth knowing even though the mesher fixed it."""
+    warnings = _orientation_warnings({"bore_alignment_flipped": 2})
+    assert len(warnings) == 1
+    assert "re-oriented from their source cap" in warnings[0]
+    assert "no action is needed" in warnings[0]
+    # It must not read like the unresolved cases, which genuinely may be wrong.
+    assert "may be inverted" not in warnings[0]
+
+
+def test_a_collar_verdict_and_a_volume_fallback_are_reported_separately():
+    """They are different levels of confidence and must not merge into one."""
+    warnings = _orientation_warnings(
+        {"bore_alignment_flipped": 1, "symmetry_volume_fallback_flipped": 1}
+    )
+    assert len(warnings) == 2
+    assert any("signed volume rather than from a source cap" in line for line in warnings)
+    assert any("re-oriented from their source cap" in line for line in warnings)
+
+
+def test_orientation_warnings_tolerate_a_mesher_older_than_the_collar():
+    """A pin before the collar reports no bore_alignment_* keys at all."""
+    assert _orientation_warnings(
+        {"flipped_global": 3, "symmetry_volume_fallback_kept": 1}
+    ) == []
