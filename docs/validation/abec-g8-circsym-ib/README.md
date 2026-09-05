@@ -132,17 +132,24 @@ pattern 0.296 → 0.187) and barely moves anything below 4 kHz, so the HF residu
 is our discretisation, not a formulation difference. Quote the converged numbers
 if you need HF figures.
 
-### What matching the sound speed changed, and what it did not
+### What the recorded numbers show
 
 The original solve, 2026-09-03 at pin `368849cc`, ran the package default
 343.0 m/s against ABEC's 343.32 because no `speed_of_sound` knob existed yet.
-It read: SPL 0.009 / 0.050 / 0.099 / 0.192, pattern 0.005 / 0.107 / 0.230 /
-0.303, |Z| median 0.0017. Removing that 0.093% bias improves the sub-1 kHz
-bands (SPL 0.009 → 0.005, pattern 0.005 → 0.002) and the impedance median, and
-leaves 4 kHz and above where it was. That is the expected shape: a wavenumber
-offset is a frequency shift, so it matters most where the curves are steep in
-level and least where the residual is discretisation. It confirms rather than
-weakens the conclusion above — the HF residual was never the sound speed.
+It read: SPL 0.009 / 0.050 / 0.099 / 0.192 (max 0.945), pattern 0.005 / 0.107 /
+0.230 / 0.303 (max 0.894), |Z| median 0.0017.
+
+Set against the table above, the largest relative changes are in the sub-1 kHz
+bands (SPL 0.009 → 0.005, pattern 0.005 → 0.002) and in the impedance median
+(0.0017 → 0.0012). The rest move little, and not all the same way: 1–4 kHz SPL
+0.050 → 0.051 and max SPL 0.945 → 0.957 are marginally worse, while 4–11 kHz,
+>11 kHz and max pattern are marginally better. Both runs are recorded so the
+figures can be compared directly; why the change distributes across the bands
+the way it does is not established here, and this fixture does not measure it.
+
+What the numbers do settle is narrower: the bands above 4 kHz sit within
+0.005 dB of where they were, so the sound speed does not account for the HF
+residual. The element-cap halving above is the evidence that addresses that.
 
 ### Two earlier findings, both now closed
 
@@ -161,8 +168,10 @@ ABEC.
 `ce1b747` and is in WG's pin `e7e32d0`; `_constants.SPEED_OF_SOUND` is now the
 default, not the only value. `compare.py` sets ABEC's 343.32, so the fixed
 0.093% bias this section used to report no longer applies to G8. Results
-published before 2026-09-03 were solved at 343.0 and reproduce bit-for-bit by
-leaving the default alone.
+published before 2026-09-03 were solved at the 343.0 default; reproducing them
+means leaving `speed_of_sound` unset. No such control run is recorded here, and
+the two tables also differ by pin (`368849cc` against `e7e32d0`), so read them as
+two recorded runs rather than as an isolated before/after of the sound speed.
 
 ### The trap worth remembering
 

@@ -138,9 +138,14 @@ geometry entirely, has a median relative error of 0.0012 and a maximum of
 0.0093.
 
 The original 2026-09-03 solve at pin `368849cc` ran the package default
-343.0 m/s and read SPL 0.009 / 0.050 / 0.099 / 0.192 and pattern 0.005 / 0.107 /
-0.230 / 0.303. Matching c moves only the sub-1 kHz bands, which is where a
-wavenumber offset shows; it does not touch the HF residual.
+343.0 m/s and read SPL 0.009 / 0.050 / 0.099 / 0.192 (max 0.945) and pattern
+0.005 / 0.107 / 0.230 / 0.303 (max 0.894). The largest relative changes against
+the table above are sub-1 kHz and in the impedance median; the other bands move
+little and not all the same way, 1-4 kHz SPL and max SPL being marginally worse
+and the rest marginally better. Above 4 kHz the bands sit within 0.005 dB of
+where they were, so the sound speed does not account for the HF residual. Why
+the change distributes as it does is not established here; the fixture README
+records both runs.
 
 Halving the element cap to 2.15 mm moves only the top band (SPL 0.187 -> 0.132,
 pattern 0.296 -> 0.187) and barely touches anything below 4 kHz, so **the >11
@@ -215,8 +220,9 @@ defaults to c = 343.32 m/s and rho = 1.205, and takes its polar arc from
 throat, which is the opposite of the free-standing ASRO reference.
 `hornlab_metal_bem.SolveConfig` exposes `air_density`, and `speed_of_sound`
 joins it from `ce1b747` (hornlab-metal-bem#7), which WG's pin `e7e32d0`
-carries; `hornlab_beat_bem.SolveConfig` has had `sound_speed` all along. In every case the default stays 343.0, so a harness
-that leaves it alone runs 0.093% slow against ABEC and should say so.
+carries; `hornlab_beat_bem.SolveConfig` has had `sound_speed` all along. In
+every case the default stays 343.0, so a harness that leaves it alone runs
+0.093% slow against ABEC and should say so.
 `hornlab_bempp_bem` still hardcodes the value with no knob at all.
 
 ## Report checklist
