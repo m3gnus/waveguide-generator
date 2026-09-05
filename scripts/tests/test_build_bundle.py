@@ -2202,12 +2202,6 @@ def _desktop_exec_argv(entry: str) -> list[str]:
 #: where these same assertions are exact. Asserting the bit on Windows tests the
 #: Windows filesystem rather than the builder, which is why it is skipped rather
 #: than weakened: the check stays strict everywhere it means anything.
-_NEEDS_POSIX_MODES = pytest.mark.skipif(
-    os.name != "posix",
-    reason="executable bits are POSIX; Windows chmod is a no-op",
-)
-
-
 def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path) -> None:
     """One root holding ``app``, ``runtime`` and the launcher, and nothing else.
 
@@ -2284,17 +2278,25 @@ def test_the_linux_desktop_entry_is_substituted_not_guessed() -> None:
     assert "Terminal=false" in entry
 
 
-@_NEEDS_POSIX_MODES
 def test_the_linux_tarball_carries_an_executable_installer(tmp_path: Path) -> None:
     """A .tar.gz because tar keeps the executable bit and .zip does not.
 
     A user who has to ``chmod +x install.sh`` before anything happens is the
     Linux form of a .command that opens in TextEdit, and this project has met
     that failure once already.
+
+    Runs on every platform now, because the modes asserted here are properties
+    of the ARCHIVE rather than of the build host: the scripts are written from
+    text at a stated mode and the launcher is named in ``executable_members``.
+    The bundle's launcher is stripped of its bit below to prove exactly that --
+    that is what an NTFS checkout hands the packer, and the old host-derived
+    rule shipped 0644 for it.
     """
 
     builder = BundleBuilder(Path(__file__).resolve().parents[2], system=lambda: "Linux")
     bundle = _linux_payload(tmp_path)
+    # Simulate the Windows build host on any platform: no executable bit to read.
+    (bundle / LINUX_LAUNCHER_NAME).chmod(0o644)
     archive = tmp_path / "out.tar.gz"
 
     builder.create_linux_tarball(bundle, archive)
@@ -2304,7 +2306,11 @@ def test_the_linux_tarball_carries_an_executable_installer(tmp_path: Path) -> No
     for name in (LINUX_INSTALLER_NAME, LINUX_UNINSTALLER_NAME):
         assert members[name].mode & 0o111, f"{name} must arrive executable"
     assert members[LINUX_README_NAME].mode & 0o111 == 0
-    assert members[f"{LINUX_BUNDLE_DIRECTORY}/{LINUX_LAUNCHER_NAME}"].mode & 0o111
+    launcher = members[f"{LINUX_BUNDLE_DIRECTORY}/{LINUX_LAUNCHER_NAME}"]
+    assert launcher.mode == 0o755, (
+        "the launcher must ship executable even from a host with no executable "
+        "bit; it execs runtime/bin/python3.13 and a 0644 launcher cannot start"
+    )
     # The instructions and the scripts sit BESIDE the folder, so they are
     # reachable without entering it -- the same placement as the Windows
     # readme, and for the same reason.

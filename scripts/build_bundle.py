@@ -1362,6 +1362,7 @@ def deterministic_tar_gz(
     *,
     archive_root: str,
     extra_root_files: Mapping[str, tuple[str, int]] | None = None,
+    executable_members: frozenset[str] = frozenset(),
 ) -> None:
     """Archive the Linux bundle reproducibly, modes intact and links resolved.
 
@@ -1380,6 +1381,15 @@ def deterministic_tar_gz(
     ``extra_root_files`` maps a member name to its text and mode and writes it
     *beside* ``archive_root`` -- the installer and the instructions, which have
     to be reachable without entering the application folder.
+
+    ``executable_members`` names paths, relative to ``archive_root``, that ship
+    0755 whatever the build host recorded. Every other member keeps the host's
+    executable bit, which is deliberate rather than lazy: the interpreter under
+    ``runtime/bin`` has to stay executable and this function has no way to know
+    which of a CPython tree's files those are. So the rule is "force the modes
+    we can name, preserve the rest" -- a build host that loses the bit on the
+    runtime is a separate defect, and forcing 0644 on everything unnamed would
+    ship a bundle whose launcher cannot start its own interpreter.
     """
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1426,7 +1436,14 @@ def deterministic_tar_gz(
                     else:
                         metadata = path.lstat()
                         content = path
-                    mode = 0o755 if metadata.st_mode & 0o111 else 0o644
+                    relative_member = member[len(archive_root) + 1 :]
+                    if relative_member in executable_members:
+                        # Named, so the archive says 0755 even when the build
+                        # host has no executable bit to read -- NTFS records
+                        # none, and Path.chmod cannot set one there.
+                        mode = 0o755
+                    else:
+                        mode = 0o755 if metadata.st_mode & 0o111 else 0o644
                     info = entry(
                         member, mode=mode, size=metadata.st_size, kind=tarfile.REGTYPE
                     )
@@ -1955,6 +1972,11 @@ on.
         0755 by :func:`deterministic_tar_gz`, so a checkout that lost the
         executable bit -- a Windows one, or a release runner that is not
         Linux -- cannot ship an installer the user has to ``chmod`` first.
+
+        The launcher gets the same treatment by name. It is written into the
+        bundle and chmod-ed there, and that chmod is a no-op on Windows, so its
+        mode used to be read back off the build host: a bundle packed on
+        Windows shipped a launcher at 0644, which a Linux user cannot run.
         """
 
         deterministic_tar_gz(
@@ -1966,6 +1988,7 @@ on.
                 LINUX_UNINSTALLER_NAME: (self.linux_uninstaller(), 0o755),
                 LINUX_README_NAME: (self.linux_readme(), 0o644),
             },
+            executable_members=frozenset({LINUX_LAUNCHER_NAME}),
         )
 
     # Windows has the same shape of first-launch wall as macOS, and it is just
