@@ -55,9 +55,14 @@ absolute deviation.
 
 ### What a fidelity tolerance guarantees, and what it does not
 
-Every number above is a **sampled** maximum, so it is a lower bound on the true one, and
-the guarantee is only as good as where the reference looks. Three limits are known and
-worth stating plainly.
+Every number above is a maximum over a **finite** set of sample points, so the guarantee
+is only as good as where the reference looks. Sampling on its own under-reads: a maximum
+taken over some points cannot exceed the maximum over all of them. That does not make a
+reported figure a lower bound, though, because what is measured *at* each sample point
+carries approximations of its own — for the surface STEP one of them is two-sided and one
+over-reads, and the table further down names all four with their directions. Sampling
+under-reads; the number that comes out of sampling plus measurement is not guaranteed to
+sit on either side of the truth. Four limits are known and worth stating plainly.
 
 **A reference has to be refined where the surface is coarse, not merely refined.** A
 rounded-rectangle morph samples its corner arc with three fixed intervals whatever
@@ -113,6 +118,15 @@ Python 3.13, gmsh 4.15). That figure is a single observation on one machine and 
 design, recorded so the order of magnitude is not a surprise; it is not a performance
 guarantee, and no part of the export contract depends on it. Other hardware, other
 designs and other gmsh builds will differ.
+
+**The tolerance is what the search aims at, not a promise it always reaches.** Each
+planner refines for a bounded number of probes — six generally, sixteen for the surface
+STEP, whose reading falls more slowly than the step model each refinement is sized from.
+If a design exhausts that budget the planner ships the finest grid it tried, carrying the
+deviation it actually measured, and says nothing further about it. That is long-standing
+behaviour and it is unchanged here; it is recorded because "sized from a 0.10 mm
+tolerance" reads like a guarantee and is not one. The four designs the round-trip test
+qualifies arrive with four probes to spare.
 
 **The STL's triangle ceiling is a backstop, not a gate.** A design whose tolerance would
 need more than 150,000 triangles is exported anyway, coarsened to the ceiling, with the
