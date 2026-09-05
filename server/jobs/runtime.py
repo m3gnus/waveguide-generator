@@ -56,7 +56,11 @@ from server.solver.imported import (
     read_verified_import_mesh,
     verify_record_mesh_text,
 )
-from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
+from server.solver.symmetry import (
+    resolve_symmetry,
+    restrict_for_ground_plane,
+    validate_symmetry_mode,
+)
 from server.solver.field_plane import FieldPlaneEvaluation, FieldPlaneService
 from server.solver.metal_permit import MetalPermit, process_metal_permit
 
@@ -377,6 +381,35 @@ class UnknownEngineError(ValueError):
     """The request named an engine outside the registry."""
 
 
+def _ground_plane_axis(request: SolveRequest) -> str | None:
+    """The axis a requested ground plane bounds, or None when it is off."""
+
+    ground_plane = request.options.ground_plane
+    return ground_plane.axis if ground_plane.enabled else None
+
+
+def _requested_mounting(request: SolveRequest) -> str | None:
+    """The mounting AUTO must find an engine for.
+
+    The two sources are deliberately different layers: the infinite baffle is a
+    property of the design (``Simulation.SimType``, and ATH writes it), while
+    the ground plane describes the room the design is placed in and lives in
+    solve options. A solve has one mounting either way, so they are collapsed
+    here rather than at every consumer.
+
+    They cannot both be set -- ``server/solver/bempp.py`` refuses the pair, as
+    two half-space models each claiming the whole exterior -- but this runs
+    before that check, so the baffle wins here and the adapter reports the
+    conflict with the fuller explanation.
+    """
+
+    if request.design.root.simulation.sim_type == "infinite-baffle":
+        return "infinite-baffle"
+    if _ground_plane_axis(request) is not None:
+        return "ground-plane"
+    return request.design.root.simulation.sim_type
+
+
 class SymmetryValidationError(ValueError):
     """The requested solve domain requires a mirror plane the geometry lacks."""
 
@@ -554,6 +587,13 @@ async def resolve_submission(
                 )
     if engine_name != "axisym":
         resolution = await asyncio.to_thread(resolve_symmetry, request.design)
+        # Subtract the mirror plane a ground plane makes unavailable before the
+        # mode is validated, so AUTO degrades quarter to half_yz on a floor and
+        # a forced conflicting mode fails naming the ground plane -- instead of
+        # meshing a reduced domain the solver will then refuse.
+        resolution = restrict_for_ground_plane(
+            resolution, _ground_plane_axis(request)
+        )
         try:
             resolved_quadrants = validate_symmetry_mode(
                 request.options.symmetry, resolution
@@ -582,7 +622,7 @@ async def resolve_submission(
         # list: BEAT advertises no coupled infinite-baffle support and rejects
         # such a request outright, so picking it here would persist a job that
         # a coupling-capable BEMPP on the same host could have solved.
-        mounting = request.design.root.simulation.sim_type
+        mounting = _requested_mounting(request)
         engine_name = await engine_registry.resolve(
             "auto",
             solver_mode=request.options.solver_mode,
@@ -590,11 +630,10 @@ async def resolve_submission(
             resolved_quadrants=resolved_quadrants,
         )
         if engine_name is None:
-            unsupported = (
-                " that supports a coupled infinite-baffle mounting"
-                if mounting == "infinite-baffle"
-                else ""
-            )
+            unsupported = {
+                "infinite-baffle": " that supports a coupled infinite-baffle mounting",
+                "ground-plane": " that supports a rigid ground-plane mounting",
+            }.get(mounting or "", "")
             raise EngineUnavailableError(
                 f"AUTO could not resolve a compatible solve engine{unsupported} from "
                 "this host's capabilities. Install/enable Axisymmetric, Metal, BEAT, "

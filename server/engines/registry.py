@@ -112,6 +112,24 @@ class EngineInfo:
     fast_paths: tuple[str, ...] = ()
     formulations: tuple[str, ...] = ()
     mountings: tuple[str, ...] = ()
+    # Which single axes an engine can bound with a rigid half space, e.g.
+    # ("y",) for a floor only. Empty means no ground plane at all, and the
+    # "ground-plane" mounting is advertised only when this is non-empty.
+    #
+    # A list rather than a boolean because the engines genuinely differ:
+    # hornlab-bempp-bem mirrors across any one of the three coordinate planes,
+    # while hornlab-beat-bem's :ground transform is y = 0 only. A flat boolean
+    # would make BEAT look capable of a side wall it cannot solve.
+    ground_plane_axes: tuple[str, ...] = ()
+    # Whether a ground plane may be combined with a reduced-domain mesh.
+    #
+    # bempp joins the symmetry spec and the ground plane into one reflection
+    # group, so a left-right-symmetric horn on a floor keeps its half mesh.
+    # metal and BEAT each carry a single image-transform set and cannot, so the
+    # same model solves the full domain there -- about four times the work. The
+    # mounting is therefore not performance-neutral across engines, and the UI
+    # must not present them as interchangeable once a ground plane is on.
+    ground_plane_composes_with_symmetry: bool = False
     geometry_sources: tuple[str, ...] = ("parametric",)
     symmetry_domains: tuple[str, ...] = ()
     field_traces: bool = False
@@ -142,6 +160,55 @@ def _symmetry_domains(name: str) -> tuple[str, ...]:
     if name == "beat" or name.startswith("beat-"):
         return ("full", "half-yz", "quarter")
     return ("full",)
+
+
+def _ground_plane_axes(name: str, status: Mapping[str, Any]) -> tuple[str, ...]:
+    """Which axes this engine can bound with a rigid half space, per its probe.
+
+    Probed, never assumed. ``server/solver/bempp.py`` reports the axes only
+    after constructing a ``SolveConfig`` that actually accepts ``ground_plane``,
+    so a wg2 running against a pre-merge pin of hornlab-bempp-bem advertises
+    nothing here and the mounting simply does not appear -- rather than being
+    offered and then failing with a TypeError deep in the adapter.
+
+    BEAT is deliberately absent even though the package has a ``:ground``
+    symmetry mode. It is not reachable through the package's own config today,
+    so there is nothing for wg2 to call; when it is, BEAT reports ("y",) alone,
+    because its transform mirrors across y = 0 only and advertising a side wall
+    it cannot solve is the failure this per-axis list exists to prevent.
+    """
+
+    if name != "bempp":
+        return ()
+    axes = status.get("ground_plane_axes") or ()
+    return tuple(str(axis) for axis in axes)
+
+
+def _mountings(
+    *, infinite_baffle: bool, ground_plane_axes: Sequence[str] = ()
+) -> tuple[str, ...]:
+    """Assemble the advertised mounting vocabulary from probed capabilities.
+
+    "free-standing" is unconditional: every engine here can solve a body in
+    free air. The other two are separate boundary conditions rather than two
+    spellings of one, and are advertised only when the installed package can
+    actually run them:
+
+    * "infinite-baffle" -- the mouth is let into an unbounded rigid wall,
+      coplanar with the mouth, removing every cabinet edge.
+    * "ground-plane" -- the whole body, edges and all, stands above an infinite
+      rigid half space and radiates into 2*pi.
+
+    Choosing the wrong one of those returns a plausible wrong answer rather
+    than an error, which is exactly why the vocabulary names them apart.
+    """
+
+    names = ["free-standing"]
+    if infinite_baffle:
+        names.append("infinite-baffle")
+    if ground_plane_axes:
+        names.append("ground-plane")
+    return tuple(names)
 
 
 def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineInfo]:
@@ -242,10 +309,16 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 reason=str(status.get("reason") or f"{name} capability probe returned no reason"),
                 version=(str(status["version"]) if status.get("version") is not None else None),
                 formulations=("full-3d",),
-                mountings=(
-                    ("free-standing", "infinite-baffle")
-                    if name == "metal" or bool(status.get("coupled_infinite_baffle"))
-                    else ("free-standing",)
+                mountings=_mountings(
+                    infinite_baffle=(
+                        name == "metal" or bool(status.get("coupled_infinite_baffle"))
+                    ),
+                    ground_plane_axes=_ground_plane_axes(name, status),
+                ),
+                ground_plane_axes=_ground_plane_axes(name, status),
+                ground_plane_composes_with_symmetry=(
+                    name == "bempp"
+                    and bool(status.get("ground_plane_composes_with_symmetry"))
                 ),
                 geometry_sources=(
                     ("parametric", "imported")
@@ -292,6 +365,8 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 ),
                 version=(str(status["version"]) if status.get("version") is not None else None),
                 formulations=("full-3d",),
+                # No "ground-plane": see _ground_plane_axes. The gap is in this
+                # application, not in hornlab-beat-bem.
                 mountings=("free-standing",),
                 geometry_sources=("parametric",),
                 symmetry_domains=_symmetry_domains(name),
@@ -383,6 +458,13 @@ def get_engine(
     return create_engine(name)
 
 
+#: Mountings AUTO must filter candidates by, because an engine can genuinely
+#: refuse them. Both are spelled the same in EngineInfo.mountings and in the
+#: caller's resolved mounting; "free-standing" is deliberately absent, since
+#: every engine can solve it and its two spellings differ.
+_GATED_MOUNTINGS = frozenset({"infinite-baffle", "ground-plane"})
+
+
 def resolve_auto_engine(
     *,
     solver_mode: str | None = None,
@@ -413,20 +495,26 @@ def resolve_auto_engine(
     ``mounting`` drops candidates that cannot solve the requested mounting at
     all. BEAT rejects every coupled infinite-baffle request, so without this
     the order above handed such a solve to BEAT ahead of a coupling-capable
-    BEMPP on any GPU host -- persisting a job that could only ever fail.
+    BEMPP on any GPU host -- persisting a job that could only ever fail. The
+    rigid ground plane is filtered the same way and is currently BEMPP-only.
     """
 
     detected = list(capabilities) if capabilities is not None else detect_engines(environ=environ)
     available = {item.name for item in detected if item.available}
     del solver_mode
-    if mounting == "infinite-baffle":
-        # Deliberately the only mounting tested. It is also the only value the
-        # two vocabularies spell alike: EngineInfo.mountings says
-        # "free-standing" while DesignConfig.sim_type says "freestanding", so a
-        # general membership test would reject every free-standing solve.
-        available &= {
-            item.name for item in detected if "infinite-baffle" in item.mountings
-        }
+    if mounting in _GATED_MOUNTINGS:
+        # Only the mountings an engine can refuse are tested, and only these
+        # two are spelled identically in both vocabularies: EngineInfo.mountings
+        # says "free-standing" while DesignConfig.sim_type says "freestanding",
+        # so a general membership test would reject every free-standing solve.
+        #
+        # "ground-plane" is not a sim_type at all -- it comes from
+        # SolveOptions.ground_plane, because it describes the room rather than
+        # the horn -- so the caller resolves the effective mounting and passes
+        # it here. Without this, AUTO would hand a ground-plane solve to an
+        # engine that cannot express it and persist a job that could only ever
+        # fail, which is the same trap coupled infinite baffle fell into.
+        available &= {item.name for item in detected if mounting in item.mountings}
     if resolved_quadrants is not None:
         available &= {
             item.name

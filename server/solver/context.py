@@ -14,6 +14,7 @@ from typing import Any
 from server.design.schema import DesignConfig, Expr
 from server.jobs.models import ImportedGeometrySource, PolarConfig, SolveRequest
 
+from .ground_plane import GroundPlane
 from .quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
 
 
@@ -24,6 +25,15 @@ def _number(value: Expr | None, fallback: float) -> float:
     if number is None:
         raise ValueError("solver control must be a finite scalar expression")
     return float(number)
+
+
+def _ground_plane(request: SolveRequest) -> GroundPlane | None:
+    """Resolve the requested ground plane, or None when the horn radiates into free air."""
+
+    requested = request.options.ground_plane
+    if not requested.enabled:
+        return None
+    return GroundPlane(axis=requested.axis, height_m=float(requested.height_m))
 
 
 @dataclass(slots=True)
@@ -43,6 +53,11 @@ class SolverContext:
     quadrants: int = FULL_DOMAIN_QUADRANTS
     sim_type: int = 2
     source_motion: str = "normal"
+    # A rigid reflecting half space the model stands above, or None for free
+    # air. Distinct from ``sim_type == 1`` (coupled infinite baffle): the
+    # baffle lets the mouth into an unbounded wall and removes every cabinet
+    # edge, while the ground plane reflects the whole body, edges included.
+    ground_plane: GroundPlane | None = None
     polar_config: dict[str, Any] = field(
         default_factory=lambda: PolarConfig().model_dump(mode="json")
     )
@@ -148,6 +163,7 @@ class SolverContext:
             quadrants=quadrants,
             sim_type=1 if simulation.sim_type == "infinite-baffle" else 2,
             source_motion=source_motion,
+            ground_plane=_ground_plane(request),
             polar_config=request.options.polar_config.model_dump(mode="json"),
         )
 
@@ -188,6 +204,7 @@ class SolverContext:
             quadrants=int(quadrants),
             sim_type=2,
             source_motion=source_motion,
+            ground_plane=_ground_plane(request),
             polar_config=polar_config,
         )
 

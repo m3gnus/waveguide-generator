@@ -15,6 +15,8 @@ export interface EngineCapability {
   fast_paths: string[];
   formulations?: string[];
   mountings?: string[];
+  /** Single axes this engine can bound with a rigid half space, e.g. ['y']. */
+  ground_plane_axes?: string[];
   geometry_sources?: string[];
   symmetry_domains?: string[];
   field_traces?: boolean;

@@ -17,6 +17,8 @@ export type BackendIdentity = string | EngineCapability | null;
 export type BackendFeature =
   /** Coupled infinite-baffle solves — ``server/solver/infinite_baffle.py``. */
   | 'infinite-baffle'
+  /** Rigid ground-plane solves — ``server/solver/ground_plane.py``. */
+  | 'ground-plane'
   /** The axisymmetric meridian fast path — ``server/solver/bempp.py``. */
   | 'meridian-fast-path'
   /** Solving ingested CAD geometry — ``server/jobs/runtime.py``. */
@@ -25,6 +27,7 @@ export type BackendFeature =
 /** Human phrasing for the feature, as the object of "X does not support …". */
 const FEATURE_LABELS: Record<BackendFeature, string> = {
   'infinite-baffle': 'coupled infinite-baffle simulation',
+  'ground-plane': 'a rigid ground plane',
   'meridian-fast-path': 'the axisymmetric meridian fast path',
   'imported-geometry': 'solving imported CAD geometry',
 };
@@ -33,6 +36,8 @@ const FEATURE_LABELS: Record<BackendFeature, string> = {
 const FEATURE_REMEDIES: Record<BackendFeature, string> = {
   'infinite-baffle':
     'Use Metal or BEMPP full 3D, or the Axisymmetric meridian path for eligible circular geometry.',
+  'ground-plane':
+    'Ground-plane solves need BEMPP full 3D on this build. Note that an infinite baffle is a different boundary, not a substitute.',
   'meridian-fast-path':
     'Use Auto or Force full 3D; this geometry cannot use the platform-neutral meridian runner.',
   'imported-geometry':
@@ -195,6 +200,7 @@ export function backendSupports(
 
 function capabilitySupports(backend: EngineCapability, feature: BackendFeature): boolean {
   if (feature === 'infinite-baffle') return backend.mountings?.includes('infinite-baffle') ?? true;
+  if (feature === 'ground-plane') return backend.mountings?.includes('ground-plane') ?? true;
   if (feature === 'meridian-fast-path') return backend.formulations?.includes('axisymmetric') ?? true;
   return backend.geometry_sources?.includes('imported') ?? true;
 }
