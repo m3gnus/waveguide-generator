@@ -2584,7 +2584,12 @@ Nothing is sent anywhere; it runs entirely on your machine.
                     )
                 print("Server verification: / -> 200; /health -> 200")
             finally:
-                if process.poll() is None:
+                if platform_name == WINDOWS_PLATFORM:
+                    # The production server can start Julia provisioning before
+                    # serving /health. Kill its tree while the parent is alive;
+                    # terminating only Python can leave a child holding app/.
+                    self._terminate_process_tree(process, platform_name=platform_name)
+                elif process.poll() is None:
                     process.terminate()
                     try:
                         process.wait(timeout=15.0)

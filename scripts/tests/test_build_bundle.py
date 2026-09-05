@@ -3038,3 +3038,47 @@ def test_the_rc_build_offers_every_platform_the_release_page_does() -> None:
     # Same runner pin as the release job: an RC built against a different glibc
     # would be a hand-test of something that is not going to ship.
     assert "runs-on: ubuntu-24.04" in workflow
+
+
+@pytest.mark.parametrize("health_failure", [False, True])
+def test_windows_server_verification_retires_provisioning_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, health_failure: bool
+) -> None:
+    """The direct server probe can spawn Julia before the bare-launch gate runs."""
+    bundle = tmp_path / "bundle"
+    (bundle / "app").mkdir(parents=True)
+    scratch = tmp_path / "verification"
+    scratch.mkdir()
+    process = _FakeLauncherProcess()
+    child_alive = True
+
+    def runner(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        nonlocal child_alive
+        if "-c" in command:
+            (scratch / "windows-launcher-probe.txt").write_text("ready")
+        if command[0] == "taskkill":
+            assert command == ["taskkill", "/PID", str(process.pid), "/T", "/F"]
+            child_alive = False
+            process.returncode = 0
+        return subprocess.CompletedProcess(command, 0, "bempp (cross-platform): ready", "")
+
+    def http_status(_url: str) -> int:
+        if health_failure:
+            raise BundleError("probe failure")
+        return 200
+
+    monkeypatch.setattr(BundleBuilder, "_free_port", staticmethod(lambda: 43110))
+    monkeypatch.setattr(BundleBuilder, "_http_status", staticmethod(http_status))
+    # This separate gate already kills its tree. It must not conceal a leak
+    # from the earlier launch/serve.py probe, which has a different parent PID.
+    monkeypatch.setattr(BundleBuilder, "verify_windows_bare_launch", lambda *_a, **_k: None)
+    builder = BundleBuilder(
+        tmp_path, runner=runner, process_factory=lambda *_a, **_k: process
+    )
+    if health_failure:
+        with pytest.raises(BundleError, match="probe failure"):
+            builder.verify_bundle(bundle, scratch, platform_name=WINDOWS_PLATFORM)
+    else:
+        builder.verify_bundle(bundle, scratch, platform_name=WINDOWS_PLATFORM)
+    assert not child_alive, "parent-only termination leaves the provisioning child alive"
+    assert process.waits, "cleanup must reap the verification parent"
