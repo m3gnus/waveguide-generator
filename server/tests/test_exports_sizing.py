@@ -21,10 +21,12 @@ import pytest
 from server.design.schema import DesignConfig
 from server.exports.core import (
     _geometry_params,
+    _inner_grid,
     _prepared_design,
     _stl_grid_plan,
     _stl_mesher_config,
     _surface_grid_plan,
+    _write_step,
 )
 from server.exports.sizing import (
     STL_CHORD_TOLERANCE_MM,
@@ -216,6 +218,107 @@ def test_stl_sizing_ignores_the_designs_own_segment_controls() -> None:
 def test_surface_step_sizing_ignores_the_solver_mesh_too() -> None:
     default = _surface_grid_plan(_seed())
     assert _surface_grid_plan(_seed(mouth_resolution=3, throat_resolution=1.5)) == default
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        SEED_ROSSE,
+        {
+            "formula": "OSSE",
+            "L": 120,
+            "a": 55,
+            "a0": 10,
+            "r0": 12.7,
+            "morph": {
+                "target_shape": 3,
+                "target_exponent": 4,
+                "target_width": 120,
+                "target_height": 80,
+                "rate": 3,
+            },
+        },
+        {
+            "formula": "OSSE",
+            "L": 120,
+            "r0": 12.7,
+            "a": 60,
+            "a0": 15.5,
+            "guiding_curve": {
+                "curve_type": 1,
+                "width": 140,
+                "aspect_ratio": 1.5,
+                "distance": 0.5,
+                "rotation": 25,
+            },
+        },
+    ],
+    ids=["R-OSSE-mouth-rollback", "superellipse-morph", "rotated-guiding-curve"],
+)
+def test_written_surface_step_meets_its_chord_target_after_occ_round_trip(
+    tmp_path, payload: dict,
+) -> None:
+    """Probe the file, including loft stations, interiors, and periodic seam."""
+
+    import gmsh
+
+    design = DesignConfig.model_validate(payload)
+    plan = _surface_grid_plan(design)
+    source = _inner_grid(design, grid=(plan.angular, plan.length))
+    analytic = _inner_grid(
+        design,
+        grid=(2 * source.shape[0], 2 * (source.shape[1] - 1)),
+    )
+    step_path = tmp_path / "surface.step"
+    step_path.write_text(_write_step(source), encoding="utf-8")
+
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add("written-surface-fidelity")
+        gmsh.model.occ.importShapes(str(step_path), highestDimOnly=True)
+        gmsh.model.occ.synchronize()
+        # STEP preserves the ruled section order; sorting geometrically would
+        # scramble the R-OSSE mouth rollback, whose last stations turn back.
+        surfaces = [tag for _dim, tag in gmsh.model.getEntities(2)]
+        assert len(surfaces) == source.shape[1] - 1
+
+        cell_count = len(surfaces)
+        cells = set(np.linspace(0, cell_count - 1, min(24, cell_count), dtype=int))
+        cells.update(range(max(0, cell_count - 6), cell_count))
+        maximum = 0.0
+        for cell in sorted(cells):
+            # Even columns are analytic loft stations; odd columns are newly
+            # evaluated analytic points halfway between adjacent stations.
+            for column in (2 * cell, 2 * cell + 1, 2 * cell + 2):
+                points = analytic[:, column]
+                closest, _ = gmsh.model.getClosestPoint(
+                    2, surfaces[cell], points.reshape(-1).tolist()
+                )
+                maximum = max(
+                    maximum,
+                    float(
+                        np.linalg.norm(
+                            points - np.asarray(closest).reshape(-1, 3), axis=1
+                        ).max()
+                    ),
+                )
+
+            low, high = gmsh.model.getParametrizationBounds(2, surfaces[cell])
+            midpoint = 0.5 * (low[1] + high[1])
+            parameters = [low[0], midpoint, high[0], midpoint]
+            seam = np.asarray(
+                gmsh.model.getValue(2, surfaces[cell], parameters)
+            ).reshape(2, 3)
+            normals = np.asarray(
+                gmsh.model.getNormal(surfaces[cell], parameters)
+            ).reshape(2, 3)
+            assert np.linalg.norm(seam[0] - seam[1]) < 1e-7
+            assert np.dot(normals[0], normals[1]) > 1.0 - 1e-10
+
+        assert maximum <= STL_CHORD_TOLERANCE_MM
+    finally:
+        gmsh.finalize()
 
 
 # --- the backstop warns and trims; it never refuses ------------------------
