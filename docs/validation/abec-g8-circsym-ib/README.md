@@ -1,7 +1,7 @@
 # G8 — external ABEC reference, axisymmetric waveguide in an infinite baffle
 
 An ABEC3 CircSym project built to close the external-reference gap recorded in
-`wg2/docs/validation/SOLVER-QUALIFICATION.md` ("External axisymmetric reference
+`docs/validation/SOLVER-QUALIFICATION.md` ("External axisymmetric reference
 status"). Until this is solved, every infinite-baffle claim in the stack rests on
 our own three formulations agreeing with each other.
 
@@ -94,51 +94,75 @@ is a manual step (ABEC3 Pro v360b07, `ABEC3_Pro_64r.exe`):
 - ABEC uses constant (order 0) elements collocated at element centroids; we use
   P1 continuous. Different, convergent, and the reason a fine mesh matters more
   than usual here.
-- ABEC's time convention is e^-jkr against bempp's e^+ikr — conjugate before
-  comparing phase.
-- ABEC defaults: c = 343.32 m/s, rho = 1.205. Non-uniqueness compensation is on
-  by default when `NUC=` is unspecified, as it is here.
+- ABEC documents an e^-jkr Green's kernel, i.e. the e^+jωt time factor; our
+  solvers state e^-iωt with the outgoing e^+ikr kernel. Those are consistent
+  descriptions of the same physics, so ABEC's results are simply the complex
+  conjugate of ours — conjugate before comparing anything phase-bearing, and
+  expect a mass-like reactance to read negative-imaginary here and positive
+  there. Magnitudes, SPL and patterns are unaffected.
+- ABEC defaults: c = 343.32 m/s, rho = 1.205. Set **both** on our side —
+  `SolveConfig.air_density` and `SolveConfig.speed_of_sound`; the latter exists
+  from hornlab-metal-bem `ce1b747` and is in WG's pin. Non-uniqueness
+  compensation is on by default when `NUC=` is unspecified, as it is here.
 - `Spectrum_ABEC.txt` layout, as exported here: three `Data` sections keyed by
   `Graph_Caption` (`RadImp`, `PM_SPL`, `PM_SPL_ABS`). Each row is
   `frequency, (re, im) x 19` — one complex pair per polar angle, 0° first, in
   the order given by `PolarRange`. Decimal separator is `.` in this export;
   the older ASRO reference files use `,`, so a reader must handle both.
 
-## Result, 2026-09-03
+## Result, re-run 2026-09-05 at the current pin
 
-`compare.py` against `hornlab_metal_bem` 0.1.0 (pin `368849cc`), element cap
-4.29 mm — ABEC's own λ/2 at `MeshFrequency=40000`:
+`compare.py` against `hornlab_metal_bem` 0.1.0 (pin `e7e32d0`, WG's current
+metal-bem pin), element cap 4.29 mm — ABEC's own λ/2 at `MeshFrequency=40000`,
+with `speed_of_sound` set to ABEC's 343.32 m/s:
 
 | quantity | <1 kHz | 1–4 kHz | 4–11 kHz | >11 kHz | max |
 |---|---|---|---|---|---|
-| absolute SPL, rms dB | 0.009 | 0.050 | 0.099 | 0.192 | 0.945 |
-| pattern, rms dB | 0.005 | 0.107 | 0.230 | 0.303 | 0.894 |
+| absolute SPL, rms dB | 0.005 | 0.051 | 0.097 | 0.187 | 0.957 |
+| pattern, rms dB | 0.002 | 0.108 | 0.228 | 0.296 | 0.827 |
 
-−6 dB half-angle agrees within 0.15°–0.87° from 1 kHz to 20 kHz. Normalized
-throat radiation impedance: median relative error 0.0017, max 0.0093.
+−6 dB half-angle agrees within 0.13°–0.83° from 1 kHz to 20 kHz. Normalized
+throat radiation impedance: median relative error 0.0012, max 0.0093.
 
 **The external gap is closed for the axisymmetric infinite baffle.** Absolute
 level, not only pattern, is confirmed against a solver outside this stack.
 
-Halving the element cap to 2.15 mm moves the >11 kHz numbers (SPL 0.192 → 0.131,
-pattern 0.303 → 0.191) and barely moves anything below 4 kHz, so the HF residual
+Halving the element cap to 2.15 mm moves the >11 kHz numbers (SPL 0.187 → 0.132,
+pattern 0.296 → 0.187) and barely moves anything below 4 kHz, so the HF residual
 is our discretisation, not a formulation difference. Quote the converged numbers
 if you need HF figures.
 
-### Two things this turned up
+### What matching the sound speed changed, and what it did not
 
-**Our CircSym engine conjugates ABEC.** Real parts of the radiation impedance
-agree to under 0.5% while the imaginary parts are equal and opposite at every
-frequency, which is a time-convention flip and nothing else. `compare.py`
-conjugates ours into ABEC's before any phase-bearing comparison. Worth noting
-that `SolveResult`'s docstring claims e^(−iωt) and ABEC's manual claims e^(−jkr);
-those cannot both be true as written, and one of the two docs is wrong.
+The original solve, 2026-09-03 at pin `368849cc`, ran the package default
+343.0 m/s against ABEC's 343.32 because no `speed_of_sound` knob existed yet.
+It read: SPL 0.009 / 0.050 / 0.099 / 0.192, pattern 0.005 / 0.107 / 0.230 /
+0.303, |Z| median 0.0017. Removing that 0.093% bias improves the sub-1 kHz
+bands (SPL 0.009 → 0.005, pattern 0.005 → 0.002) and the impedance median, and
+leaves 4 kHz and above where it was. That is the expected shape: a wavenumber
+offset is a frequency shift, so it matters most where the curves are steep in
+level and least where the residual is discretisation. It confirms rather than
+weakens the conclusion above — the HF residual was never the sound speed.
 
-**`hornlab_metal_bem` hardcodes the sound speed.** `_constants.SPEED_OF_SOUND`
-is 343.0 m/s with no `SolveConfig` knob, against ABEC's 343.32 — 0.093% apart,
-and an odd asymmetry given `air_density` is configurable. It is far too small to
-explain anything above, but it is a fixed bias in every comparison this stack
-makes against ABEC.
+### Two earlier findings, both now closed
+
+**The conjugation is a documented convention pair, not a contradiction.** Real
+parts of the radiation impedance agree to under 0.5% while the imaginary parts
+are equal and opposite at every frequency. An earlier note here called that an
+unresolved disagreement between `SolveResult`'s e^(−iωt) docstring and ABEC's
+e^(−jkr) manual. It is not: a time factor and a Green's kernel are different
+objects, and e^(−iωt) with the outgoing e^(+ikr) kernel is exactly the pairing
+that makes an e^(−jkr) reference the complex conjugate. metal-bem `ce1b747`
+states both halves together (`README.md` "Phase and time convention",
+`SolveResult`). Conjugate the comparison; do not change solver signs to match
+ABEC.
+
+**The sound speed is configurable.** `SolveConfig.speed_of_sound` landed in
+`ce1b747` and is in WG's pin `e7e32d0`; `_constants.SPEED_OF_SOUND` is now the
+default, not the only value. `compare.py` sets ABEC's 343.32, so the fixed
+0.093% bias this section used to report no longer applies to G8. Results
+published before 2026-09-03 were solved at 343.0 and reproduce bit-for-bit by
+leaving the default alone.
 
 ### The trap worth remembering
 

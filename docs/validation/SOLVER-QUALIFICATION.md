@@ -123,21 +123,27 @@ demonstrable body of revolution (ABEC's whole input is one meridian polyline),
 flush-mounted with a valid interior/aperture interface, and reproducible from
 text.
 
-Against `hornlab_metal_bem` (pin `368849cc`) at an element cap of 4.29 mm --
-ABEC's own lambda/2 at its `MeshFrequency=40000`:
+Re-run 2026-09-05 against `hornlab_metal_bem` at WG's current pin `e7e32d0`,
+element cap 4.29 mm -- ABEC's own lambda/2 at its `MeshFrequency=40000` -- with
+`speed_of_sound` set to ABEC's 343.32 m/s, which the pin now allows:
 
 | quantity | <1 kHz | 1-4 kHz | 4-11 kHz | >11 kHz | max |
 |---|---|---|---|---|---|
-| absolute SPL, rms dB | 0.009 | 0.050 | 0.099 | 0.192 | 0.945 |
-| pattern, rms dB | 0.005 | 0.107 | 0.230 | 0.303 | 0.894 |
+| absolute SPL, rms dB | 0.005 | 0.051 | 0.097 | 0.187 | 0.957 |
+| pattern, rms dB | 0.002 | 0.108 | 0.228 | 0.296 | 0.827 |
 
-The -6 dB half-angle agrees within 0.15-0.87 deg from 1 kHz to 20 kHz.
+The -6 dB half-angle agrees within 0.13-0.83 deg from 1 kHz to 20 kHz.
 Normalized throat radiation impedance, which is independent of the observation
-geometry entirely, has a median relative error of 0.0017 and a maximum of
+geometry entirely, has a median relative error of 0.0012 and a maximum of
 0.0093.
 
-Halving the element cap to 2.15 mm moves only the top band (SPL 0.192 -> 0.131,
-pattern 0.303 -> 0.191) and barely touches anything below 4 kHz, so **the >11
+The original 2026-09-03 solve at pin `368849cc` ran the package default
+343.0 m/s and read SPL 0.009 / 0.050 / 0.099 / 0.192 and pattern 0.005 / 0.107 /
+0.230 / 0.303. Matching c moves only the sub-1 kHz bands, which is where a
+wavenumber offset shows; it does not touch the HF residual.
+
+Halving the element cap to 2.15 mm moves only the top band (SPL 0.187 -> 0.132,
+pattern 0.296 -> 0.187) and barely touches anything below 4 kHz, so **the >11
 kHz residual is our discretisation, not a formulation difference.** Quote the
 converged numbers for any HF claim.
 
@@ -208,8 +214,8 @@ defaults to c = 343.32 m/s and rho = 1.205, and takes its polar arc from
 `Offset`, which for an infinite baffle is clamped to the mouth plane -- not the
 throat, which is the opposite of the free-standing ASRO reference.
 `hornlab_metal_bem.SolveConfig` exposes `air_density`, and `speed_of_sound`
-joins it in hornlab-metal-bem#7; `hornlab_beat_bem.SolveConfig` has had
-`sound_speed` all along. In every case the default stays 343.0, so a harness
+joins it from `ce1b747` (hornlab-metal-bem#7), which WG's pin `e7e32d0`
+carries; `hornlab_beat_bem.SolveConfig` has had `sound_speed` all along. In every case the default stays 343.0, so a harness
 that leaves it alone runs 0.093% slow against ABEC and should say so.
 `hornlab_bempp_bem` still hardcodes the value with no knob at all.
 
