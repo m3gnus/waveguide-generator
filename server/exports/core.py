@@ -21,10 +21,15 @@ from server.exports.sizing import (
     STL_CHORD_TOLERANCE_MM,
     STL_TRIANGLE_CEILING,
     GridPlan,
+    SurfaceDeviation,
+    axial_band_of_column,
     facet_element_size_mm,
+    measure_deviation,
     plan_cad_resolution,
     plan_grid,
+    quad_distance,
 )
+from server.exports.sizing import _point_grid
 from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
 from server.mesh.gmsh_worker import _preserve_native_windows_path, run_on_gmsh_worker
 from server.preview.translate import design_to_mesher_config
@@ -309,21 +314,307 @@ def _geometry_params(config: Mapping[str, Any]) -> dict[str, Any]:
     return params
 
 
+#: Polyline samples per grid segment when the written loft is measured. The
+#: samples lie on the real surface, while the triangles between them approximate
+#: its angular curvature. Measured on the rounded-rectangle morph, grid points
+#: that lie exactly on the loft read 0.0080 mm at 8 samples, 0.0032 at 16 and
+#: 0.0016 at 24. Sixteen keeps that approximation error to about a thirtieth of
+#: the target at a third of the cost of 24; the independent convergence sweep
+#: and the acceptance margin below cover the remaining sampling error.
+_LOFT_SAMPLES_PER_SEGMENT = 16
+#: Grid segments either side of the located one that the fine search covers.
+#: The loft's own parameterisation is within about 1.5x of uniform across a
+#: segment, so two is roughly a factor of three of headroom.
+_LOFT_SEARCH_WINDOW = 2
+#: Angular density of the reference the written loft is measured against, as a
+#: multiple of the requested count, and a detuning offset so the reference is
+#: not phase-locked to the candidate.
+#:
+#: Two is not enough here, and this is the one place where that is not obvious.
+#: The overshoot is a narrow spike where a straight side meets its corner arc --
+#: the builder always samples that arc at the same four angles whatever the
+#: count, so the sample spacing steps by a factor of about 2.7 across a single
+#: knot. On the 156x50 grid the converged reading is about 0.10146 mm; a 2x
+#: reference reads about 0.09934 mm and a 3x reference about 0.1000 mm, so a
+#: search believing the 2x reading accepts a grid that misses the target.
+#: Sampled at 8x with 16 strip samples the reading is about 0.10090 mm.
+_WRITTEN_REFERENCE_MULTIPLE = 8
+_WRITTEN_REFERENCE_OFFSET = 9
+#: What the dense reference still cannot see. A sampled maximum is a lower
+#: bound on the real one, and the spike above is narrow enough that lower-density
+#: phases read below the roughly 0.10146 mm converged value. Accepting requires
+#: the reading inside the tolerance with 5% room, several times the largest
+#: shortfall observed across the 8x--128x convergence sweep. It
+#: tightens acceptance and never loosens it, and it applies only to this
+#: reading -- the chord it is taken alongside is converged at 2x.
+_WRITTEN_SAMPLING_MARGIN = 0.05
+
+
+def _loft_strips(inner_points: np.ndarray, samples: int) -> np.ndarray:
+    """Sample the ruled loft ``_write_step`` builds, band by band, in process.
+
+    Returns ``(bands, samples * n_phi + 1, 2, 3)``: for each axial band, a
+    closed run of points on the section curve at each end of it. The loft is
+    ``makeRuled=True, maxDegree=1``, so the line joining corresponding boundary
+    samples is an exact ruling. Triangulating between neighbouring rulings is a
+    controlled approximation of the angular spline, checked by the convergence
+    sweep above. Sampling the two section splines separately would be invalid:
+    OCC gives each
+    curve its own chord-length parameterisation, and pairing them by normalised
+    parameter skews the strip badly enough to read 4.7 mm on a surface that is
+    0.15 mm out.
+    """
+
+    import gmsh
+
+    initialized_here = False
+    try:
+        if not gmsh.isInitialized():
+            with _preserve_native_windows_path():
+                gmsh.initialize()
+            initialized_here = True
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("Geometry.Tolerance", 1e-8)
+        gmsh.option.setNumber("Geometry.ToleranceBoolean", 1e-8)
+        gmsh.clear()
+        gmsh.model.add("WaveguideInnerSurfaceProbe")
+        n_phi, n_columns, _ = inner_points.shape
+        wire_tags = []
+        for column in range(n_columns):
+            point_tags = [
+                int(gmsh.model.occ.addPoint(*(float(v) for v in inner_points[index, column])))
+                for index in range(n_phi)
+            ]
+            point_tags.append(point_tags[0])
+            curve = int(gmsh.model.occ.addSpline(point_tags))
+            wire_tags.append(int(gmsh.model.occ.addWire([curve], checkClosed=True)))
+        gmsh.model.occ.addThruSections(
+            wire_tags, makeSolid=False, makeRuled=True, maxDegree=1
+        )
+        gmsh.model.occ.synchronize()
+        faces = [tag for _dim, tag in gmsh.model.getEntities(2)]
+        if len(faces) != n_columns - 1:
+            raise RuntimeError(
+                f"the probe loft has {len(faces)} bands for {n_columns} sections"
+            )
+        count = n_phi * samples
+        strips = np.empty((n_columns - 1, count + 1, 2, 3), dtype=float)
+        for band, face in enumerate(faces):
+            low, high = gmsh.model.getParametrizationBounds(2, face)
+            u = np.linspace(low[0], high[0], count + 1)
+            for side, v in enumerate((low[1], high[1])):
+                parameters = np.column_stack((u, np.full_like(u, v)))
+                strips[band, :, side] = np.asarray(
+                    gmsh.model.getValue(2, face, parameters.reshape(-1).tolist())
+                ).reshape(-1, 3)
+        if not np.isfinite(strips).all():
+            raise RuntimeError("the probe loft evaluated to non-finite coordinates")
+        return strips
+    finally:
+        if initialized_here and gmsh.isInitialized():
+            with _preserve_native_windows_path():
+                gmsh.finalize()
+
+
+def _nearest_ruling(
+    points: np.ndarray, strip: np.ndarray, candidates: np.ndarray
+) -> np.ndarray:
+    """Index into ``candidates`` of the closest ruling, for each point.
+
+    A ruling is the straight segment across one band at one position around the
+    ring. ``candidates`` is either every ruling (shape ``(k,)``, shared by all
+    points) or one shortlist per point (shape ``(len(points), k)``).
+    """
+
+    start = strip[candidates, 0]
+    end = strip[candidates, 1]
+    if start.ndim == 2:
+        start, end = start[None], end[None]
+    edge = end - start
+    offset = points[:, None, :] - start
+    length = (edge * edge).sum(-1)
+    position = np.where(
+        length > 0.0, (offset * edge).sum(-1) / np.where(length > 0.0, length, 1.0), 0.0
+    )
+    closest = start + np.clip(position, 0.0, 1.0)[..., None] * edge
+    delta = points[:, None, :] - closest
+    return (delta * delta).sum(-1).argmin(axis=1)
+
+
+def _distance_to_loft(
+    reference: np.ndarray,
+    strips: np.ndarray,
+    base_band: np.ndarray,
+    samples: int,
+    *,
+    band_halo: int = 1,
+    window: int = _LOFT_SEARCH_WINDOW,
+) -> np.ndarray:
+    """Distance from analytic samples to the loft, cell searched, not indexed.
+
+    The band each reference column falls in is exact -- the builder's axial map
+    nests -- and the position around the ring is found rather than assumed:
+    nearest of the per-segment *rulings*, then nearest of the fine rulings
+    around it, then the exact distance to the three quads spanning it. Every
+    shortlist is widened around the nearest ruling before exact point-to-triangle
+    distances are taken. Missing a nearer cell can only raise the distance to
+    this sampled approximation; its separate angular approximation error is
+    controlled by strip density, the dense reference and the margin above.
+
+    Locating on rulings rather than on grid points is what makes the last step
+    safe. A band's cells are long across the ring and thin along it near the
+    mouth, and the reverse near the throat, so the nearest *corner* can be
+    several cells away from the nearest cell: measuring three cells around it
+    read 0.79 mm where the surface is 0.155 mm out. A ruling spans the band, so
+    the nearest one is the cell -- and because ``makeRuled`` is degree one
+    across a band, the ruling is exactly on the surface rather than a model of
+    it.
+    """
+
+    rows, columns, _ = reference.shape
+    bands, fine, _, _ = strips.shape
+    segments = fine - 1
+    span = np.arange(-window * samples, window * samples + 1)
+    neighbours = np.array([-1, 0, 1])
+    index = np.arange(rows)
+    # The reference rows are the same positions around the ring in every
+    # column, so the coarse search is a property of the band, not of the
+    # column. Repeating it per column was most of the cost of the measurement.
+    seeds: dict[int, np.ndarray] = {}
+    out = np.empty((rows, columns))
+    for column in range(columns):
+        base = int(base_band[column])
+        candidates = np.unique(
+            np.clip(np.arange(-band_halo, band_halo + 1) + base, 0, bands - 1)
+        )
+        points = reference[:, column]
+        best = np.full(rows, np.inf)
+        for band in candidates:
+            strip = strips[band]
+            seed = seeds.get(band)
+            if seed is None:
+                rulings = strip[::samples]
+                seed = (
+                    _nearest_ruling(points, rulings, np.arange(len(rulings)))
+                    * samples
+                )
+                seeds[band] = seed
+            near = (seed[:, None] + span[None, :]) % segments
+            fine_index = near[index, _nearest_ruling(points, strip, near)]
+            quads = (fine_index[:, None] + neighbours[None, :]) % segments
+            # One band's strip is itself a phi-periodic grid two columns wide,
+            # so the shared cell measurement applies to it unchanged.
+            best = np.minimum(
+                best,
+                quad_distance(
+                    points, strip, quads, np.zeros_like(quads)
+                ).min(axis=1),
+            )
+        out[:, column] = best
+    return out
+
+
+def _written_surface_measure(
+    params: Mapping[str, Any], angular: int, length: int
+) -> tuple[SurfaceDeviation, int, int] | None:
+    """Measure a candidate grid against the surface the STEP will contain.
+
+    The analytic chord is measured first and is kept: it is exact for the axial
+    direction, which the loft rules linearly, and it carries the nested and
+    detuned sampling checks. It is *not* enough on its own. ``_write_step``
+    interpolates each ring with OCC's C2 spline, and a rounded-rectangle morph
+    samples that ring unevenly -- corner arcs land about 1.3 degrees apart
+    between sides spaced 3.6 degrees -- so the spline overshoots at the
+    curvature step where a straight side meets its corner. On the 120x80 r12
+    morph, each grid against its own 2x reference, the surface sits about twice
+    as far from the analytic geometry as the chord through the same points, and
+    the gap widens as the grid refines:
+
+        108x56 chord 0.0805 -> surface 0.1545    172x96  0.0288 -> 0.0811
+        132x72 chord 0.0501 -> surface 0.1175    216x112 0.0214 -> 0.0608
+
+    A chord target therefore cannot certify this export, in either direction.
+    So the loft itself is built and sampled, and the reading is the larger of
+    the two. Attributing the loft's reading to the angular direction is what
+    keeps it from over-refining the length: the axial fit is exactly linear and
+    already measured exactly, so the excess is the ring spline's.
+
+    The tolerance the two short-circuits below compare against is this export's
+    own rather than an argument: a ``plan_grid`` measurement hook is not handed
+    one, and this hook exists for ``_surface_grid_plan``. They only decide
+    whether a more expensive reading is worth taking on a grid already rejected.
+    """
+
+    analytic = measure_deviation(params, angular, length)
+    if analytic is None:
+        return None
+    deviation, n_phi, n_length = analytic
+
+    def reading(written: float) -> tuple[SurfaceDeviation, int, int]:
+        angular_linear = max(deviation.angular_linear, written)
+        return (
+            SurfaceDeviation(
+                angular_linear=angular_linear,
+                angular_cubic=angular_linear,
+                axial_linear=deviation.axial_linear,
+                axial_cubic=deviation.axial_linear,
+                cubic_modelled=False,
+            ),
+            n_phi,
+            n_length,
+        )
+
+    if max(deviation.angular_linear, deviation.axial_linear) > STL_CHORD_TOLERANCE_MM:
+        # Already too coarse on the cheap reading. Building the loft could only
+        # confirm it, so spend the probe on a finer grid instead.
+        return reading(0.0)
+
+    coarse, _, _ = _point_grid(params, angular, length)
+    strips = _loft_strips(coarse, _LOFT_SAMPLES_PER_SEGMENT)
+    band = axial_band_of_column(2 * n_length + 1, n_length)
+
+    def against(multiple: int, offset: int) -> float | None:
+        reference, _, reference_length = _point_grid(
+            params, multiple * angular + offset, 2 * n_length
+        )
+        if reference_length != 2 * n_length:
+            return None
+        return float(
+            _distance_to_loft(
+                reference, strips, band, _LOFT_SAMPLES_PER_SEGMENT
+            ).max()
+        ) * (1.0 + _WRITTEN_SAMPLING_MARGIN)
+
+    # Cheap reference first. A grid this already rejects does not need the dense
+    # one, and on the way up from the probe grid most of them do not.
+    written = against(2, 5)
+    if written is None:
+        return None
+    if written <= STL_CHORD_TOLERANCE_MM:
+        dense = against(_WRITTEN_REFERENCE_MULTIPLE, _WRITTEN_REFERENCE_OFFSET)
+        if dense is None:
+            return None
+        written = max(written, dense)
+    return reading(written)
+
+
 def _surface_grid_plan(design: DesignConfig) -> GridPlan:
-    """Size the ruled inner-surface STEP by the same chord as the STL.
+    """Size the ruled inner-surface STEP against the surface it writes.
 
     This export is not the manufacturable part -- that is the solid -- but an
     open reference bore the user lofts or thickens in CAD, and ``_write_step``
     builds it as a *ruled* loft (``makeRuled=True, maxDegree=1``) through
-    interpolating profile splines.  The planner uses the linear chord target
-    in both directions; export tests separately check the written STEP after
-    an OCC round trip, including samples on and between loft stations.
+    interpolating profile splines. The planner therefore measures that loft
+    rather than the chord through its samples; export tests separately check the
+    written STEP after an OCC round trip, including samples on and between loft
+    stations.
     """
 
     return plan_grid(
         _geometry_params(_bare_grid_config(design)),
         angular=("linear", STL_CHORD_TOLERANCE_MM),
         axial=("linear", STL_CHORD_TOLERANCE_MM),
+        measure=_written_surface_measure,
     )
 
 
