@@ -24,6 +24,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -356,6 +357,99 @@ def test_every_action_is_pinned_to_a_digest_and_node_to_a_patch(
     assert node and all(re.fullmatch(r"\d+\.\d+\.\d+", version) for version in node), node
 
 
+def _clean_environment() -> dict[str, str]:
+    """A child environment that cannot reach outside the checkout under test.
+
+    `PYTHONPATH` and `PYTHONHOME` would put site-packages back after `-S` took
+    them away, which would make the clean-runner check prove nothing.
+    `WG2_APP_ROOT` is the one that matters most: `server.platform.paths.app_root`
+    honours it, so a stamp inheriting it would rewrite the versions of whichever
+    tree it names -- and a test that edits the repository it is testing is a
+    mistake this file has already made once.
+    """
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHONPATH", "PYTHONHOME", "WG2_APP_ROOT"}
+    }
+    environment["PYTHONNOUSERSITE"] = "1"
+    return environment
+
+
+def _logical_lines(script: str) -> list[str]:
+    """The script's commands, with shell line continuations joined."""
+
+    joined = re.sub(r"\\\n\s*", " ", script)
+    return [line.strip() for line in joined.splitlines() if line.strip()]
+
+
+def stamp_commands(step: dict, version: str) -> list[list[str]]:
+    """The stamp step's commands, as argv, from the template's own text.
+
+    Read rather than restated, and run without a shell. A shell is what made
+    the first version of this test POSIX-only: it wrote a `#!/bin/sh` shim with
+    `sys.executable` interpolated into a double-quoted string, prepended PATH
+    with `:`, and called `bash`. On Windows -- where this suite also runs -- the
+    backslashes in the interpreter path are escapes, `:` is not the separator,
+    and `bash` need not exist, so the shim could have failed or silently found a
+    different Python and "proved" a clean interpreter that was never used.
+
+    The fail-fast prologue is the one line not executed -- `set -euo pipefail`
+    in sh, `$ErrorActionPreference = "Stop"` in PowerShell. Both say the step
+    stops at the first failure, which the caller reproduces by checking each
+    command; a block that carried neither would run on past a failed stamp, so
+    its absence fails here.
+    """
+
+    script = str(step["run"])
+    # No unresolved workflow expression may reach a command: substituting one
+    # by hand would be testing a paraphrase.
+    assert "${{" not in script, script
+    lines = _logical_lines(script)
+    assert lines[0] in {"set -euo pipefail", '$ErrorActionPreference = "Stop"'}, lines[0]
+    commands = []
+    for line in lines[1:]:
+        resolved = (
+            line.replace('"$VERSION"', version)
+            .replace("$env:VERSION", version)
+            .replace("$VERSION", version)
+        )
+        tokens = shlex.split(resolved)
+        if tokens[0] == "python":
+            # The runner's `python`, with site-packages switched off. Passed as
+            # argv rather than through a PATH shim, so the interpreter's own
+            # path needs no quoting on any platform.
+            tokens = [sys.executable, "-S", *tokens[1:]]
+        commands.append(tokens)
+    assert commands, script
+    return commands
+
+
+def test_disabling_site_packages_really_removes_the_server_dependencies() -> None:
+    """The negative control for the check below.
+
+    "It ran under `-S`" says nothing unless `-S` is what stops a server import.
+    If this interpreter could import FastAPI with site-packages disabled -- from
+    PYTHONPATH, or a vendored copy -- then the clean-runner check would pass
+    while proving nothing.
+    """
+
+    environment = _clean_environment()
+    with_site = subprocess.run(
+        [sys.executable, "-c", "import fastapi"],
+        capture_output=True,
+        env=environment,
+    )
+    assert with_site.returncode == 0, "this environment cannot establish the control"
+    without_site = subprocess.run(
+        [sys.executable, "-S", "-c", "import fastapi"],
+        capture_output=True,
+        env=environment,
+    )
+    assert without_site.returncode != 0
+
+
 def test_the_stamp_runs_on_a_runner_with_nothing_installed(tmp_path: Path) -> None:
     """The template's own stamp commands, executed, with site-packages disabled.
 
@@ -364,10 +458,11 @@ def test_the_stamp_runs_on_a_runner_with_nothing_installed(tmp_path: Path) -> No
     to reach every copy of the version -- including the OpenAPI snapshot's
     `info.version`, which `check` compares. An earlier draft called
     `gen_openapi.py` there, which imports `server.app` and therefore FastAPI:
-    correct on this machine, and impossible on a clean runner.
+    correct on a developer machine, and impossible on a clean runner.
 
-    Running under `-S` removes site-packages entirely, so anything outside the
-    standard library fails here rather than on the runner.
+    Portable, and shell-free: the commands run as argv on whichever platform the
+    suite runs on. What is still owed is a run on real Windows CI -- this proves
+    the commands and their semantics, not the PowerShell host.
     """
 
     proposal = _load(PROPOSAL)
@@ -376,46 +471,43 @@ def test_the_stamp_runs_on_a_runner_with_nothing_installed(tmp_path: Path) -> No
         for step in _steps(proposal["jobs"]["spa"])
         if step.get("name") == "Stamp this build's identity"
     )
-    # The commands as the template writes them, with the workflow's own
-    # expressions resolved -- not a paraphrase of them.
-    script = str(step["run"])
-    assert "${{" not in script
     version = "0.4.0-main.7"
     date = "2026-01-01T00:00:00+00:00"
+    commands = stamp_commands(step, version)
+    # The dates come from the step's own `env:`, so a template that stopped
+    # fixing them would fail here rather than quietly lose determinism.
+    assert set(step["env"]) >= {"GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"}
+
+    def child_environment() -> dict[str, str]:
+        environment = _clean_environment()
+        environment.update(
+            GIT_AUTHOR_DATE=date,
+            GIT_COMMITTER_DATE=date,
+            GIT_AUTHOR_NAME="m-a",
+            GIT_AUTHOR_EMAIL="m3gnus@users.noreply.github.com",
+            GIT_COMMITTER_NAME="m-a",
+            GIT_COMMITTER_EMAIL="m3gnus@users.noreply.github.com",
+        )
+        return environment
 
     def stamped(root: Path) -> str:
+        environment = child_environment()
+        for setup in (["git", "init", "-q", "."], ["git", "add", "-A"]):
+            subprocess.run(setup, cwd=root, check=True, capture_output=True)
         subprocess.run(
-            ["git", "init", "-q", "."], cwd=root, check=True, capture_output=True
-        )
-        subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
-        base = {
-            **os.environ,
-            "GIT_AUTHOR_DATE": date,
-            "GIT_COMMITTER_DATE": date,
-            "GIT_AUTHOR_NAME": "m-a",
-            "GIT_AUTHOR_EMAIL": "m3gnus@users.noreply.github.com",
-            "GIT_COMMITTER_NAME": "m-a",
-            "GIT_COMMITTER_EMAIL": "m3gnus@users.noreply.github.com",
-        }
-        subprocess.run(
-            ["git", "commit", "-qm", "source"], cwd=root, check=True, env=base,
-            capture_output=True,
-        )
-        # `python` on PATH is this interpreter with site-packages switched off.
-        shim = root.parent / "bin"
-        shim.mkdir(exist_ok=True)
-        (shim / "python").write_text(
-            f'#!/bin/sh\nexec "{sys.executable}" -S "$@"\n', encoding="utf-8"
-        )
-        (shim / "python").chmod(0o755)
-        result = subprocess.run(
-            ["bash", "-c", script],
+            ["git", "commit", "-qm", "source"],
             cwd=root,
-            env={**base, "VERSION": version, "PATH": f"{shim}:{os.environ['PATH']}"},
+            check=True,
+            env=environment,
             capture_output=True,
-            text=True,
         )
-        assert result.returncode == 0, result.stdout + result.stderr
+        for command in commands:
+            # `set -euo pipefail`, reproduced: the step stops at the first
+            # command that fails, so nothing after a failure is credited.
+            result = subprocess.run(
+                command, cwd=root, env=environment, capture_output=True, text=True
+            )
+            assert result.returncode == 0, f"{command}\n{result.stdout}{result.stderr}"
         return subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=root,
@@ -461,28 +553,32 @@ def test_the_stamp_runs_on_a_runner_with_nothing_installed(tmp_path: Path) -> No
     assert stamped(second) == head
 
 
-def test_the_windows_stamp_runs_the_same_commands(proposal: dict) -> None:
-    """PowerShell, so it cannot be executed here -- but it must not drift."""
+def test_the_windows_stamp_is_the_same_commands(proposal: dict) -> None:
+    """PowerShell, so its host is not exercised here -- but its commands are.
 
-    steps = {
-        name: next(
-            step
-            for step in _steps(proposal["jobs"][name])
-            if step.get("name") == "Stamp this build's identity"
+    They resolve to the same argv as the POSIX blocks, which is what carries the
+    executed check above onto the Windows job. A real Windows CI run is still
+    owed and is not claimed: what this refuses is divergence, not a PowerShell
+    quoting bug.
+    """
+
+    version = "0.4.0-main.7"
+    commands = {
+        name: stamp_commands(
+            next(
+                step
+                for step in _steps(proposal["jobs"][name])
+                if step.get("name") == "Stamp this build's identity"
+            ),
+            version,
         )
-        for name in ("spa", "windows-bundle")
+        for name in ("spa", "macos-bundle", "windows-bundle", "linux-bundle")
     }
-    posix = [
-        line.strip()
-        for line in str(steps["spa"]["run"]).splitlines()
-        if line.strip().startswith("python ")
-    ]
-    windows = [
-        line.strip()
-        for line in str(steps["windows-bundle"]["run"]).splitlines()
-        if line.strip().startswith("python ")
-    ]
-    assert [line.replace('"$VERSION"', "$env:VERSION") for line in posix] == windows
+    reference = commands["spa"]
+    for name, argv in commands.items():
+        assert argv == reference, name
+    # And the version really reached them, rather than a literal surviving.
+    assert any(version in token for command in reference for token in command)
 
 
 @pytest.mark.parametrize(
