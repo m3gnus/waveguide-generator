@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 import tempfile
 from typing import Any
@@ -1317,6 +1318,150 @@ def _import_occ_root_bodies(gmsh: Any, assembly_path: str | Path) -> list[tuple[
     return roots
 
 
+def occ_body_groups(gmsh: Any, roots: Sequence[tuple[int, int]]) -> list[list[tuple[int, int]]]:
+    """Group transformable roots into the bodies a STEP file declares.
+
+    :func:`_import_occ_root_bodies` answers "what must an affine transform touch
+    exactly once", and every face of an open shell is a separate answer to that.
+    It is **not** an answer to "how many bodies is this", and the two were the
+    same list until a surface body arrived with more than one face in it.
+
+    CAD's own count, in ``wglink_send.count_step_bodies``, is one per
+    ``MANIFOLD_SOLID_BREP`` or ``SHELL_BASED_SURFACE_MODEL``; the add-in refuses
+    its own export when its inventory disagrees, so the manifest is *known* to
+    be counting bodies. A Fusion surface body is exported as
+    ``SHELL_BASED_SURFACE_MODEL('name', (#open_shell))`` -- which is what
+    ``hornlab_mesher.step_import._parse_named_shell_faces`` is written against --
+    and OCC imports that one shell as one free surface per face. A 26-face
+    half model therefore arrived here as 26 "bodies" against a manifest
+    declaring 1, and the gate refused a file that was correct.
+
+    A solid is one body. Free surfaces are grouped by **shared bounding
+    curves**, transitively: two faces of one shell meet along an edge, and two
+    separate shells do not. That is what keeps this from being "call every free
+    face one body" -- an undeclared second shell shares no curve with the first,
+    so it is still a second body and the gate still fires.
+
+    Faces that touch only at a vertex count as separate bodies. That
+    over-counts a non-manifold shell rather than under-counting a stray one,
+    which is the safe direction for a gate whose job is to refuse surprises.
+    """
+
+    volumes = [root for root in roots if root[0] == 3]
+    surfaces = [root for root in roots if root[0] == 2]
+    groups: list[list[tuple[int, int]]] = [[volume] for volume in volumes]
+    if not surfaces:
+        return groups
+
+    parent = {tag: tag for _dim, tag in surfaces}
+
+    def find(tag: int) -> int:
+        while parent[tag] != tag:
+            parent[tag] = parent[parent[tag]]
+            tag = parent[tag]
+        return tag
+
+    faces_by_curve: dict[int, list[int]] = {}
+    for _dim, tag in surfaces:
+        for curve in gmsh.model.getAdjacencies(2, int(tag))[1]:
+            faces_by_curve.setdefault(int(curve), []).append(int(tag))
+    for shared in faces_by_curve.values():
+        first = find(shared[0])
+        for other in shared[1:]:
+            root = find(other)
+            if root != first:
+                parent[root] = first
+
+    by_component: dict[int, list[tuple[int, int]]] = {}
+    for dim, tag in surfaces:
+        by_component.setdefault(find(int(tag)), []).append((dim, int(tag)))
+    groups.extend(by_component.values())
+    return groups
+
+
+#: Comments and strings, removed before any entity is counted. A body name is
+#: free text: without this, a part called ``SHELL_BASED_SURFACE_MODEL`` would
+#: add a body, and a commented-out one would too.
+_STEP_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_STEP_STRING = re.compile(r"'(?:''|[^'])*'")
+#: The two entity types CAD counts a body by. Deliberately the same rule and
+#: the same spelling as the producer's ``wglink_send.count_step_bodies``: this
+#: gate compares its result against a number that rule produced, so any
+#: difference between them is a disagreement about what a body is.
+_STEP_SURFACE_BODY = re.compile(r"\bSHELL_BASED_SURFACE_MODEL\s*\(", re.I)
+_STEP_SOLID_BODY = re.compile(r"\bMANIFOLD_SOLID_BREP\s*\(", re.I)
+
+
+def declared_step_bodies(assembly_path: str | Path) -> dict[str, int]:
+    """How many bodies the STEP file itself declares, counted by entity.
+
+    **By entity, never by name.** ``parse_named_shell_faces`` is the right tool
+    for "which faces belong to the body called X" and the wrong one for "how
+    many bodies are there": it skips a model with no name and keys the rest by
+    name, so two unnamed models count as none and two models sharing a name
+    count as one. A name is not an identity -- the producer's own counter does
+    not look at names at all.
+
+    That is not a theoretical gap. Two touching bodies whose boundaries are
+    merely *coincident* rather than shared are sewn into one connected
+    component by the healing this gate runs, so on such a file the name-keyed
+    count and the geometric count are both 1 while the file says 2.
+    """
+
+    text = Path(assembly_path).read_text(encoding="ascii", errors="replace")
+    text = _STEP_STRING.sub("''", _STEP_COMMENT.sub("", text))
+    return {
+        "surface_models": len(_STEP_SURFACE_BODY.findall(text)),
+        "solid_breps": len(_STEP_SOLID_BODY.findall(text)),
+    }
+
+
+def scope_body_count(
+    gmsh: Any,
+    roots: Sequence[tuple[int, int]],
+    *,
+    declared: Mapping[str, int],
+) -> dict[str, Any]:
+    """How many exterior bodies this STEP has, from the file and the geometry.
+
+    Two readings, and the larger wins, because they miss different things.
+
+    * **The file's own inventory** (:func:`declared_step_bodies`) is the
+      authority on how many bodies CAD exported, and the only thing that can
+      tell two bodies apart when they touch. It is counted by entity, so an
+      unnamed or duplicately-named model still counts.
+    * **The geometry** (:func:`occ_body_groups`) is the only thing that can see
+      a body the file did *not* declare -- a second, disconnected sheet inside
+      one declared model.
+
+    Neither is a superset of the other, so the gate takes both. What that
+    buys, stated precisely rather than universally: **no body can hide that
+    either the file's own body rule or shared-curve connectivity would show.**
+    A body that is neither declared separately nor geometrically separable --
+    two touching sheets inside one declared model -- reads as one here, and
+    reads as one to the producer too, so the two sides still agree, which is
+    what this gate compares.
+
+    Volumes get the same treatment for the same reason: OCC reports what it
+    managed to import, the file reports what was meant to be there.
+    """
+
+    groups = occ_body_groups(gmsh, roots)
+    volumes = [group for group in groups if any(dim == 3 for dim, _tag in group)]
+    surface_components = len(groups) - len(volumes)
+    surface_bodies = max(int(declared.get("surface_models", 0)), surface_components)
+    solids = max(int(declared.get("solid_breps", 0)), len(volumes))
+    return {
+        "count": solids + surface_bodies,
+        "solids": solids,
+        "imported_volumes": len(volumes),
+        "declared_surface_models": int(declared.get("surface_models", 0)),
+        "declared_solid_breps": int(declared.get("solid_breps", 0)),
+        "connected_surface_components": surface_components,
+        "surface_bodies": surface_bodies,
+    }
+
+
 def build_imported_viewport_mesh(
     assembly_path: str | Path,
     manifest: Mapping[str, Any],
@@ -2097,7 +2242,13 @@ def build_imported_mesh(
         named = {name: [face_to_surface[face] for face in faces if face in face_to_surface] for name, faces in named_step.items()}
         styled = {name: [face_to_surface[face] for face in faces if face in face_to_surface] for name, faces in styled_step.items()}
 
-        body_count = len(imported)
+        # Bodies, not transformable roots: an open shell is one body however
+        # many faces it has, and two shells are two bodies however much they
+        # touch. See :func:`scope_body_count` for why both sources are read.
+        body_inventory = scope_body_count(
+            gmsh, imported, declared=declared_step_bodies(assembly_path)
+        )
+        body_count = int(body_inventory["count"])
         expected_bodies = int(manifest["assembly"]["n_bodies_expected"])
         if body_count != expected_bodies:
             raise ImportedMeshError(
