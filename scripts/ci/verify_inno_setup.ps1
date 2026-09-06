@@ -50,7 +50,11 @@ if ($actualVersion -ne $ExpectedVersion) {
 # Compile a tiny valid script as a success-producing execution probe. `ISCC /?`
 # prints usage and leaves a non-zero native exit code on the pinned compiler,
 # while merely checking nonempty output would let an unrelated executable pass.
-$probeRoot = Join-Path $env:RUNNER_TEMP ("inno-probe-" + [guid]::NewGuid().ToString("N"))
+$probeParent = $env:RUNNER_TEMP
+if ([string]::IsNullOrWhiteSpace($probeParent)) {
+    $probeParent = [IO.Path]::GetTempPath()
+}
+$probeRoot = Join-Path $probeParent ("inno-probe-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $probeRoot | Out-Null
 try {
     $probeScript = Join-Path $probeRoot "probe.iss"

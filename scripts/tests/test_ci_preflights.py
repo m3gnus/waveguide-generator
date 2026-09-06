@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
 import yaml
@@ -131,6 +132,7 @@ def test_inno_verifier_uses_bounded_pe_metadata_and_all_workflow_variants() -> N
     assert '(& $CompilerPath "/Q" $probeScript 2>&1 | Out-String)' in verifier
     assert "$probeExitCode -ne 0" in verifier
     assert 'Test-Path -LiteralPath $probeExecutable -PathType Leaf' in verifier
+    assert '[IO.Path]::GetTempPath()' in verifier
     assert "Get-ChildItem" not in verifier
     assert '"$env:ProgramFiles(x86)' not in verifier
 
@@ -160,3 +162,47 @@ def test_inno_verifier_rejects_a_missing_compiler_before_execution() -> None:
     )
     assert result.returncode != 0
     assert "ISCC.exe was not found" in result.stderr
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or shutil.which("pwsh") is None,
+    reason="the real compiler probe runs on Windows only",
+)
+def test_inno_verifier_executes_the_real_installed_compiler_probe() -> None:
+    """Exercise PE metadata and the successful ISCC compile on Windows.
+
+    The RC workflow installs the pinned compiler before this same helper runs.
+    A normal Windows checkout without Inno Setup skips this environment test;
+    when the compiler is present, a drifted version is a real failure.
+    """
+
+    roots = [os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles")]
+    compiler = next(
+        (
+            Path(root) / "Inno Setup 6" / "ISCC.exe"
+            for root in roots
+            if root and (Path(root) / "Inno Setup 6" / "ISCC.exe").is_file()
+        ),
+        None,
+    )
+    if compiler is None:
+        pytest.skip("the Windows host has no standard Inno Setup installation")
+
+    environment = {**os.environ, "RUNNER_TEMP": tempfile.gettempdir()}
+    result = subprocess.run(
+        [
+            shutil.which("pwsh") or "pwsh",
+            "-NoProfile",
+            "-File",
+            str(INNO_VERIFIER),
+            "-CompilerPath",
+            str(compiler),
+        ],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Verified Inno Setup compiler 6.7.1" in result.stdout
