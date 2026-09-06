@@ -1,6 +1,6 @@
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { defaultScheduler, notifyManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UpdateStatus } from '../api/updates';
 import { UpdateButton, UpdateDialog, updatePresentation, useUpdateStatus } from './UpdateControl';
@@ -545,6 +545,17 @@ describe('UpdateControl', () => {
   });
 
   describe('the update channel, chosen where the version is', () => {
+    beforeEach(() => {
+      // Query-core schedules observer notifications on a zero-delay timer in
+      // production. Make these query update assertions deterministic instead
+      // of relying on a timer that a Promise-only flush does not run.
+      notifyManager.setScheduler((callback) => callback());
+    });
+
+    afterEach(() => {
+      notifyManager.setScheduler(defaultScheduler);
+    });
+
     function channelButton(label: 'Stable' | 'Beta'): HTMLButtonElement {
       const found = [...document.querySelectorAll<HTMLButtonElement>('.update-channel button')]
         .find((button) => button.textContent === label);
