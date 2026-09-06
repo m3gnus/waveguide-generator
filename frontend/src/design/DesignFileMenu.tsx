@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
+  buildGeometryExport,
   exportGeometryToOutputFolder,
   inspectDesignText,
   openDesignText,
   serializeDesignDocument,
+  type GeometryExportFile,
   type ImportReport,
   type CadLinkOpenState,
   type StepBody,
@@ -63,12 +65,29 @@ export function reportText(report: ImportReport): string {
   return notes.length ? `${summary} · ${notes.join(' ')}` : summary;
 }
 
+/**
+ * Export the profile pair: build both files, then write them once.
+ *
+ * Building stays parallel -- it only reads -- but the two files are **one**
+ * write. They used to be two, and with a destination folder that meant two
+ * replacement questions racing for a dialog that answers one at a time: the
+ * second was auto-declined, so half the export landed and the message said the
+ * whole of it had. One write is one question covering both names, and one
+ * atomic publish.
+ *
+ * A half that fails to build is still reported by name, and the half that built
+ * is still written -- that part is unchanged.
+ */
 export async function exportProfileArtifacts(
-  exporter: (kind: 'profiles' | 'slices') => Promise<{ directory: string }>,
+  build: (kind: 'profiles' | 'slices') => Promise<GeometryExportFile>,
+  write: (files: GeometryExportFile[]) => Promise<{ directory: string }>,
   revision: number,
 ): Promise<string> {
   const kinds = ['profiles', 'slices'] as const;
-  const results = await Promise.allSettled(kinds.map((kind) => exporter(kind)));
+  const results = await Promise.allSettled(kinds.map((kind) => build(kind)));
+  const built = results.flatMap((result) => (
+    result.status === 'fulfilled' ? [result.value] : []
+  ));
   const completed = kinds.filter((_kind, index) => results[index].status === 'fulfilled');
   const failed = kinds.flatMap((kind, index) => {
     const result = results[index];
@@ -76,13 +95,16 @@ export async function exportProfileArtifacts(
       ? [`${kind}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`]
       : [];
   });
+  // Whatever built is written first, so a reported failure never also loses the
+  // half that worked.
+  const written = built.length ? await write(built) : null;
   if (failed.length) {
-    const partial = completed.length ? `Exported ${completed.join(' and ')} CSV; ` : '';
+    const partial = completed.length
+      ? `Exported ${completed.join(' and ')} CSV${written ? ` to ${written.directory}` : ''}; `
+      : '';
     throw new Error(`${partial}failed ${failed.join('; ')}`);
   }
-  const written = results.find((result) => result.status === 'fulfilled');
-  const directory = written?.status === 'fulfilled' ? written.value.directory : '';
-  return `Exported profiles and slices CSV from revision ${revision}${directory ? ` to ${directory}` : ''}`;
+  return `Exported profiles and slices CSV from revision ${revision}${written ? ` to ${written.directory}` : ''}`;
 }
 
 export function DesignFileMenu() {
@@ -298,16 +320,20 @@ export function DesignFileMenu() {
 
   async function exportProfiles() {
     await act(async () => {
-      // One dialog for both files: profiles and slices are halves of one
-      // export, and asking twice would be asking the same question twice.
+      // One question, then one more only if the folder already holds them:
+      // profiles and slices are halves of one export, and both are written by
+      // a single request so neither can be answered without the other.
       const destination = await askForExportDestination({
         title: 'Export profiles',
         detail: 'Profile and slice CSV files.',
       });
       if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       const result = await exportProfileArtifacts(
-        (kind) => exportGeometryToOutputFolder(
+        (kind) => buildGeometryExport(
           'profiles', design, revision, designNameSlug(designName), kind, 'solid', fetch,
+        ),
+        (files) => writeToOutputFolder(
+          designNameSlug(designName), files, fetch, 'confirm',
           destination.token, askToReplaceExports,
         ),
         revision,

@@ -11,6 +11,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { CadLinkCoordinator } from '../shell/CadLinkCoordinator';
 import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
+import { ExportDestinationDialog } from '../shell/ExportDestinationDialog';
 import { DesignFileMenu } from './DesignFileMenu';
 
 /**
@@ -264,6 +265,117 @@ describe('design file export menu', () => {
 
     // One attempt, refused: no second request repeating it as an overwrite.
     expect(requested.filter((path) => path === '/api/workspace/write-export')).toHaveLength(1);
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toBe('Export cancelled. No files were written.');
+  });
+
+  it('asks once for the profile pair, and replaces both on one answer', async () => {
+    // The interaction the singleton dialog made possible to get wrong: two
+    // files, one user action. Written as two requests, the second replacement
+    // question was auto-declined because the first still held the dialog, so
+    // half the export landed while the message claimed all of it had.
+    const writes: FormData[] = [];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/workspace/export-destination') {
+        return new Response(JSON.stringify({
+          path: '/chosen', token: 'handle-1', remembered: true, selected: false,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (path === '/api/workspace/write-export') {
+        const body = init?.body as FormData;
+        writes.push(body);
+        if (String(body.get('existing')) === 'confirm') {
+          return new Response(JSON.stringify({
+            code: 'export_collision',
+            detail: '2 file(s) would be replaced',
+            directory: '/chosen',
+            paths: ['/chosen/untitled_profiles.csv', '/chosen/untitled_slices.csv'],
+          }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+          directory: '/chosen',
+          files: ['/chosen/untitled_profiles.csv', '/chosen/untitled_slices.csv'],
+          replaced: ['/chosen/untitled_profiles.csv', '/chosen/untitled_slices.csv'],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return Object.assign(new Response('x,y\n0,1\n', { status: 200 }), {
+        blob: async () => new Blob(['x,y\n0,1\n'], { type: 'text/csv' }),
+      });
+    });
+    // The real dialog, not the stub: this test is about the singleton.
+    act(() => root.render(<><DesignFileMenu/><ExportDestinationDialog/></>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const exportItem = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')]
+      .find((item) => item.querySelector('span')?.textContent === 'Export')!;
+    act(() => exportItem.click());
+    const profiles = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((item) => item.textContent?.startsWith('Profiles CSV'))!;
+
+    await act(async () => { profiles.click(); });
+    const dialogButton = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('.export-dialog button')]
+      .find((button) => button.textContent?.trim() === label)!;
+    await act(async () => { dialogButton('Export here').click(); });
+
+    // One question about both names, not one dialog per file.
+    expect([...document.querySelectorAll('.export-replace-list li')].map((item) => item.textContent))
+      .toEqual(['untitled_profiles.csv', 'untitled_slices.csv']);
+    await act(async () => { dialogButton('Replace').click(); });
+
+    // Two builds, then exactly two writes: the refused `confirm` and its
+    // answered `overwrite`, each carrying both members.
+    expect(requested.filter((path) => path.startsWith('/api/export/profiles'))).toHaveLength(2);
+    expect(writes.map((body) => String(body.get('existing')))).toEqual(['confirm', 'overwrite']);
+    writes.forEach((body) => {
+      expect(body.getAll('relative_path').map(String))
+        .toEqual(['untitled_profiles.csv', 'untitled_slices.csv']);
+      expect(String(body.get('destination'))).toBe('handle-1');
+    });
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toMatch(/^Exported profiles and slices CSV from revision \d+ to \/chosen$/);
+  });
+
+  it('leaves both profile files untouched when the replacement is declined', async () => {
+    const writes: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/workspace/export-destination') {
+        return new Response(JSON.stringify({
+          path: '/chosen', token: 'handle-1', remembered: true, selected: false,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (path === '/api/workspace/write-export') {
+        writes.push(String((init?.body as FormData).get('existing')));
+        return new Response(JSON.stringify({
+          code: 'export_collision',
+          detail: '2 file(s) would be replaced',
+          directory: '/chosen',
+          paths: ['/chosen/untitled_profiles.csv', '/chosen/untitled_slices.csv'],
+        }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      return Object.assign(new Response('x,y\n0,1\n', { status: 200 }), {
+        blob: async () => new Blob(['x,y\n0,1\n'], { type: 'text/csv' }),
+      });
+    });
+    act(() => root.render(<><DesignFileMenu/><ExportDestinationDialog/></>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const exportItem = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')]
+      .find((item) => item.querySelector('span')?.textContent === 'Export')!;
+    act(() => exportItem.click());
+    const profiles = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((item) => item.textContent?.startsWith('Profiles CSV'))!;
+    const dialogButton = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('.export-dialog button')]
+      .find((button) => button.textContent?.trim() === label)!;
+
+    await act(async () => { profiles.click(); });
+    await act(async () => { dialogButton('Export here').click(); });
+    await act(async () => { dialogButton('Cancel').click(); });
+
+    // The refusal, and no retry: neither half is written, so the pair cannot
+    // land half-replaced.
+    expect(writes).toEqual(['confirm']);
     expect(container.querySelector('[role="status"]')?.textContent)
       .toBe('Export cancelled. No files were written.');
   });

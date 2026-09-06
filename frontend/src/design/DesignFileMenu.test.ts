@@ -1,15 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
 import { exportProfileArtifacts, reportText } from './DesignFileMenu';
-import type { ImportReport } from '../api/designIo';
+import type { GeometryExportFile, ImportReport } from '../api/designIo';
 
 describe('profile artifact export', () => {
-  it('reports partial success with the completed and failed artifact names', async () => {
-    const exporter = vi.fn(async (kind: 'profiles' | 'slices') => {
-      if (kind === 'slices') throw new Error('disk full');
+  const file = (kind: string) => ({
+    filename: `horn_${kind}.csv`,
+    blob: new Blob([kind], { type: 'text/csv' }),
+  });
+
+  it('builds both halves and writes them as one set', async () => {
+    // One write, so the pair asks about its destination once and about
+    // replacing existing files once. Two writes raced for a dialog that
+    // answers one question at a time, and the loser was auto-declined.
+    const build = vi.fn(async (kind: 'profiles' | 'slices') => file(kind));
+    const written: GeometryExportFile[][] = [];
+    const write = vi.fn(async (files: GeometryExportFile[]) => {
+      written.push(files);
       return { directory: 'C:/Output/horn' };
     });
-    await expect(exportProfileArtifacts(exporter, 7)).rejects.toThrow('Exported profiles CSV; failed slices: disk full');
-    expect(exporter).toHaveBeenCalledTimes(2);
+
+    const message = await exportProfileArtifacts(build, write, 7);
+
+    expect(build).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(written[0].map(({ filename }) => filename))
+      .toEqual(['horn_profiles.csv', 'horn_slices.csv']);
+    expect(message).toBe('Exported profiles and slices CSV from revision 7 to C:/Output/horn');
+  });
+
+  it('reports partial success with the completed and failed artifact names', async () => {
+    const build = vi.fn(async (kind: 'profiles' | 'slices') => {
+      if (kind === 'slices') throw new Error('disk full');
+      return file(kind);
+    });
+    const written: GeometryExportFile[][] = [];
+    const write = vi.fn(async (files: GeometryExportFile[]) => {
+      written.push(files);
+      return { directory: 'C:/Output/horn' };
+    });
+
+    await expect(exportProfileArtifacts(build, write, 7))
+      .rejects.toThrow('Exported profiles CSV to C:/Output/horn; failed slices: disk full');
+    expect(build).toHaveBeenCalledTimes(2);
+    // The half that built is still written: a reported failure must not also
+    // lose the work that succeeded.
+    expect(written[0].map(({ filename }) => filename)).toEqual(['horn_profiles.csv']);
+  });
+
+  it('writes nothing when neither half builds', async () => {
+    const build = vi.fn(async (): Promise<GeometryExportFile> => { throw new Error('no geometry'); });
+    const write = vi.fn(async () => ({ directory: 'C:/Output/horn' }));
+
+    await expect(exportProfileArtifacts(build, write, 7)).rejects.toThrow('failed profiles');
+    expect(write).not.toHaveBeenCalled();
   });
 });
 
