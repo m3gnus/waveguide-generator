@@ -26,9 +26,21 @@ from pathlib import Path
 import pytest
 
 from server.mesh.gmsh_worker import _run_in_gmsh_session
-from server.mesh.imported import _import_occ_root_bodies, occ_body_groups
+from server.mesh.imported import (
+    ImportedMeshError,
+    _import_occ_root_bodies,
+    build_imported_mesh,
+    declared_step_bodies,
+    occ_body_groups,
+    scope_body_count,
+)
 
-from _shell_fixture import write_disjoint_shells, write_open_shell
+from _shell_fixture import (
+    write_disjoint_shells,
+    write_open_shell,
+    write_touching_bodies,
+    write_undeclared_extra_sheet,
+)
 
 
 def _inventory(step_path: Path) -> dict[str, object]:
@@ -131,3 +143,229 @@ def test_a_shell_is_one_body_however_many_faces_it_has(tmp_path: Path, faces: in
 
     assert inventory["bodies"] == 1, inventory
     assert inventory["roots"] == faces
+
+
+def _inventory_as_the_gate_sees_it(step_path: Path) -> dict[str, object]:
+    """Count the way the gate does: same healing, same two readings."""
+
+    import gmsh
+
+    declared = declared_step_bodies(step_path)
+
+    def probe() -> dict[str, object]:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        for option in ("OCCSewFaces", "OCCFixSmallEdges", "OCCFixSmallFaces"):
+            gmsh.option.setNumber(f"Geometry.{option}", 1)
+        roots = _import_occ_root_bodies(gmsh, step_path)
+        inventory = scope_body_count(gmsh, roots, declared=declared)
+        gmsh.clear()
+        return inventory
+
+    return _run_in_gmsh_session(probe)
+
+
+# ---------------------------------------------------------------------------
+# A name is not an identity
+# ---------------------------------------------------------------------------
+
+
+def test_bodies_are_counted_by_entity_not_by_name(tmp_path: Path) -> None:
+    """``parse_named_shell_faces`` cannot answer "how many bodies".
+
+    It skips a model with no name and keys the rest *by* name, so two unnamed
+    models read as none and two models sharing a name read as one. The file
+    still declares two either way, which is why this gate counts entities --
+    the same thing the producer's own counter does.
+    """
+
+    from hornlab_mesher.step_import import parse_named_shell_faces
+
+    for names in ((None, None), ("body", "body")):
+        step = write_touching_bodies(
+            tmp_path / f"{names[0]}-{names[1]}.step", faces=4, names=names, share_records=False
+        )
+        assert len(parse_named_shell_faces(step)) < 2, "the premise: the name-keyed view undercounts"
+        assert declared_step_bodies(step)["surface_models"] == 2
+
+
+def test_a_body_name_that_looks_like_an_entity_is_not_a_body(tmp_path: Path) -> None:
+    """Names are free text, and comments are not geometry.
+
+    Counting raw text without removing strings and comments would let a part
+    called after the entity add a body to the inventory.
+    """
+
+    step = write_open_shell(tmp_path / "sneaky.step", faces=2)
+    text = step.read_text(encoding="ascii")
+    assert declared_step_bodies(step)["surface_models"] == 1
+
+    disguised = tmp_path / "disguised.step"
+    disguised.write_text(
+        text.replace("'surface-body'", "'SHELL_BASED_SURFACE_MODEL('")
+        .replace("ENDSEC;", "/* SHELL_BASED_SURFACE_MODEL('commented out',(#1)) */\nENDSEC;", 1),
+        encoding="ascii",
+    )
+    assert declared_step_bodies(disguised)["surface_models"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Touching bodies: the case geometry alone cannot decide
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("names", "share_records", "why"),
+    [
+        (("a", "b"), True, "named, sharing the spine record"),
+        (("a", "b"), False, "named, boundaries merely coincident"),
+        ((None, None), False, "unnamed, boundaries merely coincident"),
+        (("body", "body"), False, "one name twice, boundaries merely coincident"),
+    ],
+)
+def test_two_touching_bodies_are_two(
+    tmp_path: Path, names: tuple[str | None, str | None], share_records: bool, why: str
+) -> None:
+    """However they touch, and whatever they are called.
+
+    Measured, not assumed: with the healing this gate runs, OCC sews two bodies
+    whose boundaries are only *coincident* into one connected component. On
+    those two rows the geometric reading is 1 and the name-keyed reading is 0
+    or 1, so a count built from either -- or from the larger of the two -- would
+    accept a two-body file against a manifest declaring one.
+    """
+
+    step = write_touching_bodies(
+        tmp_path / "touching.step", faces=4, names=names, share_records=share_records
+    )
+    assert step.read_text(encoding="ascii").count("SHELL_BASED_SURFACE_MODEL") == 2
+
+    inventory = _inventory_as_the_gate_sees_it(step)
+
+    assert inventory["declared_surface_models"] == 2, why
+    assert inventory["count"] == 2, inventory
+
+
+def test_an_undeclared_sheet_inside_one_declared_body_is_still_two(tmp_path: Path) -> None:
+    """The direction the declaration cannot see, so the geometry is read too.
+
+    One ``SHELL_BASED_SURFACE_MODEL`` is declared, and its shell carries two
+    disconnected groups of faces. The file says one; connectivity says two.
+    """
+
+    step = write_undeclared_extra_sheet(tmp_path / "extra-sheet.step")
+    assert step.read_text(encoding="ascii").count("SHELL_BASED_SURFACE_MODEL") == 1
+
+    inventory = _inventory_as_the_gate_sees_it(step)
+
+    assert inventory["declared_surface_models"] == 1, "the file admits to one"
+    assert inventory["connected_surface_components"] == 2, "the geometry has two"
+    assert inventory["count"] == 2, inventory
+
+
+def test_a_merged_import_cannot_hide_a_declared_body() -> None:
+    """Pinned directly, because it needs an OCC that merges everything.
+
+    If a future healing pass returned every free face as one component, the
+    declared count must still carry the answer.
+    """
+
+    class _Merged:
+        class model:  # noqa: N801 - mirrors the gmsh module shape
+            @staticmethod
+            def getAdjacencies(_dim: int, _tag: int) -> tuple[list[int], list[int]]:
+                return ([], [1])
+
+    inventory = scope_body_count(
+        _Merged, [(2, 1), (2, 2), (2, 3), (2, 4)],
+        declared={"surface_models": 2, "solid_breps": 0},
+    )
+
+    assert inventory["connected_surface_components"] == 1, "the double must merge them"
+    assert inventory["count"] == 2, inventory
+
+
+# ---------------------------------------------------------------------------
+# The gate itself
+# ---------------------------------------------------------------------------
+
+
+def _manifest(n_bodies_expected: int) -> dict[str, object]:
+    return {
+        "assembly": {
+            "file": "assembly.step",
+            "n_bodies_expected": n_bodies_expected,
+            "bbox_mm": [0, 0, 0, 1, 1, 1],
+        },
+        "sources": [],
+        "instances": [],
+        "coordinate_system": {"solver_anchor_instance_id": None},
+        "scope": {"included": [{"file": "assembly.step"}]},
+    }
+
+
+_SIZES = {
+    "rigid_size_mm": 0.5,
+    "transition_mm": 0.5,
+    "source_size_mm": {},
+    "max_frequency_hz": 1000.0,
+}
+
+
+def _import_through_the_gate(step_path: Path, expected_bodies: int) -> object:
+    return _run_in_gmsh_session(
+        lambda: build_imported_mesh(
+            step_path, _manifest(expected_bodies), _SIZES, include_viewport_mesh=False
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "names", [(None, None), ("body", "body")], ids=["unnamed", "duplicate-name"]
+)
+def test_the_gate_refuses_two_touching_bodies_declared_as_one(
+    tmp_path: Path, names: tuple[str | None, str | None]
+) -> None:
+    """The refusal itself, not the arithmetic behind it.
+
+    Scope, measured rather than assumed. The gate's first import runs
+    *unhealed*, and unhealed OCC keeps these two bodies apart, so this refusal
+    fires on connectivity alone and would fire without the file's inventory
+    too. What the inventory adds is the healed path: with the sew/fix options
+    the fallback ladder turns on, the same two bodies merge into one component
+    (see ``test_two_touching_bodies_are_two``, which imports with exactly those
+    options), and there the declared count is the only thing left that knows
+    there are two.
+
+    That healed combination is **not** covered end to end here: it needs a file
+    that both fails to mesh unhealed and merges when sewn, and constructing one
+    would be a guess at OCC's failure modes rather than a fixture. The two
+    halves are covered separately -- this test for the refusal, that one for
+    the count under healing.
+    """
+
+    step = write_touching_bodies(
+        tmp_path / "touching.step", faces=4, names=names, share_records=False
+    )
+
+    with pytest.raises(ImportedMeshError) as refusal:
+        _import_through_the_gate(step, 1)
+
+    assert "scope gate" in str(refusal.value)
+    assert "2 exterior bodies" in str(refusal.value)
+    assert "declares 1" in str(refusal.value)
+
+
+def test_the_gate_accepts_a_surface_body_of_several_faces(tmp_path: Path) -> None:
+    """And the reported case still gets through.
+
+    One ``SHELL_BASED_SURFACE_MODEL`` of several faces is one body, so a
+    manifest declaring one is satisfied and the import proceeds. This is the
+    refusal the user hit, in the smallest topology that reproduces it.
+    """
+
+    step = write_open_shell(tmp_path / "one-body.step", faces=2)
+
+    result = _import_through_the_gate(step, 1)
+
+    assert isinstance(result, dict) and result, "the import must produce a mesh artifact"

@@ -183,3 +183,77 @@ def write_disjoint_shells(path: Path) -> Path:
         step.render(name=path.name, description="two disjoint open shells"), encoding="ascii"
     )
     return path
+
+
+def write_touching_bodies(
+    path: Path,
+    *,
+    faces: int = 4,
+    names: tuple[str | None, str | None] = ("surface-body-0", "surface-body-1"),
+    share_records: bool = True,
+) -> Path:
+    """Two surface bodies that touch, in either of the two ways they can.
+
+    ``share_records`` picks which. ``True`` puts both shells' faces in one fan,
+    so they literally reference the same ``EDGE_CURVE``; ``False`` gives each
+    body its own fan at the same place, so their boundaries are *coincident*
+    but topologically distinct -- which is what two touching bodies exported
+    separately actually look like, and the case a sewing pass might join.
+
+    ``names`` carries the other axis. A model may be unnamed, and two models
+    may share a name: neither changes how many bodies the file declares, which
+    is why a name is not an identity. ``None`` writes ``''``.
+    """
+
+    step = _Step()
+    shape = step.product()
+    context = step.context()
+    if share_records:
+        made = _fan(step, 0.0, faces, "face")
+        groups = [made[: len(made) // 2], made[len(made) // 2 :]]
+    else:
+        groups = [_fan(step, 0.0, faces // 2, "a"), _fan(step, 0.0, faces // 2, "b")]
+
+    models = []
+    for index, (group, name) in enumerate(zip(groups, names, strict=True)):
+        shell = step.add(
+            f"OPEN_SHELL('shell{index}',(" + ",".join(f"#{tag}" for tag in group) + "))"
+        )
+        models.append(
+            step.add(f"SHELL_BASED_SURFACE_MODEL('{name or ''}',(#{shell}))")
+        )
+    representation = step.add(
+        "MANIFOLD_SURFACE_SHAPE_REPRESENTATION('',("
+        + ",".join(f"#{tag}" for tag in models)
+        + f"),#{context})"
+    )
+    step.add(f"SHAPE_DEFINITION_REPRESENTATION(#{shape},#{representation})")
+    path.write_text(
+        step.render(name=path.name, description="two touching open shells"), encoding="ascii"
+    )
+    return path
+
+
+def write_undeclared_extra_sheet(path: Path) -> Path:
+    """**One** declared surface body whose shell carries two separated groups.
+
+    The direction the declaration cannot see: the file says one body, and the
+    geometry has two. A count that trusted only ``SHELL_BASED_SURFACE_MODEL``
+    would accept this against a manifest declaring one.
+    """
+
+    step = _Step()
+    shape = step.product()
+    context = step.context()
+    made = _fan(step, 0.0, 2, "near") + _fan(step, 10.0, 2, "far")
+    shell = step.add("OPEN_SHELL('shell',(" + ",".join(f"#{tag}" for tag in made) + "))")
+    model = step.add(f"SHELL_BASED_SURFACE_MODEL('surface-body',(#{shell}))")
+    representation = step.add(
+        f"MANIFOLD_SURFACE_SHAPE_REPRESENTATION('',(#{model}),#{context})"
+    )
+    step.add(f"SHAPE_DEFINITION_REPRESENTATION(#{shape},#{representation})")
+    path.write_text(
+        step.render(name=path.name, description="one declared body, two separated sheets"),
+        encoding="ascii",
+    )
+    return path
