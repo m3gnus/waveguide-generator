@@ -182,11 +182,15 @@ Stated plainly, because "it parses" is not "it builds":
 | The workflow is a complete graph | `scripts/tests/test_main_build_proposal.py`: every `needs` names a job that exists and has steps, artifacts match by name across jobs, and every asset `shared/release_assets.py` produces is matched by an upload path. |
 | One commit is built | The identity job resolves `inputs.sha` once; every other job checks out that SHA, and the manifest records it. |
 | The flags it calls exist | The test runs `--help` on both scripts. |
+| **The stamp runs on a runner with nothing installed** | The test executes the template's own stamp block, in a fresh checkout, with site-packages disabled. `bump_version.py` reaches every copy of the version — including the OpenAPI snapshot's `info.version` — using only the standard library, so no dependency set has to exist before the version is decided. |
+| The four platform stamp commits are the same commit | The same test stamps two independent checkouts and compares the resulting SHA. |
+| Actions are pinned to digests, Node to a patch | Asserted, against the same action names `rc-build.yml` uses. A fixed ref detects **tool drift**; it is not publisher authentication of anything the workflow produces. |
 | A stamp reaches the app layer only once committed | `scripts/tests/test_build_bundle.py`, against the real materializer. |
 | The native version fields take the value passed to them | `server/tests/test_version_consistency.py` for the plist, `scripts/tests/test_build_bundle.py` for the Inno defines. |
 | An installed copy accepts a pre-release update request | `server/tests/test_update_handoff.py`, both the bundle and the release-tag paths. |
 | **Not checked: that Inno Setup compiles the script** | ISCC is Windows-only and was not run. What is checked is that it is handed four numbers rather than a SemVer string, which is the input that made it refuse. |
 | **Not checked: that macOS packages, or that any installer runs** | Those need the runners, and a published build needs the authorizations below. |
+| **Not checked: that WG's own artifacts are signed** | They are not, here or for a release. Whether that is acceptable for a channel that installs more often is an open owner decision, and no pin in this workflow bears on it. |
 
 ### Old-client compatibility
 

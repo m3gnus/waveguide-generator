@@ -32,6 +32,15 @@ on:
         required: false
         default: "main"
 
+# Every action is pinned to a digest, and Node to an exact patch, matching the
+# refs `.github/workflows/rc-build.yml` carries. Be precise about what that
+# buys: a fixed ref detects **tool drift** -- the build is the build that was
+# reviewed, and a tag repointed underneath it cannot change what runs. It is
+# NOT publisher authentication of anything this workflow produces. WG's own
+# artifacts are unsigned here exactly as they are for a release, and whether
+# that is acceptable for a channel that installs more often is a separate,
+# open, owner decision. See docs/reference/UPDATE-CHANNELS.md.
+
 permissions:
   contents: read
 
@@ -53,7 +62,7 @@ jobs:
       # `treeSha256`.
       stamp_date: ${{ steps.resolve.outputs.stamp_date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
       - id: resolve
@@ -88,17 +97,28 @@ jobs:
     runs-on: ubuntu-latest
     needs: identity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.identity.outputs.source }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          node-version: "20.20.2"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       # The stamp comes before `npm ci`: the SPA compiles __WG2_VERSION__ from
       # package.json, so a build stamped afterwards would report the last
       # release from inside the running application.
+      #
+      # It is also the first thing this job runs, on a runner with nothing
+      # installed but its host Python -- which is why `bump_version.py` reaches
+      # every copy of the version itself, including the OpenAPI snapshot's
+      # `info.version`, and imports nothing outside the standard library.
+      # Regenerating that snapshot needs FastAPI and the rest of the server, so
+      # a stamp that called `gen_openapi.py` would need the whole dependency set
+      # installed on all four runners before the version was even decided.
+      # `scripts/tests/test_main_build_proposal.py` runs these exact commands
+      # with site-packages disabled, in a fresh checkout, so "it runs on a clean
+      # runner" is checked rather than assumed.
       - name: Stamp this build's identity
         env:
           VERSION: ${{ needs.identity.outputs.version }}
@@ -107,7 +127,6 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/bump_version.py --build-stamp --set "$VERSION"
-          python scripts/gen_openapi.py --write
           python scripts/bump_version.py --check --build-stamp
           git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com \
             commit -aqm "Build stamp $VERSION" --no-gpg-sign
@@ -125,7 +144,7 @@ jobs:
           sha256sum "$archive" > "$archive.sha256"
           echo "artifact=$archive" >> "$GITHUB_ENV"
           tar -tzf "$archive" | grep -Fx "dist/index.html"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: main-build-spa
           path: |
@@ -138,14 +157,14 @@ jobs:
     runs-on: macos-latest
     needs: [identity, spa]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.identity.outputs.source }}
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.2"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: main-build-spa
           path: build/spa
@@ -161,7 +180,6 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/bump_version.py --build-stamp --set "$VERSION"
-          python scripts/gen_openapi.py --write
           python scripts/bump_version.py --check --build-stamp
           git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com \
             commit -aqm "Build stamp $VERSION" --no-gpg-sign
@@ -177,7 +195,7 @@ jobs:
           uv run --no-project --python 3.13.12 scripts/build_bundle.py \
             --spa "$spa" --output build/bundle --source-commit "$SOURCE"
       - name: Share the canonical platform-neutral app layer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: main-build-app-layer
           path: |
@@ -186,7 +204,7 @@ jobs:
             build/bundle/update-app-*.manifest.json
           if-no-files-found: error
       - name: Share the macOS assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: main-build-macos
           path: |
@@ -201,18 +219,18 @@ jobs:
     runs-on: windows-latest
     needs: [identity, spa, macos-bundle]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.identity.outputs.source }}
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.2"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: main-build-spa
           path: build/spa
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: main-build-app-layer
           path: build/app-reference
@@ -225,7 +243,6 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python scripts/bump_version.py --build-stamp --set $env:VERSION
-          python scripts/gen_openapi.py --write
           python scripts/bump_version.py --check --build-stamp
           git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com commit -aqm "Build stamp $env:VERSION" --no-gpg-sign
       - name: Install the pinned Inno Setup
@@ -275,7 +292,7 @@ jobs:
           }
           Write-Host "Cross-platform app layer treeSha256: $localTree"
       - name: Share the Windows assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: main-build-windows
           path: |
@@ -295,18 +312,18 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [identity, spa, macos-bundle]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.identity.outputs.source }}
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.2"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: main-build-spa
           path: build/spa
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: main-build-app-layer
           path: build/app-reference
@@ -318,7 +335,6 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/bump_version.py --build-stamp --set "$VERSION"
-          python scripts/gen_openapi.py --write
           python scripts/bump_version.py --check --build-stamp
           git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com \
             commit -aqm "Build stamp $VERSION" --no-gpg-sign
@@ -350,7 +366,7 @@ jobs:
           print(f"Cross-platform app layer treeSha256: {trees[0]}")
           PY
       - name: Share the Linux assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: main-build-linux
           path: |
@@ -381,10 +397,10 @@ jobs:
     steps:
       # A checkout, so `shared/release_assets.py` names the assets here rather
       # than a second copy of those names living in this file.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.identity.outputs.source }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: build/artifacts
       - name: Sort the assets into the two releases

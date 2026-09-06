@@ -37,6 +37,29 @@ def _load_bump_version():
 bump_version = _load_bump_version()
 
 
+#: Every file `bump_version.write` rewrites. Tests copy all of them, because a
+#: test that patches four of five paths writes the fifth into the repository --
+#: which is how a suite run left the committed OpenAPI snapshot naming a build
+#: version that was never released.
+WRITTEN_PATHS = (
+    "VERSION_FILE",
+    "PACKAGE_JSON",
+    "PACKAGE_LOCK",
+    "APP_PLIST",
+    "OPENAPI_SNAPSHOT",
+)
+
+
+def isolate_version_files(tmp_path, monkeypatch) -> None:
+    """Point every copy at a scratch duplicate of the real one."""
+
+    for attribute in WRITTEN_PATHS:
+        source = getattr(bump_version, attribute)
+        copy = tmp_path / source.name
+        copy.write_bytes(source.read_bytes())
+        monkeypatch.setattr(bump_version, attribute, copy)
+
+
 def test_every_declared_version_agrees() -> None:
     assert bump_version.check() == []
 
@@ -145,12 +168,7 @@ def test_check_validates_a_build_stamp_only_when_asked_to(tmp_path, monkeypatch)
     same check rather than no check at all.
     """
 
-    for attribute in ("VERSION_FILE", "PACKAGE_JSON", "PACKAGE_LOCK", "APP_PLIST"):
-        source = getattr(bump_version, attribute)
-        copy = tmp_path / source.name
-        copy.write_bytes(source.read_bytes())
-        monkeypatch.setattr(bump_version, attribute, copy)
-    monkeypatch.setattr(bump_version, "_openapi_version", lambda: "0.4.0-main.7")
+    isolate_version_files(tmp_path, monkeypatch)
     bump_version.write("0.4.0-main.7", allow_prerelease=True)
 
     # The natives disagree with shared/version.json on purpose, and `check`
@@ -161,12 +179,7 @@ def test_check_validates_a_build_stamp_only_when_asked_to(tmp_path, monkeypatch)
 
 
 def test_check_still_reports_a_native_field_that_drifted(tmp_path, monkeypatch) -> None:
-    for attribute in ("VERSION_FILE", "PACKAGE_JSON", "PACKAGE_LOCK", "APP_PLIST"):
-        source = getattr(bump_version, attribute)
-        copy = tmp_path / source.name
-        copy.write_bytes(source.read_bytes())
-        monkeypatch.setattr(bump_version, attribute, copy)
-    monkeypatch.setattr(bump_version, "_openapi_version", lambda: "0.4.0-main.7")
+    isolate_version_files(tmp_path, monkeypatch)
     bump_version.write("0.4.0-main.7", allow_prerelease=True)
     plist = bump_version.APP_PLIST
     plist.write_text(
@@ -181,6 +194,36 @@ def test_check_still_reports_a_native_field_that_drifted(tmp_path, monkeypatch) 
     ]
 
 
+def test_writing_a_version_touches_nothing_outside_the_paths_it_declares(
+    tmp_path, monkeypatch
+) -> None:
+    """A test that isolates some of the copies edits the repository with the rest.
+
+    That is not hypothetical: adding the OpenAPI snapshot to `write` left three
+    tests patching four of the five paths, and a suite run rewrote the committed
+    snapshot to a build version. `WRITTEN_PATHS` is the list they share, and
+    this is what keeps it complete.
+    """
+
+    isolate_version_files(tmp_path, monkeypatch)
+    watched = {
+        attribute: getattr(bump_version, attribute)
+        for attribute in WRITTEN_PATHS
+    }
+    before = {
+        attribute: path.read_bytes() for attribute, path in watched.items()
+    }
+
+    bump_version.write("0.4.0-main.7", allow_prerelease=True)
+
+    # Every declared path is a scratch copy, so every file `write` touched is
+    # one of these -- and each of them did change, which is what makes the list
+    # a complete description of the write rather than a superset.
+    for attribute, path in watched.items():
+        assert path.read_bytes() != before[attribute], attribute
+        assert path.parent == tmp_path, attribute
+
+
 def test_the_build_stamp_reaches_every_declared_copy(tmp_path, monkeypatch) -> None:
     """One stamp or none: a packaged app that disagrees with the file it was
     published under is the failure this exists to prevent.
@@ -190,14 +233,7 @@ def test_the_build_stamp_reaches_every_declared_copy(tmp_path, monkeypatch) -> N
     documentation allows, which is a separate test above.
     """
 
-    for attribute in ("VERSION_FILE", "PACKAGE_JSON", "PACKAGE_LOCK", "APP_PLIST"):
-        source = getattr(bump_version, attribute)
-        copy = tmp_path / source.name
-        copy.write_bytes(source.read_bytes())
-        monkeypatch.setattr(bump_version, attribute, copy)
-    # The OpenAPI snapshot is written by gen_openapi.py, not by this script, so
-    # it is excluded here exactly as `write` excludes it.
-    monkeypatch.setattr(bump_version, "_openapi_version", lambda: "0.4.0-main.7")
+    isolate_version_files(tmp_path, monkeypatch)
 
     bump_version.write("0.4.0-main.7", allow_prerelease=True)
 

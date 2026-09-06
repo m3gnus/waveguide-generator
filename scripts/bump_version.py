@@ -233,6 +233,40 @@ def _replace_plist_version(new: str) -> None:
     APP_PLIST.write_text(text, encoding="utf-8")
 
 
+def _replace_openapi_version(new: str) -> None:
+    """Move the version the committed OpenAPI snapshot declares.
+
+    Only ``info.version``: everything else in that file is generated from the
+    live application by ``scripts/gen_openapi.py``, and a route change still
+    needs that script. The version is the one field a version bump can move on
+    its own, and moving it here is what keeps this script **dependency free**.
+
+    That matters where it is used. The snapshot is one of the copies ``check``
+    compares, so leaving it behind meant a stamped build could only be verified
+    after importing the whole server -- FastAPI and the rest -- which on a build
+    runner means installing the dependency set before the version is even
+    decided. Nothing here imports anything but the standard library.
+
+    The rewrite is a full ``json.dumps`` with the same options
+    ``scripts/gen_openapi.py`` uses, so the file it produces is byte for byte
+    the file that script would produce, and a snapshot missing or unreadable is
+    skipped exactly as ``_openapi_version`` skips it.
+    """
+
+    try:
+        document = _read_json(OPENAPI_SNAPSHOT)
+    except VersionError:
+        return
+    info = document.get("info")
+    if not isinstance(info, dict) or "version" not in info:
+        return
+    info["version"] = new
+    OPENAPI_SNAPSHOT.write_text(
+        json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def write(new: str, *, allow_prerelease: bool = False) -> None:
     parse(new, where="--set", allow_prerelease=allow_prerelease)
     _replace_version(VERSION_FILE, new, occurrences=1)
@@ -241,6 +275,7 @@ def write(new: str, *, allow_prerelease: bool = False) -> None:
     # the root, which humans read, and once in packages[""], which npm reads.
     _replace_version(PACKAGE_LOCK, new, occurrences=2)
     _replace_plist_version(new)
+    _replace_openapi_version(new)
 
 
 def next_version(part: str) -> str:
@@ -299,7 +334,10 @@ def main(argv: list[str] | None = None) -> int:
         # move it. Saying so here is the difference between noticing now and
         # noticing when all three server jobs go red on the release commit,
         # which is how 0.2.5 found out.
-        print("next: python scripts/gen_openapi.py --write")
+        # The snapshot's version moved with everything else; regenerating it is
+        # still how a *route* change reaches it, and that needs the server's
+        # dependencies.
+        print("next: python scripts/gen_openapi.py --write, if any route changed")
         if args.build_stamp:
             # Not a release, so no tag instruction. The commit is what the
             # bundle builder reads: it materializes the app layer from Git

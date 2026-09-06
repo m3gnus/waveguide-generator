@@ -20,8 +20,11 @@ decision. See `docs/reference/UPDATE-CHANNELS.md`.
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -31,6 +34,19 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROPOSAL = REPO_ROOT / "docs" / "reference" / "main-build.workflow-proposal.yml"
 RC_BUILD = REPO_ROOT / ".github" / "workflows" / "rc-build.yml"
+
+#: Everything the stamp reads or rewrites, which is the whole of what a clean
+#: runner needs before any dependency exists.
+STAMPED_PATHS = (
+    "shared",
+    "scripts/bump_version.py",
+    "server/__init__.py",
+    "server/platform",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "launchers",
+    "docs/reference/openapi.v1.json",
+)
 
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -303,11 +319,16 @@ def test_the_publish_job_can_actually_run_gh(proposal: dict) -> None:
     assert "--cleanup-tag" not in body
 
 
-def test_the_shared_actions_are_pinned_exactly_as_the_real_workflows_pin_them(
+def test_every_action_is_pinned_to_a_digest_and_node_to_a_patch(
     proposal: dict,
 ) -> None:
-    """A proposal that drifts from the workflows it mirrors is reviewed against
-    a build nobody runs."""
+    """A floating `@v4` is a different build tomorrow than the one reviewed.
+
+    Be precise about what this buys: a fixed ref detects **tool drift**. It is
+    not publisher authentication of anything this workflow produces -- WG's own
+    artifacts are unsigned here exactly as they are for a release, which is a
+    separate open decision.
+    """
 
     def pins(document: dict) -> set[str]:
         return {
@@ -317,10 +338,151 @@ def test_the_shared_actions_are_pinned_exactly_as_the_real_workflows_pin_them(
             if "uses" in step
         }
 
-    proposed, actual = pins(proposal), pins(_load(RC_BUILD))
-    assert proposed <= actual, f"pins the real workflows do not use: {proposed - actual}"
-    # And the one pinned by digest stays pinned by digest.
-    assert any(re.fullmatch(r"astral-sh/setup-uv@[0-9a-f]{40}", pin) for pin in proposed)
+    proposed = pins(proposal)
+    floating = [pin for pin in proposed if not re.fullmatch(r"[^@]+@[0-9a-f]{40}", pin)]
+    assert not floating, f"not pinned to a digest: {floating}"
+    # The same actions the repository's own build workflow uses, by name: a
+    # proposal that reached for a different action would be reviewed against a
+    # build nobody runs.
+    assert {pin.split("@")[0] for pin in proposed} <= {
+        pin.split("@")[0] for pin in pins(_load(RC_BUILD))
+    }
+    node = [
+        step["with"]["node-version"]
+        for job in proposal["jobs"].values()
+        for step in _steps(job)
+        if "setup-node" in str(step.get("uses", ""))
+    ]
+    assert node and all(re.fullmatch(r"\d+\.\d+\.\d+", version) for version in node), node
+
+
+def test_the_stamp_runs_on_a_runner_with_nothing_installed(tmp_path: Path) -> None:
+    """The template's own stamp commands, executed, with site-packages disabled.
+
+    This is the check a string assertion cannot make. The stamp is the first
+    thing every build job runs, before any dependency is installed, and it has
+    to reach every copy of the version -- including the OpenAPI snapshot's
+    `info.version`, which `check` compares. An earlier draft called
+    `gen_openapi.py` there, which imports `server.app` and therefore FastAPI:
+    correct on this machine, and impossible on a clean runner.
+
+    Running under `-S` removes site-packages entirely, so anything outside the
+    standard library fails here rather than on the runner.
+    """
+
+    proposal = _load(PROPOSAL)
+    step = next(
+        step
+        for step in _steps(proposal["jobs"]["spa"])
+        if step.get("name") == "Stamp this build's identity"
+    )
+    # The commands as the template writes them, with the workflow's own
+    # expressions resolved -- not a paraphrase of them.
+    script = str(step["run"])
+    assert "${{" not in script
+    version = "0.4.0-main.7"
+    date = "2026-01-01T00:00:00+00:00"
+
+    def stamped(root: Path) -> str:
+        subprocess.run(
+            ["git", "init", "-q", "."], cwd=root, check=True, capture_output=True
+        )
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+        base = {
+            **os.environ,
+            "GIT_AUTHOR_DATE": date,
+            "GIT_COMMITTER_DATE": date,
+            "GIT_AUTHOR_NAME": "m-a",
+            "GIT_AUTHOR_EMAIL": "m3gnus@users.noreply.github.com",
+            "GIT_COMMITTER_NAME": "m-a",
+            "GIT_COMMITTER_EMAIL": "m3gnus@users.noreply.github.com",
+        }
+        subprocess.run(
+            ["git", "commit", "-qm", "source"], cwd=root, check=True, env=base,
+            capture_output=True,
+        )
+        # `python` on PATH is this interpreter with site-packages switched off.
+        shim = root.parent / "bin"
+        shim.mkdir(exist_ok=True)
+        (shim / "python").write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" -S "$@"\n', encoding="utf-8"
+        )
+        (shim / "python").chmod(0o755)
+        result = subprocess.run(
+            ["bash", "-c", script],
+            cwd=root,
+            env={**base, "VERSION": version, "PATH": f"{shim}:{os.environ['PATH']}"},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def checkout(into: Path) -> Path:
+        # Copied from the working tree rather than from `git archive HEAD`: the
+        # tree is what a runner checks out and what this test is about, and a
+        # copy taken from HEAD would quietly test the previous commit.
+        root = into / "repo"
+        root.mkdir(parents=True)
+        for relative in STAMPED_PATHS:
+            source = REPO_ROOT / relative
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(
+                    source, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+                )
+            else:
+                shutil.copy2(source, target)
+        return root
+
+    first = checkout(tmp_path / "a")
+    head = stamped(first)
+
+    # Every copy moved, and the check the stamp step runs is the one that says
+    # so -- with no server import anywhere in it.
+    declared = json.loads((first / "shared" / "version.json").read_text(encoding="utf-8"))
+    assert declared["version"] == version
+    snapshot = json.loads(
+        (first / "docs" / "reference" / "openapi.v1.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["info"]["version"] == version
+
+    # And the same source, stamped the same way, produces the same commit: the
+    # four platform jobs each make this commit independently, and their app
+    # manifests record it.
+    second = checkout(tmp_path / "b")
+    assert stamped(second) == head
+
+
+def test_the_windows_stamp_runs_the_same_commands(proposal: dict) -> None:
+    """PowerShell, so it cannot be executed here -- but it must not drift."""
+
+    steps = {
+        name: next(
+            step
+            for step in _steps(proposal["jobs"][name])
+            if step.get("name") == "Stamp this build's identity"
+        )
+        for name in ("spa", "windows-bundle")
+    }
+    posix = [
+        line.strip()
+        for line in str(steps["spa"]["run"]).splitlines()
+        if line.strip().startswith("python ")
+    ]
+    windows = [
+        line.strip()
+        for line in str(steps["windows-bundle"]["run"]).splitlines()
+        if line.strip().startswith("python ")
+    ]
+    assert [line.replace('"$VERSION"', "$env:VERSION") for line in posix] == windows
 
 
 @pytest.mark.parametrize(
