@@ -14,27 +14,42 @@ and the same download, and outside the two directories an update renames, so it
 survives the window it exists for. Nothing here imports from the app layer.
 
 **What it will and will not run.** The helper is named by this module, not by
-the journal, and it is verified against a digest recorded at build time before
-it is executed. The interpreter is the one already running this file, which is
-the bundle's own. Nothing is taken from ``PATH``, from the data directory, or
+the journal, and nothing is taken from ``PATH``, from the data directory, or
 from the record of the interrupted transaction: the journal decides *whether*
 there is something to recover, inside the helper, and never *what to run*.
 
+The digest recorded beside the helper is an **integrity** check and not
+publisher authentication. It catches a truncated, partially written or
+accidentally replaced copy -- the states an interrupted install actually
+produces -- and it does not catch an attacker who can write the installation
+directory, because such an attacker rewrites the manifest as well. Nothing here
+claims otherwise, and it must not: on macOS the bundle seal is *invalid* during
+an interrupted rename, which is precisely why recovery has to re-seal, so the
+signature cannot be leaned on at this moment either. Authenticating the helper
+would need a publisher key this project does not have.
+
 **The live-updater window.** An update in progress looks exactly like an
-interrupted one from outside: ``app`` is genuinely absent for the moment
-between two renames. A launcher that recovered immediately would race the
-updater that is mid-swap. So the app layer is given a bounded time to appear
-before anything is decided, which is also the better behaviour for the user --
-the application starts a few seconds late instead of fighting the process that
-is upgrading it. A residual race remains for an update slower than the dwell;
-closing it needs an interlock the journal does not currently carry, which is
-recorded in the plan rather than invented here.
+interrupted one from outside: ``app`` is genuinely absent between two renames.
+Waiting is not an interlock -- an updater slower than any wait is still
+mid-swap -- so this takes the same exclusive claim the updater takes
+(:mod:`update_lock`) and **fails closed** when it cannot: an installation whose
+update is owned by a live process is left alone, and the user is told to start
+it again in a moment. The dwell is kept in front of that, because the common
+case is an update that finishes in well under a second and should cost nobody a
+refusal.
+
+**What counts as recovered.** The helper's exit code is the verdict. A restored
+``app`` directory is not proof on its own: the helper reports failure when it
+could not re-seal the bundle, and it leaves the transaction open on purpose so
+the next start tries again. So both are required -- a zero exit *and* an
+installation whose layers are actually there.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -43,6 +58,11 @@ import subprocess
 import sys
 import time
 from typing import Mapping, Sequence
+
+try:  # inside the app layer, where this module is maintained
+    from launchers.update_lock import UpdateInProgress, claim_update as claim
+except ImportError:  # staged beside the helper, where it runs as a script
+    from update_lock import UpdateInProgress, claim_update as claim  # type: ignore[no-redef]
 
 
 APP_LAYER = "app"
@@ -66,10 +86,29 @@ DWELL_SECONDS = 0.5
 EXIT_OK = 0
 EXIT_UNRECOVERED = 1
 EXIT_NO_HELPER = 3
+#: A live updater owns this installation. Nothing was touched, and starting
+#: again shortly is the whole remedy.
+EXIT_UPDATE_IN_PROGRESS = 4
 
 
 class RecoveryUnavailable(RuntimeError):
     """The recovery route itself is not usable, before anything was tried."""
+
+
+def installation_is_complete(resources: Path) -> bool:
+    """Both layers present, each with the manifest that says it is a layer.
+
+    The positive check the exit code is paired with. A directory called ``app``
+    proves nothing -- a partially copied or half-renamed layer is a directory
+    too -- so the manifests the builder writes into each layer are what is
+    looked for, and a start is only allowed when both are there.
+    """
+
+    resources = Path(resources)
+    return (
+        (resources / APP_LAYER / "APP-MANIFEST.json").is_file()
+        and (resources / RUNTIME_LAYER / "RUNTIME-MANIFEST.json").is_file()
+    )
 
 
 def recovery_root(module_file: str | os.PathLike[str] | None = None) -> Path:
@@ -193,25 +232,28 @@ def verified_helper(recovery: Path) -> Path:
     return helper
 
 
-def app_layer_present(resources: Path) -> bool:
-    return (Path(resources) / APP_LAYER).is_dir()
-
-
-def wait_for_app_layer(
+def wait_for_installation(
     resources: Path,
     *,
     attempts: int = DWELL_ATTEMPTS,
     delay: float = DWELL_SECONDS,
     sleep=time.sleep,
 ) -> bool:
-    """Give an update in progress the time to put the app layer back."""
+    """Give an update in progress the time to put the layers back.
+
+    Waits on the whole installation rather than on ``app`` alone. The updater
+    takes one layer at a time -- rename aside, rename in -- so a kill inside the
+    *runtime's* turn leaves ``app`` already replaced and no interpreter to run
+    it with. A launcher that asked only about ``app`` would call that healthy
+    and exec a file that is not there.
+    """
 
     for remaining in range(max(0, attempts), 0, -1):
-        if app_layer_present(resources):
+        if installation_is_complete(resources):
             return True
         if remaining > 1:
             sleep(delay)
-    return app_layer_present(resources)
+    return installation_is_complete(resources)
 
 
 def recover(
@@ -239,7 +281,9 @@ def recover(
     env = os.environ if environ is None else environ
     say = report if report is not None else (lambda message: print(message, file=sys.stderr))
 
-    if wait_for_app_layer(resources, attempts=attempts, delay=delay, sleep=sleep):
+    # The dwell is not the interlock, it is the courtesy in front of it: most
+    # updates finish in well under a second and should cost nobody a refusal.
+    if wait_for_installation(resources, attempts=attempts, delay=delay, sleep=sleep):
         return EXIT_OK
 
     recovery = resources / RECOVERY_DIRECTORY
@@ -251,10 +295,6 @@ def recover(
         say(f"Waveguide Generator recovery: {exc}")
         return EXIT_NO_HELPER
 
-    say(
-        "Waveguide Generator: the application layer is missing, which is what an "
-        "interrupted update leaves behind. Recovering it..."
-    )
     command = [
         interpreter or sys.executable,
         str(helper),
@@ -265,19 +305,47 @@ def recover(
         str(data_dir),
     ]
     try:
-        completed = runner(command, check=False)
+        # The claim is held across the helper, so nothing may move a layer
+        # while it is deciding. Failing closed is the point: an installation
+        # somebody else owns is left exactly as it is.
+        with claim(data_dir):
+            say(
+                "Waveguide Generator: this installation is missing a layer, "
+                "which is what an interrupted update leaves behind. Recovering "
+                "it..."
+            )
+            completed = runner(command, check=False)
+    except UpdateInProgress:
+        say(
+            "Waveguide Generator: an update to this installation is still "
+            "running, so nothing was changed. It will finish on its own -- "
+            "start the application again in a moment."
+        )
+        return EXIT_UPDATE_IN_PROGRESS
     except OSError as exc:
         say(f"Waveguide Generator recovery: the helper could not be started: {exc}")
         return EXIT_NO_HELPER
     code = int(getattr(completed, "returncode", 1) or 0)
-    if app_layer_present(resources):
+    # Both, not either. A restored directory is not a completed recovery: the
+    # helper reports failure when it could not re-seal the bundle, and it leaves
+    # the transaction open on purpose so the next start tries again.
+    if code == 0 and installation_is_complete(resources):
         say("Waveguide Generator: the interrupted update was recovered.")
         return EXIT_OK
+    if code == 0:
+        say(
+            "Waveguide Generator: recovery reported success but the installation "
+            "is still incomplete, so it was not started."
+        )
+    else:
+        say(
+            f"Waveguide Generator: recovery did not finish (it exited {code}), so "
+            "the application was not started. The update log in the data "
+            "directory says what it was doing."
+        )
     say(
-        "Waveguide Generator: the interrupted update could not be recovered "
-        f"automatically (recovery exited {code}). Reinstall this version over "
-        "the top; your designs and settings are in the data directory and are "
-        "not touched by a reinstall."
+        "Reinstall this version over the top; your designs and settings are in "
+        "the data directory and are not touched by a reinstall."
     )
     return code or EXIT_UNRECOVERED
 
@@ -305,13 +373,29 @@ def windows_boot(
     if not _is_direct_windows_launch(arguments, program):
         return
     resources = Path(program).resolve().parent
-    if app_layer_present(resources):
-        import wg_desktop_bootstrap  # noqa: F401  (the app layer's own bootstrap)
-
+    if installation_is_complete(resources):
+        _start_application()
         return
-    raise SystemExit(
-        recover(resources=resources, arguments=arguments[1:], environ=env)
-    )
+    code = recover(resources=resources, arguments=arguments[1:], environ=env)
+    if code != EXIT_OK:
+        raise SystemExit(code)
+    # Recovery put the layer back, so this start continues into it rather than
+    # asking the user to open the application a second time. The import system
+    # cached the failure to find the app layer while it was genuinely absent,
+    # so the caches have to be dropped before the same path is tried again.
+    importlib.invalidate_caches()
+    _start_application()
+
+
+def _start_application() -> None:
+    """Hand over to the app layer's own bootstrap, which owns the start.
+
+    Separated so the recovered path and the ordinary path are the same line of
+    code; everything about *how* the application starts still lives in the
+    layer that ships with it.
+    """
+
+    import wg_desktop_bootstrap  # noqa: F401  (the app layer's own bootstrap)
 
 
 def _is_direct_windows_launch(arguments: Sequence[str], executable: str) -> bool:

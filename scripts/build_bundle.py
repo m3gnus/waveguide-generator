@@ -150,6 +150,7 @@ WINDOWS_PTH_NAME = "Waveguide Generator._pth"
 RECOVERY_DIRECTORY_NAME = "recovery"
 RECOVERY_HELPER_NAME = "apply_update.py"
 RECOVERY_ENTRY_NAME = "wg_bundle_recovery.py"
+RECOVERY_LOCK_NAME = "update_lock.py"
 RECOVERY_MANIFEST_NAME = "RECOVERY-MANIFEST.json"
 WINDOWS_PYVENV_NAME = "pyvenv.cfg"
 WINDOWS_RUNTIME_PTH_NAME = "python._pth"
@@ -905,6 +906,15 @@ def write_windows_bootstrap(app_root: Path) -> None:
     (app_root / "wg_desktop_bootstrap.py").write_text(
         windows_desktop_bootstrap(), encoding="utf-8", newline="\n"
     )
+    # Still written, and deliberately. An installation made before ``recovery``
+    # existed has a ``._pth`` that lists only ``app``, and it can still receive
+    # this app layer through an in-app update -- which would take its only site
+    # hook away and leave a double-click doing nothing at all. On a bundle that
+    # does have ``recovery``, that directory precedes ``app`` on the path, so
+    # the shim there is the one ``site`` finds and this copy is never imported.
+    (app_root / "sitecustomize.py").write_text(
+        "import wg_desktop_bootstrap\n", encoding="utf-8", newline="\n"
+    )
 
 
 def recovery_sitecustomize() -> str:
@@ -935,6 +945,8 @@ def recovery_manifest(recovery_root: Path, *, runtime_id: str) -> dict[str, obje
         "helperSha256": file_sha256(recovery_root / RECOVERY_HELPER_NAME),
         "entry": RECOVERY_ENTRY_NAME,
         "entrySha256": file_sha256(recovery_root / RECOVERY_ENTRY_NAME),
+        "lock": RECOVERY_LOCK_NAME,
+        "lockSha256": file_sha256(recovery_root / RECOVERY_LOCK_NAME),
     }
 
 
@@ -979,6 +991,11 @@ def write_recovery_layer(
     )
     shutil.copyfile(
         repo_root / "launchers" / "bundle_recovery.py", recovery / RECOVERY_ENTRY_NAME
+    )
+    # The claim both sides take. It travels with the pair rather than being
+    # imported from the app layer, for the same reason they do.
+    shutil.copyfile(
+        repo_root / "launchers" / RECOVERY_LOCK_NAME, recovery / RECOVERY_LOCK_NAME
     )
     if platform_name == WINDOWS_PLATFORM:
         (recovery / "sitecustomize.py").write_text(

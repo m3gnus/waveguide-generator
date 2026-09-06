@@ -25,6 +25,15 @@ except ImportError:  # pragma: no cover - taken only on Windows
     fcntl = None  # type: ignore[assignment]
 
 
+try:  # inside the app layer, where this module is maintained
+    from launchers.update_lock import claim_update as _claim_update
+except ImportError:  # staged beside the bootstrap recovery, where it is a script
+    try:
+        from update_lock import claim_update as _claim_update  # type: ignore[no-redef]
+    except ImportError:  # pragma: no cover - an install predating the claim
+        from contextlib import nullcontext as _claim_update  # type: ignore[assignment]
+
+
 class ApplyUpdateError(RuntimeError):
     """The live bundle could not be swapped or restored safely."""
 
@@ -2599,14 +2608,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.rollback:
         if args.staged_app_dir is not None or args.staged_runtime_dir is not None:
             parser.error("--rollback restores installed layers and takes no staged directories")
+    elif args.staged_app_dir is None:
+        parser.error("--staged-app-dir is required unless --rollback is given")
+    # Every refusal above happens first, so an unusable command line still
+    # creates nothing. Everything past this point moves a layer on purpose, so
+    # it takes the installation's update claim for the whole of it: the
+    # bootstrap recovery in ``bundle_recovery`` takes the same one and fails
+    # closed against it, which is what stops a launcher started mid-swap from
+    # renaming the directories this process is already renaming. Deliberately
+    # not taken for --recover, because the bootstrap holds the claim across that
+    # subprocess and a helper that re-acquired it would deadlock its own caller.
+    with _claim_update(args.data_dir):
+        return _run_transaction(args)
+
+
+def _run_transaction(args: argparse.Namespace) -> int:
+    if args.rollback:
         return rollback_bundle(
             bundle=args.bundle,
             data_dir=args.data_dir,
             parent_pid=args.parent_pid,
             relaunch_arguments=args.relaunch_args,
         )
-    if args.staged_app_dir is None:
-        parser.error("--staged-app-dir is required unless --rollback is given")
     return apply_update(
         bundle=args.bundle,
         data_dir=args.data_dir,

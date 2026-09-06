@@ -1578,6 +1578,9 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
     (tmp_path / "launchers" / "bundle_recovery.py").write_text(
         "# recovery entry\n", encoding="utf-8"
     )
+    (tmp_path / "launchers" / "update_lock.py").write_text(
+        "# update claim\n", encoding="utf-8"
+    )
     builder = BundleBuilder(tmp_path)
 
     builder.assemble_windows_bundle(
@@ -1598,6 +1601,7 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
     recovery = destination / "recovery"
     assert (recovery / "apply_update.py").read_text(encoding="utf-8") == "# updater\n"
     assert (recovery / "wg_bundle_recovery.py").read_text(encoding="utf-8") == "# recovery entry\n"
+    assert (recovery / "update_lock.py").read_text(encoding="utf-8") == "# update claim\n"
     assert (recovery / "sitecustomize.py").is_file()
     assert (recovery / "RECOVERY-MANIFEST.json").is_file()
     for filename in ("python313.dll", "python3.dll", *MSVC_RUNTIME_DLLS):

@@ -57,19 +57,22 @@ static int is_regular_file(const char *path) {
 }
 
 /*
- * Reach recovery when the app layer is the thing that is missing.
+ * Reach recovery when a layer is the thing that is missing.
  *
- * An update renames `app` aside and puts the staged copy in its place. Killed
- * between those two renames, it leaves no `app` -- and everything this launcher
- * used to be able to do next lived inside it. So the recovery route is staged
- * beside the layers instead, at Resources/recovery, and this runs it with the
- * bundle's own interpreter: whichever of runtime/ and runtime.previous/ is
- * there. Nothing is taken from PATH or from the user's data directory; the two
- * paths below are built from the resolved bundle and from nothing else.
+ * The updater renames each layer aside and puts the staged copy in its place,
+ * one layer at a time. Killed between those two renames it leaves either no
+ * `app` or no `runtime` -- and everything this launcher used to be able to do
+ * next lived in one of them: the application in `app`, and the interpreter that
+ * runs it in `runtime`. So the recovery route is staged beside both, at
+ * Resources/recovery, and this runs it with whichever of runtime/ and
+ * runtime.previous/ survived. Nothing is taken from PATH or from the user's
+ * data directory; every path below is built from the resolved bundle and from
+ * nothing else.
  *
  * Run as a child rather than exec'd, because the launcher still has a job
- * afterwards: if recovery put the app layer back, this start continues into it.
- * Returns 1 when the app layer exists afterwards.
+ * afterwards: if recovery put the layers back, this start continues into them.
+ * Returns the child's exit status, which is the verdict -- a directory back in
+ * place is not a completed recovery, and the entry knows the difference.
  */
 static int attempt_recovery(const char *resources, int argc, char *argv[]) {
     char entry[PATH_MAX];
@@ -117,10 +120,7 @@ static int attempt_recovery(const char *resources, int argc, char *argv[]) {
     while (waitpid(child, &status, 0) < 0) {
         /* Interrupted by a signal; the child is still the one to wait for. */
     }
-
-    char app_layer[PATH_MAX];
-    snprintf(app_layer, sizeof(app_layer), "%s/app", resources);
-    return is_directory(app_layer);
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -177,9 +177,15 @@ int main(int argc, char *argv[]) {
         setenv("NUMBA_CACHE_DIR", numba, 1);
     }
 
-    if (!is_directory(app_root)) {
-        if (!attempt_recovery(resources, argc, argv)) {
-            fail("the application layer is missing and could not be recovered; "
+    /* Either layer can be the missing one, because the updater takes them one
+     * at a time: killed inside the runtime's turn, `app` is the new generation
+     * and there is no interpreter to run it with. Checking only for `app` would
+     * walk straight into an exec of a file that is not there. */
+    if (!is_directory(app_root) || access(interpreter, X_OK) != 0) {
+        if (!attempt_recovery(resources, argc, argv)
+            || !is_directory(app_root)
+            || access(interpreter, X_OK) != 0) {
+            fail("this installation is incomplete and could not be recovered; "
                  "reinstall this version over the top -- your designs and "
                  "settings live outside the application and are not touched");
             return EXIT_NO_EXEC;

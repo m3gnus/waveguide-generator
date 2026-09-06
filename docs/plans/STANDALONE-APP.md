@@ -220,29 +220,73 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
     shim is frozen at install time.
 
   **What it will and will not run.** The helper is named by this project, not by
-  the journal, and is verified against the recorded digest before it is executed;
-  the interpreter is the bundle's own, by absolute path. Nothing comes from `PATH`,
-  from the data directory, or from the record of the interrupted transaction — the
-  journal decides *whether* there is something to recover, inside the helper, and
-  never *what to run*. The staged `<data>/rollback/apply_update.py` copy remains the
-  manual route and is deliberately **not** what the automatic one executes: it is
-  writable by anything that can write the data directory.
+  the journal, and the interpreter is the bundle's own, by absolute path. Nothing
+  comes from `PATH`, from the data directory, or from the record of the interrupted
+  transaction — the journal decides *whether* there is something to recover, inside
+  the helper, and never *what to run*. The staged `<data>/rollback/apply_update.py`
+  copy remains the manual route and is deliberately **not** what the automatic one
+  executes: it is writable by anything that can write the data directory.
 
-  **The live-updater window.** An update in progress is indistinguishable from an
-  interrupted one from outside, because `app` really is absent between two renames.
-  The entry therefore waits for the layer to reappear — ten polls of half a second —
-  before deciding anything, which also makes a start during an update look slow
-  rather than combative. A residual race remains for a swap slower than the dwell;
-  closing it needs an interlock the journal does not carry (a live updater pid, or a
-  lock both parties take), which is recorded here rather than invented in a launcher.
+  The digest beside the helper is an **integrity** check, not publisher
+  authentication. It catches a truncated, partially written or accidentally
+  replaced copy — the states an interrupted install actually produces — and it does
+  **not** catch someone who can write the installation directory, because they
+  rewrite the manifest too. The macOS seal cannot stand in for it here either: the
+  seal is invalid during an interrupted rename, which is exactly why recovery has to
+  re-seal. Authenticating the helper needs a publisher key this project does not
+  have, and no claim above or below assumes one.
+
+  **The live-updater interlock.** An update in progress is indistinguishable from an
+  interrupted one from outside, because a layer really is absent between two
+  renames. Waiting is not an interlock — an updater slower than any wait is still
+  mid-swap — so both sides take the same exclusive claim, `launchers/update_lock.py`:
+  an OS lock on `<data>/updates/update.lock`, taken by the updater CLI for the whole
+  of an apply or rollback, and by the bootstrap recovery across the helper it runs.
+  The bootstrap **fails closed**: an installation whose update is owned by a live
+  process is left untouched and the user is told to start again in a moment. It is
+  an OS lock on a descriptor rather than a pid file on purpose — the kernel drops it
+  when the holder dies, so a killed updater releases it by dying, which is precisely
+  the case this whole route exists for. `--recover` deliberately does not take it,
+  because the bootstrap holds it across that subprocess. A dwell is kept in front of
+  the claim as a courtesy: most updates finish in well under a second and should
+  cost nobody a refusal.
+
+  **What counts as recovered.** The helper's exit code is the verdict, and a
+  restored directory is not one. `recover_transaction` reports failure when it could
+  not re-seal the bundle and leaves the transaction open on purpose so the next
+  start tries again; reading the file system instead would launch a bundle whose
+  signature still describes the generation that was replaced. The bootstrap requires
+  both a zero exit **and** an installation whose two layers are present with their
+  manifests, and it waits on that whole condition rather than on `app` alone —
+  `swap_staged_layers` takes one layer at a time, so a kill inside the runtime's turn
+  leaves `app` already replaced and no interpreter to run it with.
+
+  **Which installations get this.** It arrives with the installer and only with the
+  installer:
+
+  | Upgrade path | Recovery capability |
+  |---|---|
+  | Fresh install from a new DMG, Windows setup or Linux tarball | **yes** — `assemble_*_bundle` stages `recovery/`, and the launchers are the new ones |
+  | An installation made before this, receiving new app/runtime layers in-app | **no** — the layer archives are built from the layer trees and carry no `recovery/`; `refresh_launcher_files` transports only what the runtime manifest's `launcherFiles` names (the renamed pythonw and its DLLs); the `._pth` and the native launchers are not refreshed at all. It keeps recovering exactly as it did before, which is: whenever the app layer survived |
+  | An installation that has `recovery/`, receiving later app layers in-app | keeps the `recovery/` it was installed with. It does **not** become newer, and nothing here claims it does |
+
+  The seam that had to be preserved, and is: `write_windows_bootstrap` still writes
+  `app/sitecustomize.py`. An older installation's `._pth` lists only `app`, so that
+  copy is its only site hook, and dropping it would have left a double-click doing
+  nothing on every old Windows install that took this app layer. On a bundle that
+  has `recovery`, that directory precedes `app` on the import path, so the shim is
+  what `site` finds and the app copy is never imported. Both orders are asserted.
 
   `test_the_native_launchers_reach_recovery_without_an_app_layer` asserts the three
   wirings so the statement cannot rot silently, and
-  `server/tests/test_bundle_recovery.py` drives the first two end to end: the real
-  compiled macOS binary and the real generated Linux script, against an installation
-  whose app layer was renamed aside after a real `begin_update_transaction`. On the
-  same fixture the shipped launcher exits 71 having recovered nothing; the changed
-  one restores the layer and continues into the application, with user data intact.
+  `server/tests/test_bundle_recovery.py` drives the first two end to end against
+  installations interrupted after a real `begin_update_transaction`: the real
+  compiled macOS binary with no app layer, the same binary with no *runtime* layer
+  and an emptied `PATH`, and the real generated Linux script. On one fixture the
+  shipped launcher exits 71 having recovered nothing; the changed one restores the
+  layers and continues into the application, with user data intact. The negative
+  control runs the real helper against a bundle that cannot be re-sealed: the layers
+  come back, the helper fails, and nothing is started.
 
   **The Windows limit, stated plainly.** Its arm is exercised as the Python it is —
   the shim's decision, the `._pth` ordering, the staged files — and not as a
