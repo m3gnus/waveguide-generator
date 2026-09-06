@@ -10,6 +10,24 @@ name: Release
 # of a gate that had never run permanently spent v0.2.5 and v0.2.6, because
 # GIT-WORKFLOW.md section 4 keeps published tags immutable. With the tag created
 # last, a failed build costs nothing and the same version is retried.
+#
+# Every action is pinned to an immutable commit, with the release it belonged to
+# in a trailing comment. A major tag such as `@v4` moves, so a workflow that
+# names one does not describe the code that ran: the inputs of a release build
+# would be whatever those tags pointed at on the day. `scripts/tests/
+# test_release_workflow.py` fails this file if a floating reference reappears,
+# and rc-build.yml carries the same pins so a hand-tested candidate is built by
+# the same actions as the release.
+#
+# What is still not pinned, stated rather than glossed over: the hosted runner
+# images (`ubuntu-latest`, `macos-latest`, `windows-latest`, `ubuntu-24.04`)
+# are rebuilt weekly by GitHub and carry no addressable identity a workflow can
+# name. Four tools are pinned on top of them -- uv, the CPython standalone
+# build, Node, Inno Setup -- and that is the list, not a summary of everything
+# the build touches: the shell, tar, git, hdiutil, codesign, the system Python
+# and the platform toolchains all arrive with the image at whatever version it
+# carries that week. So this is meaningful drift reduction, and it is not a
+# reproducible or authenticated toolchain; neither claim should be made from it.
 
 on:
   workflow_dispatch:
@@ -30,16 +48,42 @@ jobs:
       tag: ${{ steps.release_guard.outputs.tag }}
       version: ${{ steps.release_guard.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           ref: ${{ inputs.sha }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          node-version: "20.20.2"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      - name: The Node the release was built with must be the pinned one
+        # Drift detection, and only that. setup-node performs no digest check on
+        # the archive it fetches from nodejs.org -- verified by reading its
+        # distribution sources at the commit pinned above, which contain no
+        # checksum code. This step does not close that: a substituted binary can
+        # print any version it likes, so a version match is not authentication
+        # of the bytes. What it does catch is the drift this pin exists for -- a
+        # runner tool cache that answers a version spec differently, or a pin
+        # that silently widens -- at the build rather than inside an artifact
+        # nobody can date afterwards.
+        #
+        # Authenticating the Node download is possible and is NOT implemented
+        # here: it would mean fetching the archive in this workflow and checking
+        # it against a digest pinned in this repository. That is a real change
+        # with its own review, not something this step should be read as having
+        # done.
+        run: |
+          set -euo pipefail
+          expected="v20.20.2"
+          actual="$(node --version)"
+          if [ "$actual" != "$expected" ]; then
+            echo "Expected Node $expected, got $actual" >&2
+            exit 1
+          fi
+          echo "Node $actual"
 
       - name: The version must be unreleased and the commit must be on main
         id: release_guard
@@ -105,7 +149,7 @@ jobs:
           echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
 
       - name: The release commit must have successful CI
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           RELEASE_COMMIT: ${{ steps.release_guard.outputs.release_commit }}
         with:
@@ -152,7 +196,7 @@ jobs:
           tar -tzf "$archive" | grep -Fx "dist/index.html"
 
       - name: Share the SPA with bundle and publisher jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-spa
           path: |
@@ -165,7 +209,7 @@ jobs:
     runs-on: macos-latest
     needs: spa
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
 
@@ -175,7 +219,7 @@ jobs:
           version: "0.11.2"
 
       - name: Download the verified SPA inputs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-spa
           path: build/spa
@@ -190,7 +234,7 @@ jobs:
           uv run --no-project --python 3.13.12 scripts/build_bundle.py --spa "$spa" --output build/bundle
 
       - name: Share the canonical platform-neutral app layer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: standalone-app-layer
           path: |
@@ -200,7 +244,7 @@ jobs:
           if-no-files-found: error
 
       - name: Share the complete macOS release asset set
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: standalone-macos-assets
           path: |
@@ -221,7 +265,7 @@ jobs:
     # Windows prove that its independently materialized Git blobs are exact.
     needs: [spa, macos-bundle]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
 
@@ -231,13 +275,13 @@ jobs:
           version: "0.11.2"
 
       - name: Download the verified SPA inputs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-spa
           path: build/spa
 
       - name: Download the macOS-built app layer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: standalone-app-layer
           path: build/app-reference
@@ -257,6 +301,24 @@ jobs:
                      Select-Object -First 1 -ExpandProperty FullName)
           }
           if (-not $iscc) { throw "Inno Setup installed but ISCC.exe was not found." }
+          # The chocolatey package embeds its installer rather than fetching
+          # one, so there is no separate download to checksum. Asserting which
+          # compiler runs is drift detection, like the Node check, not proof of
+          # the bytes.
+          #
+          # ISCC has no --version and prints its banner from `/?`, which exits
+          # non-zero. So the exit code is deliberately not the test -- and the
+          # output is captured whole before it is matched, because piping it
+          # straight into Select-Object would let an empty or failed invocation
+          # produce an empty banner that no pattern rejects for the wrong
+          # reason. An empty banner is failed explicitly here.
+          $banner = (& $iscc /? 2>&1 | Out-String)
+          if ([string]::IsNullOrWhiteSpace($banner)) {
+            throw "The Inno Setup compiler at $iscc printed no banner."
+          }
+          if ($banner -notmatch "6\.7\.1") {
+            throw "Expected the Inno Setup 6.7.1 compiler, got: $($banner.Trim())"
+          }
           "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and verify the standalone app
@@ -295,7 +357,7 @@ jobs:
           Write-Host "Cross-platform app layer treeSha256: $localTree"
 
       - name: Share the complete Windows release asset set
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: standalone-windows-assets
           path: |
@@ -320,7 +382,7 @@ jobs:
     # materialized Git blobs are exact.
     needs: [spa, macos-bundle]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
 
@@ -330,13 +392,13 @@ jobs:
           version: "0.11.2"
 
       - name: Download the verified SPA inputs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-spa
           path: build/spa
 
       - name: Download the macOS-built app layer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: standalone-app-layer
           path: build/app-reference
@@ -373,7 +435,7 @@ jobs:
           PY
 
       - name: Share the complete Linux release asset set
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: standalone-linux-assets
           path: |
@@ -394,31 +456,31 @@ jobs:
       UPDATES_TAG: ${{ needs.spa.outputs.tag }}-updates
       RELEASE_SHA: ${{ inputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           ref: ${{ inputs.sha }}
 
       - name: Download SPA assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-spa
           path: build/publish-inputs/spa
 
       - name: Download macOS assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: standalone-macos-assets
           path: build/publish-inputs/macos
 
       - name: Download Windows assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: standalone-windows-assets
           path: build/publish-inputs/windows
 
       - name: Download Linux assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: standalone-linux-assets
           path: build/publish-inputs/linux

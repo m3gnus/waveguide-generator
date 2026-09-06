@@ -21,8 +21,14 @@ from launchers.apply_update import (
     BUNDLE_LAYERS,
     FAILED_SUFFIX,
     PREVIOUS_SUFFIX,
+    RECOVERY_HELPER_DIRECTORY,
+    RECOVERY_HELPER_NAME,
     WINDOWS_LAUNCHER_NAME,
+    ApplyUpdateError,
+    RecoveryOutcome,
+    append_update_log,
     bundle_from_app_layer,
+    recover_transaction,
     resources_directory,
 )
 
@@ -32,8 +38,11 @@ VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_DETACHED_PROCESS = 0x00000008
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
-ROLLBACK_HELPER_DIRECTORY = "rollback"
-ROLLBACK_HELPER_SCRIPT = "apply_update.py"
+#: Imported rather than respelled: the transaction stages a copy at the same
+#: two names before it renames anything, so a handoff that stages it again must
+#: not be able to drift to a different path.
+ROLLBACK_HELPER_DIRECTORY = RECOVERY_HELPER_DIRECTORY
+ROLLBACK_HELPER_SCRIPT = RECOVERY_HELPER_NAME
 
 
 class UpdateHandoffError(RuntimeError):
@@ -165,6 +174,58 @@ def consume_update_request(
 # renames the application layers, so it is the last one that should be
 # executing whatever a user pip-installed years ago.
 NO_USER_SITE_ENVIRONMENT = {"PYTHONNOUSERSITE": "1"}
+
+
+def recover_interrupted_bundle_update(
+    server_args: Sequence[str] = (),
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform_name: str | None = None,
+) -> RecoveryOutcome | None:
+    """Decide an interrupted update before *any* start mode gets going.
+
+    Returns ``None`` when this is not a bundle -- a checkout has no layers to
+    swap -- and otherwise whatever reconciliation concluded.
+
+    This exists because the recovery that shipped ran inside
+    ``DesktopWindow._wait_for_frontend``, which only the ``--window`` start
+    reaches. A user who opens the app in browser mode, or a service that starts
+    it with ``--no-gui``, after a power cut during an update got no recovery at
+    all: the very modes most likely to be used when the window will not open.
+
+    It is called from the one place every mode passes through, and before the
+    branch that chooses one, which is also the moment when the least of the
+    application has been imported -- both terminal and browser mode defer their
+    heavy imports past this point, so a rollback here replaces a tree almost
+    nothing has read yet.
+    """
+
+    environment = os.environ if environ is None else environ
+    if environment.get("WG2_BUNDLE") != "1":
+        return None
+    selected_platform = sys.platform if platform_name is None else platform_name
+    try:
+        app_layer = Path(
+            environment.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[2]
+        ).resolve()
+        bundle = bundle_from_app_layer(app_layer, selected_platform)
+        resources = resources_directory(bundle, selected_platform)
+        data_dir = resolve_data_dir(
+            _data_dir_override(server_args), environ=environment
+        ).resolve()
+    except (ApplyUpdateError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        # Nothing has been touched. A bundle whose own layout cannot be resolved
+        # is not one this should start renaming directories inside.
+        return RecoveryOutcome(
+            "none", f"The bundle layout could not be resolved, so nothing was recovered: {exc}"
+        )
+    return recover_transaction(
+        data_dir=data_dir,
+        resources=resources,
+        bundle=bundle,
+        platform_name=selected_platform,
+        log=lambda message: append_update_log(data_dir, message),
+    )
 
 
 def _data_dir_override(server_args: Sequence[str]) -> str | None:

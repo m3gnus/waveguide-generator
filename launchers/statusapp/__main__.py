@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -346,6 +347,114 @@ def parse_arguments(arguments: list[str]) -> tuple[argparse.Namespace, list[str]
         return 0 if exc.code in (None, 0) else int(exc.code)
     return options, [argument for argument in arguments if argument not in DISPLAY_FLAGS]
 
+def _refuse_bundle_without_recovery(
+    cause: BaseException,
+    deliver: Callable[[str], None],
+) -> int | None:
+    """Answer a start whose recovery module could not be imported.
+
+    Returns None to start and an exit code to refuse.
+
+    A source checkout has no swappable layers, so nothing an interrupted update
+    could have left exists and it starts. That is the whole of the case that
+    needs no further proof: being a checkout *is* the evidence.
+
+    **An installed bundle fails closed**, and the reason it does not instead get
+    a cheaper check is worth writing down, because the first version of this
+    function tried one. It asked whether both layers were present and
+    ``layers_disagree`` was false -- and ``layers_disagree`` deliberately
+    answers false when either manifest is missing or unreadable, because it is
+    the compatibility helper for bundles that predate the field. So two empty
+    directories passed as "verified", which is measurably worse than no check:
+    it is a check that says yes to the state it exists to catch. Matching ids
+    would not have been enough either, since they say nothing about a
+    transaction that is recorded but not settled -- a restore whose renames
+    finished and whose seal did not looks exactly like a matched pair.
+
+    Real positive evidence would have to read the scoped journal, confirm it is
+    absent or terminal with no surviving temporary, and re-check the seal. That
+    is reconciliation, and reimplementing a second, weaker copy of it here in
+    order to keep a broken installation starting is the wrong trade twice over.
+
+    It also buys nothing in practice. The module that failed to import is
+    ``launchers.statusapp.updater``, which needs ``server.platform.paths`` and
+    ``launchers.apply_update``; a bundle where that fails has a server package
+    that will not import either, so terminal mode and browser mode were both
+    going to fail a moment later, further in, with a traceback instead of a
+    sentence.
+    """
+
+    import os
+
+    if os.environ.get("WG2_BUNDLE") != "1":
+        return None
+    deliver(
+        "Waveguide Generator could not check whether an earlier update was interrupted, "
+        "so it did not start. Starting without that check could run an installation "
+        f"that is part-way through a change.\n\n{type(cause).__name__}: {cause}\n\n"
+        "The update log in the application data log directory records the command that "
+        "repairs an interrupted update. If the log has no such entry, reinstall."
+    )
+    return 1
+
+
+def _recover_interrupted_bundle_update(
+    arguments: list[str],
+    *,
+    report: Callable[[str], None] | None = None,
+) -> int | None:
+    """Finish or undo an interrupted update, whatever mode was asked for.
+
+    Returns an exit code when the installation must not be started, and None
+    when it may be. Placed before the mode branch on purpose: the recovery that
+    shipped lived inside the desktop window's startup wait, so ``--browser``
+    and ``--no-gui`` skipped it -- and those are the modes a user reaches for
+    when the window will not open, which after an interrupted update is exactly
+    when it will not.
+
+    **Three outcomes, and only some of them may continue.** If the recovery
+    *call* raises, it had already begun -- and it renames directories, so the
+    exception may have arrived between two of them. What is on the disk is then
+    a possibly mixed installation that nothing has decided, and that refuses.
+    Collapsing that with a mechanism failure, which the first version of this
+    function did, fails open into precisely the state the transaction exists to
+    prevent.
+
+    If the recovery module cannot be *imported*, nothing ran -- but "nothing
+    ran" only describes this invocation. A checkout has no swappable layers and
+    may start; **an installed bundle may already be mixed from the interruption
+    that made recovery necessary**, and browser and terminal mode have no later
+    structural check to catch it, because the one that exists lives in the
+    desktop window. So a bundle fails closed. See
+    :func:`_refuse_bundle_without_recovery` for why it is not given a cheaper
+    check instead.
+    """
+
+    deliver = _report_startup_failure if report is None else report
+    try:
+        from launchers.statusapp.updater import recover_interrupted_bundle_update
+    except Exception as exc:  # noqa: BLE001 - degraded; see _verify_bundle_without_recovery
+        _log_startup_failure(f"The interrupted-update check could not be loaded: {exc!r}")
+        return _refuse_bundle_without_recovery(exc, deliver)
+    try:
+        outcome = recover_interrupted_bundle_update(arguments)
+    except BaseException as exc:  # noqa: BLE001 - it had started; the disk may have moved
+        message = (
+            "Waveguide Generator stopped while recovering an interrupted update, so it "
+            "did not start. The installation may be part-way through a change and must "
+            f"not be used until it is repaired.\n\n{type(exc).__name__}: {exc}"
+        )
+        _log_startup_failure(f"{message}\n{traceback.format_exc()}")
+        deliver(message)
+        return 1
+    if outcome is None or outcome.action != "failed":
+        return None
+    deliver(
+        "Waveguide Generator could not finish recovering an interrupted update, so it "
+        f"did not start.\n\n{outcome.detail}"
+    )
+    return 1
+
 
 def main(argv: list[str] | None = None) -> int:
     parsed = parse_arguments(list(sys.argv[1:] if argv is None else argv))
@@ -359,6 +468,23 @@ def main(argv: list[str] | None = None) -> int:
         report = _report_terminal_failure if options.no_gui else _report_startup_failure
         report("Choose only one display mode: --window or --browser.")
         return 2
+    # ``--no-gui`` promised to open no window of our own, and a refusal is still
+    # this mode's answer, so it reports the same way the display-mode
+    # contradiction just above does. This runs before the mode branch on
+    # purpose: the recovery that shipped lived inside the desktop window, so
+    # ``--browser`` and ``--no-gui`` skipped it -- and those are the modes a
+    # user reaches for when the window will not open, which after an
+    # interrupted update is exactly when it will not.
+    #
+    # ``arguments`` here is the server's own command line: ``parse_arguments``
+    # has already removed the display flags, and the recovery reads it only for
+    # a ``--data-dir`` override, so the stripped list is the right one to pass.
+    refusal = _recover_interrupted_bundle_update(
+        arguments,
+        report=_report_terminal_failure if options.no_gui else _report_startup_failure,
+    )
+    if refusal is not None:
+        return refusal
     if options.no_gui:
         # The status window refuses to start the backend when the interface is
         # missing (controller.poll). Terminal mode bypasses that guard by going

@@ -82,60 +82,228 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
   The second does not depend on the first and is ordinary code plus a key to
   protect. Which to take, and where the private key lives, is the decision.
 
-- **Recovery across the layer swap — partly implemented; not established as
-  power-loss durable.** Two next-start recovery paths exist in
-  `DesktopWindow._recover_interrupted_bundle_update` and are unit-tested:
+  **Re-checked 2026-09-06; it stays open. What was checked, so the next reader need
+  not repeat it:**
 
-  1. a live layer directory missing, restored from its `.previous`
-     (`test_startup_recovers_a_missing_live_layer_before_starting_the_server` in
-     `server/tests/test_desktop_launcher.py`);
-  2. both layers present but declaring different `runtimeId`s in
-     `app/APP-MANIFEST.json` and `runtime/RUNTIME-MANIFEST.json` — the state a stop
-     between the two renames leaves — detected and rolled back
-     (`test_an_update_interrupted_between_its_two_renames_is_rolled_back`), with
-     an absent or unreadable manifest deliberately not counted as disagreement so
-     an older bundle still starts
-     (`test_matching_layers_and_unreadable_manifests_both_start_normally`).
+  - The integrity side has no hole left to close as a consolation prize.
+    `_valid_proof` already refuses an asset carrying neither a GitHub `digest` nor a
+    checksum URL bound to that exact release, layer and filename — and refuses it
+    during validation, before the download rather than after. A digest mismatch
+    refuses before extraction. There is no bounded "verify harder" change available
+    that does not need a key.
+  - What *was* implementable with no secret and no trust decision was the wording,
+    and it was wrong in one place: the README described the download as
+    "checksum-verified" without saying what that does not establish. It now says
+    integrity, not authenticity, in the paragraph a user reads before clicking
+    **Install update**.
 
-  **That is the tested scope, and it is narrower than the gate.** What it does not
-  establish, and what would be needed to call the gate met:
+  **The gate, stated as the decision it is.** One of these is required from the
+  release owner. No agent can supply either, and neither is a code question:
 
-  - **Crash durability.** `os.replace` is atomic with respect to concurrent
-    readers; it is not a promise that the directory entry reached stable storage
-    before the next one was issued. `launchers/apply_update.py` contains no
-    `fsync` of the layer parents, so after power loss the two renames may be
-    observed in an order the process never produced. Logical rename atomicity is
-    not crash durability, and only the two shapes above were tested.
-  - **Arbitrary interruption points.** Both tests construct a specific end state.
-    Interruption inside `rollback_previous_layers`, during launcher-file
-    replacement, or with a partially populated staging directory is untested.
-  - **macOS reseal.** The ad-hoc signature is restored *after* the swap. A stop in
-    between leaves a bundle whose seal does not match its contents, and the
-    mixed-generation path (`_roll_back_mixed_generation`) returns without calling
-    `repair_bundle`, unlike the missing-layer path beside it. Whether that state
-    launches, and what Gatekeeper does with it, has not been measured.
-  - **Windows.** The local review ran on macOS. Existing Windows CI exercises
-    unit tests, but no real interrupted Windows upgrade was qualified here.
-    Directory replacement and file-handle behavior still need that platform
-    acceptance; `_rename` already retries transient replacement failures.
+  1. **A signing identity** — an Apple Developer ID (with notarization) and/or a
+     Windows Authenticode certificate. A purchase and a key-custody decision. It
+     also closes Gatekeeper and SmartScreen, which nothing else here does.
+  2. **A key for WG's own updater signature** — a private key that must live
+     somewhere protected, plus the decision about where. The verification half is
+     ordinary bounded code; it is worthless until something signs.
 
-  A durable journal is one way to attack the first point; manifest reconciliation
-  is not a substitute for it, because the manifests are only read after the fact
-  and cannot say which renames were persisted. A real interrupted upgrade on both
-  platforms remains owed either way.
+  A third route, **Sigstore keyless signing** from the release workflow, needs no
+  long-lived private key — but it needs `id-token: write` on the workflow, which is
+  `GIT-WORKFLOW.md` §1.2.5 and Magnus's call, every time. Named so the option is not
+  lost, not proposed as taken.
 
-- **Release-action and tool provenance — partly pinned; this is the residual.**
-  SHA-pinned with the version in a trailing comment: `astral-sh/setup-uv` and
-  `softprops/action-gh-release`. uv is pinned to an exact version. The Python
-  runtime is pinned twice — `PYTHON_VERSION = "3.13.12"` and
-  `PYTHON_BUILD = "20260325"` — and `require_python_build` fails the build when
-  uv's catalog resolves a different python-build-standalone release.
+  Until one of those exists, **0.3.2 ships with integrity verification and says so**,
+  in the README and in the release notes. Nothing in the product may describe the
+  GitHub digest or TLS as a publisher signature: they authenticate the repository
+  and the transport, never the person who produced the bytes.
 
-  Not pinned: `actions/checkout`, `actions/setup-node`, `actions/github-script`,
-  `actions/upload-artifact` and `actions/download-artifact`, each on a floating
-  major tag, and `node-version: "20"`. A major tag moves, so the release build is
-  not reproducible from its workflow text alone and its inputs are whatever those
-  tags pointed at on the day.
+- **Recovery across the layer swap — a durable transaction journal now decides it;
+  the platform acceptance is still owed.** *(Implemented 2026-09-06.)*
+
+  `launchers/apply_update.py` records what it is about to rename before it renames
+  any of it, in `<data>/update-transaction.json`, outside the bundle so the record
+  survives the very directories the transaction moves and does not have to join the
+  macOS reseal dance that `.previous` does. The record names the two layers, the
+  staged directory each is coming from, and the `runtimeId` each layer carried
+  before the swap and will carry after it — the one question the manifests cannot
+  answer afterwards, because a layer says what it *is*, never which of two renames
+  produced it.
+
+  Reconciliation reads that record and the live directories, and nothing else. The
+  staged directory is the marker that does the work: it exists until the moment it
+  *becomes* the live layer, so its presence says "this layer was not installed"
+  whatever order the renames reached the disk in. That is why no decision here
+  depends on rename ordering.
+
+  What the journal did not do is remove the file-system limits, so they are stated
+  rather than glossed:
+
+  - **Publication is durable only where a directory can be flushed.** The record is
+    written to a temporary name, flushed, and renamed into place; the rename is
+    durable once the directory is flushed, which POSIX can do and Windows cannot
+    (`os.open` offers no `FILE_FLAG_BACKUP_SEMANTICS`, and `FlushFileBuffers` is not
+    documented to do anything useful for a directory handle). Three states follow
+    from that, and each is answered: the new record; the previous record with the
+    temporary file beside it, which `read_journal` reports as unresolved whatever is
+    at the published name; or no record at all, which leaves the manifest and
+    directory checks that predate the journal in charge. `write_journal` reports
+    which guarantee it obtained and logs when it got the weaker one.
+
+    **This is not a claim that every state a power cut can leave is covered.** It is
+    the narrower one the tests support: these three *journal* states are handled
+    conservatively, and the journal adds information without subtracting the safety
+    that existed before it. Torn writes inside a layer directory, a file system that
+    reorders more than renames, and hardware that acknowledges a flush it has not
+    performed are all outside what any of this establishes.
+  - **macOS `fsync` is not a media flush.** `F_FULLFSYNC` is used where the file
+    system implements it. Where it does not — reported by `ENOTSUP`, `EINVAL` and
+    friends — the code falls back to `fsync` and logs that the guarantee is weaker.
+    Any other error propagates, so a failed write is never quietly downgraded into
+    a quieter flush that then reports success.
+  - **A restore is as interruptible as the swap.** A rollback killed after its first
+    layer leaves exactly the shape a finished swap leaves. Both are covered: every
+    path that restores writes a `rolling-back` state before it starts, and for every
+    bundle this project builds the two manifests carry `runtimeId`s that disagree in
+    that state anyway.
+
+    **That marker is the one journal write that is not advisory, and it is
+    required rather than best-effort.** The others are: reconciliation decides
+    from the live directories, so losing "swapped" changes nothing, and a
+    terminal state is written only after the work it describes has been done and
+    observed, so a start that misses it reaches the same conclusion again. The
+    `rolling-back` marker is different because a branch depends on it — and the
+    manifests can only stand in for it when the two layers carry *different*
+    `runtimeId`s, which an app-only update and any same-runtime update do not. So
+    nothing is renamed until it is recorded, exactly as no swap begins until its
+    own intent is; a restore that cannot record itself refuses and leaves the
+    installation as it found it, which the next start still reconciles from the
+    record the swap already wrote. "Deliberately not written" — an untrusted
+    record, left alone on purpose — is distinguished from "the write failed",
+    because an untrusted record already sends reconciliation down the restoring
+    path and needs no marker to steer it.
+
+  Recovery now runs for **every start mode**. It used to live inside
+  `DesktopWindow._wait_for_frontend`, so `--browser` and `--no-gui` skipped it
+  entirely — the modes a user reaches for when the window will not open. It is
+  called from `launchers/statusapp/__main__.py:main` before the branch that chooses
+  a mode, which is also the point at which the least of the application has been
+  imported.
+
+  Three answers, because two of them were once collapsed into one. A recovery that
+  *decides* the installation is broken refuses. A recovery that **raised** refuses
+  too: it had already begun, and it renames directories, so the exception may have
+  arrived between two of them. A recovery module that could not be **imported**
+  refuses for an installed bundle and starts for a source checkout — a checkout has
+  no swappable layers, which is evidence in itself, while "nothing ran" describes
+  only the invocation and says nothing about an installation that may already be
+  part-way through a change.
+
+  A cheaper check was tried there and removed. It asked whether both layers existed
+  and `layers_disagree` was false, and that helper answers false when either
+  manifest is missing or unreadable — deliberately, since it is the compatibility
+  path for bundles predating the field. Two empty directories passed it as
+  "verified": a check that says yes to the state it exists to catch. Matching ids
+  would not have sufficed either, because a restore whose renames finished and whose
+  seal did not looks exactly like a matched pair. Real evidence means reading the
+  scoped journal and re-checking the seal, which is reconciliation; a second, weaker
+  copy of it written to keep a broken installation starting is the wrong trade.
+
+  The mixed-generation path re-seals the macOS bundle, which it did not before
+  (`_roll_back_mixed_generation` returned without calling `repair_bundle`, unlike
+  the missing-layer path beside it).
+
+  An external entry point exists for the case where a layer is the thing that is
+  missing: `apply_update.py --recover --bundle … --data-dir …`. It could not
+  previously run in that case at all — the module imported `shared.safe_names` from
+  inside the `app` layer at import time. That import is still eager, because nothing
+  may import lazily once renaming has begun, but its failure is now recorded rather
+  than fatal, and installing launcher files, the one thing that needs it, refuses
+  without it. A copy is now staged at `<data>/rollback/apply_update.py` when the
+  transaction opens, not only when a handled failure hands off, so the copy exists
+  for the crash that never reaches a handoff.
+
+  **What that does and does not buy, traced through the real launchers.** Automatic
+  recovery runs inside the application, and every platform launcher reaches the
+  application through the `app` layer:
+
+  - Linux — the generated launcher refuses outright (`exit 71`, "reinstall it by
+    running install.sh") when `app` is missing or `runtime/bin/python3.13` is not
+    executable.
+  - macOS — `launchers/macos/launcher.c` `chdir`s into `app` before `exec`, and
+    fails there, so the interpreter beside it is never reached.
+  - Windows — the interpreter at the bundle root survives a `runtime` rename, which
+    is exactly why `rollback_interpreter` uses it; but the bootstrap it runs
+    (`sitecustomize` → `wg_desktop_bootstrap`) lives in the app layer.
+
+  So: **the swap's last window — killed between `app` → `app.previous` and
+  `staged` → `app` — is not automatically recoverable on any platform.** The staged
+  helper makes a *manual* repair always possible there, with any Python 3.13
+  including the bundle's own `runtime/bin/python3.13`; it does not make recovery
+  automatic, and this section does not claim it does. Closing that window means
+  changing the packaged bootstraps, which needs a native build to verify and is not
+  attempted here. `test_the_native_launchers_cannot_reach_recovery_without_an_app_layer`
+  asserts each of the three behaviours above so the statement cannot rot silently.
+
+  **Evidence, and its limits.** `server/tests/test_update_transaction.py` kills a
+  real updater subprocess with `SIGKILL` at each of the four renames and at three
+  points inside a restore, then recovers in a process that starts afterwards and
+  shares nothing with the one that died. That is a real proof of fresh-process
+  recovery; it is **not** a proof of power-loss durability, because the file system
+  is never actually interrupted, so every write those processes issued did land.
+  The states only a lost write can produce are constructed explicitly instead.
+
+  **Still owed, and not claimable from this machine:** a real interrupted upgrade on
+  an installed macOS bundle and an installed Windows bundle — app and runtime
+  changing together, the machine cut off rather than the process killed, user data
+  checked afterwards. The Windows half in particular has never run: all of the above
+  was developed and measured on macOS.
+
+- **Release-action and tool provenance — closed for the release-building
+  workflows.** *(Implemented 2026-09-06.)* `release.yml` and `rc-build.yml` pin
+  every action to an immutable commit with the release it belonged to in a trailing
+  comment, and Node to the exact patch `20.20.2`. The SHAs were resolved with
+  `gh api repos/<action>/commits/<tag>` on 2026-09-05 and are asserted against a
+  reviewed table in `scripts/tests/test_release_workflow.py`, which also fails if
+  the two workflows ever disagree — an RC hand-tested by different actions than the
+  release does not test the release.
+
+  Tool downloads, checked rather than assumed:
+
+  - **uv** — `astral-sh/setup-uv` validates the download against a `KNOWN_CHECKSUMS`
+    table compiled into the action. Verified at the pinned commit that the table
+    contains entries for uv `0.11.2` on all three build platforms, so the check
+    cannot silently fall through (it returns without validating for a version it
+    does not know).
+  - **CPython** — pinned twice, `PYTHON_VERSION = "3.13.12"` and
+    `PYTHON_BUILD = "20260325"`, and `require_python_build` fails the build when
+    uv's catalog resolves a different python-build-standalone release.
+  - **Node** — `actions/setup-node` performs **no** digest check; verified by
+    reading its distribution sources at the pinned commit, which contain no
+    checksum code. Nothing in this repository can add one, so the workflows assert
+    the exact version after installation instead, which is what a substituted
+    download would change loudly.
+  - **Inno Setup** — the chocolatey package embeds its installer rather than
+    fetching one, so there is no separate artifact to checksum. The workflows
+    assert the compiler's own version banner instead.
+
+  **What none of this establishes.** The version checks above are *drift detection*
+  — a substituted binary can print whatever version it likes, so a version match is
+  not authentication of bytes. Authenticating the Node download is possible and is
+  **not implemented**: it would mean fetching the archive in the workflow and
+  checking it against a digest pinned in this repository, which is its own change
+  with its own review. The four pinned tools are uv, the CPython standalone build,
+  Node and Inno Setup — that is the list, not a summary of everything the build
+  touches. The shell, tar, git, `hdiutil`, `codesign`, the system Python and the
+  platform toolchains all arrive with the hosted runner image (`ubuntu-latest`,
+  `macos-latest`, `windows-latest`, `ubuntu-24.04`) at whatever version it carries
+  that week, and those images are rebuilt weekly with no identity a workflow can
+  name. So this is meaningful drift reduction, and it is neither a reproducible nor
+  an authenticated toolchain; neither should be claimed from it. The scoping is
+  written into both workflow files, not only here.
+
+  `ci.yml` was deliberately left alone. It gates the release commit rather than
+  building the release artifacts, and it is outside this change's scope; pinning it
+  is a recommendation for the owner, not a claim made here.
 
 Not verifiable here, and therefore open:
 

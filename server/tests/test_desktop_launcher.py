@@ -14,6 +14,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from launchers import apply_update as apply_update_module
 from launchers import desktop
 from launchers.statusapp.controller import LampStatus, ServiceState, StatusSnapshot
 from launchers.statusapp.updater import (
@@ -1109,6 +1110,11 @@ def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
     monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
     monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+    # The rollback's own reseal now happens inside restore_previous_generation,
+    # which publishes the transaction's end only after it succeeds. That is the
+    # seam to stub here; leaving it to the real codesign would make this test
+    # assert the behaviour of a fixture directory that is not a bundle.
+    monkeypatch.setattr(apply_update_module, "repair_bundle", lambda *_a, **_k: None)
 
     assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 1  # type: ignore[arg-type]
 
@@ -1145,6 +1151,7 @@ def test_missing_pywebview_rolls_back_bundle_after_http_readiness(
 
     monkeypatch.setattr(desktop.importlib, "import_module", missing)
     monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(apply_update_module, "repair_bundle", lambda *_a, **_k: None)
     reported: list[str] = []
     shown: list[str] = []
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
@@ -1538,9 +1545,21 @@ def test_an_update_interrupted_between_its_two_renames_is_rolled_back(
     monkeypatch.setattr(
         desktop, "rollback_previous_layers", lambda res, log=None: rolled.append(res) or True
     )
+    # The seal is restored here as well as on the missing-layer path beside it.
+    # Stubbed rather than run: the real `codesign` would reject this fixture and
+    # put a modal on the screen of whoever runs the suite. The assertion below
+    # is that the call happens, which is the property that was missing.
+    resealed: list[Path] = []
+    monkeypatch.setattr(
+        desktop, "repair_bundle", lambda bundle, **_kwargs: resealed.append(bundle)
+    )
 
     assert window._recover_interrupted_bundle_update() is True
     assert rolled == [resources], "a mixed generation must be rolled back, not started"
+    assert resealed == [resources.parents[1]], (
+        "a bundle restored through the mixed-generation path keeps an ad-hoc seal that no "
+        "longer covers its contents unless this path re-seals it too"
+    )
     assert "different updates" in (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
 
 
