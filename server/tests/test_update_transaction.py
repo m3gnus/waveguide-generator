@@ -42,6 +42,7 @@ from launchers.apply_update import (
     commit_transaction,
     journal_path,
     journal_temp_path,
+    layers_disagree,
     main as run_updater_cli,
     plan_layer_swap,
     read_journal,
@@ -1729,57 +1730,102 @@ def test_the_desktop_in_process_rollback_uses_the_same_ordering(
     assert 'set_journal_state(data_dir, resources, "rolled-back"' not in source
 
 
-def test_a_bundle_whose_recovery_module_will_not_load_is_verified_not_assumed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """"Nothing ran" describes this invocation, not the installation.
+def _refuse_the_updater_module(monkeypatch: pytest.MonkeyPatch, *also: str) -> None:
+    """Make `launchers.statusapp.updater` unimportable, and optionally more."""
 
-    The reason recovery is being asked for is that an update may have stopped
-    part-way. Browser and terminal mode have no later structural check -- the
-    missing-layer and manifest checks live in the desktop window, which they
-    never open -- so treating an unloadable recovery module as a verified clean
-    install is a fail-open. The bundle is checked directly instead, with the
-    standard-library updater module that does not import the server package.
+    refused = {"launchers.statusapp.updater", *also}
+    real_import = builtins.__import__
+
+    def refusing_import(name: str, *args: object, **kwargs: object) -> object:
+        if name in refused:
+            raise ImportError(f"no {name} today")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", refusing_import)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ("no-manifests", "unreadable-manifest", "matching-ids-open-transaction", "looks-clean"),
+)
+def test_a_bundle_whose_recovery_module_will_not_load_never_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    """A bundle fails closed, and the states that made a cheap check unsound.
+
+    The first version of this fallback asked "both layers present and
+    `layers_disagree` false". That helper answers false when either manifest is
+    missing or unreadable -- deliberately, because it is the compatibility path
+    for bundles predating the field -- so `no-manifests` and
+    `unreadable-manifest` passed it as *verified*. A check that says yes to the
+    state it exists to catch is worse than no check.
+
+    `matching-ids-open-transaction` is the other hole: the ids match and the
+    journal still records a restore whose seal never came back, which is not a
+    settled installation by any reading.
+
+    `looks-clean` is here to pin the decision rather than the symptom. Even an
+    installation with nothing visibly wrong refuses, because "nothing visibly
+    wrong" was never the evidence; establishing there is no open transaction
+    means reading the scoped journal and re-checking the seal, which is
+    reconciliation -- and a second, weaker copy of it, written to keep a broken
+    installation starting, is the wrong trade twice over.
     """
 
     from launchers.statusapp import __main__ as entry_point
 
-    bundle, resources, data_dir, _staged_app, _staged_runtime = _native_installation(tmp_path)
+    bundle, resources, data_dir, staged_app, staged_runtime = _native_installation(tmp_path)
+    if damage == "no-manifests":
+        _strip_manifests(resources)
+    elif damage == "unreadable-manifest":
+        (resources / "app" / "APP-MANIFEST.json").write_text("{ truncated", encoding="utf-8")
+    elif damage == "matching-ids-open-transaction":
+        _begin(resources, data_dir, staged_app, staged_runtime)
+        swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+        assert rollback_previous_layers(resources) is True
+        # Renames done, seal never restored: matching ids, unsettled record.
+        apply_update_module.set_journal_state(data_dir, resources, ROLLING_BACK_STATE)
+        assert not layers_disagree(resources), "the ids match, which was the old evidence"
+
     monkeypatch.setenv("WG2_BUNDLE", "1")
     monkeypatch.setenv("WG2_APP_ROOT", str(resources / "app"))
     monkeypatch.setenv("WG2_DATA_DIR", str(data_dir))
-
     reported: list[str] = []
-    logged: list[str] = []
     monkeypatch.setattr(entry_point, "_report_startup_failure", reported.append)
-    monkeypatch.setattr(entry_point, "_log_startup_failure", logged.append)
+    monkeypatch.setattr(entry_point, "_log_startup_failure", lambda *_a, **_k: None)
+    _refuse_the_updater_module(monkeypatch)
 
-    real_import = builtins.__import__
-
-    def refuse_updater(name: str, *args: object, **kwargs: object) -> object:
-        if name == "launchers.statusapp.updater":
-            raise ImportError("no updater module here")
-        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(builtins, "__import__", refuse_updater)
-
-    # Complete and one generation: verified clean, so it starts.
-    assert entry_point._recover_interrupted_bundle_update([]) is None
-    assert reported == []
-    assert any("complete and name one generation" in entry for entry in logged)
-
-    # A layer missing is exactly the interruption nothing else would catch.
-    logged.clear()
-    (resources / "runtime").rename(resources / "runtime.previous")
     assert entry_point._recover_interrupted_bundle_update([]) == 1
-    assert reported and "could not be confirmed to be from one version" in reported[0]
+    assert reported and "could not check whether an earlier update was interrupted" in (
+        reported[0]
+    )
+    assert "no launchers.statusapp.updater today" in reported[0], (
+        "the refusal has to name what stopped the check"
+    )
 
-    # Two generations installed at once: the same refusal.
-    reported.clear()
-    (resources / "runtime.previous").rename(resources / "runtime")
-    _write_manifest(resources / "runtime", "somethingelse")
-    assert entry_point._recover_interrupted_bundle_update([]) == 1
-    assert reported
+
+def test_the_permissive_manifest_helper_is_why_the_cheap_check_was_unsound(
+    tmp_path: Path,
+) -> None:
+    """Pins the property that made the first fallback wrong, at its source.
+
+    `layers_disagree` is correct for its own job -- it must not refuse a start
+    over a field an older bundle never had -- and that is exactly why negating
+    it is not evidence of anything. Asserted here so a future reader does not
+    reach for it again.
+    """
+
+    resources = tmp_path / "WaveguideGenerator"
+    (resources / "app").mkdir(parents=True)
+    (resources / "runtime").mkdir()
+
+    assert layers_disagree(resources) is False, "two empty directories 'agree'"
+
+    (resources / "app" / "APP-MANIFEST.json").write_text("{ truncated", encoding="utf-8")
+    (resources / "runtime" / "RUNTIME-MANIFEST.json").write_text(
+        json.dumps({"runtimeId": "b"}), encoding="utf-8"
+    )
+    assert layers_disagree(resources) is False, "an unreadable manifest 'agrees' too"
 
 
 def test_a_source_checkout_still_starts_when_the_recovery_module_will_not_load(
@@ -1794,14 +1840,7 @@ def test_a_source_checkout_still_starts_when_the_recovery_module_will_not_load(
     monkeypatch.setattr(entry_point, "_report_startup_failure", reported.append)
     monkeypatch.setattr(entry_point, "_log_startup_failure", lambda *_a, **_k: None)
 
-    real_import = builtins.__import__
-
-    def refuse_updater(name: str, *args: object, **kwargs: object) -> object:
-        if name == "launchers.statusapp.updater":
-            raise ImportError("no updater module here")
-        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(builtins, "__import__", refuse_updater)
+    _refuse_the_updater_module(monkeypatch)
 
     assert entry_point._recover_interrupted_bundle_update([]) is None
     assert reported == []
@@ -1820,15 +1859,9 @@ def test_a_bundle_that_cannot_even_be_inspected_refuses(
     monkeypatch.setattr(entry_point, "_report_startup_failure", reported.append)
     monkeypatch.setattr(entry_point, "_log_startup_failure", lambda *_a, **_k: None)
 
-    real_import = builtins.__import__
-
-    def refuse_everything(name: str, *args: object, **kwargs: object) -> object:
-        if name in {"launchers.statusapp.updater", "launchers.apply_update"}:
-            raise ImportError("nothing loads today")
-        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(builtins, "__import__", refuse_everything)
+    _refuse_the_updater_module(monkeypatch, "launchers.apply_update")
 
     assert entry_point._recover_interrupted_bundle_update([]) == 1
-    assert reported and "could not be confirmed to be from one version" in reported[0]
-    assert "nothing loads today" in reported[0], "the refusal has to name its cause"
+    assert reported and "could not check whether an earlier update was interrupted" in (
+        reported[0]
+    )

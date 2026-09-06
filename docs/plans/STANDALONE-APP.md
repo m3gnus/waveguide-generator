@@ -172,9 +172,26 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
   entirely — the modes a user reaches for when the window will not open. It is
   called from `launchers/statusapp/__main__.py:main` before the branch that chooses
   a mode, which is also the point at which the least of the application has been
-  imported. A recovery that *decides* the installation is broken refuses the start;
-  a recovery mechanism that could not run does not, because the checks that predate
-  it still run further in.
+  imported.
+
+  Three answers, because two of them were once collapsed into one. A recovery that
+  *decides* the installation is broken refuses. A recovery that **raised** refuses
+  too: it had already begun, and it renames directories, so the exception may have
+  arrived between two of them. A recovery module that could not be **imported**
+  refuses for an installed bundle and starts for a source checkout — a checkout has
+  no swappable layers, which is evidence in itself, while "nothing ran" describes
+  only the invocation and says nothing about an installation that may already be
+  part-way through a change.
+
+  A cheaper check was tried there and removed. It asked whether both layers existed
+  and `layers_disagree` was false, and that helper answers false when either
+  manifest is missing or unreadable — deliberately, since it is the compatibility
+  path for bundles predating the field. Two empty directories passed it as
+  "verified": a check that says yes to the state it exists to catch. Matching ids
+  would not have sufficed either, because a restore whose renames finished and whose
+  seal did not looks exactly like a matched pair. Real evidence means reading the
+  scoped journal and re-checking the seal, which is reconciliation; a second, weaker
+  copy of it written to keep a broken installation starting is the wrong trade.
 
   The mixed-generation path re-seals the macOS bundle, which it did not before
   (`_roll_back_mixed_generation` returned without calling `repair_bundle`, unlike
