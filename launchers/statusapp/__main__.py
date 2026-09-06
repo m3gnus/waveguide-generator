@@ -118,11 +118,26 @@ def _show_startup_failure_dialog(message: str) -> None:
     Best effort in the same sense as :func:`_log_startup_failure`; a platform
     without a usable dialog still has the log file.
 
-    The Linux branch does not wait. zenity and kdialog block until the dialog
-    is dismissed, and every Linux caller of this has something to do next --
-    open the status window, or exit -- that must not sit behind a modal the
-    user may never see. Windows and macOS keep their blocking calls, where the
-    dialog *is* the last thing that happens.
+    **Nothing here waits, except Windows.** The rule used to be that Linux does
+    not wait and the other two do, "where the dialog *is* the last thing that
+    happens" -- true while the only caller was a process with no ``sys.stderr``
+    at all. :func:`_console_is_readable` widened that to every run nobody is
+    reading, which is right, and it put a *blocking* modal in front of runs
+    that continue: a redirected terminal launch, a service, and this
+    repository's own test suite, where one refusal held pytest for the whole
+    300 s faulthandler timeout and left the dialog on the developer's screen
+    afterwards.
+
+    macOS therefore starts ``osascript`` and returns. Nothing is lost when the
+    caller then exits: the dialog belongs to that separate process, which
+    outlives its parent and stays on screen until it is dismissed.
+
+    Windows keeps its blocking call, and the difference is not stylistic.
+    ``MessageBoxW`` is drawn *by this process*; there is no child to outlive
+    it, so a launcher that returned here and exited would take the only
+    message the user was ever going to see with it -- which is the failure
+    this whole function was written for (``start "" pythonw.exe``, no console,
+    nothing else on screen).
     """
 
     try:
@@ -156,9 +171,13 @@ def _show_startup_failure_dialog(message: str) -> None:
             # The message travels as an argv item rather than interpolated into
             # the AppleScript source, where a quote in a path or an exception
             # string would rewrite the program.
-            subprocess.run(
+            #
+            # Absolute, and not waited for. Absolute because a bundle inherits
+            # whatever PATH LaunchServices gave it, and this is now the dialog
+            # a bundle failure reaches; not waited for, see the docstring.
+            subprocess.Popen(
                 [
-                    "osascript",
+                    "/usr/bin/osascript",
                     "-e",
                     "on run argv",
                     "-e",
@@ -169,10 +188,35 @@ def _show_startup_failure_dialog(message: str) -> None:
                     "--",
                     message,
                 ],
-                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
     except Exception:  # noqa: BLE001 - see docstring
         pass
+
+
+def _report_terminal_failure(message: str, *, detail: str | None = None) -> None:
+    """Deliver a failure without opening anything.
+
+    ``--no-gui`` is documented, in its own ``--help`` text, as "run in this
+    terminal, opening no window of our own". That has to hold for the mode's
+    *refusals* as well, and it stopped holding when the dialog test in
+    :func:`_report_startup_failure` widened from "there is no ``sys.stderr``"
+    to "nobody is reading ``sys.stderr``": a redirected terminal run
+    (``waveguide-generator --no-gui > log 2>&1``), a service, or a CI step then
+    satisfies it, and terminal mode answered a missing interface with a window.
+    On Windows it answered with a *modal* one, and waited for it.
+
+    So the terminal modes report through this and the graphical ones through
+    :func:`_report_startup_failure`, which is this plus a dialog. Both channels
+    that open nothing are here: stderr when there is one, and the log always --
+    a redirected run still gets its message, and an exit code either way.
+    """
+
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+    _log_startup_failure(message if detail is None else f"{message}\n{detail}")
 
 
 def _report_startup_failure(
@@ -198,9 +242,7 @@ def _report_startup_failure(
     terminal while only the cause and the remedy go on screen.
     """
 
-    if sys.stderr is not None:
-        print(message, file=sys.stderr)
-    _log_startup_failure(message if detail is None else f"{message}\n{detail}")
+    _report_terminal_failure(message, detail=detail)
     if not _console_is_readable():
         _show_startup_failure_dialog(message if dialog is None else dialog)
 
@@ -311,7 +353,11 @@ def main(argv: list[str] | None = None) -> int:
         return parsed
     options, arguments = parsed
     if options.window and options.browser:
-        _report_startup_failure("Choose only one display mode: --window or --browser.")
+        # ``--no-gui`` wins over both further down, so a command line carrying
+        # it has asked for a terminal even while contradicting itself about
+        # which window it wanted. Answer it in the terminal.
+        report = _report_terminal_failure if options.no_gui else _report_startup_failure
+        report("Choose only one display mode: --window or --browser.")
         return 2
     if options.no_gui:
         # The status window refuses to start the backend when the interface is
@@ -324,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
         if not FRONTEND_INDEX.is_file():
             from .controller import missing_frontend_reason
 
-            _report_startup_failure(
+            _report_terminal_failure(
                 "Waveguide Generator did not start because the interface is "
                 f"missing: {missing_frontend_reason()}"
             )

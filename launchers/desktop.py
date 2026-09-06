@@ -23,6 +23,7 @@ from launchers.statusapp.__main__ import (
     _console_is_readable,
     _log_startup_failure,
     _report_startup_failure,
+    _report_terminal_failure,
     _show_startup_failure_dialog,
     parse_arguments,
 )
@@ -763,15 +764,23 @@ class DesktopWindow:
 
         LaunchServices starts the bundle with stderr attached to nothing a
         user can read, yet not ``None``, so the console-only heuristic in
-        ``_report_startup_failure`` would leave a failed start (or a completed
-        rollback) invisible.
+        ``_report_startup_failure`` used to leave a failed start (or a
+        completed rollback) invisible.
+
+        The two calls below are one dialog between them, and the condition has
+        to be the *complement* of the one inside ``_report_startup_failure``.
+        It was ``sys.stderr is not None``, which was that complement while the
+        test in there was ``sys.stderr is None``; since it became
+        :func:`_console_is_readable` the two overlap on every bundle launch --
+        stderr is real and nobody is reading it -- so a failed update showed
+        the same message twice, and on macOS twice *modally*.
         """
 
         if detail is None:
             _report_startup_failure(message)
         else:
             _report_startup_failure(message, detail=detail)
-        if sys.stderr is not None:
+        if _console_is_readable():
             _show_bundle_failure_dialog(message)
 
     def _report_desktop_failure(self, message: str, *, detail: str | None = None) -> None:
@@ -1618,14 +1627,17 @@ def _fall_back_to_status_window(reason: str, server_arguments: list[str]) -> int
         "Opening the status window and your browser instead; everything else "
         "works exactly as it does in the native window."
     )
+    # Started from the applications menu, stderr goes to the journal -- real,
+    # and read by nobody. The status window that follows says nothing about Qt,
+    # so without a dialog the user would simply get a different application
+    # from the one macOS gives them and never learn why.
+    #
+    # That dialog is _report_startup_failure's own, and asking for it a second
+    # time here is how this fell over: the console test moved into that
+    # function (it used to be `sys.stderr is None`, which a desktop entry does
+    # not satisfy), so both branches fire on exactly the hosts this feature is
+    # for and the user dismisses the same message twice.
     _report_startup_failure(message)
-    if not _console_is_readable():
-        # Started from the applications menu, stderr goes to the journal --
-        # real, and read by nobody. The status window that follows says
-        # nothing about Qt, so without this the user would simply get a
-        # different application than the one they have on macOS and never
-        # learn why. The dialog does not block; see the helper.
-        _show_startup_failure_dialog(message)
     from launchers.statusapp.__main__ import main as status_main
 
     return status_main(["--browser", *server_arguments])
@@ -1652,7 +1664,13 @@ def main(argv: list[str] | None = None) -> int:
         return parsed
     options, server_arguments = parsed
     if options.window and options.browser:
-        _report_startup_failure("Choose only one display mode: --window or --browser.")
+        # This is the installed command, so ``waveguide-generator --no-gui``
+        # arrives here first and this refusal comes before the branch that
+        # honours it. ``--no-gui`` promises no window of our own, and a
+        # self-contradicting display mode is not a reason to break that
+        # promise -- report it where the user is.
+        report = _report_terminal_failure if options.no_gui else _report_startup_failure
+        report("Choose only one display mode: --window or --browser.")
         return 2
     if options.no_gui or options.browser:
         from launchers.statusapp.__main__ import main as status_main

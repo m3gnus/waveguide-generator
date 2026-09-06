@@ -334,33 +334,38 @@ def test_linux_falls_back_to_the_status_window_and_says_which_library(
 
 
 def test_a_failure_from_the_applications_menu_is_put_on_screen(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, startup_dialogs: list[str],
 ) -> None:
     """A desktop entry's stderr is real and goes to the journal.
 
-    ``_report_startup_failure`` shows a dialog only when there is no stderr at
-    all, which is Windows' ``pythonw`` case and not this one -- so a Linux
-    user who launched from the menu would have got a different application
-    from the one macOS gives them, with the explanation filed somewhere they
-    will never look.
+    ``_report_startup_failure`` used to show a dialog only when there was no
+    stderr at all, which is Windows' ``pythonw`` case and not this one -- so a
+    Linux user who launched from the menu would have got a different
+    application from the one macOS gives them, with the explanation filed
+    somewhere they will never look.
+
+    **Exactly once.** The console test moved *into* ``_report_startup_failure``
+    and the fallback kept its own copy of it, so both fired on precisely the
+    hosts this feature exists for. Nothing here stubs the reporter, because
+    the reporter is the thing under test: a stub would have hidden the second
+    dialog, which is how it survived review.
     """
 
     from launchers.statusapp import __main__ as status_entrypoint
 
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(desktop.sys, "platform", "linux")
     monkeypatch.setattr(desktop, "_linux_window_blocker", lambda: "no Qt here")
-    monkeypatch.setattr(desktop, "_report_startup_failure", lambda _message: None)
     monkeypatch.setattr(status_entrypoint, "main", lambda _arguments: 0)
-    shown: list[str] = []
-    monkeypatch.setattr(desktop, "_show_startup_failure_dialog", shown.append)
 
-    monkeypatch.setattr(desktop, "_console_is_readable", lambda: True)
+    monkeypatch.setattr(status_entrypoint, "_console_is_readable", lambda: True)
     assert desktop.main([]) == 0
-    assert shown == [], "a terminal already showed it"
+    assert startup_dialogs == [], "a terminal already showed it"
 
-    monkeypatch.setattr(desktop, "_console_is_readable", lambda: False)
+    monkeypatch.setattr(status_entrypoint, "_console_is_readable", lambda: False)
     assert desktop.main([]) == 0
-    assert len(shown) == 1 and "no Qt here" in shown[0]
+    assert len(startup_dialogs) == 1, "one failure, one dialog"
+    assert "no Qt here" in startup_dialogs[0]
 
 
 def test_the_linux_check_is_skipped_when_the_user_has_chosen_a_backend(
@@ -617,8 +622,115 @@ def test_the_terminal_and_browser_modes_reach_the_status_entry_point(
     assert seen == [["--no-gui", "--port", "3199"], ["--browser"]]
 
 
-def test_bundle_failure_dialog_uses_valid_macos_applescript(
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_the_installed_command_keeps_the_no_gui_promise_when_it_refuses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform: str,
+) -> None:
+    """``launchers.desktop`` is what the bundle launcher execs, not the status app.
+
+    So ``waveguide-generator --window --browser --no-gui`` reaches *this*
+    module's contradiction check, which sits before the branch that hands
+    ``--no-gui`` on. The same promise applies: no window of our own.
+
+    Guarded at the transport, and on all three platforms, for the reason given
+    in ``test_statusapp_entrypoint._WindowStation``.
+    """
+
+    import ctypes
+    import shutil
+    import subprocess
+
+    calls: list[str] = []
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(desktop.sys, "platform", platform)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys, "stderr", _Stderr(tty=False))
+    monkeypatch.setattr(subprocess, "run", lambda command, **_k: calls.append("run"))
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **_k: calls.append("popen"))
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        SimpleNamespace(user32=SimpleNamespace(MessageBoxW=lambda *_a: calls.append("box"))),
+        raising=False,
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    assert desktop.main(["--window", "--browser", "--no-gui"]) == 2
+    assert calls == [], "the installed command opened a window in terminal mode"
+    assert "only one display mode" in (
+        tmp_path / "logs" / "statusapp.log"
+    ).read_text(encoding="utf-8")
+
+
+class _Stderr:
+    """A stderr, with a say in whether anybody is reading it."""
+
+    def __init__(self, *, tty: bool) -> None:
+        self._tty = tty
+        self.written: list[str] = []
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    def write(self, text: str) -> int:
+        self.written.append(text)
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("stderr", "reporter_shows", "bundle_shows"),
+    [
+        (None, True, False),
+        (_Stderr(tty=False), True, False),
+        (_Stderr(tty=True), False, True),
+    ],
+    ids=["pythonw-has-no-console", "launchservices-nobody-reads-it", "a-real-terminal"],
+)
+def test_a_bundle_failure_reaches_the_screen_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    startup_dialogs: list[str],
+    stderr: object,
+    reporter_shows: bool,
+    bundle_shows: bool,
+) -> None:
+    """Two reporters, one dialog, in all three console states.
+
+    ``_report_bundle_failure`` exists because LaunchServices gives a bundle a
+    stderr that is real and that nobody reads, so a failed start or a completed
+    rollback must be put on screen anyway. It delivers that through two calls
+    and they have to be complementary: ``_report_startup_failure``'s own dialog
+    when the console is unreadable, the bundle's own when a terminal has
+    already printed the message.
+
+    They stopped being complementary when the inner test changed from
+    ``sys.stderr is None`` to :func:`_console_is_readable` and the outer guard
+    stayed ``sys.stderr is not None``. Both then fired on every bundle launch,
+    and on macOS both were modal, so the user dismissed the same sentence twice
+    before the application would continue.
+
+    Driven through ``sys.stderr`` rather than by replacing the predicate,
+    because the predicate is imported into both modules: patching one name
+    leaves the other answering about the real stream, which is how the two
+    halves came to disagree in the first place.
+    """
+
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "stderr", stderr)
+    bundle_dialogs: list[str] = []
+    monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", bundle_dialogs.append)
+
+    desktop.DesktopWindow._report_bundle_failure("layers restored")
+
+    assert startup_dialogs == (["layers restored"] if reporter_shows else [])
+    assert bundle_dialogs == (["layers restored"] if bundle_shows else [])
+
+
+def test_bundle_failure_dialog_uses_valid_macos_applescript(
+    monkeypatch: pytest.MonkeyPatch, real_startup_dialogs: None,
 ) -> None:
     monkeypatch.setattr(desktop.sys, "platform", "darwin")
     commands: list[list[str]] = []
@@ -1003,9 +1115,10 @@ def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
     assert (app / "marker").read_text(encoding="utf-8") == "old"
     assert not previous.exists()
     assert "previous version was restored" in reported[0]
-    # A bundle started by LaunchServices has a stderr nobody reads, so the
-    # rollback result must reach the screen regardless of the console heuristic.
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
     assert "Restored the previous bundle layers" in (
         tmp_path / "data" / "logs" / "update.log"
     ).read_text(encoding="utf-8")
@@ -1042,7 +1155,10 @@ def test_missing_pywebview_rolls_back_bundle_after_http_readiness(
     assert not previous.exists()
     assert "pywebview is unavailable" in reported[0]
     assert "previous version was restored" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def test_macos_cleanup_sign_failure_restores_rollback_material(
@@ -1080,7 +1196,10 @@ def test_macos_cleanup_sign_failure_restores_rollback_material(
     assert downloads.is_dir()
     assert repair_calls == 2
     assert "rollback material was restored" in reported[0].casefold()
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def test_startup_recovers_a_missing_live_layer_before_starting_the_server(
@@ -1158,7 +1277,10 @@ def test_second_bundle_update_with_pending_previous_stays_visible_and_running(
     assert window.destroyed == 0
     assert "rollback material from an earlier update" in reported[0]
     assert "current version remains open" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def test_failed_bundle_handoff_restarts_before_claiming_current_version_is_open(
@@ -1186,7 +1308,10 @@ def test_failed_bundle_handoff_restarts_before_claiming_current_version_is_open(
     assert controller.starts == 2
     assert window.destroyed == 0
     assert "was restarted and remains open" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def test_failed_bundle_handoff_and_restart_close_the_dead_window(
@@ -1223,7 +1348,10 @@ def test_failed_bundle_handoff_and_restart_close_the_dead_window(
     assert window.destroyed == 1
     assert "also could not restart" in reported[0]
     assert "unusable window was closed" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def _failed_windows_bundle(tmp_path: Path) -> tuple[Path, Path]:
@@ -1295,7 +1423,10 @@ def test_a_failed_windows_start_hands_the_rollback_to_a_detached_helper(
     assert positional[2] == os.getpid()
     assert keywords["server_args"] == ("--port", "3110")
     assert "reopen by itself" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
     assert "Started the detached rollback helper" in (data_dir / "logs" / "update.log").read_text(
         encoding="utf-8"
     )

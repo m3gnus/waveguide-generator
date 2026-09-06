@@ -174,14 +174,15 @@ def test_a_closed_stream_is_answered_rather_than_raised(
 
 
 def test_the_linux_dialog_does_not_hold_up_what_comes_after_it(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, real_startup_dialogs: None,
 ) -> None:
     """zenity and kdialog block until dismissed; the fallback must not.
 
     Every Linux caller has something to do next -- open the status window, or
     exit -- and a modal the user may not even have on screen yet must not be
-    what that waits on. Windows and macOS keep their blocking calls, where the
-    dialog is the last thing that happens.
+    what that waits on. macOS answers the same way, for the same reason and
+    since the same change (see the test below). Windows is the exception, and
+    the reason is in :func:`_show_startup_failure_dialog`.
     """
 
     import subprocess
@@ -204,8 +205,73 @@ def test_the_linux_dialog_does_not_hold_up_what_comes_after_it(
     assert started[0][-1] == "no Qt platform plugin could be initialized"
 
 
+def test_the_dialog_guard_does_not_reorder_every_other_test_s_fixtures(request) -> None:
+    """The guard must cost nothing to tests that have no dialog in them.
+
+    ``_no_test_opens_a_dialog`` in ``conftest.py`` is autouse, so whatever it
+    depends on becomes a dependency of every test in the suite. It briefly
+    requested the shared ``monkeypatch`` fixture, and that alone was enough to
+    break six *other* tests: an autouse fixture at conftest scope is set up
+    before module-level ones, finalisation runs in reverse, and so the shared
+    undo began running after module fixtures whose teardown calls
+    ``cache_clear()`` on a function those tests had monkeypatched. A plain
+    function has no ``cache_clear``. Six teardown errors, in
+    ``test_beat_cpu_runtime``, ``test_bempp_availability`` and
+    ``test_solver_beat`` -- none of which any subset of the launcher tests runs.
+
+    This test is the cheap standing check that the guard stays self-contained:
+    it requests no fixture of its own, so ``monkeypatch`` may not appear.
+    """
+
+    assert "monkeypatch" not in request.fixturenames, (
+        "the dialog guard has taken a dependency on the shared monkeypatch fixture, "
+        "which reorders fixture teardown for every test in the suite"
+    )
+    # ...and it is still armed for the tests that do need it.
+    assert "_no_test_opens_a_dialog" in request.fixturenames
+
+
+def test_the_macos_dialog_does_not_hold_up_what_comes_after_it_either(
+    monkeypatch: pytest.MonkeyPatch, real_startup_dialogs: None,
+) -> None:
+    """The blocking ``osascript`` outlived the rule that justified it.
+
+    It was correct while the only way here was a process with no ``sys.stderr``
+    at all: the dialog was that process's whole remaining output, and waiting
+    kept it on screen. ``_console_is_readable`` widened the door to every run
+    nobody is reading -- a redirected launch, a service, this suite -- and each
+    of those has something to do next. This repository's own test run proved
+    the cost: one refusal held pytest for the full 300 s faulthandler timeout
+    and left the modal on the developer's screen after the run was killed.
+
+    Nothing is lost by not waiting. The dialog belongs to the ``osascript``
+    process, which outlives the parent that started it.
+    """
+
+    import subprocess
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    started: list[list[str]] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **_kwargs: started.append(command))
+
+    def _must_not_block(*_args: object, **_kwargs: object) -> None:  # pragma: no cover
+        raise AssertionError("the macOS dialog must not wait for the user")
+
+    monkeypatch.setattr(subprocess, "run", _must_not_block)
+
+    entrypoint._show_startup_failure_dialog('Update failed at "app"')
+
+    assert started, "the dialog must still be shown"
+    # Absolute: a bundle inherits whatever PATH LaunchServices gave it, and
+    # this is now the dialog a bundle failure reaches.
+    assert started[0][0] == "/usr/bin/osascript"
+    # The message travels as an argv item, never interpolated into the
+    # AppleScript source, where a quote would rewrite the program.
+    assert started[0][-1] == 'Update failed at "app"'
+
+
 def test_a_desktop_with_no_dialog_tool_still_gets_its_log(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, real_startup_dialogs: None,
 ) -> None:
     """None of zenity, kdialog or xmessage is guaranteed to exist."""
 
