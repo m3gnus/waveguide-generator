@@ -613,12 +613,30 @@ _KILL_DRIVER = textwrap.dedent(
     performed = 0
 
 
+    def terminate_without_cleanup():
+        # Windows has no SIGKILL. TerminateProcess is the equivalent hard
+        # stop: it does not run Python finally blocks or atexit handlers.
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.GetCurrentProcess.argtypes = []
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            kernel32.TerminateProcess.restype = wintypes.BOOL
+            if not kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 137):
+                raise ctypes.WinError()
+            raise RuntimeError("TerminateProcess unexpectedly returned")
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
     def renamer(source, destination):
         global performed
         _rename(source, destination)
         performed += 1
         if performed == kill_after:
-            os.kill(os.getpid(), signal.SIGKILL)
+            terminate_without_cleanup()
 
 
     swap_staged_layers(
@@ -648,12 +666,30 @@ _ROLLBACK_KILL_DRIVER = textwrap.dedent(
     performed = 0
 
 
+    def terminate_without_cleanup():
+        # Windows has no SIGKILL. TerminateProcess is the equivalent hard
+        # stop: it does not run Python finally blocks or atexit handlers.
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.GetCurrentProcess.argtypes = []
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            kernel32.TerminateProcess.restype = wintypes.BOOL
+            if not kernel32.TerminateProcess(kernel32.GetCurrentProcess(), 137):
+                raise ctypes.WinError()
+            raise RuntimeError("TerminateProcess unexpectedly returned")
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
     def renamer(source, destination):
         global performed
         _rename(source, destination)
         performed += 1
         if performed == kill_after:
-            os.kill(os.getpid(), signal.SIGKILL)
+            terminate_without_cleanup()
 
 
     rollback_previous_layers(resources, renamer=renamer)
@@ -693,6 +729,19 @@ def _run_driver(source: str, tmp_path: Path, name: str, *arguments: str) -> subp
     )
 
 
+def _assert_hard_kill(result: subprocess.CompletedProcess[str], context: str) -> None:
+    """Require the driver to have stopped abruptly on every supported OS."""
+
+    if sys.platform == "win32":
+        assert result.returncode == 137, (
+            f"the updater was expected to be terminated {context}: {result.stderr}"
+        )
+    else:
+        assert result.returncode == -signal.SIGKILL, (
+            f"the updater was expected to be killed {context}: {result.stderr}"
+        )
+
+
 @pytest.mark.parametrize(
     ("kill_after", "description"),
     (
@@ -729,9 +778,7 @@ def test_a_killed_updater_is_recovered_by_a_process_that_starts_afterwards(
         str(staged_runtime),
         str(kill_after),
     )
-    assert killed.returncode == -signal.SIGKILL, (
-        f"the updater was expected to be killed {description}: {killed.stderr}"
-    )
+    _assert_hard_kill(killed, description)
     # Prove the kill left something to recover, so a passing assertion below
     # cannot come from an interruption that happened to change nothing.
     interrupted = _generations(resources)
@@ -783,7 +830,7 @@ def test_a_killed_rollback_is_finished_by_a_process_that_starts_afterwards(
         str(data_dir),
         str(kill_after),
     )
-    assert killed.returncode == -signal.SIGKILL, killed.stderr
+    _assert_hard_kill(killed, "during rollback")
     assert list(resources.glob("*.previous")) or len(_generations(resources)) == 1, (
         "the kill was expected to leave the restore unfinished"
     )

@@ -704,6 +704,7 @@ args = parser.parse_args()
 
 SETTINGS = json.loads(Path(__file__).with_name("stub-settings.json").read_text())
 STARTED = time.monotonic()
+CAPABILITY_POLLS = 0
 RESULT = SETTINGS["result"]
 
 
@@ -711,7 +712,12 @@ WORKSPACE = {"path": str(Path(args.data_dir) / "workspace-default")}
 
 
 def capabilities():
-    settled = (time.monotonic() - STARTED) >= SETTINGS["ready_after_s"]
+    global CAPABILITY_POLLS
+    CAPABILITY_POLLS += 1
+    settled = (
+        CAPABILITY_POLLS > SETTINGS.get("ready_after_capability_polls", 0)
+        and (time.monotonic() - STARTED) >= SETTINGS["ready_after_s"]
+    )
     available = bool(settled) and SETTINGS["ever_ready"]
     return {
         "engines": [
@@ -836,7 +842,9 @@ def _stub_payload(tmp_path: Path, **settings: object) -> Path:
 def test_the_harness_starts_waits_solves_and_stops_against_a_stub(tmp_path: Path, _quick_timeouts: None) -> None:
     """Argument wiring, the startup wait, the capability poll and the shutdown."""
 
-    payload = _stub_payload(tmp_path, ready_after_s=1.0)
+    # A wall-clock delay can elapse before the first request on a slower
+    # runner, so use the protocol's poll count for deterministic wait coverage.
+    payload = _stub_payload(tmp_path, ready_after_capability_polls=1)
     output = tmp_path / "out"
 
     code = gate.main(

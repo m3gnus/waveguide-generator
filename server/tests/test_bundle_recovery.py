@@ -1220,8 +1220,14 @@ def test_the_detached_rollback_helper_is_staged_with_the_module_it_imports(
     bundle = tmp_path / ("Waveguide Generator.app" if sys.platform == "darwin" else "wg")
     resources = bundle_recovery.resources_for_platform(bundle, sys.platform)
     resources.mkdir(parents=True)
-    (resources / "runtime" / "bin").mkdir(parents=True)
-    _interpreter_shim(resources / "runtime" / "bin" / "python3.13")
+    if sys.platform == "win32":
+        # Windows keeps the rollback interpreter at the bundle root, outside
+        # the runtime directory whose layers the helper may have to rename.
+        # A POSIX-shaped runtime path is not a valid Windows handoff fixture.
+        (bundle / "Waveguide Generator.exe").write_bytes(b"windows executable stub")
+    else:
+        (resources / "runtime" / "bin").mkdir(parents=True)
+        _interpreter_shim(resources / "runtime" / "bin" / "python3.13")
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     commands: list[list[str]] = []

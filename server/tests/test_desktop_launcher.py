@@ -954,7 +954,14 @@ def _live_webview(polls: int) -> tuple[ModuleType, LiveWindow]:
     stub.settings = {"ALLOW_DOWNLOADS": False, "OPEN_EXTERNAL_LINKS_IN_BROWSER": True}
     window = LiveWindow(polls)
     stub.create_window = lambda *_args, **_kwargs: window
-    stub.start = lambda *, func: func()
+
+    # pywebview receives the selected Linux backend as ``gui="qt"``. Keep
+    # this stub's signature aligned with pywebview so the test remains about
+    # the desktop loop rather than a mock-only TypeError.
+    def start(*, func, **_options: object) -> None:
+        func()
+
+    stub.start = start
     return stub, window
 
 
@@ -988,7 +995,9 @@ def test_a_failed_update_handoff_is_reported_and_the_window_stays_open(
     webview, window = _live_webview(polls=3)
     monkeypatch.setitem(sys.modules, "webview", webview)
     reported: list[str] = []
-    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(
+        desktop, "_report_startup_failure", lambda message, **_kwargs: reported.append(message)
+    )
 
     assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
 
