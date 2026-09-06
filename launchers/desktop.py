@@ -6,20 +6,25 @@ import importlib
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
 from types import ModuleType
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from urllib.parse import urljoin, urlsplit
 import webbrowser
 
 from launchers.statusapp.__main__ import (
+    _console_is_readable,
     _log_startup_failure,
     _report_startup_failure,
+    _report_terminal_failure,
     _show_startup_failure_dialog,
+    parse_arguments,
 )
 from launchers.statusapp.controller import ServiceState, StatusController, StatusSnapshot
 from launchers.macoswindow import install_custom_frame as install_macos_frame
@@ -83,6 +88,107 @@ WEBVIEW2_REPAIR = (
     "reopen Waveguide Generator: https://developer.microsoft.com/microsoft-edge/webview2/\n"
     "If WebView2 is already installed and the error names pythonnet, reinstall the "
     "dependencies from server/requirements-runtime.txt."
+)
+
+#: The X11 ``WM_CLASS`` *class* of every window this process opens. Qt takes it
+#: from ``QCoreApplication::applicationName`` in the selected Qt backend -- see
+#: ``QXcbIntegration::wmClass`` in qtbase -- so this string and the installed
+#: desktop entry's ``StartupWMClass`` are one contract in two files. Get them
+#: apart and the launcher icon stops matching the running window: the taskbar
+#: shows a second, nameless entry and the startup-notification spinner has
+#: nothing to match and times out.
+LINUX_APPLICATION_NAME = WINDOW_TITLE
+#: The Wayland ``app_id``, which ``QWaylandWindow`` takes from
+#: ``QGuiApplication::desktopFileName``. A compositor matches it against the
+#: *basename of the desktop entry*, so this must stay equal to
+#: ``waveguide-generator.desktop`` minus its suffix -- the name
+#: ``installers/linux/bundle-install.sh`` installs.
+LINUX_DESKTOP_FILE_NAME = "waveguide-generator"
+#: The program run in a child interpreter to find out whether a Qt window can
+#: open here. ``{deadline}`` is filled in by :func:`_linux_qt_probe`.
+#:
+#: It has to be a child. Constructing a ``QApplication`` is what loads the
+#: platform plugin and connects to the display, and Qt answers a failure there
+#: with ``qFatal`` -- an ``abort()`` that no ``try`` in this process could
+#: catch, and which would take the application down with no message at all
+#: rather than fall back to the status window.
+#:
+#: It also has to load a page rather than stop at a constructed application.
+#: QtWebEngine is Chromium: the interface is drawn by a *separate render
+#: process*, started through a zygote that needs unprivileged user namespaces
+#: and seccomp-bpf (Qt WebEngine Platform Notes). A machine can build a
+#: perfectly good QApplication and then produce nothing but a blank window,
+#: which is the failure a user cannot diagnose and the one an import check
+#: cannot see. So the probe renders local HTML and waits for ``loadFinished``,
+#: which is the shortest path that has actually started a render process.
+#:
+#: Nothing here disables the sandbox. A probe that passed by turning off the
+#: thing that was failing would be worse than no probe: it would send the
+#: application into the same blank window with the check saying yes.
+LINUX_QT_PROBE = """\
+import sys
+
+from qtpy.QtCore import QTimer
+from qtpy.QtWebEngineWidgets import QWebEngineView
+from qtpy.QtWidgets import QApplication
+
+application = QApplication(['waveguide-generator'])
+view = QWebEngineView()
+outcome = []
+
+
+def finished(ok):
+    outcome.append(bool(ok))
+    application.quit()
+
+
+view.loadFinished.connect(finished)
+view.setHtml('<!doctype html><title>probe</title><p>probe</p>')
+QTimer.singleShot({deadline}, application.quit)
+application.exec_()
+
+if not outcome:
+    verdict = 'the Qt web view never finished loading a local page'
+elif not outcome[0]:
+    verdict = 'the Qt web view could not render a local page'
+else:
+    verdict = 0
+
+# Destroy the view while the application is still alive. A QWebEngineView
+# collected during interpreter shutdown -- after QApplication has gone -- is a
+# well-known crash at exit, and it would arrive back as a failed probe on a
+# machine where the window in fact works perfectly.
+del view
+application.processEvents()
+
+sys.exit(verdict)
+"""
+#: How long the probe's own event loop waits for that page, in milliseconds.
+#: A cold QtWebEngine start is a second or two; this is the point at which a
+#: render process that is never coming back stops being worth waiting for.
+LINUX_QT_PROBE_DEADLINE_MS = 20_000
+#: The outer limit, on the child as a whole. Larger than the deadline above by
+#: design: the inner one ends the wait for a page, this one is the backstop for
+#: an interpreter that never reaches the event loop at all.
+LINUX_QT_PROBE_TIMEOUT = 60.0
+#: How much of a failed probe's output to quote. Qt's diagnosis is the last two
+#: lines ("Could not load the Qt platform plugin ... it was found", then the
+#: library it could not load); a Python traceback's is the last one.
+LINUX_QT_PROBE_LINES = 6
+LINUX_QT_REPAIR = (
+    "The native window is drawn by the Qt libraries installed beside the "
+    "application, which load the system's X11 or Wayland client libraries. The "
+    "message above names the one that is missing; the usual answer on a "
+    "desktop that has never run a Qt application is:\n"
+    "  Debian/Ubuntu:  sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libnss3\n"
+    "  Fedora:         sudo dnf install xcb-util-cursor libxkbcommon-x11 nss\n"
+    "  Arch:           sudo pacman -S --needed xcb-util-cursor libxkbcommon-x11 nss\n"
+    "If the message names qtpy or PySide6 instead, the desktop dependency is "
+    "not installed: reinstall from server/requirements-runtime.txt.\n"
+    "If it names a namespace, a sandbox or a render process, the kernel is "
+    "refusing Qt WebEngine the unprivileged user namespace its renderer needs "
+    "-- some hardened and container images disable them. That is a system "
+    "policy and this application will not override it."
 )
 
 
@@ -158,6 +264,144 @@ def _windows_webview2_installed() -> bool:
             if isinstance(version, str) and version.strip(" .0"):
                 return True
     return False
+
+
+def _forced_pywebview_gui(environ: Mapping[str, str]) -> str | None:
+    """The backend the user has already chosen, if they have chosen one.
+
+    ``PYWEBVIEW_GUI`` is pywebview's own documented override and it is read
+    here for one reason: this launcher must not overrule it. Someone who has
+    set ``gtk`` has WebKitGTK and wants it, and neither the Qt probe below nor
+    the ``gui='qt'`` this module otherwise passes should second-guess that.
+    """
+
+    value = environ.get("PYWEBVIEW_GUI", "").strip().casefold()
+    return value or None
+
+
+def _linux_backend_is_qt(environ: Mapping[str, str]) -> bool:
+    """Will this launch be drawn by Qt?
+
+    Only a *different* backend excuses the check below. Someone who has set
+    ``PYWEBVIEW_GUI=qt`` has chosen the same renderer this application ships
+    and is no less exposed to a missing xcb library than someone who chose
+    nothing -- skipping the probe for them would withhold the diagnosis from
+    the one user who was explicit about what they wanted.
+    """
+
+    return _forced_pywebview_gui(environ) in (None, "qt")
+
+
+def _linux_qt_probe(deadline_ms: int = LINUX_QT_PROBE_DEADLINE_MS) -> str:
+    """The probe program, with its event-loop deadline filled in."""
+
+    return LINUX_QT_PROBE.format(deadline=int(deadline_ms))
+
+
+def _probe_failure_reason(completed: subprocess.CompletedProcess[str]) -> str:
+    """Quote the end of a failed probe, which is where Qt puts the cause."""
+
+    output = "\n".join(
+        stream.strip()
+        for stream in (completed.stderr, completed.stdout)
+        if stream and stream.strip()
+    )
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines:
+        return f"a Qt check exited with {completed.returncode} and printed nothing"
+    quoted = "\n".join(lines[-LINUX_QT_PROBE_LINES:])
+    return f"a Qt check exited with {completed.returncode}:\n{quoted}"
+
+
+def _run_linux_qt_probe(command, *, env, stdin, timeout, **_run_options):
+    """Own the probe's Chromium children as well as its Python process.
+
+    File-backed output cannot keep communicate() waiting on an inherited pipe
+    after the Python process exits. The private process group is cleaned up on
+    success, failure and timeout, before falling back or starting the real GUI.
+    """
+
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        child = subprocess.Popen(
+            command, env=env, stdin=stdin, stdout=stdout, stderr=stderr,
+            start_new_session=True,
+        )
+        try:
+            returncode = child.wait(timeout=timeout)
+        finally:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # A kernel-stalled process cannot be synchronously reaped. Its
+                # pending SIGKILL will finish it when the kernel releases it.
+                pass
+
+        def read_tail(stream):
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 65536))
+            return stream.read().decode("utf-8", errors="replace")
+
+        return subprocess.CompletedProcess(
+            command, returncode, stdout=read_tail(stdout), stderr=read_tail(stderr)
+        )
+
+
+def _linux_window_blocker(
+    *,
+    environ: Mapping[str, str] | None = None,
+    executable: str | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = _run_linux_qt_probe,
+) -> str | None:
+    """Say why the native window cannot open here, or ``None`` when it can.
+
+    Two checks, cheapest first. Without a display there is nothing for Qt to
+    connect to and no reason to pay for an interpreter to find that out; with
+    one, only actually rendering a page distinguishes a working desktop from a
+    machine whose xcb plugin is missing a library or whose kernel will not give
+    Chromium the namespace its render process needs -- and that has to happen
+    out of process (see :data:`LINUX_QT_PROBE`).
+
+    Deliberately *not* a check for the Qt packages by name. The import is the
+    thing that has to work, the error names the exact library, and the packages
+    that provide them differ on every distribution -- the same reasoning the
+    Linux installer's gmsh preflight is built on.
+
+    It is not free: a cold QtWebEngine start is a second or two, and this one
+    is thrown away before the real window starts its own. That is the price of
+    a fallback that exists at all, against a ``qFatal`` this process could not
+    survive and a blank window it could not explain.
+    """
+
+    environment = os.environ if environ is None else environ
+    if not (environment.get("WAYLAND_DISPLAY") or environment.get("DISPLAY")):
+        return (
+            "no graphical display is available -- neither WAYLAND_DISPLAY nor "
+            "DISPLAY is set for this process"
+        )
+    try:
+        completed = runner(
+            [executable or sys.executable, "-c", _linux_qt_probe()],
+            # The child must see the environment this function just judged, or
+            # the answer would be about a different machine than the window
+            # will run on.
+            env=dict(environment),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=LINUX_QT_PROBE_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return f"a Qt check did not finish within {LINUX_QT_PROBE_TIMEOUT:.0f} seconds"
+    except OSError as exc:
+        return f"a Qt check could not be started: {type(exc).__name__}: {exc}"
+    if completed.returncode == 0:
+        return None
+    return _probe_failure_reason(completed)
 
 
 def _open_browser_fallback(url: str) -> None:
@@ -535,15 +779,23 @@ class DesktopWindow:
 
         LaunchServices starts the bundle with stderr attached to nothing a
         user can read, yet not ``None``, so the console-only heuristic in
-        ``_report_startup_failure`` would leave a failed start (or a completed
-        rollback) invisible.
+        ``_report_startup_failure`` used to leave a failed start (or a
+        completed rollback) invisible.
+
+        The two calls below are one dialog between them, and the condition has
+        to be the *complement* of the one inside ``_report_startup_failure``.
+        It was ``sys.stderr is not None``, which was that complement while the
+        test in there was ``sys.stderr is None``; since it became
+        :func:`_console_is_readable` the two overlap on every bundle launch --
+        stderr is real and nobody is reading it -- so a failed update showed
+        the same message twice, and on macOS twice *modally*.
         """
 
         if detail is None:
             _report_startup_failure(message)
         else:
             _report_startup_failure(message, detail=detail)
-        if sys.stderr is not None:
+        if _console_is_readable():
             _show_bundle_failure_dialog(message)
 
     def _report_desktop_failure(self, message: str, *, detail: str | None = None) -> None:
@@ -859,6 +1111,58 @@ class DesktopWindow:
             ) from exc
         if not self.webview2_probe():
             raise WindowsWebViewUnavailable("the Microsoft Edge WebView2 runtime was not found")
+
+    def _name_linux_application(self) -> None:
+        """Tell Qt which desktop entry this process is, before a window exists.
+
+        Both setters are static and documented as usable before the
+        application object is constructed, so this costs one import and no
+        display connection -- it must stay that way, because *constructing* a
+        ``QApplication`` here would abort the process on a machine the probe
+        has not cleared.
+
+        Without them Qt derives the window's identity from ``argv[0]``, which
+        for this application is ``python3.13``. The desktop then has a window
+        it cannot match to the launcher it started: the icon does not
+        highlight, the taskbar entry does not group under it, and the
+        startup-notification spinner runs until it times out. That is the
+        symptom the 0.3.1 Linux bundle shipped, and no amount of correcting
+        the desktop entry fixes it from the other side.
+
+        Failure is logged and swallowed. A window with the wrong taskbar icon
+        is a far better outcome than no window.
+        """
+
+        environ = getattr(self.controller, "environ", os.environ)
+        if not sys.platform.startswith("linux") or not _linux_backend_is_qt(environ):
+            return
+        try:
+            core = importlib.import_module("qtpy.QtCore")
+            gui = importlib.import_module("qtpy.QtGui")
+            core.QCoreApplication.setApplicationName(LINUX_APPLICATION_NAME)
+            gui.QGuiApplication.setDesktopFileName(LINUX_DESKTOP_FILE_NAME)
+        except Exception as exc:  # noqa: BLE001 - cosmetic, and never worth raising
+            _log_startup_failure(
+                f"Could not name the application for the Linux desktop: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    def _start_options(self) -> dict[str, str]:
+        """Extra ``webview.start`` arguments, which today is the Linux backend.
+
+        pywebview tries GTK before Qt on Linux and falls back the other way,
+        so leaving this empty would work -- until a machine that has PyGObject
+        for something else silently gets a WebKitGTK window this application
+        has never been tested against. Naming ``qt`` makes the shipped backend
+        the one that runs, and pywebview still falls back to GTK if Qt cannot
+        load. ``PYWEBVIEW_GUI`` wins over both, because it is the user saying
+        the same thing louder.
+        """
+
+        environ = getattr(self.controller, "environ", os.environ)
+        if not sys.platform.startswith("linux") or _forced_pywebview_gui(environ):
+            return {}
+        return {"gui": "qt"}
 
     def _fallback_from_windows_webview(self, snapshot: StatusSnapshot, exc: Exception) -> int:
         self._report_desktop_failure(
@@ -1342,6 +1646,7 @@ class DesktopWindow:
                 return self._fallback_from_windows_webview(snapshot, exc)
             self._webview = webview
             webview.settings["ALLOW_DOWNLOADS"] = True
+            self._name_linux_application()
             self._startup_snapshot = snapshot
             self._window = webview.create_window(
                 WINDOW_TITLE,
@@ -1356,7 +1661,7 @@ class DesktopWindow:
             except Exception as exc:  # noqa: BLE001 - the window still works framed
                 _log_startup_failure(f"Could not arm the custom window frame: {exc}")
             try:
-                webview.start(func=self._window_loop)
+                webview.start(func=self._window_loop, **self._start_options())
             except Exception as exc:  # noqa: BLE001 - native initialization boundary
                 if sys.platform == "win32" and (
                     "pythonnet" in str(exc).casefold() or "webview2" in str(exc).casefold()
@@ -1378,19 +1683,82 @@ class DesktopWindow:
             self.controller.close()
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the native window, with the status-window fallback on Linux."""
+def _fall_back_to_status_window(reason: str, server_arguments: list[str]) -> int:
+    """Report why there is no native window, then run the one that works.
 
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    if sys.platform.startswith("linux"):
-        _report_startup_failure(
-            "The native Waveguide Generator desktop window is unavailable on Linux "
-            "in this release; opening the existing browser/status window instead."
-        )
+    Deliberately the status window rather than
+    :func:`_open_browser_fallback`. The browser fallback is Windows' shape,
+    where a modal ``MessageBoxW`` stays up to own the server's lifetime; on
+    Linux there is no such dialog, so opening a browser from here would return
+    immediately, ``run``'s ``finally`` would stop the backend, and the user
+    would watch the interface they were just handed go dead. The status window
+    owns its server for as long as it is open, which is the property the
+    fallback needs.
+    """
+
+    message = (
+        "Waveguide Generator could not open its native desktop window: "
+        f"{reason}\n\n{LINUX_QT_REPAIR}\n\n"
+        "Opening the status window and your browser instead; everything else "
+        "works exactly as it does in the native window."
+    )
+    # Started from the applications menu, stderr goes to the journal -- real,
+    # and read by nobody. The status window that follows says nothing about Qt,
+    # so without a dialog the user would simply get a different application
+    # from the one macOS gives them and never learn why.
+    #
+    # That dialog is _report_startup_failure's own, and asking for it a second
+    # time here is how this fell over: the console test moved into that
+    # function (it used to be `sys.stderr is None`, which a desktop entry does
+    # not satisfy), so both branches fire on exactly the hosts this feature is
+    # for and the user dismisses the same message twice.
+    _report_startup_failure(message)
+    from launchers.statusapp.__main__ import main as status_main
+
+    return status_main(["--browser", *server_arguments])
+
+
+def main(argv: list[str] | None = None) -> int:
+    """The installed command: parse the display mode, then run it.
+
+    This is the entry point every bundle's launcher execs, so it -- not the
+    status window's module -- is where ``waveguide-generator --help`` arrives.
+    It used to forward every unrecognised argument to the server it started,
+    which is why ``--help`` printed usage into a pipe nobody read and then sat
+    on an event loop for ever.
+
+    The Linux branch is no longer a refusal. The window is offered on Linux
+    the way it is everywhere else; what remains platform-specific is that Qt
+    cannot be *asked* whether it will work without risking an abort, so the
+    check happens before the server starts and its failure lands on the
+    fallback that has always been there.
+    """
+
+    parsed = parse_arguments(list(sys.argv[1:] if argv is None else argv))
+    if isinstance(parsed, int):
+        return parsed
+    options, server_arguments = parsed
+    if options.window and options.browser:
+        # This is the installed command, so ``waveguide-generator --no-gui``
+        # arrives here first and this refusal comes before the branch that
+        # honours it. ``--no-gui`` promises no window of our own, and a
+        # self-contradicting display mode is not a reason to break that
+        # promise -- report it where the user is.
+        report = _report_terminal_failure if options.no_gui else _report_startup_failure
+        report("Choose only one display mode: --window or --browser.")
+        return 2
+    if options.no_gui or options.browser:
         from launchers.statusapp.__main__ import main as status_main
 
-        return status_main(["--browser", *arguments])
-    return DesktopWindow(StatusController(server_args=arguments)).run()
+        # --no-gui first, matching the status window's own precedence: asking
+        # for a terminal and a browser at once is a terminal.
+        requested = "--no-gui" if options.no_gui else "--browser"
+        return status_main([requested, *server_arguments])
+    if sys.platform.startswith("linux") and _linux_backend_is_qt(os.environ):
+        blocker = _linux_window_blocker()
+        if blocker is not None:
+            return _fall_back_to_status_window(blocker, server_arguments)
+    return DesktopWindow(StatusController(server_args=server_arguments)).run()
 
 
 if __name__ == "__main__":

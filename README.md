@@ -82,6 +82,14 @@ a menu entry and icon, and puts `waveguide-generator` on your `PATH` at
 the installed application, so removing it does not need the download; add
 `--data` to remove designs and job history too.
 
+To check a Linux download, run `sha256sum "<downloaded-file>.tar.gz"` and
+compare the result with the matching release asset's `digest` (without the
+`sha256:` prefix) in GitHub's [release asset metadata](https://docs.github.com/en/rest/releases/assets#get-a-release-asset).
+If sharing a build outside GitHub, include its filename, build commit and
+SHA-256 from the original build with the link. A matching checksum confirms
+that the copy matches that build; it is not a publisher signature. A missing
+digest is not verification.
+
 Per-user is deliberate, and it is the same reason the Windows installer avoids
 Program Files: the in-app updater replaces files inside the installation and
 cannot elevate, so a root-owned copy under `/opt` would install once and then
@@ -94,8 +102,11 @@ server install may not. `install.sh` checks by importing gmsh with the bundled
 interpreter and stops before copying anything, printing the exact command; on
 Ubuntu 24.04 that is `sudo apt install libglu1-mesa libgl1 libgomp1
 libfontconfig1 libxrender1 libxcursor1 libxft2 libxinerama1 libxi6 libxext6`.
-Linux gets the status window and your browser rather than the single native
-window, as it does from a checkout.
+The Linux bundle opens the interface in its own native window using the
+bundled Qt/PySide6 backend. Qt also needs desktop libraries; if its startup
+check fails, the launcher explains the missing dependency and offers the
+existing status-window/browser recovery path. `--browser` requests that mode
+explicitly. The application does not install system packages or ask for root.
 
 **This build is Ubuntu 24.04 LTS on x86-64**, and distributions close enough to
 it — not "Linux". There is no arm64 build and no musl build. Other
@@ -189,12 +200,15 @@ The repository root intentionally has no duplicate install or launch scripts;
 use the platform folders above. On first launch the entry creates `.venv` with
 CPython 3.13 and installs the locked dependencies.
 
-On macOS and Windows, append `--window` to the command launcher to open the
+On macOS, Windows and Linux, append `--window` to the command launcher to open the
 interface in one native desktop window instead of the tkinter status window.
 Closing that window stops the owned server. `--browser` explicitly keeps the
-normal status-window/browser workflow. Linux does not offer the native window
-in this release; `--window` reports that limitation and falls back to the
-status window.
+normal status-window/browser workflow. Linux uses Qt/PySide6 and checks that
+its platform libraries can load before starting the native window. The source
+environment installs this Linux backend through the runtime requirements.
+
+`--help` prints usage and exits without starting a server or window. Unknown
+options are rejected before startup.
 
 For the original plain-terminal behavior, append `--no-gui`:
 
@@ -353,11 +367,25 @@ Flags: `--no-browser`, `--data-dir` (or `WG2_DATA_DIR`); `WG2_ENABLE_DRYRUN=1` e
 
 ## Test commands
 
-Python: `.venv/bin/python -m pytest server/tests -q`
+Build the frontend **before running the Python tests**, including on a fresh
+clone. The server mounts `frontend/dist`, which is generated and not checked in.
+From the repository root, using Node 20:
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
+.venv/bin/python -m pytest server/tests scripts/tests -v
+```
+
+On Windows use `.venv\Scripts\python.exe` for the Python command. Tests that
+exercise the Tk status view require an importable Tk installation; those view
+tests skip explicitly when Tk cannot load; controller tests that do not import
+the view still run. A missing frontend build stops the server suite once with
+the build commands, rather than failing each app-constructing test separately.
 
 JS frame codec (explicit file path — directory mode trips the node runner): `node --test shared/js/frame.test.mjs`
 
-Frontend: `cd frontend && npm ci && npm test && npm run build`
+Frontend unit tests: `npm --prefix frontend test`
 
 Real solves are never run in hosted CI; Metal and bempp parity run on owned
 qualification hardware, and their archived reports back the release gates. Use

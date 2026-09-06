@@ -314,12 +314,19 @@ FALLBACK_ASSEMBLY_BACKEND = "numba"
 #: not be initialized`` in the middle of every solve.
 OPENCL_DEVICE_TYPE = "cpu"
 
+#: Named per distribution rather than left as "install pocl", because the
+#: package name is the part a blocked user cannot guess: a Fedora host reads
+#: advice for a package manager it does not have. These are the packages that
+#: register a CPU ICD, which is the device bempp-cl assembles on -- a vendor GPU
+#: ICD does not substitute, however capable the card.
 _OPENCL_GUIDANCE = (
     "Install an OpenCL CPU runtime and start again: on Windows the Intel CPU "
     "Runtime for OpenCL registers an ICD under "
-    "HKLM\\SOFTWARE\\Khronos\\OpenCL\\Vendors; on Linux install pocl or your "
-    "vendor's ICD. Apple Silicon has no CPU OpenCL device at all, so BEMPP "
-    "assembles on numba there and Metal is the engine to prefer."
+    "HKLM\\SOFTWARE\\Khronos\\OpenCL\\Vendors; on Fedora `sudo dnf install "
+    "pocl`, on Debian/Ubuntu `sudo apt install pocl-opencl-icd`, on Arch "
+    "`sudo pacman -S pocl`, or install your CPU vendor's ICD. Apple Silicon "
+    "has no CPU OpenCL device at all, so BEMPP assembles on numba there and "
+    "Metal is the engine to prefer."
 )
 
 
@@ -416,7 +423,10 @@ def _opencl_status() -> tuple[bool, str]:
     inventory = f" Devices found: {', '.join(seen)}." if seen else ""
     return False, (
         f"an OpenCL runtime is present but exposes no {OPENCL_DEVICE_TYPE} device, "
-        f"which is the one bempp-cl assembles on.{inventory} {_OPENCL_GUIDANCE}"
+        f"which is the one bempp-cl assembles on.{inventory} A GPU OpenCL device "
+        "does not substitute: BEMPP is this application's CPU engine and has no "
+        "GPU assembly path, and the GPU engines are separate ones (BEAT · CUDA "
+        f"on an NVIDIA card, Metal on Apple Silicon). {_OPENCL_GUIDANCE}"
     )
 
 

@@ -29,10 +29,29 @@ step, and its constraints come from where it runs:
 * It never starts GPU work. ``provision_cpu`` instantiates the CPU project,
   which depends on no accelerator package, so this cannot turn into the
   multi-gigabyte CUDA/ROCm artifact pull that ``--if-gpu`` is gated on.
-* It runs on Windows and Linux only. macOS is not a host that needs it: Apple
-  Silicon provisions Metal through the GPU hook and AUTO prefers Metal there on
-  measured evidence, so downloading a Julia for a backend that would not be
-  selected is cost without a user.
+* **It runs on every desktop platform this application supports, macOS
+  included.** It used to skip macOS, on the reasoning that AUTO prefers the
+  measured Metal path there so a CPU runtime would never be *selected*. That
+  answered the wrong question. ``BEAT · CPU`` is an engine a user picks by
+  name, and every supported computer has a CPU, so on a Mac it was a row that
+  could never light up -- offering, as its remedy, a shell command a packaged
+  application gives nobody a shell for. Preparing it is also cheapest there:
+  Apple Silicon has a Julia already, downloaded by the Metal hook, so what is
+  left is instantiating the CPU project and the 1 kHz probe.
+
+  Availability is not preference. ``registry.full3d_engine_order`` still leaves
+  macOS on the base order, so AUTO keeps choosing Metal and then BEMPP there;
+  this only decides whether the row can be chosen at all.
+* **It runs on a GPU host too, as long as the pinned package records readiness
+  per backend.** It used to stop as soon as ``nvidia-smi`` found a card, and
+  that made ``BEAT · CPU`` a row a user could select by name and never have:
+  permanently unavailable on every GPU machine, with a reason offering a
+  command that -- against a single-slot state record -- would have overwritten
+  the GPU runtime's own readiness. ``hornlab_beat_bem.provision`` now keeps one
+  record per backend, so both can be ready at once and the CPU runtime is
+  prepared *in addition to* the accelerator. Against an older pinned package
+  the old skip is kept, because there the two backends share one record and
+  preparing this one would cost the other; see ``_provision_worker``.
 * It does not retry a failure. A recorded failure for this same build is
   reported, not re-run, so a metered or offline machine pays the attempt once
   and reads why instead of re-downloading on every launch.
@@ -66,8 +85,10 @@ CPU_BACKEND = "cpu"
 #: Opt out of the background provisioning described above.
 SKIP_PROVISION_ENV_VAR = "WG2_SKIP_BEAT_CPU_PROVISION"
 
-#: Where the CPU runtime is provisioned automatically. See the module docstring.
-PROVISION_SYSTEMS: frozenset[str] = frozenset({"Windows", "Linux"})
+#: Where the CPU runtime is provisioned automatically: every desktop platform
+#: this application ships for. See the module docstring for why macOS is in the
+#: set even though AUTO never prefers a CPU solve there.
+PROVISION_SYSTEMS: frozenset[str] = frozenset({"Windows", "Linux", "Darwin"})
 
 #: The ``hornlab-beat-bem`` commit that introduced ``provision.provision_cpu``
 #: and its ``--backend cpu`` CLI. Named in the unavailable reason because the
@@ -75,6 +96,17 @@ PROVISION_SYSTEMS: frozenset[str] = frozenset({"Windows", "Linux"})
 #: the landing role, not here: until it moves, this path degrades to an honest
 #: "cannot prove it" rather than to a wrong "ready".
 REQUIRED_PACKAGE_COMMIT = "ac48d90"
+
+#: The attribute that tells us the pinned package records readiness per backend
+#: (``state-<backend>.json``) rather than in one slot. A capability, not a
+#: commit: this consumer cannot name a SHA that does not exist yet, and the
+#: attribute is the thing the behaviour actually depends on.
+#:
+#: With it, ``provision_cpu`` on a GPU host is additive and this module prepares
+#: the CPU runtime everywhere. Without it, provisioning the CPU would overwrite
+#: the record that says the accelerator is provisioned, so the GPU host is left
+#: alone and the CPU row says why.
+PER_BACKEND_STATE_ATTR = "read_backend_states"
 
 #: Thread name, so a stack dump from ``faulthandler`` names this work.
 PROVISION_THREAD_NAME = "wg2-beat-cpu-provision"
@@ -197,6 +229,46 @@ def _matches_cpu_request(
     return True
 
 
+def records_state_per_backend(provision: Any) -> bool:
+    """Whether the installed package keeps one readiness record per backend.
+
+    The one fact that decides whether asking for the CPU runtime is additive or
+    a trade against a provisioned GPU one. See ``PER_BACKEND_STATE_ATTR``.
+    """
+
+    return hasattr(provision, PER_BACKEND_STATE_ATTR)
+
+
+def _read_cpu_state(provision: Any) -> Mapping[str, Any]:
+    """The CPU backend's own record, from whichever layout the pin has.
+
+    Asking for the backend by name is what stops another backend's record from
+    being read as an answer about this one. Against a single-slot package the
+    call has no such argument, and the field comparison in
+    ``_matches_cpu_request`` is what keeps that safe: a record describing CUDA
+    fails it, so the answer is "unprovisioned" rather than a claim about the
+    wrong backend.
+    """
+
+    if records_state_per_backend(provision):
+        return provision.read_state(backend=CPU_BACKEND) or {}
+    return provision.read_state() or {}
+
+
+def _provisioned_julia(provision: Any) -> str | None:
+    """The Julia the CPU record names, confirmed to still exist.
+
+    Narrowed to the CPU backend where the package can do that. Unnarrowed, the
+    answer is about any ready record -- which is the right answer for "is there
+    a Julia to run" and the wrong one for "is the CPU runtime provisioned", the
+    question this module asks.
+    """
+
+    if records_state_per_backend(provision):
+        return provision.provisioned_julia(backend=CPU_BACKEND)
+    return provision.provisioned_julia()
+
+
 def _cpu_project_and_fingerprint(runtime: Any) -> tuple[Path | None, str | None]:
     """The bundled CPU project and its content fingerprint, best effort.
 
@@ -280,10 +352,10 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
             "engine with a 1 kHz solve. It becomes selectable here when ready.",
         )
 
-    state = provision.read_state() or {}
+    state = _read_cpu_state(provision)
     status = state.get("status")
     if status == "ready" and _matches_cpu_request(state, project, fingerprint):
-        julia = provision.provisioned_julia()
+        julia = _provisioned_julia(provision)
         if julia is not None:
             return CpuRuntimeReadiness(
                 True,
@@ -315,6 +387,31 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
             f"{provision_command()}",
         )
 
+    if (
+        not records_state_per_backend(provision)
+        and state.get("backend") in {"metal", "cuda", "rocm"}
+    ):
+        return CpuRuntimeReadiness(
+            False,
+            "unprovisioned",
+            "The installed BEAT package shares one readiness record between CPU "
+            "and GPU runtimes. Update Waveguide Generator before preparing CPU "
+            "alongside the provisioned GPU: CPU preparation with this older "
+            "package can interrupt GPU availability.",
+        )
+
+    # Said wherever this module prints the provisioning command, because the
+    # question a user on a GPU box asks about it is "what does this cost me".
+    # On a package with per-backend records the answer is nothing: it is the
+    # single-slot layout that made running it look like trading the accelerator
+    # away, and where that layout is still what is pinned this clause is
+    # correctly absent.
+    additive = (
+        " Readiness is recorded per backend, so this does not disturb a "
+        "provisioned GPU runtime."
+        if records_state_per_backend(provision)
+        else ""
+    )
     try:
         julia = package.discover_julia()
     except Exception as exc:  # noqa: BLE001 - a broken optional stack is unavailable
@@ -328,7 +425,7 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
             "No Julia executable was found and the BEAT CPU runtime has not been "
             f"provisioned here. Run: {provision_command()} -- it downloads a "
             "portable Julia, instantiates the CPU project, and proves it with a "
-            "1 kHz solve.",
+            f"1 kHz solve.{additive}",
         )
     return CpuRuntimeReadiness(
         False,
@@ -336,7 +433,7 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
         f"Julia is present ({julia}) but the BEAT CPU runtime has not been "
         "instantiated and probed here, and a Julia executable alone is not "
         "evidence that a solve would run -- an uninstantiated or offline depot "
-        f"fails at the first solve instead. Run: {provision_command()}",
+        f"fails at the first solve instead. Run: {provision_command()}{additive}",
     )
 
 
@@ -346,7 +443,9 @@ def _provision_worker() -> None:
     The hardware inventory is *here* rather than in the caller because
     ``nvidia-smi`` is a subprocess the package is willing to wait 15 s for, and
     the caller is a launcher that has a server to start. Nothing about it is
-    urgent: it only decides whether this host wants a CPU runtime at all.
+    urgent, and on a package that records readiness per backend it no longer
+    decides *whether* to prepare a CPU runtime -- only whether preparing one
+    would cost the GPU runtime its record, which on such a package it cannot.
     """
 
     try:
@@ -354,9 +453,29 @@ def _provision_worker() -> None:
         if provision is None:  # pragma: no cover - caller already imported it
             return
         gpu = _gpu_backend_present(provision)
-        if gpu is not None:
-            log.info("BEAT %s hardware found; CPU preparation skipped", gpu)
+        if gpu is not None and not records_state_per_backend(provision):
+            # One record, one backend: provisioning this one would overwrite the
+            # record that says the accelerator is ready, and the next GPU hook
+            # would re-resolve multi-gigabyte artifacts to get back to where it
+            # already was. Leave it alone and let the CPU row say why.
+            log.info(
+                "BEAT %s hardware found and the pinned hornlab-beat-bem records "
+                "readiness in one slot; CPU preparation skipped so the %s "
+                "runtime keeps its record",
+                gpu,
+                gpu,
+            )
             return
+        if gpu is not None:
+            # Additive, and cheap where it matters: the portable Julia this
+            # needs is the one the GPU runtime already downloaded, so what is
+            # left is instantiating the CPU project (no accelerator artifacts)
+            # and the 1 kHz probe solve.
+            log.info(
+                "BEAT %s hardware found; preparing the CPU runtime as well so "
+                "both backends are selectable",
+                gpu,
+            )
         _record_step("starting")
         try:
             state = provision.provision_cpu(status_cb=_provision_status)
@@ -422,9 +541,9 @@ def start_cpu_provisioning(
         return None
     host = system or platform.system()
     if host not in PROVISION_SYSTEMS:
-        log.debug(
-            "BEAT CPU runtime provisioning is not offered on %s; AUTO prefers the "
-            "measured Metal path there and the GPU hook provisions it",
+        log.info(
+            "BEAT CPU runtime provisioning is not offered on %s, which is not a "
+            "platform this application ships for",
             host,
         )
         return None
@@ -474,6 +593,7 @@ def start_cpu_provisioning(
 __all__ = [
     "CPU_BACKEND",
     "CpuRuntimeReadiness",
+    "PER_BACKEND_STATE_ATTR",
     "PROVISION_SYSTEMS",
     "PROVISION_THREAD_NAME",
     "REQUIRED_PACKAGE_COMMIT",
@@ -482,5 +602,6 @@ __all__ = [
     "cpu_preparation_in_flight",
     "cpu_runtime_readiness",
     "provision_command",
+    "records_state_per_backend",
     "start_cpu_provisioning",
 ]

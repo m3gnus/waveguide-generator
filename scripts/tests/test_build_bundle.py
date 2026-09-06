@@ -449,6 +449,50 @@ def test_materialized_app_files_carry_gits_mode(tmp_path: Path) -> None:
             build_bundle.assert_app_layer_modes_match_git(destination, frozenset())
 
 
+def test_a_version_stamp_reaches_the_app_layer_only_once_it_is_committed(
+    tmp_path: Path,
+) -> None:
+    """The trap under any build-time version stamp, stated as a test.
+
+    The app layer is materialized from Git blobs at a commit, not from the
+    files in the checkout, so editing shared/version.json and building would
+    package the *previous* version while the artifact names carried the new one
+    -- an app that disagrees with the release it was published under. In
+    practice such a build fails before that: `BundleBuilder.require_clean_worktree`
+    runs before every build. What this checks is the materializer itself.
+
+    So a build-only stamp has to be committed inside the build. That commit is
+    never pushed and never tagged; it exists so that one version reaches the
+    packaged app, the SPA, the manifest and the installer names together.
+    """
+
+    repo = tmp_path / "repo"
+    (repo / "shared").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    version_file = repo / "shared" / "version.json"
+    version_file.write_text('{"version": "0.3.1"}\n', encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "fixture"], cwd=repo, check=True)
+
+    # Stamped in the checkout only, as a naive build would.
+    version_file.write_text('{"version": "0.4.0-main.7"}\n', encoding="utf-8")
+    uncommitted = tmp_path / "app-uncommitted"
+    uncommitted.mkdir()
+    copy_tracked_app_files(repo, uncommitted)
+
+    assert "0.3.1" in (uncommitted / "shared" / "version.json").read_text(encoding="utf-8")
+
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "stamp"], cwd=repo, check=True)
+    committed = tmp_path / "app-committed"
+    committed.mkdir()
+    copy_tracked_app_files(repo, committed)
+
+    assert "0.4.0-main.7" in (committed / "shared" / "version.json").read_text(encoding="utf-8")
+
+
 def test_release_builder_refuses_a_dirty_worktree(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -895,6 +939,68 @@ def test_installer_points_every_shown_icon_at_the_staged_ico() -> None:
     assert "UninstallDisplayIcon={app}" + chr(92) + WINDOWS_ICON_NAME in script
     # The build's own .ico is what the installer executable wears too.
     assert "SetupIconFile={#PayloadDir}" + chr(92) + WINDOWS_ICON_NAME in script
+
+
+def test_the_installer_gets_a_numeric_version_field_and_the_readable_one() -> None:
+    """`VersionInfoVersion` is a binary field, and a pre-release is not valid in it.
+
+    Inno Setup takes up to four dot-separated numbers there -- it writes the
+    VERSIONINFO resource -- so `/DAppVersion=0.4.0-main.7` alone is a compile
+    error, not a cosmetic issue. The build passes both: the SemVer string for
+    everything a person reads, and its numeric form for the resource.
+    https://jrsoftware.org/ishelp/topic_setup_versioninfoversion.htm
+    """
+
+    script = (
+        Path(__file__).resolve().parents[2] / "installers" / "windows" / "bundle-setup.iss"
+    ).read_text(encoding="utf-8")
+
+    assert "VersionInfoVersion={#VersionInfoVersion}" in script
+    # Supplied by the build, never defaulted back to AppVersion here: a silent
+    # fallback would put the invalid value back the moment someone forgot.
+    assert "#ifndef VersionInfoVersion" in script
+    assert "#error VersionInfoVersion must be defined by the build" in script
+    assert "AppVersion={#AppVersion}" in script
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [("0.3.1", "0.3.1"), ("0.4.0-main.7", "0.4.0.7"), ("0.4.0-beta.2", "0.4.0.2")],
+)
+def test_the_compile_command_carries_both_versions(
+    tmp_path: Path, version: str, expected: str
+) -> None:
+    commands: list[list[str]] = []
+
+    def runner(command, **kwargs):  # type: ignore[no-untyped-def]
+        parts = [str(part) for part in command]
+        commands.append(parts)
+        defines = dict(
+            part.removeprefix("/D").split("=", 1) for part in parts if part.startswith("/D")
+        )
+        Path(defines["OutputDir"], f"{defines['OutputBaseFilename']}.exe").write_bytes(b"setup")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    compiler = tmp_path / "ISCC.exe"
+    compiler.write_text("", encoding="utf-8")
+    bundle = tmp_path / "bundle"
+    (bundle / "app").mkdir(parents=True)
+    (bundle / "app" / "main.py").write_text("x = 1\n", encoding="utf-8")
+    output = tmp_path / "out" / "setup.exe"
+    output.parent.mkdir()
+    builder = BundleBuilder(Path(__file__).resolve().parents[2], runner=runner)
+
+    builder.build_windows_setup(
+        bundle, output, version=version, environment={INNO_COMPILER_ENV: str(compiler)}
+    )
+
+    defines = dict(
+        part.removeprefix("/D").split("=", 1)
+        for part in commands[0]
+        if part.startswith("/D")
+    )
+    assert defines["AppVersion"] == version
+    assert defines["VersionInfoVersion"] == expected
 
 
 def test_installer_script_pins_the_per_user_install_that_the_updater_needs() -> None:
@@ -1862,6 +1968,43 @@ def test_the_app_manifest_records_the_tree_digest(tmp_path: Path) -> None:
     )
 
 
+def test_the_manifest_names_a_source_commit_only_when_it_is_given_one(
+    tmp_path: Path,
+) -> None:
+    """Inert for a release, and exact for a build whose HEAD is a stamp commit.
+
+    A build-only version stamp has to be committed to reach the app layer at
+    all, so `commit` then names that stamp commit. `sourceCommit` names the one
+    it was made from. A release passes neither, and its manifest is byte for
+    byte what it always was.
+    """
+
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "LICENSE").write_text("licence\n", encoding="utf-8")
+
+    release = build_bundle.write_app_manifest(
+        root, version="0.2.4", commit="0" * 40, runtime_id="abcdef012345"
+    )
+    assert "sourceCommit" not in release
+
+    build = build_bundle.write_app_manifest(
+        root,
+        version="0.4.0-main.7",
+        commit="1" * 40,
+        runtime_id="abcdef012345",
+        source_commit="2" * 40,
+    )
+
+    assert build["sourceCommit"] == "2" * 40
+    assert json.loads((root / "APP-MANIFEST.json").read_text(encoding="utf-8"))[
+        "sourceCommit"
+    ] == "2" * 40
+    # The layer digest is over the files, not over this record of them, so
+    # naming the source commit cannot change what the layer is.
+    assert build["treeSha256"] == release["treeSha256"]
+
+
 def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> None:
     """The instruction has to be where the wall is.
 
@@ -2309,11 +2452,28 @@ def test_the_linux_desktop_entry_is_substituted_not_guessed() -> None:
 
     assert entry.startswith("[Desktop Entry]\n")
     assert "Type=Application" in entry
-    assert f"Exec=@INSTALL_DIR@/{LINUX_LAUNCHER_NAME} %U" in entry
+    assert f"Exec=@INSTALL_DIR@/{LINUX_LAUNCHER_NAME}\n" in entry
     # The icon is named by theme key, not by path, so the hicolor lookup the
     # installer feeds is the one the desktop performs.
     assert "Icon=waveguide-generator\n" in entry
     assert "Terminal=false" in entry
+
+
+def test_the_linux_desktop_entry_promises_no_file_handling_it_does_not_have() -> None:
+    """No field code, because there is no MimeType and no argument handling.
+
+    ``Exec`` ended in ``%U`` while the entry declared no ``MimeType``, so no
+    association could ever expand it -- and the launcher now answers an
+    argument it does not recognise with a usage message and exit 2 rather than
+    forwarding it to the server. A desktop that did expand ``%U`` would
+    therefore have turned "open with Waveguide Generator" into an application
+    that refuses to start.
+    """
+
+    entry = linux_desktop_entry()
+
+    assert "%U" not in entry and "%F" not in entry and "%u" not in entry and "%f" not in entry
+    assert "MimeType" not in entry
 
 
 def test_the_linux_tarball_carries_an_executable_installer(tmp_path: Path) -> None:
@@ -2487,7 +2647,7 @@ def test_the_linux_installer_places_the_application_menu_entry_and_command(
 
     entry = (share / "applications" / LINUX_DESKTOP_ENTRY_NAME).read_text(encoding="utf-8")
     assert "@INSTALL_DIR@" not in entry
-    assert _desktop_exec_argv(entry) == [str(installed / LINUX_LAUNCHER_NAME), "%U"]
+    assert _desktop_exec_argv(entry) == [str(installed / LINUX_LAUNCHER_NAME)]
     assert (share / "icons" / "hicolor" / "512x512" / "apps" / LINUX_ICON_NAME).is_file()
 
     command = home / ".local" / "bin" / LINUX_LAUNCHER_NAME
@@ -2521,7 +2681,7 @@ def test_linux_desktop_exec_quotes_and_invokes_a_special_character_path(tmp_path
     entry = entry_path.read_text(encoding="utf-8")
     executable = prefix / LINUX_BUNDLE_DIRECTORY / LINUX_LAUNCHER_NAME
     argv = _desktop_exec_argv(entry)
-    assert argv == [str(executable), "%U"]
+    assert argv == [str(executable)]
     validation_tool = shutil.which("desktop-file-validate")
     if validation_tool:
         validated = subprocess.run(

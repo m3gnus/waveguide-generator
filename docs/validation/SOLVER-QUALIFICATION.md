@@ -8,11 +8,46 @@ WG, mesher, Metal-BEM, and BEMPP-BEM SHAs plus hardware/OS details.
 
 ## BEAT package contract
 
-The BEAT pin `42bbfcf9ec06921eeec2f996e27b1e6873c5bc65` includes startup
-cleanup, ownership-aware worker retirement and capability schema version 2.
-It preserves `SubmissionClosed` and `backend_capabilities` in the public API.
-A host whose runtime retirement raises still explicitly releases its event
-stream; session cancellation and a later solve remain separate submissions.
+The BEAT pin `74da18cdbb12844729a154005a26110511864aa0` keeps everything the
+previous `42bbfcf` pin carried: startup cleanup, ownership-aware worker
+retirement, capability schema version 2, and `SubmissionClosed` and
+`backend_capabilities` unchanged in the public API. A host whose runtime
+retirement raises still explicitly releases its event stream; session
+cancellation and a later solve remain separate submissions.
+
+It adds independent per-backend readiness, which is why WG adopted it. Readiness
+is recorded per backend rather than as one verdict for the host, so a machine can
+have the CPU runtime and an accelerator provisioned at the same time, and two
+accelerator families no longer collapse into whichever the single probe named
+first. `beat_backend_statuses` and `backend_status` are now part of the public
+API; `server/solver/beat.py` already probes for the first of those and falls back
+to a `beat_engine_status` derivation when a pin predates it, so this pin moves
+that adapter onto its documented first source. Provisioning is serialized with
+kernel locks, and a runtime directory that cannot take an advisory lock — NFS
+without a lock daemon, several FUSE, overlay and SMB mounts — now yields a failed
+state naming the directory and `HORNLAB_BEAT_RUNTIME_DIR` instead of raising an
+`OSError` through `provision_cpu`/`provision_gpu`, which previously answered a
+setup hook with a traceback.
+
+Two things about this pin are worth stating because they are easy to misread:
+
+* **BEAT's own capability report now marks the CPU backend user-facing** wherever
+  its runtime is provisioned, instead of reporting it available only under
+  `HORNLAB_BEAT_FORCE_CPU=1`. That flag now only skips the provisioning evidence
+  for CI and regression runs. **This does not move anything in WG.** WG reads
+  neither `user_facing` nor that environment variable, and its CPU row comes from
+  `server/solver/beat_cpu_runtime.py`, not from the package's capability record.
+  No engine default changed with this pin.
+* It also carries the re-synced fused singular Burton–Miller pair for the Metal
+  engine (`a5c240c`), which is an assembly-speed change with no tolerance moved.
+  Its known issue is unchanged and pre-existing: the fused Burton–Miller
+  validator at symmetry `xy` fails non-deterministically against the script's own
+  5e-6 tolerance on the bundled sample, which is why `xy` is not in that
+  validator's default arm list.
+
+Near-correction, quadrature and precision behaviour is untouched between the two
+pins — no file behind the paragraph below changed — so those claims carry over
+verified rather than assumed.
 
 Near correction is supported only on CPU. Metal, CUDA and ROCm refuse it at
 configuration time; the refusal is not an implementation of the missing

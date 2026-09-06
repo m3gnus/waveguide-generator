@@ -51,6 +51,28 @@ def imported_symmetry_from_cut_planes(cut_planes: Iterable[Any]) -> ImportedSymm
     return ImportedSymmetry("full", 1234, None, ordered)
 
 
+def imported_domain_planes(record: Mapping[str, Any]) -> tuple[str, ...]:
+    """The planes an ingestion record's solve must mirror on.
+
+    This is the one place the distinction is resolved, because two readers that
+    disagree about it solve two different models. ``symmetry.domain_planes`` is
+    the domain: the planes WG cut here *plus* the planes the CAD author had
+    already cut before exporting. ``symmetry.cut_planes`` is only the first set,
+    and a return that arrived already reduced has none of them -- reading it
+    would resolve a declared half to ``full`` and solve an open shell.
+
+    Records written before ``domain_planes`` existed carry only ``cut_planes``,
+    where the two lists are the same.
+    """
+
+    symmetry = record.get("symmetry")
+    symmetry = symmetry if isinstance(symmetry, Mapping) else {}
+    planes = symmetry.get("domain_planes")
+    if planes is None:
+        planes = symmetry.get("cut_planes") or []
+    return tuple(str(plane) for plane in planes)
+
+
 def mesh_frequency_validation(record: Mapping[str, Any]) -> Mapping[str, Any]:
     mesh = record.get("mesh")
     mesh = mesh if isinstance(mesh, Mapping) else {}
@@ -64,6 +86,7 @@ __all__ = [
     "ImportedSymmetry",
     "ImportedSymmetryUnsupportedError",
     "ImportedMeshArtifactError",
+    "imported_domain_planes",
     "imported_symmetry_from_cut_planes",
     "mesh_frequency_validation",
     "mesh_text_sha256",

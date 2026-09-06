@@ -1,4 +1,9 @@
 import { downloadBlob, downloadText } from '../api/designIo';
+import {
+  collisionFrom,
+  writeConfirmingReplacements,
+  type ConfirmReplacements,
+} from '../api/exportDestination';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import { placeRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
@@ -52,6 +57,18 @@ export interface ExportContext {
   saveText?: (text: string, filename: string, type?: string) => void;
   now?: Date;
   destination?: 'manual' | 'workspace';
+  /**
+   * The folder this one export was sent to, as the handle
+   * `POST /api/workspace/export-destination` issued. Absent writes into the
+   * workspace, which is what every automatic export does.
+   */
+  destinationToken?: string;
+  /**
+   * Asked once, with every file this export would replace, before any of them
+   * is touched. Only a manual export carries one; without it an
+   * `existing=confirm` refusal is raised rather than silently overwritten.
+   */
+  confirmReplacements?: ConfirmReplacements;
   /** Retention-consistent artifacts copied by the permanent-archive endpoint. */
   archiveSnapshot?: {
     pressureBases: Record<string, { blob: Blob; filename: string }>;
@@ -66,6 +83,8 @@ export interface ExportBundleResult {
   failures: ExportFailure[];
   /** Absolute backend destination for Workspace exports. */
   directory?: string;
+  /** Files in that destination that already existed and were replaced. */
+  replaced?: string[];
 }
 
 function finite(value: unknown): number | null {
@@ -329,6 +348,8 @@ export interface WorkspaceFile {
 export interface WorkspaceWriteResponse {
   directory: string;
   files: string[];
+  /** Files that already existed and were replaced. Absent from older servers. */
+  replaced?: string[];
 }
 
 function blobFromBase64(content: string, type = 'application/octet-stream'): Blob {
@@ -349,7 +370,7 @@ function blobFromBase64(content: string, type = 'application/octet-stream'): Blo
  * chart preferences change the bytes too, so every repeat differed and the
  * whole bundle was rejected with a 409.
  */
-export type ExistingFilePolicy = 'reject' | 'merge_identical' | 'overwrite';
+export type ExistingFilePolicy = 'reject' | 'merge_identical' | 'overwrite' | 'confirm';
 
 /** The folder a bundle is written to, which callers may group by design. */
 export function workspaceSubdirectory(context: ExportContext): string {
@@ -361,11 +382,9 @@ export async function writeWorkspaceFiles(
   members: WorkspaceFile[],
   fetcher: typeof fetch = fetch,
   existing: ExistingFilePolicy = 'merge_identical',
+  destination?: string,
+  confirmReplacements?: ConfirmReplacements,
 ): Promise<WorkspaceWriteResponse> {
-  const body = new FormData();
-  body.append('subdirectory', subdirectory);
-  body.append('existing', existing);
-  members.forEach(({ filename }) => body.append('relative_path', filename));
   const compatibleBlobs = await Promise.all(members.map(async ({ blob }) => {
     const crossRealmBlob = blob as unknown as {
       arrayBuffer: () => Promise<ArrayBuffer>;
@@ -375,13 +394,29 @@ export async function writeWorkspaceFiles(
       ? blob
       : new Blob([await crossRealmBlob.arrayBuffer()], { type: crossRealmBlob.type });
   }));
-  members.forEach(({ filename }, index) => body.append('file', compatibleBlobs[index], filename));
-  const response = await fetcher('/api/workspace/write-export', {
-    method: 'POST',
-    body,
-  });
-  if (!response.ok) throw await responseError(response);
-  return response.json() as Promise<WorkspaceWriteResponse>;
+  const post = async (policy: string): Promise<WorkspaceWriteResponse> => {
+    const body = new FormData();
+    // With a destination the user chose for this export, the files land in it.
+    // The subdirectory is how exports are kept apart inside the shared output
+    // folder, and it is not what someone who just named a folder asked for.
+    body.append('subdirectory', destination ? '' : subdirectory);
+    body.append('existing', policy);
+    if (destination) body.append('destination', destination);
+    members.forEach(({ filename }) => body.append('relative_path', filename));
+    members.forEach(({ filename }, index) => body.append('file', compatibleBlobs[index], filename));
+    const response = await fetcher('/api/workspace/write-export', {
+      method: 'POST',
+      body,
+    });
+    // The bytes are built once and posted again on confirmation: rebuilding the
+    // bundle would re-render its charts and restamp its timestamps, so the
+    // second request would not be the export the user was asked about.
+    if (!response.ok) throw await collisionFrom(response) ?? await responseError(response);
+    return response.json() as Promise<WorkspaceWriteResponse>;
+  };
+  return existing === 'confirm'
+    ? writeConfirmingReplacements(post, confirmReplacements)
+    : post(existing);
 }
 
 async function fetchGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<GeometryDownload> {
@@ -863,8 +898,15 @@ export async function runWorkspaceExportBundle(
     [...prepared.values()],
     context.fetcher ?? fetch,
     existing,
+    context.destinationToken,
+    context.confirmReplacements,
   );
-  return { ...bundle, directory: written.directory, files: written.files };
+  return {
+    ...bundle,
+    directory: written.directory,
+    files: written.files,
+    replaced: written.replaced ?? [],
+  };
 }
 
 export async function downloadMeshArtifact(

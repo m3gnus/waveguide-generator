@@ -201,6 +201,34 @@ def test_a_gpu_only_runtime_is_not_a_usable_opencl_backend(monkeypatch):
     assert "Apple M1 Max" in reason
 
 
+def test_the_gpu_only_reason_names_a_package_per_distribution(monkeypatch):
+    """"Install pocl" is not actionable if the reader has the wrong distro.
+
+    Reported from Fedora 44 with an RTX 5090 as the only OpenCL device: the
+    message named the cause and the consequence well, and then left a blocked
+    user to find the package name themselves -- on a machine where the obvious
+    guess (``mesa-libGL``-style naming, ``apt``) does not resolve.
+
+    The second half is the confusion the same host invites: a very capable GPU
+    *is* exposed, and it cannot assemble a BEMPP solve at any speed. BEMPP is
+    this application's CPU engine; the GPU path is a different engine.
+    """
+
+    gpu_only = _FakePlatform(
+        "NVIDIA CUDA", [_FakeDevice("NVIDIA GeForce RTX 5090", "gpu-devices")]
+    )
+    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([gpu_only]))
+
+    usable, reason = bempp._opencl_status()
+
+    assert usable is False
+    assert "sudo dnf install pocl" in reason
+    assert "sudo apt install pocl-opencl-icd" in reason
+    assert "sudo pacman -S pocl" in reason
+    assert "does not substitute" in reason
+    assert "BEAT · CUDA" in reason
+
+
 def test_a_cpu_device_on_any_platform_is_accepted(monkeypatch):
     """The GPU-only case must not become a blanket refusal."""
 

@@ -100,3 +100,64 @@ also include `cost_evidence`: deterministic counts from the frequency-refined
 meridian (unknowns, azimuthal quadrature work, matrix memory, and a revolved
 full-3D triangle scale for the requested symmetry domain). These are transparent
 complexity comparisons rather than machine-specific wall-clock promises.
+
+## CAD returns that arrive already cut
+
+A CAD return may state that the exported bodies **are** the reduced domain. The
+statement is `assembly.domain` in `wgreturn.json`, gated by the
+`reduced-domain-v1` entry in `required_features` so a reader that does not
+understand it refuses the bundle rather than solving a half as a whole model:
+
+```json
+"domain": {
+  "kind": "half",
+  "cut_planes": ["y0"],
+  "declared_by": "cad-author",
+  "evidence": {"y0": {"min_mm": 0.0, "max_mm": 173.2, "tolerance_mm": 0.05}}
+}
+```
+
+`kind` is `full`, `half`, or `quarter` and must agree with `cut_planes`, which
+may name only `x0` and `y0` — the planes `imported_symmetry_from_cut_planes`
+can express. `evidence` records what the writer measured on the bodies it
+exported, per declared plane, and must still support the claim: geometry on the
+positive side, none beyond tolerance on the negative side. The counterpart
+writer and its own validation are `hornlab-fusion-addin`
+`fusion-addins/WGLink/wglink_return.py` and `wglink_send.plan_domain`.
+
+The declaration is not believed on its own. Ingestion keeps two sets of planes
+apart: `symmetry.cut_planes` is what *this* preparation removed, and
+`symmetry.domain_planes` is what the solver mirrors — declared planes plus cut
+ones. Only the first predicts a halved source area, because only the first
+halved a face here. `verify_symmetry_cut` then re-reads every domain plane from
+the meshed boundary with a detector that knows nothing about what was declared,
+and separates three ways a claim fails: the boundary spans both sides of the
+plane, it lies on the negative side, or the plane is capped rather than open.
+
+Two readers must never disagree about which planes those are, so
+`server/solver/imported.imported_domain_planes` is the single resolver and both
+the submit gate (`server/jobs/runtime.py`) and the Metal entry
+(`server/solver/metal.py`) go through it. A reduced domain also cannot be
+combined with a rigid ground plane on the same plane: a mirror plane is touched
+and a floor is stood clear of, and an imported mesh cannot be re-cut the way
+`restrict_for_ground_plane` re-cuts a parametric one, so the pair is refused as
+`imported_symmetry_ground_plane_conflict` with the plane named.
+
+A rejected **auto-cut** falls back to the full domain, because the whole model
+is in the STEP. A rejected **declared** domain is refused: the other half is not
+in the file, so meshing what arrived and solving it whole answers a different
+question. `symmetryMode: "full"` is refused for the same reason.
+
+`coordinate_system.export_frame` names which component's own frame
+`assembly.step` is written in: `root-component`, or
+`selected-occurrence-component` when the return was scoped to one occurrence.
+Fusion's STEP export takes a Component and writes it in the component's own
+coordinates, so the export scope decides the file's frame, and every coordinate
+in the manifest — `assembly.bbox_mm`, each `instances[].assembly_from_link`,
+the domain evidence — is in that frame. Absent means `root-component`, which is
+what every bundle written before the member exported.
+
+An undeclared return whose meshed boundary looks reduced — open on a coordinate
+plane, with the whole mesh on one side of it — raises the blocking
+`undeclared-reduced-domain` finding. It is the only guard on a Fusion-first
+return, which has no design contract to contradict.

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import shutil
 import subprocess
@@ -16,6 +15,7 @@ import tempfile
 import time
 
 from server.platform.paths import resolve_data_dir
+from shared import release_assets
 from launchers import apply_update as apply_update_module
 from launchers.apply_update import (
     BUNDLE_LAYERS,
@@ -33,8 +33,44 @@ from launchers.apply_update import (
 )
 
 
-TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+#: The one version vocabulary, borrowed rather than restated.
+#:
+#: These were `^\d+\.\d+\.\d+$` and `^v\d+\.\d+\.\d+$`, which is the shape a
+#: release has and not the shape the updater offers: the beta channel offers
+#: pre-releases, and this end of the handoff refused every one of them. Passing
+#: `_is_installable_tag` in `server/updates/service.py` proved only that the
+#: server would *offer* such an update; the request it then wrote was discarded
+#: here as invalid, which is where an installed beta actually fails.
+#:
+#: `shared/release_assets.py` says why one pattern rather than four: the last
+#: time these drifted, every beta asset was refused as untrusted and no beta
+#: could have been installed at all.
+TAG_RE = release_assets.TAG_RE
+VERSION_RE = release_assets.VERSION_RE
+
+
+def _is_offered_version(version: str) -> bool:
+    """Whether this names a release WG offers, rather than its layer companion.
+
+    A companion (`0.4.0-updates`) carries update layers and no installer. Its
+    suffix is a syntactically valid pre-release label, so the shape alone
+    accepts it and the meaning has to refuse it -- the same refusal
+    `server/updates/service.py` makes when choosing what to offer.
+    """
+
+    return (
+        VERSION_RE.fullmatch(version) is not None
+        and not version.endswith(release_assets.UPDATES_TAG_SUFFIX)
+    )
+
+
+def _is_offered_tag(tag: str) -> bool:
+    """The same question for a release tag."""
+
+    return (
+        TAG_RE.fullmatch(tag) is not None
+        and not tag.endswith(release_assets.UPDATES_TAG_SUFFIX)
+    )
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_DETACHED_PROCESS = 0x00000008
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
@@ -114,7 +150,7 @@ def consume_update_request(
             }
             or payload.get("schemaVersion") != 1
             or not isinstance(version, str)
-            or VERSION_RE.fullmatch(version) is None
+            or not _is_offered_version(version)
             or raw_runtime is not None
             and not isinstance(raw_runtime, str)
             or not inside
@@ -140,7 +176,7 @@ def consume_update_request(
             payload.get("schemaVersion") != 1
             or payload.get("kind") != "install_release"
             or not isinstance(tag, str)
-            or TAG_RE.fullmatch(tag) is None
+            or not _is_offered_tag(tag)
             or not isinstance(ready_at, int | float)
         )
     else:
@@ -332,7 +368,7 @@ def launch_update_handoff(
     """Start an independent helper that waits for this status process to exit."""
 
     selected_platform = sys.platform if platform_name is None else platform_name
-    if TAG_RE.fullmatch(tag) is None:
+    if not _is_offered_tag(tag):
         raise UpdateHandoffError("Refusing an invalid update release tag.")
 
     if selected_platform == "win32":

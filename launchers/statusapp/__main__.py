@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ import sys
 import traceback
 from typing import TYPE_CHECKING
 
+from launch.serve_options import PROGRAM_NAME, add_server_arguments
 from server.platform.paths import app_root
 
 if TYPE_CHECKING:  # pragma: no cover - import cost is why it is deferred at runtime
@@ -74,17 +76,90 @@ def _log_startup_failure(message: str) -> None:
         pass
 
 
-def _show_startup_failure_dialog(message: str) -> None:
-    """Put the failure on screen for a process that has no console.
+#: Graphical error reporters to try on Linux, in order, with the message
+#: appended as the last argument. There is no equivalent of ``MessageBoxW`` or
+#: ``osascript`` here -- a desktop may ship any of these, or none -- so this is
+#: a list of attempts rather than a call, and the log file remains the channel
+#: that always exists.
+LINUX_DIALOG_COMMANDS: tuple[tuple[str, ...], ...] = (
+    ("zenity", "--error", "--no-wrap", "--title", "Waveguide Generator", "--text"),
+    ("kdialog", "--title", "Waveguide Generator", "--error"),
+    ("xmessage", "-center", "-title", "Waveguide Generator"),
+)
 
-    Only reached when there is no stderr, which on Windows means the launcher's
-    ``start "" pythonw.exe``. Best effort in the same sense as
-    :func:`_log_startup_failure`; a platform without a usable dialog still has
-    the log file.
+
+def _console_is_readable() -> bool:
+    """Is there a terminal in which a printed message would actually be seen?
+
+    ``sys.stderr is None`` -- the Windows ``pythonw`` case -- used to be the
+    whole test, and on Linux it is the wrong one. A process started from a
+    desktop entry has a perfectly real stderr: systemd attaches it to the
+    journal, where a user who has just been told nothing at all is not going
+    to look. macOS has the same shape from LaunchServices, which is why
+    ``DesktopWindow._report_bundle_failure`` already ignores the stderr test
+    there. So ask whether anyone is reading, not whether the stream exists.
+
+    A redirected terminal run (``waveguide-generator > log 2>&1``) answers
+    false too and gets a dialog it did not strictly need. That is the safe
+    direction to be wrong in.
+    """
+
+    stream = sys.stderr
+    if stream is None:
+        return False
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError):  # a closed or exotic stream
+        return False
+
+
+def _show_startup_failure_dialog(message: str) -> None:
+    """Put the failure on screen for a process nobody is reading the output of.
+
+    Best effort in the same sense as :func:`_log_startup_failure`; a platform
+    without a usable dialog still has the log file.
+
+    **Nothing here waits, except Windows.** The rule used to be that Linux does
+    not wait and the other two do, "where the dialog *is* the last thing that
+    happens" -- true while the only caller was a process with no ``sys.stderr``
+    at all. :func:`_console_is_readable` widened that to every run nobody is
+    reading, which is right, and it put a *blocking* modal in front of runs
+    that continue: a redirected terminal launch, a service, and this
+    repository's own test suite, where one refusal held pytest for the whole
+    300 s faulthandler timeout and left the dialog on the developer's screen
+    afterwards.
+
+    macOS therefore starts ``osascript`` and returns. Nothing is lost when the
+    caller then exits: the dialog belongs to that separate process, which
+    outlives its parent and stays on screen until it is dismissed.
+
+    Windows keeps its blocking call, and the difference is not stylistic.
+    ``MessageBoxW`` is drawn *by this process*; there is no child to outlive
+    it, so a launcher that returned here and exited would take the only
+    message the user was ever going to see with it -- which is the failure
+    this whole function was written for (``start "" pythonw.exe``, no console,
+    nothing else on screen).
     """
 
     try:
-        if sys.platform == "win32":
+        if sys.platform.startswith("linux"):
+            import shutil
+            import subprocess
+
+            for command in LINUX_DIALOG_COMMANDS:
+                # Resolved rather than named, so what is reported and what runs
+                # are the same file even if PATH changes under a slow desktop.
+                executable = shutil.which(command[0])
+                if executable is None:
+                    continue
+                subprocess.Popen(
+                    [executable, *command[1:], message],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+        elif sys.platform == "win32":
             import ctypes
 
             # MB_ICONERROR | MB_SETFOREGROUND. Foreground matters because the
@@ -97,9 +172,13 @@ def _show_startup_failure_dialog(message: str) -> None:
             # The message travels as an argv item rather than interpolated into
             # the AppleScript source, where a quote in a path or an exception
             # string would rewrite the program.
-            subprocess.run(
+            #
+            # Absolute, and not waited for. Absolute because a bundle inherits
+            # whatever PATH LaunchServices gave it, and this is now the dialog
+            # a bundle failure reaches; not waited for, see the docstring.
+            subprocess.Popen(
                 [
-                    "osascript",
+                    "/usr/bin/osascript",
                     "-e",
                     "on run argv",
                     "-e",
@@ -110,10 +189,35 @@ def _show_startup_failure_dialog(message: str) -> None:
                     "--",
                     message,
                 ],
-                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
     except Exception:  # noqa: BLE001 - see docstring
         pass
+
+
+def _report_terminal_failure(message: str, *, detail: str | None = None) -> None:
+    """Deliver a failure without opening anything.
+
+    ``--no-gui`` is documented, in its own ``--help`` text, as "run in this
+    terminal, opening no window of our own". That has to hold for the mode's
+    *refusals* as well, and it stopped holding when the dialog test in
+    :func:`_report_startup_failure` widened from "there is no ``sys.stderr``"
+    to "nobody is reading ``sys.stderr``": a redirected terminal run
+    (``waveguide-generator --no-gui > log 2>&1``), a service, or a CI step then
+    satisfies it, and terminal mode answered a missing interface with a window.
+    On Windows it answered with a *modal* one, and waited for it.
+
+    So the terminal modes report through this and the graphical ones through
+    :func:`_report_startup_failure`, which is this plus a dialog. Both channels
+    that open nothing are here: stderr when there is one, and the log always --
+    a redirected run still gets its message, and an exit code either way.
+    """
+
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+    _log_startup_failure(message if detail is None else f"{message}\n{detail}")
 
 
 def _report_startup_failure(
@@ -140,7 +244,7 @@ def _report_startup_failure(
     """
 
     _report_terminal_failure(message, detail=detail)
-    if sys.stderr is None:
+    if not _console_is_readable():
         _show_startup_failure_dialog(message if dialog is None else dialog)
 
 
@@ -159,6 +263,89 @@ def _report_failure_with_evidence(failure: "TkFailure", *, detail: str | None = 
         dialog=f"{failure.summary()}\n\n{_log_location()}",
     )
 
+
+class _LauncherParser(argparse.ArgumentParser):
+    """An argparse parser that can still report to a process with no console.
+
+    ``ArgumentParser._print_message`` writes to ``sys.stdout`` for ``--help``
+    and to ``sys.stderr`` for a usage error, and falls back to ``sys.stderr``
+    when handed no file. Started from a desktop entry, or from Windows'
+    ``start "" pythonw.exe``, *both* streams are ``None`` -- so the base class
+    would answer a mistyped flag with ``AttributeError: 'NoneType' object has
+    no attribute 'write'``, replacing a precise usage message with a crash.
+    The log file is the channel that always exists, so it is the last resort
+    here exactly as it is in :func:`_report_startup_failure`.
+    """
+
+    def _print_message(self, message: str, file=None) -> None:  # type: ignore[override]
+        if not message:
+            return
+        stream = file if file is not None else sys.stderr
+        if stream is not None:
+            stream.write(message)
+            return
+        _log_startup_failure(message)
+
+
+#: Consumed by the launcher and never forwarded to the server. Kept as a tuple
+#: beside the parser because the server arguments are passed on *verbatim* --
+#: argparse's parsed namespace cannot reconstruct ``--port 3199`` versus
+#: ``--port=3199``, and the server has to receive what the user actually typed.
+DISPLAY_FLAGS = ("--window", "--browser", "--no-gui")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The launcher's whole command line: display mode plus the server's own.
+
+    ``allow_abbrev=False`` because an accepted abbreviation would be a bug
+    here and nowhere else: ``--wind`` would satisfy argparse as ``--window``,
+    survive the verbatim filter below (which matches the flags by name), and
+    reach the server as an argument it has never heard of.
+    """
+
+    parser = _LauncherParser(
+        prog=PROGRAM_NAME,
+        description="Start Waveguide Generator on this machine.",
+        allow_abbrev=False,
+    )
+    display = parser.add_argument_group("display mode")
+    display.add_argument(
+        "--window",
+        action="store_true",
+        help="open the native desktop window",
+    )
+    display.add_argument(
+        "--browser",
+        action="store_true",
+        help="use the status window and your own browser (the default)",
+    )
+    display.add_argument(
+        "--no-gui",
+        dest="no_gui",
+        action="store_true",
+        help="run in this terminal, opening no window of our own",
+    )
+    return add_server_arguments(parser)
+
+
+def parse_arguments(arguments: list[str]) -> tuple[argparse.Namespace, list[str]] | int:
+    """Validate the command line, or return the exit code argparse chose.
+
+    ``--help`` is the one flag that must never open a window, and this is
+    where that is guaranteed: argparse prints usage and raises
+    ``SystemExit(0)`` before any display mode has been decided, let alone a
+    server started. An unrecognised argument leaves by the same door with 2.
+    """
+
+    try:
+        options = build_parser().parse_args(arguments)
+    except SystemExit as exc:
+        # argparse's only exit channel. Turning it into a return value keeps
+        # every caller of ``main`` -- including ``launchers.desktop`` -- on the
+        # one exit path they already have, instead of a SystemExit that skips
+        # the callers' own cleanup.
+        return 0 if exc.code in (None, 0) else int(exc.code)
+    return options, [argument for argument in arguments if argument not in DISPLAY_FLAGS]
 
 def _refuse_bundle_without_recovery(
     cause: BaseException,
@@ -209,30 +396,6 @@ def _refuse_bundle_without_recovery(
         "repairs an interrupted update. If the log has no such entry, reinstall."
     )
     return 1
-
-
-def _report_terminal_failure(message: str, *, detail: str | None = None) -> None:
-    """Deliver a failure without opening anything.
-
-    ``--no-gui`` is documented, in its own ``--help`` text, as "run in this
-    terminal, opening no window of our own", and that has to hold for the
-    mode's *refusals* too. Both channels that open nothing are here: stderr
-    when there is one, and the log always.
-
-    Deliberately the same function, by the same name, that the launcher-report
-    work on ``fix/032-linux-review`` (`9fbf9264`) introduces. On *this* branch
-    the dialog still fires only when ``sys.stderr is None``, so a redirected
-    ``--no-gui`` run cannot reach it; that branch widens the test to "nobody is
-    reading stderr", at which point a recovery refusal *would* open a modal in
-    a mode that promised not to -- on Windows a blocking one, waiting for a
-    person who is not there. Routing the refusal through this now means the
-    combined code is correct whichever order the two land in. The integrator
-    should keep one copy of the function.
-    """
-
-    if sys.stderr is not None:
-        print(message, file=sys.stderr)
-    _log_startup_failure(message if detail is None else f"{message}\n{detail}")
 
 
 def _recover_interrupted_bundle_update(
@@ -294,24 +457,35 @@ def _recover_interrupted_bundle_update(
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    window_requested = "--window" in arguments
-    browser_requested = "--browser" in arguments
-    arguments = [argument for argument in arguments if argument not in {"--window", "--browser"}]
-    if window_requested and browser_requested:
-        _report_startup_failure("Choose only one display mode: --window or --browser.")
+    parsed = parse_arguments(list(sys.argv[1:] if argv is None else argv))
+    if isinstance(parsed, int):
+        return parsed
+    options, arguments = parsed
+    if options.window and options.browser:
+        # ``--no-gui`` wins over both further down, so a command line carrying
+        # it has asked for a terminal even while contradicting itself about
+        # which window it wanted. Answer it in the terminal.
+        report = _report_terminal_failure if options.no_gui else _report_startup_failure
+        report("Choose only one display mode: --window or --browser.")
         return 2
-    # ``--no-gui`` promised to open no window of our own, and a refusal is
-    # still this mode's answer. Same reporter selection `9fbf9264` applies to
-    # the display-mode contradiction just above.
+    # ``--no-gui`` promised to open no window of our own, and a refusal is still
+    # this mode's answer, so it reports the same way the display-mode
+    # contradiction just above does. This runs before the mode branch on
+    # purpose: the recovery that shipped lived inside the desktop window, so
+    # ``--browser`` and ``--no-gui`` skipped it -- and those are the modes a
+    # user reaches for when the window will not open, which after an
+    # interrupted update is exactly when it will not.
+    #
+    # ``arguments`` here is the server's own command line: ``parse_arguments``
+    # has already removed the display flags, and the recovery reads it only for
+    # a ``--data-dir`` override, so the stripped list is the right one to pass.
     refusal = _recover_interrupted_bundle_update(
         arguments,
-        report=_report_terminal_failure if "--no-gui" in arguments else _report_startup_failure,
+        report=_report_terminal_failure if options.no_gui else _report_startup_failure,
     )
     if refusal is not None:
         return refusal
-    if "--no-gui" in arguments:
-        arguments.remove("--no-gui")
+    if options.no_gui:
         # The status window refuses to start the backend when the interface is
         # missing (controller.poll). Terminal mode bypasses that guard by going
         # straight to the server, which then raises a starlette RuntimeError
@@ -322,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
         if not FRONTEND_INDEX.is_file():
             from .controller import missing_frontend_reason
 
-            _report_startup_failure(
+            _report_terminal_failure(
                 "Waveguide Generator did not start because the interface is "
                 f"missing: {missing_frontend_reason()}"
             )
@@ -332,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return serve(arguments)
 
-    if window_requested:
+    if options.window:
         from launchers.desktop import main as desktop_main
 
         return desktop_main(arguments)

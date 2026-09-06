@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -107,7 +109,13 @@ def _stub_webview() -> tuple[ModuleType, list[tuple[tuple[object, ...], dict[str
         created.append((args, kwargs))
         return SimpleNamespace(events=SimpleNamespace(closed=ClosedEvent()))
 
-    def start(*, func) -> None:
+    #: Every keyword ``webview.start`` was given, so a test can see which
+    #: backend was named without a second stub. pywebview's own signature takes
+    #: ``gui`` beside ``func``.
+    stub.start_calls = []
+
+    def start(*, func, **options: object) -> None:
+        stub.start_calls.append(options)
         func()
 
     stub.create_window = create_window
@@ -260,24 +268,470 @@ def test_windows_pythonnet_initialization_error_uses_the_same_visible_fallback(
     assert "Evergreen Runtime" in reported[0]
 
 
-def test_linux_window_request_reports_and_uses_status_fallback(
+def _completed(returncode: int, stderr: str = "", stdout: str = "") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(
+        args=["python", "-c", "..."], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def test_linux_opens_the_native_window_when_qt_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The window is offered on Linux, not refused before it is attempted.
+
+    0.3.1 short-circuited every Linux launch into the status window with a
+    notice saying the native window was "unavailable on Linux in this
+    release". The window code was already platform-generic; only pywebview's
+    Linux backend was missing from the requirements.
+    """
+
+    controller = StubController()
+    webview, created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setattr(desktop, "_linux_window_blocker", lambda: None)
+    monkeypatch.setattr(
+        desktop.DesktopWindow, "_name_linux_application", lambda self: None
+    )
+    windows: list[StubController] = []
+    monkeypatch.setattr(
+        desktop, "StatusController", lambda *, server_args: windows.append(server_args) or controller
+    )
+
+    assert desktop.main(["--port", "3199"]) == 0
+    assert windows == [["--port", "3199"]]
+    assert created[0][0] == (desktop.WINDOW_TITLE, controller.url)
+    # Named rather than left to pywebview's own GTK-first order: Qt is the
+    # backend this application ships and tests against.
+    assert webview.start_calls == [{"gui": "qt"}]
+
+
+def test_linux_falls_back_to_the_status_window_and_says_which_library(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A machine whose Qt cannot start must reach the interface anyway.
+
+    The status window rather than a bare browser: it owns the server for as
+    long as it is open, where ``_open_browser_fallback`` returns at once on
+    Linux and would let ``run``'s ``finally`` stop the backend under the
+    interface it had just opened.
+    """
+
     from launchers.statusapp import __main__ as status_entrypoint
 
     monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setattr(
+        desktop,
+        "_linux_window_blocker",
+        lambda: 'a Qt check exited with -6:\nlibxcb-cursor.so.0: cannot open shared object file',
+    )
     reported: list[str] = []
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
     seen: list[list[str]] = []
     monkeypatch.setattr(status_entrypoint, "main", lambda arguments: seen.append(arguments) or 7)
 
     assert desktop.main(["--port", "3199"]) == 7
-    assert "unavailable on Linux" in reported[0]
     assert seen == [["--browser", "--port", "3199"]]
+    assert "libxcb-cursor.so.0" in reported[0], "the cause has to survive to the user"
+    assert "sudo dnf install" in reported[0] and "sudo pacman" in reported[0]
+
+
+def test_a_failure_from_the_applications_menu_is_put_on_screen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, startup_dialogs: list[str],
+) -> None:
+    """A desktop entry's stderr is real and goes to the journal.
+
+    ``_report_startup_failure`` used to show a dialog only when there was no
+    stderr at all, which is Windows' ``pythonw`` case and not this one -- so a
+    Linux user who launched from the menu would have got a different
+    application from the one macOS gives them, with the explanation filed
+    somewhere they will never look.
+
+    **Exactly once.** The console test moved *into* ``_report_startup_failure``
+    and the fallback kept its own copy of it, so both fired on precisely the
+    hosts this feature exists for. Nothing here stubs the reporter, because
+    the reporter is the thing under test: a stub would have hidden the second
+    dialog, which is how it survived review.
+    """
+
+    from launchers.statusapp import __main__ as status_entrypoint
+
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setattr(desktop, "_linux_window_blocker", lambda: "no Qt here")
+    monkeypatch.setattr(status_entrypoint, "main", lambda _arguments: 0)
+
+    monkeypatch.setattr(status_entrypoint, "_console_is_readable", lambda: True)
+    assert desktop.main([]) == 0
+    assert startup_dialogs == [], "a terminal already showed it"
+
+    monkeypatch.setattr(status_entrypoint, "_console_is_readable", lambda: False)
+    assert desktop.main([]) == 0
+    assert len(startup_dialogs) == 1, "one failure, one dialog"
+    assert "no Qt here" in startup_dialogs[0]
+
+
+def test_the_linux_check_is_skipped_when_the_user_has_chosen_a_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``PYWEBVIEW_GUI`` is pywebview's override and this must not overrule it."""
+
+    controller = StubController()
+    webview, _created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setenv("PYWEBVIEW_GUI", "gtk")
+    monkeypatch.setattr(
+        desktop.DesktopWindow, "_name_linux_application", lambda self: None
+    )
+
+    def _must_not_probe() -> str | None:  # pragma: no cover - the point is the absence
+        raise AssertionError("a chosen backend must not be probed for Qt")
+
+    monkeypatch.setattr(desktop, "_linux_window_blocker", _must_not_probe)
+    monkeypatch.setattr(desktop, "StatusController", lambda *, server_args: controller)
+
+    assert desktop.main([]) == 0
+    # ...and pywebview is left to honour the variable itself.
+    assert webview.start_calls == [{}]
+
+
+def test_a_machine_with_no_display_is_answered_without_starting_an_interpreter() -> None:
+    """No display means nothing for Qt to connect to, and nothing to pay for."""
+
+    def _must_not_run(*_args: object, **_kwargs: object) -> object:  # pragma: no cover
+        raise AssertionError("the display check comes first")
+
+    reason = desktop._linux_window_blocker(environ={}, runner=_must_not_run)
+
+    assert reason is not None
+    assert "DISPLAY" in reason and "WAYLAND_DISPLAY" in reason
+
+
+def test_the_qt_check_runs_out_of_process_because_qt_aborts_in_it() -> None:
+    """Constructing a QApplication is the call that can call ``qFatal``.
+
+    ``qFatal`` is ``abort()``: no ``try`` in this process could catch it, and
+    the application would die with no window and no message rather than fall
+    back. So the check has to be a child interpreter, and the program it runs
+    has to build a real QApplication -- importing the module proves nothing
+    about the platform plugin.
+    """
+
+    commands: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return _completed(0)
+
+    assert (
+        desktop._linux_window_blocker(
+            environ={"WAYLAND_DISPLAY": "wayland-0"},
+            executable="/bundle/runtime/bin/python3.13",
+            runner=runner,
+        )
+        is None
+    )
+    assert commands[0][:2] == ["/bundle/runtime/bin/python3.13", "-c"]
+    assert "QApplication(" in commands[0][2]
+    # QtWebEngine is where the interface is actually drawn, and its shared
+    # libraries are a separate way for this to fail.
+    assert "QtWebEngineWidgets" in commands[0][2]
+
+
+def test_the_qt_check_renders_a_page_rather_than_stopping_at_an_application() -> None:
+    """QtWebEngine is Chromium: the interface is drawn by a second process.
+
+    A machine can construct a perfectly good ``QApplication`` and then produce
+    a blank window, because the render process needs an unprivileged user
+    namespace and seccomp-bpf that some kernels and container images do not
+    give it (Qt WebEngine Platform Notes). Only loading a page starts that
+    process, so only loading a page answers the question the fallback is
+    asking.
+    """
+
+    program = desktop._linux_qt_probe(deadline_ms=1234)
+
+    # It is built by ``str.format``, so a brace added to it in good faith
+    # would produce a program that is not Python at all -- and the failure
+    # would read exactly like a machine with no Qt.
+    ast.parse(program)
+    assert "setHtml(" in program
+    assert "loadFinished" in program
+    # Bounded: a render process that never answers must end the check rather
+    # than hold the launch on an event loop.
+    assert "QTimer.singleShot(1234" in program
+    assert "exec_()" in program
+    # The view goes before the application does. Collected the other way round
+    # -- at interpreter shutdown, after QApplication -- QtWebEngine is a known
+    # crash at exit, which would come back as a failed probe from a machine
+    # where the window works.
+    assert program.index("del view") < program.index("sys.exit(verdict)")
+
+
+def test_the_qt_check_never_buys_a_pass_by_disabling_the_sandbox() -> None:
+    """A probe that switched off what was failing would be worse than none.
+
+    It would report success and send the application into exactly the blank
+    window the check exists to predict.
+    """
+
+    program = desktop._linux_qt_probe()
+
+    for escape in ("--no-sandbox", "QTWEBENGINE_DISABLE_SANDBOX", "--disable-gpu-sandbox"):
+        assert escape not in program
+    # Nor may it decide the display protocol on the user's behalf: a forced
+    # QT_QPA_PLATFORM answers a question about a session nobody is running.
+    assert "QT_QPA_PLATFORM" not in program
+    assert "QT_QPA_PLATFORM" not in Path(desktop.__file__).read_text(encoding="utf-8")
+
+
+def test_an_explicitly_chosen_qt_backend_is_still_checked() -> None:
+    """``PYWEBVIEW_GUI=qt`` is the same renderer, and the same exposure.
+
+    Skipping the probe for it would withhold the diagnosis from the one user
+    who was explicit about what they wanted.
+    """
+
+    assert desktop._linux_backend_is_qt({"PYWEBVIEW_GUI": "qt"}) is True
+    assert desktop._linux_backend_is_qt({}) is True
+    assert desktop._linux_backend_is_qt({"PYWEBVIEW_GUI": "gtk"}) is False
+
+
+def test_the_qt_check_quotes_the_end_of_the_failure_not_the_beginning() -> None:
+    """Qt puts the library it could not load in its last lines."""
+
+    output = "\n".join(
+        [
+            "qt.qpa.plugin: From 6.5.0, xcb-cursor0 or libxcb-cursor0 is needed.",
+            "",
+            'qt.qpa.plugin: Could not load the Qt platform plugin "xcb" in "" even though it was found.',
+            "This application failed to start because no Qt platform plugin could be initialized.",
+        ]
+    )
+    reason = desktop._linux_window_blocker(
+        environ={"DISPLAY": ":0"},
+        runner=lambda *_a, **_k: _completed(-6, stderr=output),
+    )
+
+    assert reason is not None
+    assert "xcb-cursor0" in reason
+    assert "no Qt platform plugin could be initialized" in reason
+    assert "-6" in reason, "the signal is the difference between a crash and an exit"
+
+
+def test_a_qt_check_that_never_returns_is_a_blocker_rather_than_a_hang() -> None:
+    def runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess:
+        raise subprocess.TimeoutExpired(cmd="python", timeout=desktop.LINUX_QT_PROBE_TIMEOUT)
+
+    reason = desktop._linux_window_blocker(environ={"DISPLAY": ":0"}, runner=runner)
+
+    assert reason is not None and "did not finish" in reason
+
+
+def test_the_linux_application_is_named_before_any_window_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qt reads both of these statically, so they must be set pre-construction.
+
+    Left unset, Qt derives the window's identity from ``argv[0]`` --
+    ``python3.13`` for this application -- and the installed launcher matches
+    nothing at all.
+    """
+
+    named: dict[str, str] = {}
+    core = ModuleType("qtpy.QtCore")
+    core.QCoreApplication = SimpleNamespace(
+        setApplicationName=lambda value: named.update(application=value)
+    )
+    gui = ModuleType("qtpy.QtGui")
+    gui.QGuiApplication = SimpleNamespace(
+        setDesktopFileName=lambda value: named.update(desktop_file=value)
+    )
+    monkeypatch.setitem(sys.modules, "qtpy.QtCore", core)
+    monkeypatch.setitem(sys.modules, "qtpy.QtGui", gui)
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+
+    desktop.DesktopWindow(StubController(), poll_interval=0)._name_linux_application()  # type: ignore[arg-type]
+
+    assert named == {
+        "application": desktop.LINUX_APPLICATION_NAME,
+        "desktop_file": desktop.LINUX_DESKTOP_FILE_NAME,
+    }
+
+
+def test_a_qt_that_cannot_be_named_still_gets_its_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrong taskbar icon is a far better outcome than no window."""
+
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+
+    def missing(_name: str) -> ModuleType:
+        raise ImportError("No module named 'qtpy'")
+
+    monkeypatch.setattr(desktop.importlib, "import_module", missing)
+    logged: list[str] = []
+    monkeypatch.setattr(desktop, "_log_startup_failure", logged.append)
+
+    desktop.DesktopWindow(StubController(), poll_interval=0)._name_linux_application()  # type: ignore[arg-type]
+
+    assert logged and "qtpy" in logged[0]
+
+
+def test_help_never_opens_a_window_and_is_titled_by_the_installed_command(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``waveguide-generator --help`` opened a window and never exited.
+
+    The launcher forwarded everything it did not recognise as a display flag
+    to the server, so ``--help`` reached the *server's* argparse, which
+    printed usage into a pipe nobody reads and exited -- leaving the GUI event
+    loop running for ever. Reported on Fedora 44, 2026-09-05.
+    """
+
+    assert desktop.main(["--help"]) == 0
+    printed = capsys.readouterr().out
+
+    assert printed.startswith("usage: waveguide-generator")
+    assert "--no-gui" in printed and "--window" in printed and "--port" in printed
+
+
+def test_an_unrecognised_flag_is_refused_instead_of_forwarded(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``--no-brwoser`` was accepted silently and hung a window."""
+
+    assert desktop.main(["--no-brwoser"]) == 2
+    assert "--no-brwoser" in capsys.readouterr().err
+
+
+def test_the_terminal_and_browser_modes_reach_the_status_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bundle's launcher execs this module, so it owns every display mode.
+
+    Without this, ``--no-gui`` from an installed copy became a server argument
+    and produced the same hang ``--help`` did.
+    """
+
+    from launchers.statusapp import __main__ as status_entrypoint
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(status_entrypoint, "main", lambda arguments: seen.append(arguments) or 0)
+
+    assert desktop.main(["--no-gui", "--port", "3199"]) == 0
+    assert desktop.main(["--browser"]) == 0
+    assert seen == [["--no-gui", "--port", "3199"], ["--browser"]]
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
+def test_the_installed_command_keeps_the_no_gui_promise_when_it_refuses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform: str,
+) -> None:
+    """``launchers.desktop`` is what the bundle launcher execs, not the status app.
+
+    So ``waveguide-generator --window --browser --no-gui`` reaches *this*
+    module's contradiction check, which sits before the branch that hands
+    ``--no-gui`` on. The same promise applies: no window of our own.
+
+    Guarded at the transport, and on all three platforms, for the reason given
+    in ``test_statusapp_entrypoint._WindowStation``.
+    """
+
+    import ctypes
+    import shutil
+    import subprocess
+
+    calls: list[str] = []
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(desktop.sys, "platform", platform)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys, "stderr", _Stderr(tty=False))
+    monkeypatch.setattr(subprocess, "run", lambda command, **_k: calls.append("run"))
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **_k: calls.append("popen"))
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        SimpleNamespace(user32=SimpleNamespace(MessageBoxW=lambda *_a: calls.append("box"))),
+        raising=False,
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    assert desktop.main(["--window", "--browser", "--no-gui"]) == 2
+    assert calls == [], "the installed command opened a window in terminal mode"
+    assert "only one display mode" in (
+        tmp_path / "logs" / "statusapp.log"
+    ).read_text(encoding="utf-8")
+
+
+class _Stderr:
+    """A stderr, with a say in whether anybody is reading it."""
+
+    def __init__(self, *, tty: bool) -> None:
+        self._tty = tty
+        self.written: list[str] = []
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    def write(self, text: str) -> int:
+        self.written.append(text)
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("stderr", "reporter_shows", "bundle_shows"),
+    [
+        (None, True, False),
+        (_Stderr(tty=False), True, False),
+        (_Stderr(tty=True), False, True),
+    ],
+    ids=["pythonw-has-no-console", "launchservices-nobody-reads-it", "a-real-terminal"],
+)
+def test_a_bundle_failure_reaches_the_screen_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    startup_dialogs: list[str],
+    stderr: object,
+    reporter_shows: bool,
+    bundle_shows: bool,
+) -> None:
+    """Two reporters, one dialog, in all three console states.
+
+    ``_report_bundle_failure`` exists because LaunchServices gives a bundle a
+    stderr that is real and that nobody reads, so a failed start or a completed
+    rollback must be put on screen anyway. It delivers that through two calls
+    and they have to be complementary: ``_report_startup_failure``'s own dialog
+    when the console is unreadable, the bundle's own when a terminal has
+    already printed the message.
+
+    They stopped being complementary when the inner test changed from
+    ``sys.stderr is None`` to :func:`_console_is_readable` and the outer guard
+    stayed ``sys.stderr is not None``. Both then fired on every bundle launch,
+    and on macOS both were modal, so the user dismissed the same sentence twice
+    before the application would continue.
+
+    Driven through ``sys.stderr`` rather than by replacing the predicate,
+    because the predicate is imported into both modules: patching one name
+    leaves the other answering about the real stream, which is how the two
+    halves came to disagree in the first place.
+    """
+
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "stderr", stderr)
+    bundle_dialogs: list[str] = []
+    monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", bundle_dialogs.append)
+
+    desktop.DesktopWindow._report_bundle_failure("layers restored")
+
+    assert startup_dialogs == (["layers restored"] if reporter_shows else [])
+    assert bundle_dialogs == (["layers restored"] if bundle_shows else [])
 
 
 def test_bundle_failure_dialog_uses_valid_macos_applescript(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, real_startup_dialogs: None,
 ) -> None:
     monkeypatch.setattr(desktop.sys, "platform", "darwin")
     commands: list[list[str]] = []
@@ -667,9 +1121,10 @@ def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
     assert (app / "marker").read_text(encoding="utf-8") == "old"
     assert not previous.exists()
     assert "previous version was restored" in reported[0]
-    # A bundle started by LaunchServices has a stderr nobody reads, so the
-    # rollback result must reach the screen regardless of the console heuristic.
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
     assert "Restored the previous bundle layers" in (
         tmp_path / "data" / "logs" / "update.log"
     ).read_text(encoding="utf-8")
@@ -707,7 +1162,10 @@ def test_missing_pywebview_rolls_back_bundle_after_http_readiness(
     assert not previous.exists()
     assert "pywebview is unavailable" in reported[0]
     assert "previous version was restored" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def test_macos_cleanup_sign_failure_restores_rollback_material(
@@ -745,7 +1203,10 @@ def test_macos_cleanup_sign_failure_restores_rollback_material(
     assert downloads.is_dir()
     assert repair_calls == 2
     assert "rollback material was restored" in reported[0].casefold()
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def test_startup_recovers_a_missing_live_layer_before_starting_the_server(
@@ -823,7 +1284,10 @@ def test_second_bundle_update_with_pending_previous_stays_visible_and_running(
     assert window.destroyed == 0
     assert "rollback material from an earlier update" in reported[0]
     assert "current version remains open" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def test_failed_bundle_handoff_restarts_before_claiming_current_version_is_open(
@@ -851,7 +1315,10 @@ def test_failed_bundle_handoff_restarts_before_claiming_current_version_is_open(
     assert controller.starts == 2
     assert window.destroyed == 0
     assert "was restarted and remains open" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def test_failed_bundle_handoff_and_restart_close_the_dead_window(
@@ -888,7 +1355,10 @@ def test_failed_bundle_handoff_and_restart_close_the_dead_window(
     assert window.destroyed == 1
     assert "also could not restart" in reported[0]
     assert "unusable window was closed" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
 
 
 def _failed_windows_bundle(tmp_path: Path) -> tuple[Path, Path]:
@@ -960,7 +1430,10 @@ def test_a_failed_windows_start_hands_the_rollback_to_a_detached_helper(
     assert positional[2] == os.getpid()
     assert keywords["server_args"] == ("--port", "3110")
     assert "reopen by itself" in reported[0]
-    assert shown == reported
+    # One dialog, and it is _report_startup_failure's: its own console test
+    # now covers a bundle's unreadable stderr, so this second call must not
+    # fire as well. See test_a_bundle_failure_reaches_the_screen_exactly_once.
+    assert shown == []
     assert "Started the detached rollback helper" in (data_dir / "logs" / "update.log").read_text(
         encoding="utf-8"
     )

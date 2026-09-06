@@ -410,6 +410,9 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
         "requestId": "request-a",
         "sourceCount": 1,
         "instanceCount": 1,
+        # A bundle written before the declaration existed is a full model, and
+        # says so rather than saying nothing.
+        "declaredCutPlanes": [],
         "designIds": ["wgd_speaker"],
         "solverAnchorInstanceId": None,
         "instances": [

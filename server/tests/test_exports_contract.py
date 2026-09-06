@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 from pathlib import Path
 import struct
@@ -164,6 +165,12 @@ def test_profile_csv_axes_units_rows_and_closed_slices() -> None:
 _STEP_STUB = "ISO-10303-21;\nADVANCED_FACE\nB_SPLINE_SURFACE\nEND-ISO-10303-21;\n"
 
 
+def _surface_result(step_text: str = _STEP_STUB, warning: str | None = None):
+    from server.exports.core import StepSurfaceResult
+
+    return StepSurfaceResult(step_text=step_text, warning=warning)
+
+
 def _step_result(step_text: str = _STEP_STUB) -> StepSolidResult:
     return StepSolidResult(
         step_text=step_text,
@@ -278,11 +285,33 @@ def test_both_step_bodies_write_an_iso_10303_21_header() -> None:
 
     for step_text in (
         _build_step_solid_sync(design).step_text,
-        _build_step_sync(design),
+        _build_step_sync(design).step_text,
     ):
         positions = _header_positions(step_text)
         assert all(position >= 0 for position in positions), step_text[:400]
         assert positions == sorted(positions), step_text[:400]
+
+
+def test_public_builders_return_their_result_objects() -> None:
+    """The shape each public builder promises, including the one that changed.
+
+    ``build_step`` returned a bare ``str`` before the surface export had a
+    warning to carry. Nothing outside this repository imports it, and the route
+    is its only caller, but it is in ``core.__all__`` -- so the contract is
+    written down here rather than left to be rediscovered from a traceback.
+    """
+
+    from server.exports.core import StepSolidResult, StepSurfaceResult, StlResult
+
+    assert {"step_text", "warning"} <= set(StepSurfaceResult.__dataclass_fields__)
+    assert {"step_text", "cad_info", "warning"} <= set(
+        StepSolidResult.__dataclass_fields__
+    )
+    assert {"data", "warning"} <= set(StlResult.__dataclass_fields__)
+    # Every one of them defaults to no warning, so a builder that has nothing to
+    # report stays silent without having to say so.
+    for kind in (StepSurfaceResult, StepSolidResult, StlResult):
+        assert kind.__dataclass_fields__["warning"].default is None
 
 
 def test_core_all_contains_public_builders() -> None:
@@ -303,13 +332,69 @@ def test_step_route_body_selects_the_solid_or_the_inner_surface(monkeypatch) -> 
 
     async def fake_surface(_design):
         called.append("surface")
-        return _STEP_STUB
+        return _surface_result()
 
     monkeypatch.setattr(api, "build_step_solid", fake_solid)
     monkeypatch.setattr(api, "build_step", fake_surface)
     asyncio.run(api.export_step(_request(), body="solid"))
     asyncio.run(api.export_step(_request(), body="surface"))
     assert called == ["solid", "surface"]
+
+
+# --- a sizing compromise has to leave the server ---------------------------
+#
+# The planner has always been able to ship a grid that missed its target or was
+# never measured against one. Until this was plumbed the note it wrote went to
+# the log and nowhere else, so the STEP routes served a compromised file that
+# looked exactly like a clean one.
+
+
+_SIZING_WARNING = "This geometry did not reach its 0.1 mm target before the refinement budget ran out."
+
+
+def test_the_surface_step_route_carries_a_sizing_warning_to_the_client(monkeypatch) -> None:
+    async def fake_surface(_design):
+        return _surface_result(warning=_SIZING_WARNING)
+
+    monkeypatch.setattr(api, "build_step", fake_surface)
+    response = asyncio.run(api.export_step(_request(), body="surface"))
+    assert response.headers["X-Export-Warning"] == _SIZING_WARNING
+
+
+def test_the_surface_step_route_stays_quiet_when_nothing_was_compromised(monkeypatch) -> None:
+    async def fake_surface(_design):
+        return _surface_result()
+
+    monkeypatch.setattr(api, "build_step", fake_surface)
+    response = asyncio.run(api.export_step(_request(), body="surface"))
+    assert "X-Export-Warning" not in response.headers
+
+
+def test_the_solid_step_route_carries_its_own_sizing_warning(monkeypatch) -> None:
+    """The solid sizes itself too, and falls back when it cannot measure."""
+
+    async def fake_solid(_design):
+        return replace(_step_result(), warning=_SIZING_WARNING)
+
+    monkeypatch.setattr(api, "build_step_solid", fake_solid)
+    response = asyncio.run(api.export_step(_request(), body="solid"))
+    assert response.headers["X-Export-Warning"] == _SIZING_WARNING
+
+
+def test_the_surface_builder_hands_on_the_plans_own_warning(monkeypatch) -> None:
+    """Not a stub of the route: the builder reads the plan and passes it up."""
+
+    from server.exports import core
+    from server.exports.sizing import GridPlan
+
+    monkeypatch.setattr(
+        core,
+        "_surface_grid_plan",
+        lambda _design: GridPlan(64, 40, 0.5, 5_120, warning=_SIZING_WARNING),
+    )
+    result = core._build_step_sync(_design().model_dump(mode="json"))
+    assert result.warning == _SIZING_WARNING
+    assert result.step_text.startswith("ISO-10303-21;")
 
 
 def test_step_route_defaults_to_the_solid_over_http(monkeypatch) -> None:
@@ -328,7 +413,7 @@ def test_step_route_defaults_to_the_solid_over_http(monkeypatch) -> None:
 
     async def fake_surface(_design):
         called.append("surface")
-        return _STEP_STUB
+        return _surface_result()
 
     monkeypatch.setattr(api, "build_step_solid", fake_solid)
     monkeypatch.setattr(api, "build_step", fake_surface)

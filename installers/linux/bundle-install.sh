@@ -211,15 +211,27 @@ if [ "$PREFLIGHT" -eq 1 ]; then
              "" \
              "$(printf '%s' "$PREFLIGHT_ERROR" | tail -n 1)" \
              "" \
-             "These are ordinary OpenGL and X11 desktop libraries. On Ubuntu 24.04" \
-             "and Debian, this installs every one the mesher needs:" \
+             "These are ordinary OpenGL and X11 desktop libraries. Pick the line" \
+             "for your distribution; each installs every one the mesher needs." \
              "" \
+             "  Ubuntu 24.04 / Debian:" \
              "  sudo apt install libglu1-mesa libgl1 libgomp1 libfontconfig1 \\" \
              "                   libxrender1 libxcursor1 libxft2 libxinerama1 \\" \
              "                   libxi6 libxext6" \
              "" \
-             "On Fedora and Arch the same libraries are packaged under their own" \
-             "names -- mesa-libGLU / glu and the matching libX* packages." \
+             "  Fedora:" \
+             "  sudo dnf install mesa-libGLU libglvnd-glx libgomp fontconfig \\" \
+             "                   libXrender libXcursor libXft libXinerama \\" \
+             "                   libXi libXext" \
+             "" \
+             "  Arch:" \
+             "  sudo pacman -S --needed glu libglvnd gcc-libs fontconfig \\" \
+             "                          libxrender libxcursor libxft libxinerama \\" \
+             "                          libxi libxext" \
+             "" \
+             "The Fedora list is libglvnd-glx, not mesa-libGL: current Fedora" \
+             "ships libGL.so.1 from libglvnd, and the obvious-looking guess does" \
+             "not resolve." \
              "" \
              "Then run this installer again. Nothing has been installed yet." \
              "Use --skip-checks to install anyway."
@@ -398,8 +410,8 @@ EXECUTABLE="$(desktop_exec_escape "$TARGET/$LAUNCHER_NAME")"
 DESKTOP_RENDERED=0
 while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-        "Exec=@INSTALL_DIR@/$LAUNCHER_NAME %U")
-            printf 'Exec="%s" %%U\n' "$EXECUTABLE"
+        "Exec=@INSTALL_DIR@/$LAUNCHER_NAME")
+            printf 'Exec="%s"\n' "$EXECUTABLE"
             DESKTOP_RENDERED=1
             ;;
         *) printf '%s\n' "$line" ;;

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getUpdateStatus, installApplicationUpdate, type UpdateStatus } from '../api/updates';
+import {
+  getUpdateChannel,
+  getUpdateStatus,
+  installApplicationUpdate,
+  setUpdateChannel,
+  type UpdateChannel,
+  type UpdateStatus,
+} from '../api/updates';
 import { Icon } from './icons';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
 
@@ -209,6 +216,112 @@ function megabytes(value: number): string {
 
 function Fact({ label, value }: { label: string; value: ReactNode }) {
   return <div><dt>{label}</dt><dd>{value}</dd></div>;
+}
+
+const CHANNEL_NOTE: Record<UpdateChannel, string> = {
+  beta: 'Beta builds are published to test packaging and installation on every platform before a stable version number is committed to them. Expect rough edges — and report them.',
+  stable: 'Only finished releases. This is the right choice unless you want to help test a release before it ships.',
+};
+
+/**
+ * Stable or beta, where the version and its verdict already are.
+ *
+ * It used to sit in Settings, because it is a standing preference rather than a
+ * decision about one release. It is still exactly that -- and this is where
+ * someone forms the intent: they clicked the version to see what WG would
+ * install, and "which releases am I offered?" is the same question. Switching
+ * here re-checks immediately, so the answer above changes while it is on
+ * screen; from Settings that took a trip back to the top bar to see.
+ *
+ * The value stays on the server. A browser-scoped copy would be back on stable
+ * the first time the update it asked for actually landed, which is the one
+ * moment the preference exists to survive.
+ */
+function UpdateChannelChoice({ status, disabled }: {
+  status: UpdateStatus | undefined;
+  disabled: boolean;
+}) {
+  const client = useQueryClient();
+  const [choice, setChoice] = useState<UpdateChannel>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const generation = useRef(0);
+  const confirmed = useRef<UpdateChannel>('stable');
+  const reported = status?.channel;
+
+  // Read once per opening, from the status payload the dialog already has. Not
+  // continuously: after the user presses a button, their choice is what the
+  // buttons show until the write settles, and a refetch that is still carrying
+  // the previous payload must not flip the pressed state back under the
+  // pointer. This component unmounts with the dialog, so the next opening reads
+  // the payload again.
+  useEffect(() => {
+    if (!reported || choice !== undefined) return;
+    confirmed.current = reported;
+    setChoice(reported);
+  }, [choice, reported]);
+
+  useEffect(() => {
+    // Only when the status has no answer -- a failed check must still leave a
+    // usable selector, and that is the state in which it matters most.
+    if (reported || choice) return;
+    const request = ++generation.current;
+    void getUpdateChannel().then(
+      (value) => {
+        if (request !== generation.current) return;
+        confirmed.current = value;
+        setChoice(value);
+      },
+      (reason: unknown) => {
+        if (request === generation.current) setError(reason instanceof Error ? reason.message : String(reason));
+      },
+    );
+  }, [choice, reported]);
+
+  const choose = async (next: UpdateChannel) => {
+    if (next === choice || busy) return;
+    // Optimistic, and rolled back on refusal, so the buttons never disagree
+    // with what the server will actually check.
+    const request = ++generation.current;
+    setChoice(next); setBusy(true); setError(undefined);
+    try {
+      const saved = await setUpdateChannel(next);
+      if (request !== generation.current) return;
+      confirmed.current = saved;
+      setChoice(saved);
+      // The standing verdict answers the other channel's question. Dropping it
+      // makes this dialog re-check while it is still open, which is the point
+      // of the selector being here.
+      await client.invalidateQueries({ queryKey: UPDATE_QUERY_KEY });
+    } catch (reason) {
+      if (request !== generation.current) return;
+      setChoice(confirmed.current);
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (request === generation.current) setBusy(false);
+    }
+  };
+
+  return <section className="update-channel" aria-labelledby="update-channel-title">
+    <h3 id="update-channel-title">Update channel</h3>
+    <div className="settings-theme-options" role="group" aria-label="Update channel">
+      <button
+        className={choice === 'stable' ? 'on' : ''}
+        aria-pressed={choice === 'stable'}
+        disabled={choice === undefined || busy || disabled}
+        onClick={() => void choose('stable')}
+      >Stable</button>
+      <button
+        className={choice === 'beta' ? 'on' : ''}
+        aria-pressed={choice === 'beta'}
+        disabled={choice === undefined || busy || disabled}
+        onClick={() => void choose('beta')}
+      >Beta</button>
+    </div>
+    <p className="cad-settings-note">{CHANNEL_NOTE[choice ?? 'stable']}</p>
+    <p className="cad-settings-note">Stored with WG’s application data, not in this browser, so it survives the updates it controls. Switching back to <b>Stable</b> while running a beta leaves WG ahead of the latest release; it stays on that beta until the release catches up.</p>
+    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+  </section>;
 }
 
 export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
@@ -440,6 +553,10 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
           {bundleAction && <Fact label="Download" value={`${megabytes(bundleAction.downloadBytes)} MB`}/>}
         </dl>
 
+        {/* Not while an install is downloading or verifying: the bytes on disk
+            were resolved from the channel this check answered. */}
+        <UpdateChannelChoice status={data} disabled={installActive}/>
+
         {presentation.state === 'failed' && <p className="update-note error" role="alert">
           <b>WG could not complete the check</b>
           {presentation.detail}
@@ -457,7 +574,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
 
         {data?.channel === 'beta' && <p className="update-note">
           <b>Beta channel</b>
-          WG is offered pre-releases as well as finished ones. Change this in Settings.
+          WG is offered the newest release published on GitHub, pre-releases included. Betas are published per release candidate, not per commit on <code>main</code>.
         </p>}
 
         {commandAction && <section className="update-install" aria-labelledby="update-install-title">

@@ -164,6 +164,127 @@ def test_bundle_request_accepts_only_existing_staged_paths_inside_the_data_dir(
     assert not request.exists()
 
 
+@pytest.mark.parametrize("version", ["0.4.0-main.7", "0.4.0-beta.1"])
+def test_a_prerelease_bundle_request_survives_the_handoff(
+    tmp_path: Path, version: str
+) -> None:
+    """The end of the path an offered beta actually takes.
+
+    The beta channel offers pre-releases and the server writes a request naming
+    one. This end used to accept only `MAJOR.MINOR.PATCH`, so every such request
+    was discarded as invalid and the install failed *here* -- after the download
+    and the verification, with the staged layers already on disk. Passing
+    `_is_installable_tag` on the server proved the update would be offered, not
+    that it could be applied.
+    """
+
+    data = tmp_path / "data"
+    staged_app = data / "updates" / version / "staged" / "app"
+    staged_app.mkdir(parents=True)
+    request = tmp_path / "update.json"
+    request.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "apply_bundle",
+                "version": version,
+                "stagedAppDir": str(staged_app),
+                "stagedRuntimeDir": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    consumed = consume_update_request(request, data_dir=data)
+
+    assert consumed == BundleUpdateRequest(version, staged_app.resolve(), None)
+    assert not request.exists()
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["0.4.0-updates", "0.4.0-beta.1-updates", "0.4", "0.4.0.1", "", "0.4.0-main.7 ; rm -rf /"],
+)
+def test_a_bundle_request_naming_something_that_is_not_a_release_is_discarded(
+    tmp_path: Path, version: str
+) -> None:
+    """Widening the shape must not widen the meaning.
+
+    An `-updates` companion carries update layers and no installer, and its
+    suffix is a syntactically valid pre-release label -- so the shape alone
+    accepts it and only the meaning refuses it. That is the same refusal the
+    server makes when choosing what to offer.
+    """
+
+    data = tmp_path / "data"
+    staged_app = data / "updates" / "staged" / "app"
+    staged_app.mkdir(parents=True)
+    request = tmp_path / "update.json"
+    request.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "apply_bundle",
+                "version": version,
+                "stagedAppDir": str(staged_app),
+                "stagedRuntimeDir": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateHandoffError, match="invalid"):
+        consume_update_request(request, data_dir=data)
+    assert not request.exists()
+
+
+@pytest.mark.parametrize("tag", ["v0.4.0-main.7", "v0.4.0-beta.1"])
+def test_a_prerelease_release_tag_reaches_the_installer(tmp_path: Path, tag: str) -> None:
+    """The same widening on the source-install path, which takes `--tag`."""
+
+    request = tmp_path / "update.json"
+    request.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "install_release",
+                "tag": tag,
+                "readyAtEpoch": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert consume_update_request(request, now=1) == tag
+
+
+@pytest.mark.parametrize(
+    "tag", ["v0.4.0-updates", "v0.4.0-beta.1-updates", "0.4.0-main.7", "v0.4"]
+)
+def test_a_release_tag_that_is_not_one_this_project_offers_is_refused(
+    tmp_path: Path, tag: str
+) -> None:
+    request = tmp_path / "update.json"
+    request.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "install_release",
+                "tag": tag,
+                "readyAtEpoch": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UpdateHandoffError, match="invalid"):
+        consume_update_request(request, now=1)
+    assert not request.exists()
+    # And the handoff refuses it directly too, before starting any process.
+    with pytest.raises(UpdateHandoffError, match="invalid update release tag"):
+        launch_update_handoff(tmp_path, tag, 1, environ={}, platform_name="darwin")
+
+
 def test_bundle_handoff_uses_the_staged_updater_and_new_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

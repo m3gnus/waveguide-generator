@@ -403,12 +403,24 @@ def write_app_manifest(
     commit: str,
     runtime_id: str,
     executables: frozenset[str] = frozenset(),
+    source_commit: str | None = None,
 ) -> dict[str, object]:
+    """Describe the app layer: its version, the commit it was cut from, its runtime.
+
+    ``source_commit`` is for a build whose ``commit`` is not the commit a person
+    would look for. A build-only version stamp has to be committed to reach the
+    layer at all -- the layer is materialized from Git blobs -- so ``commit``
+    then names that stamp commit, and this names the commit it was made from.
+    Omitted entirely when absent, so a release manifest is byte for byte what it
+    always was.
+    """
+
     assert_app_layer_modes_match_git(app_root, executables)
     payload: dict[str, object] = {
         "schemaVersion": 1,
         "version": version,
         "commit": commit,
+        **({"sourceCommit": source_commit} if source_commit else {}),
         "runtimeId": runtime_id,
         # Computed before the manifest exists, and therefore excluding it: the
         # manifest cannot contain a digest of itself. Consumers comparing two
@@ -1096,6 +1108,22 @@ def linux_desktop_entry() -> str:
     is an additional category and needs a main one beside it; a second main
     category makes ``desktop-file-validate`` warn that the entry may appear
     twice in the menu, which it does on GNOME.
+
+    ``Exec`` carries **no field code**. It used to end in ``%U``, which
+    promises that the application accepts URLs -- but the entry declares no
+    ``MimeType``, so nothing was ever going to associate a file with it, and
+    the launcher now rejects arguments it does not recognise instead of
+    forwarding them to the server. A stray ``%U`` expansion would therefore
+    have turned an opened file into exit code 2. The specification requires a
+    field code only for entries that handle files or URLs.
+
+    ``StartupWMClass`` names what Qt actually puts on the window:
+    ``QXcbIntegration::wmClass`` takes WM_CLASS's class from
+    ``QCoreApplication::applicationName``, which ``launchers/desktop.py`` sets
+    to ``LINUX_APPLICATION_NAME``. On Wayland the match is made against the
+    ``app_id`` instead, which Qt takes from ``QGuiApplication::desktopFileName``
+    -- set to this file's own basename, so a compositor resolves it without
+    needing this key at all.
     """
 
     return """[Desktop Entry]
@@ -1104,7 +1132,7 @@ Version=1.5
 Name=Waveguide Generator
 GenericName=Acoustic waveguide designer
 Comment=Design and simulate acoustic waveguides locally
-Exec=@INSTALL_DIR@/waveguide-generator %U
+Exec=@INSTALL_DIR@/waveguide-generator
 Icon=waveguide-generator
 Terminal=false
 Categories=Science;Engineering;
@@ -1893,6 +1921,7 @@ class BundleBuilder:
         runtime_id: str,
         spa: Path | None,
         commit: str,
+        source_commit: str | None = None,
     ) -> dict[str, object]:
         destination.mkdir()
         tracked = copy_tracked_app_files(
@@ -1920,6 +1949,7 @@ class BundleBuilder:
             commit=commit,
             runtime_id=runtime_id,
             executables=tracked.executables,
+            source_commit=source_commit,
         )
 
     def assemble_bundle(
@@ -2056,6 +2086,12 @@ Open a terminal in this folder and run:
 
     ./install.sh
 
+If you have not used a terminal before: extract the download, then right-click
+the extracted folder and choose "Open in Terminal" (GNOME Files, Nautilus,
+Dolphin and Thunar all offer it, sometimes under "Open Terminal Here"). Type
+the line above into the window that opens and press Enter. Nothing else is
+needed, and nothing will ask for your password.
+
 It copies the application to ~/.local/share/waveguide-generator, adds a
 launcher to your applications menu, and puts `waveguide-generator` on your
 PATH at ~/.local/bin. Run it again to upgrade in place; your designs, job
@@ -2087,10 +2123,17 @@ WHAT IT SHOULD DO
 Waveguide Generator starts a local server on 127.0.0.1 and opens its
 interface. Nothing is sent anywhere; it runs entirely on your machine.
 
-Linux gets the status window and your browser rather than the single native
-window macOS and Windows have. That is the documented behaviour, not a
-failure: the native window needs a system webview this build does not depend
-on.
+You get the same single native window macOS and Windows have. It is drawn by
+the Qt libraries installed beside the application, so nothing has to be added
+to your system for it -- but Qt does load your desktop's X11 or Wayland client
+libraries, and a machine that has never run a Qt application may be missing
+one. If it is, the application says which, tells you the package that provides
+it on Debian/Ubuntu, Fedora and Arch, and opens the status window and your
+browser instead. Everything works there too; only the window is different.
+
+Over SSH, or on any machine with no display at all, use:
+
+    waveguide-generator --no-gui
 """
 
     def linux_readme(self) -> str:
@@ -2256,10 +2299,16 @@ cache under %LOCALAPPDATA%\WaveguideGenerator, which is safe to delete too.
                 f"no room under the {WINDOWS_MAX_PATH}-character limit for any "
                 "install root at all."
             )
+        # Two version strings, deliberately. `AppVersion` is what a person reads
+        # in the wizard and in Apps & features; `VersionInfoVersion` is the
+        # binary VERSIONINFO field, which takes only numbers, so a pre-release
+        # build has to hand it the numeric form of the same identity.
+        native = release_assets.native_version_fields(version)
         self.run_command(
             [
                 str(compiler),
                 f"/DAppVersion={version}",
+                f"/DVersionInfoVersion={native.windows}",
                 f"/DPayloadDir={bundle}",
                 f"/DMaxPayloadDepth={depth}",
                 f"/DOutputDir={output.parent}",
@@ -2922,6 +2971,7 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 runtime_id=runtime_id,
                 spa=args.spa,
                 commit=commit,
+                source_commit=args.source_commit,
             )
             app_asset = output / release_assets.app_layer_name(version)
             # Canonical modes avoid NTFS/POSIX checkout differences. The archive
@@ -3029,6 +3079,14 @@ def build_parser() -> argparse.ArgumentParser:
     layers.add_argument("--runtime-only", action="store_true")
     layers.add_argument("--app-only", action="store_true")
     parser.add_argument("--skip-verify", action="store_true")
+    parser.add_argument(
+        "--source-commit",
+        help=(
+            "commit this build was made from, when HEAD is a build-only stamp "
+            "commit rather than the commit a person would look for. Recorded in "
+            "the app manifest as sourceCommit; omitted entirely when absent."
+        ),
+    )
     parser.add_argument("--python-version", default=PYTHON_VERSION)
     return parser
 

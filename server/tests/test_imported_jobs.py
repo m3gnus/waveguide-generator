@@ -21,13 +21,19 @@ from server.jobs.models import (
     SolveRequest,
 )
 from server.jobs.api import create_jobs_router
-from server.jobs.runtime import ImportedSolveRefusal, JobRuntime, _replay_request
+from server.jobs.runtime import (
+    ImportedSolveRefusal,
+    JobRuntime,
+    _imported_symmetry_metadata,
+    _replay_request,
+)
 from server.jobs.store import JobStore
 from server.mesh.imported import polar_grid_from_symmetry
 from server.solver import metal
 from server.solver.base import EngineRunResult
 from server.solver.imported import (
     ImportedSymmetryUnsupportedError,
+    imported_domain_planes,
     mesh_text_sha256,
 )
 from server.solver.result_mapping import REFERENCE_RHO_C
@@ -2409,3 +2415,88 @@ def test_imported_native_leak_check_follows_the_verified_ingest_record() -> None
     assert check({"mesh": {"integrity": {"valid": True}}}) is False
     assert check({"mesh": {}}) is False
     assert check({}) is False
+
+
+# --------------------------------- CAD returns that arrived already reduced
+
+
+def _declared_half_symmetry() -> dict[str, Any]:
+    """An ingestion record for a return the CAD author cut before exporting.
+
+    Nothing was cut during preparation, so ``cut_planes`` is empty; the domain
+    the solver must mirror is the plane the author declared.
+    """
+
+    return {
+        "cut_planes": [],
+        "declared_cut_planes": ["y0"],
+        "domain_planes": ["y0"],
+        "planes": {"y0": {"plane": "y0", "accepted": True, "source": "declared-by-cad-author"}},
+    }
+
+
+def test_a_declared_half_resolves_as_a_half_and_never_as_a_full_domain(
+    tmp_path: Path,
+) -> None:
+    """Reading ``cut_planes`` here would solve an open shell in free space.
+
+    The half arrived already cut, so the preparation removed nothing and the
+    cut list is empty. The domain is what the CAD author declared, and both the
+    submit gate and the Metal entry have to agree on it or the mesh is mirrored
+    by one and not the other.
+    """
+
+    symmetry = _declared_half_symmetry()
+    record = {"symmetry": symmetry}
+
+    assert imported_domain_planes(record) == ("y0",)
+    metadata = _imported_symmetry_metadata(record, "auto")
+    assert metadata["resolved"] == "half_xz"
+    assert metadata["resolved_quadrants"] == 12
+    assert metadata["native_symmetry_plane"] == "xz"
+    assert metadata["cut_planes"] == ["y0"]
+    assert metadata["source"] == "cad-ingestion-domain-planes"
+
+    # An explicit request has to match the domain that was actually returned.
+    assert _imported_symmetry_metadata(record, "half_xz")["resolved"] == "half_xz"
+    with pytest.raises(ImportedSolveRefusal) as refusal:
+        _imported_symmetry_metadata(record, "full")
+    assert refusal.value.reason_code == "imported_symmetry_mismatch"
+
+    # A record written before domain_planes existed keeps its old meaning.
+    legacy = {"symmetry": {"cut_planes": ["x0"]}}
+    assert imported_domain_planes(legacy) == ("x0",)
+    assert _imported_symmetry_metadata(legacy, "auto")["resolved"] == "half_yz"
+    assert imported_domain_planes({"symmetry": {}}) == ()
+
+
+def test_a_reduced_domain_and_a_ground_plane_on_the_same_plane_are_refused(
+    tmp_path: Path,
+) -> None:
+    """A mirror plane is touched; a floor must be stood clear of.
+
+    The design path subtracts the blocked plane before anything is meshed. An
+    imported mesh already exists and cannot be re-cut, so the pair is refused
+    with the plane named rather than handed to an engine that would mirror the
+    model into the floor.
+    """
+
+    record = {"symmetry": _declared_half_symmetry()}
+
+    with pytest.raises(ImportedSolveRefusal) as refusal:
+        _imported_symmetry_metadata(record, "auto", "y")
+    assert refusal.value.reason_code == "imported_symmetry_ground_plane_conflict"
+    assert refusal.value.details["blocked_symmetry_plane"] == "xz"
+    assert refusal.value.details["native_symmetry_plane"] == "xz"
+
+    # The orthogonal plane is a legitimate combination and stays allowed.
+    assert _imported_symmetry_metadata(record, "auto", "x")["resolved"] == "half_xz"
+    # A quarter is blocked by either floor, because it mirrors on both planes.
+    quarter = {"symmetry": {"cut_planes": [], "domain_planes": ["x0", "y0"]}}
+    for axis in ("x", "y"):
+        with pytest.raises(ImportedSolveRefusal) as caught:
+            _imported_symmetry_metadata(quarter, "auto", axis)
+        assert caught.value.reason_code == "imported_symmetry_ground_plane_conflict"
+    # A full domain has no mirror plane to collide with a floor.
+    full = {"symmetry": {"cut_planes": [], "domain_planes": []}}
+    assert _imported_symmetry_metadata(full, "auto", "y")["resolved"] == "full"

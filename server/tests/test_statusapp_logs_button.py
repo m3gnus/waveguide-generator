@@ -67,6 +67,7 @@ def test_a_missing_file_manager_is_reported_and_not_raised(tmp_path: Path, monke
 def test_the_view_reports_a_failure_instead_of_propagating_it() -> None:
     """A raise out of a Tk callback goes to a console this app does not have."""
 
+    pytest.importorskip("tkinter", exc_type=ImportError)
     from launchers.statusapp.view import StatusView
 
     class Reason:

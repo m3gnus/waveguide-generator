@@ -485,6 +485,17 @@ working.
   usual way). On Linux it needs GTK or Qt; the window is **not** offered on
   Linux in this step — `--window` there reports why and falls back to the
   browser.
+
+  **Superseded 2026-09-05.** Linux bundles shipped, which crossed this
+  document's own scope boundary while the deferral stayed put — and a Fedora
+  user reported the result: pywebview present, no backend, a status window
+  and a browser where the plan's own goal is one native window. The window is
+  now offered on Linux too, on `PySide6` + `QtPy` pinned beside pywebview
+  (the dependencies of its `[pyside6]` extra, written out so their
+  platform markers and exact versions remain explicit in the lock). GTK was rejected for
+  needing WebKitGTK *from the distribution*, which the bundle's "nothing is
+  installed system-wide" promise does not allow. What remains out of scope
+  here is the packaging half: see `Linux bundles` below.
 - New module `launchers/desktop.py` with a `DesktopWindow` that owns a
   `StatusController` (it already starts/stops the server process, knows the
   port, and polls health). Flow: start controller → wait for the frontend lamp
@@ -646,3 +657,14 @@ Developer ID signing and notarization (a separate purchase decision that
 plugs into `build_bundle.py` later), Linux bundles, and any change to the
 checkout-based development workflow, which remains the way the application
 is developed and the way CI tests it.
+
+**Linux bundles are no longer out of scope** — one ships, and a tarball plus
+`install.sh` is what it ships as. What is still out of scope, and what the
+2026-09-05 Fedora report asks for, is a *graphical* install route: every
+other platform has one (a `.command` to double-click, an `.exe`), Linux has a
+terminal. An AppImage is the closest equivalent and the bundle is most of the
+way to being one, but it is a single immutable file and `launchers/apply_update.py`
+replaces `app` and `runtime` in place — so it needs a deliberate decision
+about the in-app updater (keep the tarball as the self-updating route and
+offer the AppImage as an on-ramp, or move AppImage users to zsync) before it
+is worth building.

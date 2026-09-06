@@ -1023,7 +1023,7 @@ function CadMeshDetail() {
     .map((finding) => String(finding.source_id))]);
   return <>
     <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadCoordinator.ingesting || !state.selectedBundle?.readable} onClick={() => void cadCoordinator.ingest()}>{cadCoordinator.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
-    <ToggleRow id="cad-force-full-domain" label="Force full domain" help="Disable automatic x=0/y=0 cutting for this preparation. Use this when a symmetry verdict is doubtful; it costs more memory and solve time but cannot remove a geometric half." checked={symmetryMode === 'full'} onChange={(enabled) => {
+    <ToggleRow id="cad-force-full-domain" label="Force full domain" help="Disable automatic x=0/y=0 cutting for this preparation. Use this when a symmetry verdict is doubtful; it costs more memory and solve time but cannot remove a geometric half. A return the CAD author already cut is refused instead: the other half is not in the file." checked={symmetryMode === 'full'} onChange={(enabled) => {
       setSymmetryMode(enabled ? 'full' : 'auto');
       state.markIngestStale('The CAD symmetry preparation mode changed.');
     }}/>

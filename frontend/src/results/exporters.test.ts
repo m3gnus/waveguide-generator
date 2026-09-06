@@ -5,6 +5,11 @@ import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
 import { archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
+import {
+  ExportCancelledError,
+  ExportCollisionError,
+  type ExportCollision,
+} from '../api/exportDestination';
 
 const cadIdentity: CadIdentityProvenance = {
   schema_version: 1,
@@ -81,6 +86,7 @@ function workspacePayload(init?: RequestInit) {
   return {
     subdirectory: String(form.get('subdirectory')),
     existing: String(form.get('existing')),
+    destination: form.get('destination'),
     members: paths.map((relative_path, index) => ({
       relative_path,
       blob: files[index] as Blob,
@@ -772,6 +778,166 @@ describe('result exporters', () => {
     expect(await (saveBlob.mock.calls[0][0] as Blob).text()).toBe('stored mesh bytes');
   });
 
+  it('sends a chosen destination as a handle, and the files into that folder itself', async () => {
+    const requests: Array<{ path: string; init?: RequestInit }> = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      requests.push({ path, init });
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          directory: '/exports',
+          files: ['/exports/horn_1.csv'],
+          replaced: ['/exports/horn_1.csv'],
+        }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    const bundle = await runWorkspaceExportBundle({
+      result,
+      jobStem: 'horn_1',
+      workspaceSubdirectory: 'design_a/run_3',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher,
+      destinationToken: 'handle-1',
+    }, ['csv'], 'overwrite');
+
+    const payload = workspacePayload(requests.find(({ path }) => path === '/api/workspace/write-export')!.init);
+    // The folder the user chose receives the files. Nesting the run's own
+    // subdirectory under it would be answering a question nobody asked.
+    expect(payload.subdirectory).toBe('');
+    expect(payload.destination).toBe('handle-1');
+    expect(payload.existing).toBe('overwrite');
+    expect(bundle.directory).toBe('/exports');
+    // What was overwritten, so the caller can say so rather than counting.
+    expect(bundle.replaced).toEqual(['/exports/horn_1.csv']);
+  });
+
+  it('asks once before replacing files in the chosen folder, then repeats as overwrite', async () => {
+    const requests: Array<{ path: string; init?: RequestInit }> = [];
+    let refused = false;
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      requests.push({ path, init });
+      if (path !== '/api/workspace/write-export') return new Response('not found', { status: 404 });
+      if (!refused) {
+        refused = true;
+        return new Response(JSON.stringify({
+          code: 'export_collision',
+          detail: '1 file(s) would be replaced',
+          directory: '/exports',
+          paths: ['/exports/horn_1.csv'],
+        }), { status: 409 });
+      }
+      return new Response(JSON.stringify({
+        directory: '/exports',
+        files: ['/exports/horn_1.csv'],
+        replaced: ['/exports/horn_1.csv'],
+      }), { status: 200 });
+    });
+    const asked: ExportCollision[] = [];
+
+    const bundle = await runWorkspaceExportBundle({
+      result,
+      jobStem: 'horn_1',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher,
+      destinationToken: 'handle-1',
+      confirmReplacements: async (collision) => { asked.push(collision); return true; },
+    }, ['csv'], 'confirm');
+
+    // One question, carrying every file, before anything was written.
+    expect(asked).toEqual([{
+      directory: '/exports',
+      paths: ['/exports/horn_1.csv'],
+    }]);
+    const writes = requests.filter(({ path }) => path === '/api/workspace/write-export');
+    expect(writes.map(({ init }) => workspacePayload(init).existing)).toEqual(['confirm', 'overwrite']);
+    // The same bytes, not a rebuilt bundle: re-rendering would restamp the
+    // timestamps, so the retry would not be the export that was asked about.
+    const [first, second] = writes.map(({ init }) => workspacePayload(init));
+    expect(second.members.map(({ relative_path }) => relative_path))
+      .toEqual(first.members.map(({ relative_path }) => relative_path));
+    expect(await second.members[0].blob.text()).toBe(await first.members[0].blob.text());
+    expect(bundle.files).toEqual(['/exports/horn_1.csv']);
+    expect(bundle.replaced).toEqual(['/exports/horn_1.csv']);
+  });
+
+  it('writes nothing when the replacement is declined', async () => {
+    const requests: string[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      requests.push(String(input));
+      return new Response(JSON.stringify({
+        code: 'export_collision',
+        detail: '1 file(s) would be replaced',
+        directory: '/exports',
+        paths: ['/exports/horn_1.csv'],
+      }), { status: 409 });
+    });
+
+    await expect(runWorkspaceExportBundle({
+      result,
+      jobStem: 'horn_1',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher,
+      destinationToken: 'handle-1',
+      confirmReplacements: async () => false,
+    }, ['csv'], 'confirm')).rejects.toBeInstanceOf(ExportCancelledError);
+
+    // The refusal, and no retry: declining is an answer, not a failure to work
+    // around.
+    expect(requests.filter((path) => path === '/api/workspace/write-export')).toHaveLength(1);
+  });
+
+  it('raises the refusal rather than overwriting when nothing can ask', async () => {
+    // A caller with no confirmation route must not inherit a silent overwrite.
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      code: 'export_collision',
+      detail: '1 file(s) would be replaced',
+      directory: '/exports',
+      paths: ['/exports/horn_1.csv'],
+    }), { status: 409 }));
+
+    await expect(runWorkspaceExportBundle({
+      result,
+      jobStem: 'horn_1',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher,
+      destinationToken: 'handle-1',
+    }, ['csv'], 'confirm')).rejects.toBeInstanceOf(ExportCollisionError);
+  });
+
+  it('leaves automatic export non-interactive: no handle, and the run\'s own folder', async () => {
+    const requests: Array<{ path: string; init?: RequestInit }> = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      requests.push({ path, init });
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          directory: 'C:/output/design_a/run_3',
+          files: ['C:/output/design_a/run_3/horn_1.csv'],
+        }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    await runWorkspaceExportBundle({
+      result,
+      jobStem: 'horn_1',
+      workspaceSubdirectory: 'design_a/run_3',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher,
+    }, ['csv']);
+
+    const payload = workspacePayload(requests.find(({ path }) => path === '/api/workspace/write-export')!.init);
+    expect(payload.subdirectory).toBe('design_a/run_3');
+    expect(payload.destination).toBeNull();
+    expect(payload.existing).toBe('merge_identical');
+    // Nothing asked the user anything: a background export that opened a
+    // folder dialog would interrupt a solve nobody is watching.
+    expect(requests.map(({ path }) => path)).not.toContain('/api/workspace/export-destination');
+  });
+
   it('writes automatic text and binary exports to the Workspace without browser downloads', async () => {
     const requests: Array<{ path: string; init?: RequestInit }> = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
@@ -803,6 +969,7 @@ describe('result exporters', () => {
       directory: 'C:/output/horn_1',
       files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png', 'C:/output/horn_1/horn_1_directivity_map.png'],
       failures: [],
+      replaced: [],
     });
     const write = requests.find(({ path }) => path === '/api/workspace/write-export')!;
     const payload = workspacePayload(write.init);

@@ -261,7 +261,11 @@ def beat_status() -> dict[str, Any]:
     return dict(status)
 
 
-beat_status.cache_clear = _cached_successful_beat_status.cache_clear  # type: ignore[attr-defined]
+# ``beat_status.cache_clear`` and ``beat_backend_statuses.cache_clear`` are
+# assigned together further down, once both probe caches exist. Both clear
+# both: a test or a driver install that invalidates one verdict invalidates the
+# other, and two clears that had to be called in pairs would be found in pairs
+# only some of the time.
 
 
 def _cpu_backend_status(package: Any) -> tuple[bool, str]:
@@ -287,30 +291,90 @@ def _cpu_backend_status(package: Any) -> tuple[bool, str]:
     return readiness.ready, readiness.reason
 
 
+def _probe_package_backend_statuses() -> dict[str, Any] | None:
+    """The package's own per-backend verdicts, when the pin has them.
+
+    ``hornlab_beat_bem.beat_backend_statuses`` asks each backend
+    independently -- hardware inventory and ``functional()`` per accelerator
+    family, the provisioning record for the CPU -- which is the shape a selector
+    needs and the shape ``beat_engine_status`` cannot give: that one answers
+    "which *single* backend would a solve use here".
+
+    ``None`` when the pinned package predates it, and the single-probe
+    derivation below is used instead.
+    """
+
+    package = _load_api()
+    if package is None:
+        return None
+    probe = getattr(package, "beat_backend_statuses", None)
+    if probe is None:
+        return None
+    try:
+        statuses = probe()
+    except Exception:  # noqa: BLE001 - a broken optional stack is unavailable
+        logger.warning("BEAT per-backend capability probe failed", exc_info=True)
+        return None
+    if not isinstance(statuses, dict):
+        return None
+    return statuses
+
+
+@lru_cache(maxsize=1)
+def _cached_available_package_statuses() -> dict[str, Any]:
+    """Cache the per-backend probe only once an accelerator is usable.
+
+    Same rule as ``_cached_successful_beat_status`` and for the same reason: an
+    unavailable verdict must be re-probed, so installing a GPU driver takes
+    effect without restarting the server. What that costs on a host that stays
+    unavailable is the cheap inventory again (``shutil.which``, and
+    ``nvidia-smi -L`` only where there is an ``nvidia-smi``); the expensive
+    half, a Julia startup asking ``functional()``, is cached inside the package
+    for the process lifetime either way.
+    """
+
+    statuses = _probe_package_backend_statuses()
+    if statuses is None:
+        raise _BeatProbeUnavailable({"statuses": None})
+    if not any(
+        bool(entry.get("available"))
+        for backend, entry in statuses.items()
+        if backend != BEAT_CPU_BACKEND
+    ):
+        raise _BeatProbeUnavailable({"statuses": statuses})
+    return statuses
+
+
+def _package_backend_statuses() -> dict[str, Any] | None:
+    with _status_probe_lock:
+        try:
+            return _cached_available_package_statuses()
+        except _BeatProbeUnavailable as exc:
+            return exc.status["statuses"]
+
+
 def beat_backend_statuses() -> dict[str, dict[str, Any]]:
-    """One status per BEAT backend, from a single package probe.
+    """One status per BEAT backend: what each of them can do on this host.
 
-    ``hornlab_beat_bem.beat_engine_status`` answers a deliberately different
-    question: which *one* backend a solve would use, taking the first
-    accelerator family whose hardware is present. That is the right answer for
-    AUTO and the wrong one for a selector, which has to say something about
-    every backend a user might pick -- including the CPU path, which the probe
-    only ever names under ``HORNLAB_BEAT_FORCE_CPU`` and which is in fact
-    available wherever a Julia is.
+    Two sources, in this order, and neither of them a second detector written
+    here -- two copies of "is there a CUDA device" would be one upstream edit
+    away from disagreeing, and the copy that drifted would be the one in the
+    dropdown.
 
-    Nothing here re-implements the package's detection, which is the whole
-    point: the probe runs once, the backend it named is available for the
-    reason it gave, and every other backend reports its own prerequisite
-    alongside what the probe actually found. Two copies of "is there a CUDA
-    device" would be one upstream edit away from disagreeing, and the copy that
-    drifted would be the one in the dropdown.
+    1. ``hornlab_beat_bem.beat_backend_statuses``, when the pin has it: one
+       independent verdict per backend. This is what closes the two-family gap
+       (an NVIDIA card and an AMD card in one box: the single probe names the
+       first and says nothing true about the second) and the CPU-on-a-GPU-host
+       gap (readiness is per backend, so both can be ready at once).
+    2. Otherwise ``beat_engine_status`` -- which answers which *one* backend a
+       solve would use -- plus each other backend's own prerequisite. That
+       under-declares on the hosts above rather than over-promising, which is
+       the safe direction for an older pin.
 
-    The known gap is a host with two accelerator families -- an NVIDIA card and
-    an AMD card in the same box. The probe names the first, so the second reads
-    unavailable here even though it would work. That under-declares rather than
-    over-promises, which is the safe direction, and closing it needs a
-    per-backend probe in ``hornlab-beat-bem`` rather than a second detector in
-    this file.
+    The CPU row does not come from either. It comes from
+    ``server/solver/beat_cpu_runtime.py``, which knows two things the package
+    cannot: whether *this process* is provisioning the runtime right now, and
+    whether the pinned package can provision one at all.
     """
 
     package = _load_api()
@@ -328,6 +392,29 @@ def beat_backend_statuses() -> dict[str, dict[str, Any]]:
             }
             for backend in BEAT_BACKENDS
         }
+
+    delegated = _package_backend_statuses()
+    if delegated is not None:
+        surface_traces = _package_retains_surface_traces(package)
+        statuses: dict[str, dict[str, Any]] = {}
+        for backend in BEAT_BACKENDS:
+            entry = delegated.get(backend) or {}
+            if backend == BEAT_CPU_BACKEND:
+                available, reason = _cpu_backend_status(package)
+            else:
+                available = bool(entry.get("available"))
+                reason = str(
+                    entry.get("reason")
+                    or f"the BEAT package returned no reason for the {backend} backend"
+                )
+            statuses[backend] = {
+                "available": available,
+                "reason": reason,
+                "version": entry.get("version"),
+                "backend": backend,
+                "surface_traces": surface_traces,
+            }
+        return statuses
 
     status = beat_status()
     probe_reason = str(status.get("reason") or "beat capability probe returned no reason")
@@ -365,6 +452,24 @@ def beat_backend_statuses() -> dict[str, dict[str, Any]]:
             "surface_traces": bool(status.get("surface_traces")),
         }
     return statuses
+
+
+def _clear_status_caches() -> None:
+    """Forget both cached probe results.
+
+    Exposed as ``cache_clear`` on both public probes. One function because the
+    two caches answer the same underlying question -- what this host's BEAT
+    backends can do -- so anything that invalidates one invalidates the other:
+    a GPU driver installed while the server runs, or a test that has just
+    replaced the package.
+    """
+
+    _cached_successful_beat_status.cache_clear()
+    _cached_available_package_statuses.cache_clear()
+
+
+beat_status.cache_clear = _clear_status_caches  # type: ignore[attr-defined]
+beat_backend_statuses.cache_clear = _clear_status_caches  # type: ignore[attr-defined]
 
 
 def resolve_beat_backend(status: Mapping[str, Any]) -> str:

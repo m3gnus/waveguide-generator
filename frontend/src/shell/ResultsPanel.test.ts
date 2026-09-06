@@ -8,17 +8,18 @@ import type { NamedResult } from '../results/mappers';
 import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { resultFrequencyValidity } from '../results/validity';
+import { provideExportDestinationPrompt } from './exportDestinationPrompt';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
 
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<() => Promise<void>>(),
-  download: vi.fn<() => Promise<void>>(),
+  save: vi.fn<() => Promise<string>>(),
 }));
 vi.mock('../results/chartImage', async (importOriginal) => ({
   ...await importOriginal<typeof import('../results/chartImage')>(),
   copyChartPng: chartImageMocks.copy,
-  downloadChartPng: chartImageMocks.download,
+  saveChartPng: chartImageMocks.save,
 }));
 
 const summaryMocks = vi.hoisted(() => ({
@@ -524,7 +525,7 @@ describe('results chart layouts', () => {
     summaryMocks.groups.mockReset().mockReturnValue([]);
     summaryMocks.text.mockReset().mockReturnValue('');
     chartImageMocks.copy.mockReset().mockResolvedValue(undefined);
-    chartImageMocks.download.mockReset().mockResolvedValue(undefined);
+    chartImageMocks.save.mockReset().mockResolvedValue('/exports');
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -647,7 +648,7 @@ describe('results chart layouts', () => {
     }
   });
 
-  it('copies and downloads one composited PNG from a graphical chart', async () => {
+  it('copies and exports one composited PNG from a graphical chart', async () => {
     const chartResult: ResultPayload = {
       frequencies: [500, 1_000],
       spl_on_axis: { frequencies: [500, 1_000], spl: [80, 82] },
@@ -659,16 +660,31 @@ describe('results chart layouts', () => {
     await act(async () => { target.append(document.createElement('canvas')); await Promise.resolve(); });
 
     const copy = host.querySelector<HTMLButtonElement>('[aria-label="Copy panel 1 as PNG"]')!;
-    const download = host.querySelector<HTMLButtonElement>('[aria-label="Download panel 1 as PNG"]')!;
+    const save = host.querySelector<HTMLButtonElement>('[aria-label="Export panel 1 as PNG"]')!;
     expect(copy).not.toBeNull();
-    expect(download).not.toBeNull();
+    expect(save).not.toBeNull();
     await act(async () => { copy.click(); });
     expect(chartImageMocks.copy).toHaveBeenCalledWith(target, tokens.background);
     expect(host.querySelector('.result-image-status')?.textContent).toBe('Copied PNG');
 
-    await act(async () => { download.click(); });
-    expect(chartImageMocks.download).toHaveBeenCalledWith(target, 'result_frequency_response.png', tokens.background);
-    expect(host.querySelector('.result-image-status')?.textContent).toBe('Downloaded PNG');
+    // A chart image is a file export like any other: it asks where it goes,
+    // and it is written by the server rather than handed to a download shelf
+    // the desktop window does not have.
+    chartImageMocks.save.mockResolvedValue('/exports');
+    provideExportDestinationPrompt(async () => ({ token: 'handle-png', directory: '/exports' }));
+    await act(async () => { save.click(); });
+    expect(chartImageMocks.save).toHaveBeenCalledWith(
+      target, 'result_frequency_response.png', 'handle-png', tokens.background,
+      expect.any(Function),
+    );
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('Saved PNG');
+
+    provideExportDestinationPrompt(async () => null);
+    chartImageMocks.save.mockClear();
+    await act(async () => { save.click(); });
+    expect(chartImageMocks.save).not.toHaveBeenCalled();
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('Export cancelled');
+    provideExportDestinationPrompt(null);
   });
 
   it('reports a blocked image clipboard without breaking the chart', async () => {

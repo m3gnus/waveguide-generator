@@ -989,9 +989,14 @@ def test_recovery_runs_before_the_mode_branch_for_browser_and_terminal_starts(
     assert (resources / "app" / "marker.txt").read_text(encoding="utf-8") == "old0"
     assert _user_data_intact(data_dir)
 
-    # And the launcher asks for it before it chooses a mode at all.
+    # And the launcher asks for it before it chooses a mode at all. The marker
+    # is the mode branch itself: this was written against a raw
+    # ``"--no-gui" in arguments`` test, and the launcher's command line became
+    # argparse in the same candidate, so it follows the branch rather than the
+    # spelling it used to have. ``index`` raises if either marker is gone, so a
+    # rename cannot turn this into a test that passes by finding nothing.
     source = Path(entry_point.__file__).read_text(encoding="utf-8")
-    branch = source.index('if "--no-gui" in arguments')
+    branch = source.index("if options.no_gui:")
     call = source.index("refusal = _recover_interrupted_bundle_update(")
     assert call < branch, "recovery must run before the mode branch, not inside one"
 
@@ -1119,10 +1124,11 @@ def test_a_no_gui_start_refuses_a_broken_installation_without_opening_a_window(
     captured = capsys.readouterr()
     assert "the layers are mixed" in captured.err, "the refusal still has to be readable"
 
-    # And main() picks that reporter for --no-gui without being told.
+    # And main() picks that reporter for --no-gui without being told. Same
+    # adaptation as above: the mode is read off the parsed options now.
     source = Path(entry_point.__file__).read_text(encoding="utf-8")
     assert (
-        'report=_report_terminal_failure if "--no-gui" in arguments else _report_startup_failure'
+        "report=_report_terminal_failure if options.no_gui else _report_startup_failure"
         in source
     )
 

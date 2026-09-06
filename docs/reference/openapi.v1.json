@@ -1009,6 +1009,23 @@
         "title": "ChartsRenderRequest",
         "type": "object"
       },
+      "ChooseExportDestinationRequest": {
+        "additionalProperties": false,
+        "description": "A folder typed instead of chosen from the native picker.\n\nSame reasoning as ``SelectWorkspaceRequest``: the picker runs on the machine\nhosting the server, so a browser on another machine needs a way to name a\nfolder that does not open a dialog nobody is sitting in front of.",
+        "properties": {
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "ChooseExportDestinationRequest",
+        "type": "object"
+      },
       "ClearFailedResponse": {
         "additionalProperties": false,
         "properties": {
@@ -10410,6 +10427,74 @@
         "summary": "Update Status"
       }
     },
+    "/api/workspace/export-destination": {
+      "get": {
+        "operationId": "export_destination_api_workspace_export_destination_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Export Destination Api Workspace Export Destination Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Export Destination",
+        "tags": [
+          "workspace"
+        ]
+      },
+      "post": {
+        "description": "Ask the user where this export goes, without moving the workspace.\n\nCancelling answers ``selected: false`` and writes nothing -- neither a\nfile nor the remembered folder, which only a completed export moves.",
+        "operationId": "choose_export_destination_api_workspace_export_destination_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ChooseExportDestinationRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Choose Export Destination Api Workspace Export Destination Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Choose Export Destination",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
     "/api/workspace/open": {
       "post": {
         "operationId": "workspace_open_api_workspace_open_post",
@@ -10548,12 +10633,24 @@
                 },
                 "additionalProperties": false,
                 "properties": {
+                  "destination": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Destination"
+                  },
                   "existing": {
                     "default": "reject",
                     "enum": [
                       "reject",
                       "merge_identical",
-                      "overwrite"
+                      "overwrite",
+                      "confirm"
                     ],
                     "title": "Existing",
                     "type": "string"
@@ -10568,13 +10665,12 @@
                     "type": "array"
                   },
                   "subdirectory": {
-                    "minLength": 1,
+                    "default": "",
                     "title": "Subdirectory",
                     "type": "string"
                   }
                 },
                 "required": [
-                  "subdirectory",
                   "members"
                 ],
                 "title": "WriteExportRequest",
@@ -10584,12 +10680,17 @@
             "multipart/form-data": {
               "schema": {
                 "properties": {
+                  "destination": {
+                    "description": "Handle from POST /api/workspace/export-destination. Absent writes into the workspace.",
+                    "type": "string"
+                  },
                   "existing": {
                     "default": "reject",
                     "enum": [
                       "reject",
                       "merge_identical",
-                      "overwrite"
+                      "overwrite",
+                      "confirm"
                     ],
                     "type": "string"
                   },

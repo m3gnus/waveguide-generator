@@ -762,7 +762,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    dialog -- five short lines of content -- a full-height box with everything
    crammed against the top edge. Header and footer chrome below are written to
    Settings' own final values so the two still read as one family. */
-.update-dialog {
+.update-dialog,
+.export-dialog {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(560px, calc(100vw - 36px));
@@ -774,9 +775,12 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
   box-shadow: var(--float-sh);
   color: var(--fg);
 }
-.update-dialog > header { display: flex; align-items: flex-start; gap: var(--space-12); padding: var(--space-12) var(--space-16); border-bottom: 1px solid var(--hair); }
-.update-dialog h2 { margin: 0; color: var(--fg); font-size: var(--text-head); font-weight: 600; letter-spacing: -.012em; }
-.update-dialog > header p { margin: var(--space-4) 0 0; max-width: 62ch; color: var(--fg3); font-size: var(--text-base); line-height: 1.45; }
+.update-dialog > header,
+.export-dialog > header { display: flex; align-items: flex-start; gap: var(--space-12); padding: var(--space-12) var(--space-16); border-bottom: 1px solid var(--hair); }
+.update-dialog h2,
+.export-dialog h2 { margin: 0; color: var(--fg); font-size: var(--text-head); font-weight: 600; letter-spacing: -.012em; }
+.update-dialog > header p,
+.export-dialog > header p { margin: var(--space-4) 0 0; max-width: 62ch; color: var(--fg3); font-size: var(--text-base); line-height: 1.45; }
 .update-dialog-body { display: grid; align-content: start; gap: var(--space-12); min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--space-16); color: var(--fg2); font-size: var(--text-base); }
 .update-dialog-body p { margin: 0; line-height: 1.45; }
 
@@ -834,18 +838,23 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .update-progress-note.ready { color: var(--green); font-size: var(--text-micro); }
 .update-feedback { color: var(--fg1); font-size: var(--text-micro); }
 
-.update-dialog > footer { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-16); border-top: 1px solid var(--hair); background: var(--surface-panel); }
+.update-dialog > footer,
+.export-dialog > footer { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-16); border-top: 1px solid var(--hair); background: var(--surface-panel); }
 .update-dialog > footer button,
+.export-dialog > footer button,
 .update-install-actions button { display: inline-flex; align-items: center; gap: var(--space-6); min-height: var(--control-h); padding: 0 var(--space-12); border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-base); }
 .update-dialog > footer button:hover:not(:disabled),
+.export-dialog > footer button:hover:not(:disabled),
 .update-install-actions button:hover:not(:disabled) { border-color: var(--hair-hi); background: var(--ctl-grad-h); color: var(--fg); }
 .update-install-actions button svg { width: 13px; height: 13px; }
 /* The workspace's own highest-emphasis control -- the solid inverted ground the
    Solve button wears -- rather than the accent wash the report dialog uses for
    a link-shaped action. This is the one thing the dialog exists to offer, and
    the wash measured 4.15:1 in Console against the footer it sits on. */
-.update-dialog .primary { border-color: transparent; background: var(--inv-bg); color: var(--inv-fg); font-weight: 550; }
-.update-dialog .primary:hover:not(:disabled) { background: var(--inv-bg); border-color: var(--acc); color: var(--inv-fg); }
+.update-dialog .primary,
+.export-dialog .primary { border-color: transparent; background: var(--inv-bg); color: var(--inv-fg); font-weight: 550; }
+.update-dialog .primary:hover:not(:disabled),
+.export-dialog .primary:hover:not(:disabled) { background: var(--inv-bg); border-color: var(--acc); color: var(--inv-fg); }
 .update-release-link { color: var(--acc-text); font-size: var(--text-micro); text-decoration: none; }
 .update-release-link:hover { text-decoration: underline; }
 .update-release-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: 0 0 0 4px var(--focus-halo); }
@@ -855,6 +864,21 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
   .update-progress .progress.indeterminate i { animation: none; }
   .update-progress .progress i { transition: none; }
 }
+/* The channel selector, in the dialog rather than in Settings. It borrows the
+   settings idiom for the two buttons so one control does not read as two. */
+.update-channel { display: grid; gap: var(--space-8); padding: var(--space-12); border: 1px solid var(--hair); border-radius: var(--r); background: var(--surface-raised); }
+.update-channel h3 { margin: 0; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; text-transform: uppercase; }
+.update-channel .cad-settings-note { margin: 0; }
+
+/* The export destination dialog wears the update dialog's shape -- one modal
+   idiom in this application -- and adds only the folder it is asking about. */
+.export-dialog { width: min(520px, calc(100vw - 36px)); }
+.export-destination-label { color: var(--fg3); font-size: var(--text-micro); letter-spacing: .04em; text-transform: uppercase; }
+.export-destination-path { padding: var(--space-8) var(--space-12); border: 1px solid var(--hair); border-radius: var(--r); background: var(--surface-raised); color: var(--fg1); font: var(--text-micro) var(--mono); overflow-wrap: anywhere; }
+.export-destination-path.not-selected { color: var(--fg3); }
+.export-replace-list { display: grid; gap: var(--space-4); margin: 0; padding: 0 0 0 var(--space-16); color: var(--fg1); font: var(--text-micro) var(--mono); }
+.export-replace-list .export-replace-more { color: var(--fg3); font-family: inherit; list-style: none; }
+
 .command-backdrop { place-items: start center; padding-top: min(15vh, 120px); }
 .command-palette { width: min(680px, calc(100vw - 36px)); }
 .command-search { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 12px; border-bottom: 1px solid var(--hair); }.command-search > svg { width: 16px; color: var(--fg2); }.command-search input { flex: 1; min-width: 0; background: transparent; color: var(--fg); font-size: var(--text-title); }.command-search input::placeholder { color: var(--fg3); }

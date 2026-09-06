@@ -8,6 +8,8 @@ import { EXPORT_FORMATS, preferencesStore } from '../prefs/preferences';
 import { hydrateJobDesign } from './jobDesign';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { useRunExportStore } from '../stores/runExports';
+import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
+import { ExportCancelledError } from '../api/exportDestination';
 import { RunExportControl } from './RunExportControl';
 import { JobsPanel } from '../shell/JobsPanel';
 
@@ -107,6 +109,10 @@ describe('RunExportControl', () => {
       designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
     });
     patchMetadata = vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
+    // The dialog the top bar mounts, standing in for the user answering it.
+    provideExportDestinationPrompt(async () => ({
+      token: 'destination-handle', directory: 'C:/chosen',
+    }));
     vi.stubGlobal('fetch', vi.fn());
     host = document.createElement('div');
     document.body.append(host);
@@ -114,6 +120,7 @@ describe('RunExportControl', () => {
   });
 
   afterEach(() => {
+    provideExportDestinationPrompt(null);
     act(() => root.unmount());
     host.remove();
     compareSelection.clear();
@@ -251,7 +258,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ design: hydrateJobDesign(job), designRevision: 42 }),
       ['step'],
-      'overwrite',
+      'confirm',
     );
   });
 
@@ -276,7 +283,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: wrapped }),
       ['csv'],
-      'overwrite',
+      'confirm',
     );
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
       exported_files: [
@@ -301,7 +308,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: expect.any(Object) }),
       [format],
-      'overwrite',
+      'confirm',
     );
   });
 
@@ -328,7 +335,7 @@ describe('RunExportControl', () => {
         hasRadiationImpedanceArtifact: true,
       }),
       ['radiation_impedance_npz'],
-      'overwrite',
+      'confirm',
     );
   });
 
@@ -347,7 +354,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: directivityResult() }),
       ['on_axis_frd'],
-      'overwrite',
+      'confirm',
     );
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
       exported_files: ['earlier.csv', 'C:/chosen/1_stored_horn_v07/1_stored_horn_v07.frd'],
@@ -375,7 +382,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: wrapped }),
       ['on_axis_frd'],
-      'overwrite',
+      'confirm',
     );
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', { exported_files: [
       'earlier.csv',
@@ -395,7 +402,7 @@ describe('RunExportControl', () => {
     openMenu();
     await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
 
-    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd'], 'overwrite');
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd'], 'confirm');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('6 files written');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('C:/chosen/1_stored_horn_v07');
   });
@@ -411,7 +418,7 @@ describe('RunExportControl', () => {
     openMenu();
     await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
 
-    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd'], 'overwrite');
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd'], 'confirm');
     expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/workspace/select', expect.anything());
     expect(document.querySelector('[role="status"]')?.textContent).toContain('C:/default/output/1_stored_horn_v07');
   });
@@ -451,7 +458,7 @@ describe('RunExportControl', () => {
     openMenu();
     await act(async () => { menuItem('Charts').click(); await settle(); });
 
-    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['png'], 'overwrite');
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['png'], 'confirm');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('2 files');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('C:/chosen/1_stored_horn_v07');
   });
@@ -489,10 +496,54 @@ describe('RunExportControl', () => {
     expect(mocks.fetchJobResults).toHaveBeenCalledOnce();
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledOnce();
     expect(mocks.runWorkspaceExportBundle.mock.calls[0][1]).toEqual(['csv', 'step']);
-    // A user asking for the export again gets the export again; merging would
-    // 409 on any format whose bytes carry a timestamp.
-    expect(mocks.runWorkspaceExportBundle.mock.calls[0][2]).toBe('overwrite');
+    // A user asking for the export again gets the export again -- merging would
+    // 409 on any format whose bytes carry a timestamp -- but files WG did not
+    // write are named and asked about first, which is what `confirm` adds.
+    expect(mocks.runWorkspaceExportBundle.mock.calls[0][2]).toBe('confirm');
     expect(mocks.runWorkspaceExportBundle.mock.calls[0][0].design).toEqual(hydrateJobDesign(completeJob()));
+  });
+
+  it('asks where the run export goes and carries the handle into the bundle', async () => {
+    const asked: string[] = [];
+    provideExportDestinationPrompt(async (request) => {
+      asked.push(request.title);
+      return { token: 'handle-run', directory: '/exports' };
+    });
+    preferencesStore.update({ exportFormats: ['csv'] });
+    render();
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await Promise.resolve(); });
+
+    expect(asked).toEqual(['Export this run']);
+    expect(mocks.runWorkspaceExportBundle.mock.calls[0][0].destinationToken).toBe('handle-run');
+  });
+
+  it('writes nothing when the destination dialog is cancelled', async () => {
+    provideExportDestinationPrompt(async () => null);
+    preferencesStore.update({ exportFormats: ['csv'] });
+    render();
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await Promise.resolve(); });
+
+    // Not even the result fetch: nothing is built for an export with nowhere
+    // to go, and no run metadata is stamped with files that do not exist.
+    expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
+    expect(patchMetadata).not.toHaveBeenCalled();
+    expect(host.textContent).toContain('Export cancelled. No files were written.');
+  });
+
+  it('reports a declined replacement as a cancellation, not as a failure', async () => {
+    // The user answered "do not replace those". Painting that red beside the
+    // run says something went wrong, and nothing did.
+    mocks.runWorkspaceExportBundle.mockRejectedValueOnce(new ExportCancelledError());
+    preferencesStore.update({ exportFormats: ['csv'] });
+    render();
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await Promise.resolve(); });
+
+    expect(host.textContent).toContain('Export cancelled. No files were written.');
+    expect(patchMetadata).not.toHaveBeenCalled();
+    expect(useRunExportStore.getState().jobs['job-export-1']?.lastError ?? null).toBeNull();
   });
 
   it('offers every selectable export format, so the primary action cannot be silently dead', async () => {

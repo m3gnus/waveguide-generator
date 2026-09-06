@@ -44,14 +44,22 @@ _BASE_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
     "dryrun",
 )
 
-#: Windows and Linux are the platforms Waveguide Generator provisions a BEAT CPU
-#: runtime for (``server/solver/beat_cpu_runtime.py``), and there ``beat-cpu``
-#: leads BEMPP. What makes that safe is what "available" now means for that row:
+#: Windows and Linux are the platforms where ``beat-cpu`` leads BEMPP. Every
+#: supported platform provisions a BEAT CPU runtime
+#: (``server/solver/beat_cpu_runtime.py``); this order is about which one AUTO
+#: reaches for first, which is a different question and settled by measurement. What makes that safe is what "available" now means for that row:
 #: since the readiness rewrite it is set only when ``hornlab_beat_bem`` has
 #: instantiated the CPU project and solved a 1 kHz probe through the precompiled
 #: engine bundle on this machine, so AUTO can only reach it on a host where a
 #: CPU solve has demonstrably run. On every host where it has not, this order is
 #: the base order.
+#:
+#: A GPU host reaches this order too, and its first four entries are why that
+#: changes nothing: a provisioned CPU runtime on a CUDA box is now representable
+#: and prepared (readiness is recorded per backend in the package), so
+#: ``beat-cpu`` becomes a row a user can actually select there -- but AUTO still
+#: walks Metal and the three accelerators first, and only reaches the CPU path
+#: when none of them is available.
 _CPU_FIRST_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
     "metal",
     "beat-cuda",
@@ -66,11 +74,13 @@ _CPU_FIRST_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
 def full3d_engine_order(system: str | None = None) -> tuple[str, ...]:
     """AUTO's full-3D preference order on this platform.
 
-    macOS is deliberately not in the swap. Metal leads there on measured
-    evidence and BEAT-CPU is not provisioned there at all, so moving it ahead of
-    BEMPP could only change the answer on a Mac whose Metal path is broken --
-    and would move it ahead of the CPU engine this project has measured, on the
-    one platform where nothing proved the swap.
+    macOS is deliberately not in the swap, and it stays out now that the CPU
+    runtime *is* provisioned there too (``beat_cpu_runtime.PROVISION_SYSTEMS``).
+    Being able to choose an engine and being the default are different
+    questions: Metal leads on measured evidence, so moving BEAT-CPU ahead of
+    BEMPP could only change the answer on a Mac whose Metal path is broken, and
+    would put it ahead of the CPU engine this project has measured on the one
+    platform where nothing proved the swap.
 
     Ordering is a *default*, never an override: an explicitly selected engine is
     resolved by name in ``EngineRegistry.resolve`` and never passes through
