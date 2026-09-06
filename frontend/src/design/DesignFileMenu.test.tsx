@@ -185,6 +185,43 @@ describe('design file export menu', () => {
     expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=surface']);
   });
 
+  it('surfaces a surface-STEP sizing warning after reporting the successful write', async () => {
+    // The inner-surface STEP sizes itself and can ship a grid that missed its
+    // target or was never measured against one. That used to reach the log and
+    // stop there; this is the whole path, from the response header the route
+    // now sets to the line the user reads.
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/export/step?body=surface') {
+        const response = new Response('ISO-10303-21;', {
+          status: 200,
+          headers: {
+            'X-Export-Warning':
+              'This geometry did not reach its 0.1 mm target before the refinement budget ran out.',
+          },
+        });
+        return Object.assign(response, {
+          blob: async () => new Blob(['ISO-10303-21;'], { type: 'model/step' }),
+        });
+      }
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          directory: 'C:/Output/horn', files: ['horn.step'],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    const item = itemNamed('STEP inner surface');
+    await act(async () => { item.click(); });
+
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      'Exported STEP from revision 1 to C:/Output/horn. Warning: This geometry did not '
+      + 'reach its 0.1 mm target before the refinement budget ran out.',
+    );
+  });
+
   it('surfaces an STL fidelity warning after reporting the successful write', async () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input);

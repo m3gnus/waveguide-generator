@@ -91,6 +91,56 @@ def _install_fake_write(monkeypatch) -> list[object]:
     return writes
 
 
+def test_the_cad_bundle_is_built_without_the_export_sizing_planners(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Why no export-sizing warning rides on Send to CAD, proved by running it.
+
+    The geometry exports size themselves against a fidelity tolerance and can
+    report that they missed it. This bundle does not: it hands the design's own
+    resolved geometry to the mesher's ``write_wglink``, so there is no plan and
+    no reading to pass on. That is a real scope gap and it is documented in the
+    export contract -- but it is only true while the call graph stays this
+    shape, so the planners are replaced with detonators rather than grepped for.
+    If a later change routes this bundle through the sizing path, this fails and
+    says the warning has to be plumbed with it.
+    """
+
+    from server.exports import core, sizing
+
+    def detonate(*_args, **_kwargs):  # pragma: no cover - only runs on failure
+        raise AssertionError(
+            "the CAD bundle reached the export sizing planners; its compromises "
+            "are no longer outside the warning path and must be plumbed"
+        )
+
+    for module, name in (
+        (core, "_surface_grid_plan"),
+        (core, "_stl_grid_plan"),
+        (core, "_build_step_solid_sync"),
+        (sizing, "plan_cad_resolution"),
+        (sizing, "plan_grid"),
+    ):
+        monkeypatch.setattr(module, name, detonate)
+
+    design = _design()
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, design)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _install_fake_write(monkeypatch)
+
+    row = api._export_wglink_sync(_request(saved), store, workspace, "no-planner")
+
+    assert row["artifactSha256"] == "sha256:" + "a" * 64
+    manifest = json.loads((Path(row["bundlePath"]) / "wglink.json").read_text())
+    assert manifest["files"]["waveguide.step"]["sha256"]
+    # Nothing in the bundle response or its manifest carries a sizing warning,
+    # because nothing in the path can produce one.
+    assert not any("warning" in key.lower() for key in row)
+    assert not any("warning" in key.lower() for key in manifest)
+
+
 def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
     monkeypatch, tmp_path: Path,
 ) -> None:

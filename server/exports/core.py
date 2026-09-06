@@ -49,6 +49,15 @@ class StepSolidResult:
 
     step_text: str
     cad_info: CadInfo
+    warning: str | None = None
+
+
+@dataclass(frozen=True)
+class StepSurfaceResult:
+    """The ruled inner-surface STEP, plus anything its sizing had to say."""
+
+    step_text: str
+    warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -340,6 +349,29 @@ _LOFT_SEARCH_WINDOW = 2
 #: Sampled at 8x with 16 strip samples the reading is about 0.10090 mm.
 _WRITTEN_REFERENCE_MULTIPLE = 8
 _WRITTEN_REFERENCE_OFFSET = 9
+#: The reference's own blind spot, and why the multiple above cannot close it.
+#: A rounded-rectangle morph samples its corner arc with three fixed intervals
+#: whatever the angular count, so asking for more segments refines the straight
+#: sides and leaves the arc alone: on the 120x80 r12 morph the arc breakpoints
+#: sit at 42.9473, 44.2581, 45.7419 and 47.0527 degrees at every count from 147
+#: to 2352, while the sides fall from 2.26 to 0.15 degrees. A reference built by
+#: multiplying the count therefore never samples between them -- which is where
+#: the ring spline's overshoot lives. Measured on the written file, the 147x56
+#: grid this export used to choose read 0.0937 mm against such a reference and
+#: 0.1138 mm against one that subdivides the arc.
+#:
+#: ``ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY`` is the builder's own private control
+#: for exactly this, and it moves only the sampling: subdividing gives the same
+#: analytic points at every shared azimuth plus new ones inside the arc. This
+#: changes the measurement reference alone -- never the profile grid, and never
+#: the surface written for the user. A test pins the dependency on that key,
+#: because a builder that stopped honouring it would silently restore the blind
+#: spot rather than fail. The matching half of that contract is recorded at the
+#: key's definition, in the mesher's ``_morph_corner_arc_subdivision``, which
+#: names this planner as its second caller and what it relies on -- a subdivided
+#: grid has to be the unsubdivided one plus arc azimuths, every shared azimuth
+#: on the same point.
+_WRITTEN_CORNER_ARC_SUBDIVISION = 16
 #: What the dense reference still cannot see. A sampled maximum is a lower
 #: bound on the real one, and the spike above is narrow enough that lower-density
 #: phases read below the roughly 0.10146 mm converged value. Accepting requires
@@ -573,9 +605,16 @@ def _written_surface_measure(
     strips = _loft_strips(coarse, _LOFT_SAMPLES_PER_SEGMENT)
     band = axial_band_of_column(2 * n_length + 1, n_length)
 
+    from hornlab_mesher.profile_sampling import ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY
+
+    reference_params = {
+        **params,
+        ACOUSTIC_CORNER_ARC_SUBDIVISION_KEY: _WRITTEN_CORNER_ARC_SUBDIVISION,
+    }
+
     def against(multiple: int, offset: int) -> float | None:
         reference, _, reference_length = _point_grid(
-            params, multiple * angular + offset, 2 * n_length
+            reference_params, multiple * angular + offset, 2 * n_length
         )
         if reference_length != 2 * n_length:
             return None
@@ -615,17 +654,49 @@ def _surface_grid_plan(design: DesignConfig) -> GridPlan:
         angular=("linear", STL_CHORD_TOLERANCE_MM),
         axial=("linear", STL_CHORD_TOLERANCE_MM),
         measure=_written_surface_measure,
+        # Corner-spline deviation falls more slowly than the chord model each
+        # refinement step is sized from, so this reading needs more probes to
+        # arrive than the chord one does. Measured on the 120x80 r12 morph, the
+        # generic six stop at 177x56 and 0.1108 mm -- a grid that misses -- and
+        # the budget reaches 248x56 and 0.0992 mm at sixteen. Twenty changes
+        # nothing, so this is bounded work with room, not a ceiling to sit on.
+        max_attempts=16,
     )
 
 
-def _build_step_sync(design_dump: dict[str, Any]) -> str:
+def _build_step_sync(design_dump: dict[str, Any]) -> StepSurfaceResult:
     design = DesignConfig.model_validate(design_dump)
     plan = _surface_grid_plan(design)
-    return _write_step(_inner_grid(design, grid=(plan.angular, plan.length)))
+    if plan.warning:
+        logger.warning("Surface STEP export sizing: %s", plan.warning)
+    logger.info(
+        "STEP inner surface on a %dx%d grid (measured deviation %s mm, tolerance %g mm)",
+        plan.angular,
+        plan.length,
+        "unmeasured" if plan.deviation_mm is None else f"{plan.deviation_mm:.5f}",
+        STL_CHORD_TOLERANCE_MM,
+    )
+    return StepSurfaceResult(
+        step_text=_write_step(_inner_grid(design, grid=(plan.angular, plan.length))),
+        warning=plan.warning,
+    )
 
 
-async def build_step(design: DesignConfig) -> str:
-    """Build the open, ruled, full-domain HornLab inner acoustic surface."""
+async def build_step(design: DesignConfig) -> StepSurfaceResult:
+    """Build the open, ruled, full-domain HornLab inner acoustic surface.
+
+    The plan's warning rides with the text. This export sizes itself, and when
+    the search cannot reach the tolerance it writes the finest grid it managed
+    rather than refusing -- which is right, and was previously invisible: the
+    plan carried the note and nothing ever read it.
+
+    **This returns a result object, not the STEP text.** It returned a bare
+    ``str`` until the warning had somewhere to travel; a second entry point
+    would have left two ways to build the same file, one of them silent. The
+    other two builders in this module already return their own result objects,
+    so the three now agree. The only caller is the export route, and
+    ``test_public_builders_return_their_result_objects`` pins the shape.
+    """
 
     return await run_on_gmsh_worker(_build_step_sync, design.model_dump(mode="json"))
 
@@ -677,6 +748,8 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
         "unmeasured" if plan.deviation_mm is None else f"{plan.deviation_mm:.5f}",
         STEP_SURFACE_TOLERANCE_MM,
     )
+    if plan.warning:
+        logger.warning("Solid STEP export sizing: %s", plan.warning)
     with tempfile.NamedTemporaryFile(
         prefix="waveguide-solid-", suffix=".step", delete=False
     ) as handle:
@@ -696,7 +769,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     finally:
         step_path.unlink(missing_ok=True)
     _assert_step(text)
-    return StepSolidResult(step_text=text, cad_info=cad_info)
+    return StepSolidResult(step_text=text, cad_info=cad_info, warning=plan.warning)
 
 
 async def build_step_solid(design: DesignConfig) -> StepSolidResult:
@@ -944,6 +1017,7 @@ def build_profiles(design: DesignConfig, kind: str) -> str:
 
 __all__ = [
     "StepSolidResult",
+    "StepSurfaceResult",
     "StlResult",
     "binary_stl",
     "build_profiles",

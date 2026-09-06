@@ -662,15 +662,22 @@ async def export_step(
     try:
         if body == "solid":
             solid = await build_step_solid(request.design)
-            content = solid.step_text
+            content, warning = solid.step_text, solid.warning
         else:
-            content = await build_step(request.design)
+            surface = await build_step(request.design)
+            content, warning = surface.step_text, surface.warning
     except Exception as exc:
         raise _export_error(exc) from exc
+    # Both bodies size themselves and both can end up on a grid that missed the
+    # target or was never measured against it. The file is still served -- an
+    # export is never refused for this -- and the note rides with it, exactly as
+    # the STL's sizing backstop already did.
+    if warning:
+        logger.warning("STEP %s export sizing: %s", body, warning)
     return Response(
         content=content,
         media_type="model/step",
-        headers=_headers(request, f"{_base_name(request.base_name)}.step"),
+        headers=_headers(request, f"{_base_name(request.base_name)}.step", warning),
     )
 
 
