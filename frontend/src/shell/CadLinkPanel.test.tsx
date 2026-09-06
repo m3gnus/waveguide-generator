@@ -16,7 +16,7 @@ import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOpt
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
-import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
+import { buildImportedSubmission, CadLinkPanel, declaredDomainPhrase, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -1393,5 +1393,16 @@ describe('CadLinkPanel', () => {
     expect([...host.querySelectorAll<HTMLButtonElement>('button')]
       .some((button) => button.textContent === 'Prepare simulation')).toBe(true);
     expect(host.textContent).not.toContain('Allow recorded area drift');
+  });
+});
+
+describe('declaredDomainPhrase', () => {
+  it('names the domain a CAD author declared, and says nothing for a full model', () => {
+    expect(declaredDomainPhrase(undefined)).toBe('');
+    expect(declaredDomainPhrase([])).toBe('');
+    expect(declaredDomainPhrase(['y0'])).toBe('half model, cut on y = 0');
+    expect(declaredDomainPhrase(['x0', 'y0'])).toBe('quarter model, cut on x = 0 and y = 0');
+    // A plane this build cannot mirror is not a domain it may claim to know.
+    expect(declaredDomainPhrase(['z0'])).toBe('');
   });
 });

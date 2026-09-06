@@ -437,6 +437,17 @@ sent and solved the same way. Three things make it a valid return:
    dialog's pre-flight summary warns when the model appears to violate any of
    this — fix the placement in Fusion rather than solving a mis-framed model.
 
+4. **Say so if it is already a half.** A model you cut in CAD before exporting
+   is not a full model with a hole in it, and nothing in the geometry says
+   which one it is. Set **Model domain** in the Send/Solve dialog to the half
+   or quarter it is; WG then mirrors the missing part instead of solving an
+   open shell. Keep the retained side on x ≥ 0 / y ≥ 0, and leave the cut
+   plane open — a face left on the plane meshes as a wall, not as a mirror, and
+   WG refuses it rather than solving it. **Force full domain** is refused for
+   such a return: the other half is not in the file. If you return a half
+   without declaring it, WG recognises the shape and blocks the run with a
+   finding rather than solving it whole in silence.
+
 **Solve in WG** then works as for a linked design. The return arrives marked
 as an imported CAD model — an informational note states that WG has no design
 identity for it and that the assembly frame is solved as-is — and mesh sizing

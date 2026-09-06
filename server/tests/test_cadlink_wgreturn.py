@@ -483,3 +483,132 @@ def test_an_oversized_manifest_is_refused_before_it_is_parsed(tmp_path: Path) ->
 
     with pytest.raises(WgReturnError, match="byte limit for a return manifest"):
         read_wgreturn(bundle)
+
+
+# ---------------------------------------------------- declared reduced domain
+
+
+def _domain(**overrides: object) -> dict:
+    record = {
+        "kind": "half",
+        "cut_planes": ["y0"],
+        "declared_by": "cad-author",
+        "evidence": {"y0": {"min_mm": 0.0, "max_mm": 90.0, "tolerance_mm": 0.05}},
+    }
+    record.update(overrides)
+    return record
+
+
+def _with_domain(step: bytes = b"step", **overrides: object) -> dict:
+    manifest = _manifest(step)
+    manifest["assembly"]["domain"] = _domain(**overrides)
+    manifest["required_features"] = [
+        *manifest["required_features"],
+        "reduced-domain-v1",
+    ]
+    return manifest
+
+
+def test_a_declared_reduced_domain_validates_and_reports_its_planes() -> None:
+    from server.cadlink.wgreturn import declared_domain_planes
+
+    manifest = _with_domain()
+    validate_manifest(manifest)
+    assert declared_domain_planes(manifest) == ("y0",)
+    assert declared_domain_planes(_manifest(b"step")) == ()
+
+    quarter = _with_domain(
+        kind="quarter",
+        cut_planes=["y0", "x0"],
+        evidence={
+            plane: {"min_mm": 0.0, "max_mm": 90.0, "tolerance_mm": 0.05}
+            for plane in ("x0", "y0")
+        },
+    )
+    validate_manifest(quarter)
+    assert declared_domain_planes(quarter) == ("x0", "y0")
+
+
+def test_the_reduced_domain_feature_is_paired_in_both_directions() -> None:
+    missing = _with_domain()
+    missing["required_features"] = [
+        name for name in missing["required_features"] if name != "reduced-domain-v1"
+    ]
+    with pytest.raises(WgReturnError, match="reduced-domain-v1 is required exactly"):
+        validate_manifest(missing)
+
+    decorative = _manifest(b"step")
+    decorative["required_features"] = [
+        *decorative["required_features"],
+        "reduced-domain-v1",
+    ]
+    with pytest.raises(WgReturnError, match="reduced-domain-v1 is required exactly"):
+        validate_manifest(decorative)
+
+
+def test_a_domain_record_that_contradicts_itself_is_refused() -> None:
+    with pytest.raises(WgReturnError, match=r"\$\.assembly\.domain\.kind"):
+        validate_manifest(_with_domain(kind="quarter"))
+    with pytest.raises(WgReturnError, match="may only name x0, y0"):
+        validate_manifest(
+            _with_domain(
+                cut_planes=["z0"],
+                evidence={"z0": {"min_mm": 0.0, "max_mm": 9.0, "tolerance_mm": 0.05}},
+            )
+        )
+    with pytest.raises(WgReturnError, match="must be 'cad-author'"):
+        validate_manifest(_with_domain(declared_by="waveguide-generator"))
+    with pytest.raises(WgReturnError, match="exactly the declared planes"):
+        validate_manifest(_with_domain(evidence={}))
+    with pytest.raises(WgReturnError, match="the measurement contradicts"):
+        validate_manifest(
+            _with_domain(
+                evidence={"y0": {"min_mm": -3.0, "max_mm": 90.0, "tolerance_mm": 0.05}}
+            )
+        )
+    with pytest.raises(WgReturnError, match="no extent on the positive side"):
+        validate_manifest(
+            _with_domain(
+                evidence={"y0": {"min_mm": 0.0, "max_mm": 0.0, "tolerance_mm": 0.05}}
+            )
+        )
+
+
+def test_a_wg_that_predates_the_feature_refuses_the_bundle_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate exists so an old reader stops, instead of solving a half whole.
+
+    Simulated by taking the feature back out of this reader's supported set,
+    which is exactly the state a WG released before it was in.
+    """
+
+    from server.cadlink import wgreturn as module
+
+    monkeypatch.setattr(
+        module,
+        "SUPPORTED_FEATURES",
+        module.SUPPORTED_FEATURES - {"reduced-domain-v1"},
+    )
+    with pytest.raises(
+        WgReturnError, match=r"unknown required feature\(s\): reduced-domain-v1"
+    ):
+        validate_manifest(_with_domain())
+
+
+def test_the_export_frame_is_named_and_checked() -> None:
+    """A Component exports in its own frame, so the file has to say which one."""
+
+    manifest = _manifest(b"step")
+    manifest["coordinate_system"]["export_frame"] = "selected-occurrence-component"
+    validate_manifest(manifest)
+    manifest["coordinate_system"]["export_frame"] = "root-component"
+    validate_manifest(manifest)
+
+    manifest["coordinate_system"]["export_frame"] = "assembly"
+    with pytest.raises(WgReturnError, match=r"\$\.coordinate_system\.export_frame"):
+        validate_manifest(manifest)
+
+    # Absent is the root component: every bundle written before the member.
+    del manifest["coordinate_system"]["export_frame"]
+    validate_manifest(manifest)

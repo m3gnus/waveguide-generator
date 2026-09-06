@@ -59,7 +59,7 @@ from .ingest import (
 )
 from .roles import canonical_source_role
 from .store import CadLinkStore
-from .wgreturn import WgReturnError
+from .wgreturn import WgReturnError, declared_domain_planes
 
 
 logger = logging.getLogger(__name__)
@@ -309,6 +309,7 @@ def _return_inventory(
             "modifiedAt": modified_at,
             "readable": False,
             "documentName": None,
+            "declaredCutPlanes": [],
             "requestId": None,
             "sourceCount": None,
             "instanceCount": None,
@@ -463,6 +464,11 @@ def _return_inventory(
                     ),
                     "sourceCount": len(sources),
                     "instanceCount": len(instances),
+                    # The domain the CAD author declared, so the panel can say
+                    # which model is about to be solved before anyone presses
+                    # anything. Empty for a full model, which is every bundle
+                    # written before the declaration existed.
+                    "declaredCutPlanes": list(declared_domain_planes(manifest)),
                     "solverAnchorInstanceId": (
                         str(coordinates["solver_anchor_instance_id"])
                         if coordinates.get("solver_anchor_instance_id")

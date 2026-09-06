@@ -69,6 +69,7 @@ from .field_traces_store import (
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import require_full_3d_aperture_tag
 from .imported import (
+    imported_domain_planes,
     imported_symmetry_from_cut_planes,
     mesh_frequency_validation,
     read_verified_import_mesh,
@@ -1746,10 +1747,8 @@ def solve_imported_metal_from_msh_text(
     if not status["available"]:
         raise MetalUnavailable(status["reason"])
 
-    symmetry = record.get("symmetry")
-    symmetry = symmetry if isinstance(symmetry, Mapping) else {}
-    cut_planes = {str(value) for value in symmetry.get("cut_planes") or []}
-    imported_symmetry = imported_symmetry_from_cut_planes(cut_planes)
+    domain_planes = imported_domain_planes(record)
+    imported_symmetry = imported_symmetry_from_cut_planes(domain_planes)
     quadrants = imported_symmetry.quadrants
     source_tags = record.get("source_tags")
     if not isinstance(source_tags, Mapping):
@@ -2255,7 +2254,7 @@ def solve_imported_metal_from_msh_text(
         "tag_namespace": record.get("tag_namespace"),
         "tag_map": json_safe_native_value(record.get("tag_map") or {}),
         "per_source_frequency_validity": per_source_validity,
-        "symmetry_planes_used": sorted(cut_planes),
+        "symmetry_planes_used": sorted(domain_planes),
         "polar_grid_derivation": json_safe_native_value(
             record.get("polar_grid_derivation") or {}
         ),
