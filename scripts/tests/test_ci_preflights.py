@@ -123,13 +123,14 @@ def test_linux_preflight_precedes_the_rc_installed_package_gate() -> None:
     assert "--skip-checks" not in steps[qualification_step]["run"]
 
 
-def test_inno_verifier_uses_bounded_pe_metadata_and_all_workflow_variants() -> None:
+def test_inno_verifier_uses_bounded_compiler_version_probe_and_all_workflow_variants() -> None:
     verifier = INNO_VERIFIER.read_text(encoding="utf-8")
     assert '[Environment]::GetEnvironmentVariable("ProgramFiles(x86)")' in verifier
     assert "FileVersionInfo]::GetVersionInfo($CompilerPath).FileVersion" in verifier
     assert "ExpectedVersion = \"6.7.1\"" in verifier
-    assert "^\\s*(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)" in verifier
-    assert '(& $CompilerPath "/Q" $probeScript 2>&1 | Out-String)' in verifier
+    assert 'Compiler engine version:' in verifier
+    assert "(?m)^\\s*Compiler engine version:" in verifier
+    assert '(& $CompilerPath $probeScript 2>&1 | Out-String)' in verifier
     assert "$probeExitCode -ne 0" in verifier
     assert 'Test-Path -LiteralPath $probeExecutable -PathType Leaf' in verifier
     assert '[IO.Path]::GetTempPath()' in verifier
@@ -171,7 +172,7 @@ def test_inno_verifier_rejects_a_missing_compiler_before_execution() -> None:
     reason="the real compiler probe is opt-in after the pinned Windows setup",
 )
 def test_inno_verifier_executes_the_real_installed_compiler_probe() -> None:
-    """Exercise PE metadata and the successful ISCC compile on Windows.
+    """Exercise the compiler engine version and successful compile on Windows.
 
     The RC workflow installs the pinned compiler before this same helper runs.
     A normal Windows checkout skips this environment test; set

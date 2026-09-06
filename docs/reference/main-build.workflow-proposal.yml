@@ -253,8 +253,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Chocolatey Inno Setup install exited $LASTEXITCODE"
           }
-          # The helper uses bounded Program Files paths and the compiler's PE
-          # FileVersion resource and compiles a valid probe script.
+          # The helper uses bounded Program Files paths and the compiler's own
+          # engine-version output while compiling a valid probe script.
           $iscc = & ./scripts/ci/verify_inno_setup.ps1
           "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       # The installer's VersionInfoVersion is a binary field that takes only

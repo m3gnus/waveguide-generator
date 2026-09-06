@@ -554,8 +554,8 @@ def test_the_release_node_is_an_exact_patch_and_that_patch_is_checked(
     assert 'actual="$(node --version)"' in text, name
 
 
-def test_the_inno_setup_check_uses_the_compiler_pe_version() -> None:
-    """ISCC help omits the patch, so the workflow calls the shared verifier."""
+def test_the_inno_setup_check_uses_the_compiler_engine_version() -> None:
+    """The helper reads the exact engine version from a real compile probe."""
 
     verifier = (ROOT / "scripts" / "ci" / "verify_inno_setup.ps1").read_text(
         encoding="utf-8"
@@ -563,7 +563,8 @@ def test_the_inno_setup_check_uses_the_compiler_pe_version() -> None:
     assert '[Environment]::GetEnvironmentVariable("ProgramFiles(x86)")' in verifier
     assert "FileVersionInfo]::GetVersionInfo($CompilerPath).FileVersion" in verifier
     assert 'ExpectedVersion = "6.7.1"' in verifier
-    assert '(& $CompilerPath "/Q" $probeScript 2>&1 | Out-String)' in verifier
+    assert '(& $CompilerPath $probeScript 2>&1 | Out-String)' in verifier
+    assert "Compiler engine version:" in verifier
     assert "$probeExitCode -ne 0" in verifier
     assert "Get-ChildItem" not in verifier
     for name, text in (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)):
