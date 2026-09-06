@@ -29,17 +29,19 @@ permissions:
 needed for these file subjects. No workflow permission or repository setting is
 activated by this reference document.
 
+Before building, each RC job verifies that its checked-out `HEAD` equals
+`github.sha`, the commit selected by the workflow dispatch ref. A candidate
+input that resolves to a different commit fails before any artifact is built or
+attested. The inactive Beta proposal applies the same check in its identity job.
+
 ## Verify an RC installer
 
 Run the command from the directory containing the downloaded installer. Set
-`SOURCE` to the exact candidate commit supplied to the RC dispatch. Use the
-`--source-digest` constraint when the workflow was dispatched from that same
-candidate ref (the normal hand-tested RC path); current GitHub CLI versions
-then make the command fail when the attestation names another source revision.
-If a run was dispatched from one ref while its `sha` input selected a different
-commit, omit that flag and compare the manifest's recorded commit with the
-input instead, because the signed SLSA source digest identifies the workflow
-ref rather than an arbitrary input string.
+`SOURCE` to the exact candidate commit supplied to the RC dispatch. The
+workflow has already failed closed if the checked-out candidate and dispatch
+source differ, so keep the `--source-digest` constraint: current GitHub CLI
+versions then make the command fail when the attestation names another source
+revision.
 
 ```bash
 SOURCE=COMMIT_SHA
@@ -89,9 +91,12 @@ gh attestation verify "$ASSET" \
   --source-digest "$SOURCE"
 ```
 
-The stamped Beta app manifest must report the candidate in `sourceCommit`, a
-distinct local `commit` created by the build stamp, and a 64-character
-lowercase `treeSha256`. Those values are evidence about the stamped tree; they
-do not make the updater enforce signatures. The updater continues to use its
-existing checksum and trusted-release checks, and macOS Gatekeeper and Windows
+The identity job has the same dispatch-source check before it resolves the
+candidate. The stamped Beta app manifest must report that candidate in
+`sourceCommit`, a distinct local `commit` created by the build stamp, and a
+64-character lowercase `treeSha256`. `--source-digest` checks the workflow's
+dispatch source; the manifest fields independently bind the candidate and its
+stamped tree. Those values are evidence about the stamped tree; they do not
+make the updater enforce signatures. The updater continues to use its existing
+checksum and trusted-release checks, and macOS Gatekeeper and Windows
 SmartScreen warnings remain until paid platform signing is separately chosen.

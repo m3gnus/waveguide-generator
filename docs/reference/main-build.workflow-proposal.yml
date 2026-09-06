@@ -14,9 +14,10 @@
 #
 # What it does: builds every installer from a commit on main, exactly as
 # rc-build.yml already does, and publishes them as an immutable pre-release so
-# the in-app beta channel can install one. No tag is ever moved or deleted, no
-# signing identity is introduced, and the updater's trusted origins are
-# untouched — the assets are ordinary release downloads of this repository.
+# the in-app beta channel can install one. Each producing job also creates a
+# free GitHub/Sigstore keyless provenance attestation for the exact local files
+# it transfers. No tag is ever moved or deleted, no paid platform signing
+# identity is introduced, and the updater's trusted origins are untouched.
 
 name: Main build
 
@@ -35,11 +36,14 @@ on:
 # Every action is pinned to a digest, and Node to an exact patch, matching the
 # refs `.github/workflows/rc-build.yml` carries. Be precise about what that
 # buys: a fixed ref detects **tool drift** -- the build is the build that was
-# reviewed, and a tag repointed underneath it cannot change what runs. It is
-# NOT publisher authentication of anything this workflow produces. WG's own
-# artifacts are unsigned here exactly as they are for a release, and whether
-# that is acceptable for a channel that installs more often is a separate,
-# open, owner decision. See docs/reference/UPDATE-CHANNELS.md.
+# reviewed, and a tag repointed underneath it cannot change what runs. The
+# attestation action separately binds the local output bytes to this workflow's
+# short-lived Sigstore identity. This is build provenance, not Apple Developer
+# ID or Authenticode signing, and it does not make the updater enforce
+# signatures. See docs/reference/UPDATE-CHANNELS.md.
+# Its identity job fails before stamping if the checked-out candidate does not
+# equal github.sha, the commit selected by this dispatch. That keeps the
+# attestation's source digest bound to the candidate input.
 
 permissions:
   contents: read
@@ -65,6 +69,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
+      - name: Verify the candidate matches the workflow source
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(git rev-parse HEAD)"
+          test "$resolved" = "$WORKFLOW_SHA" \
+            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
+          echo "Candidate $resolved matches the dispatch source."
       - id: resolve
         name: Next patch, plus a monotonic main label
         run: |
@@ -96,6 +110,10 @@ jobs:
     name: Build the SPA
     runs-on: ubuntu-latest
     needs: identity
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -144,6 +162,10 @@ jobs:
           sha256sum "$archive" > "$archive.sha256"
           echo "artifact=$archive" >> "$GITHUB_ENV"
           tar -tzf "$archive" | grep -Fx "dist/index.html"
+      - name: Attest the exact SPA archive before transfer
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ${{ env.artifact }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: main-build-spa
@@ -156,6 +178,10 @@ jobs:
     name: Build the macOS standalone app
     runs-on: macos-latest
     needs: [identity, spa]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -194,6 +220,17 @@ jobs:
           test -f "$spa.sha256"
           uv run --no-project --python 3.13.12 scripts/build_bundle.py \
             --spa "$spa" --output build/bundle --source-commit "$SOURCE"
+      - name: Attest the exact macOS installer and update subjects before transfer
+        # These are this job's local outputs. The SPA was attested by the SPA
+        # job and is deliberately not re-attested after download. The manifest
+        # subject carries sourceCommit, the stamped commit and treeSha256.
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            build/bundle/Waveguide.Generator-*-macos-arm64.dmg
+            build/bundle/update-app-*.zip
+            build/bundle/update-app-*.manifest.json
+            build/bundle/update-runtime-macos-arm64-*.zip
       - name: Share the canonical platform-neutral app layer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -218,6 +255,10 @@ jobs:
     name: Build the Windows standalone app
     runs-on: windows-latest
     needs: [identity, spa, macos-bundle]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -291,6 +332,15 @@ jobs:
             throw "Windows and macOS app layers differ: $localTree != $referenceTree"
           }
           Write-Host "Cross-platform app layer treeSha256: $localTree"
+      - name: Attest the exact Windows installer and update archives before transfer
+        # The canonical app archive and manifest were produced and attested by
+        # macOS. Only the local Windows outputs are subjects here.
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
+            build/bundle/Waveguide.Generator-*-windows-x86_64.zip
+            build/bundle/update-runtime-windows-x86_64-*.zip
       - name: Share the Windows assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -311,6 +361,10 @@ jobs:
     # under the build without anyone deciding to move it.
     runs-on: ubuntu-24.04
     needs: [identity, spa, macos-bundle]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -365,6 +419,14 @@ jobs:
               raise SystemExit(f"Linux and macOS app layers differ: {trees[0]} != {trees[1]}")
           print(f"Cross-platform app layer treeSha256: {trees[0]}")
           PY
+      - name: Attest the exact Linux installer and update archive before transfer
+        # The SPA and canonical app layer were produced by other jobs. Only the
+        # local Linux outputs are subjects here.
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
+            build/bundle/update-runtime-linux-x86_64-*.zip
       - name: Share the Linux assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

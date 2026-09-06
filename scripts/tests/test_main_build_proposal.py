@@ -114,14 +114,16 @@ def test_one_commit_is_resolved_once_and_every_job_builds_that_one(
     """`main` can move while a build runs.
 
     Checking out the ref in each job would publish an installer set that never
-    existed as one tree, and `github.sha` is the workflow file's commit, not the
-    commit being built. So the identity job resolves it and everyone else takes
-    that value.
+    existed as one tree. The identity job first verifies that the input resolves
+    to the workflow dispatch source (`github.sha`), then resolves it once and
+    everyone else takes that value.
     """
 
     jobs = proposal["jobs"]
     identity_steps = _steps(jobs["identity"])
     assert identity_steps[0]["with"]["ref"] == "${{ inputs.sha }}"
+    assert identity_steps[1]["name"] == "Verify the candidate matches the workflow source"
+    assert identity_steps[1]["env"]["WORKFLOW_SHA"] == "${{ github.sha }}"
     assert "git rev-parse HEAD" in identity_steps[1]["run"]
     assert jobs["identity"]["outputs"]["source"] == "${{ steps.resolve.outputs.source }}"
 
@@ -138,7 +140,7 @@ def test_one_commit_is_resolved_once_and_every_job_builds_that_one(
     # The commit is carried into the artifacts too, not just the checkout.
     text = PROPOSAL.read_text(encoding="utf-8")
     assert "--source-commit" in text
-    assert "github.sha" not in text
+    assert "github.sha" in text
 
 
 def test_the_build_is_stamped_before_anything_reads_the_version(
