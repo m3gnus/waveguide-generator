@@ -7,7 +7,8 @@ through the parametric surface-tag contract.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -482,31 +483,150 @@ def _transform_direction(matrix: np.ndarray, direction: Iterable[float]) -> np.n
     return matrix[:3, :3] @ np.asarray(tuple(direction), dtype=float)
 
 
+@dataclass(frozen=True)
+class DeclaredDiscReduction:
+    """What a declared pre-cut domain does to one linked throat's disc.
+
+    ``retained_fraction`` is the share of the contract's disc that survived,
+    and ``cut_directions`` are the unit in-plane directions the removed halves
+    were taken from -- one per plane that bisects the disc. Both are derived
+    from the *contract's own* geometry against the declared planes, never from
+    the face being tested, so a face cannot talk its way into a different
+    expectation than the one it has to meet.
+    """
+
+    retained_fraction: float
+    cut_directions: tuple[tuple[float, float, float], ...]
+    clear_axes: tuple[int, ...]
+
+
+DOMAIN_PLANE_AXIS = {"x0": 0, "y0": 1}
+
+
+def declared_disc_reduction(
+    contract: Mapping[str, Any],
+    declared_cut_planes: Sequence[str],
+    *,
+    tolerance_mm: float = PLANE_DISTANCE_MM,
+) -> DeclaredDiscReduction:
+    """Decide what a declared domain leaves of this throat, or refuse to guess.
+
+    A declared plane does one of exactly two supported things to a throat disc.
+    It can miss it -- the disc lies wholly on the retained side, which is the
+    ordinary shape of a source that has a mirror twin the cut removed -- and
+    then the whole disc is still there. Or it can pass through the disc's
+    centre, and then exactly half of it is, because the disc is symmetric about
+    its own centre.
+
+    Anything else is refused with the measurement, because there is no honest
+    answer: a plane that clips a disc off-centre leaves a circular segment
+    whose area is not a fixed fraction of anything, and a plane that removes
+    the disc entirely leaves no source at all. Guessing a half there is how a
+    wrong face gets accepted as a throat.
+    """
+
+    planes = tuple(str(plane) for plane in declared_cut_planes)
+    if not planes:
+        return DeclaredDiscReduction(1.0, (), ())
+    normal = np.asarray(contract["plane_normal"], dtype=float)
+    normal_length = float(np.linalg.norm(normal))
+    direction = np.asarray(contract["axis_direction"], dtype=float)
+    direction_length = float(np.linalg.norm(direction))
+    if normal_length <= 0.0 or direction_length <= 0.0:
+        raise RoleResolutionError(
+            "role resolution: this throat contract has a degenerate throat plane "
+            "or axis, so a declared reduced domain cannot be applied to it"
+        )
+    normal = normal / normal_length
+    direction = direction / direction_length
+    plane_origin = np.asarray(contract["plane_origin_mm"], dtype=float)
+    axis_origin = np.asarray(contract["axis_origin_mm"], dtype=float)
+    along = float(np.dot(direction, normal))
+    if abs(along) < 1.0e-6:
+        raise RoleResolutionError(
+            "role resolution: this throat's axis runs inside its own throat "
+            "plane, so the disc a declared reduced domain would cut is undefined"
+        )
+    # Where the axis pierces the throat plane: the centre of the disc the
+    # contract describes.
+    centre = axis_origin + direction * (
+        float(np.dot(plane_origin - axis_origin, normal)) / along
+    )
+    radius = 0.5 * float(contract["throat_diameter_mm"])
+
+    fraction = 1.0
+    cuts: list[tuple[float, float, float]] = []
+    clear: list[int] = []
+    for plane in planes:
+        axis_index = DOMAIN_PLANE_AXIS.get(plane)
+        if axis_index is None:
+            raise RoleResolutionError(
+                f"role resolution: declared cut plane {plane!r} is not one this "
+                "throat matching understands"
+            )
+        world = np.zeros(3, dtype=float)
+        world[axis_index] = 1.0
+        in_plane = world - float(np.dot(world, normal)) * normal
+        span = float(np.linalg.norm(in_plane))
+        # How far the disc reaches along this world axis, and where its centre
+        # sits relative to the plane at coordinate zero.
+        reach = radius * span
+        offset = float(centre[axis_index])
+        if offset - reach >= -tolerance_mm:
+            clear.append(axis_index)
+            continue
+        if abs(offset) <= tolerance_mm and reach > tolerance_mm:
+            fraction *= 0.5
+            cuts.append(tuple(float(value) for value in in_plane / span))
+            continue
+        raise RoleResolutionError(
+            f"role resolution: the return declares it was cut on {plane}, but "
+            f"that plane crosses this throat's disc {offset:+.4g} mm off its "
+            f"centre (disc reach {reach:.4g} mm). A declared cut is supported "
+            "only where it misses a source or passes through its centre; this "
+            "one would leave a partial disc of no known area"
+        )
+    if len(cuts) == 2:
+        skew = abs(float(np.dot(np.asarray(cuts[0]), np.asarray(cuts[1]))))
+        if skew > 1.0e-3:
+            raise RoleResolutionError(
+                "role resolution: the two declared cut planes are not "
+                "perpendicular within this throat's own plane, so the retained "
+                "wedge is not a quarter of its disc"
+            )
+    return DeclaredDiscReduction(fraction, tuple(cuts), tuple(clear))
+
+
 def geometry_candidate_matches(candidate: Mapping[str, Any], contract: Mapping[str, Any]) -> bool:
     """Apply the linked-throat geometry gates to one measured face.
 
-    ``retained_area_fraction`` is how much of the contract's disc a declared
-    pre-cut domain leaves behind: half per declared plane the disc straddles,
-    which is the same factor ``_post_cut_source_area_record`` predicts for a
-    plane WG cuts here. It defaults to 1.0, so a full-domain return is judged
-    exactly as before.
+    ``retained_area_fraction`` is what :func:`declared_disc_reduction` derived
+    from the contract, not from this face. It defaults to 1.0, so a full-domain
+    return is judged exactly as before.
 
-    The centroid distance is measured perpendicular to the axis with the
-    reduced directions removed by the caller, because a retained half's
-    centroid necessarily moves along the direction the other half was taken
-    from -- the face is still on the axis in every direction that still has
-    two sides.
+    The position gate survives a reduction rather than being switched off for
+    it. A face symmetric about the throat axis, cut through its centre, has a
+    centroid that moves **onto the retained side** along the direction the
+    other half was taken from, and stays on the axis in every direction that
+    still has two sides. So the caller reports the offset along each cut
+    direction separately (``cut_offsets_mm``, which must be positive) and the
+    residual perpendicular distance (``centroid_axis_distance_mm``, which must
+    still be ~0). Nothing is erased: an off-axis face of the right area is
+    rejected exactly as it was before the reduction existed.
     """
 
     diameter = float(contract["throat_diameter_mm"])
     axis_limit = max(0.10, 0.005 * diameter)
     fraction = float(candidate.get("retained_area_fraction", 1.0))
     expected = float(contract["expected_disc_area_mm2"]) * fraction
+    offsets = [float(value) for value in candidate.get("cut_offsets_mm", ())]
     return (
         bool(candidate.get("planar"))
         and float(candidate.get("plane_distance_mm", math.inf)) <= PLANE_DISTANCE_MM
         and float(candidate.get("normal_angle_deg", math.inf)) <= NORMAL_ANGLE_DEG
         and float(candidate.get("centroid_axis_distance_mm", math.inf)) <= axis_limit
+        and all(offset > axis_limit for offset in offsets)
+        and not bool(candidate.get("crosses_declared_plane", False))
         and abs(float(candidate.get("area_mm2", 0.0)) - expected) / expected
         <= AREA_REL_TOLERANCE
     )
@@ -2042,6 +2162,15 @@ def build_imported_mesh(
                 axis_origin = np.asarray(contract["axis_origin_mm"], dtype=float)
                 axis_direction = np.asarray(contract["axis_direction"], dtype=float)
                 axis_direction /= np.linalg.norm(axis_direction)
+                # What the declaration does to THIS throat, decided once from
+                # the contract's own disc rather than per face. A source that
+                # keeps its whole disc -- one whose mirror twin the cut removed
+                # -- keeps its full expected area and its full position gate.
+                reduction = declared_disc_reduction(contract, declared_cut_planes)
+                cut_directions = [
+                    np.asarray(direction, dtype=float)
+                    for direction in reduction.cut_directions
+                ]
                 measured: list[dict[str, Any]] = []
                 for surface in surfaces:
                     center = np.asarray(gmsh.model.occ.getCenterOfMass(2, surface), dtype=float)
@@ -2053,25 +2182,27 @@ def build_imported_mesh(
                         angle = math.inf
                     delta = center - axis_origin
                     lateral = delta - np.dot(delta, axis_direction) * axis_direction
+                    # Split the perpendicular offset into the directions the
+                    # removed halves were taken from and the residual. The
+                    # residual still has to be ~0; the cut components have to be
+                    # positive, because a retained half's centroid moves ONTO
+                    # the side that was kept.
+                    cut_offsets = []
+                    for direction in cut_directions:
+                        component = float(np.dot(lateral, direction))
+                        cut_offsets.append(component)
+                        lateral = lateral - component * direction
                     face_bbox = tuple(
                         float(value)
                         for value in gmsh.model.getBoundingBox(2, int(surface))
                     )
-                    retained = 1.0
-                    for plane in declared_cut_planes:
-                        plane_axis = {"x0": 0, "y0": 1}[plane]
-                        # Coincident with the plane means the cut did not halve
-                        # this face; the same test the post-cut area provenance
-                        # uses, on the same tolerance scale.
-                        if (
-                            max(
-                                abs(face_bbox[plane_axis]),
-                                abs(face_bbox[plane_axis + 3]),
-                            )
-                            > PLANE_DISTANCE_MM
-                        ):
-                            retained *= 0.5
-                            lateral[plane_axis] = 0.0
+                    # Measured confirmation, independent of the contract: no
+                    # part of a retained face may sit on the removed side of a
+                    # declared plane.
+                    crosses = any(
+                        face_bbox[DOMAIN_PLANE_AXIS[plane]] < -PLANE_DISTANCE_MM
+                        for plane in declared_cut_planes
+                    )
                     axis_distance = float(np.linalg.norm(lateral))
                     candidate = {
                         "face_id": surface,
@@ -2080,7 +2211,9 @@ def build_imported_mesh(
                         "normal_angle_deg": angle,
                         "centroid_axis_distance_mm": axis_distance,
                         "area_mm2": areas[surface],
-                        "retained_area_fraction": retained,
+                        "retained_area_fraction": reduction.retained_fraction,
+                        "cut_offsets_mm": cut_offsets,
+                        "crosses_declared_plane": crosses,
                     }
                     candidate["matches"] = geometry_candidate_matches(candidate, contract)
                     if candidate["matches"]:
@@ -2114,7 +2247,12 @@ def build_imported_mesh(
                         for surface in surfaces
                     ]
                     if plausible:
-                        expected_area = float(contract["expected_disc_area_mm2"])
+                        # The same expectation the gate used, so the diagnostic
+                        # names the face nearest to what was actually sought.
+                        expected_area = (
+                            float(contract["expected_disc_area_mm2"])
+                            * reduction.retained_fraction
+                        )
                         nearest = min(
                             plausible,
                             key=lambda item: (

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -9,6 +11,8 @@ from server.mesh.imported import (
     IMPORTED_SURFACE_DEVIATION_MM,
     ImportedMeshError,
     RoleResolutionError,
+    declared_disc_reduction,
+    geometry_candidate_matches,
     allocate_imported_tags,
     imported_tessellation_settings,
     imported_viewport_tessellation_settings,
@@ -388,3 +392,162 @@ def test_verify_symmetry_cut_does_not_judge_an_uncut_open_shell() -> None:
     )
     assert verdict["verified"] is True
     assert verdict["detected_planes"] == []
+
+
+# ------------------- what a declared pre-cut domain does to a linked throat
+
+
+def _throat_contract(centre=(0.0, 0.0, 0.0), diameter=20.0, normal=(0.0, 0.0, 1.0)):
+    """A throat contract as ``transformed_contracts`` builds one."""
+
+    return {
+        "throat_diameter_mm": diameter,
+        "expected_disc_area_mm2": math.pi * diameter * diameter / 4.0,
+        "plane_origin_mm": list(centre),
+        "plane_normal": list(normal),
+        "axis_origin_mm": list(centre),
+        "axis_direction": list(normal),
+    }
+
+
+def test_a_source_the_cut_never_reached_keeps_its_whole_disc() -> None:
+    """A pair of drivers mirrored about y = 0 is a real reduced-domain model.
+
+    The retained one sits wholly on the retained side and its twin is the
+    solver's mirror, so its own disc is untouched. Expecting half of it would
+    refuse a legitimate return, and accepting a half-area face there would take
+    the wrong face.
+    """
+
+    contract = _throat_contract(centre=(0.0, 60.0, 0.0))
+    reduction = declared_disc_reduction(contract, ["y0"])
+
+    assert reduction.retained_fraction == 1.0
+    assert reduction.cut_directions == ()
+    assert reduction.clear_axes == (1,)
+
+    whole = {
+        "planar": True,
+        "plane_distance_mm": 0.0,
+        "normal_angle_deg": 0.0,
+        "centroid_axis_distance_mm": 0.0,
+        "area_mm2": contract["expected_disc_area_mm2"],
+        "retained_area_fraction": 1.0,
+        "cut_offsets_mm": [],
+    }
+    assert geometry_candidate_matches(whole, contract) is True
+    # The position gate is intact for it: an off-axis face of the right area is
+    # still not this throat.
+    assert (
+        geometry_candidate_matches(
+            {**whole, "centroid_axis_distance_mm": 4.0}, contract
+        )
+        is False
+    )
+    # And a half-area face is not it either.
+    assert (
+        geometry_candidate_matches(
+            {**whole, "area_mm2": contract["expected_disc_area_mm2"] / 2.0}, contract
+        )
+        is False
+    )
+
+
+def test_a_cut_through_a_disc_centre_halves_it_and_moves_its_centroid_onto_the_kept_side() -> None:
+    contract = _throat_contract()
+    reduction = declared_disc_reduction(contract, ["y0"])
+
+    assert reduction.retained_fraction == 0.5
+    assert len(reduction.cut_directions) == 1
+    assert np.allclose(reduction.cut_directions[0], (0.0, 1.0, 0.0))
+
+    half = {
+        "planar": True,
+        "plane_distance_mm": 0.0,
+        "normal_angle_deg": 0.0,
+        "centroid_axis_distance_mm": 0.0,
+        "area_mm2": contract["expected_disc_area_mm2"] / 2.0,
+        "retained_area_fraction": 0.5,
+        "cut_offsets_mm": [4.24],
+    }
+    assert geometry_candidate_matches(half, contract) is True
+
+    # The gate that used to be erased. A half-area face centred on the axis is
+    # not a retained half of anything; nor is one displaced the other way.
+    assert geometry_candidate_matches({**half, "cut_offsets_mm": [0.0]}, contract) is False
+    assert geometry_candidate_matches({**half, "cut_offsets_mm": [-4.24]}, contract) is False
+    # The direction that still has two sides is still gated.
+    assert (
+        geometry_candidate_matches({**half, "centroid_axis_distance_mm": 4.0}, contract)
+        is False
+    )
+    # Nothing may sit on the removed side of the plane.
+    assert (
+        geometry_candidate_matches({**half, "crosses_declared_plane": True}, contract)
+        is False
+    )
+    # The full disc is not a match once half of it was declared away.
+    assert (
+        geometry_candidate_matches(
+            {**half, "area_mm2": contract["expected_disc_area_mm2"]}, contract
+        )
+        is False
+    )
+
+
+def test_a_quarter_needs_both_cuts_through_the_centre_and_both_offsets_positive() -> None:
+    contract = _throat_contract()
+    reduction = declared_disc_reduction(contract, ["x0", "y0"])
+
+    assert reduction.retained_fraction == 0.25
+    assert len(reduction.cut_directions) == 2
+
+    quarter = {
+        "planar": True,
+        "plane_distance_mm": 0.0,
+        "normal_angle_deg": 0.0,
+        "centroid_axis_distance_mm": 0.0,
+        "area_mm2": contract["expected_disc_area_mm2"] / 4.0,
+        "retained_area_fraction": 0.25,
+        "cut_offsets_mm": [4.24, 4.24],
+    }
+    assert geometry_candidate_matches(quarter, contract) is True
+    assert (
+        geometry_candidate_matches({**quarter, "cut_offsets_mm": [4.24, -4.24]}, contract)
+        is False
+    )
+
+
+def test_a_cut_that_clips_a_disc_off_centre_is_refused_with_the_measurement() -> None:
+    """There is no honest fraction for a circular segment, so none is invented."""
+
+    contract = _throat_contract(centre=(0.0, 4.0, 0.0))  # disc reaches 10 mm
+    with pytest.raises(RoleResolutionError, match=r"crosses this throat's disc \+4 mm off its centre"):
+        declared_disc_reduction(contract, ["y0"])
+
+    removed = _throat_contract(centre=(0.0, -60.0, 0.0))
+    with pytest.raises(RoleResolutionError, match="off its centre"):
+        declared_disc_reduction(removed, ["y0"])
+
+
+def test_a_degenerate_throat_contract_is_named_rather_than_guessed_at() -> None:
+    flat = _throat_contract(normal=(0.0, 0.0, 0.0))
+    with pytest.raises(RoleResolutionError, match="degenerate throat plane"):
+        declared_disc_reduction(flat, ["y0"])
+
+    contract = _throat_contract()
+    contract["axis_direction"] = [1.0, 0.0, 0.0]  # axis lies in the throat plane
+    with pytest.raises(RoleResolutionError, match="runs inside its own throat plane"):
+        declared_disc_reduction(contract, ["y0"])
+
+    with pytest.raises(RoleResolutionError, match="not one this throat matching understands"):
+        declared_disc_reduction(_throat_contract(), ["z0"])
+
+
+def test_no_declared_plane_leaves_the_contract_judged_exactly_as_before() -> None:
+    contract = _throat_contract()
+    reduction = declared_disc_reduction(contract, [])
+
+    assert reduction == declared_disc_reduction(contract, ())
+    assert reduction.retained_fraction == 1.0
+    assert reduction.cut_directions == ()
