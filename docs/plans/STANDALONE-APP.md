@@ -164,17 +164,49 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
     layer leaves exactly the shape a finished swap leaves. Both are covered: every
     path that restores writes a `rolling-back` state before it starts, and for every
     bundle this project builds the two manifests carry `runtimeId`s that disagree in
-    that state anyway. A bundle whose manifests carry neither is covered by the
-    marker alone, which is one write.
+    that state anyway.
+
+    **That marker is the one journal write that is not advisory, and it is
+    required rather than best-effort.** The others are: reconciliation decides
+    from the live directories, so losing "swapped" changes nothing, and a
+    terminal state is written only after the work it describes has been done and
+    observed, so a start that misses it reaches the same conclusion again. The
+    `rolling-back` marker is different because a branch depends on it — and the
+    manifests can only stand in for it when the two layers carry *different*
+    `runtimeId`s, which an app-only update and any same-runtime update do not. So
+    nothing is renamed until it is recorded, exactly as no swap begins until its
+    own intent is; a restore that cannot record itself refuses and leaves the
+    installation as it found it, which the next start still reconciles from the
+    record the swap already wrote. "Deliberately not written" — an untrusted
+    record, left alone on purpose — is distinguished from "the write failed",
+    because an untrusted record already sends reconciliation down the restoring
+    path and needs no marker to steer it.
 
   Recovery now runs for **every start mode**. It used to live inside
   `DesktopWindow._wait_for_frontend`, so `--browser` and `--no-gui` skipped it
   entirely — the modes a user reaches for when the window will not open. It is
   called from `launchers/statusapp/__main__.py:main` before the branch that chooses
   a mode, which is also the point at which the least of the application has been
-  imported. A recovery that *decides* the installation is broken refuses the start;
-  a recovery mechanism that could not run does not, because the checks that predate
-  it still run further in.
+  imported.
+
+  Three answers, because two of them were once collapsed into one. A recovery that
+  *decides* the installation is broken refuses. A recovery that **raised** refuses
+  too: it had already begun, and it renames directories, so the exception may have
+  arrived between two of them. A recovery module that could not be **imported**
+  refuses for an installed bundle and starts for a source checkout — a checkout has
+  no swappable layers, which is evidence in itself, while "nothing ran" describes
+  only the invocation and says nothing about an installation that may already be
+  part-way through a change.
+
+  A cheaper check was tried there and removed. It asked whether both layers existed
+  and `layers_disagree` was false, and that helper answers false when either
+  manifest is missing or unreadable — deliberately, since it is the compatibility
+  path for bundles predating the field. Two empty directories passed it as
+  "verified": a check that says yes to the state it exists to catch. Matching ids
+  would not have sufficed either, because a restore whose renames finished and whose
+  seal did not looks exactly like a matched pair. Real evidence means reading the
+  scoped journal and re-checking the seal, which is reconciliation; a second, weaker
+  copy of it written to keep a broken installation starting is the wrong trade.
 
   The mixed-generation path re-seals the macOS bundle, which it did not before
   (`_roll_back_mixed_generation` returned without calling `repair_bundle`, unlike
