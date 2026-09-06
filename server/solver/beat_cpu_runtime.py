@@ -29,10 +29,19 @@ step, and its constraints come from where it runs:
 * It never starts GPU work. ``provision_cpu`` instantiates the CPU project,
   which depends on no accelerator package, so this cannot turn into the
   multi-gigabyte CUDA/ROCm artifact pull that ``--if-gpu`` is gated on.
-* It runs on Windows and Linux only. macOS is not a host that needs it: Apple
-  Silicon provisions Metal through the GPU hook and AUTO prefers Metal there on
-  measured evidence, so downloading a Julia for a backend that would not be
-  selected is cost without a user.
+* **It runs on every desktop platform this application supports, macOS
+  included.** It used to skip macOS, on the reasoning that AUTO prefers the
+  measured Metal path there so a CPU runtime would never be *selected*. That
+  answered the wrong question. ``BEAT · CPU`` is an engine a user picks by
+  name, and every supported computer has a CPU, so on a Mac it was a row that
+  could never light up -- offering, as its remedy, a shell command a packaged
+  application gives nobody a shell for. Preparing it is also cheapest there:
+  Apple Silicon has a Julia already, downloaded by the Metal hook, so what is
+  left is instantiating the CPU project and the 1 kHz probe.
+
+  Availability is not preference. ``registry.full3d_engine_order`` still leaves
+  macOS on the base order, so AUTO keeps choosing Metal and then BEMPP there;
+  this only decides whether the row can be chosen at all.
 * **It runs on a GPU host too, as long as the pinned package records readiness
   per backend.** It used to stop as soon as ``nvidia-smi`` found a card, and
   that made ``BEAT · CPU`` a row a user could select by name and never have:
@@ -76,8 +85,10 @@ CPU_BACKEND = "cpu"
 #: Opt out of the background provisioning described above.
 SKIP_PROVISION_ENV_VAR = "WG2_SKIP_BEAT_CPU_PROVISION"
 
-#: Where the CPU runtime is provisioned automatically. See the module docstring.
-PROVISION_SYSTEMS: frozenset[str] = frozenset({"Windows", "Linux"})
+#: Where the CPU runtime is provisioned automatically: every desktop platform
+#: this application ships for. See the module docstring for why macOS is in the
+#: set even though AUTO never prefers a CPU solve there.
+PROVISION_SYSTEMS: frozenset[str] = frozenset({"Windows", "Linux", "Darwin"})
 
 #: The ``hornlab-beat-bem`` commit that introduced ``provision.provision_cpu``
 #: and its ``--backend cpu`` CLI. Named in the unavailable reason because the
@@ -530,9 +541,9 @@ def start_cpu_provisioning(
         return None
     host = system or platform.system()
     if host not in PROVISION_SYSTEMS:
-        log.debug(
-            "BEAT CPU runtime provisioning is not offered on %s; AUTO prefers the "
-            "measured Metal path there and the GPU hook provisions it",
+        log.info(
+            "BEAT CPU runtime provisioning is not offered on %s, which is not a "
+            "platform this application ships for",
             host,
         )
         return None
