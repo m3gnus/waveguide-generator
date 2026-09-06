@@ -95,6 +95,58 @@ jobs:
             build/bundle/Waveguide.Generator-*-macos-arm64.dmg.sha256
           if-no-files-found: error
 
+      - name: Qualify BEAT CPU on the extracted candidate
+        # The build's own verification asks the backends whether they report
+        # ready and asks the server for one HTTP response. Neither runs a BEAT
+        # CPU solve, so a candidate could pass both while the backend the
+        # product promises on GPU-less machines had never executed a frequency.
+        #
+        # The payload is the .app copied out of the mounted disk image with
+        # ditto, so what is qualified is what a user drags out of the DMG --
+        # not the build directory it came from. On macOS the application does
+        # not prepare the CPU runtime by itself (Apple Silicon prefers Metal and
+        # AUTO agrees), so the helper falls through to the documented
+        # provisioning command, which is why this step is the slow one here.
+        #
+        # After the uploads on purpose: a candidate that fails this gate is
+        # still the candidate somebody has to look at, and the job goes red
+        # either way.
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          echo "WG2_CPU_GATE_ROOT=$root" >> "$GITHUB_ENV"
+          dmg="$(ls build/bundle/Waveguide.Generator-*-macos-arm64.dmg)"
+          hdiutil attach "$dmg" -mountpoint "$root/mnt" -nobrowse -readonly -quiet
+          ditto "$root/mnt/Waveguide Generator.app" "$root/Waveguide Generator.app"
+          hdiutil detach "$root/mnt" -quiet
+          manifest="$(ls build/bundle/update-app-*.manifest.json)"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_cpu.py \
+            --payload "$root/Waveguide Generator.app" \
+            --payload-kind dmg-ditto \
+            --work "$root/work" \
+            --output "$root/qualification" \
+            --pins-json pins.json \
+            --build-manifest "$manifest"
+
+      - name: Preserve the CPU qualification logs
+        if: always()
+        # Into the job log rather than a new artifact: this workflow's artifact
+        # set is the candidate a person hand-tests, and a gate's evidence should
+        # not change what is offered for that.
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/qualification" ]; then
+            echo "No qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
+
   windows-bundle:
     name: Build the Windows standalone app
     runs-on: windows-latest
@@ -164,6 +216,55 @@ jobs:
             build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe.sha256
           if-no-files-found: error
 
+      - name: Qualify BEAT CPU on the installed candidate
+        shell: pwsh
+        # Installed by the real installer, unattended and per-user: the .iss
+        # sets PrivilegesRequired=lowest, so /DIR into a private directory needs
+        # no elevation and touches nothing outside it. What is qualified is
+        # therefore the installer's output, which is what a user receives.
+        #
+        # After the upload on purpose; see the macOS job.
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP ("cpu-gate-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          "WG2_CPU_GATE_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $setup = (Get-ChildItem -File build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe |
+                    Select-Object -First 1).FullName
+          $install = Join-Path $root "app"
+          $installLog = Join-Path $root "inno-install.log"
+          $process = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS",
+            "/DIR=$install", "/LOG=$installLog"
+          )
+          if ($process.ExitCode -ne 0) {
+            throw "The unattended installer exited $($process.ExitCode); see $installLog"
+          }
+          $manifest = (Get-ChildItem -File build/bundle/update-app-*.manifest.json |
+                       Select-Object -First 1).FullName
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_cpu.py `
+            --payload $install `
+            --payload-kind windows-installer `
+            --work (Join-Path $root "work") `
+            --output (Join-Path $root "qualification") `
+            --pins-json pins.json `
+            --build-manifest $manifest
+
+      - name: Preserve the CPU qualification logs
+        if: always()
+        shell: pwsh
+        run: |
+          $root = $env:WG2_CPU_GATE_ROOT
+          if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "qualification"))) {
+            Write-Host "No qualification output was produced."
+            exit 0
+          }
+          Get-ChildItem -File (Join-Path $root "qualification") | ForEach-Object {
+            Write-Host "===== $($_.Name) ====="
+            Get-Content -Tail 4000 -LiteralPath $_.FullName
+            Write-Host ""
+          }
+
   linux-bundle:
     name: Build the Linux standalone app
     # Pinned to the distribution the build claims to support rather than
@@ -219,3 +320,48 @@ jobs:
             build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
             build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
+
+      - name: Qualify BEAT CPU on the installed candidate
+        # Installed by the release tarball's own install.sh, as a non-root user
+        # into a private prefix, so what is qualified is the installer's output.
+        # --no-launch because this gate starts the server itself, with its own
+        # isolated data directory, rather than qualifying whatever a desktop
+        # session happened to open.
+        #
+        # After the upload on purpose; see the macOS job.
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          echo "WG2_CPU_GATE_ROOT=$root" >> "$GITHUB_ENV"
+          tarball="$(ls build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz)"
+          tar -xzf "$tarball" -C "$root"
+          installer="$(find "$root" -maxdepth 2 -name install.sh -type f | head -n 1)"
+          test -n "$installer"
+          "$installer" --prefix "$root/prefix" --no-launch
+          manifest="$(ls build/bundle/update-app-*.manifest.json)"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_cpu.py \
+            --payload "$root/prefix/waveguide-generator" \
+            --payload-kind linux-install-sh \
+            --work "$root/work" \
+            --output "$root/qualification" \
+            --pins-json pins.json \
+            --build-manifest "$manifest"
+
+      - name: Preserve the CPU qualification logs
+        if: always()
+        # Into the job log rather than a new artifact: this workflow's artifact
+        # set is the candidate a person hand-tests, and a gate's evidence should
+        # not change what is offered for that.
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/qualification" ]; then
+            echo "No qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
