@@ -21,24 +21,41 @@ Who takes it:
 * the detached rollback helper, which is the same CLI running from a copy.
 
 Every one of them **fails closed**: an installation whose update is owned by a
-live process is left exactly as that process left it.
+live process is left exactly as that process left it, and a start that finds the
+claim held does not start.
 
-**Nothing blocks.** Acquisition is non-blocking everywhere, which is what makes
-the updater's own relaunch protocol safe: the updater installs while holding the
-claim and then starts the application, and the application's startup recovery
-finds the claim held, concludes it has nothing to decide, and starts. Waiting
-there instead would be a deadlock the moment the updater waited for the child it
-had just started. The bootstrap recovery does not hold the claim across the
-helper it runs either, for the same reason -- the helper takes it, and the
-bootstrap reads the answer out of the helper's exit code.
+**The relaunch grant.** That rule would make the updater's own relaunch
+impossible, because the updater must keep the claim across it: if the relaunched
+application does not stay running, the updater rolls the installation back, so
+it is still a writer while the child is starting. Releasing first would leave
+that rollback unguarded, and waiting would deadlock the updater against the
+child it just started -- acquisition is non-blocking everywhere for that reason.
+
+So the updater *authorizes* one start instead. After the layers are swapped and
+the bundle is resealed -- and only there -- it mints a single-use grant with
+:func:`grant_relaunch`, hands the nonce to the child it starts through that
+child's environment, and the child spends it with
+:func:`consume_relaunch_grant`. A start holding a valid grant is the updater's
+own post-seal relaunch and proceeds; a start without one, while somebody holds
+the claim, is an arbitrary launch into an installation that is being written and
+refuses. Agreement between the two layer manifests is **not** used for this: it
+is true before the first rename and again before the reseal finishes, so it
+authorizes nothing and races the writer that is about to change it.
+
+The grant is a handshake between this application's own processes, not a
+security boundary: anybody who can write the lock directory can write a grant,
+exactly as they could take the claim.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 import hashlib
+import json
 import os
 import platform
+import secrets
+import time
 from pathlib import Path
 from typing import Iterator, Mapping
 
@@ -82,16 +99,23 @@ class LockLocationUnavailable(OSError):
 
 
 def installation_key(resources: str | os.PathLike[str]) -> str:
-    """The journal's own scoping key, computed without importing the updater.
+    """One key per *physical* installation, whatever it was spelled as.
 
-    A deliberate second implementation of ``apply_update.installation_key``:
-    this module is staged beside the updater and must not import it, and the
-    updater imports this one. ``test_bundle_recovery`` asserts the two agree, so
-    the copy cannot drift into a lock that scopes differently from the record it
-    protects.
+    Resolved before it is hashed, which the journal's own key is not. The CLI
+    takes ``--bundle`` as a raw path, so the same installation arrives as an
+    absolute path, as a relative one, and through a symlink -- three spellings
+    that normalising alone maps to three different hashes, and therefore to
+    three "exclusive" claims on one set of directories. Resolving links and
+    relative components first is what makes the claim an installation's rather
+    than a string's.
+
+    Deliberately *not* the same function as ``apply_update.installation_key``:
+    that one names a journal file and changing it would rename the records of
+    every installation in flight. This one names a lock, which nothing outlives.
     """
 
-    normalized = os.path.normcase(os.path.normpath(str(Path(resources))))
+    physical = os.path.realpath(os.fspath(resources))
+    normalized = os.path.normcase(os.path.normpath(physical))
     return hashlib.sha256(normalized.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
@@ -235,12 +259,109 @@ def locking_is_available() -> bool:
     return fcntl is not None or msvcrt is not None
 
 
+RELAUNCH_ENVIRONMENT_VARIABLE = "WG2_UPDATE_RELAUNCH_GRANT"
+GRANT_PREFIX = "relaunch-"
+GRANT_SUFFIX = ".json"
+#: A grant is spent by the start it was minted for, which follows immediately.
+#: The window is generous for a slow machine and far short of a session.
+GRANT_LIFETIME_SECONDS = 600.0
+
+
+def grant_path(
+    resources: str | os.PathLike[str],
+    *,
+    system: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> Path:
+    key = installation_key(resources)
+    root = cache_root(system=system, environ=environ, home=home)
+    return root / LOCK_DIRECTORY / f"{GRANT_PREFIX}{key}{GRANT_SUFFIX}"
+
+
+def grant_relaunch(
+    resources: str | os.PathLike[str],
+    *,
+    now: float | None = None,
+    system: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> str:
+    """Authorize exactly one start of this installation, and return its nonce.
+
+    Called by the updater after the swap and the reseal, so possession of the
+    nonce is evidence of *when* the granting process had got to, not merely that
+    it exists. Returns the nonce for the caller to put in the child's
+    environment.
+    """
+
+    path = grant_path(resources, system=system, environ=environ, home=home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    nonce = secrets.token_hex(16)
+    payload = {
+        "schemaVersion": 1,
+        "nonce": nonce,
+        "installation": installation_key(resources),
+        "issuedBy": os.getpid(),
+        "expiresAt": (time.time() if now is None else now) + GRANT_LIFETIME_SECONDS,
+    }
+    temporary = path.with_name(path.name + ".new")
+    temporary.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(temporary, path)
+    return nonce
+
+
+def consume_relaunch_grant(
+    resources: str | os.PathLike[str],
+    nonce: str | None,
+    *,
+    now: float | None = None,
+    system: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> bool:
+    """Spend a grant, or report that this start has no authorization.
+
+    Single use: the record is removed whether or not it matched, so a nonce that
+    leaked cannot authorize a second start. Every failure is a refusal -- an
+    absent, unreadable, expired, mismatched or wrong-installation grant all mean
+    the same thing here, which is that nothing authorized this start.
+    """
+
+    path = grant_path(resources, system=system, environ=environ, home=home)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    if not nonce or not isinstance(payload, dict):
+        return False
+    if payload.get("installation") != installation_key(resources):
+        return False
+    recorded = payload.get("nonce")
+    if not isinstance(recorded, str) or not secrets.compare_digest(recorded, nonce):
+        return False
+    expires = payload.get("expiresAt")
+    if not isinstance(expires, (int, float)):
+        return False
+    return (time.time() if now is None else now) <= float(expires)
+
+
 __all__ = [
     "EXIT_UPDATE_IN_PROGRESS",
+    "GRANT_LIFETIME_SECONDS",
     "LockLocationUnavailable",
+    "RELAUNCH_ENVIRONMENT_VARIABLE",
     "UpdateInProgress",
     "cache_root",
     "claim_update",
+    "consume_relaunch_grant",
+    "grant_path",
+    "grant_relaunch",
     "installation_key",
     "lock_path",
     "locking_is_available",

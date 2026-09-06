@@ -12,6 +12,7 @@ import time
 import pytest
 
 from launchers import apply_update as apply_update_module
+from launchers import update_lock
 from launchers.apply_update import (
     ApplyUpdateError,
     RENAME_RETRY_INTERVAL,
@@ -282,7 +283,14 @@ def test_successful_swap_keeps_previous_layers_and_uses_injected_relauncher(
     ]
     assert "--verify" in commands[-1]
     # macOS keeps its argv route: LaunchServices passes no environment at all.
-    assert relaunched == [(["/usr/bin/open", "-n", str(bundle)], "darwin", None)]
+    # macOS inherits this process's environment, so ``relaunch_environment``
+    # returns None -- but the grant still has to reach the child, so the
+    # inheritance is made explicit and carries it.
+    command, platform_name, environment = relaunched[0]
+    assert len(relaunched) == 1
+    assert command == ["/usr/bin/open", "-n", str(bundle)]
+    assert platform_name == "darwin"
+    assert environment[update_lock.RELAUNCH_ENVIRONMENT_VARIABLE]
 
 
 def test_failed_second_rename_restores_the_old_layout_and_does_not_relaunch(
@@ -634,14 +642,15 @@ def test_windows_apply_skips_macos_repairs_and_injects_the_exe_relaunch(
     assert (folder / "app" / "marker.txt").read_text() == "new app"
     assert (folder / "app.previous" / "marker.txt").read_text() == "old app"
     # The launcher is started the way Explorer starts it, with --port carried
-    # in the environment the child inherits.
-    assert relaunched == [
-        (
-            [str(folder / "Waveguide Generator.exe")],
-            "win32",
-            {"PATH": "x", "WG2_PORT": "3110"},
-        )
-    ]
+    # in the environment the child inherits -- and with the one-shot grant that
+    # authorizes that child to start while this transaction still holds the
+    # installation's update claim.
+    command, platform_name, environment = relaunched[0]
+    assert len(relaunched) == 1
+    assert command == [str(folder / "Waveguide Generator.exe")]
+    assert platform_name == "win32"
+    grant = environment.pop(update_lock.RELAUNCH_ENVIRONMENT_VARIABLE)
+    assert grant and environment == {"PATH": "x", "WG2_PORT": "3110"}
 
 
 def test_windows_relaunch_is_detached_without_a_console() -> None:
@@ -1270,9 +1279,11 @@ def test_a_rollback_helper_waits_for_the_failed_application_before_moving_anythi
     assert (root / "Waveguide Generator.exe").read_text(encoding="utf-8") == (
         "old Waveguide Generator.exe"
     )
-    assert relaunched == [
-        ([str(root / "Waveguide Generator.exe")], {"PATH": "x", "WG2_PORT": "3110"})
-    ]
+    command, environment = relaunched[0]
+    assert len(relaunched) == 1
+    assert command == [str(root / "Waveguide Generator.exe")]
+    grant = environment.pop(update_lock.RELAUNCH_ENVIRONMENT_VARIABLE)
+    assert grant and environment == {"PATH": "x", "WG2_PORT": "3110"}
     log = (data / "logs" / "update.log").read_text(encoding="utf-8")
     assert "Rollback helper" in log
     assert "Restored the previous bundle layers" in log

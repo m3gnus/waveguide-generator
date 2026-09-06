@@ -34,8 +34,10 @@ except ImportError:  # pragma: no cover - taken only on Windows
 try:  # inside the app layer, where this module is maintained
     from launchers.update_lock import (
         EXIT_UPDATE_IN_PROGRESS,
+        RELAUNCH_ENVIRONMENT_VARIABLE,
         UpdateInProgress,
         claim_update as _claim_update,
+        grant_relaunch,
     )
 except ImportError:  # a staged copy, running as a script beside its dependency
     # The directory is added explicitly rather than relied upon. The documented
@@ -47,8 +49,10 @@ except ImportError:  # a staged copy, running as a script beside its dependency
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from update_lock import (  # type: ignore[no-redef]  # noqa: E402
         EXIT_UPDATE_IN_PROGRESS,
+        RELAUNCH_ENVIRONMENT_VARIABLE,
         UpdateInProgress,
         claim_update as _claim_update,
+        grant_relaunch,
     )
 
 
@@ -2322,6 +2326,33 @@ def _show_update_failure_dialog(message: str, platform_name: str) -> None:
         pass
 
 
+def _authorized_relaunch_environment(
+    environment: Mapping[str, str] | None,
+    resources: Path,
+    *,
+    log: LogCallable,
+) -> dict[str, str]:
+    """Add this transaction's one-shot start authorization to the child's env.
+
+    The grant says the granting process had already swapped and resealed, so a
+    start holding it is this updater's own relaunch rather than somebody opening
+    the application while the installation is being written. Best effort: a
+    grant that cannot be written costs the relaunched start its fast path -- it
+    refuses and the user opens the application again once the update is done --
+    and never costs the update itself.
+    """
+
+    # ``relaunch_environment`` returns None when the child should inherit this
+    # process's environment unchanged; the grant still has to reach it, so that
+    # inheritance is made explicit here rather than lost.
+    updated = dict(os.environ if environment is None else environment)
+    try:
+        updated[RELAUNCH_ENVIRONMENT_VARIABLE] = grant_relaunch(resources)
+    except OSError as exc:
+        _emit_log(log, f"Could not authorize the relaunch: {exc}")
+    return updated
+
+
 def _relaunch(
     *,
     bundle: Path,
@@ -2348,6 +2379,9 @@ def _relaunch(
             "The relaunch could not carry these arguments and started without "
             f"them: {' '.join(dropped)}"
         )
+    environment = _authorized_relaunch_environment(
+        environment, resources_directory(Path(bundle), platform_name), log=log
+    )
     try:
         process = relauncher(command, platform_name, environment=environment)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -2571,6 +2605,12 @@ def apply_update(
             f"them: {' '.join(dropped)}"
         )
     log("Installed and verified the staged bundle layers.")
+    # Swapped and sealed: this is the only point that may authorize a start, and
+    # the claim is still held because a relaunch that does not stay running is
+    # rolled back below. The child spends this grant instead of inferring
+    # anything from the layer manifests, which agree both before the first
+    # rename and before the reseal finishes.
+    environment = _authorized_relaunch_environment(environment, resources, log=log)
     try:
         process = relauncher(command, platform_name, environment=environment)
     except Exception as exc:  # noqa: BLE001 - a failed launch must restore the old version
@@ -2775,11 +2815,11 @@ def main(argv: list[str] | None = None) -> int:
         # actually running on.
         #
         # --recover decides a transaction and restores layers, so it takes the
-        # claim like every other path that does. It takes it here rather than
-        # having its caller hold it across this process: a parent that held the
-        # lock while waiting for a child that must acquire it is a deadlock, and
-        # non-blocking acquisition plus a distinct exit code says the same thing
-        # without one.
+        # claim like every other path that does. Its callers -- the bootstrap
+        # launcher and a person repairing an installation by hand -- do not hold
+        # it across this process: a parent holding the lock while it waits for a
+        # child that must acquire it is a deadlock, and non-blocking acquisition
+        # plus a distinct exit code says the same thing without one.
         resources = resources_directory(Path(args.bundle), sys.platform)
         try:
             with _claim_update(resources):
@@ -2802,13 +2842,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.staged_app_dir is None:
         parser.error("--staged-app-dir is required unless --rollback is given")
     # Every refusal above happens first, so an unusable command line still
-    # creates nothing. Everything past this point moves a layer on purpose, so
-    # it takes the installation's update claim for the whole of it: the
-    # bootstrap recovery in ``bundle_recovery`` takes the same one and fails
-    # closed against it, which is what stops a launcher started mid-swap from
-    # renaming the directories this process is already renaming. Deliberately
-    # not taken for --recover, because the bootstrap holds the claim across that
-    # subprocess and a helper that re-acquired it would deadlock its own caller.
+    # creates nothing. Everything past this point moves a layer on purpose, so it
+    # takes the installation's update claim for the whole of it -- including
+    # across the relaunch, because a relaunch that does not stay running is
+    # rolled back and that is another mutation. Every other writer and every
+    # start takes the same claim and fails closed against it; the one start this
+    # transaction is entitled to is the one it authorizes with a relaunch grant.
     resources = resources_directory(Path(args.bundle), sys.platform)
     try:
         with _claim_update(resources):

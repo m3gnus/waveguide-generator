@@ -17,7 +17,12 @@ import time
 from server.platform.paths import resolve_data_dir
 from shared import release_assets
 from launchers import apply_update as apply_update_module
-from launchers.update_lock import UpdateInProgress, claim_update
+from launchers.update_lock import (
+    RELAUNCH_ENVIRONMENT_VARIABLE,
+    UpdateInProgress,
+    claim_update,
+    consume_relaunch_grant,
+)
 from launchers.apply_update import (
     BUNDLE_LAYERS,
     FAILED_SUFFIX,
@@ -215,37 +220,6 @@ def consume_update_request(
 NO_USER_SITE_ENVIRONMENT = {"PYTHONNOUSERSITE": "1"}
 
 
-@dataclass(frozen=True)
-class InstallationGeneration:
-    """Whether the installed layers are one coherent generation right now."""
-
-    consistent: bool
-    summary: str
-
-
-def _installation_generation(resources: Path) -> InstallationGeneration:
-    """Read the installed layers, without deciding or moving anything.
-
-    Cheap and non-destructive on purpose: this runs when the claim is held by
-    somebody else, so it may look and must not touch.
-    """
-
-    missing = [
-        name
-        for name in BUNDLE_LAYERS
-        if not (Path(resources) / name / apply_update_module.layer_manifest_name(name)).is_file()
-    ]
-    if missing:
-        return InstallationGeneration(
-            False, "missing its " + " and ".join(missing) + " layer"
-        )
-    if apply_update_module.layers_disagree(Path(resources)):
-        return InstallationGeneration(
-            False, "part-way through a change, with layers from two generations"
-        )
-    return InstallationGeneration(True, "one consistent generation")
-
-
 def recover_interrupted_bundle_update(
     server_args: Sequence[str] = (),
     *,
@@ -310,37 +284,39 @@ def recover_interrupted_bundle_update(
                 log=lambda message: append_update_log(data_dir, message),
             )
     except UpdateInProgress as exc:
-        # Somebody else owns this installation's update. That is one of two very
-        # different things, and a busy claim alone does not say which.
+        # Somebody else owns this installation's update, so it is being written.
+        # The only start entitled to proceed is the one that writer authorized:
+        # the updater mints a single-use grant after it has swapped the layers
+        # and resealed the bundle, and hands the nonce to the child it starts.
         #
-        # The updater installs while holding the claim and then relaunches this
-        # application, so a legitimate relaunch arrives here with the claim
-        # still held *and a consistent installation*: both layers present, from
-        # the same generation. A second launch during a live half-swap arrives
-        # with the claim held and the installation mid-change -- a layer absent,
-        # or an app and a runtime from different generations.
-        #
-        # The generation is the discriminator, not the claim, because the claim
-        # is identical in both cases. A consistent installation starts; anything
-        # else refuses, because nothing has reconciled it and this start would be
-        # the one running a mixed bundle.
-        state = _installation_generation(resources)
+        # Layer-manifest agreement is deliberately NOT used here. It is true
+        # before the first rename and true again before the reseal finishes, so
+        # it authorizes nothing and races the writer that is about to change it:
+        # a start that read agreement would be loading code out of directories
+        # the updater renames a moment later.
+        authorized = consume_relaunch_grant(
+            resources, environment.get(RELAUNCH_ENVIRONMENT_VARIABLE)
+        )
         append_update_log(
             data_dir,
-            f"Startup recovery declined: {exc}. The installation is {state.summary} "
-            "and was left untouched.",
+            f"Startup recovery declined: {exc}. "
+            + (
+                "The update authorized this relaunch, so it started."
+                if authorized
+                else "Nothing authorized this start, so it did not start."
+            ),
         )
-        if state.consistent:
+        if authorized:
             return RecoveryOutcome(
                 "none",
-                "An update to this installation is in progress and the installed "
-                "layers agree, so nothing needed recovering.",
+                "This start is the update's own authorized relaunch, so there "
+                "was nothing left to recover.",
             )
         return RecoveryOutcome(
             "failed",
-            "An update to this installation is in progress and the installed "
-            f"layers are {state.summary}. It was not started, because nothing has "
-            "reconciled it yet. Let the update finish, then start it again.",
+            "An update to this installation is in progress and nothing "
+            "authorized this start, so it was not started. Let the update "
+            "finish, then start it again.",
         )
     except OSError as exc:
         # The claim could not even be attempted, so ownership is unknown. An

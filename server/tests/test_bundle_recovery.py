@@ -844,8 +844,12 @@ def test_one_installation_has_one_claim_whatever_data_directory_is_named(
     installation = tmp_path / "copy-one" / "Resources"
     other = tmp_path / "copy-two" / "Resources"
 
+    # The lock key is the *physical* installation, not the spelling. The
+    # journal's key is deliberately left alone -- changing it would rename the
+    # records of every installation in flight -- so the two agree only where the
+    # input is already resolved, which is the whole reason this one resolves.
     assert update_lock.installation_key(installation) == (
-        apply_update_module.installation_key(installation)
+        apply_update_module.installation_key(installation.resolve())
     )
     # One installation, two data directories: one claim, and it is not under
     # either of them.
@@ -1333,18 +1337,58 @@ def _startup_exit_code(data_dir: Path, app_layer: Path, monkeypatch) -> int | No
     ), delivered
 
 
-def test_a_live_update_over_a_mixed_generation_start_does_not_start_a_server(
+def test_an_ordinary_start_before_the_first_rename_does_not_start_a_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The finding. A busy claim is not permission to run a half-swapped bundle.
+    """The interleaving the manifests cannot see.
 
-    Both layers are present -- so nothing structural downstream would catch it
-    -- but they came from different generations, which is what a swap looks like
-    between its two halves. Nothing has reconciled that, and this start would be
-    the one running it.
+    The updater holds the claim and has not renamed anything yet, so both layers
+    are present and agree -- and a start that read that agreement would load code
+    out of the very directories about to be renamed. Nothing authorized this
+    start, so it does not happen.
     """
 
-    bundle, resources = _bundle_for_startup(
+    _bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="old-0", runtime_generation="old-0"
+    )
+    data_dir = tmp_path / "data"
+
+    with update_lock.claim_update(resources):
+        code, delivered = _startup_exit_code(data_dir, resources / "app", monkeypatch)
+
+    assert code == 1, "an unauthorized start under a live claim must not start"
+    assert delivered and "did not start" in delivered[0]
+    assert "nothing authorized this start" in delivered[0].casefold()
+
+
+def test_a_start_after_the_swap_but_before_the_reseal_does_not_start_a_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other agreeing window, on the far side of the renames.
+
+    Both layers are the new generation and agree, and the bundle has not been
+    resealed yet. Agreement is true here too, which is exactly why it cannot be
+    the authorization.
+    """
+
+    _bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="new-1", runtime_generation="new-1"
+    )
+    data_dir = tmp_path / "data"
+
+    with update_lock.claim_update(resources):
+        code, delivered = _startup_exit_code(data_dir, resources / "app", monkeypatch)
+
+    assert code == 1
+    assert delivered and "did not start" in delivered[0]
+
+
+def test_a_start_over_a_mixed_generation_installation_does_not_start_a_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """And the visibly half-swapped case, which was never allowed either."""
+
+    _bundle, resources = _bundle_for_startup(
         tmp_path, app_generation="new-1", runtime_generation="old-0"
     )
     data_dir = tmp_path / "data"
@@ -1352,9 +1396,8 @@ def test_a_live_update_over_a_mixed_generation_start_does_not_start_a_server(
     with update_lock.claim_update(resources):
         code, delivered = _startup_exit_code(data_dir, resources / "app", monkeypatch)
 
-    assert code == 1, "a mixed-generation installation must not start"
+    assert code == 1
     assert delivered and "did not start" in delivered[0]
-    assert "two generations" in delivered[0]
 
 
 def test_a_claim_that_cannot_be_taken_at_all_does_not_start_a_server(
@@ -1367,7 +1410,7 @@ def test_a_claim_that_cannot_be_taken_at_all_does_not_start_a_server(
     "nothing to recover" and started anyway.
     """
 
-    bundle, resources = _bundle_for_startup(
+    _bundle, resources = _bundle_for_startup(
         tmp_path, app_generation="same", runtime_generation="same"
     )
     data_dir = tmp_path / "data"
@@ -1381,33 +1424,71 @@ def test_a_claim_that_cannot_be_taken_at_all_does_not_start_a_server(
     assert delivered and "could not be taken" in delivered[0]
 
 
-def test_the_updaters_own_relaunch_of_a_consistent_installation_still_starts(
+def test_the_updaters_own_authorized_relaunch_starts_without_deadlock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The other half, which must keep working: the legitimate relaunch.
+    """The half that must keep working, and what actually proves it.
 
-    The updater installs while holding the claim and then starts the
-    application. It arrives here with the claim still held and both layers from
-    one generation, and it starts -- promptly, because acquisition never blocks.
-    Waiting would hang the updater against the child it just launched.
+    The grant is minted only after the swap and the reseal, so holding one is
+    evidence of where the granting transaction had got to -- not an inference
+    from state a writer is about to change. The claim is still held, because a
+    relaunch that does not stay running is rolled back, and the start is prompt
+    because acquisition never blocks.
     """
 
-    bundle, resources = _bundle_for_startup(
+    _bundle, resources = _bundle_for_startup(
         tmp_path, app_generation="new-1", runtime_generation="new-1"
     )
     data_dir = tmp_path / "data"
 
     with update_lock.claim_update(resources):
+        nonce = update_lock.grant_relaunch(resources)
+        monkeypatch.setenv(update_lock.RELAUNCH_ENVIRONMENT_VARIABLE, nonce)
         started = time.monotonic()
         code, delivered = _startup_exit_code(data_dir, resources / "app", monkeypatch)
         elapsed = time.monotonic() - started
 
-    assert code is None, "a consistent installation must start"
+    assert code is None, "the updater's authorized relaunch must start"
     assert delivered == []
     assert elapsed < 5.0
-    assert "Startup recovery declined" in (
+    assert "authorized this relaunch" in (
         data_dir / "logs" / "update.log"
     ).read_text(encoding="utf-8")
+
+
+def test_a_relaunch_grant_is_single_use_and_installation_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nonce that leaked cannot authorize a second start, or another bundle."""
+
+    _bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="new-1", runtime_generation="new-1"
+    )
+    _other_bundle, other = _bundle_for_startup(
+        tmp_path / "second", app_generation="new-1", runtime_generation="new-1"
+    )
+
+    with update_lock.claim_update(resources):
+        nonce = update_lock.grant_relaunch(resources)
+        assert update_lock.consume_relaunch_grant(resources, nonce) is True
+        # Spent.
+        assert update_lock.consume_relaunch_grant(resources, nonce) is False
+        # Wrong nonce, and an expired one.
+        again = update_lock.grant_relaunch(resources)
+        assert update_lock.consume_relaunch_grant(resources, "0" * 32) is False
+        assert update_lock.consume_relaunch_grant(resources, again) is False
+        stale = update_lock.grant_relaunch(resources)
+        assert (
+            update_lock.consume_relaunch_grant(
+                resources,
+                stale,
+                now=time.time() + update_lock.GRANT_LIFETIME_SECONDS + 1.0,
+            )
+            is False
+        )
+        # A grant for one installation says nothing about another.
+        theirs = update_lock.grant_relaunch(other)
+        assert update_lock.consume_relaunch_grant(resources, theirs) is False
 
 
 def test_the_in_app_startup_recovery_still_decides_when_nobody_owns_the_update(
@@ -1445,3 +1526,86 @@ def test_the_in_app_startup_recovery_still_decides_when_nobody_owns_the_update(
     # Released afterwards, so an updater started next is not locked out.
     with update_lock.claim_update(resources):
         pass
+
+
+def test_one_installation_spelled_three_ways_is_one_claim(tmp_path: Path) -> None:
+    """A relative path, a symlink and an absolute path are one installation.
+
+    The CLI takes ``--bundle`` as a raw path and claims before anything resolves
+    it, so a key that only normalises maps three spellings of one bundle to
+    three "exclusive" claims on one set of directories.
+    """
+
+    real = tmp_path / "real" / "Resources"
+    real.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path / "real", target_is_directory=True)
+
+    spellings = [real, Path(link) / "Resources", Path(os.path.relpath(real, tmp_path))]
+    keys = set()
+    for spelling in spellings:
+        previous = Path.cwd()
+        os.chdir(tmp_path)
+        try:
+            keys.add(update_lock.installation_key(spelling))
+        finally:
+            os.chdir(previous)
+    assert len(keys) == 1, f"three spellings of one installation gave {keys}"
+
+
+def test_an_alias_spelling_cannot_take_a_second_claim_on_one_installation(
+    tmp_path: Path,
+) -> None:
+    """The interprocess control for that, through the real CLI.
+
+    A live holder claims the installation by its real path; a second updater
+    names the same bundle through a symlink. Before the key resolved, that was
+    two owners renaming one set of directories.
+    """
+
+    real_root = tmp_path / "real"
+    bundle = real_root / ("Waveguide Generator.app" if sys.platform == "darwin" else "wg")
+    resources = bundle_recovery.resources_for_platform(bundle, sys.platform)
+    resources.mkdir(parents=True)
+    data_dir = tmp_path / "data"
+    _interrupted_installation(resources, data_dir, sys.platform)
+    before = sorted(entry.name for entry in resources.iterdir())
+    link = tmp_path / "link"
+    link.symlink_to(real_root, target_is_directory=True)
+    aliased_bundle = link / bundle.name
+
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys, time\n"
+            f"sys.path.insert(0, {str(REPOSITORY_ROOT)!r})\n"
+            "from launchers.update_lock import claim_update\n"
+            f"with claim_update({str(resources)!r}):\n"
+            "    print('held', flush=True)\n"
+            "    time.sleep(120)\n",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+        env={**os.environ},
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "held"
+        code = apply_update_module.main(
+            [
+                "--bundle",
+                str(aliased_bundle),
+                "--data-dir",
+                str(data_dir),
+                "--parent-pid",
+                str(holder.pid),
+                "--rollback",
+            ]
+        )
+    finally:
+        holder.kill()
+        holder.wait(timeout=30)
+
+    assert code == update_lock.EXIT_UPDATE_IN_PROGRESS
+    assert sorted(entry.name for entry in resources.iterdir()) == before

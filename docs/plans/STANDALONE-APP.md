@@ -306,19 +306,44 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
   exclude each other. Closing that needs a writable system-wide location this
   application does not claim.
 
-  **A busy claim is not permission to run.** The startup recovery takes the claim like
-  every other path that decides a transaction, and when it cannot get it the answer
-  depends on the *installed generation*, not on the claim — because the claim looks
-  identical in the two cases that matter. A consistent installation (both layers
-  present, manifests agreeing) is the updater's legitimate post-seal relaunch, and it
-  starts. Anything else — a layer absent, or an app and a runtime from two
-  generations — is a live half-swap that nothing has reconciled, and it refuses with
-  a message naming what it found. A claim that could not be attempted at all (an
-  unreadable or uncreatable lock) refuses too: ownership unknown over an installation
-  that may be mid-change is the definition of the fail-closed case. An earlier
-  revision answered both with "nothing to recover" and started anyway;
-  `failclosed-before-after.log` records the same two controls failing against that
-  behaviour and passing here.
+  The key is the **physical** installation: symlinks and relative components are
+  resolved before hashing, because the CLI takes `--bundle` as given and claims
+  before anything else resolves it. Three spellings of one bundle produced three
+  separate claims on one set of directories; they now produce one. The journal's own
+  key is deliberately unchanged — altering it would rename the records of every
+  installation in flight.
+
+  **A busy claim is not permission to run, and neither is agreement.** The startup
+  recovery takes the claim like every other path that decides a transaction. If it
+  cannot get it, the installation is being written, and the only start entitled to
+  proceed is the one that writer authorized.
+
+  Layer-manifest agreement was tried for this and is **not** sufficient: it holds
+  before the first rename and again after the swaps but before the reseal finishes,
+  so a start could read agreement, answer "nothing to do", and load code out of the
+  directories the updater renames a moment later. It is a check/use race against the
+  process that owns the installation.
+
+  The updater authorizes instead. After the layers are swapped and the bundle is
+  resealed — and only there — it mints a single-use, installation-bound, expiring
+  grant (`update_lock.grant_relaunch`) and hands the nonce to the child it starts
+  through that child's environment; the child spends it (`consume_relaunch_grant`).
+  Possession is evidence of *where the granting transaction had got to*, which is
+  what the manifests could not say. Releasing the claim before relaunching instead is
+  unsound here: a relaunch that does not stay running is rolled back, so the updater
+  is still a writer while the child starts.
+
+  A start with no grant, under a held claim, refuses. A claim that could not be
+  attempted at all — an unreadable or uncreatable lock — refuses too: ownership
+  unknown over an installation that may be mid-change is the fail-closed case. The
+  grant is a handshake between this application's own processes, not a security
+  boundary; anybody who can write the lock directory can write a grant, exactly as
+  they could take the claim.
+
+  `failclosed-before-after.log` records the earlier "nothing to recover" behaviour
+  failing the fail-closed controls; `generation-race-before.log` and
+  `generation-race-after.log` record the agreement-based authorization failing the
+  interleaving controls that this passes.
 
   **No silent bypass.** `apply_update.py` imports the claim the two ways it is ever
   run — from the app layer as a package, and from a staged copy beside its own
