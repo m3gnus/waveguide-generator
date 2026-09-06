@@ -160,6 +160,70 @@ def _report_failure_with_evidence(failure: "TkFailure", *, detail: str | None = 
     )
 
 
+def _verify_bundle_without_recovery(
+    cause: BaseException,
+    deliver: Callable[[str], None],
+) -> int | None:
+    """Decide whether a start may proceed when the recovery module is unusable.
+
+    Returns None to start and an exit code to refuse.
+
+    A source checkout has no layers to swap, so there is nothing an interrupted
+    update could have left and it starts. An installed bundle is different: the
+    reason recovery is being asked for is that an update may have stopped
+    part-way, and in browser or terminal mode nothing further along checks --
+    the missing-layer and manifest checks live in the desktop window, which
+    those modes never open. Treating an unloadable recovery module as a verified
+    clean install is the fail-open this function exists to remove.
+
+    So the bundle is checked directly, with the smallest thing that can do it:
+    ``launchers.apply_update`` is standard library only and does not import the
+    server package, so it survives most of what would break the module above.
+    Both layers present and their manifests naming one generation is a real
+    verification. Anything else -- including not being able to run that check --
+    refuses, and names the repair the updater already wrote to update.log.
+    """
+
+    import os
+
+    if os.environ.get("WG2_BUNDLE") != "1":
+        return None
+    try:
+        from pathlib import Path as _Path
+
+        from launchers.apply_update import (
+            bundle_from_app_layer,
+            layers_disagree,
+            resources_directory,
+        )
+
+        app_layer = _Path(
+            os.environ.get("WG2_APP_ROOT") or app_root()
+        ).resolve()
+        resources = resources_directory(
+            bundle_from_app_layer(app_layer, sys.platform), sys.platform
+        )
+        complete = all((resources / name).is_dir() for name in ("app", "runtime"))
+        consistent = complete and not layers_disagree(resources)
+    except Exception as exc:  # noqa: BLE001 - cannot verify, therefore refuses
+        consistent = False
+        _log_startup_failure(f"The installed layers could not be checked either: {exc!r}")
+    if consistent:
+        _log_startup_failure(
+            "The interrupted-update check could not run, but the installed layers are "
+            "complete and name one generation, so the application was started."
+        )
+        return None
+    deliver(
+        "Waveguide Generator could not check whether an update was interrupted, and its "
+        "installed files could not be confirmed to be from one version, so it did not "
+        f"start.\n\n{type(cause).__name__}: {cause}\n\n"
+        "The update log in the application data log directory records the command that "
+        "repairs an interrupted update."
+    )
+    return 1
+
+
 def _report_terminal_failure(message: str, *, detail: str | None = None) -> None:
     """Deliver a failure without opening anything.
 
@@ -198,23 +262,32 @@ def _recover_interrupted_bundle_update(
     when the window will not open, which after an interrupted update is exactly
     when it will not.
 
-    **Two failures, and only one of them may continue.** If the recovery module
-    cannot be imported, nothing ran and nothing moved: starting is strictly
-    better than refusing, because the checks that predate the journal still run
-    further in. If the recovery *call* raises, it had already begun -- and it
-    renames directories, so the exception may have arrived between two of them.
-    What is on the disk is then a possibly mixed installation that nothing has
-    decided, and that refuses. Collapsing the two, which the first version of
-    this function did, fails open into precisely the state the transaction
-    exists to prevent.
+    **Three outcomes, and only some of them may continue.** If the recovery
+    *call* raises, it had already begun -- and it renames directories, so the
+    exception may have arrived between two of them. What is on the disk is then
+    a possibly mixed installation that nothing has decided, and that refuses.
+    Collapsing that with a mechanism failure, which the first version of this
+    function did, fails open into precisely the state the transaction exists to
+    prevent.
+
+    If the recovery module cannot be *imported*, nothing ran -- but "nothing
+    ran" only describes this invocation. A checkout has no swappable layers and
+    may start; **an installed bundle may already be mixed from the interruption
+    that made recovery necessary**, and browser and terminal mode have no later
+    structural check to catch it, because the one that exists lives in the
+    desktop window. So a bundle falls back to the structural check itself, which
+    needs only the standard-library updater module: both layers present, and
+    their manifests naming one generation. That verifies, rather than assumes,
+    that there is nothing to recover. If even that cannot be established, a
+    bundle refuses.
     """
 
     deliver = _report_startup_failure if report is None else report
     try:
         from launchers.statusapp.updater import recover_interrupted_bundle_update
-    except Exception as exc:  # noqa: BLE001 - nothing ran, so nothing is undecided
+    except Exception as exc:  # noqa: BLE001 - degraded; see _verify_bundle_without_recovery
         _log_startup_failure(f"The interrupted-update check could not be loaded: {exc!r}")
-        return None
+        return _verify_bundle_without_recovery(exc, deliver)
     try:
         outcome = recover_interrupted_bundle_update(arguments)
     except BaseException as exc:  # noqa: BLE001 - it had started; the disk may have moved

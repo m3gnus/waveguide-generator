@@ -34,10 +34,9 @@ from launchers.apply_update import (
     layer_runtime_ids,
     recover_transaction,
     repair_bundle,
-    ROLLING_BACK_STATE,
     resources_directory,
+    restore_previous_generation,
     rollback_previous_layers,
-    set_journal_state,
 )
 from launchers.statusapp.updater import (
     BundleUpdateRequest,
@@ -731,21 +730,27 @@ class DesktopWindow:
             log(f"The rollback could not be recorded, and was not started: {exc}")
             self._report_bundle_failure(f"{message}\n\n{ROLLBACK_FAILED_RESULT}")
             return
-        set_journal_state(data_dir, resources, ROLLING_BACK_STATE, log=log)
-        rolled_back = rollback_previous_layers(resources, log=log)
-        if rolled_back:
-            set_journal_state(data_dir, resources, "rolled-back", log=log)
-            try:
-                repair_bundle(bundle, platform_name=sys.platform, log=log)
-            except ApplyUpdateError as exc:
-                result = (
-                    "The previous files were restored, but the bundle could not be signed and "
-                    f"verified: {exc}. Automatic recovery is incomplete."
-                )
-            else:
-                result = "The previous version was restored. Reopen Waveguide Generator."
-        else:
+        # Restore, re-seal, then record -- the ordering lives in
+        # restore_previous_generation so all three paths that start a rollback
+        # share it. This one published "rolled-back" before its reseal, so a
+        # failed reseal left a terminal record over an unsealed bundle and the
+        # next start read "already decided" instead of retrying.
+        restore = restore_previous_generation(
+            resources,
+            bundle,
+            platform_name=sys.platform,
+            log=log,
+            data_dir=data_dir,
+        )
+        if not restore.restored:
             result = ROLLBACK_FAILED_RESULT
+        elif restore.seal_error is not None:
+            result = (
+                "The previous files were restored, but the bundle could not be signed and "
+                f"verified: {restore.seal_error}. Automatic recovery is incomplete."
+            )
+        else:
+            result = "The previous version was restored. Reopen Waveguide Generator."
         self._report_bundle_failure(f"{message}\n\n{result}")
 
     def _hand_off_rollback(

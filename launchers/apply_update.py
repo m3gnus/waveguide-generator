@@ -1524,6 +1524,94 @@ def _launcher_files_are_settled(resources: Path) -> tuple[bool, str]:
     return True, ""
 
 
+@dataclass(frozen=True, slots=True)
+class RestoreOutcome:
+    """What a restore achieved, in the two halves that can fail separately."""
+
+    #: Every available ``.previous`` layer and launcher file went back.
+    restored: bool
+    #: Why the bundle seal could not be restored afterwards, or None.
+    seal_error: str | None
+    #: One sentence for a log or a dialog.
+    detail: str
+
+    @property
+    def complete(self) -> bool:
+        """Whether the installation is both restored *and* sealed."""
+
+        return self.restored and self.seal_error is None
+
+
+def restore_previous_generation(
+    resources: Path,
+    bundle: Path | None,
+    *,
+    platform_name: str,
+    renamer: RenameCallable = _rename,
+    runner: CommandRunner = subprocess.run,
+    log: LogCallable | None = None,
+    data_dir: Path | None = None,
+) -> RestoreOutcome:
+    """Roll back, re-seal, and only then record that the transaction ended.
+
+    **Every path that initiates a rollback goes through here**, and that is the
+    point of the function rather than a convenience. The ordering it enforces
+    was implemented once, in reconciliation, and missing from the three places
+    that actually start a rollback: the updater's own post-mutation handler, the
+    detached rollback helper, and the desktop window's in-process fallback. All
+    three published ``rolled-back`` as soon as the renames finished and only
+    then tried to re-seal -- so a failed or interrupted reseal left a *terminal*
+    record over an unsealed bundle, and the next start read the terminal state,
+    returned "already decided", and never reached the retry that exists for
+    exactly this. One unsealed macOS bundle, and nothing left that would ever
+    come back to it.
+
+    So the terminal state is written here, after the seal, and only if the seal
+    came back. Anything short of that keeps the rolling-back marker with the
+    reason in its detail, which is what steers the next start into finishing the
+    job.
+
+    ``data_dir`` is given whenever a journal exists. The marker it writes *first*
+    matters too: a restore killed after its first layer leaves exactly the shape
+    a finished update leaves -- one layer with no ``.previous``, one with -- and
+    this is what tells the two apart.
+    """
+
+    def record(state: str, detail: str) -> None:
+        if data_dir is not None:
+            set_journal_state(data_dir, resources, state, detail=detail, log=log)
+
+    record(ROLLING_BACK_STATE, "restoring the previous layers")
+    pending = [
+        name for name in BUNDLE_LAYERS if (resources / f"{name}{PREVIOUS_SUFFIX}").is_dir()
+    ] + [
+        path.name
+        for path in sorted(resources.glob(f"*{PREVIOUS_SUFFIX}"))
+        if path.is_file() or path.is_symlink()
+    ]
+    if not pending:
+        detail = "no previous layer or launcher file was available to restore"
+        record(ROLLING_BACK_STATE, detail)
+        return RestoreOutcome(restored=False, seal_error=None, detail=detail)
+    if not rollback_previous_layers(resources, renamer=renamer, log=log):
+        detail = "the previous version could not be fully restored"
+        record(ROLLING_BACK_STATE, detail)
+        return RestoreOutcome(restored=False, seal_error=None, detail=detail)
+    if bundle is not None:
+        # The missing-layer path has always re-sealed here; the mixed-generation
+        # path did not, which left a macOS bundle whose ad-hoc signature no
+        # longer covered its contents. One call, every path.
+        try:
+            repair_bundle(bundle, platform_name=platform_name, runner=runner, log=log)
+        except ApplyUpdateError as exc:
+            detail = f"the restored bundle could not be signed and verified: {exc}"
+            record(ROLLING_BACK_STATE, detail)
+            return RestoreOutcome(restored=True, seal_error=str(exc), detail=detail)
+    detail = "the previous version was restored"
+    record("rolled-back", detail)
+    return RestoreOutcome(restored=True, seal_error=None, detail=detail)
+
+
 def _restore_previous_layers(
     resources: Path,
     bundle: Path | None,
@@ -1534,42 +1622,18 @@ def _restore_previous_layers(
     log: LogCallable | None,
     data_dir: Path | None = None,
 ) -> tuple[bool, str]:
-    """Roll back and re-seal, reporting the exact outcome of both halves.
+    """Reconciliation's view of :func:`restore_previous_generation`."""
 
-    ``data_dir`` is given whenever a journal exists, so the restore is recorded
-    as under way *before* it starts. A restore killed after its first layer
-    leaves exactly the shape a finished update leaves -- one layer with no
-    ``.previous``, one with -- and this marker is what tells the difference.
-    """
-
-    if data_dir is not None:
-        set_journal_state(
-            data_dir,
-            resources,
-            ROLLING_BACK_STATE,
-            detail="restoring the previous layers",
-            log=log,
-        )
-    pending = [
-        name for name in BUNDLE_LAYERS if (resources / f"{name}{PREVIOUS_SUFFIX}").is_dir()
-    ] + [
-        path.name
-        for path in sorted(resources.glob(f"*{PREVIOUS_SUFFIX}"))
-        if path.is_file() or path.is_symlink()
-    ]
-    if not pending:
-        return False, "no previous layer or launcher file was available to restore"
-    if not rollback_previous_layers(resources, renamer=renamer, log=log):
-        return False, "the previous version could not be fully restored"
-    if bundle is not None:
-        # The missing-layer path has always re-sealed here; the mixed-generation
-        # path did not, which left a macOS bundle whose ad-hoc signature no
-        # longer covered its contents. One call, both paths.
-        try:
-            repair_bundle(bundle, platform_name=platform_name, runner=runner, log=log)
-        except ApplyUpdateError as exc:
-            return False, f"the restored bundle could not be signed and verified: {exc}"
-    return True, "the previous version was restored"
+    outcome = restore_previous_generation(
+        resources,
+        bundle,
+        platform_name=platform_name,
+        renamer=renamer,
+        runner=runner,
+        log=log,
+        data_dir=data_dir,
+    )
+    return outcome.complete, outcome.detail
 
 
 def _seal_after_recovery(
@@ -2294,28 +2358,24 @@ def apply_update(
     def finish_failure_after_mutation(reason: str, exit_code: int) -> int:
         # Do not emit the failure diagnostic until rollback, required signing,
         # and the attempt to reopen the restored version have all run.
-        set_journal_state(
-            data_dir, resources, ROLLING_BACK_STATE, detail=reason, log=selected_logger
+        #
+        # The restore records its own end, after the seal and only if the seal
+        # came back. Publishing "rolled-back" here, as this used to, put a
+        # terminal record over a bundle whose signature had not been restored --
+        # and a terminal record is precisely what makes the next start say
+        # "already decided" and skip the retry.
+        restore = restore_previous_generation(
+            resources,
+            resolved_bundle,
+            platform_name=platform_name,
+            renamer=renamer,
+            runner=runner,
+            log=selected_logger,
+            data_dir=data_dir,
         )
-        rolled_back = rollback_previous_layers(resources, renamer=renamer)
-        # Only a rollback that restored everything decides the transaction. One
-        # that did not leaves the journal open on purpose, so the next start
-        # reconciles it instead of reclaiming what it could not restore.
-        if rolled_back:
-            set_journal_state(
-                data_dir, resources, "rolled-back", detail=reason, log=selected_logger
-            )
-        repair_error: str | None = None
-        if rolled_back:
-            try:
-                repair_bundle(
-                    resolved_bundle,
-                    platform_name=platform_name,
-                    runner=runner,
-                )
-            except ApplyUpdateError as exc:
-                repair_error = str(exc)
-        relaunch_error = None if not rolled_back or repair_error else relaunch_current()
+        rolled_back = restore.restored
+        repair_error = restore.seal_error
+        relaunch_error = None if not restore.complete else relaunch_current()
         if not rolled_back:
             outcome = (
                 "Automatic rollback could not restore every required layer and launcher file. "
@@ -2479,22 +2539,31 @@ def rollback_bundle(
         # restore nobody recorded is a restore nobody can finish.
         log(f"The rollback was not started because it could not be recorded: {exc}")
         return 3
-    set_journal_state(data_dir, resources, ROLLING_BACK_STATE, log=log)
-    if not rollback_previous_layers(resources, renamer=renamer, log=log):
+    # Restore, re-seal, and record the end in that order -- see
+    # restore_previous_generation. This helper published "rolled-back" before
+    # its reseal, so a reseal that failed here left a terminal record over an
+    # unsealed bundle and the next start skipped the retry.
+    restore = restore_previous_generation(
+        resources,
+        bundle.resolve(),
+        platform_name=platform_name,
+        renamer=renamer,
+        runner=runner,
+        log=log,
+        data_dir=data_dir,
+    )
+    if not restore.restored:
         log(
             "The rollback did not restore the previous version, so the "
             "application was not reopened. Review the entries above before "
             "changing the installation."
         )
         return 2
-    set_journal_state(data_dir, resources, "rolled-back", log=log)
-
-    try:
-        repair_bundle(bundle.resolve(), platform_name=platform_name, runner=runner, log=log)
-    except ApplyUpdateError as exc:
+    if restore.seal_error is not None:
         log(
             "The previous version was restored, but the restored macOS bundle "
-            f"could not be signed and verified: {exc}. The application was not reopened."
+            f"could not be signed and verified: {restore.seal_error}. The "
+            "application was not reopened."
         )
         return 4
     return _relaunch(

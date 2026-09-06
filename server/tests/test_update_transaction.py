@@ -23,6 +23,7 @@ from __future__ import annotations
 import builtins
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 import signal
 import subprocess
@@ -107,6 +108,36 @@ def _installation(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     (data_dir / "workspace").mkdir()
     (data_dir / "workspace" / "design.wg2").write_text("a design", encoding="utf-8")
     return resources, data_dir, staged / "app", staged / "runtime"
+
+
+def _macos_shaped_installation(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
+    """A bundle laid out the way macOS lays one out, on any host.
+
+    The reseal is the only part of a restore that is platform-specific, so the
+    tests that exercise its ordering have to run with ``platform_name="darwin"``
+    -- and then `resources_directory` looks for `Contents/Resources`. Building
+    that shape here rather than only on a Mac keeps those tests meaningful on
+    Linux and Windows CI: no `codesign` is involved, because the runner is
+    injected, but the ordering under test is identical.
+    """
+
+    bundle = tmp_path / "Waveguide Generator.app"
+    resources = bundle / "Contents" / "Resources"
+    data_dir = tmp_path / "data"
+    staged = data_dir / "updates" / "9.9.9" / "staged"
+    for layer, generation in (
+        (resources / "app", "old0"),
+        (resources / "runtime", "old0"),
+        (staged / "app", "new1"),
+        (staged / "runtime", "new1"),
+    ):
+        layer.mkdir(parents=True)
+        (layer / "marker.txt").write_text(generation, encoding="utf-8")
+        _write_manifest(layer, generation)
+    (data_dir / "logs").mkdir(parents=True)
+    (data_dir / "workspace").mkdir()
+    (data_dir / "workspace" / "design.wg2").write_text("a design", encoding="utf-8")
+    return bundle, resources, data_dir, staged / "app", staged / "runtime"
 
 
 def _begin(resources: Path, data_dir: Path, staged_app: Path, staged_runtime: Path) -> dict:
@@ -1362,16 +1393,28 @@ def test_the_native_launchers_cannot_reach_recovery_without_an_app_layer() -> No
 # ---------------------------------------------------------------------------
 
 
-def _recording_runner(failing: str | None = None):
-    """A `subprocess.run` double that records commands and can fail one."""
+def _recording_runner(failing: str | None = None, observe: Callable[[], object] | None = None):
+    """A `subprocess.run` double that records commands and can fail one.
+
+    ``observe`` is called at the moment `codesign` is invoked, which is the
+    instant that matters: it is where a kill would leave the layers restored
+    and the seal not. Asserting only on the state *after* the call cannot see a
+    terminal record that was published early and corrected afterwards -- and an
+    early publication is precisely the defect, because a process that dies in
+    between never reaches the correction.
+    """
 
     commands: list[list[str]] = []
+    observations: list[object] = []
 
     def run(command, **_kwargs):  # type: ignore[no-untyped-def]
         commands.append(list(command))
+        if observe is not None and "codesign" in command[0]:
+            observations.append(observe())
         code = 1 if failing is not None and failing in command[0] else 0
         return subprocess.CompletedProcess(list(command), code, "", "boom" if code else "")
 
+    run.observations = observations  # type: ignore[attr-defined]
     return commands, run
 
 
@@ -1488,3 +1531,304 @@ def test_a_rollback_transaction_whose_layers_are_already_back_is_resealed_too(
     assert outcome.action == "none"
     assert "/usr/bin/codesign" in [command[0] for command in commands]
     assert read_journal(data_dir, resources)["state"] == "rolled-back"
+
+
+# ---------------------------------------------------------------------------
+# The paths that *start* a rollback, not only the one that finishes it
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_update_whose_reseal_fails_leaves_a_transaction_to_retry(
+    tmp_path: Path,
+) -> None:
+    """The updater's own post-mutation handler, at the boundary that bit.
+
+    It published `rolled-back` as soon as the renames finished and only then
+    tried to re-seal. A reseal that failed -- or a kill between the two -- left
+    a *terminal* record over an unsealed bundle, and the next start read the
+    terminal state, answered "already decided", and never reached the retry
+    that exists for exactly this. Ordering the publication after the seal is
+    what makes the state on disk and the state in the record agree.
+    """
+
+    bundle, resources, data_dir, staged_app, staged_runtime = _macos_shaped_installation(
+        tmp_path
+    )
+    def state_now() -> object:
+        record = read_journal(data_dir, resources)
+        return None if record is None else record.get("state")
+
+    _commands, failing_run = _recording_runner(failing="codesign", observe=state_now)
+    reported: list[str] = []
+
+    # A relaunch that never confirms drives apply_update into its post-mutation
+    # failure handler with the layers already swapped.
+    result = apply_update_module.apply_update(
+        bundle=bundle,
+        data_dir=data_dir,
+        staged_app=staged_app,
+        staged_runtime=staged_runtime,
+        parent_pid=1,
+        platform_name="darwin",
+        runner=failing_run,
+        relauncher=lambda *_a, **_k: None,
+        confirm=lambda _process: "closed immediately",
+        waiter=lambda _pid: True,
+        failure_reporter=reported.append,
+    )
+
+    assert result == 5
+    assert _generations(resources) == {"app": "old0", "runtime": "old0"}
+    assert failing_run.observations, "the reseal must actually have been attempted"
+    assert all(
+        observed not in {"installed", "rolled-back", "aborted"}
+        for observed in failing_run.observations
+    ), (
+        "a kill at the reseal must not find a terminal record: that is what makes the "
+        f"next start skip the retry (saw {failing_run.observations})"
+    )
+    state = read_journal(data_dir, resources)["state"]
+    assert state not in {"installed", "rolled-back", "aborted"}, (
+        "an unsealed bundle must leave a transaction the next start can finish"
+    )
+    allowed, _detail = commit_transaction(data_dir, resources=resources)
+    assert allowed is False
+
+    # And the next start does finish it, rather than reporting nothing to do.
+    commands, run = _recording_runner()
+    outcome = recover_transaction(
+        data_dir=data_dir,
+        resources=resources,
+        bundle=bundle,
+        platform_name="darwin",
+        runner=run,
+    )
+    assert outcome.action == "none"
+    assert "/usr/bin/codesign" in [command[0] for command in commands]
+    assert read_journal(data_dir, resources)["state"] == "rolled-back"
+
+
+def test_the_rollback_helper_does_not_publish_an_end_it_did_not_reach(
+    tmp_path: Path,
+) -> None:
+    """`--rollback`, the detached helper, at the same boundary."""
+
+    bundle, resources, data_dir, staged_app, staged_runtime = _macos_shaped_installation(
+        tmp_path
+    )
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    def state_now() -> object:
+        record = read_journal(data_dir, resources)
+        return None if record is None else record.get("state")
+
+    _commands, failing_run = _recording_runner(failing="codesign", observe=state_now)
+
+    result = apply_update_module.rollback_bundle(
+        bundle=bundle,
+        data_dir=data_dir,
+        parent_pid=1,
+        platform_name="darwin",
+        runner=failing_run,
+        relauncher=lambda *_a, **_k: None,
+        confirm=lambda _process: None,
+        waiter=lambda _pid: True,
+    )
+
+    assert result == 4, "a restored-but-unsealed bundle is not a completed rollback"
+    assert _generations(resources) == {"app": "old0", "runtime": "old0"}
+    assert failing_run.observations and all(
+        observed not in {"installed", "rolled-back", "aborted"}
+        for observed in failing_run.observations
+    ), f"a kill at the reseal must not find a terminal record (saw {failing_run.observations})"
+    assert read_journal(data_dir, resources)["state"] == ROLLING_BACK_STATE
+    assert commit_transaction(data_dir, resources=resources)[0] is False
+
+
+def test_a_successful_rollback_helper_publishes_the_end_after_the_seal(
+    tmp_path: Path,
+) -> None:
+    """The positive control: it does still record the end when it gets there."""
+
+    bundle, resources, data_dir, staged_app, staged_runtime = _macos_shaped_installation(
+        tmp_path
+    )
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+
+    def state_now() -> object:
+        record = read_journal(data_dir, resources)
+        return None if record is None else record.get("state")
+
+    commands, run = _recording_runner(observe=state_now)
+
+    result = apply_update_module.rollback_bundle(
+        bundle=bundle,
+        data_dir=data_dir,
+        parent_pid=1,
+        platform_name="darwin",
+        runner=run,
+        relauncher=lambda *_a, **_k: None,
+        confirm=lambda _process: None,
+        waiter=lambda _pid: True,
+    )
+
+    assert result == 0
+    assert _generations(resources) == {"app": "old0", "runtime": "old0"}
+    assert run.observations and all(
+        observed not in {"installed", "rolled-back", "aborted"}
+        for observed in run.observations
+    ), "even the successful path must not publish its end before the seal"
+    assert read_journal(data_dir, resources)["state"] == "rolled-back"
+    assert "/usr/bin/codesign" in [command[0] for command in commands]
+    assert commit_transaction(data_dir, resources=resources)[0] is True
+
+
+def test_the_desktop_in_process_rollback_uses_the_same_ordering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The third initiating path: the window's own fallback when no handoff runs.
+
+    Driven through `restore_previous_generation` like the other two, so the
+    ordering cannot be reintroduced here by editing this file alone.
+    """
+
+    from launchers import desktop
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    _commands, failing_run = _recording_runner(failing="codesign")
+    observed: list[object] = []
+
+    def failing_repair(bundle, **_kwargs):  # type: ignore[no-untyped-def]
+        record = read_journal(data_dir, resources)
+        observed.append(None if record is None else record.get("state"))
+        raise apply_update_module.ApplyUpdateError("sealing failed")
+
+    monkeypatch.setattr(apply_update_module, "repair_bundle", failing_repair)
+
+    outcome = apply_update_module.restore_previous_generation(
+        resources,
+        resources,
+        platform_name="darwin",
+        runner=failing_run,
+        data_dir=data_dir,
+    )
+
+    assert outcome.restored is True
+    assert outcome.seal_error is not None
+    assert outcome.complete is False
+    assert observed and all(
+        state not in {"installed", "rolled-back", "aborted"} for state in observed
+    ), f"the end must not be published before the seal (saw {observed})"
+    assert read_journal(data_dir, resources)["state"] == ROLLING_BACK_STATE
+    # And the window's fallback is wired to that helper, not to its own sequence.
+    source = Path(desktop.__file__).read_text(encoding="utf-8")
+    assert "restore_previous_generation(" in source
+    assert 'set_journal_state(data_dir, resources, "rolled-back"' not in source
+
+
+def test_a_bundle_whose_recovery_module_will_not_load_is_verified_not_assumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Nothing ran" describes this invocation, not the installation.
+
+    The reason recovery is being asked for is that an update may have stopped
+    part-way. Browser and terminal mode have no later structural check -- the
+    missing-layer and manifest checks live in the desktop window, which they
+    never open -- so treating an unloadable recovery module as a verified clean
+    install is a fail-open. The bundle is checked directly instead, with the
+    standard-library updater module that does not import the server package.
+    """
+
+    from launchers.statusapp import __main__ as entry_point
+
+    bundle, resources, data_dir, _staged_app, _staged_runtime = _native_installation(tmp_path)
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    monkeypatch.setenv("WG2_APP_ROOT", str(resources / "app"))
+    monkeypatch.setenv("WG2_DATA_DIR", str(data_dir))
+
+    reported: list[str] = []
+    logged: list[str] = []
+    monkeypatch.setattr(entry_point, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(entry_point, "_log_startup_failure", logged.append)
+
+    real_import = builtins.__import__
+
+    def refuse_updater(name: str, *args: object, **kwargs: object) -> object:
+        if name == "launchers.statusapp.updater":
+            raise ImportError("no updater module here")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", refuse_updater)
+
+    # Complete and one generation: verified clean, so it starts.
+    assert entry_point._recover_interrupted_bundle_update([]) is None
+    assert reported == []
+    assert any("complete and name one generation" in entry for entry in logged)
+
+    # A layer missing is exactly the interruption nothing else would catch.
+    logged.clear()
+    (resources / "runtime").rename(resources / "runtime.previous")
+    assert entry_point._recover_interrupted_bundle_update([]) == 1
+    assert reported and "could not be confirmed to be from one version" in reported[0]
+
+    # Two generations installed at once: the same refusal.
+    reported.clear()
+    (resources / "runtime.previous").rename(resources / "runtime")
+    _write_manifest(resources / "runtime", "somethingelse")
+    assert entry_point._recover_interrupted_bundle_update([]) == 1
+    assert reported
+
+
+def test_a_source_checkout_still_starts_when_the_recovery_module_will_not_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checkout has no swappable layers, so there is nothing to have failed."""
+
+    from launchers.statusapp import __main__ as entry_point
+
+    monkeypatch.delenv("WG2_BUNDLE", raising=False)
+    reported: list[str] = []
+    monkeypatch.setattr(entry_point, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(entry_point, "_log_startup_failure", lambda *_a, **_k: None)
+
+    real_import = builtins.__import__
+
+    def refuse_updater(name: str, *args: object, **kwargs: object) -> object:
+        if name == "launchers.statusapp.updater":
+            raise ImportError("no updater module here")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", refuse_updater)
+
+    assert entry_point._recover_interrupted_bundle_update([]) is None
+    assert reported == []
+
+
+def test_a_bundle_that_cannot_even_be_inspected_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the fallback check itself cannot run, the answer is still no."""
+
+    from launchers.statusapp import __main__ as entry_point
+
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    monkeypatch.setenv("WG2_APP_ROOT", "/nowhere/that/exists/app")
+    reported: list[str] = []
+    monkeypatch.setattr(entry_point, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(entry_point, "_log_startup_failure", lambda *_a, **_k: None)
+
+    real_import = builtins.__import__
+
+    def refuse_everything(name: str, *args: object, **kwargs: object) -> object:
+        if name in {"launchers.statusapp.updater", "launchers.apply_update"}:
+            raise ImportError("nothing loads today")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", refuse_everything)
+
+    assert entry_point._recover_interrupted_bundle_update([]) == 1
+    assert reported and "could not be confirmed to be from one version" in reported[0]
+    assert "nothing loads today" in reported[0], "the refusal has to name its cause"
