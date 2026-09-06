@@ -1456,11 +1456,33 @@ def test_the_updaters_own_authorized_relaunch_starts_without_deadlock(
     ).read_text(encoding="utf-8")
 
 
-def test_a_relaunch_grant_is_single_use_and_installation_bound(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_start_with_no_authorization_does_not_destroy_the_one_that_has_it(
+    tmp_path: Path,
 ) -> None:
-    """A nonce that leaked cannot authorize a second start, or another bundle."""
+    """The ordinary extra launch, which must cost the updater's child nothing.
 
+    A user opening the application while the updater is relaunching it presents
+    no nonce. An earlier revision read and unlinked the grant before looking at
+    what was presented, so that launch deleted the authorization its sibling was
+    about to spend -- the child then refused to start, and the updater rolled a
+    healthy update back because the relaunch "did not stay running".
+    """
+
+    _bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="new-1", runtime_generation="new-1"
+    )
+
+    nonce = update_lock.grant_relaunch(resources)
+
+    assert update_lock.consume_relaunch_grant(resources, None) is False
+    assert update_lock.consume_relaunch_grant(resources, "") is False
+    assert update_lock.consume_relaunch_grant(resources, "not-a-nonce") is False
+    assert update_lock.consume_relaunch_grant(resources, "0" * 32) is False
+    # None of that touched the real one.
+    assert update_lock.consume_relaunch_grant(resources, nonce) is True
+
+
+def test_a_grant_is_single_use_expiring_and_installation_bound(tmp_path: Path) -> None:
     _bundle, resources = _bundle_for_startup(
         tmp_path, app_generation="new-1", runtime_generation="new-1"
     )
@@ -1468,27 +1490,88 @@ def test_a_relaunch_grant_is_single_use_and_installation_bound(
         tmp_path / "second", app_generation="new-1", runtime_generation="new-1"
     )
 
-    with update_lock.claim_update(resources):
-        nonce = update_lock.grant_relaunch(resources)
-        assert update_lock.consume_relaunch_grant(resources, nonce) is True
-        # Spent.
-        assert update_lock.consume_relaunch_grant(resources, nonce) is False
-        # Wrong nonce, and an expired one.
-        again = update_lock.grant_relaunch(resources)
-        assert update_lock.consume_relaunch_grant(resources, "0" * 32) is False
-        assert update_lock.consume_relaunch_grant(resources, again) is False
-        stale = update_lock.grant_relaunch(resources)
-        assert (
-            update_lock.consume_relaunch_grant(
-                resources,
-                stale,
-                now=time.time() + update_lock.GRANT_LIFETIME_SECONDS + 1.0,
-            )
-            is False
+    nonce = update_lock.grant_relaunch(resources)
+    assert update_lock.consume_relaunch_grant(resources, nonce) is True
+    assert update_lock.consume_relaunch_grant(resources, nonce) is False
+
+    stale = update_lock.grant_relaunch(resources)
+    assert (
+        update_lock.consume_relaunch_grant(
+            resources, stale, now=time.time() + update_lock.GRANT_LIFETIME_SECONDS + 1.0
         )
-        # A grant for one installation says nothing about another.
-        theirs = update_lock.grant_relaunch(other)
-        assert update_lock.consume_relaunch_grant(resources, theirs) is False
+        is False
+    )
+
+    # A grant for one installation says nothing about another, and spending it
+    # there leaves that installation's own grant alone.
+    theirs = update_lock.grant_relaunch(other)
+    mine = update_lock.grant_relaunch(resources)
+    assert update_lock.consume_relaunch_grant(resources, theirs) is False
+    assert update_lock.consume_relaunch_grant(other, theirs) is True
+    assert update_lock.consume_relaunch_grant(resources, mine) is True
+
+
+def test_only_one_of_several_simultaneous_consumers_spends_a_grant(
+    tmp_path: Path,
+) -> None:
+    """The one-shot claim, raced by real processes rather than argued about.
+
+    Consumption is a rename, so the loser's rename finds nothing there. A read
+    followed by an unlink would let several readers see the same payload and
+    every one of them answer yes, which is not a one-shot grant. Repeated
+    because a race proven once is a race that happened to interleave once: each
+    round mints a fresh grant, parks every consumer on the same barrier, and
+    releases them together.
+    """
+
+    _bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="new-1", runtime_generation="new-1"
+    )
+    consumers = 6
+    rounds = 4
+
+    for round_number in range(rounds):
+        nonce = update_lock.grant_relaunch(resources)
+        go = tmp_path / f"go-{round_number}"
+        program = (
+            "import os, sys, time\n"
+            f"sys.path.insert(0, {str(REPOSITORY_ROOT)!r})\n"
+            "from launchers.update_lock import consume_relaunch_grant\n"
+            "print('ready', flush=True)\n"
+            f"go = {str(go)!r}\n"
+            "while not os.path.exists(go):\n"
+            "    pass\n"
+            f"print(consume_relaunch_grant({str(resources)!r}, {nonce!r}), flush=True)\n"
+        )
+        started = [
+            subprocess.Popen(
+                [sys.executable, "-c", program],
+                stdout=subprocess.PIPE,
+                text=True,
+                env={**os.environ},
+            )
+            for _ in range(consumers)
+        ]
+        try:
+            # Every consumer has imported and is spinning on the barrier, so the
+            # release lands on all of them at once rather than on whichever
+            # interpreter finished starting first.
+            for process in started:
+                assert process.stdout is not None
+                assert process.stdout.readline().strip() == "ready"
+            go.write_text("go", encoding="utf-8")
+            answers = [
+                process.communicate(timeout=120)[0].strip() for process in started
+            ]
+        finally:
+            for process in started:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=30)
+
+        assert sorted(answers) == ["False"] * (consumers - 1) + ["True"], (
+            f"round {round_number}: {answers}"
+        )
 
 
 def test_the_in_app_startup_recovery_still_decides_when_nobody_owns_the_update(

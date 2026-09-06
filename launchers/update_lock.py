@@ -54,6 +54,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import secrets
 import time
 from pathlib import Path
@@ -267,16 +268,47 @@ GRANT_SUFFIX = ".json"
 GRANT_LIFETIME_SECONDS = 600.0
 
 
+NONCE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+
 def grant_path(
     resources: str | os.PathLike[str],
+    nonce: str,
     *,
     system: str | None = None,
     environ: Mapping[str, str] | None = None,
     home: str | os.PathLike[str] | None = None,
 ) -> Path:
+    """The file that *is* one grant, named by the nonce that spends it.
+
+    The nonce is part of the name, not only of the contents, and that is what
+    makes consumption safe. A start presenting no nonce or the wrong one
+    addresses a path that does not exist, so it cannot read, claim or delete the
+    grant somebody else was given -- which is what an earlier revision did, and
+    it cost a healthy update its rollback whenever a user opened the application
+    while the updater was relaunching it.
+
+    A presented nonce is checked against :data:`NONCE_PATTERN` before it becomes
+    part of a path, so a value out of the environment can only ever name a file
+    in this directory.
+    """
+
+    if not NONCE_PATTERN.fullmatch(nonce):
+        raise ValueError("a relaunch nonce is 32 lowercase hexadecimal digits")
     key = installation_key(resources)
     root = cache_root(system=system, environ=environ, home=home)
-    return root / LOCK_DIRECTORY / f"{GRANT_PREFIX}{key}{GRANT_SUFFIX}"
+    return root / LOCK_DIRECTORY / f"{GRANT_PREFIX}{key}-{nonce}{GRANT_SUFFIX}"
+
+
+def _grant_directory(
+    resources: str | os.PathLike[str],
+    *,
+    system: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> tuple[Path, str]:
+    root = cache_root(system=system, environ=environ, home=home) / LOCK_DIRECTORY
+    return root, f"{GRANT_PREFIX}{installation_key(resources)}-"
 
 
 def grant_relaunch(
@@ -293,11 +325,23 @@ def grant_relaunch(
     nonce is evidence of *when* the granting process had got to, not merely that
     it exists. Returns the nonce for the caller to put in the child's
     environment.
+
+    Any earlier grant for this installation is removed first. The updater is the
+    only minter and it holds the installation's claim while it mints, so at most
+    one grant is outstanding and an abandoned one cannot accumulate.
     """
 
-    path = grant_path(resources, system=system, environ=environ, home=home)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    directory, prefix = _grant_directory(
+        resources, system=system, environ=environ, home=home
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    for stale in directory.glob(f"{prefix}*{GRANT_SUFFIX}"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     nonce = secrets.token_hex(16)
+    path = grant_path(resources, nonce, system=system, environ=environ, home=home)
     payload = {
         "schemaVersion": 1,
         "nonce": nonce,
@@ -320,25 +364,50 @@ def consume_relaunch_grant(
     environ: Mapping[str, str] | None = None,
     home: str | os.PathLike[str] | None = None,
 ) -> bool:
-    """Spend a grant, or report that this start has no authorization.
+    """Spend the grant this start was given, or report that it has none.
 
-    Single use: the record is removed whether or not it matched, so a nonce that
-    leaked cannot authorize a second start. Every failure is a refusal -- an
-    absent, unreadable, expired, mismatched or wrong-installation grant all mean
-    the same thing here, which is that nothing authorized this start.
+    **Consumption is a rename, and the rename is the exclusion.** Two starts
+    holding the same valid nonce both try to move the one file out of the way;
+    exactly one succeeds, because the loser's rename finds nothing there. A read
+    followed by an unlink would let both read the same payload and both answer
+    yes, which is not a one-shot grant.
+
+    **A start that was given nothing consumes nothing.** No nonce, a malformed
+    one, or one addressing another installation never reaches the grant file at
+    all -- the path is derived from what was presented. That matters more than
+    it looks: the ordinary case is a user opening the application while the
+    updater is relaunching it, and an earlier revision let that launch delete
+    the grant its child was about to spend, whereupon the updater rolled a
+    perfectly healthy update back.
+
+    Every failure is a refusal: absent, unreadable, expired, mismatched or
+    belonging to another installation all mean the same thing here, which is
+    that nothing authorized this start.
     """
 
-    path = grant_path(resources, system=system, environ=environ, home=home)
+    if not nonce or not NONCE_PATTERN.fullmatch(nonce):
+        return False
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        path = grant_path(resources, nonce, system=system, environ=environ, home=home)
+    except (ValueError, OSError):
+        return False
+    # One atomic move decides who spent it. The name is unique to this attempt so
+    # two winners cannot exist even if the loser retried.
+    claimed = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.spent")
+    try:
+        os.rename(path, claimed)
+    except OSError:
+        return False
+    try:
+        payload = json.loads(claimed.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     finally:
         try:
-            path.unlink()
+            claimed.unlink()
         except OSError:
             pass
-    if not nonce or not isinstance(payload, dict):
+    if not isinstance(payload, dict):
         return False
     if payload.get("installation") != installation_key(resources):
         return False
