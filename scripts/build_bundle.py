@@ -2124,10 +2124,16 @@ cache under %LOCALAPPDATA%\WaveguideGenerator, which is safe to delete too.
                 f"no room under the {WINDOWS_MAX_PATH}-character limit for any "
                 "install root at all."
             )
+        # Two version strings, deliberately. `AppVersion` is what a person reads
+        # in the wizard and in Apps & features; `VersionInfoVersion` is the
+        # binary VERSIONINFO field, which takes only numbers, so a pre-release
+        # build has to hand it the numeric form of the same identity.
+        native = release_assets.native_version_fields(version)
         self.run_command(
             [
                 str(compiler),
                 f"/DAppVersion={version}",
+                f"/DVersionInfoVersion={native.windows}",
                 f"/DPayloadDir={bundle}",
                 f"/DMaxPayloadDepth={depth}",
                 f"/DOutputDir={output.parent}",

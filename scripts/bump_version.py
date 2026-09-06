@@ -40,6 +40,7 @@ if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
 from server.platform.paths import app_root  # noqa: E402
+from shared.release_assets import native_version_fields  # noqa: E402
 
 
 REPO_ROOT = app_root()
@@ -137,21 +138,47 @@ def _openapi_version() -> str | None:
     return info.get("version") if isinstance(info, dict) else None
 
 
+#: The copies that carry a platform's own numeric version field rather than the
+#: product's version string. They agree with `shared/version.json` for a release
+#: -- `native_version_fields` maps a release onto itself -- and carry its
+#: numeric form for a build stamp, which is the only shape those fields accept.
+NATIVE_VERSION_FIELDS = {
+    "macOS app CFBundleShortVersionString": "short",
+    "macOS app CFBundleVersion": "bundle",
+}
+
+
 def check() -> list[str]:
-    """Return a list of disagreements; empty means every copy matches."""
+    """Return a list of disagreements; empty means every copy matches.
+
+    Every copy of the product version must be the same string, and each native
+    field must be that version as its own format can carry it. For a release
+    those are the same requirement, so this is one rule rather than a mode.
+    """
 
     versions = declared_versions()
     source = versions["shared/version.json"]
-    return [
-        f"{where} says {found!r}, shared/version.json says {source!r}"
-        for where, found in versions.items()
-        if where != "shared/version.json" and found != source
-    ]
+    try:
+        native = native_version_fields(source)
+    except ValueError as exc:
+        return [f"shared/version.json says {source!r}, which is not a version: {exc}"]
+    problems = []
+    for where, found in versions.items():
+        if where == "shared/version.json":
+            continue
+        expected = (
+            getattr(native, NATIVE_VERSION_FIELDS[where])
+            if where in NATIVE_VERSION_FIELDS
+            else source
+        )
+        if found != expected:
+            problems.append(f"{where} says {found!r}, expected {expected!r}")
+    return problems
 
 
 VERSION_KEY = re.compile(r'("version"\s*:\s*)"[^"]*"')
 PLIST_VERSION = re.compile(
-    r"(<key>CFBundle(?:ShortVersionString|Version)</key>\s*<string>)[^<]*(</string>)"
+    r"(<key>CFBundle(?P<key>ShortVersionString|Version)</key>\s*<string>)[^<]*(</string>)"
 )
 
 
@@ -176,8 +203,29 @@ def _replace_version(path: Path, new: str, *, occurrences: int) -> None:
 
 
 def _replace_plist_version(new: str) -> None:
+    """Write the two bundle versions, each in the format Apple documents for it.
+
+    They are the same string for a release. For a build stamp they are not:
+    `CFBundleShortVersionString` is one to three integers and `CFBundleVersion`
+    is the build, so `0.4.0-main.7` is not a value either field accepts. The
+    SemVer string still identifies the build everywhere a person or an asset
+    name sees it.
+    """
+
+    native = native_version_fields(new)
     text = APP_PLIST.read_text(encoding="utf-8")
-    text, count = PLIST_VERSION.subn(rf"\g<1>{new}\g<2>", text)
+    replacements = {
+        "CFBundleShortVersionString": native.short,
+        "CFBundleVersion": native.bundle,
+    }
+    count = 0
+
+    def substitute(match: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        return f"{match.group(1)}{replacements['CFBundle' + match.group('key')]}{match.group(3)}"
+
+    text = PLIST_VERSION.sub(substitute, text)
     if count != 2:
         raise VersionError(
             f"{APP_PLIST.relative_to(REPO_ROOT)}: expected 2 bundle versions, found {count}"
@@ -213,8 +261,10 @@ def main(argv: list[str] | None = None) -> int:
         "--build-stamp",
         action="store_true",
         help=(
-            "allow --set to name a pre-release build (0.4.0-main.7). For stamping "
-            "a build that is not a release; never for a release commit."
+            "allow a pre-release build version (0.4.0-main.7) on --set, and "
+            "accept one on --check. For a build that is not a release; a plain "
+            "--check still refuses a stamped tree, which is what keeps a release "
+            "commit from carrying one."
         ),
     )
     group.add_argument(
@@ -231,11 +281,16 @@ def main(argv: list[str] | None = None) -> int:
                 for problem in problems:
                     print(f"version drift: {problem}", file=sys.stderr)
                 return 1
-            print(f"version {current()} is consistent across all files")
+            # Reading it back is half the check: a tree carrying a build stamp
+            # must fail a plain `--check`, because a release tree may not carry
+            # one. `--check --build-stamp` is the build's own route to the same
+            # verification, and it is the only way to validate the stamp it just
+            # wrote.
+            print(f"version {current(allow_prerelease=args.build_stamp)} is consistent across all files")
             return 0
 
         if args.build_stamp and not args.exact:
-            raise VersionError("--build-stamp only applies to --set")
+            raise VersionError("--build-stamp applies to --set and to --check")
         new = args.exact if args.exact else next_version(args.part)
         was = current(allow_prerelease=args.build_stamp)
         write(new, allow_prerelease=args.build_stamp)
