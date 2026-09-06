@@ -95,7 +95,7 @@ jobs:
             build/bundle/Waveguide.Generator-*-macos-arm64.dmg.sha256
           if-no-files-found: error
 
-      - name: Qualify BEAT CPU on the extracted candidate
+      - name: Qualify BEAT CPU on the candidate extracted from the disk image
         # The build's own verification asks the backends whether they report
         # ready and asks the server for one HTTP response. Neither runs a BEAT
         # CPU solve, so a candidate could pass both while the backend the
@@ -103,10 +103,12 @@ jobs:
         #
         # The payload is the .app copied out of the mounted disk image with
         # ditto, so what is qualified is what a user drags out of the DMG --
-        # not the build directory it came from. On macOS the application does
-        # not prepare the CPU runtime by itself (Apple Silicon prefers Metal and
-        # AUTO agrees), so the helper falls through to the documented
-        # provisioning command, which is why this step is the slow one here.
+        # not the build directory it came from.
+        #
+        # The application prepares its own CPU runtime on macOS too since
+        # 69b1ed0, so this requires that preparation like every other platform
+        # rather than reaching around it. It is the slow step here because that
+        # preparation downloads and instantiates a Julia.
         #
         # After the uploads on purpose: a candidate that fails this gate is
         # still the candidate somebody has to look at, and the job goes red
@@ -216,7 +218,7 @@ jobs:
             build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe.sha256
           if-no-files-found: error
 
-      - name: Qualify BEAT CPU on the installed candidate
+      - name: Qualify BEAT CPU on the candidate the Windows installer installed
         shell: pwsh
         # Installed by the real installer, unattended and per-user: the .iss
         # sets PrivilegesRequired=lowest, so /DIR into a private directory needs
@@ -249,6 +251,13 @@ jobs:
             --output (Join-Path $root "qualification") `
             --pins-json pins.json `
             --build-manifest $manifest
+          # PowerShell does not turn a native command's non-zero exit into a
+          # terminating error: $ErrorActionPreference governs PowerShell errors,
+          # not exit codes, so without this the qualifier could fail and the step
+          # would still be green. The one thing this gate must never do.
+          if ($LASTEXITCODE -ne 0) {
+            throw "The CPU qualification exited $LASTEXITCODE"
+          }
 
       - name: Preserve the CPU qualification logs
         if: always()
@@ -321,7 +330,7 @@ jobs:
             build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
 
-      - name: Qualify BEAT CPU on the installed candidate
+      - name: Qualify BEAT CPU on the candidate install.sh installed
         # Installed by the release tarball's own install.sh, as a non-root user
         # into a private prefix, so what is qualified is the installer's output.
         # --no-launch because this gate starts the server itself, with its own

@@ -384,9 +384,14 @@ def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: P
     assert environment["WG2_BUNDLE"] == "1"
     assert environment["WG2_APP_ROOT"] == str(app)
     for name in ("PYTHONPYCACHEPREFIX", "NUMBA_CACHE_DIR", "MPLCONFIGDIR",
-                 "HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_REGISTRY"):
+                 "HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR"):
         assert environment[name].startswith(str(work)), name
     assert "PYTHONPATH" not in environment
+    # The name is not a detail. `worker_registry.py` reads WORKER_DIR_ENV_VAR
+    # and nothing else, so an invented one is ignored in silence: the workers
+    # go to the user's default registry and the directory reported as isolated
+    # is one nothing ever wrote to.
+    assert "HORNLAB_BEAT_WORKER_REGISTRY" not in environment
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +531,10 @@ def test_the_candidate_is_installed_or_extracted_before_it_is_qualified(job: str
         "windows-bundle": ("/VERYSILENT", "/DIR=$install", "--payload-kind windows-installer"),
         "linux-bundle": ("install.sh", "--prefix", "--payload-kind linux-install-sh"),
     }[job]
+    names = [step.get("name") or "" for step in _steps(job)]
+    assert any(name.startswith("Qualify BEAT CPU on the candidate") for name in names), (
+        f"{job} must say which kind of payload it qualified"
+    )
     for fragment in expected:
         assert fragment in command, f"{job} is missing {fragment!r}"
 
@@ -546,6 +555,52 @@ def test_a_failed_gate_still_leaves_the_candidate_and_its_logs(job: str) -> None
     assert upload < gate_step, f"{job} would withhold the candidate when the gate fails"
     assert logs > gate_step, f"{job} preserves logs before the step that writes them"
     assert _steps(job)[logs]["if"] == "always()", job
+
+
+def test_the_windows_step_fails_when_the_qualifier_fails() -> None:
+    """PowerShell does not fail a step on a native command's exit code.
+
+    `$ErrorActionPreference` governs PowerShell's own errors, not the exit
+    status of `python.exe`, so without an explicit `$LASTEXITCODE` check the
+    qualifier could exit 1 and the step would still be green -- the one thing a
+    gate must never do. The POSIX jobs get this from `set -e`.
+    """
+
+    windows = next(
+        step["run"]
+        for step in _steps("windows-bundle")
+        if "qualify_installed_cpu.py" in (step.get("run") or "")
+    )
+    check = windows.index("$LASTEXITCODE")
+    invocation = windows.index("qualify_installed_cpu.py")
+    assert check > invocation, "the exit code must be checked after the qualifier runs"
+    assert "throw" in windows[check:], "a non-zero exit has to fail the step"
+
+
+@pytest.mark.parametrize("job", ("macos-bundle", "linux-bundle"))
+def test_the_posix_steps_stop_on_a_failing_command(job: str) -> None:
+    command = next(
+        step["run"]
+        for step in _steps(job)
+        if "qualify_installed_cpu.py" in (step.get("run") or "")
+    )
+    assert command.lstrip().startswith("set -euo pipefail"), job
+
+
+def test_no_step_turns_a_failed_qualification_into_a_pass() -> None:
+    """No `|| true`, no `continue-on-error`, and no second attempt anywhere."""
+
+    spec = _workflow()
+    for name, body in spec["jobs"].items():
+        for step in body["steps"]:
+            assert "continue-on-error" not in step, f"{name}: {step.get('name')}"
+            run = step.get("run") or ""
+            if "qualify_installed_cpu.py" in run:
+                assert "|| true" not in run, name
+                assert run.count("qualify_installed_cpu.py") == 1, (
+                    f"{name} invokes the qualifier more than once, which is how a "
+                    "retry would hide a product failure"
+                )
 
 
 def test_the_gate_adds_no_new_action_reference() -> None:
@@ -610,7 +665,11 @@ if argv and argv[0] == "-c":
     if "importlib.metadata" in program:
         print(json.dumps({{name: {{"commit": "{sha}"}} for name in argv[2:]}}))
     else:
-        print(json.dumps({{"verified": [], "refused": []}}))
+        wanted = argv[2]
+        effective = "{effective}" or wanted
+        print(json.dumps({{"verified": [], "refused": [],
+                           "effective_worker_dir": effective,
+                           "contained": effective == wanted}}))
     raise SystemExit(0)
 if argv and argv[0] == "-m":
     raise SystemExit(0)
@@ -637,15 +696,19 @@ STARTED = time.monotonic()
 RESULT = SETTINGS["result"]
 
 
+WORKSPACE = {"path": str(Path(args.data_dir) / "workspace-default")}
+
+
 def capabilities():
-    ready = (time.monotonic() - STARTED) >= SETTINGS["ready_after_s"]
+    settled = (time.monotonic() - STARTED) >= SETTINGS["ready_after_s"]
+    available = bool(settled) and SETTINGS["ever_ready"]
     return {
         "engines": [
-            {"name": "beat-cpu", "available": bool(ready) and SETTINGS["ever_ready"],
-             "reason": "ready" if ready else "preparing"},
+            {"name": "beat-cpu", "available": available,
+             "reason": "ready" if available else "preparing"},
             {"name": "beat-metal", "available": False, "reason": "no GPU here"},
         ],
-        "cpuPreparationInFlight": not ready,
+        "cpuPreparationInFlight": not settled,
     }
 
 
@@ -666,6 +729,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"status": "ok"})
         elif self.path == "/api/capabilities":
             self._send(capabilities())
+        elif self.path == "/api/workspace/path":
+            self._send(WORKSPACE)
         elif self.path.startswith("/api/status/"):
             self._send({"status": "complete"})
         elif self.path.startswith("/api/results/"):
@@ -676,7 +741,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or b"{}")
-        if self.path == "/api/solve":
+        if self.path == "/api/workspace/select":
+            WORKSPACE["path"] = body["path"]
+            self._send(WORKSPACE)
+        elif self.path == "/api/solve":
             Path(args.data_dir).mkdir(parents=True, exist_ok=True)
             (Path(args.data_dir) / "solve-request.json").write_text(json.dumps(body))
             self._send({"job_id": "job-1"})
@@ -731,16 +799,20 @@ def _stub_payload(tmp_path: Path, **settings: object) -> Path:
         encoding="utf-8",
     )
     (app / "launch" / "serve.py").write_text(_STUB_SERVER, encoding="utf-8")
-    resolved = {"ready_after_s": 0.0, "ever_ready": True, "result": _result()}
-    resolved.update(settings)
-    (app / "launch" / "stub-settings.json").write_text(json.dumps(resolved), encoding="utf-8")
-
     interpreter = payload / "runtime" / "bin" / "python3.13"
     interpreter.write_text(
-        _FAKE_INTERPRETER.format(python=sys.executable, sha=PINS["hornlab-beat-bem"]),
+        _FAKE_INTERPRETER.format(
+            python=sys.executable,
+            sha=PINS["hornlab-beat-bem"],
+            effective=str(settings.pop("effective_worker_dir", "")),
+        ),
         encoding="utf-8",
     )
     interpreter.chmod(0o755)
+
+    resolved = {"ready_after_s": 0.0, "ever_ready": True, "result": _result()}
+    resolved.update(settings)
+    (app / "launch" / "stub-settings.json").write_text(json.dumps(resolved), encoding="utf-8")
     return payload
 
 
@@ -786,15 +858,17 @@ def test_the_harness_starts_waits_solves_and_stops_against_a_stub(tmp_path: Path
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="see the test above")
-def test_a_candidate_that_never_offers_cpu_fails_in_bounded_time(
+def test_an_application_that_does_not_offer_cpu_itself_fails_the_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _quick_timeouts: None
 ) -> None:
-    """The gate's whole purpose, exercised end to end.
+    """The requirement is that the *application* offers it, on every platform.
 
-    The application says it has stopped preparing and the row is still not
-    available, so this must fail with the application's own reason rather than
-    sitting on a timeout -- and then fail again after the documented
-    provisioning command, because a stub cannot make the row appear.
+    Since 69b1ed0 the application prepares the CPU runtime on macOS too, so a
+    row that never becomes available is a product defect on any supported
+    computer. An earlier version of this gate answered that by running the
+    provisioning command itself and restarting, which passed -- and so left
+    exactly the user requirement it exists for unqualified. It must fail, with
+    the application's own reason.
     """
 
     payload = _stub_payload(tmp_path, ever_ready=False)
@@ -814,7 +888,49 @@ def test_a_candidate_that_never_offers_cpu_fails_in_bounded_time(
     assert code == 1
     report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
     assert report["qualified"] is False
-    assert "still not offered" in report["error"]
+    assert "did not offer beat-cpu by itself" in report["error"]
+    assert report["cpu_offered"]["available"] is False
+    assert report["cpu_offered"]["reason"] == "preparing"
+    # No provisioning was run, and no second server was started to hide it.
+    assert "preparation_diagnosis" not in report
+    assert not (output / "cpu-provision-diagnosis.log").exists()
+    assert not (output / "server-2.log").exists()
+    # Everything established before the failure survived it.
+    assert report["pins"]["checked"] == ["hornlab-beat-bem"]
+    assert report["app_manifest"]["manifest"]["version"] == "0.3.1"
+    assert report["cpu_preparation"]["settled"] == "not-preparing"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the test above")
+def test_the_diagnosis_flag_adds_evidence_and_still_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _quick_timeouts: None
+) -> None:
+    """An explicitly labelled diagnosis cannot qualify a candidate.
+
+    It runs from the failure path, after the verdict, so the most it can do is
+    say whether the runtime could have been built on this host at all.
+    """
+
+    payload = _stub_payload(tmp_path, ever_ready=False)
+    output = tmp_path / "out"
+    monkeypatch.setattr(gate, "CAPABILITY_POLL_S", 0.1)
+
+    code = gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--diagnose-preparation-failure",
+        ]
+    )
+
+    assert code == 1, "a diagnosis must never turn a failed gate green"
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert report["qualified"] is False
+    assert report["preparation_diagnosis"]["note"].startswith("diagnosis only")
+    assert (output / "cpu-provision-diagnosis.log").is_file()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="see the test above")
@@ -847,18 +963,51 @@ def test_a_stub_that_answers_with_rubbish_fails_the_gate(tmp_path: Path, _quick_
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
-def test_each_launch_gets_its_own_stop_file(tmp_path: Path, _quick_timeouts: None) -> None:
-    """A second launch must not inherit the first one's shutdown signal.
+def test_the_gate_starts_exactly_one_server(tmp_path: Path, _quick_timeouts: None) -> None:
+    """No second launch, because there is nothing left that would restart.
 
-    The server stops when the control file appears, so two launches sharing one
-    path means the second is told to stop before it has finished starting. Found
-    by running the harness against a stub rather than by reading it.
+    The fallback that ran the provisioning command and started the application
+    again is gone -- it made a product defect pass -- and with it the shared
+    status-control file that told the second launch to stop before it had
+    started. One launch is now the whole of the gate, so both are closed.
     """
 
     payload = _stub_payload(tmp_path, ever_ready=False)
     output = tmp_path / "out"
 
-    gate.main(
+    assert gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+        ]
+    ) == 1
+
+    assert (output / "server.log").is_file()
+    assert not (output / "server-2.log").exists()
+    assert [p.name for p in (tmp_path / "work" / "status").iterdir()] == ["stop-1"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_registry_override_that_did_not_take_effect_signals_nothing(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    """The failure mode the wrong variable name produced, caught rather than hidden.
+
+    `worker_registry.py` reads `HORNLAB_BEAT_WORKER_DIR` and nothing else, so an
+    override under any other name is ignored in silence: the workers land in the
+    user's own registry and the gate happily reports an isolated directory that
+    nothing ever wrote to. Cleanup would then be reading -- and signalling --
+    another person's workers. Authenticating as itself does not make a
+    stranger's worker ours, so the answer is to touch nothing and say so.
+    """
+
+    payload = _stub_payload(tmp_path, effective_worker_dir="/somewhere/else/entirely")
+    output = tmp_path / "out"
+
+    code = gate.main(
         [
             "--payload", str(payload),
             "--payload-kind", "stub",
@@ -868,13 +1017,83 @@ def test_each_launch_gets_its_own_stop_file(tmp_path: Path, _quick_timeouts: Non
         ]
     )
 
-    # Both launches ran and neither timed out waiting for /health, which is what
-    # a shared control file would have caused.
-    error = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))["error"]
-    assert "answer /health" not in error, error
-    assert (output / "server.log").is_file()
-    assert (output / "server-2.log").is_file()
-    assert sorted(p.name for p in (tmp_path / "work" / "status").iterdir()) == [
-        "stop-1",
-        "stop-2",
-    ]
+    assert code == 1
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert "did not take effect" in report["worker_cleanup"]["refused"]
+    assert "Nothing was signalled" in report["worker_cleanup"]["refused"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_failure_still_cleans_up_and_keeps_what_it_had_established(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    """Cleanup and the partial report are in the finally, not after success.
+
+    A solve that returns rubbish used to leave both behind: no worker cleanup,
+    and a report containing only the error -- not the pins already checked, not
+    the manifest, not the capability samples that say what the application was
+    doing when it stopped.
+    """
+
+    broken = _result(
+        spl_on_axis={
+            "frequencies": [500.0, 1000.0],
+            "spl": [float("nan"), 1.0],
+            "phase_degrees": [0.0, 1.0],
+        }
+    )
+    payload = _stub_payload(tmp_path, result=broken)
+    output = tmp_path / "out"
+
+    assert gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+        ]
+    ) == 1
+
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert report["qualified"] is False
+    assert "non-finite" in report["error"]
+    assert report["worker_cleanup"]["contained"] is True
+    assert report["pins"]["checked"] == ["hornlab-beat-bem"]
+    assert report["cpu_offered"]["available"] is True
+    assert report["workspace"]["workspace_path"].startswith(str(tmp_path / "work"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_the_workspace_is_moved_into_the_run_before_anything_solves(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    """`--data-dir` is not workspace isolation, and on Windows nothing else is.
+
+    `launch/serve.py` resolves the workspace through `documents_root()`, which
+    honours `XDG_DOCUMENTS_DIR` on POSIX and has no supported override on
+    Windows. So the workspace is selected through the same API the application's
+    own settings use, before the first solve -- a run that wrote a result into
+    somebody's Documents and only then checked would already have done the thing
+    the check exists to prevent.
+    """
+
+    payload = _stub_payload(tmp_path)
+    output = tmp_path / "out"
+
+    assert gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+        ]
+    ) == 0
+
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    workspace = report["workspace"]
+    assert workspace["established_through_the_api"] is True
+    assert workspace["workspace_path"] == str(tmp_path / "work" / "workspace")
+    # And it happened before the solve: the request the stub recorded is there.
+    assert (tmp_path / "work" / "data" / "solve-request.json").is_file()

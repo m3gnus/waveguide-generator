@@ -36,6 +36,7 @@ import platform
 import socket
 import subprocess
 import sys
+import traceback
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -95,6 +96,8 @@ PROBE_TIMEOUT_S = 300.0
 #: A record that will not authenticate is reported and left strictly alone.
 _IDENTIFY_AND_STOP = r"""
 import json, sys, time
+from pathlib import Path
+
 from hornlab_beat_bem import worker_registry as registry
 from hornlab_beat_bem.worker_client import find_live_hosts, receive_frame, send_frame
 
@@ -135,6 +138,16 @@ def identity(record):
             pass
 
 
+# The directory the package would use on its own. If the override did not take
+# effect this is the user's own registry, and nothing below may touch it.
+effective = str(registry.worker_dir())
+contained = Path(effective).resolve() == Path(directory).resolve()
+if not contained:
+    print(json.dumps({"verified": [], "refused": [], "effective_worker_dir": effective,
+                      "contained": False,
+                      "note": "refused to read or signal a registry outside the gate tree"}))
+    raise SystemExit(0)
+
 verified, refused = [], []
 for host in find_live_hosts(directory):
     found = identity(host)
@@ -155,7 +168,8 @@ if action == "stop" and verified:
     verified = [dict(item, still_alive=registry.pid_alive(item["host_pid"]))
                 for item in verified]
 
-print(json.dumps({"verified": verified, "refused": refused}))
+print(json.dumps({"verified": verified, "refused": refused,
+                  "effective_worker_dir": effective, "contained": True}))
 """
 
 #: Read PEP 610 metadata from the packaged interpreter. Asked of the runtime
@@ -252,7 +266,13 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
         NUMBA_CACHE_DIR=str(caches / "numba"),
         MPLCONFIGDIR=str(caches / "matplotlib"),
         HORNLAB_BEAT_RUNTIME_DIR=str(work / "beat-runtime"),
-        HORNLAB_BEAT_WORKER_REGISTRY=str(work / "beat-registry"),
+        # The name the pinned package actually reads is WORKER_DIR_ENV_VAR, and
+        # it is HORNLAB_BEAT_WORKER_DIR. An invented name is not an isolation
+        # failure that shows up as an error: the override is simply ignored, the
+        # workers land in the *user's* default registry, and the directory this
+        # gate then reports as isolated is one nothing ever wrote to. The
+        # containment check below exists because that failure is silent.
+        HORNLAB_BEAT_WORKER_DIR=str(work / "beat-registry"),
     )
     if platform.system() != "Windows":
         environment["XDG_DOCUMENTS_DIR"] = str(documents)
@@ -495,6 +515,70 @@ class Server:
 # ---------------------------------------------------------------------------
 
 
+def _inside(candidate: object, parent: Path) -> bool:
+    """Is *candidate* the same path as *parent*, or under it?
+
+    Both sides are resolved. Resolving only one is how this reads False on
+    macOS, where a temporary root is reached through ``/var`` and reported
+    through ``/private/var`` -- and a run would then refuse its own correctly
+    isolated workspace. Comparing parents rather than string prefixes keeps
+    ``/tmp/run-elsewhere`` from counting as inside ``/tmp/run``.
+    """
+
+    if not isinstance(candidate, str) or not candidate:
+        return False
+    try:
+        resolved = Path(candidate).resolve()
+        anchor = Path(parent).resolve()
+    except OSError:
+        return False
+    return resolved == anchor or anchor in resolved.parents
+
+
+def workspace_isolation(base: str, work: Path) -> dict[str, Any]:
+    """Put this run's workspace inside its own tree, before anything solves.
+
+    ``--data-dir`` is not this. ``launch/serve.py`` resolves the workspace
+    through ``documents_root()``, which on POSIX honours ``XDG_DOCUMENTS_DIR``
+    -- set in the environment above -- and on Windows has no supported
+    override at all. So on Windows the startup default really is the user's
+    Documents, and the workspace is moved into this run's tree through the same
+    API the application's own settings use, before the first solve. Asserting
+    that ``WG2_DATA_DIR`` alone isolates the workspace would be false there.
+
+    Called before solving on purpose: a run that wrote its first result into
+    somebody's Documents and only then checked would already have done the
+    thing this exists to prevent.
+    """
+
+    documents = (work / "documents").resolve()
+    before = http(base, "/api/workspace/path")
+    started_inside = _inside(before.get("path"), documents)
+    established = False
+    if not started_inside:
+        target = work / "workspace"
+        target.mkdir(parents=True, exist_ok=True)
+        http(base, "/api/workspace/select", {"path": str(target)})
+        established = True
+    current = http(base, "/api/workspace/path")
+    if not _inside(current.get("path"), work):
+        raise QualificationError(
+            f"the workspace is outside this run's temporary tree: {current!r}"
+        )
+    return {
+        "startup_path": before.get("path"),
+        "startup_was_isolated": started_inside,
+        "established_through_the_api": established,
+        "workspace_path": current.get("path"),
+        "documents_override": (
+            "XDG_DOCUMENTS_DIR"
+            if platform.system() != "Windows"
+            else "unavailable on Windows; the workspace was selected through the API and "
+            "the startup default above was the user's Documents"
+        ),
+    }
+
+
 def engine_row(capabilities: dict[str, Any], name: str) -> dict[str, Any]:
     for row in capabilities.get("engines", []):
         if row.get("name") == name:
@@ -543,22 +627,31 @@ def await_cpu_row(server: Server, output: Path) -> dict[str, Any]:
     return {"settled": "timeout", "samples": len(samples), "final": last}
 
 
-def provision_cpu(
+def diagnose_preparation(
     interpreter: Path, app: Path, environment: dict[str, str], output: Path
 ) -> dict[str, Any]:
-    """Run the documented provisioning command, and say where its Julia came from.
+    """Run the documented provisioning command *after* the gate has already failed.
 
-    This is the command the application's own unavailable reason tells a user to
-    run, so it is the supported explicit path rather than a way around one. It
-    is only reached when the application did not prepare the runtime itself,
-    which on macOS is by design.
+    **This can never make a candidate pass.** It is reached only from the
+    failure path, with an explicit flag, and its result is attached to a report
+    whose verdict is already "not qualified".
+
+    The distinction matters because an earlier version of this file did the
+    opposite: when the application had not prepared the CPU runtime, it ran this
+    command, restarted, and passed. That masked the exact user requirement the
+    gate exists to check -- BEAT CPU offered on every supported computer, by the
+    application itself -- and turned "the product does not do this" into a
+    green step. What the application will not do for a user, this must not do
+    for the build.
+
+    What it is good for is diagnosis: when a runner reports the row unavailable,
+    the provisioning transcript says whether the runtime can be built there at
+    all, which separates "the product never tried" from "the host cannot".
 
     ``HORNLAB_BEAT_RUNTIME_DIR`` is this run's own directory, so no previously
     provisioned record is read -- but discovery also consults
-    ``HORNLAB_BEAT_JULIA`` and ``PATH``. Reusing a Julia already on the host is
-    real evidence that the packaged application can provision and solve; it is
-    **not** evidence about a clean machine, so which happened is recorded here
-    and must not be quoted as the other.
+    ``HORNLAB_BEAT_JULIA`` and ``PATH``. Reusing a Julia already on the host
+    says nothing about a clean machine, so which happened is recorded.
     """
 
     completed = subprocess.run(  # noqa: S603 - packaged interpreter, documented module
@@ -571,12 +664,8 @@ def provision_cpu(
         check=False,
     )
     transcript = completed.stdout + completed.stderr
-    log = output / "cpu-provision.log"
+    log = output / "cpu-provision-diagnosis.log"
     log.write_text(transcript, encoding="utf-8")
-    if completed.returncode != 0:
-        raise QualificationError(
-            f"CPU provisioning failed ({completed.returncode}); see {log.name}"
-        )
     runtime_dir = environment["HORNLAB_BEAT_RUNTIME_DIR"]
     state_path = Path(runtime_dir) / "state-cpu.json"
     state: dict[str, Any] = {}
@@ -586,6 +675,8 @@ def provision_cpu(
     inside = bool(julia) and julia.startswith(runtime_dir)
     downloaded = "download" in transcript.lower()
     return {
+        "note": "diagnosis only; this cannot qualify a candidate",
+        "command_exit_code": completed.returncode,
         "status": state.get("status"),
         "julia_executable": julia,
         "julia_env_var_set": bool(environment.get("HORNLAB_BEAT_JULIA")),
@@ -761,7 +852,7 @@ def stop_our_workers(
             str(interpreter),
             "-c",
             _IDENTIFY_AND_STOP,
-            environment["HORNLAB_BEAT_WORKER_REGISTRY"],
+            environment["HORNLAB_BEAT_WORKER_DIR"],
             "stop",
         ],
         env=environment,
@@ -776,12 +867,30 @@ def stop_our_workers(
     if completed.returncode != 0:
         return {"error": completed.stderr[-1000:]}
     try:
-        return json.loads(completed.stdout.strip().splitlines()[-1])
+        answer = json.loads(completed.stdout.strip().splitlines()[-1])
     except (IndexError, ValueError) as exc:
         return {"error": f"unreadable cleanup output: {exc}"}
+    if answer.get("contained") is not True:
+        # The override did not take effect, so the registry the package would
+        # have used is the user's own. Nothing there belongs to this run, and
+        # authenticating as itself does not make a stranger's worker ours.
+        raise QualificationError(
+            "the isolated worker registry did not take effect: the package resolves "
+            f"{answer.get('effective_worker_dir')!r}, not "
+            f"{environment['HORNLAB_BEAT_WORKER_DIR']!r}. Nothing was signalled."
+        )
+    return answer
 
 
-def qualify(arguments: argparse.Namespace) -> dict[str, Any]:
+def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
+    """Fill *report* in place, so a failure keeps everything established so far.
+
+    The caller owns the dictionary and writes it out whatever happens. Returning
+    it instead meant a run that raised in the solve reported nothing at all --
+    not the pins it had already checked, not the manifest, not the capability
+    samples that say what the application was doing when it stopped.
+    """
+
     resources, app, interpreter = resolve_payload(arguments.payload)
     work = arguments.work.expanduser().resolve()
     output = arguments.output.expanduser().resolve()
@@ -792,7 +901,7 @@ def qualify(arguments: argparse.Namespace) -> dict[str, Any]:
     expected_pins = pins_from_file(arguments.pins_json)
     expected_pins.update(arguments.expected_pin or {})
 
-    report: dict[str, Any] = {
+    report.update({
         "payload": str(resources),
         "payload_kind": arguments.payload_kind,
         "platform": {"system": platform.system(), "machine": platform.machine()},
@@ -800,9 +909,9 @@ def qualify(arguments: argparse.Namespace) -> dict[str, Any]:
         "isolated": {
             "data_dir": str(data_dir),
             "beat_runtime_dir": environment["HORNLAB_BEAT_RUNTIME_DIR"],
-            "worker_registry": environment["HORNLAB_BEAT_WORKER_REGISTRY"],
+            "worker_registry": environment["HORNLAB_BEAT_WORKER_DIR"],
         },
-    }
+    })
     expected_identity = expectations_from_build_manifest(arguments.build_manifest)
     for field, value in (
         ("version", arguments.expected_version),
@@ -819,50 +928,49 @@ def qualify(arguments: argparse.Namespace) -> dict[str, Any]:
     # pointed at the first one's file would be told to stop before it had
     # finished starting -- which is exactly what happened the first time this
     # ran against a stub.
+    # Recorded before anything can start a worker, so the cleanup in ``main``
+    # knows where to look even if the very next call raises.
+    arguments.cleanup = (interpreter, environment, output)
     control = work / "status" / "stop-1"
-    # One server for the whole gate wherever possible: the row the application
-    # published and the solve that uses it are then the same process, so
-    # "offered" cannot describe one run while the solve describes another.
+    # One server for the whole gate: the row the application published and the
+    # solve that uses it are then the same process, so "offered" cannot describe
+    # one run while the solve describes another.
     with Server(interpreter, app, environment, data_dir, control, output / "server.log") as server:
         report["cpu_preparation"] = await_cpu_row(server, output)
         capabilities = server.capabilities()
-        offered = engine_row(capabilities, CPU_ENGINE).get("available") is True
-        if offered:
+        row = engine_row(capabilities, CPU_ENGINE)
+        if row.get("available") is not True:
+            # **The gate ends here, and does not reach around the product.**
+            # The requirement is that the application offers BEAT CPU on every
+            # supported computer, which since 69b1ed0 includes macOS. Running
+            # the provisioning command here and restarting -- which this file
+            # used to do -- would turn "the product did not prepare it" into a
+            # passing step, and the requirement would be unqualified by the very
+            # gate written to qualify it.
             report["cpu_offered"] = {
-                "available": True,
-                "after": "the application's own preparation",
+                "available": row.get("available"),
+                "reason": row.get("reason"),
+                "settled": report["cpu_preparation"]["settled"],
             }
-            result = server.completed(server.solve(SOLVE_FREQUENCIES, CPU_ENGINE))
-
-    if not offered:
-        # The application did not prepare the CPU runtime itself. That is by
-        # design on macOS, and elsewhere it is what the documented command
-        # exists for -- so run that command and ask the application again,
-        # rather than deciding readiness on the application's behalf.
-        report["explicit_provisioning"] = provision_cpu(interpreter, app, environment, output)
-        with Server(
-            interpreter,
-            app,
-            environment,
-            data_dir,
-            work / "status" / "stop-2",
-            output / "server-2.log",
-        ) as server:
-            capabilities = server.capabilities()
-            row = engine_row(capabilities, CPU_ENGINE)
-            if row.get("available") is not True:
-                raise QualificationError(
-                    f"{CPU_ENGINE} is still not offered after the documented provisioning "
-                    f"command succeeded: {row.get('reason')!r}"
+            if arguments.diagnose_preparation_failure:
+                report["preparation_diagnosis"] = diagnose_preparation(
+                    interpreter, app, environment, output
                 )
-            report["cpu_offered"] = {"available": True, "after": "explicit provisioning"}
-            result = server.completed(server.solve(SOLVE_FREQUENCIES, CPU_ENGINE))
+            raise QualificationError(
+                f"the application did not offer {CPU_ENGINE} by itself "
+                f"({report['cpu_preparation']['settled']}): {row.get('reason')!r}"
+            )
+        report["cpu_offered"] = {
+            "available": True,
+            "after": "the application's own preparation",
+            "settled": report["cpu_preparation"]["settled"],
+        }
+        report["workspace"] = workspace_isolation(server.base, work)
+        result = server.completed(server.solve(SOLVE_FREQUENCIES, CPU_ENGINE))
 
     (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     report["solve"] = check_solve(result, expected_pins)
     report["gpu_independence"] = gpu_independence(capabilities, report["solve"])
-    report["worker_cleanup"] = stop_our_workers(interpreter, environment, output)
-    return report
 
 
 def pins_from_file(path: Path | None) -> dict[str, str]:
@@ -950,6 +1058,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="the update-app-*.manifest.json the build produced, as the expected identity",
     )
+    parser.add_argument(
+        "--diagnose-preparation-failure",
+        action="store_true",
+        help=(
+            "when the application does not offer the CPU backend, additionally run the "
+            "documented provisioning command and attach its transcript. Diagnosis only: "
+            "the run has already failed and this cannot change that"
+        ),
+    )
     parser.add_argument("--expected-version")
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-tree-sha256")
@@ -960,23 +1077,42 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     arguments.expected_pin = parse_pins(arguments.expected_pin)
+    arguments.cleanup = None
     started = time.time()
+    report: dict[str, Any] = {}
+    failure: str | None = None
     try:
-        report = qualify(arguments)
+        qualify(arguments, report)
     except QualificationError as exc:
-        failure = {"qualified": False, "error": str(exc), "seconds": round(time.time() - started)}
+        failure = str(exc)
+    except Exception as exc:  # noqa: BLE001 - an unexpected failure is still a failure
+        failure = f"{type(exc).__name__}: {exc}"
+        report["traceback"] = traceback.format_exc()
+    finally:
+        # Whatever happened -- a refused pin, a solve that never finished, an
+        # exception nobody predicted -- a worker this run started must not be
+        # left behind, and everything established before the failure has to
+        # survive it. Both used to happen only after a *successful* solve.
+        if arguments.cleanup is not None:
+            try:
+                report["worker_cleanup"] = stop_our_workers(*arguments.cleanup)
+            except QualificationError as exc:
+                report["worker_cleanup"] = {"refused": str(exc)}
+                failure = failure or str(exc)
+            except Exception as exc:  # noqa: BLE001 - cleanup must not mask the result
+                report["worker_cleanup"] = {"error": f"{type(exc).__name__}: {exc}"}
+        report["qualified"] = failure is None
+        if failure is not None:
+            report["error"] = failure
+        report["seconds"] = round(time.time() - started)
         arguments.output.mkdir(parents=True, exist_ok=True)
         (arguments.output / "cpu-qualification.json").write_text(
-            json.dumps(failure, indent=2), encoding="utf-8"
+            json.dumps(report, indent=2, default=str), encoding="utf-8"
         )
-        print(f"CPU qualification FAILED: {exc}", file=sys.stderr)
+    if failure is not None:
+        print(f"CPU qualification FAILED: {failure}", file=sys.stderr)
         return 1
-    report["qualified"] = True
-    report["seconds"] = round(time.time() - started)
-    (arguments.output / "cpu-qualification.json").write_text(
-        json.dumps(report, indent=2), encoding="utf-8"
-    )
-    print(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2, default=str))
     return 0
 
 
