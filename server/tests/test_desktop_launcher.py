@@ -1065,9 +1065,21 @@ def test_an_update_interrupted_between_its_two_renames_is_rolled_back(
     monkeypatch.setattr(
         desktop, "rollback_previous_layers", lambda res, log=None: rolled.append(res) or True
     )
+    # The seal is restored here as well as on the missing-layer path beside it.
+    # Stubbed rather than run: the real `codesign` would reject this fixture and
+    # put a modal on the screen of whoever runs the suite. The assertion below
+    # is that the call happens, which is the property that was missing.
+    resealed: list[Path] = []
+    monkeypatch.setattr(
+        desktop, "repair_bundle", lambda bundle, **_kwargs: resealed.append(bundle)
+    )
 
     assert window._recover_interrupted_bundle_update() is True
     assert rolled == [resources], "a mixed generation must be rolled back, not started"
+    assert resealed == [resources.parents[1]], (
+        "a bundle restored through the mixed-generation path keeps an ad-hoc seal that no "
+        "longer covers its contents unless this path re-seals it too"
+    )
     assert "different updates" in (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
 
 

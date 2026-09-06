@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 import errno
 import json
@@ -15,6 +16,17 @@ import subprocess
 import sys
 import time
 from typing import Any
+import uuid
+
+try:  # POSIX only; the Windows branch of _fsync_descriptor never needs it.
+    import fcntl
+except ImportError:  # pragma: no cover - taken only on Windows
+    fcntl = None  # type: ignore[assignment]
+
+
+class ApplyUpdateError(RuntimeError):
+    """The live bundle could not be swapped or restored safely."""
+
 
 # The Windows runtime interpreter is isolated by ``python._pth`` and does not
 # add a directly executed script's parent app layer to ``sys.path``. Make the
@@ -30,11 +42,38 @@ if (
 ):
     sys.path.insert(0, str(_SCRIPT_APP_ROOT))
 
-from shared.safe_names import (  # noqa: E402 - isolated staged runtime path bootstrap
-    UnsafeName,
-    collision_key,
-    validate_relative_name,
-)
+#: Why the strict shared-name validator is unavailable, or ``None``.
+#:
+#: Installing launcher files needs it and refuses without it. *Recovering* does
+#: not: rollback and reconciliation move only directories and files the bundle
+#: already owns, under names this module spells itself. Keeping the failure in a
+#: variable rather than at the import statement is what lets the copied external
+#: recovery helper run at all when the missing ``app`` layer is the very thing
+#: it was started to restore -- that helper died on this import before, so the
+#: one situation it exists for was the one situation it could not handle. The
+#: import still happens here, eagerly, before any rename: nothing below it is a
+#: lazy application import performed after the layers start moving.
+NAME_VALIDATOR_ERROR: str | None = None
+try:
+    from shared.safe_names import (  # noqa: E402 - isolated staged runtime path bootstrap
+        UnsafeName,
+        collision_key,
+        validate_relative_name,
+    )
+except Exception as _validator_error:  # noqa: BLE001 - any import failure is recoverable
+    NAME_VALIDATOR_ERROR = f"{type(_validator_error).__name__}: {_validator_error}"
+
+    class UnsafeName(ValueError):  # type: ignore[no-redef]
+        """Stand-in so the except clauses below stay valid without the app layer."""
+
+    def _validator_unavailable(*_args: object, **_kwargs: object) -> str:
+        raise ApplyUpdateError(
+            "The strict launcher-name validator could not be imported "
+            f"({NAME_VALIDATOR_ERROR}); refusing to install launcher files."
+        )
+
+    collision_key = _validator_unavailable  # type: ignore[assignment]
+    validate_relative_name = _validator_unavailable  # type: ignore[assignment]
 
 
 PARENT_WAIT_SECONDS = 60.0
@@ -82,10 +121,6 @@ RelaunchCallable = Callable[..., Any]
 LogCallable = Callable[[str], None]
 
 
-class ApplyUpdateError(RuntimeError):
-    """The live bundle could not be swapped or restored safely."""
-
-
 def append_update_log(data_dir: Path, message: str) -> None:
     """Append one updater/rollback event without affecting recovery control flow."""
 
@@ -106,6 +141,504 @@ def _emit_log(log: LogCallable | None, message: str) -> None:
         log(message)
     except Exception:  # noqa: BLE001 - injected/logging failures are non-fatal
         pass
+
+
+# --------------------------------------------------------------------------
+# Durability primitives
+# --------------------------------------------------------------------------
+
+#: Whether this platform lets Python flush a *directory*, which is what makes a
+#: rename survive a power cut rather than merely a crash. POSIX can; Windows has
+#: no directory handle the standard library will open, so there it is False and
+#: the design below never depends on it. See ``sync_directory``.
+DIRECTORY_SYNC_SUPPORTED = os.name == "posix"
+
+#: ``fcntl.F_FULLFSYNC``. Named here because the constant is absent on Linux.
+MACOS_FULL_FSYNC = 51
+
+
+#: Errno values that mean "this file system does not implement F_FULLFSYNC",
+#: as opposed to "this flush failed". Only the first list may be answered by
+#: falling back to the weaker ``fsync``; a genuine write error must not be
+#: turned into a quieter flush that then reports success.
+UNSUPPORTED_FLUSH_ERRNOS = frozenset(
+    number
+    for number in (
+        getattr(errno, "ENOTSUP", None),
+        getattr(errno, "EOPNOTSUPP", None),
+        getattr(errno, "EINVAL", None),
+        getattr(errno, "ENOTTY", None),
+        getattr(errno, "ENOSYS", None),
+    )
+    if number is not None
+)
+
+
+def _fsync_descriptor(fd: int, *, log: LogCallable | None = None) -> bool:
+    """Flush one descriptor as hard as the platform can be asked to flush it.
+
+    Returns whether the *strongest* available flush was used, so a caller can
+    record a weakened guarantee instead of implying one it did not get.
+
+    On macOS ``fsync`` returns once the data reaches the drive, not once the
+    drive has committed it, so a power cut can still lose a write that fsync
+    reported as done. ``F_FULLFSYNC`` is the call that asks for the media
+    flush. Several file systems do not implement it, and that is not a reason
+    to fail an update -- but "not implemented" and "the write failed" are
+    different answers arriving through the same exception type, and only the
+    first may be answered by quietly doing something weaker. Anything else
+    propagates.
+    """
+
+    if fcntl is not None and sys.platform == "darwin":
+        try:
+            fcntl.fcntl(fd, getattr(fcntl, "F_FULLFSYNC", MACOS_FULL_FSYNC))
+            return True
+        except OSError as exc:
+            if exc.errno not in UNSUPPORTED_FLUSH_ERRNOS:
+                raise
+            _emit_log(
+                log,
+                "This file system does not implement F_FULLFSYNC "
+                f"({errno.errorcode.get(exc.errno, exc.errno)}); falling back to fsync, "
+                "which returns before the drive has committed the write.",
+            )
+            os.fsync(fd)
+            return False
+    os.fsync(fd)
+    # Off macOS, fsync is the strongest flush the standard library offers, and
+    # on Linux it is a media flush; there is nothing weaker being substituted.
+    return sys.platform != "darwin"
+
+
+def sync_directory(path: Path, *, log: LogCallable | None = None) -> bool:
+    """Persist a directory's own entries, so a rename that returned is on disk.
+
+    Returns whether the flush was actually performed. Windows always returns
+    False: opening a directory needs ``FILE_FLAG_BACKUP_SEMANTICS``, which
+    ``os.open`` does not offer, and ``FlushFileBuffers`` is not documented to do
+    anything useful for a directory handle even if one is obtained. POSIX
+    returns False when the flush itself failed. Both are real, both are
+    reported to the caller, and neither is papered over.
+
+    **What this does and does not buy.** Flushing a directory is how a *rename*
+    -- including the rename that publishes the journal -- is made durable; a
+    file flush covers the bytes, never the name. So a False here means the
+    journal's own publication is not proven durable, and the recovery below is
+    written to be correct anyway: every state a lost publication can leave
+    behind (no journal, the previous journal, or a complete temporary one) is
+    handled conservatively, and none of them can make an unfinished
+    installation look finished. That is the property this design rests on --
+    not a claim that the flush always succeeds.
+    """
+
+    if not DIRECTORY_SYNC_SUPPORTED:
+        return False
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError as exc:
+        _emit_log(log, f"Could not open {path} to flush its directory entries: {exc}")
+        return False
+    try:
+        _fsync_descriptor(fd, log=log)
+    except OSError as exc:
+        _emit_log(log, f"Could not flush the directory entries of {path}: {exc}")
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+
+def sync_file(path: Path, *, log: LogCallable | None = None) -> bool:
+    """Flush one already-written file's contents to stable storage."""
+
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError as exc:
+        _emit_log(log, f"Could not open {path} to flush it: {exc}")
+        return False
+    try:
+        _fsync_descriptor(fd, log=log)
+    except OSError as exc:
+        _emit_log(log, f"Could not flush {path}: {exc}")
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+
+# --------------------------------------------------------------------------
+# The update transaction journal
+# --------------------------------------------------------------------------
+
+#: The journal lives in the application data directory, never inside the bundle.
+#: Two reasons, both load-bearing. It has to survive the very directories the
+#: transaction renames, and on macOS anything added inside ``Contents`` would
+#: have to be removed again before the ad-hoc seal could be restored -- which is
+#: the dance ``_finish_healthy_macos_update`` already performs for ``.previous``
+#: and which no recovery record should have to join.
+JOURNAL_NAME = "update-transaction.json"
+JOURNAL_TEMP_NAME = "update-transaction.json.new"
+JOURNAL_SCHEMA = 1
+
+#: States that mean the transaction has reached a decided end. Only these permit
+#: ``.previous`` to be reclaimed. Anything else -- including a journal that
+#: cannot be parsed -- means "still in flight, keep the rollback material".
+TERMINAL_JOURNAL_STATES = frozenset({"installed", "rolled-back", "aborted"})
+
+#: The state read_journal reports for a journal that exists but cannot be read.
+#: Deliberately not terminal: an unreadable record of a transaction is not a
+#: record that there was none.
+UNREADABLE_JOURNAL_STATE = "unreadable"
+
+#: A journal that parsed but is not a record this module could have written.
+INVALID_JOURNAL_STATE = "invalid"
+
+#: A journal whose publication was interrupted -- the temporary file survives,
+#: so what is at the published name may be this transaction's record or the one
+#: it was replacing, and nothing on the disk says which.
+INTERRUPTED_PUBLICATION_STATE = "publication-interrupted"
+
+#: Every state that means "do not conclude anything from this record".
+UNTRUSTED_JOURNAL_STATES = frozenset(
+    {UNREADABLE_JOURNAL_STATE, INVALID_JOURNAL_STATE, INTERRUPTED_PUBLICATION_STATE}
+)
+
+#: Written before any restore begins, by every path that restores: the updater's
+#: own failure handler, the rollback helper, and recovery itself. A start that
+#: finds it knows a restore was under way and must be finished.
+#:
+#: This matters for one specific shape. A restore killed after its first layer
+#: leaves one layer with a ``.previous`` beside it and one without -- which is
+#: also what a finished swap leaves. For every bundle this project has ever
+#: built the two are still distinguishable, because both manifests carry a
+#: ``runtimeId`` and ``layers_disagree`` sees the mismatch; this marker is what
+#: covers a bundle whose manifests do not, where that comparison has nothing to
+#: compare. It is one write, and a write can be lost, so it is a second line
+#: rather than the only one.
+ROLLING_BACK_STATE = "rolling-back"
+
+
+def journal_path(data_dir: Path) -> Path:
+    return Path(data_dir) / JOURNAL_NAME
+
+
+def journal_temp_path(data_dir: Path) -> Path:
+    return Path(data_dir) / JOURNAL_TEMP_NAME
+
+
+def _invalid_journal(state: str, detail: str) -> dict[str, Any]:
+    """A record that says only "something was in flight, and it is not decided".
+
+    Everything that cannot be trusted collapses to this, and it is deliberately
+    *not* terminal: it blocks reclaiming rollback material, and it makes
+    recovery restore rather than conclude. A record nobody can read is not a
+    record that there was nothing to do.
+    """
+
+    return {"state": state, "operation": "unknown", "layers": [], "detail": detail}
+
+
+def _validate_journal(payload: object) -> dict[str, Any]:
+    """Accept only a record this module could have written, or refuse it whole.
+
+    Written because the alternative -- trusting any JSON object with the right
+    two keys -- lets a truncated, hand-edited or foreign file reach the branch
+    that concludes "installed" and permits deleting the only copy of the
+    previous version. Validation failures are answered with
+    ``_invalid_journal``, never with a default that lets the record through.
+    """
+
+    if not isinstance(payload, dict):
+        return _invalid_journal(INVALID_JOURNAL_STATE, "the journal is not an object")
+    if payload.get("schema") != JOURNAL_SCHEMA:
+        return _invalid_journal(
+            INVALID_JOURNAL_STATE, f"unsupported journal schema {payload.get('schema')!r}"
+        )
+    operation = payload.get("operation")
+    if operation not in {"update", "rollback"}:
+        return _invalid_journal(
+            INVALID_JOURNAL_STATE, f"unknown journal operation {operation!r}"
+        )
+    state = payload.get("state")
+    if not isinstance(state, str) or not state:
+        return _invalid_journal(INVALID_JOURNAL_STATE, "the journal records no state")
+    for key in ("transaction", "resources", "bundle"):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value:
+            return _invalid_journal(INVALID_JOURNAL_STATE, f"the journal records no {key}")
+    entries = payload.get("layers")
+    if not isinstance(entries, list):
+        return _invalid_journal(INVALID_JOURNAL_STATE, "the journal records no layers")
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return _invalid_journal(INVALID_JOURNAL_STATE, "a journal layer is not an object")
+        name = entry.get("name")
+        # The name is the only journal field that ever becomes part of a path
+        # this module touches, so it is restricted to the two directory names
+        # the bundle owns. Nothing read from the journal can name a third place.
+        if name not in BUNDLE_LAYERS:
+            return _invalid_journal(
+                INVALID_JOURNAL_STATE, f"a journal layer names {name!r}, which is not a layer"
+            )
+        if name in seen:
+            return _invalid_journal(INVALID_JOURNAL_STATE, f"the journal repeats layer {name!r}")
+        seen.add(name)
+        staged = entry.get("staged")
+        if staged is not None and (not isinstance(staged, str) or not staged):
+            return _invalid_journal(
+                INVALID_JOURNAL_STATE, f"layer {name!r} records an unusable staged path"
+            )
+    return dict(payload)
+
+
+def read_journal(data_dir: Path) -> dict[str, Any] | None:
+    """Return the recorded transaction for this data directory, or None.
+
+    Both names are consulted. A surviving ``.json.new`` means a journal was
+    being published when the machine stopped, and since publishing it is a
+    rename -- durable only if the directory flush that followed it succeeded --
+    that temporary file may be the *only* evidence that anything was in flight.
+    It is never treated as the record itself: whatever it contains, the answer
+    is "unresolved", which keeps the rollback material and sends recovery down
+    the restoring path. The published record wins when it is newer in kind
+    (non-terminal), and a terminal published record beside a leftover temporary
+    is still reported unresolved, because the pair cannot say which came first.
+    """
+
+    path = journal_path(data_dir)
+    temporary = journal_temp_path(data_dir)
+    interrupted_publication = temporary.exists() or temporary.is_symlink()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        if interrupted_publication:
+            return _invalid_journal(
+                INTERRUPTED_PUBLICATION_STATE,
+                f"a transaction was being recorded when the machine stopped: {temporary}",
+            )
+        return None
+    except (OSError, ValueError) as exc:
+        return _invalid_journal(UNREADABLE_JOURNAL_STATE, f"{type(exc).__name__}: {exc}")
+    record = _validate_journal(payload)
+    if interrupted_publication:
+        # The published record may be this transaction's, or the previous one's
+        # that the interrupted publication was about to replace. Nothing on the
+        # disk distinguishes them, so neither is allowed to decide anything.
+        record = dict(record)
+        record["state"] = INTERRUPTED_PUBLICATION_STATE
+        record["detail"] = (
+            f"a later transaction was being recorded when the machine stopped: {temporary}"
+        )
+    return record
+
+
+@dataclass(frozen=True, slots=True)
+class JournalDurability:
+    """How durable the journal write that just returned actually is."""
+
+    #: The record is at its published name and readable by any later process.
+    published: bool
+    #: The directory entry that publication created was flushed, so the *name*
+    #: survives a power cut. False on Windows always, and on POSIX when the
+    #: flush failed; see ``sync_directory``.
+    name_synced: bool
+    #: The bytes were flushed with the platform's strongest available primitive.
+    contents_fully_synced: bool
+
+
+def write_journal(
+    data_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    log: LogCallable | None = None,
+) -> JournalDurability:
+    """Put the transaction intent on the disk before anything moves.
+
+    Temporary name, contents flushed, renamed over the target, directory
+    flushed. A reader therefore sees the previous record or the complete new
+    one, never half of either -- and, if the last flush did not happen, may see
+    the temporary file as well, which ``read_journal`` treats as "unresolved".
+
+    **What is guaranteed, and what is not.** The bytes are flushed before the
+    rename on every platform. The *name* is durable only where the directory
+    flush succeeded, which excludes Windows entirely. So this function does not
+    promise that a power cut leaves the new record in place; it promises that
+    every state a power cut can leave is one the reader above answers
+    conservatively. The returned report says which guarantee was obtained, the
+    record itself carries it, and no caller claims more than it was given.
+
+    A failure to write at all is fatal to the update by design, and happens
+    before the first rename, so a caller that sees it raise still has an
+    installation it can simply reopen.
+    """
+
+    directory = Path(data_dir)
+    target = journal_path(directory)
+    temporary = journal_temp_path(directory)
+    contents_fully_synced = True
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        body = json.dumps(dict(payload), indent=2, sort_keys=True) + "\n"
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(body)
+            handle.flush()
+            contents_fully_synced = _fsync_descriptor(handle.fileno(), log=log)
+        os.replace(temporary, target)
+    except OSError as exc:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise ApplyUpdateError(
+            f"Could not record the update transaction journal {target}: {exc}"
+        ) from exc
+    name_synced = sync_directory(directory, log=log)
+    if not name_synced:
+        _emit_log(
+            log,
+            f"The update transaction journal {target} was written but its directory entry "
+            "could not be flushed; recovery treats an interrupted publication as "
+            "unresolved, so this weakens diagnosis rather than safety.",
+        )
+    return JournalDurability(
+        published=True,
+        name_synced=name_synced,
+        contents_fully_synced=contents_fully_synced,
+    )
+
+
+def remove_journal(data_dir: Path, *, log: LogCallable | None = None) -> bool:
+    """Delete a decided transaction record, and any leftover temporary with it.
+
+    The temporary is removed *first*: it is what makes ``read_journal`` report
+    "unresolved", so a leftover that outlived the record it was replacing would
+    make the next start refuse to reclaim anything, for ever.
+    """
+
+    removed = True
+    for path in (journal_temp_path(data_dir), journal_path(data_dir)):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _emit_log(log, f"Could not remove the resolved update transaction {path}: {exc}")
+            removed = False
+    sync_directory(Path(data_dir), log=log)
+    return removed
+
+
+def set_journal_state(
+    data_dir: Path,
+    state: str,
+    *,
+    detail: str | None = None,
+    log: LogCallable | None = None,
+) -> bool:
+    """Record how far the transaction got. Advisory, and deliberately so.
+
+    Reconciliation never trusts these markers to decide what to do -- it reads
+    the live directories, which is the only account that a power cut cannot
+    disagree with. They exist so a person reading ``update-transaction.json``
+    after the fact can see where it stopped, and so a *decided* transaction can
+    say so. That is why a failure here is logged instead of raised: losing a
+    progress marker changes no decision, and the marker that does decide
+    something -- a terminal state -- is only ever written after the work it
+    describes has already been done and observed.
+    """
+
+    payload = read_journal(data_dir)
+    if payload is None:
+        return False
+    if payload.get("state") in {
+        INVALID_JOURNAL_STATE,
+        UNREADABLE_JOURNAL_STATE,
+        INTERRUPTED_PUBLICATION_STATE,
+    }:
+        # There is nothing coherent to advance. Rewriting it from this partial
+        # view would replace the evidence with a record this process invented.
+        reason = payload.get("detail") or "the journal cannot be trusted"
+        _emit_log(log, f"Not recording update progress {state!r}: {reason}.")
+        return False
+    payload["state"] = state
+    payload["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+    if detail is not None:
+        payload["detail"] = detail
+    try:
+        write_journal(data_dir, payload, log=log)
+    except ApplyUpdateError as exc:
+        _emit_log(log, f"Could not record update progress {state!r}: {exc}")
+        return False
+    return True
+
+
+def layer_manifest_name(layer_name: str) -> str:
+    return "APP-MANIFEST.json" if layer_name == "app" else "RUNTIME-MANIFEST.json"
+
+
+def read_layer_runtime_id(layer: Path) -> str | None:
+    """Return the ``runtimeId`` a layer directory declares, if it declares one."""
+
+    manifest = layer / layer_manifest_name(layer.name)
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("runtimeId")
+    return value if isinstance(value, str) and value else None
+
+
+def layer_runtime_ids(resources: Path) -> tuple[str | None, str | None]:
+    """Return (the runtime the installed app requires, the runtime installed)."""
+
+    return (
+        read_layer_runtime_id(resources / "app"),
+        read_layer_runtime_id(resources / "runtime"),
+    )
+
+
+def journal_describes(journal: Mapping[str, Any], resources: Path) -> bool:
+    """Whether a recorded transaction is about *this* installation.
+
+    A data directory is not private to one copy of the application: a second
+    install, or a ``--data-dir`` aimed at an existing one, shares it. The
+    record therefore names the ``Resources`` directory it was written for, and
+    everything that acts on a record checks that name first.
+
+    An untrusted record -- unreadable, invalid, or caught mid-publication --
+    has no usable ``resources`` field and is answered True: it belongs to
+    whoever is asking, because the alternative is to ignore the only evidence
+    that something was in flight. It cannot cause a mutation on its own, since
+    every path recovery touches is derived from the caller's ``resources``.
+    """
+
+    if str(journal.get("state")) in UNTRUSTED_JOURNAL_STATES:
+        return True
+    recorded = journal.get("resources")
+    if not isinstance(recorded, str) or not recorded:
+        return False
+    try:
+        return os.path.normcase(os.path.normpath(recorded)) == os.path.normcase(
+            os.path.normpath(str(resources))
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def layers_disagree(resources: Path) -> bool:
+    """Report a live app and runtime that came from different generations.
+
+    Unreadable or absent manifests are not treated as disagreement: an older
+    bundle predates these fields, and refusing to start over a missing file
+    would be worse than the mismatch this is looking for.
+    """
+
+    required, installed = layer_runtime_ids(resources)
+    return required is not None and installed is not None and required != installed
 
 
 def _windows_process_exists(pid: int) -> bool:
@@ -242,12 +775,22 @@ def _rename(
     scanners, the search indexer and Explorer preview handlers open the same
     directories on their own schedule, so retry briefly instead of failing an
     update that would have succeeded a moment later.
+
+    Both parent directories are flushed after a rename that returned, so on a
+    platform that permits it the new directory entry is on stable storage before
+    the next rename is issued. Windows does not permit it (``sync_directory``
+    explains why) and nothing here depends on it: the journal makes recovery a
+    question about the directories that exist, not about the order two renames
+    were persisted in.
     """
 
     deadline = clock() + timeout
     while True:
         try:
             os.replace(source, destination)
+            sync_directory(source.parent)
+            if destination.parent != source.parent:
+                sync_directory(destination.parent)
             return
         except OSError as exc:
             if getattr(exc, "winerror", None) not in WINDOWS_TRANSIENT_RENAME_ERRORS:
@@ -288,14 +831,17 @@ def _failed_path(target: Path, *, log: LogCallable | None = None) -> Path:
     raise ApplyUpdateError(f"Too many undeleted failed copies remain beside {target}.")
 
 
-def swap_staged_layers(
+def plan_layer_swap(
     resources: Path,
     staged_app: Path,
     staged_runtime: Path | None,
-    *,
-    renamer: RenameCallable = _rename,
-) -> None:
-    """Swap complete layers into place and restore all old layers on failure."""
+) -> list[tuple[Path, Path]]:
+    """Return the (live layer, staged layer) renames an update must perform.
+
+    Separated from the swap itself so the transaction journal can be written
+    from the same plan the swap will execute, before the swap starts. Every
+    precondition is checked here, so a refusal costs nothing: nothing has moved.
+    """
 
     layers: list[tuple[Path, Path]] = []
     if staged_runtime is not None:
@@ -308,7 +854,7 @@ def swap_staged_layers(
     # startup rather than silent.
     layers.append((resources / "app", staged_app.resolve()))
     for target, staged in layers:
-        previous = target.with_name(target.name + ".previous")
+        previous = target.with_name(target.name + PREVIOUS_SUFFIX)
         if not target.is_dir():
             raise ApplyUpdateError(f"The installed layer is missing: {target}")
         if not staged.is_dir():
@@ -317,16 +863,135 @@ def swap_staged_layers(
             raise ApplyUpdateError(
                 f"A previous update has not completed its healthy-start check: {previous}"
             )
+    return layers
+
+
+def begin_update_transaction(
+    *,
+    data_dir: Path,
+    bundle: Path,
+    resources: Path,
+    layers: Sequence[tuple[Path, Path]],
+    platform_name: str = sys.platform,
+) -> dict[str, Any]:
+    """Record what is about to be renamed, durably, before renaming any of it.
+
+    The record carries the runtime id each layer declares now and the one its
+    replacement declares, because after the fact the manifests can only say what
+    a layer *is*, never which of two renames was the one that reached the disk.
+
+    An unresolved earlier transaction is refused rather than overwritten. That
+    is the same conservatism as the ``.previous`` precondition above, one level
+    up: an installation whose last update was never decided is not a base to
+    start another one from.
+    """
+
+    existing = read_journal(data_dir)
+    if existing is not None and str(existing.get("state")) not in TERMINAL_JOURNAL_STATES:
+        raise ApplyUpdateError(
+            "An earlier update transaction "
+            f"({existing.get('transaction', 'unidentified')}) is still unresolved in state "
+            f"{existing.get('state')!r}; refusing to start another before it is recovered."
+        )
+    now = datetime.now().isoformat(timespec="seconds")
+    payload: dict[str, Any] = {
+        "schema": JOURNAL_SCHEMA,
+        "transaction": uuid.uuid4().hex,
+        "operation": "update",
+        "state": "planned",
+        "platform": platform_name,
+        "bundle": str(bundle),
+        "resources": str(resources),
+        "pid": os.getpid(),
+        "startedAt": now,
+        "updatedAt": now,
+        "directorySync": DIRECTORY_SYNC_SUPPORTED,
+        "layers": [
+            {
+                "name": target.name,
+                "staged": str(staged),
+                "installedRuntimeId": read_layer_runtime_id(target),
+                "stagedRuntimeId": read_layer_runtime_id(staged),
+            }
+            for target, staged in layers
+        ],
+    }
+    if existing is not None:
+        payload["supersedes"] = existing.get("transaction")
+    write_journal(data_dir, payload)
+    return payload
+
+
+def begin_rollback_transaction(
+    *,
+    data_dir: Path,
+    bundle: Path,
+    resources: Path,
+    platform_name: str = sys.platform,
+    reason: str,
+) -> dict[str, Any]:
+    """Record a restore before it starts, superseding whatever it is undoing.
+
+    A rollback may legitimately begin on top of an unresolved update -- undoing
+    it is the whole point -- so unlike ``begin_update_transaction`` this does
+    not refuse one. What it must not do is lose the fact that something is in
+    flight, so the previous transaction id is kept.
+    """
+
+    existing = read_journal(data_dir)
+    now = datetime.now().isoformat(timespec="seconds")
+    payload: dict[str, Any] = {
+        "schema": JOURNAL_SCHEMA,
+        "transaction": uuid.uuid4().hex,
+        "operation": "rollback",
+        "state": "planned",
+        "platform": platform_name,
+        "bundle": str(bundle),
+        "resources": str(resources),
+        "pid": os.getpid(),
+        "startedAt": now,
+        "updatedAt": now,
+        "directorySync": DIRECTORY_SYNC_SUPPORTED,
+        "reason": reason,
+        "layers": [
+            {"name": name, "staged": None}
+            for name in BUNDLE_LAYERS
+            if (resources / f"{name}{PREVIOUS_SUFFIX}").is_dir()
+        ],
+    }
+    if existing is not None:
+        payload["supersedes"] = existing.get("transaction")
+    write_journal(data_dir, payload)
+    return payload
+
+
+def swap_staged_layers(
+    resources: Path,
+    staged_app: Path,
+    staged_runtime: Path | None,
+    *,
+    renamer: RenameCallable = _rename,
+    journal_dir: Path | None = None,
+) -> None:
+    """Swap complete layers into place and restore all old layers on failure."""
+
+    layers = plan_layer_swap(resources, staged_app, staged_runtime)
+
+    def progress(detail: str) -> None:
+        if journal_dir is not None:
+            set_journal_state(journal_dir, "swapping", detail=detail)
 
     moved_old: list[tuple[Path, Path]] = []
     moved_new: list[tuple[Path, Path]] = []
     try:
         for target, staged in layers:
-            previous = target.with_name(target.name + ".previous")
+            previous = target.with_name(target.name + PREVIOUS_SUFFIX)
             renamer(target, previous)
             moved_old.append((target, previous))
+            progress(f"moved {target.name} aside to {previous.name}")
             renamer(staged, target)
             moved_new.append((target, staged))
+            progress(f"installed the staged {target.name}")
     except OSError as exc:
         rollback_errors: list[str] = []
         for target, staged in reversed(moved_new):
@@ -451,6 +1116,13 @@ def refresh_launcher_files(
         incoming_directory.mkdir()
         for source, destination in files:
             copier(runtime / source, incoming_directory / destination)
+        for _source, destination in files:
+            # Flush the copies before any of them is renamed into place. A
+            # launcher file whose directory entry survived a power cut but whose
+            # contents did not is a bundle that cannot start, and unlike the
+            # layer directories there is no manifest that would reveal it.
+            sync_file(incoming_directory / destination, log=log)
+        sync_directory(incoming_directory, log=log)
         for _source, destination in files:
             target = resources / destination
             previous = target.with_name(target.name + PREVIOUS_SUFFIX)
@@ -683,6 +1355,390 @@ def rollback_previous_layers(
             # healthy start, when nothing holds it any more.
             report(f"Deferred removal of {path} to the next healthy start: {exc}")
     return True
+
+
+# --------------------------------------------------------------------------
+# Reconciling an interrupted transaction
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryOutcome:
+    """What reconciliation found and what it did about it."""
+
+    #: ``none`` (nothing was in flight, or it was already decided),
+    #: ``completed`` (the update had finished; the journal now says so),
+    #: ``rolled-back`` (the previous version was restored),
+    #: ``failed`` (the installation still needs attention -- do not start).
+    action: str
+    detail: str
+
+
+def _layer_paths(resources: Path, entry: Mapping[str, Any]) -> tuple[Path, Path, Path | None]:
+    name = str(entry.get("name") or "")
+    live = resources / name
+    previous = resources / f"{name}{PREVIOUS_SUFFIX}"
+    staged_value = entry.get("staged")
+    staged = Path(str(staged_value)) if isinstance(staged_value, str) and staged_value else None
+    return live, previous, staged
+
+
+def _update_layer_state(resources: Path, entry: Mapping[str, Any]) -> str:
+    """Classify one layer of an interrupted update from what is on the disk.
+
+    The staged directory is the durable marker the manifests cannot be: it
+    exists until the moment it *becomes* the live layer, so its presence says
+    "this layer was not installed" no matter which rename reached the platter
+    first. That is why reconciliation needs no ordering guarantee from the file
+    system, only the intent that named the staged path in the first place.
+    """
+
+    live, previous, staged = _layer_paths(resources, entry)
+    if staged is not None and (staged.is_dir() or staged.is_symlink()):
+        if live.is_dir() and not (previous.exists() or previous.is_symlink()):
+            return "untouched"
+        return "interrupted"
+    if not live.is_dir():
+        return "interrupted"
+    if previous.exists() or previous.is_symlink():
+        return "installed"
+    # No staged directory, a live layer, and no rollback material. Either the
+    # swap finished and a healthy start already reclaimed it, or this layer was
+    # never part of the move. Both are settled states, and neither is a reason
+    # to touch anything.
+    return "settled"
+
+
+def _rollback_layer_state(resources: Path, entry: Mapping[str, Any]) -> str:
+    live, previous, _staged = _layer_paths(resources, entry)
+    if previous.is_dir():
+        return "pending"
+    return "settled" if live.is_dir() else "interrupted"
+
+
+def _launcher_files_are_settled(resources: Path) -> tuple[bool, str]:
+    """Whether the launcher files beside the layers match the installed runtime.
+
+    Windows keeps ``Waveguide Generator.exe`` and its DLLs beside ``runtime``
+    rather than inside it, so a swap is only finished once those copies match
+    the runtime that is now installed. Comparing them is a state check, not a
+    progress marker, so it survives an interruption between any two of them.
+    macOS and Linux declare no launcher files and settle trivially.
+    """
+
+    try:
+        files = staged_launcher_files(resources / "runtime")
+    except ApplyUpdateError as exc:
+        return False, str(exc)
+    for source, destination in files:
+        live = resources / destination
+        origin = resources / "runtime" / source
+        if not origin.is_file():
+            return False, f"the installed runtime is missing {origin}"
+        if not live.is_file():
+            return False, f"the launcher file {live} is missing"
+        try:
+            if live.stat().st_size != origin.stat().st_size or live.read_bytes() != (
+                origin.read_bytes()
+            ):
+                return False, f"the launcher file {live} does not match the installed runtime"
+        except OSError as exc:
+            return False, f"could not compare the launcher file {live}: {exc}"
+    return True, ""
+
+
+def _restore_previous_layers(
+    resources: Path,
+    bundle: Path | None,
+    *,
+    platform_name: str,
+    renamer: RenameCallable,
+    runner: CommandRunner,
+    log: LogCallable | None,
+    data_dir: Path | None = None,
+) -> tuple[bool, str]:
+    """Roll back and re-seal, reporting the exact outcome of both halves.
+
+    ``data_dir`` is given whenever a journal exists, so the restore is recorded
+    as under way *before* it starts. A restore killed after its first layer
+    leaves exactly the shape a finished update leaves -- one layer with no
+    ``.previous``, one with -- and this marker is what tells the difference.
+    """
+
+    if data_dir is not None:
+        set_journal_state(
+            data_dir,
+            ROLLING_BACK_STATE,
+            detail="restoring the previous layers",
+            log=log,
+        )
+    pending = [
+        name for name in BUNDLE_LAYERS if (resources / f"{name}{PREVIOUS_SUFFIX}").is_dir()
+    ] + [
+        path.name
+        for path in sorted(resources.glob(f"*{PREVIOUS_SUFFIX}"))
+        if path.is_file() or path.is_symlink()
+    ]
+    if not pending:
+        return False, "no previous layer or launcher file was available to restore"
+    if not rollback_previous_layers(resources, renamer=renamer, log=log):
+        return False, "the previous version could not be fully restored"
+    if bundle is not None:
+        # The missing-layer path has always re-sealed here; the mixed-generation
+        # path did not, which left a macOS bundle whose ad-hoc signature no
+        # longer covered its contents. One call, both paths.
+        try:
+            repair_bundle(bundle, platform_name=platform_name, runner=runner, log=log)
+        except ApplyUpdateError as exc:
+            return False, f"the restored bundle could not be signed and verified: {exc}"
+    return True, "the previous version was restored"
+
+
+def recover_transaction(
+    *,
+    data_dir: Path,
+    resources: Path,
+    bundle: Path | None = None,
+    platform_name: str = sys.platform,
+    renamer: RenameCallable = _rename,
+    runner: CommandRunner = subprocess.run,
+    log: LogCallable | None = None,
+) -> RecoveryOutcome:
+    """Decide an interrupted update from its journal and the live directories.
+
+    Runs in whatever process gets there first: the desktop launcher before it
+    starts the server, or the standalone ``--recover`` helper when the launcher
+    itself cannot run. It reads only the journal and the file system, so it
+    needs nothing that the interrupted process left in memory -- which is the
+    property that a killed process cannot take away.
+    """
+
+    journal = read_journal(data_dir)
+    if journal is None:
+        return RecoveryOutcome("none", "No update transaction was recorded.")
+    state = str(journal.get("state") or "")
+    identifier = str(journal.get("transaction") or "unidentified")
+    if state in TERMINAL_JOURNAL_STATES:
+        return RecoveryOutcome("none", f"Update transaction {identifier} is already {state}.")
+
+    if not journal_describes(journal, resources):
+        # Two installations can share one data directory -- a second copy of the
+        # app, or a --data-dir pointed at an existing one -- and a record from
+        # the other copy says nothing about this one. Acting on it would move
+        # directories on the strength of a file that never described them. So
+        # this installation is treated as having no record, which leaves the
+        # structural checks that predate the journal in charge, and the record
+        # itself is left alone for the installation it belongs to.
+        _emit_log(
+            log,
+            f"Ignoring update transaction {identifier}: it records "
+            f"{journal.get('resources')!r}, not this installation at {resources}.",
+        )
+        return RecoveryOutcome(
+            "none", "The recorded update transaction belongs to another installation."
+        )
+
+    entries = journal.get("layers")
+    entries = [entry for entry in entries if isinstance(entry, Mapping)] if (
+        isinstance(entries, list)
+    ) else []
+    operation = str(journal.get("operation") or "unknown")
+
+    def decide(state_name: str, detail: str) -> None:
+        """Record the end of the transaction, or clear a record that cannot hold one.
+
+        ``set_journal_state`` refuses to advance an untrusted record, and it is
+        right to: rewriting a truncated or half-published file from a partial
+        view would replace the evidence with something this process invented.
+        But a decided transaction has to stop blocking, or the rollback material
+        it protects is protected for ever and the next update is refused too. So
+        the untrusted record is removed instead of edited. Nothing is lost that
+        could have been read, and recovery has by then acted only on directories
+        derived from the caller's own installation.
+        """
+
+        if state in UNTRUSTED_JOURNAL_STATES:
+            remove_journal(data_dir, log=log)
+            _emit_log(
+                log,
+                f"Removed the unreadable update transaction record after {state_name}: {detail}.",
+            )
+            return
+        set_journal_state(data_dir, state_name, detail=detail, log=log)
+
+    def finish(restored: bool, detail: str) -> RecoveryOutcome:
+        if restored:
+            decide("rolled-back", detail)
+            _emit_log(log, f"Recovered update transaction {identifier}: {detail}.")
+            return RecoveryOutcome("rolled-back", detail)
+        set_journal_state(data_dir, "recovery-failed", detail=detail, log=log)
+        message = (
+            f"Update transaction {identifier} could not be recovered: {detail}. "
+            "The rollback material was kept."
+        )
+        _emit_log(log, message)
+        return RecoveryOutcome("failed", message)
+
+    if not entries or state in UNTRUSTED_JOURNAL_STATES:
+        # An intent that cannot be read, cannot be trusted, or was only half
+        # published is still an intent. Restore whatever rollback material
+        # exists rather than assume the swap finished; the one thing that must
+        # never come out of an unreadable record is the conclusion "installed".
+        restored, detail = _restore_previous_layers(
+            resources,
+            bundle,
+            platform_name=platform_name,
+            renamer=renamer,
+            runner=runner,
+            log=log,
+            data_dir=data_dir,
+        )
+        if not restored and "no previous layer" in detail:
+            decide("aborted", detail)
+            return RecoveryOutcome("none", f"Update transaction {identifier}: {detail}.")
+        return finish(restored, detail)
+
+    if operation == "rollback":
+        states = [_rollback_layer_state(resources, entry) for entry in entries]
+        if all(value == "settled" for value in states):
+            set_journal_state(
+                data_dir, "rolled-back", detail="every layer was already restored", log=log
+            )
+            return RecoveryOutcome(
+                "none", f"Rollback transaction {identifier} had already completed."
+            )
+        restored, detail = _restore_previous_layers(
+            resources,
+            bundle,
+            platform_name=platform_name,
+            renamer=renamer,
+            runner=runner,
+            log=log,
+            data_dir=data_dir,
+        )
+        return finish(restored, detail)
+
+    states = [_update_layer_state(resources, entry) for entry in entries]
+    if state == ROLLING_BACK_STATE:
+        # A restore was already under way. Finish it; do not re-examine whether
+        # the update looks complete, because a restore that got through its
+        # first layer leaves precisely that appearance.
+        _emit_log(
+            log,
+            f"Update transaction {identifier} was already being rolled back; finishing it.",
+        )
+        restored, detail = _restore_previous_layers(
+            resources,
+            bundle,
+            platform_name=platform_name,
+            renamer=renamer,
+            runner=runner,
+            log=log,
+            data_dir=data_dir,
+        )
+        if not restored and "no previous layer" in detail:
+            set_journal_state(
+                data_dir,
+                "rolled-back",
+                detail="the restore had already finished",
+                log=log,
+            )
+            return RecoveryOutcome(
+                "none", f"Update transaction {identifier} had already been rolled back."
+            )
+        return finish(restored, detail)
+
+    if all(value == "untouched" for value in states):
+        detail = "no layer had been swapped when the update stopped"
+        set_journal_state(data_dir, "aborted", detail=detail, log=log)
+        _emit_log(log, f"Update transaction {identifier} was abandoned: {detail}.")
+        return RecoveryOutcome("none", detail)
+
+    if all(value in {"installed", "settled"} for value in states):
+        reasons: list[str] = []
+        if layers_disagree(resources):
+            required, installed = layer_runtime_ids(resources)
+            reasons.append(
+                f"the installed app requires runtime {required!r} but runtime {installed!r} "
+                "is installed"
+            )
+        settled, launcher_detail = _launcher_files_are_settled(resources)
+        if not settled:
+            reasons.append(launcher_detail)
+        if not reasons:
+            detail = "every layer of the interrupted update was already installed"
+            if bundle is not None:
+                try:
+                    repair_bundle(bundle, platform_name=platform_name, runner=runner, log=log)
+                except ApplyUpdateError as exc:
+                    # The layers are right but the seal is not, and on macOS an
+                    # unsealed bundle is not a startable one. Roll back rather
+                    # than hand the user a bundle Gatekeeper will refuse.
+                    restored, restore_detail = _restore_previous_layers(
+                        resources,
+                        bundle,
+                        platform_name=platform_name,
+                        renamer=renamer,
+                        runner=runner,
+                        log=log,
+                        data_dir=data_dir,
+                    )
+                    return finish(restored, f"the swapped bundle could not be sealed: {exc}")
+            set_journal_state(data_dir, "installed", detail=detail, log=log)
+            _emit_log(log, f"Update transaction {identifier} completed: {detail}.")
+            return RecoveryOutcome("completed", detail)
+        _emit_log(
+            log,
+            f"Update transaction {identifier} left an inconsistent installation: "
+            + "; ".join(reasons),
+        )
+
+    restored, detail = _restore_previous_layers(
+        resources,
+        bundle,
+        platform_name=platform_name,
+        renamer=renamer,
+        runner=runner,
+        log=log,
+        data_dir=data_dir,
+    )
+    return finish(restored, detail)
+
+
+def commit_transaction(
+    data_dir: Path,
+    *,
+    resources: Path,
+    log: LogCallable | None = None,
+) -> tuple[bool, str]:
+    """Close a decided transaction so its ``.previous`` may be reclaimed.
+
+    Called from the one place that has the evidence: a start that reached a
+    healthy interface. Everything else -- an updater that renamed four
+    directories, a reseal that passed, a relaunch that stayed up -- is progress,
+    not proof, and none of it is allowed to reclaim the rollback material.
+
+    Returns whether reclaiming may proceed. A transaction that is still open
+    means recovery has not run or did not finish, and the answer is no.
+    """
+
+    journal = read_journal(data_dir)
+    if journal is None:
+        return True, "no update transaction was recorded"
+    state = str(journal.get("state") or "")
+    identifier = str(journal.get("transaction") or "unidentified")
+    if not journal_describes(journal, resources):
+        # Another copy's transaction. It says nothing about this installation,
+        # and this installation has just started healthily, so its own rollback
+        # material is spent -- but the record stays for its owner.
+        return True, "the recorded update transaction belongs to another installation"
+    if state not in TERMINAL_JOURNAL_STATES:
+        return False, (
+            f"update transaction {identifier} is unresolved (state {state!r}); "
+            "the rollback material was kept"
+        )
+    remove_journal(data_dir, log=log)
+    return True, f"update transaction {identifier} committed from state {state!r}"
 
 
 def _repair_macos_bundle(
@@ -1076,10 +2132,30 @@ def apply_update(
             return f"the application {failure}"
         return None
 
+    def abandon_before_mutation(reason: str) -> int:
+        """Report an update that stopped with the installation as it was."""
+
+        relaunch_error = relaunch_current()
+        outcome = (
+            "The current version was reopened."
+            if relaunch_error is None
+            else f"The update was cancelled, but {relaunch_error}."
+        )
+        message = f"{reason}\n\n{outcome} Review update.log in the application data log directory."
+        log(message)
+        report(message)
+        return 2
+
     def finish_failure_after_mutation(reason: str, exit_code: int) -> int:
         # Do not emit the failure diagnostic until rollback, required signing,
         # and the attempt to reopen the restored version have all run.
+        set_journal_state(data_dir, ROLLING_BACK_STATE, detail=reason, log=selected_logger)
         rolled_back = rollback_previous_layers(resources, renamer=renamer)
+        # Only a rollback that restored everything decides the transaction. One
+        # that did not leaves the journal open on purpose, so the next start
+        # reconciles it instead of reclaiming what it could not restore.
+        if rolled_back:
+            set_journal_state(data_dir, "rolled-back", detail=reason, log=selected_logger)
         repair_error: str | None = None
         if rolled_back:
             try:
@@ -1120,34 +2196,58 @@ def apply_update(
         return 1
 
     try:
+        # Plan, then journal, then move. Both of the first two refuse before
+        # anything has changed, which is why their failure is answered by simply
+        # reopening the version that is already installed. An update that could
+        # not record what it was about to do does not get to do it: an
+        # unjournalled swap is precisely the state this transaction exists to
+        # make impossible.
+        planned = plan_layer_swap(resources, staged_app, staged_runtime)
+        begin_update_transaction(
+            data_dir=data_dir,
+            bundle=resolved_bundle,
+            resources=resources,
+            layers=planned,
+            platform_name=platform_name,
+        )
+    except ApplyUpdateError as exc:
+        # Deliberately *not* recorded as aborted. One of the ways to arrive here
+        # is that an earlier transaction is still unresolved -- which is exactly
+        # the record that must keep protecting its rollback material. Writing a
+        # terminal state now would decide somebody else's transaction on the
+        # strength of this one having been refused.
+        return abandon_before_mutation(str(exc))
+
+    try:
         swap_staged_layers(
             resources,
             staged_app,
             staged_runtime,
             renamer=renamer,
+            journal_dir=data_dir,
         )
     except ApplyUpdateError as exc:
-        relaunch_error = relaunch_current()
-        outcome = (
-            "The current version was reopened."
-            if relaunch_error is None
-            else f"The update was cancelled, but {relaunch_error}."
-        )
-        message = f"{exc}\n\n{outcome} Review update.log in the application data log directory."
-        log(message)
-        report(message)
-        return 2
+        # The swap restored what it had moved before raising, so this
+        # transaction really is decided, and it is ours to decide.
+        set_journal_state(data_dir, "aborted", detail=str(exc), log=selected_logger)
+        return abandon_before_mutation(str(exc))
 
+    set_journal_state(data_dir, "swapped", log=selected_logger)
     if staged_runtime is not None:
         try:
             refresh_launcher_files(resources, log=log)
         except ApplyUpdateError as exc:
             return finish_failure_after_mutation(str(exc), 4)
+        set_journal_state(data_dir, "launchers-refreshed", log=selected_logger)
 
     try:
         repair_bundle(resolved_bundle, platform_name=platform_name, runner=runner, log=log)
     except ApplyUpdateError as exc:
         return finish_failure_after_mutation(str(exc), 5)
+    # Installed, sealed, and not yet proven: the journal says "installed", which
+    # only permits the next healthy start to reclaim the previous layers. It
+    # does not reclaim anything itself.
+    set_journal_state(data_dir, "installed", log=selected_logger)
     if dropped:
         log(
             "The relaunch could not carry these arguments and started without "
@@ -1214,6 +2314,20 @@ def rollback_bundle(
         return 1
 
     resources = resources_directory(bundle.resolve(), platform_name)
+    try:
+        begin_rollback_transaction(
+            data_dir=data_dir,
+            bundle=bundle.resolve(),
+            resources=resources,
+            platform_name=platform_name,
+            reason=f"the application that failed to start (pid {parent_pid}) was rolled back",
+        )
+    except ApplyUpdateError as exc:
+        # Nothing has moved yet, so refusing costs only this attempt -- and a
+        # restore nobody recorded is a restore nobody can finish.
+        log(f"The rollback was not started because it could not be recorded: {exc}")
+        return 3
+    set_journal_state(data_dir, ROLLING_BACK_STATE, log=log)
     if not rollback_previous_layers(resources, renamer=renamer, log=log):
         log(
             "The rollback did not restore the previous version, so the "
@@ -1221,6 +2335,7 @@ def rollback_bundle(
             "changing the installation."
         )
         return 2
+    set_journal_state(data_dir, "rolled-back", log=log)
 
     try:
         repair_bundle(bundle.resolve(), platform_name=platform_name, runner=runner, log=log)
@@ -1243,17 +2358,65 @@ def rollback_bundle(
     )
 
 
+def recover_bundle(
+    *,
+    bundle: Path,
+    data_dir: Path,
+    platform_name: str = sys.platform,
+    renamer: RenameCallable = _rename,
+    runner: CommandRunner = subprocess.run,
+    logger: LogCallable | None = None,
+) -> int:
+    """Reconcile an interrupted update from outside the application.
+
+    The recovery the desktop launcher performs needs the desktop launcher, which
+    needs the ``app`` layer -- and a swap interrupted at the wrong moment is
+    exactly the case where that layer is the one that is missing. This entry
+    point needs neither: the module is standard library only, it declines to
+    hard-fail when the shared name validator cannot be imported, and everything
+    it consults is either the journal in the data directory or the bundle's own
+    directories. Any Python 3.13 can run the copy in ``<data>/rollback``.
+    """
+
+    log = logger or (lambda message: append_update_log(data_dir, message))
+    resolved = bundle.resolve()
+    try:
+        resources = resources_directory(resolved, platform_name)
+    except ApplyUpdateError as exc:
+        _emit_log(log, f"Recovery could not resolve the bundle {bundle}: {exc}")
+        return 3
+    _emit_log(log, f"Recovery helper {os.getpid()} started for {resolved}.")
+    outcome = recover_transaction(
+        data_dir=data_dir,
+        resources=resources,
+        bundle=resolved,
+        platform_name=platform_name,
+        renamer=renamer,
+        runner=runner,
+        log=log,
+    )
+    _emit_log(log, f"Recovery result ({outcome.action}): {outcome.detail}")
+    return 3 if outcome.action == "failed" else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--staged-app-dir", type=Path)
     parser.add_argument("--staged-runtime-dir", type=Path)
-    parser.add_argument("--parent-pid", type=int, required=True)
+    # Not required for --recover, which waits for nobody: it runs when the
+    # application is not running at all, which is the state it exists for.
+    parser.add_argument("--parent-pid", type=int)
     parser.add_argument(
         "--rollback",
         action="store_true",
         help="restore the .previous layers of a version that would not start",
+    )
+    parser.add_argument(
+        "--recover",
+        action="store_true",
+        help="reconcile an interrupted update from its transaction journal",
     )
     parser.add_argument(
         "--relaunch-arg",
@@ -1268,6 +2431,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.recover:
+        if args.rollback:
+            parser.error("--recover decides for itself whether a rollback is needed")
+        if args.staged_app_dir is not None or args.staged_runtime_dir is not None:
+            parser.error("--recover reconciles installed layers and takes no staged directories")
+        # Read at call time rather than inheriting the default bound when this
+        # module was imported, so the entry point reports the platform it is
+        # actually running on.
+        return recover_bundle(
+            bundle=args.bundle, data_dir=args.data_dir, platform_name=sys.platform
+        )
+    if args.parent_pid is None:
+        parser.error("--parent-pid is required unless --recover is given")
     if args.rollback:
         if args.staged_app_dir is not None or args.staged_runtime_dir is not None:
             parser.error("--rollback restores installed layers and takes no staged directories")

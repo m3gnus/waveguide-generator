@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import json
 import os
 from pathlib import Path
 import shutil
@@ -28,11 +27,17 @@ from launchers.windowframe import enable_non_client_regions, install_custom_fram
 from launchers.apply_update import (
     ApplyUpdateError,
     append_update_log,
+    begin_rollback_transaction,
     bundle_from_app_layer,
     cleanup_previous_layers,
+    commit_transaction,
+    layer_runtime_ids,
+    recover_transaction,
     repair_bundle,
+    ROLLING_BACK_STATE,
     resources_directory,
     rollback_previous_layers,
+    set_journal_state,
 )
 from launchers.statusapp.updater import (
     BundleUpdateRequest,
@@ -353,7 +358,18 @@ class DesktopWindow:
                 f"{snapshot.backend.state.name}, frontend {snapshot.frontend.state.name}."
             )
             return
+        # A healthy interface is the only evidence that an update worked, and
+        # this is the only place that has it. Close the transaction here, and
+        # refuse to reclaim anything while one is still open: a ``.previous``
+        # removed under an undecided transaction is the rollback material for a
+        # failure nobody has ruled out yet.
+        committed, commit_detail = commit_transaction(data_dir, resources=resources, log=log)
+        if not committed:
+            log(f"Not reclaiming the previous layers: {commit_detail}.")
+            return
         self._healthy_bundle_checked = True
+        if commit_detail.startswith("update transaction"):
+            log(f"Healthy start: {commit_detail}.")
 
         previous = self._previous_generation_paths(resources)
         if sys.platform == "darwin":
@@ -539,20 +555,14 @@ class DesktopWindow:
 
     @staticmethod
     def _layer_runtime_ids(resources: Path) -> tuple[str | None, str | None]:
-        """Return (the runtime the app requires, the runtime installed)."""
+        """Return (the runtime the app requires, the runtime installed).
 
-        def read(path: Path, key: str) -> str | None:
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                return None
-            value = payload.get(key) if isinstance(payload, dict) else None
-            return value if isinstance(value, str) and value else None
+        The updater asks the same question while it is writing the transaction
+        journal, from a process that has no application layer to import, so the
+        reader lives beside the swap itself and both callers use that one.
+        """
 
-        return (
-            read(resources / "app" / "APP-MANIFEST.json", "runtimeId"),
-            read(resources / "runtime" / "RUNTIME-MANIFEST.json", "runtimeId"),
-        )
+        return layer_runtime_ids(resources)
 
     @classmethod
     def _layers_disagree(cls, resources: Path) -> bool:
@@ -584,6 +594,19 @@ class DesktopWindow:
             )
             return False
         if rollback_previous_layers(resources, log=log):
+            # The path beside this one has always re-sealed the bundle after a
+            # restore; this one returned without doing so, which on macOS leaves
+            # an ad-hoc signature that no longer covers the contents it names.
+            paths = self._bundle_paths()
+            if paths is not None:
+                try:
+                    repair_bundle(paths[0], platform_name=sys.platform, log=log)
+                except ApplyUpdateError as exc:
+                    self._report_bundle_failure(
+                        "Waveguide Generator restored the previous version after an "
+                        f"interrupted update, but could not sign and verify it: {exc}"
+                    )
+                    return False
             return True
         self._report_bundle_window_failure(
             "Waveguide Generator cannot start: an interrupted update left the "
@@ -593,12 +616,39 @@ class DesktopWindow:
         return False
 
     def _recover_interrupted_bundle_update(self) -> bool:
-        """Restore a missing live layer from pending rollback before server start."""
+        """Decide any interrupted update before the server is allowed to start.
+
+        The journal decides it when there is one, because only the journal knows
+        that a transaction was in flight at all. The two manifest/directory
+        checks below stay as they were, and are not redundant: a bundle updated
+        by a release that predates the journal has none, and neither does one
+        whose data directory a user has moved or emptied.
+        """
 
         paths = self._bundle_paths()
         if paths is None:
             return True
         bundle, resources, data_dir = paths
+
+        def log(message: str) -> None:
+            append_update_log(data_dir, message)
+
+        outcome = recover_transaction(
+            data_dir=data_dir,
+            resources=resources,
+            bundle=bundle,
+            platform_name=sys.platform,
+            log=log,
+        )
+        if outcome.action == "failed":
+            self._report_bundle_failure(
+                "Waveguide Generator could not finish recovering an interrupted update: "
+                f"{outcome.detail} Review update.log before changing the installation."
+            )
+            return False
+        if outcome.action in {"completed", "rolled-back"}:
+            return True
+
         missing = [
             resources / name
             for name in ("runtime", "app")
@@ -669,8 +719,22 @@ class DesktopWindow:
             self._report_bundle_failure(f"{message}\n\n{ROLLBACK_HANDOFF_RESULT}")
             return
 
+        try:
+            begin_rollback_transaction(
+                data_dir=data_dir,
+                bundle=bundle,
+                resources=resources,
+                platform_name=sys.platform,
+                reason="the updated version could not open its window",
+            )
+        except ApplyUpdateError as exc:
+            log(f"The rollback could not be recorded, and was not started: {exc}")
+            self._report_bundle_failure(f"{message}\n\n{ROLLBACK_FAILED_RESULT}")
+            return
+        set_journal_state(data_dir, ROLLING_BACK_STATE, log=log)
         rolled_back = rollback_previous_layers(resources, log=log)
         if rolled_back:
+            set_journal_state(data_dir, "rolled-back", log=log)
             try:
                 repair_bundle(bundle, platform_name=sys.platform, log=log)
             except ApplyUpdateError as exc:

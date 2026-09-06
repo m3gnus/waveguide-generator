@@ -161,6 +161,40 @@ def _report_failure_with_evidence(failure: "TkFailure", *, detail: str | None = 
     )
 
 
+def _recover_interrupted_bundle_update(arguments: list[str]) -> int | None:
+    """Finish or undo an interrupted update, whatever mode was asked for.
+
+    Returns an exit code when the installation must not be started, and None
+    when it may be. Placed before the mode branch on purpose: the recovery that
+    shipped lived inside the desktop window's startup wait, so ``--browser``
+    and ``--no-gui`` skipped it entirely -- and those are the modes a user
+    reaches for when the window will not open, which after an interrupted
+    update is exactly when it will not.
+
+    The import is deferred and every failure of the *mechanism* is swallowed,
+    because a launcher that cannot start because its recovery step could not
+    import is strictly worse than one that starts without having run it: the
+    checks that predate the journal still run inside the desktop path. A
+    recovery that ran and *decided* the installation is broken is a different
+    thing, and that one refuses.
+    """
+
+    try:
+        from launchers.statusapp.updater import recover_interrupted_bundle_update
+
+        outcome = recover_interrupted_bundle_update(arguments)
+    except Exception as exc:  # noqa: BLE001 - never block a start on this step
+        _log_startup_failure(f"The interrupted-update check could not run: {exc!r}")
+        return None
+    if outcome is None or outcome.action != "failed":
+        return None
+    _report_startup_failure(
+        "Waveguide Generator could not finish recovering an interrupted update, so it "
+        f"did not start.\n\n{outcome.detail}"
+    )
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     window_requested = "--window" in arguments
@@ -169,6 +203,9 @@ def main(argv: list[str] | None = None) -> int:
     if window_requested and browser_requested:
         _report_startup_failure("Choose only one display mode: --window or --browser.")
         return 2
+    refusal = _recover_interrupted_bundle_update(arguments)
+    if refusal is not None:
+        return refusal
     if "--no-gui" in arguments:
         arguments.remove("--no-gui")
         # The status window refuses to start the backend when the interface is

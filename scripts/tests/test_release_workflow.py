@@ -452,3 +452,117 @@ def test_an_unexpected_extra_file_fails_the_publish(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "Release inventory mismatch" in result.stderr
     assert re.search(r"extra=\[[^]]*surprise\.zip", result.stderr)
+
+
+RC_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "rc-build.yml"
+RC_WORKFLOW = RC_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+#: `owner/name@ref`, with the optional trailing `# version` comment separated.
+USES_RE = re.compile(
+    r"^\s*(?:-\s+)?uses:\s+(?P<action>[^@\s]+)@(?P<ref>\S+)(?:\s+#\s*(?P<comment>.+))?$",
+    re.MULTILINE,
+)
+IMMUTABLE_REF_RE = re.compile(r"^[0-9a-f]{40}$")
+
+#: Every action the two release-building workflows may use, and the commit it is
+#: pinned to. Resolved from GitHub on 2026-09-05 with `gh api repos/<action>/
+#: commits/<tag>`; the comment beside each `uses:` names the release that commit
+#: belonged to. This table is the drift check: moving a pin means changing it
+#: here, in the same commit, with the new SHA resolved the same way.
+RELEASE_ACTION_PINS = {
+    "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262",
+    "actions/setup-node": "49933ea5288caeca8642d1e84afbd3f7d6820020",
+    "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "actions/download-artifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+    "actions/github-script": "f28e40c7f34bde8b3046d885e986cb6290c5673b",
+    "astral-sh/setup-uv": "08807647e7069bb48b6ef5acd8ec9567f424441b",
+    "softprops/action-gh-release": "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65",
+}
+
+#: The exact Node the SPA is built with. A major-only spec resolves to whatever
+#: the runner image happens to carry, which is the same reproducibility hole a
+#: floating action tag is.
+RELEASE_NODE_VERSION = "20.20.2"
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)),
+    ids=("release", "candidate"),
+)
+def test_every_release_action_is_pinned_to_an_immutable_commit(name: str, text: str) -> None:
+    """A major tag moves, so a workflow naming one does not describe its build.
+
+    Both files are checked because an RC that is hand-tested by a different set
+    of actions than the release does not test the release.
+    """
+
+    seen = [match.groupdict() for match in USES_RE.finditer(text)]
+    assert seen, f"{name} declares no actions at all; the pattern stopped matching"
+    for entry in seen:
+        action, ref, comment = entry["action"], entry["ref"], entry["comment"]
+        assert IMMUTABLE_REF_RE.fullmatch(ref), (
+            f"{name} uses {action}@{ref}, which is not a 40-character commit id"
+        )
+        assert action in RELEASE_ACTION_PINS, (
+            f"{name} uses {action}, which is not in the reviewed pin table"
+        )
+        assert ref == RELEASE_ACTION_PINS[action], (
+            f"{name} pins {action} to {ref}, the table says {RELEASE_ACTION_PINS[action]}"
+        )
+        assert comment and comment.strip().startswith("v"), (
+            f"{name} pins {action} without naming the release the commit belongs to"
+        )
+
+
+def test_the_release_and_the_candidate_are_built_by_the_same_actions() -> None:
+    """Same pins, same versions -- otherwise the hand test proves nothing."""
+
+    def pins(text: str) -> dict[str, str]:
+        return {
+            match.group("action"): match.group("ref") for match in USES_RE.finditer(text)
+        }
+
+    release_pins = pins(WORKFLOW)
+    candidate_pins = pins(RC_WORKFLOW)
+    shared_actions = release_pins.keys() & candidate_pins.keys()
+    assert shared_actions, "the two workflows share no actions at all"
+    for action in sorted(shared_actions):
+        assert release_pins[action] == candidate_pins[action], action
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)),
+    ids=("release", "candidate"),
+)
+def test_the_release_node_is_an_exact_patch_and_is_asserted_at_runtime(
+    name: str, text: str
+) -> None:
+    """setup-node verifies no digest, so the version is checked after install.
+
+    Reading actions/setup-node at the pinned commit finds no checksum code on
+    the download path at all. Nothing in this repository can add one, so the
+    workflow asserts the one thing a substituted download would change loudly.
+    """
+
+    assert f'node-version: "{RELEASE_NODE_VERSION}"' in text, name
+    assert 'node-version: "20"' not in text, name
+    assert f'expected="v{RELEASE_NODE_VERSION}"' in text, name
+    assert 'actual="$(node --version)"' in text, name
+
+
+def test_the_inno_setup_compiler_identity_is_asserted_not_assumed() -> None:
+    """The chocolatey package embeds its installer; assert what compiles."""
+
+    for name, text in (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)):
+        assert "choco install innosetup --version=6.7.1" in text, name
+        assert 'if ($banner -notmatch "6\\.7\\.1")' in text, name
+
+
+def test_the_unpinnable_runner_baseline_is_documented_not_implied() -> None:
+    """An honest gap that is written down is not the same as one that is not."""
+
+    for name, text in (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)):
+        assert "hosted runner" in text, name
+        assert "the base image is" in text, name

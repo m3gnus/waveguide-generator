@@ -7,6 +7,21 @@ name: RC build
 # the release.yml bundle jobs minus the release guard and the publish job;
 # assets are named by shared/version.json as it stands, so an RC built before
 # phase 1 carries the previous version string — that is expected.
+#
+# Every action is pinned to an immutable commit, with the release it belonged to
+# in a trailing comment. A major tag such as `@v4` moves, so a workflow that
+# names one does not describe the code that ran: the inputs of a release build
+# would be whatever those tags pointed at on the day. `scripts/tests/
+# test_release_workflow.py` fails this file if a floating reference reappears,
+# and rc-build.yml carries the same pins so a hand-tested candidate is built by
+# the same actions as the release.
+#
+# What is still not pinned, stated rather than glossed over: the hosted runner
+# images (`ubuntu-latest`, `macos-latest`, `windows-latest`, `ubuntu-24.04`)
+# are rebuilt weekly by GitHub and carry no addressable identity a workflow can
+# name. Everything this build actually consumes from them is pinned on top --
+# uv, the CPython standalone build, Node, Inno Setup -- but the base image is
+# not, and no amount of workflow text can make it so.
 on:
   workflow_dispatch:
     inputs:
@@ -23,14 +38,32 @@ jobs:
     name: Build the SPA
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: "20"
+          node-version: "20.20.2"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      - name: The Node the release was built with must be the pinned one
+        # setup-node performs no digest check on the archive it fetches from
+        # nodejs.org -- verified by reading its sources at the commit pinned
+        # above, which contain no checksum code at all. That cannot be fixed
+        # from here, so what is asserted instead is the one property a wrong
+        # download would break loudly: the exact version. A runner image whose
+        # tool cache answers a version spec differently, or a pin that silently
+        # widens, fails here rather than inside an artifact nobody can date.
+        run: |
+          set -euo pipefail
+          expected="v20.20.2"
+          actual="$(node --version)"
+          if [ "$actual" != "$expected" ]; then
+            echo "Expected Node $expected, got $actual" >&2
+            exit 1
+          fi
+          echo "Node $actual"
       - name: Build the SPA
         working-directory: frontend
         run: |
@@ -45,7 +78,7 @@ jobs:
           sha256sum "$archive" > "$archive.sha256"
           echo "artifact=$archive" >> "$GITHUB_ENV"
           tar -tzf "$archive" | grep -Fx "dist/index.html"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-spa
           path: |
@@ -58,14 +91,14 @@ jobs:
     runs-on: macos-latest
     needs: spa
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.2"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-spa
           path: build/spa
@@ -78,7 +111,7 @@ jobs:
           test -f "$spa.sha256"
           uv run --no-project --python 3.13.12 scripts/build_bundle.py --spa "$spa" --output build/bundle
       - name: Share the canonical platform-neutral app layer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: standalone-app-layer
           path: |
@@ -87,7 +120,7 @@ jobs:
             build/bundle/update-app-*.manifest.json
           if-no-files-found: error
       - name: Share the macOS RC assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rc-macos-dmg
           path: |
@@ -100,18 +133,18 @@ jobs:
     runs-on: windows-latest
     needs: [spa, macos-bundle]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.2"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-spa
           path: build/spa
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: standalone-app-layer
           path: build/app-reference
@@ -126,6 +159,13 @@ jobs:
                      Select-Object -First 1 -ExpandProperty FullName)
           }
           if (-not $iscc) { throw "Inno Setup installed but ISCC.exe was not found." }
+          # The chocolatey package embeds its installer rather than fetching
+          # one, so there is no separate download to checksum; what can be
+          # asserted is the identity of the compiler that actually runs.
+          $banner = (& $iscc /? 2>&1 | Select-Object -First 4) -join " "
+          if ($banner -notmatch "6\.7\.1") {
+            throw "Expected the Inno Setup 6.7.1 compiler, got: $banner"
+          }
           "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Build and verify the standalone app
         shell: pwsh
@@ -156,7 +196,7 @@ jobs:
           }
           Write-Host "Cross-platform app layer treeSha256: $localTree"
       - name: Share the Windows RC assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rc-windows-installer
           path: |
@@ -172,18 +212,18 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [spa, macos-bundle]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.2"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-spa
           path: build/spa
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: standalone-app-layer
           path: build/app-reference
@@ -212,7 +252,7 @@ jobs:
           print(f"Cross-platform app layer treeSha256: {trees[0]}")
           PY
       - name: Share the Linux RC assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rc-linux-tarball
           path: |

@@ -256,8 +256,17 @@ it turns amber and says **update available**. In the standalone application,
 click **Install update** to download the checksum-verified app layer and, when
 its content id changed, the matching runtime layer. WG stages them in its data
 directory, closes only after verification succeeds, swaps the complete layers,
-restores the ad-hoc bundle signature, and restarts. The previous layers remain
+restores the ad-hoc bundle signature, and restarts. An asset that carries no
+published digest is refused before it is downloaded, and one whose bytes do not
+match it is refused before anything is extracted. That check establishes
+**integrity, not authenticity**: it proves the copy matches the release GitHub
+describes, over TLS to `api.github.com`. It is not a publisher signature — the
+application is ad-hoc signed and carries no signing identity. The previous layers
+remain
 available for automatic rollback until the updated native application starts successfully.
+An update interrupted part-way through, including by a power cut, is decided on the
+next start from a transaction journal in the data directory: it is finished or
+rolled back before the server starts, in whichever mode the application is opened.
 The same action is available from the command palette as **Application update**.
 
 The job-log dialog reads and renders at most the first 1.0 MB. For example, opening
