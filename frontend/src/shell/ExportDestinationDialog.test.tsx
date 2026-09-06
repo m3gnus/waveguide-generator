@@ -66,18 +66,18 @@ describe('the export destination dialog', () => {
 
   it('offers the folder the last export used, and exports there on one click', async () => {
     stubFetch(() => respond({
-      path: '/Users/tester/Desktop', token: 'handle-1', remembered: true, selected: false,
+      path: '/exports', token: 'handle-1', remembered: true, selected: false,
     }));
     const { answer } = await ask();
 
     expect(document.querySelector('.export-destination-path')?.textContent)
-      .toBe('/Users/tester/Desktop');
+      .toBe('/exports');
     expect(document.querySelector('.export-dialog')?.textContent)
       .toContain('Where your last export went.');
     await act(async () => { button('Export here').click(); });
 
     await expect(answer).resolves.toEqual({
-      token: 'handle-1', directory: '/Users/tester/Desktop',
+      token: 'handle-1', directory: '/exports',
     });
     // Reading the suggestion is one GET. Nothing was chosen, so nothing was
     // posted, and the workspace endpoints were never touched.
@@ -86,7 +86,7 @@ describe('the export destination dialog', () => {
 
   it('says the folder is the output folder until an export has moved it', async () => {
     stubFetch(() => respond({
-      path: '/Users/tester/WG', token: 'handle-workspace', remembered: false, selected: false,
+      path: '/workspace', token: 'handle-workspace', remembered: false, selected: false,
     }));
     await ask();
 
@@ -97,7 +97,7 @@ describe('the export destination dialog', () => {
   it('opens the platform picker on request and offers what it returned', async () => {
     stubFetch((_path, init) => respond(init?.method === 'POST'
       ? { path: '/Volumes/Stick', token: 'handle-2', remembered: false, selected: true }
-      : { path: '/Users/tester/WG', token: 'handle-1', remembered: false, selected: false }));
+      : { path: '/workspace', token: 'handle-1', remembered: false, selected: false }));
     const { answer } = await ask();
 
     await act(async () => { button('Choose folder…').click(); });
@@ -118,7 +118,7 @@ describe('the export destination dialog', () => {
   it('accepts a typed path, for WG reached from another machine', async () => {
     stubFetch((_path, init) => respond(init?.method === 'POST'
       ? { path: '/srv/exports', token: 'handle-typed', remembered: false, selected: true }
-      : { path: '/Users/tester/WG', token: 'handle-1', remembered: false, selected: false }));
+      : { path: '/workspace', token: 'handle-1', remembered: false, selected: false }));
     const { answer } = await ask();
 
     const field = document.querySelector<HTMLInputElement>('.cad-folder-manual input')!;
@@ -137,7 +137,7 @@ describe('the export destination dialog', () => {
 
   it('answers nothing when the export is cancelled', async () => {
     stubFetch(() => respond({
-      path: '/Users/tester/WG', token: 'handle-1', remembered: false, selected: false,
+      path: '/workspace', token: 'handle-1', remembered: false, selected: false,
     }));
     const { answer } = await ask();
 
@@ -151,15 +151,15 @@ describe('the export destination dialog', () => {
     stubFetch((_path, init) => respond(init?.method === 'POST'
       // What the server answers a cancelled picker with: the same offer, not a
       // new folder and not an error.
-      ? { path: '/Users/tester/WG', token: 'handle-2', remembered: false, selected: false }
-      : { path: '/Users/tester/WG', token: 'handle-1', remembered: false, selected: false }));
+      ? { path: '/workspace', token: 'handle-2', remembered: false, selected: false }
+      : { path: '/workspace', token: 'handle-1', remembered: false, selected: false }));
     const { answer } = await ask();
 
     await act(async () => { button('Choose folder…').click(); });
 
     expect(document.querySelector('.export-dialog')).not.toBeNull();
     expect(document.querySelector('.export-destination-path')?.textContent)
-      .toBe('/Users/tester/WG');
+      .toBe('/workspace');
     await act(async () => { button('Cancel').click(); });
     await expect(answer).resolves.toBeNull();
   });
@@ -176,7 +176,7 @@ describe('the export destination dialog', () => {
   it('reports a refused folder and stays open', async () => {
     stubFetch((_path, init) => (init?.method === 'POST'
       ? new Response(JSON.stringify({ detail: 'Selected path is not a directory: /nope' }), { status: 400 })
-      : respond({ path: '/Users/tester/WG', token: 'handle-1', remembered: false, selected: false })));
+      : respond({ path: '/workspace', token: 'handle-1', remembered: false, selected: false })));
     await ask();
 
     await act(async () => { button('Choose folder…').click(); });
@@ -188,7 +188,7 @@ describe('the export destination dialog', () => {
 
   it('answers a second export "cancelled" rather than losing the question on screen', async () => {
     stubFetch(() => respond({
-      path: '/Users/tester/WG', token: 'handle-1', remembered: false, selected: false,
+      path: '/workspace', token: 'handle-1', remembered: false, selected: false,
     }));
     const { answer } = await ask();
 
@@ -217,7 +217,7 @@ describe('the export destination dialog', () => {
     };
     stubFetch((_path, init) => respond(init?.method === 'POST'
       ? answer
-      : { path: '/Users/tester/WG', token: 'handle-1', remembered: true, selected: false }));
+      : { path: '/workspace', token: 'handle-1', remembered: true, selected: false }));
     const { answer: chosen } = await ask();
 
     await act(async () => { button('Choose folder…').click(); });
@@ -225,7 +225,7 @@ describe('the export destination dialog', () => {
 
     // What the server answers a cancelled picker with: no handle, and the
     // standing suggestion rather than the folder on screen.
-    answer = { path: '/Users/tester/WG', token: null, remembered: true, selected: false };
+    answer = { path: '/workspace', token: null, remembered: true, selected: false };
     await act(async () => { button('Choose folder…').click(); });
 
     expect(document.querySelector('.export-destination-path')?.textContent).toBe('/Volumes/Stick');
@@ -237,7 +237,7 @@ describe('the export destination dialog', () => {
     // Otherwise the export that asked awaits a promise nobody can settle, and
     // its panel sits busy for the rest of the session.
     stubFetch(() => respond({
-      path: '/Users/tester/WG', token: 'handle-1', remembered: false, selected: false,
+      path: '/workspace', token: 'handle-1', remembered: false, selected: false,
     }));
     const { answer } = await ask();
     const replace = askToReplaceExports({ directory: '/x', paths: ['/x/a.csv'] });
@@ -258,7 +258,7 @@ describe('the export destination dialog', () => {
       await act(async () => { root.render(<ExportDestinationDialog/>); });
       let answer!: Promise<boolean>;
       await act(async () => {
-        answer = askToReplaceExports({ directory: '/Users/tester/Desktop', paths });
+        answer = askToReplaceExports({ directory: '/exports', paths });
         await Promise.resolve();
       });
       return { answer };
@@ -266,8 +266,8 @@ describe('the export destination dialog', () => {
 
     it('names the files it would replace and writes only when told to', async () => {
       const { answer } = await askReplace([
-        '/Users/tester/Desktop/horn.csv',
-        '/Users/tester/Desktop/horn.json',
+        '/exports/horn.csv',
+        '/exports/horn.json',
       ]);
 
       const dialog = document.querySelector('.export-dialog')!;
@@ -282,7 +282,7 @@ describe('the export destination dialog', () => {
     });
 
     it('answers no when it is cancelled', async () => {
-      const { answer } = await askReplace(['/Users/tester/Desktop/horn.csv']);
+      const { answer } = await askReplace(['/exports/horn.csv']);
 
       expect(document.querySelector('.export-dialog')?.textContent)
         .toContain('Replace 1 existing file?');

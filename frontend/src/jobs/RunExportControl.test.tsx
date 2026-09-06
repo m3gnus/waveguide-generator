@@ -507,7 +507,7 @@ describe('RunExportControl', () => {
     const asked: string[] = [];
     provideExportDestinationPrompt(async (request) => {
       asked.push(request.title);
-      return { token: 'handle-run', directory: '/Users/tester/Desktop' };
+      return { token: 'handle-run', directory: '/exports' };
     });
     preferencesStore.update({ exportFormats: ['csv'] });
     render();

@@ -525,7 +525,7 @@ describe('results chart layouts', () => {
     summaryMocks.groups.mockReset().mockReturnValue([]);
     summaryMocks.text.mockReset().mockReturnValue('');
     chartImageMocks.copy.mockReset().mockResolvedValue(undefined);
-    chartImageMocks.save.mockReset().mockResolvedValue('/Users/tester/Desktop');
+    chartImageMocks.save.mockReset().mockResolvedValue('/exports');
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -670,8 +670,8 @@ describe('results chart layouts', () => {
     // A chart image is a file export like any other: it asks where it goes,
     // and it is written by the server rather than handed to a download shelf
     // the desktop window does not have.
-    chartImageMocks.save.mockResolvedValue('/Users/tester/Desktop');
-    provideExportDestinationPrompt(async () => ({ token: 'handle-png', directory: '/Users/tester/Desktop' }));
+    chartImageMocks.save.mockResolvedValue('/exports');
+    provideExportDestinationPrompt(async () => ({ token: 'handle-png', directory: '/exports' }));
     await act(async () => { save.click(); });
     expect(chartImageMocks.save).toHaveBeenCalledWith(
       target, 'result_frequency_response.png', 'handle-png', tokens.background,
