@@ -165,15 +165,19 @@ def test_inno_verifier_rejects_a_missing_compiler_before_execution() -> None:
 
 
 @pytest.mark.skipif(
-    sys.platform != "win32" or shutil.which("pwsh") is None,
-    reason="the real compiler probe runs on Windows only",
+    sys.platform != "win32"
+    or shutil.which("pwsh") is None
+    or os.environ.get("WG_TEST_PINNED_INNO") != "1",
+    reason="the real compiler probe is opt-in after the pinned Windows setup",
 )
 def test_inno_verifier_executes_the_real_installed_compiler_probe() -> None:
     """Exercise PE metadata and the successful ISCC compile on Windows.
 
     The RC workflow installs the pinned compiler before this same helper runs.
-    A normal Windows checkout without Inno Setup skips this environment test;
-    when the compiler is present, a drifted version is a real failure.
+    A normal Windows checkout skips this environment test; set
+    ``WG_TEST_PINNED_INNO=1`` only after installing the pinned package. When
+    the compiler is present in that explicitly prepared environment, a drifted
+    version is a real failure.
     """
 
     roots = [os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles")]
