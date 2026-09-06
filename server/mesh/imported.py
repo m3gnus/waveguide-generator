@@ -7,7 +7,7 @@ through the parametric surface-tag contract.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 import hashlib
 import json
 import math
@@ -1163,6 +1163,67 @@ def _import_occ_root_bodies(gmsh: Any, assembly_path: str | Path) -> list[tuple[
     return roots
 
 
+def occ_body_groups(gmsh: Any, roots: Sequence[tuple[int, int]]) -> list[list[tuple[int, int]]]:
+    """Group transformable roots into the bodies a STEP file declares.
+
+    :func:`_import_occ_root_bodies` answers "what must an affine transform touch
+    exactly once", and every face of an open shell is a separate answer to that.
+    It is **not** an answer to "how many bodies is this", and the two were the
+    same list until a surface body arrived with more than one face in it.
+
+    CAD's own count, in ``wglink_send.count_step_bodies``, is one per
+    ``MANIFOLD_SOLID_BREP`` or ``SHELL_BASED_SURFACE_MODEL``; the add-in refuses
+    its own export when its inventory disagrees, so the manifest is *known* to
+    be counting bodies. A Fusion surface body is exported as
+    ``SHELL_BASED_SURFACE_MODEL('name', (#open_shell))`` -- which is what
+    ``hornlab_mesher.step_import._parse_named_shell_faces`` is written against --
+    and OCC imports that one shell as one free surface per face. A 26-face
+    half model therefore arrived here as 26 "bodies" against a manifest
+    declaring 1, and the gate refused a file that was correct.
+
+    A solid is one body. Free surfaces are grouped by **shared bounding
+    curves**, transitively: two faces of one shell meet along an edge, and two
+    separate shells do not. That is what keeps this from being "call every free
+    face one body" -- an undeclared second shell shares no curve with the first,
+    so it is still a second body and the gate still fires.
+
+    Faces that touch only at a vertex count as separate bodies. That
+    over-counts a non-manifold shell rather than under-counting a stray one,
+    which is the safe direction for a gate whose job is to refuse surprises.
+    """
+
+    volumes = [root for root in roots if root[0] == 3]
+    surfaces = [root for root in roots if root[0] == 2]
+    groups: list[list[tuple[int, int]]] = [[volume] for volume in volumes]
+    if not surfaces:
+        return groups
+
+    parent = {tag: tag for _dim, tag in surfaces}
+
+    def find(tag: int) -> int:
+        while parent[tag] != tag:
+            parent[tag] = parent[parent[tag]]
+            tag = parent[tag]
+        return tag
+
+    faces_by_curve: dict[int, list[int]] = {}
+    for _dim, tag in surfaces:
+        for curve in gmsh.model.getAdjacencies(2, int(tag))[1]:
+            faces_by_curve.setdefault(int(curve), []).append(int(tag))
+    for shared in faces_by_curve.values():
+        first = find(shared[0])
+        for other in shared[1:]:
+            root = find(other)
+            if root != first:
+                parent[root] = first
+
+    by_component: dict[int, list[tuple[int, int]]] = {}
+    for dim, tag in surfaces:
+        by_component.setdefault(find(int(tag)), []).append((dim, int(tag)))
+    groups.extend(by_component.values())
+    return groups
+
+
 def build_imported_viewport_mesh(
     assembly_path: str | Path,
     manifest: Mapping[str, Any],
@@ -1943,7 +2004,10 @@ def build_imported_mesh(
         named = {name: [face_to_surface[face] for face in faces if face in face_to_surface] for name, faces in named_step.items()}
         styled = {name: [face_to_surface[face] for face in faces if face in face_to_surface] for name, faces in styled_step.items()}
 
-        body_count = len(imported)
+        # Bodies, not transformable roots. An open shell is one body however
+        # many faces it has; see :func:`occ_body_groups`.
+        body_groups = occ_body_groups(gmsh, imported)
+        body_count = len(body_groups)
         expected_bodies = int(manifest["assembly"]["n_bodies_expected"])
         if body_count != expected_bodies:
             raise ImportedMeshError(
