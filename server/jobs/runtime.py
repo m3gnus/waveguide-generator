@@ -52,6 +52,7 @@ from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
 from server.solver.imported import (
     ImportedMeshArtifactError,
     ImportedSymmetryUnsupportedError,
+    imported_domain_planes,
     imported_symmetry_from_cut_planes,
     read_verified_import_mesh,
     verify_record_mesh_text,
@@ -1073,11 +1074,20 @@ def _validate_passive_cardioid_topology(
 
 
 def _imported_symmetry_metadata(
-    record: Mapping[str, Any], requested: str
+    record: Mapping[str, Any], requested: str, ground_axis: str | None = None
 ) -> dict[str, Any]:
-    symmetry = record.get("symmetry")
-    symmetry = symmetry if isinstance(symmetry, Mapping) else {}
-    cut_planes = [str(plane) for plane in symmetry.get("cut_planes") or []]
+    """Resolve the domain the ingestion artifact actually describes.
+
+    The planes read here are the **domain** planes -- what the solver must
+    mirror -- not the subset WG's own cutter removed during preparation. A
+    return the CAD author cut before exporting has nothing left for the cutter
+    to take, so its ``cut_planes`` are empty while its domain is a half or a
+    quarter; reading the cut list would resolve it to ``full`` and solve an open
+    shell. Older records carry only ``cut_planes``, where the two are the same
+    list.
+    """
+
+    cut_planes = list(imported_domain_planes(record))
     try:
         resolved = imported_symmetry_from_cut_planes(cut_planes)
     except ImportedSymmetryUnsupportedError as exc:
@@ -1093,13 +1103,40 @@ def _imported_symmetry_metadata(
             f"actual cut planes {cut_planes} ({resolved.mode})",
             details={"requested": requested, "resolved": resolved.mode, "cut_planes": cut_planes},
         )
+    # A reduced mesh is cut *on* its mirror plane and touches it; a model above
+    # a rigid ground plane must not reach it. The two cannot name the same
+    # plane. The design path subtracts the blocked plane before meshing
+    # (``restrict_for_ground_plane``), but an imported mesh already exists and
+    # cannot be re-cut, so the conflict is refused with the plane named instead
+    # of being handed to an engine that would mirror into the floor.
+    if ground_axis is not None and resolved.native_plane:
+        from server.solver.ground_plane import GroundPlane
+
+        blocked = GroundPlane(axis=ground_axis, height_m=0.0).blocked_symmetry_plane
+        mirrored = set(str(resolved.native_plane).split("+"))
+        if blocked in mirrored:
+            raise ImportedSolveRefusal(
+                "imported_symmetry_ground_plane_conflict",
+                f"this CAD return is a {resolved.mode} domain mirrored on {blocked}, "
+                f"and a {ground_axis}-axis ground plane bounds that same plane. A "
+                "reduced domain touches its mirror plane and a grounded model must "
+                "stand clear of the floor, so the two cannot be combined. Turn the "
+                "ground plane off, or return the model whole from CAD.",
+                details={
+                    "resolved": resolved.mode,
+                    "native_symmetry_plane": resolved.native_plane,
+                    "ground_axis": ground_axis,
+                    "blocked_symmetry_plane": blocked,
+                    "cut_planes": cut_planes,
+                },
+            )
     return {
         "requested": requested,
         "resolved": resolved.mode,
         "resolved_quadrants": resolved.quadrants,
         "native_symmetry_plane": resolved.native_plane,
         "cut_planes": cut_planes,
-        "source": "cad-ingestion-cut-planes",
+        "source": "cad-ingestion-domain-planes",
     }
 
 
@@ -1673,7 +1710,7 @@ class JobRuntime:
             )
 
         symmetry_metadata = _imported_symmetry_metadata(
-            record, request.options.symmetry
+            record, request.options.symmetry, _ground_plane_axis(request)
         )
         _validate_imported_polar_grid(geometry, request, record)
         polar = request.options.polar_config

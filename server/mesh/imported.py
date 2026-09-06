@@ -483,17 +483,31 @@ def _transform_direction(matrix: np.ndarray, direction: Iterable[float]) -> np.n
 
 
 def geometry_candidate_matches(candidate: Mapping[str, Any], contract: Mapping[str, Any]) -> bool:
-    """Apply the linked-throat geometry gates to one measured face."""
+    """Apply the linked-throat geometry gates to one measured face.
+
+    ``retained_area_fraction`` is how much of the contract's disc a declared
+    pre-cut domain leaves behind: half per declared plane the disc straddles,
+    which is the same factor ``_post_cut_source_area_record`` predicts for a
+    plane WG cuts here. It defaults to 1.0, so a full-domain return is judged
+    exactly as before.
+
+    The centroid distance is measured perpendicular to the axis with the
+    reduced directions removed by the caller, because a retained half's
+    centroid necessarily moves along the direction the other half was taken
+    from -- the face is still on the axis in every direction that still has
+    two sides.
+    """
 
     diameter = float(contract["throat_diameter_mm"])
     axis_limit = max(0.10, 0.005 * diameter)
+    fraction = float(candidate.get("retained_area_fraction", 1.0))
+    expected = float(contract["expected_disc_area_mm2"]) * fraction
     return (
         bool(candidate.get("planar"))
         and float(candidate.get("plane_distance_mm", math.inf)) <= PLANE_DISTANCE_MM
         and float(candidate.get("normal_angle_deg", math.inf)) <= NORMAL_ANGLE_DEG
         and float(candidate.get("centroid_axis_distance_mm", math.inf)) <= axis_limit
-        and abs(float(candidate.get("area_mm2", 0.0)) - float(contract["expected_disc_area_mm2"]))
-        / float(contract["expected_disc_area_mm2"])
+        and abs(float(candidate.get("area_mm2", 0.0)) - expected) / expected
         <= AREA_REL_TOLERANCE
     )
 
@@ -732,12 +746,25 @@ def verify_symmetry_cut(
         "tolerance_mm": float(tolerance_mm),
     }
     if not planes:
+        # A full domain has no mirror to be wrong about, so this is verified by
+        # construction -- but it is exactly where an undeclared half hides. The
+        # same detector that confirms a cut also recognises one nobody
+        # declared: free edges lying in a coordinate plane with the whole mesh
+        # on one side of it. Reported, never fatal here; the caller decides.
+        detected, detection = detect_symmetry_planes(
+            np.asarray(points_mm, dtype=float),
+            np.asarray(triangles, dtype=np.int64),
+            tolerance=float(tolerance_mm),
+        )
+        undeclared = [plane for plane in detected if plane in ("x0", "y0")]
         record.update(
             {
                 "verified": True,
                 "reason": "full domain: no cut plane to verify",
-                "detected_planes": [],
+                "detected_planes": list(detected),
                 "capped_planes": [],
+                "undeclared_open_planes": undeclared,
+                "detection": detection,
             }
         )
         return record
@@ -746,14 +773,58 @@ def verify_symmetry_cut(
         np.asarray(triangles, dtype=np.int64),
         tolerance=float(tolerance_mm),
     )
-    capped = [plane for plane in planes if plane not in detected]
+    sides = detection.get("plane_vertex_side_counts") or {}
+    missing = [plane for plane in planes if plane not in detected]
+    # Three different things get a plane rejected, and they have three different
+    # remedies, so they are separated rather than all reported as "capped".
+    straddling = [
+        plane
+        for plane in missing
+        if int((sides.get(plane) or {}).get("negative", 0)) > 0
+        and int((sides.get(plane) or {}).get("positive", 0)) > 0
+    ]
+    capped = [plane for plane in missing if plane not in straddling]
+    # WG keeps the positive side of every mirror plane, here and in the cutter,
+    # so a domain retained on the negative side is a mirror image of the model
+    # the manifest describes -- accepted, it would solve the wrong half.
+    wrong_side = [
+        plane
+        for plane in planes
+        if int((sides.get(plane) or {}).get("positive", 0)) == 0
+    ]
     record.update(
         {
             "detected_planes": list(detected),
             "capped_planes": capped,
+            "straddling_planes": straddling,
+            "wrong_side_planes": wrong_side,
             "detection": detection,
         }
     )
+    if straddling:
+        record.update(
+            {
+                "verified": False,
+                "reason": (
+                    "the boundary spans both sides of "
+                    + ", ".join(straddling)
+                    + "; that is not a reduced domain about that plane"
+                ),
+            }
+        )
+        return record
+    if wrong_side:
+        record.update(
+            {
+                "verified": False,
+                "reason": (
+                    "the boundary lies on the negative side of "
+                    + ", ".join(wrong_side)
+                    + "; WG keeps the positive half, so mirror the model first"
+                ),
+            }
+        )
+        return record
     if capped:
         record.update(
             {
@@ -761,7 +832,7 @@ def verify_symmetry_cut(
                 "reason": (
                     "the reduced boundary is closed on "
                     + ", ".join(capped)
-                    + "; the auto-cut plane is capped, not open"
+                    + "; the cut plane is capped, not open"
                 ),
             }
         )
@@ -804,7 +875,13 @@ def polar_grid_from_symmetry(symmetry_report: Mapping[str, Any]) -> dict[str, An
             "maximum_deg": 180.0,
             "may_widen_not_narrow": True,
         }
-    return {"axes": axes, "cut_planes": list(symmetry_report.get("cut_planes") or [])}
+    # A plane the CAD author cut before exporting bounds the sweep exactly as
+    # one WG cut here does, so the echo names the solved domain rather than the
+    # subset of it this preparation happened to remove.
+    domain = symmetry_report.get("domain_planes")
+    if domain is None:
+        domain = symmetry_report.get("cut_planes") or []
+    return {"axes": axes, "cut_planes": list(domain)}
 
 
 def _face_components(gmsh: Any, faces: Iterable[int]) -> int:
@@ -1724,6 +1801,39 @@ def build_imported_mesh(
     symmetry_mode = str(options.get("symmetry_mode") or "auto")
     if symmetry_mode not in {"auto", "full"}:
         raise ImportedMeshError("symmetry: symmetryMode must be 'auto' or 'full'")
+    # The CAD author's declaration that the returned bodies ARE the reduced
+    # domain. It is not a request to cut: there is nothing left to remove, and
+    # the mesher's own detector correctly declines a plane the model does not
+    # straddle. What it changes is the *interpretation* -- these planes are the
+    # solver's mirrors -- which is why the two are kept apart everywhere below:
+    # ``cut.planes`` is what this preparation removed, ``domain_planes`` is what
+    # the solver must mirror, and only the first may predict a halved source
+    # area.
+    declared_cut_planes = tuple(
+        str(plane) for plane in (options.get("declared_cut_planes") or ())
+    )
+    unsupported = [
+        plane for plane in declared_cut_planes if plane not in SUPPORTED_CUT_PLANES
+    ]
+    if unsupported:
+        raise ImportedMeshError(
+            "symmetry: declared cut planes may only name "
+            f"{', '.join(SUPPORTED_CUT_PLANES)}, got {sorted(unsupported)}"
+        )
+    if len(set(declared_cut_planes)) != len(declared_cut_planes):
+        raise ImportedMeshError("symmetry: declared cut planes must not repeat")
+    declared_cut_planes = tuple(
+        plane for plane in SUPPORTED_CUT_PLANES if plane in set(declared_cut_planes)
+    )
+    if declared_cut_planes and symmetry_mode == "full":
+        # Forcing the full domain disables WG's cutter; it cannot restore a half
+        # the author already removed, so accepting the pair would solve a half
+        # model as a whole one.
+        raise ImportedMeshError(
+            "symmetry: this return is declared already cut on "
+            f"{', '.join(declared_cut_planes)}, so the full domain cannot be "
+            "forced. Return the whole model from CAD to solve it whole."
+        )
     raw_area_drift_overrides = options.get("area_drift_overrides", ())
     if not isinstance(raw_area_drift_overrides, (list, tuple, set, frozenset)):
         raise ImportedMeshError("role resolution: areaDriftOverrides must be an array of source ids")
@@ -1942,7 +2052,27 @@ def build_imported_mesh(
                     except Exception:
                         angle = math.inf
                     delta = center - axis_origin
-                    axis_distance = float(np.linalg.norm(delta - np.dot(delta, axis_direction) * axis_direction))
+                    lateral = delta - np.dot(delta, axis_direction) * axis_direction
+                    face_bbox = tuple(
+                        float(value)
+                        for value in gmsh.model.getBoundingBox(2, int(surface))
+                    )
+                    retained = 1.0
+                    for plane in declared_cut_planes:
+                        plane_axis = {"x0": 0, "y0": 1}[plane]
+                        # Coincident with the plane means the cut did not halve
+                        # this face; the same test the post-cut area provenance
+                        # uses, on the same tolerance scale.
+                        if (
+                            max(
+                                abs(face_bbox[plane_axis]),
+                                abs(face_bbox[plane_axis + 3]),
+                            )
+                            > PLANE_DISTANCE_MM
+                        ):
+                            retained *= 0.5
+                            lateral[plane_axis] = 0.0
+                    axis_distance = float(np.linalg.norm(lateral))
                     candidate = {
                         "face_id": surface,
                         "planar": planar,
@@ -1950,6 +2080,7 @@ def build_imported_mesh(
                         "normal_angle_deg": angle,
                         "centroid_axis_distance_mm": axis_distance,
                         "area_mm2": areas[surface],
+                        "retained_area_fraction": retained,
                     }
                     candidate["matches"] = geometry_candidate_matches(candidate, contract)
                     if candidate["matches"]:
@@ -1997,6 +2128,14 @@ def build_imported_mesh(
                             f"{nearest['face_id']} has plane residual "
                             f"{nearest['plane_distance_mm']:.9g} mm "
                             f"(planar={nearest['planar']})"
+                            + (
+                                "; this return declares it was already cut on "
+                                + ", ".join(declared_cut_planes)
+                                + ", so the throat contract is matched against the "
+                                "retained fraction of its disc"
+                                if declared_cut_planes
+                                else ""
+                            )
                         )
                 outcome = resolve_instance_source(
                     source,
@@ -2150,6 +2289,47 @@ def build_imported_mesh(
                     "symmetry reduction disabled after the reduced domain "
                     "failed post-mesh verification"
                 )
+        # A declared plane is checked against the MESH, not against the OCC
+        # bounding box: a trimmed B-spline's OCC box bounds its control hull,
+        # not its surface, and on this repository's own horn fixture that box
+        # reaches 7.4 mm past a face that a real CAD cut put exactly on the
+        # plane. ``verify_symmetry_cut`` below reads the vertices themselves,
+        # which is exact, and the tail of this function refuses on its verdict.
+        if declared_cut_planes:
+            overlapping = [plane for plane in cut.planes if plane in declared_cut_planes]
+            if overlapping:
+                # Unreachable while the model really is reduced -- the cutter
+                # only accepts a plane the model straddles -- and worth failing
+                # loudly rather than halving a half.
+                raise ImportedMeshError(
+                    "symmetry: WG cut "
+                    + ", ".join(overlapping)
+                    + " on a return that declares it was already cut there"
+                )
+        domain_planes = tuple(
+            plane
+            for plane in SUPPORTED_CUT_PLANES
+            if plane in set(declared_cut_planes) | set(cut.planes)
+        )
+        cut.report["declared_cut_planes"] = list(declared_cut_planes)
+        cut.report["domain_planes"] = list(domain_planes)
+        if declared_cut_planes:
+            # ``polar_grid_from_symmetry`` reads per-plane acceptance, and a
+            # declared plane is as much a mirror as a cut one. It is recorded
+            # with its own source so the report never claims WG tested it.
+            planes_report = dict(cut.report.get("planes") or {})
+            for plane in declared_cut_planes:
+                planes_report[plane] = {
+                    "plane": plane,
+                    "accepted": True,
+                    "source": "declared-by-cad-author",
+                    "reason": (
+                        "the return declares this plane was cut in CAD; the "
+                        "meshed boundary is verified below"
+                    ),
+                }
+            cut.report["planes"] = planes_report
+        cut.report["cut_planes"] = list(cut.planes)
         cut_groups = {group.name: list(group.selector.surface_tags) for group in cut.groups}
         cut_area_provenance: dict[str, dict[str, float]] = {}
         for source in source_list:
@@ -2321,7 +2501,7 @@ def build_imported_mesh(
             processed, repair, topology = postprocess_mesh(
                 raw_mesh,
                 step_specs,
-                symmetry_planes=cut.planes,
+                symmetry_planes=domain_planes,
                 tolerance=5.0e-3,
                 symmetry_snap_tolerance=SYMMETRY_SNAP_TOLERANCE_MM,
             )
@@ -2366,13 +2546,13 @@ def build_imported_mesh(
         if len(triangles) == 0:
             raise ImportedMeshError("meshing: imported mesh contains no triangles")
         _enforce_artifact_triangle_ceiling(int(len(triangles)))
-        imported_symmetry = imported_symmetry_from_cut_planes(cut.planes)
+        imported_symmetry = imported_symmetry_from_cut_planes(domain_planes)
         dense = _enforce_dense_solver_memory_ceiling(
             triangles,
             imported_symmetry.quadrants,
             tags=tags,
         )
-        integrity = mesh_integrity_report(points_mm * 1.0e-3, triangles, symmetry_plane_axes=tuple({"x0": 0, "y0": 1}[plane] for plane in cut.planes if plane in {"x0", "y0"}))
+        integrity = mesh_integrity_report(points_mm * 1.0e-3, triangles, symmetry_plane_axes=tuple({"x0": 0, "y0": 1}[plane] for plane in domain_planes if plane in {"x0", "y0"}))
         if not integrity.get("valid"):
             raise ImportedMeshError(
                 "meshing: postprocessed imported mesh failed topology integrity checks: "
@@ -2384,9 +2564,10 @@ def build_imported_mesh(
         verification = verify_symmetry_cut(
             points_mm,
             triangles,
-            cut_planes=cut.planes,
+            cut_planes=domain_planes,
             topology=topology,
         )
+        verification["declared_cut_planes"] = list(declared_cut_planes)
         # A second, independent count of the same thing, from the arrays the
         # solver will read rather than from the postprocessor's report. It
         # judges reduced domains only, for the same reason ``verify_symmetry_cut``
@@ -2395,7 +2576,7 @@ def build_imported_mesh(
             integrity.get("off_plane_open_edge_count") or 0
         )
         if (
-            cut.planes
+            domain_planes
             and verification["verified"]
             and verification["integrity_off_plane_open_edge_count"]
         ):
@@ -2578,7 +2759,25 @@ def build_imported_mesh(
                 ),
             },
         }
+    # A declared reduced domain has no full-domain version to fall back to: the
+    # missing half is not in the STEP. Meshing what arrived and solving it as a
+    # whole model would answer a different question, so this refuses instead --
+    # the one case where the fallback above is the wrong kindness.
+    verification = result.get("symmetry_verification")
+    if (
+        declared_cut_planes
+        and isinstance(verification, Mapping)
+        and not verification.get("verified", True)
+    ):
+        raise ImportedMeshError(
+            "symmetry: this return declares it was already cut on "
+            + ", ".join(declared_cut_planes)
+            + f", but the meshed boundary denies it: {verification.get('reason')}. "
+            "Leave the cut faces open and free of other holes, or return the "
+            "whole model."
+        )
     result["symmetry"]["requested_mode"] = symmetry_mode
+    result["symmetry"]["declared_cut_planes"] = list(declared_cut_planes)
     result.pop("mesh_generation_error", None)
     result.pop("surface_order_reference", None)
     result.pop("surface_order", None)

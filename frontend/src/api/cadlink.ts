@@ -31,6 +31,12 @@ export interface CadReturnBundle {
   requestId: string | null;
   sourceCount: number | null;
   instanceCount: number | null;
+  /**
+   * Symmetry planes the CAD author declares the model was already cut on.
+   * Empty for a full model, and absent from bundles written before the
+   * declaration existed.
+   */
+  declaredCutPlanes?: string[];
   /** Registry projects represented by linked instances in this return. */
   designIds?: string[];
   solverAnchorInstanceId?: string | null;
@@ -171,6 +177,8 @@ export interface CadReturnFinding {
   instance_id?: string;
   reason?: string;
   verdict?: string;
+  /** A written explanation, where the finding has one to give. */
+  detail?: string;
   [key: string]: unknown;
 }
 

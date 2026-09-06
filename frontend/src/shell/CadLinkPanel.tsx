@@ -50,7 +50,9 @@ function compactValue(value: unknown): string {
 }
 
 function findingDetail(finding: CadReturnFinding): string {
-  const preferred = finding.reason ?? finding.verdict;
+  // `detail` is a written sentence; the field dump below is a fallback for
+  // findings that carry only structured evidence.
+  const preferred = finding.reason ?? finding.verdict ?? finding.detail;
   if (preferred) return String(preferred).replaceAll('_', ' ');
   const details = Object.entries(finding)
     .filter(([key]) => !['id', 'kind', 'blocking', 'evidence_path'].includes(key))
@@ -67,11 +69,25 @@ function returnDisplayName(bundle: CadReturnBundle): string {
   return `Return · ${hours}:${minutes}`;
 }
 
+/** How a declared pre-cut domain reads in one phrase, or '' for a full model. */
+export function declaredDomainPhrase(planes: string[] | undefined): string {
+  const cut = (planes ?? []).filter((plane) => plane === 'x0' || plane === 'y0');
+  if (cut.length === 0) return '';
+  const named = cut.map((plane) => (plane === 'x0' ? 'x = 0' : 'y = 0')).join(' and ');
+  return `${cut.length === 1 ? 'half' : 'quarter'} model, cut on ${named}`;
+}
+
 function bundleInventory(bundle: CadReturnBundle): string {
   if (!bundle.readable) return bundle.reason ?? 'Manifest is unreadable';
   const sources = pluralized(bundle.sourceCount ?? bundle.sources.length, 'source');
-  if (!bundle.instanceCount) return sources;
-  return `${sources} · ${pluralized(bundle.instanceCount, 'linked instance')}`;
+  const domain = declaredDomainPhrase(bundle.declaredCutPlanes);
+  const parts = [sources];
+  if (bundle.instanceCount) parts.push(pluralized(bundle.instanceCount, 'linked instance'));
+  // Which model is about to be solved is not a detail: a half solves in a
+  // quarter of the time and answers a different question than the same file
+  // returned whole.
+  if (domain) parts.push(domain);
+  return parts.join(' · ');
 }
 
 function formatCount(value: unknown): string {

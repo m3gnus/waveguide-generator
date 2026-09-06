@@ -28,7 +28,7 @@ from server.mesh.artifact import mesh_text_sha256
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 
-from .wgreturn import WgReturnBundle, read_wgreturn
+from .wgreturn import WgReturnBundle, declared_domain_planes, read_wgreturn
 
 
 # v4 verifies the auto-cut against the meshed boundary and recentres a
@@ -770,6 +770,12 @@ def ingest_bundle(
     except IngestRefusal:
         raise
     options = dict(prep_options or {})
+    # The domain declaration comes from the CAD bundle, never from the request:
+    # it is a statement about the geometry that arrived, and a caller must not
+    # be able to assert it over the top of one. It joins the options here so it
+    # is part of the mesh cache key -- the same STEP declared differently is a
+    # different solve.
+    options["declared_cut_planes"] = list(declared_domain_planes(manifest))
     imports_root = data_paths(data_dir).root / "imports"
     viewport_lookup_key = _viewport_cache_lookup_key(
         bundle, manifest, skipped_source_ids, options
@@ -944,6 +950,54 @@ def ingest_bundle(
         )
     verification = built.get("symmetry_verification")
     verification = verification if isinstance(verification, Mapping) else {}
+    declared_planes = list(verification.get("declared_cut_planes") or [])
+    if declared_planes:
+        # Not a warning: the reduction was asked for, checked against the mesh,
+        # and granted. It is recorded so the run says which domain it solved.
+        findings.append(
+            {
+                "id": _finding_id(
+                    "declared-reduced-domain",
+                    {"cache_key": cache_key, "planes": declared_planes},
+                ),
+                "kind": "declared-reduced-domain",
+                "blocking": False,
+                "declared_cut_planes": declared_planes,
+                "detail": (
+                    "the return declares it was already cut on "
+                    + ", ".join(declared_planes)
+                    + "; the meshed boundary confirms each plane is open, and "
+                    "the solver mirrors it rather than solving a partial model."
+                ),
+            }
+        )
+    undeclared = [
+        str(plane) for plane in (verification.get("undeclared_open_planes") or [])
+    ]
+    if undeclared:
+        # Blocking, because nothing else in the pipeline can tell the difference
+        # and the wrong answer is silent: an already-cut model solved whole
+        # radiates through the open cut face. The remedy is one dropdown in CAD.
+        findings.append(
+            {
+                "id": _finding_id(
+                    "undeclared-reduced-domain",
+                    {"cache_key": cache_key, "planes": undeclared},
+                ),
+                "kind": "undeclared-reduced-domain",
+                "blocking": True,
+                "detected_planes": undeclared,
+                "detail": (
+                    "this model is open on "
+                    + ", ".join(undeclared)
+                    + " with all of its geometry on one side, which is what a "
+                    "model already cut in half looks like. It was returned as a "
+                    "full model, so WG will solve it whole and the open face "
+                    "will radiate. If it is a half, set Model domain in the "
+                    "Fusion Send dialog and return it again."
+                ),
+            }
+        )
     fallback = verification.get("fallback")
     if isinstance(fallback, Mapping):
         # Blocking, like every other finding that changes what is solved: the

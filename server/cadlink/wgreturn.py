@@ -28,8 +28,33 @@ SUPPORTED_FEATURES = frozenset(
         "assembly-frame-v1",
         "instance-records-v1",
         "fem-air-volume-v1",
+        "reduced-domain-v1",
     }
 )
+# The CAD author's statement that the exported bodies ARE the reduced domain:
+# the model was cut before it left CAD, and the missing half is the solver's
+# mirror rather than something WG has to remove. Only the two planes the
+# imported-symmetry vocabulary can express are declarable, and the retained
+# side is the positive one, matching what WG's own cutter keeps.
+#
+# It is a declaration, not a verdict. Ingestion re-derives the same fact from
+# the meshed boundary (``server/mesh/imported.py``) and refuses a declaration
+# the mesh denies -- which is why the writer's evidence is checked for internal
+# consistency here and believed no further.
+# Which component's own frame ``assembly.step`` is written in. Fusion exports a
+# Component in its own coordinates and cannot export an occurrence in its
+# assembly placement, so the export scope decides the file's frame and the
+# writer states it. Absent means the root component, which is what every bundle
+# written before the member existed exported.
+EXPORT_FRAMES = ("root-component", "selected-occurrence-component")
+DOMAIN_PLANES = ("x0", "y0")
+DOMAIN_KIND_FOR_PLANES = {
+    (): "full",
+    ("x0",): "half",
+    ("y0",): "half",
+    ("x0", "y0"): "quarter",
+}
+REDUCED_DOMAIN_FEATURE = "reduced-domain-v1"
 REQUIRED_BASE_FEATURES = frozenset(
     {"checksummed-files-v1", "assembly-frame-v1", "instance-records-v1"}
 )
@@ -244,6 +269,56 @@ def _vector(value: Any, path: str, length: int) -> list[float]:
     if len(items) != length:
         _fail(path, f"must contain exactly {length} numbers")
     return [_number(item, f"{path}[{index}]") for index, item in enumerate(items)]
+
+
+def _domain(value: Any) -> tuple[str, ...]:
+    """Validate ``assembly.domain`` and return the planes it declares.
+
+    Absent means the full domain, so every bundle written before the member
+    existed validates unchanged.
+    """
+
+    path = "$.assembly.domain"
+    if value is None:
+        return ()
+    domain = _mapping(value, path)
+    kind = _string(_required(domain, "kind", path), f"{path}.kind")
+    names = [
+        _string(item, f"{path}.cut_planes[{index}]")
+        for index, item in enumerate(
+            _list(_required(domain, "cut_planes", path), f"{path}.cut_planes")
+        )
+    ]
+    unknown = [name for name in names if name not in DOMAIN_PLANES]
+    if unknown:
+        _fail(f"{path}.cut_planes", f"may only name {', '.join(DOMAIN_PLANES)}")
+    if len(set(names)) != len(names):
+        _fail(f"{path}.cut_planes", "must not repeat a plane")
+    planes = tuple(plane for plane in DOMAIN_PLANES if plane in set(names))
+    if DOMAIN_KIND_FOR_PLANES[planes] != kind:
+        _fail(f"{path}.kind", f"must be {DOMAIN_KIND_FOR_PLANES[planes]!r} for {list(planes)!r}")
+    if _string(_required(domain, "declared_by", path), f"{path}.declared_by") != "cad-author":
+        _fail(f"{path}.declared_by", "must be 'cad-author'")
+    evidence = _mapping(domain.get("evidence", {}), f"{path}.evidence")
+    if set(evidence) != set(planes):
+        _fail(f"{path}.evidence", "must measure exactly the declared planes")
+    for plane in planes:
+        entry_path = f"{path}.evidence.{plane}"
+        entry = _mapping(evidence[plane], entry_path)
+        minimum = _number(_required(entry, "min_mm", entry_path), f"{entry_path}.min_mm")
+        maximum = _number(_required(entry, "max_mm", entry_path), f"{entry_path}.max_mm")
+        tolerance = _number(
+            _required(entry, "tolerance_mm", entry_path), f"{entry_path}.tolerance_mm"
+        )
+        if tolerance < 0.0:
+            _fail(f"{entry_path}.tolerance_mm", "must not be negative")
+        if minimum > maximum:
+            _fail(entry_path, "min_mm must not exceed max_mm")
+        if minimum < -tolerance:
+            _fail(entry_path, f"declares a reduced domain the measurement contradicts on {plane}")
+        if maximum <= tolerance:
+            _fail(entry_path, f"declares a reduced domain with no extent on the positive side of {plane}")
+    return planes
 
 
 def _bbox(value: Any, path: str) -> list[list[float]]:
@@ -467,6 +542,13 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     for key, expected in fixed.items():
         if _required(coordinates, key, "$.coordinate_system") != expected:
             _fail(f"$.coordinate_system.{key}", f"must equal {expected!r}")
+    if "export_frame" in coordinates:
+        frame = _string(coordinates["export_frame"], "$.coordinate_system.export_frame")
+        if frame not in EXPORT_FRAMES:
+            _fail(
+                "$.coordinate_system.export_frame",
+                f"must be one of {', '.join(EXPORT_FRAMES)}",
+            )
 
     assembly = _mapping(_required(manifest, "assembly", "$"), "$.assembly")
     _string(_required(assembly, "file", "$.assembly"), "$.assembly.file")
@@ -481,6 +563,15 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         )
     elif assembly.get("signature_hash") is not None:
         _string(assembly["signature_hash"], "$.assembly.signature_hash")
+    domain_planes = _domain(assembly.get("domain"))
+    # Paired in both directions, so neither an ignored reduction nor a
+    # decorative feature name is representable.
+    if bool(domain_planes) != (REDUCED_DOMAIN_FEATURE in feature_names):
+        _fail(
+            "$.required_features",
+            f"{REDUCED_DOMAIN_FEATURE} is required exactly when "
+            "$.assembly.domain declares a reduced domain",
+        )
 
     scope = _mapping(_required(manifest, "scope", "$"), "$.scope")
     _string(_required(scope, "selection", "$.scope"), "$.scope.selection")
@@ -714,8 +805,23 @@ def read_wgreturn(path: str | Path) -> WgReturnBundle:
     )
 
 
+def declared_domain_planes(manifest: Mapping[str, Any]) -> tuple[str, ...]:
+    """The cut planes a validated manifest declares, in canonical order."""
+
+    assembly = manifest.get("assembly")
+    domain = assembly.get("domain") if isinstance(assembly, Mapping) else None
+    if not isinstance(domain, Mapping):
+        return ()
+    names = {str(plane) for plane in (domain.get("cut_planes") or [])}
+    return tuple(plane for plane in DOMAIN_PLANES if plane in names)
+
+
 __all__ = [
+    "DOMAIN_PLANES",
+    "EXPORT_FRAMES",
+    "REDUCED_DOMAIN_FEATURE",
     "SUPPORTED_FEATURES",
+    "declared_domain_planes",
     "WgReturnBundle",
     "WgReturnError",
     "WgReturnIntegrityError",
