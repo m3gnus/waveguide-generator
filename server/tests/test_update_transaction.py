@@ -867,7 +867,14 @@ def test_the_external_recovery_helper_runs_with_no_application_layer_at_all(
     helper_root = tmp_path / "rollback"
     helper_root.mkdir()
     helper = helper_root / "apply_update.py"
-    helper.write_bytes(Path(apply_update_module.__file__).read_bytes())
+    origin = Path(apply_update_module.__file__)
+    helper.write_bytes(origin.read_bytes())
+    # Both files, because the helper imports the shared update claim and refuses
+    # to start without it. ``stage_recovery_helper`` and the rollback handoff
+    # copy the pair for the same reason; this mirrors what they stage.
+    helper.with_name("update_lock.py").write_bytes(
+        origin.with_name("update_lock.py").read_bytes()
+    )
 
     bundle, resources, data_dir, staged_app, staged_runtime = _native_installation(tmp_path)
     planned = plan_layer_swap(resources, staged_app, staged_runtime)

@@ -17,11 +17,13 @@ import time
 from server.platform.paths import resolve_data_dir
 from shared import release_assets
 from launchers import apply_update as apply_update_module
+from launchers.update_lock import UpdateInProgress, claim_update
 from launchers.apply_update import (
     BUNDLE_LAYERS,
     FAILED_SUFFIX,
     PREVIOUS_SUFFIX,
     RECOVERY_HELPER_DIRECTORY,
+    RECOVERY_LOCK_NAME,
     RECOVERY_HELPER_NAME,
     WINDOWS_LAUNCHER_NAME,
     ApplyUpdateError,
@@ -78,6 +80,7 @@ WINDOWS_CREATE_NO_WINDOW = 0x08000000
 #: two names before it renames anything, so a handoff that stages it again must
 #: not be able to drift to a different path.
 ROLLBACK_HELPER_DIRECTORY = RECOVERY_HELPER_DIRECTORY
+ROLLBACK_LOCK_MODULE = RECOVERY_LOCK_NAME
 ROLLBACK_HELPER_SCRIPT = RECOVERY_HELPER_NAME
 
 
@@ -212,6 +215,37 @@ def consume_update_request(
 NO_USER_SITE_ENVIRONMENT = {"PYTHONNOUSERSITE": "1"}
 
 
+@dataclass(frozen=True)
+class InstallationGeneration:
+    """Whether the installed layers are one coherent generation right now."""
+
+    consistent: bool
+    summary: str
+
+
+def _installation_generation(resources: Path) -> InstallationGeneration:
+    """Read the installed layers, without deciding or moving anything.
+
+    Cheap and non-destructive on purpose: this runs when the claim is held by
+    somebody else, so it may look and must not touch.
+    """
+
+    missing = [
+        name
+        for name in BUNDLE_LAYERS
+        if not (Path(resources) / name / apply_update_module.layer_manifest_name(name)).is_file()
+    ]
+    if missing:
+        return InstallationGeneration(
+            False, "missing its " + " and ".join(missing) + " layer"
+        )
+    if apply_update_module.layers_disagree(Path(resources)):
+        return InstallationGeneration(
+            False, "part-way through a change, with layers from two generations"
+        )
+    return InstallationGeneration(True, "one consistent generation")
+
+
 def recover_interrupted_bundle_update(
     server_args: Sequence[str] = (),
     *,
@@ -255,13 +289,75 @@ def recover_interrupted_bundle_update(
         return RecoveryOutcome(
             "none", f"The bundle layout could not be resolved, so nothing was recovered: {exc}"
         )
-    return recover_transaction(
-        data_dir=data_dir,
-        resources=resources,
-        bundle=bundle,
-        platform_name=selected_platform,
-        log=lambda message: append_update_log(data_dir, message),
-    )
+    # This start decides a transaction and can restore layers, so it takes the
+    # same claim every other path that moves a layer takes. The updater installs
+    # while holding it and *then* relaunches the application, so this is exactly
+    # the moment the two meet: acquisition is non-blocking, so the relaunched
+    # start finds the claim held, concludes it has nothing to decide, and gets on
+    # with starting. Waiting here would deadlock the updater against the child it
+    # just launched, which is the shape this deliberately does not have.
+    #
+    # It is reported as a mechanism that could not run, not as a verdict about
+    # the installation, so it does not refuse the start -- the checks that
+    # predate recovery still run further in.
+    try:
+        with claim_update(resources):
+            return recover_transaction(
+                data_dir=data_dir,
+                resources=resources,
+                bundle=bundle,
+                platform_name=selected_platform,
+                log=lambda message: append_update_log(data_dir, message),
+            )
+    except UpdateInProgress as exc:
+        # Somebody else owns this installation's update. That is one of two very
+        # different things, and a busy claim alone does not say which.
+        #
+        # The updater installs while holding the claim and then relaunches this
+        # application, so a legitimate relaunch arrives here with the claim
+        # still held *and a consistent installation*: both layers present, from
+        # the same generation. A second launch during a live half-swap arrives
+        # with the claim held and the installation mid-change -- a layer absent,
+        # or an app and a runtime from different generations.
+        #
+        # The generation is the discriminator, not the claim, because the claim
+        # is identical in both cases. A consistent installation starts; anything
+        # else refuses, because nothing has reconciled it and this start would be
+        # the one running a mixed bundle.
+        state = _installation_generation(resources)
+        append_update_log(
+            data_dir,
+            f"Startup recovery declined: {exc}. The installation is {state.summary} "
+            "and was left untouched.",
+        )
+        if state.consistent:
+            return RecoveryOutcome(
+                "none",
+                "An update to this installation is in progress and the installed "
+                "layers agree, so nothing needed recovering.",
+            )
+        return RecoveryOutcome(
+            "failed",
+            "An update to this installation is in progress and the installed "
+            f"layers are {state.summary}. It was not started, because nothing has "
+            "reconciled it yet. Let the update finish, then start it again.",
+        )
+    except OSError as exc:
+        # The claim could not even be attempted, so ownership is unknown. An
+        # installation that may be mid-change and a mechanism that cannot tell
+        # is exactly the pair that must not start: this is the fail-closed case,
+        # and it is reported as a failure rather than as "nothing to do".
+        append_update_log(
+            data_dir,
+            f"Startup recovery could not claim the update: {exc}. "
+            "The installation was left untouched.",
+        )
+        return RecoveryOutcome(
+            "failed",
+            "The update claim for this installation could not be taken, so it "
+            "could not be checked for an interrupted update and was not started. "
+            f"{exc}",
+        )
 
 
 def _data_dir_override(server_args: Sequence[str]) -> str | None:
@@ -672,6 +768,12 @@ def launch_rollback_handoff(
         # renames; the module is deliberately standard-library only, so the
         # copy runs anywhere.
         shutil.copyfile(origin, script)
+        # The helper imports the shared claim and refuses to start without it,
+        # so the claim travels with it. A copy of the helper alone is a
+        # rollback route that cannot run.
+        shutil.copyfile(
+            origin.with_name(ROLLBACK_LOCK_MODULE), script.with_name(ROLLBACK_LOCK_MODULE)
+        )
     except OSError as exc:
         raise UpdateHandoffError(f"Could not stage the rollback helper: {exc}") from exc
 

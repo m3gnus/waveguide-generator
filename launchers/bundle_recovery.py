@@ -29,14 +29,17 @@ signature cannot be leaned on at this moment either. Authenticating the helper
 would need a publisher key this project does not have.
 
 **The live-updater window.** An update in progress looks exactly like an
-interrupted one from outside: ``app`` is genuinely absent between two renames.
+interrupted one from outside: a layer is genuinely absent between two renames.
 Waiting is not an interlock -- an updater slower than any wait is still
-mid-swap -- so this takes the same exclusive claim the updater takes
-(:mod:`update_lock`) and **fails closed** when it cannot: an installation whose
-update is owned by a live process is left alone, and the user is told to start
-it again in a moment. The dwell is kept in front of that, because the common
-case is an update that finishes in well under a second and should cost nobody a
-refusal.
+mid-swap -- so the shared claim in :mod:`update_lock` is what guards it, and
+every path that decides a transaction takes it. This one does not hold it
+across the helper it runs: the helper takes it, because a parent holding a lock
+while it waits for a child that must acquire the same lock is a deadlock. The
+answer comes back as an exit code, and this **fails closed** on it: an
+installation whose update is owned by a live process is left alone and the user
+is told to start it again in a moment. The dwell is kept in front of all of it,
+because the common case is an update that finishes in well under a second and
+should cost nobody a refusal.
 
 **What counts as recovered.** The helper's exit code is the verdict. A restored
 ``app`` directory is not proof on its own: the helper reports failure when it
@@ -59,10 +62,16 @@ import sys
 import time
 from typing import Mapping, Sequence
 
+# The shared exit code, so "somebody else owns this update" survives the process
+# boundary between this and the helper it runs. Imported the two ways this module
+# is run -- from the app layer as a package, and from the staged copy beside its
+# own dependency -- and never defaulted, because a missing claim module means a
+# broken staging rather than an installation that may skip the guard.
 try:  # inside the app layer, where this module is maintained
-    from launchers.update_lock import UpdateInProgress, claim_update as claim
-except ImportError:  # staged beside the helper, where it runs as a script
-    from update_lock import UpdateInProgress, claim_update as claim  # type: ignore[no-redef]
+    from launchers.update_lock import EXIT_UPDATE_IN_PROGRESS
+except ImportError:  # the staged copy, running as a script beside its dependency
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from update_lock import EXIT_UPDATE_IN_PROGRESS  # type: ignore[no-redef]  # noqa: E402
 
 
 APP_LAYER = "app"
@@ -86,9 +95,9 @@ DWELL_SECONDS = 0.5
 EXIT_OK = 0
 EXIT_UNRECOVERED = 1
 EXIT_NO_HELPER = 3
-#: A live updater owns this installation. Nothing was touched, and starting
-#: again shortly is the whole remedy.
-EXIT_UPDATE_IN_PROGRESS = 4
+#: ``EXIT_UPDATE_IN_PROGRESS`` is imported from :mod:`update_lock` above, so the
+#: helper and this module cannot disagree about which number means "somebody
+#: else owns this update".
 
 
 class RecoveryUnavailable(RuntimeError):
@@ -117,6 +126,15 @@ def recovery_root(module_file: str | os.PathLike[str] | None = None) -> Path:
 
 def resources_from_recovery(recovery: Path) -> Path:
     return recovery.parent
+
+
+def resources_for_platform(bundle: Path, platform_name: str) -> Path:
+    """The layer directory inside a bundle, matching ``resources_directory``."""
+
+    bundle = Path(bundle)
+    if platform_name == "darwin":
+        return bundle / "Contents" / "Resources"
+    return bundle
 
 
 def bundle_from_resources(resources: Path, platform_name: str) -> Path:
@@ -304,28 +322,27 @@ def recover(
         "--data-dir",
         str(data_dir),
     ]
+    say(
+        "Waveguide Generator: this installation is missing a layer, which is "
+        "what an interrupted update leaves behind. Recovering it..."
+    )
     try:
-        # The claim is held across the helper, so nothing may move a layer
-        # while it is deciding. Failing closed is the point: an installation
-        # somebody else owns is left exactly as it is.
-        with claim(data_dir):
-            say(
-                "Waveguide Generator: this installation is missing a layer, "
-                "which is what an interrupted update leaves behind. Recovering "
-                "it..."
-            )
-            completed = runner(command, check=False)
-    except UpdateInProgress:
+        # Deliberately NOT holding the claim across this child. The helper takes
+        # it -- like every other path that decides a transaction -- and a parent
+        # that held it while waiting for a child which must acquire it would be
+        # a deadlock. The answer comes back as an exit code instead.
+        completed = runner(command, check=False)
+    except OSError as exc:
+        say(f"Waveguide Generator recovery: the helper could not be started: {exc}")
+        return EXIT_NO_HELPER
+    code = int(getattr(completed, "returncode", 1) or 0)
+    if code == EXIT_UPDATE_IN_PROGRESS:
         say(
             "Waveguide Generator: an update to this installation is still "
             "running, so nothing was changed. It will finish on its own -- "
             "start the application again in a moment."
         )
         return EXIT_UPDATE_IN_PROGRESS
-    except OSError as exc:
-        say(f"Waveguide Generator recovery: the helper could not be started: {exc}")
-        return EXIT_NO_HELPER
-    code = int(getattr(completed, "returncode", 1) or 0)
     # Both, not either. A restored directory is not a completed recovery: the
     # helper reports failure when it could not re-seal the bundle, and it leaves
     # the transaction open on purpose so the next start tries again.

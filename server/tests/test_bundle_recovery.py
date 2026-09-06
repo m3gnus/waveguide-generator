@@ -26,9 +26,11 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 
+from launchers import apply_update as apply_update_module
 from launchers import bundle_recovery
 from launchers import update_lock
 from launchers.apply_update import begin_update_transaction, plan_layer_swap
@@ -37,6 +39,24 @@ from server.platform.paths import resolve_data_dir
 
 
 REPOSITORY_ROOT = Path(bundle_recovery.__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _claims_live_in_a_temporary_home(tmp_path_factory, monkeypatch: pytest.MonkeyPatch):
+    """Keep every claim in this file out of the developer's real cache root.
+
+    The claim is deliberately rooted in the per-user cache directory rather than
+    in a data directory, so redirecting that root is how a test isolates it --
+    and it has to reach spawned processes too, which is why these go into the
+    environment rather than only into a call argument.
+    """
+
+    root = tmp_path_factory.mktemp("claim-home")
+    monkeypatch.setenv("HOME", str(root))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(root / ".cache"))
+    monkeypatch.setenv("LOCALAPPDATA", str(root / "AppData" / "Local"))
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: root))
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -654,35 +674,109 @@ def test_a_helper_that_succeeds_on_an_incomplete_installation_is_not_believed(
     assert any("still incomplete" in message for message in said)
 
 
-def test_a_live_updater_holding_the_claim_stops_recovery_dead(tmp_path: Path) -> None:
-    """The interlock the dwell is not.
+def test_the_bootstrap_reports_a_live_updater_rather_than_starting(tmp_path: Path) -> None:
+    """The bootstrap does not hold the claim; it reads the helper's answer.
 
-    An updater slower than any wait is still mid-swap, so the wait cannot be the
-    guard. This takes the same exclusive claim the updater CLI takes and refuses
-    when it cannot get it -- changing nothing, and saying so.
+    A parent holding a lock while it waits for a child that must acquire the
+    same lock is a deadlock, so the helper takes the claim and this maps its
+    exit code. Failing closed is the point: an installation somebody else owns
+    is left exactly as it is.
     """
 
     resources = tmp_path / "Resources"
     resources.mkdir()
     _recovery_directory(resources)
-    data_dir = tmp_path / "data"
     said: list[str] = []
 
-    with update_lock.claim_update(data_dir):
-        code = bundle_recovery.recover(
-            resources=resources,
-            arguments=["--data-dir", str(data_dir)],
-            platform_name="linux",
-            runner=lambda *args, **kwargs: pytest.fail("nothing may run under the claim"),
-            attempts=1,
-            delay=0.0,
-            report=said.append,
+    code = bundle_recovery.recover(
+        resources=resources,
+        arguments=["--data-dir", str(tmp_path / "data")],
+        platform_name="linux",
+        runner=lambda command, **kwargs: subprocess.CompletedProcess(
+            command, update_lock.EXIT_UPDATE_IN_PROGRESS
+        ),
+        attempts=1,
+        delay=0.0,
+        report=said.append,
+    )
+
+    assert code == update_lock.EXIT_UPDATE_IN_PROGRESS
+    assert any("still running" in message for message in said)
+    assert not (resources / "app").exists()
+
+
+def test_the_real_helper_declines_while_the_claim_is_held_and_moves_nothing(
+    tmp_path: Path,
+) -> None:
+    """End to end, with the real CLI: held claim in, refusal out, nothing moved."""
+
+    # Shaped for the host, so the helper's own ``resources_directory`` lands on
+    # the installation this test claims. A mismatch there would look like a
+    # passing test and be no exclusion at all.
+    bundle = tmp_path / ("Waveguide Generator.app" if sys.platform == "darwin" else "wg")
+    resources = bundle_recovery.resources_for_platform(bundle, sys.platform)
+    resources.mkdir(parents=True)
+    data_dir = tmp_path / "data"
+    _interrupted_installation(resources, data_dir, sys.platform)
+    _staged_recovery(resources)
+    before = sorted(entry.name for entry in resources.iterdir())
+
+    with update_lock.claim_update(resources):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(resources / "recovery" / "apply_update.py"),
+                "--recover",
+                "--bundle",
+                str(bundle),
+                "--data-dir",
+                str(data_dir),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
         )
 
-    assert code == bundle_recovery.EXIT_UPDATE_IN_PROGRESS
-    assert any("still running" in message for message in said)
-    # Nothing was moved: the installation is exactly as the updater left it.
-    assert not (resources / "app").exists()
+    assert completed.returncode == update_lock.EXIT_UPDATE_IN_PROGRESS, completed.stderr
+    assert sorted(entry.name for entry in resources.iterdir()) == before
+    assert "Recovery declined" in (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
+
+
+def test_the_real_updater_cli_declines_a_transaction_while_the_claim_is_held(
+    tmp_path: Path,
+) -> None:
+    """The other half of the same exclusion, on the path that installs."""
+
+    # Shaped for the host, so the CLI's own ``resources_directory`` lands on the
+    # same installation this test claims. A mismatch there would look like a
+    # passing test and be no exclusion at all.
+    bundle = tmp_path / ("Waveguide Generator.app" if sys.platform == "darwin" else "wg")
+    resources = bundle_recovery.resources_for_platform(bundle, sys.platform)
+    resources.mkdir(parents=True)
+    data_dir = tmp_path / "data"
+    _interrupted_installation(resources, data_dir, sys.platform)
+    before = sorted(entry.name for entry in resources.iterdir())
+    # A pid that has certainly exited, so a claim that failed to engage would
+    # fall straight through to the transaction instead of hanging on a wait.
+    dead = subprocess.Popen([sys.executable, "-c", ""])
+    dead.wait(timeout=30)
+
+    with update_lock.claim_update(resources):
+        code = apply_update_module.main(
+            [
+                "--bundle",
+                str(bundle),
+                "--data-dir",
+                str(data_dir),
+                "--parent-pid",
+                str(dead.pid),
+                "--rollback",
+            ]
+        )
+
+    assert code == update_lock.EXIT_UPDATE_IN_PROGRESS
+    assert sorted(entry.name for entry in resources.iterdir()) == before
+    assert "Update declined" in (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
 
 
 def test_the_claim_is_exclusive_and_is_released_when_its_holder_dies(
@@ -695,15 +789,15 @@ def test_the_claim_is_exclusive_and_is_released_when_its_holder_dies(
     the whole recovery route exists for.
     """
 
-    data_dir = tmp_path / "data"
+    resources = tmp_path / "Resources"
 
-    with update_lock.claim_update(data_dir):
+    with update_lock.claim_update(resources):
         with pytest.raises(update_lock.UpdateInProgress):
-            with update_lock.claim_update(data_dir):
+            with update_lock.claim_update(resources):
                 pytest.fail("the claim is not exclusive")
 
     # Released on exit, so the next caller gets it.
-    with update_lock.claim_update(data_dir):
+    with update_lock.claim_update(resources):
         pass
 
     holder = subprocess.Popen(
@@ -713,7 +807,7 @@ def test_the_claim_is_exclusive_and_is_released_when_its_holder_dies(
             "import sys, time\n"
             f"sys.path.insert(0, {str(REPOSITORY_ROOT)!r})\n"
             "from launchers.update_lock import claim_update\n"
-            f"with claim_update({str(data_dir)!r}):\n"
+            f"with claim_update({str(resources)!r}):\n"
             "    print('held', flush=True)\n"
             "    time.sleep(120)\n",
         ],
@@ -724,40 +818,105 @@ def test_the_claim_is_exclusive_and_is_released_when_its_holder_dies(
         assert holder.stdout is not None
         assert holder.stdout.readline().strip() == "held"
         with pytest.raises(update_lock.UpdateInProgress):
-            with update_lock.claim_update(data_dir):
+            with update_lock.claim_update(resources):
                 pytest.fail("a live holder must exclude this process")
     finally:
         holder.kill()
         holder.wait(timeout=30)
     # The holder was killed, not asked to release. The claim is free anyway.
-    with update_lock.claim_update(data_dir):
+    with update_lock.claim_update(resources):
         pass
 
 
-def test_the_updater_cli_takes_the_same_claim_for_a_real_transaction() -> None:
-    """Both sides have to take the same lock or neither is excluded.
+def test_one_installation_has_one_claim_whatever_data_directory_is_named(
+    tmp_path: Path,
+) -> None:
+    """The hole a data-directory-rooted lock left, closed.
 
-    Asserted on the CLI entry rather than by driving a swap, because that is the
-    single place every real transaction passes through and the property under
-    test is that it is taken at all.
+    ``--data-dir`` is the caller's choice, so a claim rooted there is one a
+    second process steps around by naming a different directory -- while both
+    processes rename the same installation's layers. The claim is keyed on the
+    installation instead, so the data directory cannot separate two owners of
+    one bundle, and two bundles that happen to share a data directory stay
+    independent.
     """
 
-    source = (REPOSITORY_ROOT / "launchers" / "apply_update.py").read_text(encoding="utf-8")
+    installation = tmp_path / "copy-one" / "Resources"
+    other = tmp_path / "copy-two" / "Resources"
 
-    assert "with _claim_update(args.data_dir):" in source
-    assert "return _run_transaction(args)" in source
-    # Every argument refusal happens before the claim, so an unusable command
-    # line still creates nothing on disk.
-    assert source.index('parser.error("--staged-app-dir is required') < source.index(
-        "with _claim_update(args.data_dir):"
+    assert update_lock.installation_key(installation) == (
+        apply_update_module.installation_key(installation)
     )
-    # --recover must not take it: the bootstrap holds it across that subprocess.
-    recover_branch = source.index("if args.recover:")
-    claim_line = source.index("with _claim_update(args.data_dir):")
-    assert recover_branch < claim_line
-    assert "return recover_bundle(" in source[recover_branch:claim_line]
+    # One installation, two data directories: one claim, and it is not under
+    # either of them.
+    for data_dir in (tmp_path / "data-a", tmp_path / "data-b"):
+        assert not update_lock.lock_path(installation).is_relative_to(data_dir)
+    assert update_lock.lock_path(installation) != update_lock.lock_path(other)
+
+    with update_lock.claim_update(installation):
+        with pytest.raises(update_lock.UpdateInProgress):
+            with update_lock.claim_update(installation):
+                pytest.fail("two data directories must not buy two claims")
+        # A different installation is a different world, as its journal is.
+        with update_lock.claim_update(other):
+            pass
 
 
+def test_two_data_directories_cannot_update_one_installation_at_once(
+    tmp_path: Path,
+) -> None:
+    """The interprocess control for the same thing, across a real boundary.
+
+    Two updater CLIs, one bundle, two ``--data-dir`` values. Before the claim
+    moved out of the data directory these were two independent owners renaming
+    the same layers.
+    """
+
+    bundle = tmp_path / ("Waveguide Generator.app" if sys.platform == "darwin" else "wg")
+    resources = bundle_recovery.resources_for_platform(bundle, sys.platform)
+    resources.mkdir(parents=True)
+    first_data = tmp_path / "data-a"
+    second_data = tmp_path / "data-b"
+    _interrupted_installation(resources, first_data, sys.platform)
+    before = sorted(entry.name for entry in resources.iterdir())
+
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys, time\n"
+            f"sys.path.insert(0, {str(REPOSITORY_ROOT)!r})\n"
+            "from launchers.update_lock import claim_update\n"
+            f"with claim_update({str(resources)!r}):\n"
+            "    print('held', flush=True)\n"
+            "    time.sleep(120)\n",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+        env={**os.environ},
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "held"
+        # A second updater naming a different data directory for the same
+        # installation is refused, and moves nothing.
+        code = apply_update_module.main(
+            [
+                "--bundle",
+                str(bundle),
+                "--data-dir",
+                str(second_data),
+                "--parent-pid",
+                str(holder.pid),
+                "--rollback",
+            ]
+        )
+    finally:
+        holder.kill()
+        holder.wait(timeout=30)
+
+    assert code == update_lock.EXIT_UPDATE_IN_PROGRESS
+    assert sorted(entry.name for entry in resources.iterdir()) == before
 def _interrupted_runtime_swap(resources: Path, data_dir: Path, platform_name: str) -> None:
     """Killed inside the *runtime* layer's turn, not the app layer's.
 
@@ -1034,3 +1193,255 @@ def test_the_layer_archives_carry_no_recovery_directory(tmp_path: Path) -> None:
 
     assert not (app / "recovery").exists()
     assert not (app / bundle_recovery.MANIFEST_NAME).exists()
+
+
+# ---------------------------------------------------------------------------
+# Every production path that decides a transaction, and none of them deadlocked
+# ---------------------------------------------------------------------------
+
+
+def test_the_detached_rollback_helper_is_staged_with_the_module_it_imports(
+    tmp_path: Path,
+) -> None:
+    """A helper without its claim is a repair route that cannot start.
+
+    The handoff used to copy one file. This module refuses to import without
+    the claim -- deliberately, because the alternative was a silent no-op
+    exactly where the detached rollback needs the exclusion -- so both travel,
+    and the copy is then run to prove it.
+    """
+
+    from launchers.statusapp import updater as statusapp_updater
+
+    bundle = tmp_path / ("Waveguide Generator.app" if sys.platform == "darwin" else "wg")
+    resources = bundle_recovery.resources_for_platform(bundle, sys.platform)
+    resources.mkdir(parents=True)
+    (resources / "runtime" / "bin").mkdir(parents=True)
+    _interpreter_shim(resources / "runtime" / "bin" / "python3.13")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    commands: list[list[str]] = []
+
+    statusapp_updater.launch_rollback_handoff(
+        bundle,
+        data_dir,
+        parent_pid=os.getpid(),
+        environ={},
+        platform_name=sys.platform,
+        process_factory=lambda command, **kwargs: commands.append(list(command)),
+    )
+
+    staged = data_dir / "rollback"
+    assert (staged / "apply_update.py").is_file()
+    assert (staged / "update_lock.py").read_bytes() == (
+        REPOSITORY_ROOT / "launchers" / "update_lock.py"
+    ).read_bytes()
+    # The copy runs. Importing the claim from beside itself is the whole point.
+    probe = subprocess.run(
+        [sys.executable, str(staged / "apply_update.py"), "--help"],
+        capture_output=True,
+        text=True,
+        cwd=str(staged),
+        timeout=120,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert "--recover" in probe.stdout
+
+
+def test_the_staged_manual_helper_is_also_staged_with_its_claim(tmp_path: Path) -> None:
+    """The same contract on the other staging path, which had it too."""
+
+    data_dir = tmp_path / "data"
+
+    staged = apply_update_module.stage_recovery_helper(data_dir, bundle=tmp_path / "b")
+
+    assert staged is not None
+    assert (staged.parent / "update_lock.py").is_file()
+    probe = subprocess.run(
+        [sys.executable, str(staged), "--help"],
+        capture_output=True,
+        text=True,
+        cwd=str(staged.parent),
+        timeout=120,
+    )
+    assert probe.returncode == 0, probe.stderr
+
+
+def test_a_staged_helper_missing_its_claim_refuses_to_run_rather_than_skip_it(
+    tmp_path: Path,
+) -> None:
+    """The finding, asserted. A missing module is a staging bug, not a licence.
+
+    The import used to fall back to ``nullcontext``, which turned "this copy was
+    staged wrong" into "this copy silently has no exclusion" -- on the detached
+    rollback, which renames layers.
+    """
+
+    staged = tmp_path / "rollback"
+    staged.mkdir()
+    shutil.copyfile(
+        REPOSITORY_ROOT / "launchers" / "apply_update.py", staged / "apply_update.py"
+    )
+
+    probe = subprocess.run(
+        [sys.executable, str(staged / "apply_update.py"), "--help"],
+        capture_output=True,
+        text=True,
+        cwd=str(staged),
+        timeout=120,
+    )
+
+    assert probe.returncode != 0
+    assert "update_lock" in probe.stderr
+    assert "nullcontext" not in (
+        REPOSITORY_ROOT / "launchers" / "apply_update.py"
+    ).read_text(encoding="utf-8")
+
+
+def _bundle_for_startup(tmp_path: Path, *, app_generation: str, runtime_generation: str):
+    """An installed bundle whose two layers declare the given generations."""
+
+    bundle = tmp_path / ("Waveguide Generator.app" if sys.platform == "darwin" else "wg")
+    resources = bundle_recovery.resources_for_platform(bundle, sys.platform)
+    (resources / "app").mkdir(parents=True)
+    (resources / "app" / "APP-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "runtimeId": app_generation}), encoding="utf-8"
+    )
+    (resources / "runtime").mkdir(parents=True)
+    (resources / "runtime" / "RUNTIME-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "runtimeId": runtime_generation}), encoding="utf-8"
+    )
+    return bundle, resources
+
+
+def _startup_exit_code(data_dir: Path, app_layer: Path, monkeypatch) -> int | None:
+    """Run the real startup entry path and report whether it would start.
+
+    ``launchers.statusapp.__main__._recover_interrupted_bundle_update`` is the
+    one place every start mode passes through. It returns an exit code when the
+    installation must not be started and ``None`` when it may be, so this is the
+    actual "did a server start" answer rather than a proxy for it.
+    """
+
+    from launchers.statusapp import __main__ as statusapp_main
+
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    monkeypatch.setenv("WG2_APP_ROOT", str(app_layer))
+    delivered: list[str] = []
+    return statusapp_main._recover_interrupted_bundle_update(
+        ["--data-dir", str(data_dir)], report=delivered.append
+    ), delivered
+
+
+def test_a_live_update_over_a_mixed_generation_start_does_not_start_a_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The finding. A busy claim is not permission to run a half-swapped bundle.
+
+    Both layers are present -- so nothing structural downstream would catch it
+    -- but they came from different generations, which is what a swap looks like
+    between its two halves. Nothing has reconciled that, and this start would be
+    the one running it.
+    """
+
+    bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="new-1", runtime_generation="old-0"
+    )
+    data_dir = tmp_path / "data"
+
+    with update_lock.claim_update(resources):
+        code, delivered = _startup_exit_code(data_dir, resources / "app", monkeypatch)
+
+    assert code == 1, "a mixed-generation installation must not start"
+    assert delivered and "did not start" in delivered[0]
+    assert "two generations" in delivered[0]
+
+
+def test_a_claim_that_cannot_be_taken_at_all_does_not_start_a_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail closed. Ownership unknown and an installation that may be mid-change.
+
+    The claim's directory is occupied by a file, so creating the lock raises --
+    the real failure, not a patched one. An earlier revision answered this with
+    "nothing to recover" and started anyway.
+    """
+
+    bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="same", runtime_generation="same"
+    )
+    data_dir = tmp_path / "data"
+    blocked = update_lock.lock_path(resources)
+    blocked.parent.parent.mkdir(parents=True, exist_ok=True)
+    blocked.parent.write_text("not a directory", encoding="utf-8")
+
+    code, delivered = _startup_exit_code(data_dir, resources / "app", monkeypatch)
+
+    assert code == 1, "an installation whose claim cannot be taken must not start"
+    assert delivered and "could not be taken" in delivered[0]
+
+
+def test_the_updaters_own_relaunch_of_a_consistent_installation_still_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half, which must keep working: the legitimate relaunch.
+
+    The updater installs while holding the claim and then starts the
+    application. It arrives here with the claim still held and both layers from
+    one generation, and it starts -- promptly, because acquisition never blocks.
+    Waiting would hang the updater against the child it just launched.
+    """
+
+    bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="new-1", runtime_generation="new-1"
+    )
+    data_dir = tmp_path / "data"
+
+    with update_lock.claim_update(resources):
+        started = time.monotonic()
+        code, delivered = _startup_exit_code(data_dir, resources / "app", monkeypatch)
+        elapsed = time.monotonic() - started
+
+    assert code is None, "a consistent installation must start"
+    assert delivered == []
+    assert elapsed < 5.0
+    assert "Startup recovery declined" in (
+        data_dir / "logs" / "update.log"
+    ).read_text(encoding="utf-8")
+
+
+def test_the_in_app_startup_recovery_still_decides_when_nobody_owns_the_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ordinary start, with the app layer present and no updater running."""
+
+    from launchers.statusapp import updater as statusapp_updater
+
+    bundle = tmp_path / ("Waveguide Generator.app" if sys.platform == "darwin" else "wg")
+    resources = bundle_recovery.resources_for_platform(bundle, sys.platform)
+    app_layer = resources / "app"
+    app_layer.mkdir(parents=True)
+    data_dir = tmp_path / "data"
+    seen: list[dict[str, object]] = []
+
+    def recover_transaction(**kwargs: object):
+        seen.append(kwargs)
+        # The claim is held for the duration, and only for the duration.
+        with pytest.raises(update_lock.UpdateInProgress):
+            with update_lock.claim_update(resources):
+                pytest.fail("the startup recovery must hold the claim while deciding")
+        return statusapp_updater.RecoveryOutcome("none", "nothing to do")
+
+    monkeypatch.setattr(statusapp_updater, "recover_transaction", recover_transaction)
+
+    outcome = statusapp_updater.recover_interrupted_bundle_update(
+        ["--data-dir", str(data_dir)],
+        environ={"WG2_BUNDLE": "1", "WG2_APP_ROOT": str(app_layer)},
+        platform_name=sys.platform,
+    )
+
+    assert outcome is not None and outcome.action == "none"
+    assert seen and seen[0]["resources"] == resources
+    # Released afterwards, so an updater started next is not locked out.
+    with update_lock.claim_update(resources):
+        pass

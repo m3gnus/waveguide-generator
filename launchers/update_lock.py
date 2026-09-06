@@ -14,27 +14,48 @@ the case this exists to fix.
 
 Who takes it:
 
-* the updater CLI, for the whole of an ``apply``/``rollback`` transaction --
-  the only operations that move a layer on purpose;
-* the bootstrap recovery in :mod:`bundle_recovery`, before it runs anything,
-  and it **fails closed**: an installation whose update is still owned by a
-  live process is left alone and the user is told to start again in a moment.
+* the updater CLI, for the whole of an ``apply`` or ``rollback`` transaction,
+  and for ``--recover``, which decides one;
+* the in-application startup recovery in ``launchers/statusapp/updater.py``,
+  which decides a transaction on every start;
+* the detached rollback helper, which is the same CLI running from a copy.
 
-Deliberately not taken by ``--recover`` itself, because the bootstrap holds it
-across that subprocess; a helper that re-acquired it would deadlock against its
-own caller.
+Every one of them **fails closed**: an installation whose update is owned by a
+live process is left exactly as that process left it.
+
+**Nothing blocks.** Acquisition is non-blocking everywhere, which is what makes
+the updater's own relaunch protocol safe: the updater installs while holding the
+claim and then starts the application, and the application's startup recovery
+finds the claim held, concludes it has nothing to decide, and starts. Waiting
+there instead would be a deadlock the moment the updater waited for the child it
+had just started. The bootstrap recovery does not hold the claim across the
+helper it runs either, for the same reason -- the helper takes it, and the
+bootstrap reads the answer out of the helper's exit code.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
 import os
+import platform
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Mapping
 
 
-LOCK_DIRECTORY = "updates"
-LOCK_NAME = "update.lock"
+#: The claim lives beside the caches the launchers already redirect here, not
+#: in the data directory and not inside the bundle. See :func:`lock_path`.
+LOCK_DIRECTORY = "locks"
+LOCK_PREFIX = "update-"
+LOCK_SUFFIX = ".lock"
+CACHE_DIRECTORY_MACOS = "WaveguideGenerator"
+CACHE_DIRECTORY_WINDOWS = "WaveguideGenerator"
+CACHE_DIRECTORY_XDG = "waveguide-generator"
+
+#: The exit code every entry point uses for "somebody else owns this update".
+#: Shared so the bootstrap can tell that answer apart from a recovery that ran
+#: and failed, across a process boundary.
+EXIT_UPDATE_IN_PROGRESS = 4
 
 try:  # POSIX
     import fcntl
@@ -51,8 +72,89 @@ class UpdateInProgress(RuntimeError):
     """Another process owns this installation's update right now."""
 
 
-def lock_path(data_dir: str | os.PathLike[str]) -> Path:
-    return Path(data_dir) / LOCK_DIRECTORY / LOCK_NAME
+class LockLocationUnavailable(OSError):
+    """The claim has nowhere to live, so ownership cannot be established.
+
+    An ``OSError`` on purpose: every caller already has to treat a claim it
+    could not take as a refusal, and this is that case rather than a separate
+    one.
+    """
+
+
+def installation_key(resources: str | os.PathLike[str]) -> str:
+    """The journal's own scoping key, computed without importing the updater.
+
+    A deliberate second implementation of ``apply_update.installation_key``:
+    this module is staged beside the updater and must not import it, and the
+    updater imports this one. ``test_bundle_recovery`` asserts the two agree, so
+    the copy cannot drift into a lock that scopes differently from the record it
+    protects.
+    """
+
+    normalized = os.path.normcase(os.path.normpath(str(Path(resources))))
+    return hashlib.sha256(normalized.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def cache_root(
+    *,
+    system: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> Path:
+    """The per-user directory the launchers already redirect caches into.
+
+    Reused rather than invented: ``launcher.c``, the generated Linux launcher
+    and the Windows bootstrap all point ``PYTHONPYCACHEPREFIX`` at exactly these
+    roots, so this is a location the application already owns on every platform
+    and a user already has.
+    """
+
+    env = os.environ if environ is None else environ
+    os_name = platform.system() if system is None else system
+    if os_name == "Windows":
+        local = env.get("LOCALAPPDATA")
+        if not local:
+            raise LockLocationUnavailable(
+                "LOCALAPPDATA is not set, so the update claim has nowhere to live."
+            )
+        return Path(local) / CACHE_DIRECTORY_WINDOWS
+    home_dir = Path.home() if home is None else Path(home)
+    if os_name == "Darwin":
+        return home_dir / "Library" / "Caches" / CACHE_DIRECTORY_MACOS
+    xdg = env.get("XDG_CACHE_HOME")
+    root = Path(xdg) if xdg else home_dir / ".cache"
+    return root / CACHE_DIRECTORY_XDG
+
+
+def lock_path(
+    resources: str | os.PathLike[str],
+    *,
+    system: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> Path:
+    """Where one *installation's* claim lives, whatever data directory is asked for.
+
+    Deliberately **not** under the data directory. ``--data-dir`` is a caller's
+    choice, so a lock rooted there is a lock one process can step around by
+    naming a different directory -- and it is the same installation's layers
+    both processes would then rename. Keying it on the resolved installation
+    path instead means two data directories pointing at one bundle share one
+    claim, and two bundles sharing one data directory keep two, which is the
+    behaviour the directories themselves imply.
+
+    Nor inside the bundle: on macOS the bundle is sealed, and writing a lock
+    file into it would break the signature that recovery exists to restore.
+
+    The limit, stated rather than papered over: the root is per user, so two
+    *different* users updating one shared installation do not exclude each
+    other. Closing that needs a writable system-wide location this application
+    does not claim, and it is a narrower gap than the one it replaces.
+    """
+
+    key = installation_key(resources)
+    root = cache_root(system=system, environ=environ, home=home)
+    return root / LOCK_DIRECTORY / f"{LOCK_PREFIX}{key}{LOCK_SUFFIX}"
 
 
 def _acquire(handle: int) -> bool:
@@ -90,7 +192,13 @@ def _release(handle: int) -> None:
 
 
 @contextmanager
-def claim_update(data_dir: str | os.PathLike[str]) -> Iterator[Path]:
+def claim_update(
+    resources: str | os.PathLike[str],
+    *,
+    system: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> Iterator[Path]:
     """Own this installation's update for the duration, or refuse to start.
 
     Raises :class:`UpdateInProgress` when another process holds it, and
@@ -99,7 +207,7 @@ def claim_update(data_dir: str | os.PathLike[str]) -> Iterator[Path]:
     directories another process may be moving.
     """
 
-    path = lock_path(data_dir)
+    path = lock_path(resources, system=system, environ=environ, home=home)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -128,8 +236,12 @@ def locking_is_available() -> bool:
 
 
 __all__ = [
+    "EXIT_UPDATE_IN_PROGRESS",
+    "LockLocationUnavailable",
     "UpdateInProgress",
+    "cache_root",
     "claim_update",
+    "installation_key",
     "lock_path",
     "locking_is_available",
 ]

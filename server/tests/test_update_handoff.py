@@ -417,6 +417,9 @@ def test_windows_rollback_handoff_runs_outside_every_directory_it_renames(
     source = tmp_path / "source" / "apply_update.py"
     source.parent.mkdir()
     source.write_text("# the standalone updater\n", encoding="utf-8")
+    # The helper imports the shared claim and refuses to start without it, so
+    # the handoff stages both and a source without its companion is not one.
+    source.with_name("update_lock.py").write_text("# the claim\n", encoding="utf-8")
     started: list[tuple[list[str], dict[str, object]]] = []
 
     command = launch_rollback_handoff(
@@ -510,6 +513,7 @@ def test_a_rollback_handoff_that_cannot_start_is_reported_not_swallowed(
     bundle, data = _windows_rollback_installation(tmp_path)
     source = tmp_path / "apply_update.py"
     source.write_text("# updater\n", encoding="utf-8")
+    source.with_name("update_lock.py").write_text("# the claim\n", encoding="utf-8")
 
     def refuse(command: list[str], **_options: object) -> object:
         raise OSError(8, "Not enough memory resources are available")

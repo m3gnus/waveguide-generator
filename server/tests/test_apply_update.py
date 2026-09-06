@@ -207,6 +207,12 @@ def test_isolated_staged_updater_can_import_the_shared_name_validator(tmp_path: 
     updater.parent.mkdir(parents=True)
     validator.parent.mkdir(parents=True)
     updater.write_bytes(Path(apply_update_module.__file__).read_bytes())
+    # The staged app layer carries the shared update claim beside the updater,
+    # because that is where it is tracked and the updater imports it. A layer
+    # without it is not one a release produces.
+    (updater.parent / "update_lock.py").write_bytes(
+        (Path(apply_update_module.__file__).parent / "update_lock.py").read_bytes()
+    )
     validator.write_bytes(
         (Path(apply_update_module.__file__).parents[1] / "shared" / "safe_names.py").read_bytes()
     )

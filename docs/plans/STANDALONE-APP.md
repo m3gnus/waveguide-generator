@@ -271,17 +271,63 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
   **The live-updater interlock.** An update in progress is indistinguishable from an
   interrupted one from outside, because a layer really is absent between two
   renames. Waiting is not an interlock — an updater slower than any wait is still
-  mid-swap — so both sides take the same exclusive claim, `launchers/update_lock.py`:
-  an OS lock on `<data>/updates/update.lock`, taken by the updater CLI for the whole
-  of an apply or rollback, and by the bootstrap recovery across the helper it runs.
-  The bootstrap **fails closed**: an installation whose update is owned by a live
-  process is left untouched and the user is told to start again in a moment. It is
-  an OS lock on a descriptor rather than a pid file on purpose — the kernel drops it
-  when the holder dies, so a killed updater releases it by dying, which is precisely
-  the case this whole route exists for. `--recover` deliberately does not take it,
-  because the bootstrap holds it across that subprocess. A dwell is kept in front of
-  the claim as a courtesy: most updates finish in well under a second and should
-  cost nobody a refusal.
+  mid-swap — so every path that decides a transaction takes the same exclusive
+  claim, `launchers/update_lock.py`: the updater CLI for an apply, a rollback **and**
+  a `--recover`; the in-application startup recovery in
+  `launchers/statusapp/updater.py`; and the detached rollback helper, which is that
+  same CLI running from a copy. Each fails closed, leaving an installation somebody
+  else owns exactly as they left it.
+
+  It is an OS lock on a descriptor rather than a pid file on purpose — the kernel
+  drops it when the holder dies, so a killed updater releases it by dying, which is
+  precisely the case this whole route exists for.
+
+  **Nothing blocks, so the relaunch protocol is safe.** Acquisition is non-blocking
+  everywhere. The updater installs while holding the claim and then starts the
+  application; the application's startup recovery finds the claim held, concludes it
+  has nothing to decide, and starts. Waiting there would deadlock the updater against
+  the child it had just launched. For the same reason the bootstrap recovery does
+  *not* hold the claim across the helper it runs: the helper takes it, and the answer
+  comes back as the shared `EXIT_UPDATE_IN_PROGRESS` exit code. A dwell is kept in
+  front of all of it as a courtesy, because most updates finish in well under a
+  second and should cost nobody a refusal.
+
+  **Scope.** The claim is keyed on the resolved installation path and lives in the
+  per-user cache root the launchers already redirect caches into — `Library/Caches`,
+  `%LOCALAPPDATA%`, `$XDG_CACHE_HOME` — not under the data directory and not inside
+  the bundle. `--data-dir` is the caller's choice, so a claim rooted there is one a
+  second process steps around by naming a different directory, while both rename the
+  same installation's layers; documenting that as an invariant would not have made it
+  one. Inside the bundle is worse: on macOS it is sealed, and writing there would
+  break the signature recovery exists to restore. So two data directories pointing at
+  one installation now share one claim, and two installations sharing one data
+  directory keep two. The limit that remains, stated rather than papered over: the
+  root is per user, so two *different* users updating one shared installation do not
+  exclude each other. Closing that needs a writable system-wide location this
+  application does not claim.
+
+  **A busy claim is not permission to run.** The startup recovery takes the claim like
+  every other path that decides a transaction, and when it cannot get it the answer
+  depends on the *installed generation*, not on the claim — because the claim looks
+  identical in the two cases that matter. A consistent installation (both layers
+  present, manifests agreeing) is the updater's legitimate post-seal relaunch, and it
+  starts. Anything else — a layer absent, or an app and a runtime from two
+  generations — is a live half-swap that nothing has reconciled, and it refuses with
+  a message naming what it found. A claim that could not be attempted at all (an
+  unreadable or uncreatable lock) refuses too: ownership unknown over an installation
+  that may be mid-change is the definition of the fail-closed case. An earlier
+  revision answered both with "nothing to recover" and started anyway;
+  `failclosed-before-after.log` records the same two controls failing against that
+  behaviour and passing here.
+
+  **No silent bypass.** `apply_update.py` imports the claim the two ways it is ever
+  run — from the app layer as a package, and from a staged copy beside its own
+  dependency — and does not fall back to a no-op. An earlier revision aliased
+  `contextlib.nullcontext` when the import failed, which turned "this copy was staged
+  wrong" into "this copy silently has no exclusion", on the detached rollback, which
+  renames layers. Both staging paths (`stage_recovery_helper` and
+  `launch_rollback_handoff`) now copy `update_lock.py` beside the helper, and a copy
+  missing it refuses to start rather than running unguarded.
 
   **What counts as recovered.** The helper's exit code is the verdict, and a
   restored directory is not one. `recover_transaction` reports failure when it could

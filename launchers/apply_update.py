@@ -25,13 +25,31 @@ except ImportError:  # pragma: no cover - taken only on Windows
     fcntl = None  # type: ignore[assignment]
 
 
+# The shared claim. Imported the two ways this module is ever run -- from the
+# app layer as a package, and from a staged copy as a script beside its own
+# dependency -- and NOT defaulted to a no-op when neither works. A missing
+# module in a staged copy is a staging bug, not evidence of an old
+# installation, and answering it by silently dropping the exclusion would
+# remove the guard exactly where the detached helper needs it most.
 try:  # inside the app layer, where this module is maintained
-    from launchers.update_lock import claim_update as _claim_update
-except ImportError:  # staged beside the bootstrap recovery, where it is a script
-    try:
-        from update_lock import claim_update as _claim_update  # type: ignore[no-redef]
-    except ImportError:  # pragma: no cover - an install predating the claim
-        from contextlib import nullcontext as _claim_update  # type: ignore[assignment]
+    from launchers.update_lock import (
+        EXIT_UPDATE_IN_PROGRESS,
+        UpdateInProgress,
+        claim_update as _claim_update,
+    )
+except ImportError:  # a staged copy, running as a script beside its dependency
+    # The directory is added explicitly rather than relied upon. The documented
+    # manual command and the detached handoff both run this file with a plain
+    # interpreter, which would put it on the path anyway -- but ``-I`` does not,
+    # and an isolated run is exactly how somebody repairs a broken installation.
+    # The sibling is no less trusted than this file: it is this file's own
+    # directory, and this file is the program that was chosen to run.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from update_lock import (  # type: ignore[no-redef]  # noqa: E402
+        EXIT_UPDATE_IN_PROGRESS,
+        UpdateInProgress,
+        claim_update as _claim_update,
+    )
 
 
 class ApplyUpdateError(RuntimeError):
@@ -120,6 +138,9 @@ BUNDLE_LAYERS = ("app", "runtime")
 #: both names rather than spelling them again, so the two cannot drift apart.
 RECOVERY_HELPER_DIRECTORY = "rollback"
 RECOVERY_HELPER_NAME = "apply_update.py"
+#: Staged beside the helper because the helper imports it and refuses to run
+#: without it. A copy of this module alone is not a runnable helper.
+RECOVERY_LOCK_NAME = "update_lock.py"
 PREVIOUS_SUFFIX = ".previous"
 FAILED_SUFFIX = ".failed"
 # The renamed ``pythonw.exe`` parses everything on its command line as an
@@ -947,10 +968,16 @@ def stage_recovery_helper(
 
     origin = Path(__file__).resolve()
     destination = Path(data_dir) / RECOVERY_HELPER_DIRECTORY / RECOVERY_HELPER_NAME
+    # Two files, because this module imports the claim and refuses to run
+    # without it. Staging one of them would produce a helper that cannot start,
+    # which is worse than no helper at all: it looks like a repair route.
+    companions = ((origin, destination), (origin.with_name(RECOVERY_LOCK_NAME),
+                                          destination.with_name(RECOVERY_LOCK_NAME)))
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(origin, destination)
-        sync_file(destination, log=log)
+        for source, target in companions:
+            shutil.copyfile(source, target)
+            sync_file(target, log=log)
         sync_directory(destination.parent, log=log)
     except OSError as exc:
         _emit_log(log, f"Could not stage the recovery helper at {destination}: {exc}")
@@ -2746,9 +2773,27 @@ def main(argv: list[str] | None = None) -> int:
         # Read at call time rather than inheriting the default bound when this
         # module was imported, so the entry point reports the platform it is
         # actually running on.
-        return recover_bundle(
-            bundle=args.bundle, data_dir=args.data_dir, platform_name=sys.platform
-        )
+        #
+        # --recover decides a transaction and restores layers, so it takes the
+        # claim like every other path that does. It takes it here rather than
+        # having its caller hold it across this process: a parent that held the
+        # lock while waiting for a child that must acquire it is a deadlock, and
+        # non-blocking acquisition plus a distinct exit code says the same thing
+        # without one.
+        resources = resources_directory(Path(args.bundle), sys.platform)
+        try:
+            with _claim_update(resources):
+                return recover_bundle(
+                    bundle=args.bundle,
+                    data_dir=args.data_dir,
+                    platform_name=sys.platform,
+                )
+        except UpdateInProgress as exc:
+            append_update_log(
+                Path(args.data_dir),
+                f"Recovery declined: {exc}. The installation was left untouched.",
+            )
+            return EXIT_UPDATE_IN_PROGRESS
     if args.parent_pid is None:
         parser.error("--parent-pid is required unless --recover is given")
     if args.rollback:
@@ -2764,8 +2809,19 @@ def main(argv: list[str] | None = None) -> int:
     # renaming the directories this process is already renaming. Deliberately
     # not taken for --recover, because the bootstrap holds the claim across that
     # subprocess and a helper that re-acquired it would deadlock its own caller.
-    with _claim_update(args.data_dir):
-        return _run_transaction(args)
+    resources = resources_directory(Path(args.bundle), sys.platform)
+    try:
+        with _claim_update(resources):
+            return _run_transaction(args)
+    except UpdateInProgress as exc:
+        # Two updaters on one installation is the state this refuses to create.
+        # Reported rather than raised, because this is a process the user never
+        # sees and an exit code is what the caller can act on.
+        append_update_log(
+            Path(args.data_dir),
+            f"Update declined: {exc}. The installation was left untouched.",
+        )
+        return EXIT_UPDATE_IN_PROGRESS
 
 
 def _run_transaction(args: argparse.Namespace) -> int:
