@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RC_WORKFLOW = ROOT / ".github" / "workflows" / "rc-build.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 PROPOSAL_WORKFLOW = ROOT / "docs" / "reference" / "main-build.workflow-proposal.yml"
+INNO_PREFLIGHT_WORKFLOW = ROOT / ".github" / "workflows" / "windows-inno-preflight.yml"
 INNO_VERIFIER = ROOT / "scripts" / "ci" / "verify_inno_setup.ps1"
 LINUX_DEPENDENCIES = ROOT / "scripts" / "ci" / "install_linux_runtime_dependencies.sh"
 
@@ -143,6 +144,40 @@ def test_inno_verifier_uses_bounded_compiler_version_probe_and_all_workflow_vari
         assert 'if ($LASTEXITCODE -ne 0)' in workflow
         assert "./scripts/ci/verify_inno_setup.ps1" in workflow
         assert '$banner -notmatch "6\\.7\\.1"' not in workflow
+
+
+def test_windows_inno_preflight_is_manual_read_only_and_uses_the_shared_gate() -> None:
+    text = INNO_PREFLIGHT_WORKFLOW.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    trigger = workflow.get("on", workflow.get(True))
+    assert set(trigger) == {"workflow_dispatch"}
+    assert set(trigger["workflow_dispatch"]["inputs"]) == {"ref"}
+    assert "push:" not in text
+    assert "schedule:" not in text
+    assert "upload-artifact" not in text
+    assert "gh release" not in text
+    assert "git push" not in text
+
+    assert workflow["permissions"] == {"contents": "read"}
+    job = workflow["jobs"]["verify-inno"]
+    assert job["runs-on"] == "windows-latest"
+    assert job["timeout-minutes"] == 10
+    steps = job["steps"]
+    assert len(steps) == 3
+    checkout = steps[0]
+    assert checkout["uses"] == (
+        "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+    )
+    assert checkout["with"] == {
+        "ref": "${{ inputs.ref }}",
+        "persist-credentials": False,
+    }
+    assert steps[1]["shell"] == "pwsh"
+    assert "innosetup --version=6.7.1" in steps[1]["run"]
+    assert "$LASTEXITCODE -ne 0" in steps[1]["run"]
+    assert steps[2]["shell"] == "pwsh"
+    assert "./scripts/ci/verify_inno_setup.ps1" in steps[2]["run"]
+    assert "$LASTEXITCODE -ne 0" in steps[2]["run"]
 
 
 @pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell is only available on Windows runners")

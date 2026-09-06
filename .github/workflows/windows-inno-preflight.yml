@@ -1,0 +1,46 @@
+name: Windows Inno Setup preflight
+
+# This is a cheap, manual-only check for the pinned compiler gate. It does not
+# build, upload, publish, tag, or mutate a release. Select the exact reviewed
+# commit (or its review branch) in the dispatch input.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit or review ref to check out"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify-inno:
+    name: Verify pinned Inno Setup
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the selected ref
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Install pinned Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup --version=6.7.1 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chocolatey Inno Setup install exited $LASTEXITCODE"
+          }
+
+      - name: Verify the compiler and successful probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $iscc = & ./scripts/ci/verify_inno_setup.ps1
+          if ($LASTEXITCODE -ne 0) {
+            throw "The shared Inno Setup verifier exited $LASTEXITCODE"
+          }
+          Write-Host "Verified compiler path: $iscc"
