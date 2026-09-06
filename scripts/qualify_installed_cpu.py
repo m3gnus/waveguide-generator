@@ -244,8 +244,10 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
     after it runs, so bytecode or a numba kernel cache written beside its
     sources breaks the seal.
 
-    Everything is redirected into *this run's* directory rather than the user's,
-    which is stricter than the launcher and leaves the machine as it was found.
+    Everything this gate can redirect goes into *this run's* directory rather
+    than the user's, which is stricter than the launcher and leaves the machine
+    as it was found. That includes Julia's depot, which nothing else sets: see
+    ``JULIA_DEPOT_PATH`` below for what it buys and what it changes.
     ``XDG_DOCUMENTS_DIR`` moves the default workspace off POSIX hosts; Windows
     has no supported equivalent, so there the workspace default is recorded
     rather than silently accepted, and no export is written by this gate.
@@ -253,7 +255,13 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
 
     caches = work / "caches"
     documents = work / "documents"
-    for directory in (caches / "pycache", caches / "numba", caches / "matplotlib", documents):
+    for directory in (
+        caches / "pycache",
+        caches / "numba",
+        caches / "matplotlib",
+        documents,
+        work / "julia-depot",
+    ):
         directory.mkdir(parents=True, exist_ok=True)
 
     environment = os.environ.copy()
@@ -266,6 +274,18 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
         NUMBA_CACHE_DIR=str(caches / "numba"),
         MPLCONFIGDIR=str(caches / "matplotlib"),
         HORNLAB_BEAT_RUNTIME_DIR=str(work / "beat-runtime"),
+        # HORNLAB_BEAT_RUNTIME_DIR isolates the *provisioning record*, not
+        # Julia's own package store. The pinned package launches Julia with
+        # ``{**os.environ, ...}`` and never sets JULIA_DEPOT_PATH, so without
+        # this a run reads and writes the caller's ``~/.julia`` -- and a report
+        # claiming every cache was isolated would be wrong.
+        #
+        # It is also a stricter test than a user's machine gets, and that is
+        # worth naming rather than glossing: with an empty depot the
+        # application's own preparation has to fetch everything, so a pass here
+        # is closer to clean-machine evidence, and a run that reuses a populated
+        # ``~/.julia`` is not.
+        JULIA_DEPOT_PATH=str(work / "julia-depot"),
         # The name the pinned package actually reads is WORKER_DIR_ENV_VAR, and
         # it is HORNLAB_BEAT_WORKER_DIR. An invented name is not an isolation
         # failure that shows up as an error: the override is simply ignored, the
@@ -845,6 +865,13 @@ def stop_our_workers(
     authenticate as itself over its own endpoint before it is signalled. A
     record that will not is reported and left alone -- a recorded pid may since
     have been reissued to something that has nothing to do with this.
+
+    **Every unsuccessful outcome raises.** A probe that exited non-zero, output
+    that cannot be read, a host still running after it was signalled, and a
+    registry that is not this run's are all states in which what was or was not
+    stopped is unknown, and a gate that returns them as data has already
+    decided they do not matter. The caller turns any of them into a failed
+    qualification, keeping an earlier failure if there was one.
     """
 
     completed = subprocess.run(  # noqa: S603 - packaged interpreter, fixed program
@@ -865,11 +892,21 @@ def stop_our_workers(
         completed.stdout + completed.stderr, encoding="utf-8"
     )
     if completed.returncode != 0:
-        return {"error": completed.stderr[-1000:]}
+        raise QualificationError(
+            f"the worker cleanup probe exited {completed.returncode}, so what it did or "
+            f"did not stop is unknown: {completed.stderr[-1000:]}"
+        )
     try:
         answer = json.loads(completed.stdout.strip().splitlines()[-1])
     except (IndexError, ValueError) as exc:
-        return {"error": f"unreadable cleanup output: {exc}"}
+        raise QualificationError(f"unreadable worker cleanup output: {exc}") from exc
+    still_alive = [
+        record for record in answer.get("verified", []) if record.get("still_alive")
+    ]
+    if still_alive:
+        raise QualificationError(
+            f"workers this run started are still running after cleanup: {still_alive}"
+        )
     if answer.get("contained") is not True:
         # The override did not take effect, so the registry the package would
         # have used is the user's own. Nothing there belongs to this run, and
@@ -910,6 +947,13 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
             "data_dir": str(data_dir),
             "beat_runtime_dir": environment["HORNLAB_BEAT_RUNTIME_DIR"],
             "worker_registry": environment["HORNLAB_BEAT_WORKER_DIR"],
+            "julia_depot": environment["JULIA_DEPOT_PATH"],
+            "python_cache": environment["PYTHONPYCACHEPREFIX"],
+            "numba_cache": environment["NUMBA_CACHE_DIR"],
+            "note": (
+                "every cache this gate can redirect is inside the run's own tree, "
+                "Julia's depot included; the application's provisioning inherits it"
+            ),
         },
     })
     expected_identity = expectations_from_build_manifest(arguments.build_manifest)
@@ -1099,8 +1143,17 @@ def main(argv: list[str] | None = None) -> int:
             except QualificationError as exc:
                 report["worker_cleanup"] = {"refused": str(exc)}
                 failure = failure or str(exc)
-            except Exception as exc:  # noqa: BLE001 - cleanup must not mask the result
-                report["worker_cleanup"] = {"error": f"{type(exc).__name__}: {exc}"}
+            except Exception as exc:  # noqa: BLE001 - any cleanup failure is a failure
+                # This used to record the exception and leave the verdict alone,
+                # so a TimeoutExpired or an OSError after a perfectly good solve
+                # came out as qualified=true and exit 0 -- with workers possibly
+                # still running and nothing said about them. A cleanup whose
+                # outcome is unknown is not a pass. The earlier failure wins
+                # when there is one, because that is what a reader needs first.
+                detail = f"{type(exc).__name__}: {exc}"
+                report["worker_cleanup"] = {"error": detail}
+                report["worker_cleanup"]["traceback"] = traceback.format_exc()
+                failure = failure or f"the worker cleanup did not complete: {detail}"
         report["qualified"] = failure is None
         if failure is not None:
             report["error"] = failure

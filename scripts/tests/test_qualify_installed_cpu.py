@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -665,9 +666,19 @@ if argv and argv[0] == "-c":
     if "importlib.metadata" in program:
         print(json.dumps({{name: {{"commit": "{sha}"}} for name in argv[2:]}}))
     else:
+        mode = "{cleanup}"
+        if mode == "crash":
+            print("the probe fell over", file=sys.stderr)
+            raise SystemExit(3)
+        if mode == "garbage":
+            print("this is not json")
+            raise SystemExit(0)
         wanted = argv[2]
         effective = "{effective}" or wanted
-        print(json.dumps({{"verified": [], "refused": [],
+        alive = []
+        if mode == "still-alive":
+            alive = [{{"host_pid": 4242, "engine_pid": -1, "still_alive": True}}]
+        print(json.dumps({{"verified": alive, "refused": [],
                            "effective_worker_dir": effective,
                            "contained": effective == wanted}}))
     raise SystemExit(0)
@@ -805,6 +816,7 @@ def _stub_payload(tmp_path: Path, **settings: object) -> Path:
             python=sys.executable,
             sha=PINS["hornlab-beat-bem"],
             effective=str(settings.pop("effective_worker_dir", "")),
+            cleanup=str(settings.pop("cleanup", "")),
         ),
         encoding="utf-8",
     )
@@ -1097,3 +1109,141 @@ def test_the_workspace_is_moved_into_the_run_before_anything_solves(
     assert workspace["workspace_path"] == str(tmp_path / "work" / "workspace")
     # And it happened before the solve: the request the stub recorded is there.
     assert (tmp_path / "work" / "data" / "solve-request.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# The final verdict, when only the cleanup fails
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+@pytest.mark.parametrize(
+    ("cleanup", "expected"),
+    (
+        pytest.param("crash", "exited 3", id="probe-exited-non-zero"),
+        pytest.param("garbage", "unreadable worker cleanup output", id="unreadable-output"),
+        pytest.param("still-alive", "still running after cleanup", id="worker-survived"),
+    ),
+)
+def test_a_solve_that_worked_does_not_excuse_a_cleanup_that_did_not(
+    tmp_path: Path, _quick_timeouts: None, cleanup: str, expected: str
+) -> None:
+    """A cleanup whose outcome is unknown is not a pass.
+
+    The solve succeeds in every case here, and the run still fails. Returning
+    `qualified=true` with a probe that exited non-zero, output nobody could
+    read, or a worker still running would be a green step that says nothing
+    about what is left behind on the machine -- and on a shared runner that is
+    the next job's problem.
+    """
+
+    payload = _stub_payload(tmp_path, cleanup=cleanup)
+    output = tmp_path / "out"
+
+    code = gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+        ]
+    )
+
+    assert code == 1
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert report["qualified"] is False
+    assert expected in report["error"]
+    # And the evidence from the part that did work is still there.
+    assert report["solve"]["beat_backend"] == "cpu"
+    assert report["cpu_offered"]["available"] is True
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_an_unexpected_cleanup_exception_also_fails_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _quick_timeouts: None
+) -> None:
+    """The exact edge the review found: a generic exception, after a good solve.
+
+    `stop_our_workers` raising `TimeoutExpired` or `OSError` was recorded in the
+    report and then ignored, so the run came back `qualified=true` and exit 0.
+    Anything that stops the cleanup completing now fails the qualification.
+    """
+
+    payload = _stub_payload(tmp_path)
+    output = tmp_path / "out"
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(cmd="probe", timeout=1.0)
+
+    monkeypatch.setattr(gate, "stop_our_workers", explode)
+
+    code = gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+        ]
+    )
+
+    assert code == 1, "an unknown cleanup outcome must not be reported as qualified"
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert report["qualified"] is False
+    assert "the worker cleanup did not complete" in report["error"]
+    assert "TimeoutExpired" in report["worker_cleanup"]["error"]
+    assert "traceback" in report["worker_cleanup"]
+    # The solve that did work is preserved, so the failure is diagnosable.
+    assert report["solve"]["beat_backend"] == "cpu"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_an_earlier_failure_is_not_replaced_by_the_cleanup_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _quick_timeouts: None
+) -> None:
+    """When both fail, the reader needs the original first."""
+
+    broken = _result(metadata=dict(gate.CPU_RESULT_CONTRACT, beat_backend="metal"))
+    payload = _stub_payload(tmp_path, result=broken)
+    output = tmp_path / "out"
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise OSError("and the cleanup fell over too")
+
+    monkeypatch.setattr(gate, "stop_our_workers", explode)
+
+    assert gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+        ]
+    ) == 1
+
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert "expected" in report["error"], "the solve failure is the one to report"
+    assert "cleanup" not in report["error"]
+    # The cleanup failure is not lost, only demoted.
+    assert "fell over too" in report["worker_cleanup"]["error"]
+
+
+def test_the_julia_depot_is_inside_the_run(tmp_path: Path) -> None:
+    """The isolation claim has to include Julia, because nothing else sets it.
+
+    `HORNLAB_BEAT_RUNTIME_DIR` isolates the provisioning *record*. The pinned
+    package launches Julia with `{**os.environ, ...}` and never sets
+    `JULIA_DEPOT_PATH`, so without this the application's own preparation reads
+    and writes the caller's `~/.julia` while the report calls every cache
+    isolated.
+    """
+
+    app = _app_layer(tmp_path)
+    work = tmp_path / "work"
+
+    environment = gate.isolated_environment(app, work)
+
+    assert environment["JULIA_DEPOT_PATH"] == str(work / "julia-depot")
+    assert (work / "julia-depot").is_dir()
