@@ -443,15 +443,93 @@ def test_provisioning_starts_off_the_calling_thread_on_a_gpu_less_host(
     assert started == ["ran"]
 
 
-def test_provisioning_is_not_offered_on_macos(tmp_path, monkeypatch) -> None:
-    """AUTO prefers the measured Metal path there, and the GPU hook covers it."""
+@pytest.mark.parametrize("system", ["Windows", "Linux", "Darwin"])
+def test_every_supported_platform_prepares_the_cpu_runtime(
+    tmp_path, monkeypatch, system: str
+) -> None:
+    """Every supported computer has a CPU, so every one of them offers this.
+
+    macOS used to be excluded, on the reasoning that AUTO prefers Metal there
+    so a CPU runtime would never be *selected*. ``BEAT · CPU`` is an engine a
+    user chooses by name, and on a Mac it was a row that could never light up,
+    offering as its remedy a shell command a packaged application gives nobody
+    a shell for.
+    """
+
+    started: list[str] = []
+    _provisioning_host(tmp_path, monkeypatch, detect_gpu_backend=lambda: None)
+    monkeypatch.setattr(beat_cpu_runtime, "_provision_worker", lambda: started.append(system))
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system=system)
+
+    assert thread is not None, f"{system} must prepare the CPU runtime"
+    thread.join(timeout=5.0)
+    assert started == [system]
+
+
+@pytest.mark.parametrize("system", ["Windows", "Linux", "Darwin"])
+def test_a_gpu_host_prepares_it_too_on_every_platform(
+    tmp_path, monkeypatch, system: str
+) -> None:
+    """Having a GPU is not a reason to withhold the CPU engine.
+
+    The requirement is explicit that a usable Metal, CUDA or other accelerator
+    does not satisfy it -- and on a Mac the accelerator is the *normal* case, so
+    a rule that skipped GPU hosts would have skipped nearly every Mac.
+    """
+
+    project = _cpu_project(tmp_path)
+    calls: list[str] = []
+
+    def provision_cpu(runtime_dir=None, *, status_cb=print, force=False):
+        calls.append("provisioned")
+        return {"status": "ready"}
+
+    _install_stub_package(
+        monkeypatch,
+        project=project,
+        state={"status": "ready", "backend": "metal", "project": str(project)},
+        backend_states={"metal": {"status": "ready", "backend": "metal", "project": str(project)}},
+        detect_gpu_backend=lambda: "metal",
+        provision_cpu=provision_cpu,
+    )
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system=system)
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == ["provisioned"]
+
+
+def test_an_unsupported_platform_still_declines(tmp_path, monkeypatch) -> None:
+    """The set is the platforms this application ships for, not "all of them"."""
 
     _provisioning_host(tmp_path, monkeypatch, detect_gpu_backend=lambda: None)
     monkeypatch.setattr(
         beat_cpu_runtime, "_provision_worker", lambda: pytest.fail("must not run")
     )
 
-    assert beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin") is None
+    assert beat_cpu_runtime.start_cpu_provisioning(environ={}, system="FreeBSD") is None
+
+
+def test_availability_is_not_preference() -> None:
+    """Offering the row must not change which engine AUTO picks.
+
+    The two were entangled: the CPU runtime was prepared exactly where AUTO
+    ranked it ahead of BEMPP. Preparing it everywhere is a change to what a
+    user can *choose*, and would be a regression if it also changed what they
+    get when they choose nothing.
+    """
+
+    from server.engines.registry import full3d_engine_order
+
+    assert full3d_engine_order("Darwin").index("bempp") < full3d_engine_order("Darwin").index(
+        "beat-cpu"
+    ), "macOS AUTO still reaches BEMPP before the CPU path"
+    for system in ("Windows", "Linux"):
+        order = full3d_engine_order(system)
+        assert order.index("beat-cpu") < order.index("bempp")
+    assert full3d_engine_order("Darwin")[0] == "metal"
 
 
 def test_a_single_slot_package_leaves_a_gpu_host_to_its_gpu_runtime(
