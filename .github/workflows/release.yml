@@ -680,15 +680,14 @@ jobs:
             read-only, and the entry names the most recent block, so do not open
             anything else in between.
 
-            If the app is not listed there, double-click
-            `Install Waveguide Generator.command` in the disk image and approve *that*
-            the same way. macOS treats it as a separate item and may offer an exception
-            for it when it offers none for the app. It copies the app to Applications,
-            clears the download flag and starts it. No Terminal.
+            `Install Waveguide Generator.command` in the disk image is an equivalent
+            starting point, not a fallback: it is refused with the same wording and
+            approved the same way, and it then copies the app to Applications, clears
+            the download flag and starts it, so you drag nothing. Both routes were
+            confirmed working on macOS 26.5.2.
 
-            Which of the two macOS offers has not been consistent across versions, so
-            both are listed rather than one. If neither is offered, drag the app to
-            Applications and run this once instead:
+            If Privacy & Security lists neither, drag the app to Applications and run
+            this once instead:
 
             ```
             xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"

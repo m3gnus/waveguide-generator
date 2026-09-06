@@ -2015,8 +2015,9 @@ def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> Non
     Which items macOS will offer an "Open Anyway" for is not something this project
     gets to assert. The README used to promise the app would never be listed, on an
     `spctl` inference; the first real user install went the other way and the
-    promise sent them down the one route that failed for them. The order here is
-    what worked, and no route is described as impossible.
+    promise sent them down the one route that failed for them. A second install the
+    same day approved the script too, so both are offered and neither is a fallback.
+    The order below is a preference, not a claim, and no route is called impossible.
     """
 
     builder = BundleBuilder(
@@ -2075,15 +2076,17 @@ def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> Non
 
 
 def test_the_disk_image_carries_an_executable_installer_script(tmp_path: Path) -> None:
-    """The one file in the image macOS will let the user approve.
+    """A second way in, equivalent to approving the app itself.
 
-    Measured 2026-09-02 on macOS 26.5.2 against a genuinely quarantined download:
-    the ad-hoc signed .app assesses as `rejected` with no `source` line at all, so
-    Privacy & Security lists nothing for it, while an unsigned script assesses as
-    `rejected  source=no usable signature` -- and that `source` is what the "Open
-    Anyway" exception attaches to. Shipping the app unsigned instead is not
-    available: an unsigned arm64 executable is SIGKILLed whatever its quarantine
-    state. See docs/validation/2026-09/MACOS-GATEKEEPER.md.
+    `spctl` reports the ad-hoc signed .app as `rejected` with no `source` line and
+    an unsigned script as `rejected  source=no usable signature` (2026-09-02, macOS
+    26.5.2). That difference was once read as meaning Privacy & Security would list
+    the script and never the app. Two real installs on 2026-09-06 refuted it in both
+    directions: the app was listed and opened, and so was the script. So this file
+    is not the only approvable one and not a fallback -- it is the route that needs
+    no drag, and the `source` line predicts nothing. Shipping the app unsigned
+    instead is still not available: an unsigned arm64 executable is SIGKILLed
+    whatever its quarantine state. See docs/validation/2026-09/MACOS-GATEKEEPER.md.
 
     The executable bit is the failure mode worth a test of its own. A .command
     without it opens in TextEdit instead of running, which looks like nothing

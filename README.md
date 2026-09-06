@@ -26,42 +26,54 @@ Then run the installer for your platform:
 For a self-contained macOS install, download the release's
 **Waveguide.Generator-&lt;version&gt;-macos-arm64.dmg** and open it.
 
-**macOS refuses to open the app itself, and offers no button for it.** It reports
-*"Apple could not verify 'Waveguide Generator' is free of malware that may harm
-your Mac or compromise your privacy"*, offering only **Done** and **Move to Bin** —
-and **System Settings → Privacy & Security does not list the app**, because an
-ad-hoc signature gives Gatekeeper no identity to attach an exception to. That is
-a statement about a missing Apple signature rather than a finding about the app.
+**macOS refuses to open the app on first launch, and the dialog offers no way
+forward.** It reports *"Apple could not verify 'Waveguide Generator' is free of
+malware that may harm your Mac or compromise your privacy"*, offering only
+**Done** and **Move to Bin**. That is a statement about a missing Apple
+signature rather than a finding about the app, and the dialog is not where you
+approve it: the exception is granted in **System Settings → Privacy & Security**.
 
-The disk image therefore carries **`Install Waveguide Generator.command`** beside
-the app. Double-click it. macOS refuses that too — click **Done** — but a plain
-script *is* something Gatekeeper will offer an override for, so it appears in
-**System Settings → Privacy & Security → Open Anyway** where the app does not.
-Approve it there and the script copies the app to Applications, clears the
-download flag, and starts it. No Terminal.
+Drag the app to Applications first — an item still on the mounted disk image is
+on read-only storage — then open it, click **Done**, and go straight to
+**System Settings → Privacy & Security → Security**, where it is listed as
+blocked. Click **Open Anyway**. Do it promptly: the entry describes the most
+recent block, so opening something else first can replace it.
 
-If the installer is not listed in Privacy & Security either, drag the app to
-Applications and run this once in Terminal instead:
+The disk image also carries **`Install Waveguide Generator.command`** beside the
+app. It is an equivalent starting point rather than a fallback: it is refused
+with the same wording and approved the same way, and it then copies the app to
+Applications, clears the download flag and starts it, so you drag nothing. Both
+routes were confirmed working on macOS 26.5.2.
+
+If Privacy & Security lists neither item, drag the app to Applications and run
+this once in Terminal instead:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"
 ```
 
-Both routes are spelled out inside the disk image in `READ ME FIRST.txt`, and
-either is needed once, not on every launch.
+All three routes are spelled out inside the disk image in `READ ME FIRST.txt`,
+and any of them is needed once, not on every launch.
 
-**Why the app and the script differ.** Apps distributed outside the App Store
-need a paid Apple Developer ID to be notarized. This build is signed *ad-hoc*
-instead, which lets it execute but gives Gatekeeper no developer identity to
-attach an exception to: measured against a genuinely quarantined download, the
-ad-hoc bundle assesses as `rejected` with no `source` line at all, while an
-unsigned file reports `source=no usable signature` — and it is that `source` line
-the "Open Anyway" exception attaches to. Shipping the app unsigned is not the
-escape: an unsigned arm64 executable is killed by the kernel on Apple silicon
-whatever its quarantine state, which is measured too. A shell script has no
-Mach-O to sign and so is unsigned without being unrunnable, which is the entire
-reason the installer exists. Control-clicking and choosing Open does not help;
-Apple removed that bypass in macOS Sequoia. The transcripts are in
+**Why the warning appears at all.** Apps distributed outside the App Store need
+a paid Apple Developer ID to be notarized. This build is signed *ad-hoc*
+instead, which lets it execute but gives Gatekeeper no developer identity of
+ours to show you, so the first-launch dialog is a dead end by design and
+Privacy & Security is where the override lives.
+
+Which items macOS offers an override for is not something this project can
+promise. Measured 2026-09-02, the ad-hoc bundle assesses as `rejected` with no
+`source` line while an unsigned script reports `source=no usable signature`,
+and that difference was once read as meaning the app would never be listed and
+the script always would. Two real installs on 2026-09-06 refuted it in both
+directions: the app was listed and opened, and so was the script. The `source`
+line is therefore not the predictor it was taken for, which is why all three
+routes are documented and none is described as impossible.
+
+Shipping the app unsigned is not an escape either: an unsigned arm64 executable
+is killed by the kernel on Apple silicon whatever its quarantine state, which is
+measured too. Control-clicking and choosing Open does not help; Apple removed
+that bypass in macOS Sequoia. The transcripts are in
 [docs/validation/2026-09/MACOS-GATEKEEPER.md](docs/validation/2026-09/MACOS-GATEKEEPER.md).
 
 For a self-contained Windows install, download

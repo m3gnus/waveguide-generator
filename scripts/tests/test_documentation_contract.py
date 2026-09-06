@@ -170,17 +170,19 @@ def test_user_guide_distinguishes_startup_returns_from_new_arrivals() -> None:
 def test_the_three_gatekeeper_texts_say_the_same_thing() -> None:
     """README, release notes and the in-image readme are one instruction.
 
-    They disagreed once already, and the way it happened is instructive: the
-    backlog recorded "Privacy & Security > Open Anyway" as the route that works
-    for the app while the shipped texts recorded, correctly, that the app is
-    never listed there. A user following the wrong half is stuck with no next
-    step, and nothing in the build would have caught it.
+    They disagreed once already, and the way it happened is instructive. An
+    `spctl` difference -- the ad-hoc .app assessing `rejected` with no `source`
+    line, an unsigned script assessing `rejected  source=no usable signature`
+    (2026-09-02, macOS 26.5.2) -- was read as proving the app would never be
+    listed under Privacy & Security and the script always would. The shipped
+    texts said so, and the backlog said the opposite; a user following either
+    half alone could be stranded, and nothing in the build compared them.
 
-    Measured 2026-09-02 on macOS 26.5.2 against a genuinely quarantined download:
-    the ad-hoc signed .app assesses `rejected` with no `source` line, so it gets
-    no override; the unsigned installer script assesses
-    `rejected  source=no usable signature`, which is the state an override
-    attaches to. See docs/validation/2026-09/MACOS-GATEKEEPER.md.
+    Both halves were wrong. Two real installs on 2026-09-06 listed and opened
+    the app, and listed and opened the script. So the contract is no longer
+    "agree on which item is listed" -- it is that all three describe every
+    route and none of them forecloses one. See
+    docs/validation/2026-09/MACOS-GATEKEEPER.md.
     """
 
     from scripts.build_bundle import BundleBuilder
@@ -203,13 +205,30 @@ def test_the_three_gatekeeper_texts_say_the_same_thing() -> None:
             'xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"' in text
         ), name
 
-    # And each must say, in as many words, that the app itself is NOT listed
-    # there -- otherwise a reader sends themselves to Privacy & Security looking
-    # for the app, finds nothing, and has no next step. That is the exact
-    # sentence the backlog had backwards.
+    # Each must also route the reader to Applications, so all three really are
+    # the same instruction and not three different ones that happen to share a
+    # filename.
+    for name, text in surfaces.items():
+        assert "Applications" in text, name
+
+    # And none of them may promise which items macOS will offer an override for.
+    # That promise has now been made in both directions and refuted in both: the
+    # shipped texts asserted the app is never listed, the backlog asserted it
+    # always is, and real installs contradicted each. Whoever gets the other
+    # outcome is stranded by a text that forecloses it, so predicting the
+    # outcome -- either way -- is the defect this guards.
+    forbidden = (
+        "does not list the app",
+        "will not list",
+        "not list the app",
+        "never listed",
+        "cannot be approved",
+        "where the app does not",
+    )
     for name, text in surfaces.items():
         normalized = " ".join(text.split()).lower()
-        assert "not list" in normalized, name
+        for phrase in forbidden:
+            assert phrase not in normalized, f"{name}: {phrase!r}"
 
 
 def test_the_readme_never_sends_anyone_to_open_anyway_for_the_app() -> None:
@@ -219,8 +238,10 @@ def test_the_readme_never_sends_anyone_to_open_anyway_for_the_app() -> None:
     lists nothing for an ad-hoc bundle. The Launch section, a hundred lines down,
     kept the original advice -- Control-click then Open, and failing that
     "System Settings -> Privacy & Security and choose Open Anyway for the app" --
-    and shipped that way in 0.3.0. Both halves of it are wrong: Sequoia removed
-    the Control-click bypass, and the app is never listed in Privacy & Security.
+    and shipped that way in 0.3.0. Sequoia removed the Control-click bypass, so
+    that half was wrong outright. (The Open Anyway half turned out to be true
+    for a downloaded app -- see the gatekeeper-texts test -- but it is still
+    wrong HERE, for the reason below.)
 
     It is also advice for a wall that a checkout does not hit. Measured
     2026-09-02 on macOS 26.5.2: the launcher app is a script bundle, unsigned,

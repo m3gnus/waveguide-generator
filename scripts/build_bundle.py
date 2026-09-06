@@ -2353,10 +2353,11 @@ macOS will refuse to open this app the first time, with:
 
 Only "Done" and "Move to Bin" are offered in that dialog. That is expected. It
 is a statement about a missing Apple signature, not a finding about this app.
-The dialog is not the whole story: the approval lives in System Settings.
+The dialog is not where you approve it: the approval lives in System Settings,
+and the same two steps work for either file in this window.
 
-TO OPEN IT - TRY THIS FIRST
----------------------------
+TO OPEN IT
+----------
 
 1. Drag Waveguide Generator onto the Applications shortcut in this window.
    Copy it out of the disk image FIRST. An item still sitting on the mounted
@@ -2374,25 +2375,29 @@ TO OPEN IT - TRY THIS FIRST
    something else first can replace it.
 4. The app starts. This is needed once, not on every launch.
 
-IF THE APP IS NOT LISTED IN PRIVACY & SECURITY
------------------------------------------------
+THE INSTALLER SCRIPT WORKS THE SAME WAY
+---------------------------------------
 
-Then use the installer script, which macOS treats as a separate item and may
-offer an exception for even when it offers none for the app:
+"Install Waveguide Generator.command" in this window is refused with the same
+wording, and it is approved by the same route - it is not a fallback for the
+app, just a different starting point:
 
 1. Double-click "Install Waveguide Generator.command" in this window.
-2. macOS refuses that too, with the same "Apple could not verify" wording.
-   Click Done.
+2. macOS refuses it with the same "Apple could not verify" wording. Click Done.
 3. Open System Settings > Privacy & Security > Security and look for
 
        "Install Waveguide Generator.command" was blocked to protect your Mac.
 
    Click "Open Anyway", authenticate, and click Open. A Terminal window opens
    and the installer copies the app to Applications, removes the download
-   flag, and starts it.
+   flag, and starts it. You never drag anything.
 
-IF NEITHER IS OFFERED AN EXCEPTION
------------------------------------
+Use whichever you prefer. Both were confirmed working on macOS 26.5.2 in
+September 2026: each was listed under Security and each opened after
+"Open Anyway".
+
+IF PRIVACY & SECURITY LISTS NOTHING AT ALL
+------------------------------------------
 
 Then do it by hand:
 
@@ -2409,13 +2414,13 @@ WHY
 
 Apps distributed outside the App Store need a paid Apple Developer ID to be
 notarized. This build is signed ad-hoc instead, which lets it run but gives
-macOS no developer identity of ours to show you. Which items macOS will offer
-an "Open Anyway" for has not been consistent across versions and file types,
-which is why three routes are listed rather than one.
+macOS no developer identity of ours to show you. The refusal dialog offers no
+way forward on purpose; Privacy & Security is where the exception is granted,
+and it covers whichever item you tried to open.
 
-Routes 1 and 2 leave the "downloaded from the internet" flag in place and
-record your approval instead; route 3 removes the flag. Either way, nothing
-else about the app changes.
+The two "Open Anyway" routes leave the "downloaded from the internet" flag in
+place and record your approval instead; the Terminal route removes the flag.
+Either way, nothing else about the app changes.
 
 WHAT IT SHOULD DO
 -----------------

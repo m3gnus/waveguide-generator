@@ -338,3 +338,25 @@ revisited rather than re-argued.
   investigation; the first-launch refusal itself. The user's install becomes drag
   to Applications, double-click, done. It does nothing for Windows/SmartScreen,
   which needs a separate paid Authenticode certificate.
+
+## 2026-09-06, second real install: the .command route also works
+
+The first install had recorded that the `.command` script "was never approved
+and never opened a Terminal", which the guidance turned into an app-first
+order with the script as a fallback. A second run the same day, macOS 26.5.2,
+contradicts the fallback framing:
+
+- Double-clicking `Install Waveguide Generator.command` produces exactly the
+  same refusal dialog as the app — title `"Install Waveguide
+  Generator.command" Not Opened`, body "Apple could not verify ... is free of
+  malware", buttons **Done** and **Move to Bin** only.
+- The script IS then listed under System Settings > Privacy & Security >
+  Security, and **"Open Anyway" runs it**.
+
+So the earlier "never approved" observation was an incomplete run, not a
+property of the file: the dialog is a dead end for *both* items, and Privacy &
+Security grants the exception for *both*. The `spctl` `source` difference
+predicts neither outcome and should not be used to order the guidance.
+
+Guidance now presents the two as equivalent starting points, with the Terminal
+`xattr` route kept for the case where Privacy & Security lists nothing.
