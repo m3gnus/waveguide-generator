@@ -1,4 +1,5 @@
-import { downloadBlob } from '../api/designIo';
+import { writeToOutputFolder } from '../api/workspace';
+import type { ConfirmReplacements } from '../api/exportDestination';
 
 const DEFAULT_PIXEL_RATIO = 2;
 const MAX_PIXEL_RATIO = 3;
@@ -77,6 +78,24 @@ export async function copyChartPng(container: HTMLElement, background?: string):
   await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
 }
 
-export async function downloadChartPng(container: HTMLElement, filename: string, background?: string): Promise<void> {
-  downloadBlob(await chartPngBlob(container, background), filename);
+/**
+ * Write one chart image into the folder the user chose for it.
+ *
+ * This was an `<a download>`, which reaches a browser tab and reaches nobody in
+ * the desktop window -- a WebView2 host with no download handler -- so the
+ * image was encoded and then silently went nowhere. It takes the same route
+ * every other export takes: the user names a folder, and the server writes it.
+ */
+export async function saveChartPng(
+  container: HTMLElement,
+  filename: string,
+  destination: string,
+  background?: string,
+  confirmReplacements?: ConfirmReplacements,
+): Promise<string> {
+  const written = await writeToOutputFolder(
+    '', [{ filename, blob: await chartPngBlob(container, background) }],
+    fetch, 'confirm', destination, confirmReplacements,
+  );
+  return written.directory;
 }

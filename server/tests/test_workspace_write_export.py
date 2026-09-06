@@ -89,6 +89,7 @@ def test_write_export_happy_path(tmp_path: Path) -> None:
     assert response == {
         "directory": str(workspace / "horn_1"),
         "files": [str(workspace / "horn_1/hor/a.frd"), str(workspace / "horn_1/ver/b.frd")],
+        "replaced": [],
     }
     assert (workspace / "horn_1/hor/a.frd").read_text() == "one"
     assert (workspace / "horn_1/ver/b.frd").read_text() == "two"
@@ -655,6 +656,7 @@ def test_write_export_uses_visible_default_without_folder_selection(tmp_path: Pa
     assert response == {
         "directory": str(workspace / "horn_1"),
         "files": [str(workspace / "horn_1" / "a.frd")],
+        "replaced": [],
     }
     assert (workspace / "horn_1" / "a.frd").read_text() == "one"
     assert state.selected_path() is None
@@ -704,6 +706,7 @@ def test_deleted_workspace_selection_refuses_exports_until_it_returns(
     assert call(state, request("horn_1", [("a.frd", "one")])) == {
         "directory": str(workspace / "horn_1"),
         "files": [str(workspace / "horn_1" / "a.frd")],
+        "replaced": [],
     }
     assert (workspace / "horn_1" / "a.frd").read_text() == "one"
 
@@ -1362,3 +1365,664 @@ def test_a_successful_read_never_looks_at_the_descriptor(
     monkeypatch.setattr(workspace_api, "repair_path", refuse_to_repair)
 
     assert workspace_api._retry_after_acl_repair(target, lambda: b"ok") == b"ok"
+
+
+def destination_router(state: workspace_api.WorkspaceState, tmp_path: Path):
+    """A router plus the store behind it, as `mount_workspace` wires them."""
+
+    destinations = workspace_api.ExportDestinationStore(state.settings_path.parent)
+    return destinations, workspace_api.create_workspace_router(state, destinations)
+
+
+def route_endpoint(router, path: str, method: str):
+    for route in router.routes:
+        if route.path == path and method in route.methods:
+            return route.endpoint
+    raise AssertionError(f"no {method} {path}")
+
+
+def test_export_destination_suggests_the_workspace_until_one_is_remembered(
+    tmp_path: Path,
+) -> None:
+    """A first manual export defaults where every export went before.
+
+    The suggestion is a path to read plus a handle to use; the handle is the
+    only half the write endpoint accepts.
+    """
+
+    state, workspace = selected_state(tmp_path)
+    destinations, router = destination_router(state, tmp_path)
+
+    offer = asyncio.run(route_endpoint(router, "/api/workspace/export-destination", "GET")())
+
+    assert offer["path"] == str(workspace)
+    assert offer["remembered"] is False
+    assert offer["selected"] is False
+    assert destinations.resolve(offer["token"]) == workspace
+
+
+def test_choosing_an_export_folder_leaves_the_workspace_where_it_was(
+    tmp_path: Path,
+) -> None:
+    """The destination of one export is not the application's output folder.
+
+    Repointing the workspace would move run archives, automatic exports and CAD
+    projects as a side effect of answering "where should this STL go?".
+    """
+
+    state, workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    destinations, router = destination_router(state, tmp_path)
+    choose = route_endpoint(router, "/api/workspace/export-destination", "POST")
+
+    chosen = asyncio.run(
+        choose(workspace_api.ChooseExportDestinationRequest(path=str(elsewhere)))
+    )
+
+    assert chosen["selected"] is True
+    assert chosen["path"] == str(elsewhere.resolve())
+    written = asyncio.run(
+        route_endpoint(router, "/api/workspace/write-export", "POST")(
+            workspace_api.WriteExportRequest(
+                existing="overwrite",
+                destination=chosen["token"],
+                members=[{"relative_path": "horn.stl", "text": "solid"}],
+            )
+        )
+    )
+
+    # Directly in the folder the user chose: a picker that answers "Desktop"
+    # and then writes into Desktop/<design>/ has not honoured the answer.
+    assert written["directory"] == str(elsewhere.resolve())
+    assert written["files"] == [str(elsewhere.resolve() / "horn.stl")]
+    assert (elsewhere / "horn.stl").read_text() == "solid"
+    assert state.selected_path() == workspace
+    assert json.loads((tmp_path / "data" / "workspace_settings.json").read_text()) == {
+        "schemaVersion": 1,
+        "workspacePath": str(workspace),
+    }
+    assert not list(workspace.iterdir())
+
+
+def test_the_next_export_defaults_to_the_folder_the_last_one_used(
+    tmp_path: Path,
+) -> None:
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    destinations, router = destination_router(state, tmp_path)
+    chosen = asyncio.run(
+        route_endpoint(router, "/api/workspace/export-destination", "POST")(
+            workspace_api.ChooseExportDestinationRequest(path=str(elsewhere))
+        )
+    )
+    asyncio.run(
+        route_endpoint(router, "/api/workspace/write-export", "POST")(
+            workspace_api.WriteExportRequest(
+                existing="overwrite",
+                destination=chosen["token"],
+                members=[{"relative_path": "horn.stl", "text": "solid"}],
+            )
+        )
+    )
+
+    offer = asyncio.run(route_endpoint(router, "/api/workspace/export-destination", "GET")())
+
+    assert offer["path"] == str(elsewhere.resolve())
+    assert offer["remembered"] is True
+    assert destinations.resolve(offer["token"]) == elsewhere.resolve()
+
+
+def test_a_chosen_folder_is_remembered_only_once_an_export_reaches_it(
+    tmp_path: Path,
+) -> None:
+    """"Last used", not "last opened in a dialog".
+
+    Picking a folder and then cancelling, or an export that fails, must leave
+    the next dialog on the folder that actually received files.
+    """
+
+    state, workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    destinations, router = destination_router(state, tmp_path)
+
+    asyncio.run(
+        route_endpoint(router, "/api/workspace/export-destination", "POST")(
+            workspace_api.ChooseExportDestinationRequest(path=str(elsewhere))
+        )
+    )
+
+    offer = asyncio.run(route_endpoint(router, "/api/workspace/export-destination", "GET")())
+    assert offer["path"] == str(workspace)
+    assert offer["remembered"] is False
+    assert not (tmp_path / "data" / "export_settings.json").exists()
+
+
+def test_confirm_writes_what_is_new_and_skips_what_is_identical(tmp_path: Path) -> None:
+    """No question when nothing the user has would change."""
+
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    (elsewhere / "same.txt").write_text("unchanged")
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+
+    written = asyncio.run(
+        route_endpoint(router, "/api/workspace/write-export", "POST")(
+            workspace_api.WriteExportRequest(
+                existing="confirm",
+                destination=token,
+                members=[
+                    {"relative_path": "same.txt", "text": "unchanged"},
+                    {"relative_path": "new.txt", "text": "fresh"},
+                ],
+            )
+        )
+    )
+
+    assert not isinstance(written, JSONResponse)
+    assert (elsewhere / "new.txt").read_text() == "fresh"
+    assert (elsewhere / "same.txt").read_text() == "unchanged"
+    assert written["replaced"] == []
+
+
+def test_confirm_refuses_and_names_every_file_it_would_replace(tmp_path: Path) -> None:
+    """The question is asked once, about the whole export, before any write.
+
+    A manual export lands in a folder the user chose, which may hold files WG
+    never wrote. Reporting the replacement afterwards is not consent, and asking
+    per file would be the prompt storm that makes people stop reading.
+    """
+
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    (elsewhere / "one.txt").write_text("mine")
+    (elsewhere / "two.txt").write_text("also mine")
+    (elsewhere / "same.txt").write_text("unchanged")
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+
+    refused = asyncio.run(
+        route_endpoint(router, "/api/workspace/write-export", "POST")(
+            workspace_api.WriteExportRequest(
+                existing="confirm",
+                destination=token,
+                members=[
+                    {"relative_path": "one.txt", "text": "theirs"},
+                    {"relative_path": "same.txt", "text": "unchanged"},
+                    {"relative_path": "two.txt", "text": "theirs"},
+                    {"relative_path": "new.txt", "text": "fresh"},
+                ],
+            )
+        )
+    )
+
+    assert isinstance(refused, JSONResponse)
+    assert refused.status_code == 409
+    body = json.loads(refused.body)
+    assert body["code"] == "export_collision"
+    assert body["directory"] == str(elsewhere.resolve())
+    # Every one of them, and only the ones that differ.
+    assert body["paths"] == [
+        str(elsewhere.resolve() / "one.txt"),
+        str(elsewhere.resolve() / "two.txt"),
+    ]
+    # Nothing at all: not the new file either, so declining leaves the folder
+    # exactly as it was.
+    assert not (elsewhere / "new.txt").exists()
+    assert (elsewhere / "one.txt").read_text() == "mine"
+    assert (elsewhere / "two.txt").read_text() == "also mine"
+
+
+def test_the_answered_question_is_repeated_as_an_overwrite(tmp_path: Path) -> None:
+    """The handle survives the refusal, so the retry needs no second dialog."""
+
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    (elsewhere / "one.txt").write_text("mine")
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+    write = route_endpoint(router, "/api/workspace/write-export", "POST")
+    members = [{"relative_path": "one.txt", "text": "theirs"}]
+
+    assert isinstance(
+        asyncio.run(write(workspace_api.WriteExportRequest(
+            existing="confirm", destination=token, members=members,
+        ))),
+        JSONResponse,
+    )
+    written = asyncio.run(write(workspace_api.WriteExportRequest(
+        existing="overwrite", destination=token, members=members,
+    )))
+
+    assert written["replaced"] == [str(elsewhere.resolve() / "one.txt")]
+    assert (elsewhere / "one.txt").read_text() == "theirs"
+
+
+def test_confirm_refuses_a_directory_in_the_way_rather_than_listing_it(
+    tmp_path: Path,
+) -> None:
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    (elsewhere / "one.txt").mkdir()
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(
+            route_endpoint(router, "/api/workspace/write-export", "POST")(
+                workspace_api.WriteExportRequest(
+                    existing="confirm",
+                    destination=token,
+                    members=[{"relative_path": "one.txt", "text": "theirs"}],
+                )
+            )
+        )
+
+    assert caught.value.status_code == 409
+    assert "not a file" in caught.value.detail
+    assert (elsewhere / "one.txt").is_dir()
+
+
+def test_confirm_into_an_empty_folder_asks_nothing(tmp_path: Path) -> None:
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    destinations, router = destination_router(state, tmp_path)
+
+    written = asyncio.run(
+        route_endpoint(router, "/api/workspace/write-export", "POST")(
+            workspace_api.WriteExportRequest(
+                existing="confirm",
+                destination=destinations.issue(elsewhere),
+                members=[{"relative_path": "horn.stl", "text": "solid"}],
+            )
+        )
+    )
+
+    assert written["files"] == [str(elsewhere.resolve() / "horn.stl")]
+
+
+def test_the_automatic_policy_still_refuses_on_the_first_difference(
+    tmp_path: Path,
+) -> None:
+    """`merge_identical` is unchanged: a background write asks nobody anything."""
+
+    state, workspace = selected_state(tmp_path)
+    call(
+        state,
+        workspace_api.WriteExportRequest(
+            subdirectory="horn_1",
+            existing="merge_identical",
+            members=[{"relative_path": "a.csv", "text": "original"}],
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="different content"):
+        call(
+            state,
+            workspace_api.WriteExportRequest(
+                subdirectory="horn_1",
+                existing="merge_identical",
+                members=[{"relative_path": "a.csv", "text": "replacement"}],
+            ),
+        )
+
+    assert (workspace / "horn_1/a.csv").read_text() == "original"
+
+
+def test_cancelling_the_destination_dialog_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, workspace = selected_state(tmp_path)
+    destinations, router = destination_router(state, tmp_path)
+    monkeypatch.setattr(workspace_api, "_select_workspace_folder", lambda *a, **k: None)
+
+    answer = asyncio.run(
+        route_endpoint(router, "/api/workspace/export-destination", "POST")()
+    )
+
+    assert answer["selected"] is False
+    # The standing suggestion is still named, so a cancelled dialog leaves the
+    # user exactly where it found them -- but no handle is minted for it. The
+    # client keeps the one it already has, and a cancelled picker must not evict
+    # a live handle to hand back a folder nobody asked for.
+    assert answer["path"] == str(workspace)
+    assert answer["token"] is None
+    assert not list(workspace.iterdir())
+    assert not (tmp_path / "data" / "export_settings.json").exists()
+
+
+def test_the_picker_opens_in_the_folder_the_last_export_used(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remembering the folder is only useful if the dialog starts there."""
+
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    destinations, router = destination_router(state, tmp_path)
+    destinations.remember(elsewhere.resolve())
+    opened: list[tuple[str, Path | None]] = []
+
+    def picker(prompt: str = "", start_in: Path | None = None) -> str | None:
+        opened.append((prompt, start_in))
+        return str(elsewhere)
+
+    monkeypatch.setattr(workspace_api, "_select_workspace_folder", picker)
+    asyncio.run(route_endpoint(router, "/api/workspace/export-destination", "POST")())
+
+    assert opened == [("Choose export folder", elsewhere.resolve())]
+
+
+def test_an_unknown_export_destination_handle_is_refused(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    _destinations, router = destination_router(state, tmp_path)
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(
+            route_endpoint(router, "/api/workspace/write-export", "POST")(
+                workspace_api.WriteExportRequest(
+                    existing="overwrite",
+                    destination="not-a-handle",
+                    members=[{"relative_path": "horn.stl", "text": "solid"}],
+                )
+            )
+        )
+
+    assert caught.value.status_code == 409
+    assert "Choose the folder again" in caught.value.detail
+    assert not list(workspace.iterdir())
+
+
+def test_an_expired_handle_stops_naming_its_folder(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    store = workspace_api.ExportDestinationStore(tmp_path / "data")
+    token = store.issue(elsewhere, now=0.0)
+
+    assert store.resolve(token, now=workspace_api.EXPORT_DESTINATION_TTL_SECONDS) == (
+        elsewhere.resolve()
+    )
+    with pytest.raises(KeyError):
+        store.resolve(token, now=workspace_api.EXPORT_DESTINATION_TTL_SECONDS + 1)
+
+
+def test_only_the_newest_handles_are_kept(tmp_path: Path) -> None:
+    """A long-lived server does not accumulate handles nobody spent."""
+
+    store = workspace_api.ExportDestinationStore(tmp_path / "data")
+    folders = []
+    for index in range(workspace_api.MAX_EXPORT_DESTINATIONS + 1):
+        folder = tmp_path / f"folder_{index}"
+        folder.mkdir()
+        folders.append((folder, store.issue(folder)))
+
+    with pytest.raises(KeyError):
+        store.resolve(folders[0][1])
+    assert store.resolve(folders[-1][1]) == folders[-1][0].resolve()
+
+
+def test_a_handle_to_a_deleted_folder_is_refused_rather_than_recreating_it(
+    tmp_path: Path,
+) -> None:
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "removable"
+    elsewhere.mkdir()
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+    elsewhere.rmdir()
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(
+            route_endpoint(router, "/api/workspace/write-export", "POST")(
+                workspace_api.WriteExportRequest(
+                    existing="overwrite",
+                    destination=token,
+                    members=[{"relative_path": "horn.stl", "text": "solid"}],
+                )
+            )
+        )
+
+    assert caught.value.status_code == 409
+    assert not elsewhere.exists()
+
+
+def test_a_chosen_destination_cannot_be_escaped_by_a_member_path(
+    tmp_path: Path,
+) -> None:
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+
+    with pytest.raises((HTTPException, ValidationError)):
+        asyncio.run(
+            route_endpoint(router, "/api/workspace/write-export", "POST")(
+                workspace_api.WriteExportRequest(
+                    existing="overwrite",
+                    destination=token,
+                    members=[{"relative_path": "../escaped.stl", "text": "solid"}],
+                )
+            )
+        )
+
+    assert not (tmp_path / "escaped.stl").exists()
+
+
+def test_an_export_into_the_chosen_folder_never_replaces_the_folder(
+    tmp_path: Path,
+) -> None:
+    """`reject` publishes by renaming a directory over the destination.
+
+    Aimed at a folder the user already owns, that would delete everything in it,
+    so the combination is refused before anything is staged.
+    """
+
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    (elsewhere / "keep.txt").write_text("mine")
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(
+            route_endpoint(router, "/api/workspace/write-export", "POST")(
+                workspace_api.WriteExportRequest(
+                    existing="reject",
+                    destination=token,
+                    members=[{"relative_path": "horn.stl", "text": "solid"}],
+                )
+            )
+        )
+
+    assert caught.value.status_code == 422
+    assert (elsewhere / "keep.txt").read_text() == "mine"
+
+
+def test_a_repeat_export_names_the_files_it_replaced(tmp_path: Path) -> None:
+    state, _workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    (elsewhere / "horn.stl").write_text("older")
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+
+    written = asyncio.run(
+        route_endpoint(router, "/api/workspace/write-export", "POST")(
+            workspace_api.WriteExportRequest(
+                existing="overwrite",
+                destination=token,
+                members=[{"relative_path": "horn.stl", "text": "newer"}],
+            )
+        )
+    )
+
+    assert written["replaced"] == [str(elsewhere.resolve() / "horn.stl")]
+    assert (elsewhere / "horn.stl").read_text() == "newer"
+
+
+def test_a_workspace_export_still_needs_a_subdirectory(tmp_path: Path) -> None:
+    """Only a chosen folder may be written into directly.
+
+    Every export shares the workspace, so one that named no folder would drop
+    its files among the run archives.
+    """
+
+    with pytest.raises(ValidationError):
+        workspace_api.WriteExportRequest(
+            members=[{"relative_path": "horn.stl", "text": "solid"}],
+        )
+
+
+def test_a_chosen_destination_works_while_the_workspace_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    """The two folders are independent, including when one is gone.
+
+    An unplugged workspace volume refuses automatic export, and must not also
+    refuse an export the user is aiming somewhere that exists.
+    """
+
+    data = tmp_path / "data"
+    state = workspace_api.WorkspaceState(data, default_path=tmp_path / "default")
+    absent = tmp_path / "chosen"
+    absent.mkdir()
+    state.select(absent)
+    absent.rmdir()
+    state = workspace_api.WorkspaceState(data, default_path=tmp_path / "default")
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+
+    written = asyncio.run(
+        route_endpoint(router, "/api/workspace/write-export", "POST")(
+            workspace_api.WriteExportRequest(
+                existing="overwrite",
+                destination=token,
+                members=[{"relative_path": "horn.stl", "text": "solid"}],
+            )
+        )
+    )
+
+    assert written["files"] == [str(elsewhere.resolve() / "horn.stl")]
+
+
+def test_multipart_transport_carries_the_destination_handle(tmp_path: Path) -> None:
+    """The shape the browser actually sends, not only the legacy JSON model."""
+
+    state, workspace = selected_state(tmp_path)
+    elsewhere = tmp_path / "desktop"
+    elsewhere.mkdir()
+    destinations, router = destination_router(state, tmp_path)
+    token = destinations.issue(elsewhere)
+    boundary = b"wg-boundary"
+
+    def field(name: str, value: bytes, filename: str | None = None) -> bytes:
+        disposition = f'Content-Disposition: form-data; name="{name}"'
+        if filename is not None:
+            disposition += f'; filename="{filename}"'
+        content_type = (
+            b"Content-Type: application/octet-stream\r\n" if filename else b""
+        )
+        return (
+            b"--" + boundary + b"\r\n" + disposition.encode("ascii") + b"\r\n"
+            + content_type + b"\r\n" + value + b"\r\n"
+        )
+
+    body = b"".join(
+        [
+            field("subdirectory", b""),
+            field("existing", b"overwrite"),
+            field("destination", token.encode("ascii")),
+            field("relative_path", b"horn.stl"),
+            field("file", b"solid", "horn.stl"),
+            b"--" + boundary + b"--\r\n",
+        ]
+    )
+    delivered = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    from starlette.requests import Request
+
+    request_value = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/workspace/write-export",
+            "headers": [
+                (b"content-type", b"multipart/form-data; boundary=" + boundary)
+            ],
+        },
+        receive,
+    )
+    written = asyncio.run(
+        route_endpoint(router, "/api/workspace/write-export", "POST")(request_value)
+    )
+
+    assert written["files"] == [str(elsewhere.resolve() / "horn.stl")]
+    assert (elsewhere / "horn.stl").read_bytes() == b"solid"
+    assert not list(workspace.iterdir())
+
+
+def test_multipart_without_a_subdirectory_or_a_destination_is_refused(
+    tmp_path: Path,
+) -> None:
+    state, workspace = selected_state(tmp_path)
+    _destinations, router = destination_router(state, tmp_path)
+    boundary = b"wg-boundary"
+    body = b"".join(
+        [
+            b"--" + boundary + b"\r\n"
+            b'Content-Disposition: form-data; name="relative_path"\r\n\r\nhorn.stl\r\n',
+            b"--" + boundary + b"\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="horn.stl"\r\n'
+            b"Content-Type: application/octet-stream\r\n\r\nsolid\r\n",
+            b"--" + boundary + b"--\r\n",
+        ]
+    )
+    delivered = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    from starlette.requests import Request
+
+    request_value = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/workspace/write-export",
+            "headers": [
+                (b"content-type", b"multipart/form-data; boundary=" + boundary)
+            ],
+        },
+        receive,
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(
+            route_endpoint(router, "/api/workspace/write-export", "POST")(request_value)
+        )
+
+    assert caught.value.status_code == 422
+    assert not list(workspace.iterdir())

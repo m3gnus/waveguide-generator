@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import functools
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -20,6 +21,7 @@ import threading
 import time
 from typing import Any
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from scripts.fetch_spa import SpaError, expected_digest
@@ -47,8 +49,21 @@ def latest_release_api() -> str:
     return f"{updates_api_base()}/repos/{REPOSITORY}/releases/latest"
 
 
-def recent_releases_api() -> str:
-    return f"{updates_api_base()}/repos/{REPOSITORY}/releases?per_page=20"
+def recent_releases_api(page: int = 1) -> str:
+    suffix = f"&page={page}" if page > 1 else ""
+    return f"{updates_api_base()}/repos/{REPOSITORY}/releases?per_page=20{suffix}"
+
+
+def release_by_tag_api(tag: str) -> str:
+    """One release, addressed by its exact tag.
+
+    The companion carrying a version's update layers has a known name, so it
+    does not have to be found by reading a list at all. That matters as soon as
+    anything is published often: a list page holds twenty entries, and a
+    companion older than those twenty is not in it.
+    """
+
+    return f"{updates_api_base()}/repos/{REPOSITORY}/releases/tags/{urllib.parse.quote(tag)}"
 
 
 RELEASE_PAGE_ROOT = f"https://github.com/{REPOSITORY}/releases/tag"
@@ -80,6 +95,15 @@ UPDATE_CHANNELS = (STABLE_CHANNEL, BETA_CHANNEL)
 CACHE_SCHEMA = 1
 MAX_RESPONSE_BYTES = 1_000_000
 MAX_RELEASE_LIST_BYTES = 5_000_000
+#: How many 20-entry release pages a single check may read.
+#:
+#: The scan is bounded on purpose -- an unbounded walk of a repository's whole
+#: release history on every update check is a rate limit waiting to happen -- so
+#: what it offers is the highest version *among the pages it read*, not a global
+#: maximum. Pages are only fetched while the answer is still missing: one page
+#: is the normal cost, and the rest exist for the case a page holds nothing
+#: offerable at all, which is what a companion-heavy history looks like.
+MAX_RELEASE_PAGES = 5
 MAX_MANIFEST_BYTES = 64 * 1024
 REQUEST_TIMEOUT_SECONDS = 4.0
 MANUAL_REFRESH_FLOOR_SECONDS = 60.0
@@ -119,7 +143,11 @@ class ReleaseResponse:
 
 
 ReleaseFetcher = Callable[[str | None], ReleaseResponse]
-RecentReleasesFetcher = Callable[[], list[dict[str, Any]]]
+#: Called with no argument for the first page, and ``page=n`` beyond it. Many
+#: injected doubles take no argument at all, which is why `UpdateService` asks
+#: once whether this one can page -- see `_releases_page`.
+RecentReleasesFetcher = Callable[..., list[dict[str, Any]]]
+ReleaseByTagFetcher = Callable[[str], dict[str, Any] | None]
 Clock = Callable[[], float]
 
 
@@ -236,6 +264,35 @@ def _is_installable_tag(tag: str) -> bool:
     """
 
     return _is_offerable_release_tag(tag, allow_prerelease=True)
+
+
+def _no_release_by_tag(_tag: str) -> None:
+    """The by-tag lookup, for a service whose release list was injected."""
+
+    return None
+
+
+def _accepts_page(fetcher: Callable[..., Any]) -> bool:
+    """Whether this release-list fetcher can be asked for a page beyond the first.
+
+    Production's can. A test double is often a zero-argument lambda, and one
+    that cannot page simply answers the first page -- which is every page most
+    checks ever read.
+    """
+
+    try:
+        signature = inspect.signature(fetcher)
+    except (TypeError, ValueError):
+        return False
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == "page" and parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }:
+            return True
+    return False
 
 
 def channel_of(stored: Any) -> str:
@@ -496,11 +553,50 @@ def fetch_latest_release(etag: str | None = None) -> ReleaseResponse:
         raise RuntimeError(f"Could not check GitHub releases: {exc}") from exc
 
 
-def fetch_recent_releases() -> list[dict[str, Any]]:
+def fetch_release_by_tag(tag: str) -> dict[str, Any] | None:
+    """One release by exact tag, or ``None`` when there is no such release.
+
+    Answers the companion lookup in a single request, so it does not depend on
+    how many releases have been published since. Any failure returns ``None``
+    rather than raising: the caller still has the list scan to fall back to, and
+    a missing companion is reported as an incomplete release, not as a failed
+    check.
+    """
+
+    request = urllib.request.Request(
+        release_by_tag_api(tag),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "WaveguideGenerator-UpdateCheck",
+        },
+    )
+    try:
+        with open_trusted_url(
+            request,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            purpose="api",
+        ) as response:
+            body = response.read(MAX_RESPONSE_BYTES + 1)
+        if len(body) > MAX_RESPONSE_BYTES:
+            log.warning("Release-by-tag response for %s exceeded the size limit", tag)
+            return None
+        payload = json.loads(body.decode("utf-8"))
+        return payload if isinstance(payload, dict) else None
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            log.info("Release-by-tag lookup for %s failed with HTTP %s", tag, exc.code)
+        return None
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        log.info("Release-by-tag lookup for %s failed: %s", tag, exc)
+        return None
+
+
+def fetch_recent_releases(page: int = 1) -> list[dict[str, Any]]:
     """List recent releases only when a content-addressed runtime must be located."""
 
     request = urllib.request.Request(
-        recent_releases_api(),
+        recent_releases_api(page),
         headers={
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -779,6 +875,7 @@ class UpdateService:
         repo_root: Path,
         fetcher: ReleaseFetcher = fetch_latest_release,
         recent_releases_fetcher: RecentReleasesFetcher = fetch_recent_releases,
+        release_by_tag_fetcher: ReleaseByTagFetcher | None = None,
         asset_fetcher: SmallFetcher = fetch_small_release_asset,
         clock: Clock = time.time,
         platform_name: str = sys.platform,
@@ -793,6 +890,19 @@ class UpdateService:
         self.repo_root = Path(repo_root).resolve()
         self.fetcher = fetcher
         self.recent_releases_fetcher = recent_releases_fetcher
+        # Both fetchers read releases from the same origin, so supplying one
+        # replaces the release source: a caller that injected a list must not
+        # have half of this check answered by a live GitHub request behind its
+        # back. Production supplies neither and gets both.
+        self.release_by_tag_fetcher = release_by_tag_fetcher or (
+            fetch_release_by_tag
+            if recent_releases_fetcher is fetch_recent_releases
+            else _no_release_by_tag
+        )
+        # Asked once, here, rather than guessed at each call: an injected double
+        # is frequently `lambda: [...]`, and calling that with a page number is
+        # a TypeError indistinguishable from a real one raised inside it.
+        self._fetcher_pages = _accepts_page(recent_releases_fetcher)
         self.asset_fetcher = asset_fetcher
         self.clock = clock
         self.platform_name = platform_name
@@ -805,6 +915,9 @@ class UpdateService:
         self._lock = threading.Lock()
         self._cache: dict[str, Any] | None = None
         self._recent_releases: list[dict[str, Any]] | None = None
+        #: Pages already read during this check, in order, so one check reads
+        #: each page at most once however many lookups want it.
+        self._release_pages: list[list[dict[str, Any]]] = []
         self._runtime_asset_cache: dict[str, dict[str, Any] | None] = {}
         self.bundle_installer = bundle_installer
         if self.bundle_installer is None and self.update_request_path is not None:
@@ -844,6 +957,7 @@ class UpdateService:
         with self._lock:
             self.settings.put(UPDATE_SETTINGS_NAMESPACE, {"channel": channel})
             self._recent_releases = None
+            self._release_pages = []
             self._runtime_asset_cache.clear()
             cache = self._load_cache()
             cache.pop("release", None)
@@ -1040,21 +1154,63 @@ class UpdateService:
             raise RuntimeError("The release app manifest has invalid bundle identity")
         return runtime_id
 
+    def _releases_page(self, page: int) -> list[dict[str, Any]]:
+        """One page of the release list, read at most once per check.
+
+        Page 1 is requested exactly as it always was -- with no argument -- so a
+        fetcher that takes none keeps working and keeps answering the page every
+        check actually needs.
+        """
+
+        while len(self._release_pages) < page:
+            index = len(self._release_pages) + 1
+            if index > 1 and not self._fetcher_pages:
+                return []
+            fetched = (
+                self.recent_releases_fetcher()
+                if index == 1
+                else self.recent_releases_fetcher(page=index)
+            )
+            entries = [entry for entry in fetched if isinstance(entry, dict)]
+            self._release_pages.append(entries)
+            if index == 1:
+                # The single-page view the rest of this class has always used.
+                self._recent_releases = entries
+            if not entries:
+                break
+        return self._release_pages[page - 1] if len(self._release_pages) >= page else []
+
+    def _scan_releases(self):
+        """Yield releases page by page, stopping at the page bound or an empty page."""
+
+        for page in range(1, MAX_RELEASE_PAGES + 1):
+            entries = self._releases_page(page)
+            if not entries:
+                return
+            yield entries
+
     def _updates_release(self, version: str) -> dict[str, Any] | None:
         """The companion pre-release carrying this version's update layers.
 
         The user-facing release holds only the installers, so the layers live on
-        ``v<version>-updates``. It is found in the recent-releases list that
-        ``_earlier_runtime_asset`` already fetches, rather than through a request
-        of its own: one list answers both questions.
+        ``v<version>-updates``. **Asked for by its exact tag**, in one request
+        that does not depend on how many releases have been published since:
+        scanning a twenty-entry list for it was correct only while releases were
+        rare, and it is the one lookup a busier publication schedule breaks.
+
+        The list scan stays as the fallback, so a server that cannot answer the
+        by-tag request -- an older rehearsal origin, a transient failure --
+        behaves exactly as it did before.
         """
 
-        if self._recent_releases is None:
-            self._recent_releases = self.recent_releases_fetcher()
         wanted = release_assets.updates_tag(version)
-        for release in self._recent_releases:
-            if release.get("tag_name") == wanted:
-                return release
+        found = self.release_by_tag_fetcher(wanted)
+        if isinstance(found, dict) and found.get("tag_name") == wanted:
+            return found
+        for entries in self._scan_releases():
+            for release in entries:
+                if release.get("tag_name") == wanted:
+                    return release
         return None
 
     def _layer_asset(
@@ -1085,61 +1241,79 @@ class UpdateService:
         return found
 
     def _beta_release_payload(self) -> dict[str, Any]:
-        """The highest version among recent releases, pre-releases included.
+        """The highest version among the release pages this check read.
 
         The beta channel cannot use ``releases/latest``: GitHub defines that as
         the most recent non-pre-release, which is precisely what makes the
-        stable channel free. So it scans the recent list instead -- the same one
-        the companion lookup already fetches -- and takes the maximum by release
-        precedence.
+        stable channel free. So it reads the release list instead and takes the
+        maximum by release precedence.
 
-        ``_version`` does the filtering that matters. It refuses ``-updates``
-        companions outright, so a beta's own companion (`v0.4.0-beta.1-updates`,
-        a pre-release like the beta itself) can never be selected here and
-        offered as a release.
+        **The policy, exactly.** Pages are read newest-published first. Reading
+        stops at the first page that contained a candidate, and the answer is
+        the highest version among every page read. So it is the highest version
+        near the top of the list, not a global maximum over the repository's
+        history -- a release older than the pages read is not offered, and
+        `MAX_RELEASE_PAGES` bounds how far "near the top" reaches.
+
+        The extra pages exist for one shape in particular: a page can hold no
+        candidate at all. ``-updates`` companions are refused outright -- a
+        beta's own companion is a pre-release like the beta -- so a history that
+        publishes a companion beside every release fills half of each page with
+        entries this can never select, and a busier schedule could fill a whole
+        one.
         """
 
-        if self._recent_releases is None:
-            self._recent_releases = self.recent_releases_fetcher()
         best: dict[str, Any] | None = None
         best_version: tuple[Any, ...] | None = None
-        for entry in self._recent_releases:
-            if not isinstance(entry, dict) or entry.get("draft") is True:
-                continue
-            tag = entry.get("tag_name")
-            if not isinstance(tag, str) or not _is_offerable_release_tag(
-                tag, allow_prerelease=True
-            ):
-                continue
-            try:
-                version = _version(tag)
-            except ValueError:
-                continue
-            if best_version is None or version > best_version:
-                best, best_version = entry, version
+        for entries in self._scan_releases():
+            for entry in entries:
+                if entry.get("draft") is True:
+                    continue
+                tag = entry.get("tag_name")
+                if not isinstance(tag, str) or not _is_offerable_release_tag(
+                    tag, allow_prerelease=True
+                ):
+                    continue
+                try:
+                    version = _version(tag)
+                except ValueError:
+                    continue
+                if best_version is None or version > best_version:
+                    best, best_version = entry, version
+            if best is not None:
+                break
         if best is None:
             raise RuntimeError("No recent GitHub release has a supported version tag")
         return best
 
     def _earlier_runtime_asset(self, runtime_id: str) -> dict[str, Any] | None:
+        """A runtime layer this id names, from an earlier release that carries it.
+
+        Content addressed rather than named by version, so it can only be found
+        by looking: this pages, because the release that still carries an
+        unchanged runtime is by definition an older one, and how far back it
+        sits depends on how much has been published since.
+        """
+
         if runtime_id in self._runtime_asset_cache:
             return self._runtime_asset_cache[runtime_id]
-        if self._recent_releases is None:
-            self._recent_releases = self.recent_releases_fetcher()
         name = release_assets.runtime_layer_name(self._bundle_platform(), runtime_id)
         found: dict[str, Any] | None = None
-        for release in self._recent_releases:
-            tag = release.get("tag_name")
-            # Runtime layers live on the release itself today and on a companion
-            # pre-release once #57 lands; a plain beta carries neither.
-            if not isinstance(tag, str) or not _is_update_layer_carrier(tag):
-                continue
-            found = self._paired_asset(
-                self._uploaded_assets(release),
-                name,
-                "runtime",
-                tag=tag,
-            )
+        for entries in self._scan_releases():
+            for release in entries:
+                tag = release.get("tag_name")
+                # Runtime layers live on the release itself today and on a
+                # companion pre-release from 0.3.2; a plain beta carries neither.
+                if not isinstance(tag, str) or not _is_update_layer_carrier(tag):
+                    continue
+                found = self._paired_asset(
+                    self._uploaded_assets(release),
+                    name,
+                    "runtime",
+                    tag=tag,
+                )
+                if found is not None:
+                    break
             if found is not None:
                 break
         self._runtime_asset_cache[runtime_id] = found
@@ -1283,6 +1457,7 @@ class UpdateService:
         # fetched once and shared by the beta scan, the companion lookup and the
         # earlier-runtime search.
         self._recent_releases = None
+        self._release_pages = []
         self._runtime_asset_cache.clear()
         try:
             release_mode = "bundle" if checkout.get("kind") == "bundle" else "checkout"

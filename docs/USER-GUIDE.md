@@ -229,7 +229,7 @@ the only place a name is edited, and everything follows it: the title bar, the f
 chip, the viewport heading, the `.cfg` filename used by **Export a copy**, the
 `Report.Title` written at the top of that file, the label each solve is stored under,
 and every export stem. Renaming counts as unsaved work. **Export a copy as…** first
-renames the current design and then downloads it, so the file follows the name rather
+renames the current design and then exports it, so the file follows the name rather
 than the other way round.
 
 Opening a `.cfg` takes its name from the file, so a design renamed on disk keeps the
@@ -252,9 +252,30 @@ numbering, and the ✎ rename is still available per run.
 
 ### Exporting
 
+**Every export you ask for asks where it goes.** Choosing an export -- a design
+copy, STEP, STL, profiles, a run's files, or a chart image -- opens a small dialog
+naming the destination folder, with **Export here** to accept it and **Choose
+folder…** to pick another with the platform's own folder picker. The folder your
+last export used is the one offered next time. The files land in that folder
+itself, not in a sub-folder invented under it, and cancelling writes nothing.
+
+If the folder already holds files with those names and different contents, WG
+asks once — naming them — before replacing any of them; nothing is written
+until you answer, and cancelling leaves the folder exactly as it was. Files that
+are not there yet, and files that are already byte-identical, are not part of
+that question.
+
+This is separate from the output folder: choosing a destination for one export
+never moves the **Workspace folder** that runs, archives and CAD projects live
+in. Automatic post-run export and the run archive are unaffected and never
+interrupt a solve with a dialog -- they keep writing into the Workspace folder.
+The folder picker opens on the machine running WG. When that machine has no
+desktop session to open it on — a tunnelled or headless install — type the path
+under *Enter a folder path instead*.
+
 **Export a copy** in the design menu serializes the current parameters and solve
-settings to a `.cfg`, then writes it into the output folder named at the top of the
-Runs panel. It is a portable copy, not a durable editor save: it does not clear the
+settings to a `.cfg` and writes it to the folder you choose. It is a portable
+copy, not a durable editor save: it does not clear the
 unsaved indicator, create or advance a CAD-link identity, or update the CAD-link
 registry. Reopening that file is what makes it the editor's current baseline.
 
@@ -458,6 +479,22 @@ parametric formulas behind it to edit in WG.
 The detailed CAD-link implementation plan is still active workspace material. Treat
 the UI and checked-in tests as the current behavior until that plan is closed and its
 public contract is added here.
+
+## Updates
+
+The version beside the Waveguide Generator name in the top bar is also the update
+indicator: it says whether a newer release exists, and clicking it opens the update
+dialog with the verdict, what would be installed, and the **Install update** button.
+
+**Stable or Beta is chosen in that dialog**, under *Update channel*. Stable offers
+finished releases only. Beta also offers pre-releases — release candidates published
+to test packaging and installation on every platform before a stable version number
+is committed to them. Beta is per release candidate, not per commit on `main`; see
+`docs/reference/UPDATE-CHANNELS.md` for exactly what each channel reads. Switching
+re-checks immediately, so the verdict above the buttons updates while the dialog is
+open. The choice is stored with WG's application data rather than in the browser, so
+it survives the update it controls. Switching back to Stable while running a beta
+leaves WG *ahead of stable*: it stays on that build until a release catches up.
 
 ## Data and recovery
 

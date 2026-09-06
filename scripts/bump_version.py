@@ -60,6 +60,15 @@ APP_PLIST = (
 )
 
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+#: The same triple with a SemVer pre-release label, for a build-only stamp.
+#:
+#: A release is never named this way -- `release.yml` independently refuses
+#: anything but MAJOR.MINOR.PATCH -- and neither is a bump: `next_version` reads
+#: the current version to compute the next one, and there is no next patch after
+#: `0.4.0-main.7`. It exists for one job: naming a build of `main` that is not a
+#: release, where the version has to reach every copy at once or the packaged
+#: app disagrees with the file it was published under.
+BUILD_STAMP = re.compile(r"^(\d+)\.(\d+)\.(\d+)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$")
 
 
 class VersionError(RuntimeError):
@@ -73,8 +82,10 @@ def _read_json(path: Path) -> dict:
         raise VersionError(f"{path.relative_to(REPO_ROOT)}: {exc}") from exc
 
 
-def parse(version: str, *, where: str) -> tuple[int, int, int]:
+def parse(version: str, *, where: str, allow_prerelease: bool = False) -> tuple[int, int, int]:
     match = SEMVER.match(version)
+    if match is None and allow_prerelease:
+        match = BUILD_STAMP.match(version)
     if match is None:
         # Pre-release and build metadata are deliberately unsupported: the tag
         # check builds "v" + this string, and a release named v2.0.0-rc.1+build
@@ -83,11 +94,11 @@ def parse(version: str, *, where: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
 
-def current() -> str:
+def current(*, allow_prerelease: bool = False) -> str:
     version = _read_json(VERSION_FILE).get("version")
     if not isinstance(version, str):
         raise VersionError("shared/version.json has no string 'version'")
-    parse(version, where="shared/version.json")
+    parse(version, where="shared/version.json", allow_prerelease=allow_prerelease)
     return version
 
 
@@ -174,8 +185,8 @@ def _replace_plist_version(new: str) -> None:
     APP_PLIST.write_text(text, encoding="utf-8")
 
 
-def write(new: str) -> None:
-    parse(new, where="--set")
+def write(new: str, *, allow_prerelease: bool = False) -> None:
+    parse(new, where="--set", allow_prerelease=allow_prerelease)
     _replace_version(VERSION_FILE, new, occurrences=1)
     _replace_version(PACKAGE_JSON, new, occurrences=1)
     # The lockfile carries it twice before any dependency's own version: once at
@@ -198,6 +209,14 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("part", nargs="?", choices=("major", "minor", "patch"))
     group.add_argument("--set", dest="exact", help="set an exact MAJOR.MINOR.PATCH")
+    parser.add_argument(
+        "--build-stamp",
+        action="store_true",
+        help=(
+            "allow --set to name a pre-release build (0.4.0-main.7). For stamping "
+            "a build that is not a release; never for a release commit."
+        ),
+    )
     group.add_argument(
         "--check",
         action="store_true",
@@ -215,16 +234,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"version {current()} is consistent across all files")
             return 0
 
+        if args.build_stamp and not args.exact:
+            raise VersionError("--build-stamp only applies to --set")
         new = args.exact if args.exact else next_version(args.part)
-        was = current()
-        write(new)
+        was = current(allow_prerelease=args.build_stamp)
+        write(new, allow_prerelease=args.build_stamp)
         print(f"{was} -> {new}")
         # The snapshot is generated from the live app, so this script cannot
         # move it. Saying so here is the difference between noticing now and
         # noticing when all three server jobs go red on the release commit,
         # which is how 0.2.5 found out.
         print("next: python scripts/gen_openapi.py --write")
-        print(f"      git commit, then git tag v{new} && git push origin v{new}")
+        if args.build_stamp:
+            # Not a release, so no tag instruction. The commit is what the
+            # bundle builder reads: it materializes the app layer from Git
+            # blobs and refuses a dirty worktree, so a stamp left uncommitted
+            # would either fail the build or ship a packaged app still naming
+            # the previous version.
+            print("      git commit, in the build only -- never pushed, never tagged")
+        else:
+            print(f"      git commit, then git tag v{new} && git push origin v{new}")
         return 0
     except VersionError as exc:
         print(f"error: {exc}", file=sys.stderr)

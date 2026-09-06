@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UpdateStatus } from '../api/updates';
-import { UpdateButton, UpdateDialog, updatePresentation } from './UpdateControl';
+import { UpdateButton, UpdateDialog, updatePresentation, useUpdateStatus } from './UpdateControl';
 
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
@@ -97,6 +97,19 @@ function bundleStatus(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     activeVersion: overrides.installState && overrides.installState !== 'idle' ? '2.0.1' : null,
     ...overrides,
   });
+}
+
+/** The dialog over a live status query, as the top bar mounts it. */
+function LiveDialog() {
+  const snapshot = useUpdateStatus();
+  return <UpdateDialog open snapshot={snapshot} onRefresh={snapshot.refresh} onClose={() => undefined}/>;
+}
+
+function LiveHarness() {
+  const [client] = useState(() => new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  }));
+  return <QueryClientProvider client={client}><LiveDialog/></QueryClientProvider>;
 }
 
 function Harness({ value, refresh = async () => value }: { value: UpdateStatus; refresh?: () => Promise<UpdateStatus> }) {
@@ -507,7 +520,7 @@ describe('UpdateControl', () => {
     expect(host.textContent).not.toContain('Update status refreshed');
     expect(host.querySelector('[aria-busy="true"]')).toBeNull();
   });
-  it('names the beta channel in the dialog and points at Settings to change it', async () => {
+  it('names the beta channel in the dialog and says what it actually offers', async () => {
     act(() => root.render(<Harness value={status({
       channel: 'beta',
       release: {
@@ -522,8 +535,118 @@ describe('UpdateControl', () => {
 
     const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dialog.textContent).toContain('Beta channel');
-    expect(dialog.textContent).toContain('Change this in Settings');
+    // Published releases, pre-releases included -- not every commit on main.
+    // Saying so here is what keeps the channel from promising a build nothing
+    // publishes; see docs/reference/UPDATE-CHANNELS.md.
+    expect(dialog.textContent).toContain('pre-releases included');
+    expect(dialog.textContent).toContain('not per commit on');
+    expect(dialog.textContent).not.toContain('Change this in Settings');
     expect(dialog.textContent).toContain('2.1.0-beta.1 is available');
+  });
+
+  describe('the update channel, chosen where the version is', () => {
+    function channelButton(label: 'Stable' | 'Beta'): HTMLButtonElement {
+      const found = [...document.querySelectorAll<HTMLButtonElement>('.update-channel button')]
+        .find((button) => button.textContent === label);
+      if (!found) throw new Error(`Missing channel button: ${label}`);
+      return found;
+    }
+
+    async function openDialog(value = status()) {
+      act(() => root.render(<Harness value={value}/>));
+      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+    }
+
+    it('shows the channel the status reports, without a request of its own', async () => {
+      await openDialog(status({ channel: 'beta' }));
+
+      expect(channelButton('Beta').getAttribute('aria-pressed')).toBe('true');
+      expect(channelButton('Stable').getAttribute('aria-pressed')).toBe('false');
+      expect(document.querySelector('.update-channel')?.textContent)
+        .toContain('before a stable version number is committed');
+      // The channel rides on the status payload the dialog already has.
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    });
+
+    it('writes the chosen channel to the server and re-checks at once', async () => {
+      const calls: Array<[string, RequestInit | undefined]> = [];
+      // The live query, not a fixed snapshot: the point of the selector living
+      // here is that the verdict above it is re-checked while the dialog is
+      // open, and only a real query can show that.
+      const served = { channel: 'stable' as const };
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        calls.push([path, init]);
+        if (path === '/api/updates/channel' && init?.method === 'PUT') {
+          served.channel = JSON.parse(String(init.body)).channel;
+          return new Response(JSON.stringify({ channel: served.channel }), { status: 200 });
+        }
+        if (path.startsWith('/api/updates/status')) {
+          return new Response(JSON.stringify(status({ channel: served.channel })), { status: 200 });
+        }
+        return new Response(JSON.stringify({ channel: served.channel }), { status: 200 });
+      }));
+      act(() => root.render(<LiveHarness/>));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+      expect(channelButton('Stable').getAttribute('aria-pressed')).toBe('true');
+
+      await act(async () => {
+        channelButton('Beta').click();
+        for (let index = 0; index < 8; index += 1) await Promise.resolve();
+      });
+
+      expect(calls.some(([path, init]) => path === '/api/updates/channel'
+        && init?.method === 'PUT'
+        && init.body === '{\"channel\":\"beta\"}')).toBe(true);
+      expect(channelButton('Beta').getAttribute('aria-pressed')).toBe('true');
+      // The standing verdict answered the other channel's question, so it is
+      // discarded rather than left to expire while the user watches it.
+      expect(calls.filter(([path]) => path.startsWith('/api/updates/status')).length)
+        .toBeGreaterThan(1);
+      expect(facts().Channel).toBe('Beta');
+    });
+
+    it('puts the previous channel back when the server refuses the change', async () => {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input) === '/api/updates/channel' && init?.method === 'PUT'
+          ? new Response(JSON.stringify({ detail: 'Settings are read-only' }), { status: 400 })
+          : new Response(JSON.stringify({ channel: 'stable' }), { status: 200 })
+      )));
+      await openDialog();
+
+      await act(async () => {
+        channelButton('Beta').click();
+        await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      });
+
+      expect(channelButton('Beta').getAttribute('aria-pressed')).toBe('false');
+      expect(channelButton('Stable').getAttribute('aria-pressed')).toBe('true');
+      expect(document.querySelector('.update-channel')?.textContent)
+        .toContain('Settings are read-only');
+    });
+
+    it('still offers the selector when the check itself failed', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(
+        JSON.stringify({ channel: 'beta' }), { status: 200 },
+      )));
+      const [open, setOpen] = [true, () => undefined];
+      const client = new QueryClient();
+      act(() => root.render(<QueryClientProvider client={client}>
+        <UpdateDialog
+          open={open}
+          snapshot={{ data: undefined, error: new Error('offline'), isPending: false }}
+          onRefresh={async () => status()}
+          onClose={setOpen}
+        />
+      </QueryClientProvider>));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      // No status payload to read the channel from, so it is asked for: a
+      // failed check must not leave the choice unavailable, which is exactly
+      // when someone wants to move off the channel that is failing.
+      expect(channelButton('Beta').getAttribute('aria-pressed')).toBe('true');
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Update check failed');
+    });
   });
 
   it('says a beta install is ahead of stable rather than up to date', async () => {

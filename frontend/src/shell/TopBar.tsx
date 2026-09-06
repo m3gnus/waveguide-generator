@@ -17,6 +17,7 @@ import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
+import { ExportDestinationDialog } from './ExportDestinationDialog';
 import { ReportDialog } from './ReportDialog';
 import { commandShortcutLabel } from './platformKeys';
 import { SettingsDialog, type Theme } from './SettingsDialog';
@@ -352,5 +353,8 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     <SettingsDialog open={settingsOpen} theme={theme} focusSection={settingsSection} onThemeChange={setTheme} onClose={closeSettings}/>
     <UpdateDialog open={updateOpen} snapshot={update} onRefresh={update.refresh} onClose={() => setUpdateOpen(false)}/>
     <ReportDialog open={reportOpen} jobs={jobs} onClose={() => setReportOpen(false)}/>
+    {/* Mounted once, for every export surface in the window: the File menu, the
+      * Results panel and each run's export menu all ask this one dialog. */}
+    <ExportDestinationDialog/>
   </header>;
 }

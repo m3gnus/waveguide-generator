@@ -10,6 +10,8 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { CadLinkCoordinator } from '../shell/CadLinkCoordinator';
+import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
+import { ExportDestinationDialog } from '../shell/ExportDestinationDialog';
 import { DesignFileMenu } from './DesignFileMenu';
 
 /**
@@ -35,6 +37,11 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  // Every manual export asks where it goes; the top bar's dialog is what
+  // answers in the application, and this is the user answering it here.
+  provideExportDestinationPrompt(async () => ({
+    token: 'destination-handle', directory: '/chosen',
+  }));
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     requested.push(String(url));
     return new Response('ISO-10303-21;', {
@@ -49,6 +56,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  provideExportDestinationPrompt(null);
   act(() => root.unmount());
   container.remove();
   importedMeshStore.clear();
@@ -183,6 +191,193 @@ describe('design file export menu', () => {
     const item = itemNamed('STEP inner surface');
     await act(async () => { item.click(); });
     expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=surface']);
+  });
+
+  it('asks where a STEP export goes, and writes nothing when that is cancelled', async () => {
+    const asked: string[] = [];
+    provideExportDestinationPrompt(async (request) => { asked.push(request.title); return null; });
+    const item = itemNamed('STEP solid');
+
+    await act(async () => { item.click(); });
+
+    expect(asked).toEqual(['Export STEP']);
+    // Not even the geometry request: cancelling costs nothing, and the build
+    // is not started for a file that is not going anywhere.
+    expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual([]);
+    expect(requested).not.toContain('/api/workspace/write-export');
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toBe('Export cancelled. No files were written.');
+  });
+
+  it('sends the chosen destination with the geometry it writes', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          directory: '/Users/tester/Desktop',
+          files: ['/Users/tester/Desktop/horn.step'],
+          replaced: ['/Users/tester/Desktop/horn.step'],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      // jsdom's Response.blob() does not return a Blob this FormData accepts.
+      return Object.assign(new Response('ISO-10303-21;', { status: 200 }), {
+        blob: async () => new Blob(['ISO-10303-21;'], { type: 'model/step' }),
+      });
+    });
+    const item = itemNamed('STEP solid');
+
+    await act(async () => { item.click(); });
+
+    const write = vi.mocked(fetch).mock.calls
+      .find(([url]) => String(url) === '/api/workspace/write-export')!;
+    const form = write[1]?.body as FormData;
+    expect(form.get('destination')).toBe('destination-handle');
+    // The chosen folder receives the file, not a design-named folder under it.
+    expect(form.get('subdirectory')).toBe('');
+    // Replacing a file in a folder that is the user's own is worth saying.
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toContain('Replaced 1 existing file.');
+  });
+
+  it('writes nothing when the chosen folder already holds those files and nothing can ask', async () => {
+    // No dialog is mounted here, so the replace question answers "no" -- which
+    // is the point: an unanswerable question must not become an overwrite of
+    // files WG never wrote.
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          code: 'export_collision',
+          detail: '1 file(s) would be replaced',
+          directory: '/chosen',
+          paths: ['/chosen/horn.step'],
+        }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      return Object.assign(new Response('ISO-10303-21;', { status: 200 }), {
+        blob: async () => new Blob(['ISO-10303-21;'], { type: 'model/step' }),
+      });
+    });
+    const item = itemNamed('STEP solid');
+
+    await act(async () => { item.click(); });
+
+    // One attempt, refused: no second request repeating it as an overwrite.
+    expect(requested.filter((path) => path === '/api/workspace/write-export')).toHaveLength(1);
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toBe('Export cancelled. No files were written.');
+  });
+
+  it('asks once for the profile pair, and replaces both on one answer', async () => {
+    // The interaction the singleton dialog made possible to get wrong: two
+    // files, one user action. Written as two requests, the second replacement
+    // question was auto-declined because the first still held the dialog, so
+    // half the export landed while the message claimed all of it had.
+    const writes: FormData[] = [];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/workspace/export-destination') {
+        return new Response(JSON.stringify({
+          path: '/chosen', token: 'handle-1', remembered: true, selected: false,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (path === '/api/workspace/write-export') {
+        const body = init?.body as FormData;
+        writes.push(body);
+        if (String(body.get('existing')) === 'confirm') {
+          return new Response(JSON.stringify({
+            code: 'export_collision',
+            detail: '2 file(s) would be replaced',
+            directory: '/chosen',
+            paths: ['/chosen/untitled_profiles.csv', '/chosen/untitled_slices.csv'],
+          }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+          directory: '/chosen',
+          files: ['/chosen/untitled_profiles.csv', '/chosen/untitled_slices.csv'],
+          replaced: ['/chosen/untitled_profiles.csv', '/chosen/untitled_slices.csv'],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return Object.assign(new Response('x,y\n0,1\n', { status: 200 }), {
+        blob: async () => new Blob(['x,y\n0,1\n'], { type: 'text/csv' }),
+      });
+    });
+    // The real dialog, not the stub: this test is about the singleton.
+    act(() => root.render(<><DesignFileMenu/><ExportDestinationDialog/></>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const exportItem = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')]
+      .find((item) => item.querySelector('span')?.textContent === 'Export')!;
+    act(() => exportItem.click());
+    const profiles = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((item) => item.textContent?.startsWith('Profiles CSV'))!;
+
+    await act(async () => { profiles.click(); });
+    const dialogButton = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('.export-dialog button')]
+      .find((button) => button.textContent?.trim() === label)!;
+    await act(async () => { dialogButton('Export here').click(); });
+
+    // One question about both names, not one dialog per file.
+    expect([...document.querySelectorAll('.export-replace-list li')].map((item) => item.textContent))
+      .toEqual(['untitled_profiles.csv', 'untitled_slices.csv']);
+    await act(async () => { dialogButton('Replace').click(); });
+
+    // Two builds, then exactly two writes: the refused `confirm` and its
+    // answered `overwrite`, each carrying both members.
+    expect(requested.filter((path) => path.startsWith('/api/export/profiles'))).toHaveLength(2);
+    expect(writes.map((body) => String(body.get('existing')))).toEqual(['confirm', 'overwrite']);
+    writes.forEach((body) => {
+      expect(body.getAll('relative_path').map(String))
+        .toEqual(['untitled_profiles.csv', 'untitled_slices.csv']);
+      expect(String(body.get('destination'))).toBe('handle-1');
+    });
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toMatch(/^Exported profiles and slices CSV from revision \d+ to \/chosen$/);
+  });
+
+  it('leaves both profile files untouched when the replacement is declined', async () => {
+    const writes: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      requested.push(path);
+      if (path === '/api/workspace/export-destination') {
+        return new Response(JSON.stringify({
+          path: '/chosen', token: 'handle-1', remembered: true, selected: false,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (path === '/api/workspace/write-export') {
+        writes.push(String((init?.body as FormData).get('existing')));
+        return new Response(JSON.stringify({
+          code: 'export_collision',
+          detail: '2 file(s) would be replaced',
+          directory: '/chosen',
+          paths: ['/chosen/untitled_profiles.csv', '/chosen/untitled_slices.csv'],
+        }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      return Object.assign(new Response('x,y\n0,1\n', { status: 200 }), {
+        blob: async () => new Blob(['x,y\n0,1\n'], { type: 'text/csv' }),
+      });
+    });
+    act(() => root.render(<><DesignFileMenu/><ExportDestinationDialog/></>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const exportItem = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')]
+      .find((item) => item.querySelector('span')?.textContent === 'Export')!;
+    act(() => exportItem.click());
+    const profiles = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((item) => item.textContent?.startsWith('Profiles CSV'))!;
+    const dialogButton = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('.export-dialog button')]
+      .find((button) => button.textContent?.trim() === label)!;
+
+    await act(async () => { profiles.click(); });
+    await act(async () => { dialogButton('Export here').click(); });
+    await act(async () => { dialogButton('Cancel').click(); });
+
+    // The refusal, and no retry: neither half is written, so the pair cannot
+    // land half-replaced.
+    expect(writes).toEqual(['confirm']);
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toBe('Export cancelled. No files were written.');
   });
 
   it('surfaces a surface-STEP sizing warning after reporting the successful write', async () => {
@@ -452,7 +647,10 @@ describe('design file export menu', () => {
     const write = vi.mocked(fetch).mock.calls[1];
     expect(String(write[0])).toBe('/api/workspace/write-export');
     const form = write[1]?.body as FormData;
-    expect(form.get('subdirectory')).toBe('copied-horn');
+    // The folder the user chose receives the file itself: no design-named
+    // subdirectory is invented inside it, and the handle is what names it.
+    expect(form.get('subdirectory')).toBe('');
+    expect(form.get('destination')).toBe('destination-handle');
     expect(form.get('relative_path')).toBe('copied-horn.cfg');
     expect(await (form.get('file') as File).text()).toBe('serialized copy');
     expect(click).not.toHaveBeenCalled();

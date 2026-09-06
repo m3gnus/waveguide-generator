@@ -19,7 +19,9 @@ from fastapi import FastAPI, HTTPException
 import pytest
 
 from server.settings.store import SettingsStore
+from server.updates import service as service_module
 from server.updates.api import mount_updates
+from server.updates.bundle import trusted_asset_url
 from server.updates.service import (
     BETA_CHANNEL,
     STABLE_CHANNEL,
@@ -216,7 +218,10 @@ def test_stable_refuses_a_prerelease_arriving_from_releases_latest(tmp_path: Pat
 
 def beta_service(tmp_path: Path, releases: list[dict[str, Any]], **kwargs: Any) -> UpdateService:
     settings = kwargs.pop("settings", None) or store(tmp_path)
-    update = service(tmp_path, recent=lambda: releases, settings=settings, **kwargs)
+    # `recent=` overrides the one page these mostly need; a paging double passes
+    # its own and leaves `releases` empty.
+    recent = kwargs.pop("recent", None) or (lambda: releases)
+    update = service(tmp_path, recent=recent, settings=settings, **kwargs)
     update.set_channel(BETA_CHANNEL)
     return update
 
@@ -539,6 +544,169 @@ def test_request_install_refuses_a_companion_tag(tmp_path: Path) -> None:
     update.get_status = companion_status  # type: ignore[method-assign]
     with pytest.raises(UpdateInstallUnavailable):
         update.request_install()
+
+
+# --- a build of `main`, if one is ever published ---------------------------
+#
+# The beta channel offers the newest *published* release, pre-releases included.
+# "The newest build of `main`" is a different promise, and what these record is
+# which half of it the client already keeps: the tag shape, the ordering and the
+# install path work today, so the missing half is publication -- a workflow that
+# publishes a main build as a pre-release with its installer assets on it. See
+# `docs/reference/UPDATE-CHANNELS.md`.
+
+
+def test_the_beta_scan_reads_past_a_page_holding_no_offerable_release(
+    tmp_path: Path,
+) -> None:
+    """The bounded-input failure, stated as a test.
+
+    "The newest release is on the first page" proves only that the newest
+    *publication* is there. Companions are refused outright, so a history that
+    publishes one beside every release can fill a page with entries this can
+    never select -- and then the first page answers nothing at all.
+    """
+
+    pages = {
+        1: [companion(f"2.1.{index}") for index in range(20)],
+        2: [release("2.1.0"), release("2.0.9")],
+    }
+    asked: list[int] = []
+
+    def paged(page: int = 1) -> list[dict[str, Any]]:
+        asked.append(page)
+        return pages.get(page, [])
+
+    result = beta_service(tmp_path, [], recent=paged).get_status()
+
+    assert result["release"]["tag"] == "v2.1.0"
+    assert asked == [1, 2]
+
+
+def test_the_beta_scan_stops_at_the_first_page_that_answers(tmp_path: Path) -> None:
+    """Bounded on purpose: an unbounded walk on every check is a rate limit.
+
+    So the answer is the highest version among the pages read, not a global
+    maximum -- and reading stops as soon as a page has a candidate on it.
+    """
+
+    pages = {
+        1: [release("2.1.0"), release("2.0.9")],
+        2: [release("9.9.9")],
+    }
+    asked: list[int] = []
+
+    def paged(page: int = 1) -> list[dict[str, Any]]:
+        asked.append(page)
+        return pages.get(page, [])
+
+    result = beta_service(tmp_path, [], recent=paged).get_status()
+
+    # Not 9.9.9: it is older than everything on the page that answered, and
+    # reading the whole history to prove that is what the bound refuses.
+    assert result["release"]["tag"] == "v2.1.0"
+    assert asked == [1]
+
+
+def test_the_beta_scan_takes_the_highest_on_the_page_not_the_newest(
+    tmp_path: Path,
+) -> None:
+    """Within the pages it reads, the policy is highest version, not first entry."""
+
+    result = beta_service(
+        tmp_path, [release("2.0.1"), release("2.1.0-beta.2"), release("2.0.9")]
+    ).get_status()
+
+    assert result["release"]["tag"] == "v2.1.0-beta.2"
+
+
+def test_the_scan_stops_at_the_page_bound(tmp_path: Path) -> None:
+    asked: list[int] = []
+
+    def paged(page: int = 1) -> list[dict[str, Any]]:
+        asked.append(page)
+        return [companion("2.1.0")]
+
+    result = beta_service(tmp_path, [], recent=paged).get_status()
+
+    assert asked == list(range(1, service_module.MAX_RELEASE_PAGES + 1))
+    assert result["availability"] == "unknown"
+    assert "supported version tag" in result["lastError"]
+
+
+def test_a_list_fetcher_that_cannot_page_is_asked_only_for_the_first(
+    tmp_path: Path,
+) -> None:
+    """Most injected doubles take no argument, and that stays valid."""
+
+    calls: list[int] = []
+
+    def single_page() -> list[dict[str, Any]]:
+        calls.append(1)
+        return [companion("2.1.0")]
+
+    result = beta_service(tmp_path, [], recent=single_page).get_status()
+
+    assert calls == [1]
+    assert result["availability"] == "unknown"
+
+
+def test_a_main_build_published_as_a_prerelease_is_already_offerable(
+    tmp_path: Path,
+) -> None:
+    """Nothing in the client needs to change to offer one.
+
+    `v2.0.1-main.7` is a SemVer pre-release like `v2.0.1-beta.1`: the parser
+    admits it, the beta scan ranks it, and the install path takes its tag.
+    """
+
+    result = beta_service(
+        tmp_path, [release("2.0.1-main.7"), release("2.0.0")]
+    ).get_status()
+
+    assert result["availability"] == "available"
+    assert result["release"]["tag"] == "v2.0.1-main.7"
+    assert result["action"]["command"].endswith(" --tag v2.0.1-main.7")
+
+
+def test_a_main_build_must_advertise_the_next_version_to_be_offered_at_all(
+    tmp_path: Path,
+) -> None:
+    """The constraint any such workflow has to satisfy, stated as a test.
+
+    SemVer rule 11: a pre-release sorts *below* the release sharing its core
+    numbers. So a build of `main` tagged from the version in `shared/version.json`
+    -- which still names the last release -- is older than the copy already
+    installed, and the honest answer is "ahead", not an update. A main build has
+    to carry the next version, `v<next>-main.<n>`.
+    """
+
+    behind = beta_service(tmp_path, [release("2.0.0-main.7")]).get_status()
+    assert behind["availability"] == "ahead"
+    assert behind["action"] is None
+
+    ahead = beta_service(
+        tmp_path / "next", [release("2.0.1-main.7")]
+    ).get_status()
+    assert ahead["availability"] == "available"
+
+
+def test_a_main_builds_assets_are_trusted_by_the_transport(tmp_path: Path) -> None:
+    """The other half a rolling channel needs: the asset URL must be reachable.
+
+    Only a release download of this repository is, which is why an Actions
+    artifact cannot serve one -- it lives on a different origin and needs an
+    authenticated request.
+    """
+
+    assert trusted_asset_url(
+        "https://github.com/m3gnus/waveguide-generator/releases/download/"
+        "v2.0.1-main.7/Waveguide.Generator-2.0.1-main.7-macos-arm64.dmg"
+    )
+    assert not trusted_asset_url(
+        "https://api.github.com/repos/m3gnus/waveguide-generator/actions/"
+        "artifacts/12345/zip"
+    )
 
 
 # --- the endpoints ---------------------------------------------------------

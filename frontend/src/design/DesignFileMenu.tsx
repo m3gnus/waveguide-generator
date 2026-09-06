@@ -1,14 +1,22 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
+  buildGeometryExport,
   exportGeometryToOutputFolder,
   inspectDesignText,
   openDesignText,
   serializeDesignDocument,
+  type GeometryExportFile,
   type ImportReport,
   type CadLinkOpenState,
   type StepBody,
 } from '../api/designIo';
 import { writeToOutputFolder } from '../api/workspace';
+import {
+  askForExportDestination,
+  askToReplaceExports,
+  replacedNotice,
+  EXPORT_CANCELLED_MESSAGE,
+} from '../shell/exportDestinationPrompt';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
 import { documentIsUnsaved, resetDocumentStore, useDocumentStore, type CadLinkClassification } from '../stores/document';
@@ -57,12 +65,29 @@ export function reportText(report: ImportReport): string {
   return notes.length ? `${summary} · ${notes.join(' ')}` : summary;
 }
 
+/**
+ * Export the profile pair: build both files, then write them once.
+ *
+ * Building stays parallel -- it only reads -- but the two files are **one**
+ * write. They used to be two, and with a destination folder that meant two
+ * replacement questions racing for a dialog that answers one at a time: the
+ * second was auto-declined, so half the export landed and the message said the
+ * whole of it had. One write is one question covering both names, and one
+ * atomic publish.
+ *
+ * A half that fails to build is still reported by name, and the half that built
+ * is still written -- that part is unchanged.
+ */
 export async function exportProfileArtifacts(
-  exporter: (kind: 'profiles' | 'slices') => Promise<{ directory: string }>,
+  build: (kind: 'profiles' | 'slices') => Promise<GeometryExportFile>,
+  write: (files: GeometryExportFile[]) => Promise<{ directory: string }>,
   revision: number,
 ): Promise<string> {
   const kinds = ['profiles', 'slices'] as const;
-  const results = await Promise.allSettled(kinds.map((kind) => exporter(kind)));
+  const results = await Promise.allSettled(kinds.map((kind) => build(kind)));
+  const built = results.flatMap((result) => (
+    result.status === 'fulfilled' ? [result.value] : []
+  ));
   const completed = kinds.filter((_kind, index) => results[index].status === 'fulfilled');
   const failed = kinds.flatMap((kind, index) => {
     const result = results[index];
@@ -70,13 +95,16 @@ export async function exportProfileArtifacts(
       ? [`${kind}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`]
       : [];
   });
+  // Whatever built is written first, so a reported failure never also loses the
+  // half that worked.
+  const written = built.length ? await write(built) : null;
   if (failed.length) {
-    const partial = completed.length ? `Exported ${completed.join(' and ')} CSV; ` : '';
+    const partial = completed.length
+      ? `Exported ${completed.join(' and ')} CSV${written ? ` to ${written.directory}` : ''}; `
+      : '';
     throw new Error(`${partial}failed ${failed.join('; ')}`);
   }
-  const written = results.find((result) => result.status === 'fulfilled');
-  const directory = written?.status === 'fulfilled' ? written.value.directory : '';
-  return `Exported profiles and slices CSV from revision ${revision}${directory ? ` to ${directory}` : ''}`;
+  return `Exported profiles and slices CSV from revision ${revision}${written ? ` to ${written.directory}` : ''}`;
 }
 
 export function DesignFileMenu() {
@@ -226,6 +254,13 @@ export function DesignFileMenu() {
 
   async function exportCopy() {
     await act(async () => {
+      // Asked before the file is built: cancelling must cost nothing, and the
+      // question is where this export goes, not whether it can be serialized.
+      const destination = await askForExportDestination({
+        title: 'Export a copy',
+        detail: 'A text copy of this design.',
+      });
+      if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       const solveState = useSolveOptionsStore.getState();
       const polarConfig = polarConfigFromUi(solveState.polar);
       const response = await serializeDesignDocument(
@@ -234,8 +269,11 @@ export function DesignFileMenu() {
       const written = await writeToOutputFolder(designNameSlug(designName), [{
         filename: response.suggestedFilename,
         blob: new Blob([response.text], { type: 'text/plain;charset=utf-8' }),
-      }]);
-      setMessage(`Exported a copy as ${response.suggestedFilename} to ${written.directory}`);
+      }], fetch, 'confirm', destination.token, askToReplaceExports);
+      setMessage(
+        `Exported a copy as ${response.suggestedFilename} to ${written.directory}`
+        + replacedNotice(written.replaced),
+      );
     });
   }
 
@@ -260,23 +298,44 @@ export function DesignFileMenu() {
 
   async function exportOne(kind: 'step' | 'stl', stepBody: StepBody = 'solid') {
     await act(async () => {
+      const destination = await askForExportDestination({
+        title: `Export ${kind.toUpperCase()}`,
+        detail: `${designNameSlug(designName)}.${kind} from revision ${revision}.`,
+      });
+      if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       const written = await exportGeometryToOutputFolder(
-        kind, design, revision, designNameSlug(designName), undefined, stepBody,
+        kind, design, revision, designNameSlug(designName), undefined, stepBody, fetch,
+        destination.token, askToReplaceExports,
       );
       // Naming the folder is the point: the desktop window has no download
       // shelf, so an export that does not say where it went looks like one
       // that did not happen.
       const warning = written.warning ? ` Warning: ${written.warning}` : '';
       setMessage(
-        `Exported ${kind.toUpperCase()} from revision ${revision} to ${written.directory}.${warning}`,
+        `Exported ${kind.toUpperCase()} from revision ${revision} to ${written.directory}.`
+        + `${replacedNotice(written.replaced)}${warning}`,
       );
     });
   }
 
   async function exportProfiles() {
     await act(async () => {
+      // One question, then one more only if the folder already holds them:
+      // profiles and slices are halves of one export, and both are written by
+      // a single request so neither can be answered without the other.
+      const destination = await askForExportDestination({
+        title: 'Export profiles',
+        detail: 'Profile and slice CSV files.',
+      });
+      if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       const result = await exportProfileArtifacts(
-        (kind) => exportGeometryToOutputFolder('profiles', design, revision, designNameSlug(designName), kind),
+        (kind) => buildGeometryExport(
+          'profiles', design, revision, designNameSlug(designName), kind, 'solid', fetch,
+        ),
+        (files) => writeToOutputFolder(
+          designNameSlug(designName), files, fetch, 'confirm',
+          destination.token, askToReplaceExports,
+        ),
         revision,
       );
       setMessage(result);

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
+import { provideExportDestinationPrompt } from './exportDestinationPrompt';
 import { ResultsPanel } from './ResultsPanel';
 
 const exportMocks = vi.hoisted(() => ({
@@ -88,6 +89,11 @@ describe('atomic results display transitions', () => {
       files: ['C:\\Users\\tester\\AppData\\Roaming\\WaveguideGenerator\\workspace\\1_old\\1_old.csv'],
       failures: [],
     });
+    // The export dialog the top bar mounts, answered as the user would.
+    provideExportDestinationPrompt(async () => ({
+      token: 'destination-handle',
+      directory: 'C:\\Users\\tester\\AppData\\Roaming\\WaveguideGenerator\\workspace\\1_old',
+    }));
     pending = new Map();
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => new Promise<Response>((resolve) => {
       pending.set(String(input).split('/').at(-1)!, resolve);
@@ -102,6 +108,7 @@ describe('atomic results display transitions', () => {
   });
 
   afterEach(() => {
+    provideExportDestinationPrompt(null);
     act(() => root.unmount());
     host.remove();
     publishJobs([]);
@@ -317,8 +324,9 @@ describe('atomic results display transitions', () => {
     await act(async () => { exportButton!.click(); });
 
     expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
-      expect.objectContaining({ jobStem: '1_old' }),
+      expect.objectContaining({ jobStem: '1_old', destinationToken: 'destination-handle' }),
       ['csv'],
+      'confirm',
     );
     expect(patchMetadata).toHaveBeenCalledWith('old', {
       exported_files: ['C:\\Users\\tester\\AppData\\Roaming\\WaveguideGenerator\\workspace\\1_old\\1_old.csv'],

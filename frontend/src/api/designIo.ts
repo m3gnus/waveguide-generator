@@ -12,6 +12,7 @@ import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import type { PolarConfig } from '../stores/solveOptions';
 import type { CadLinkClassification, DesignIdentity } from '../stores/document';
 import { writeToOutputFolder, type OutputFolderWrite } from './workspace';
+import type { ConfirmReplacements } from './exportDestination';
 
 export interface MigrationApplication {
   name: string;
@@ -382,6 +383,50 @@ export interface GeometryExportWrite extends OutputFolderWrite {
   warning?: string;
 }
 
+/** One built geometry file, before anything has been written. */
+export interface GeometryExportFile {
+  filename: string;
+  blob: Blob;
+  warning?: string;
+}
+
+/**
+ * Build one geometry export, without writing it.
+ *
+ * Separate from the write so that an export made of more than one file -- the
+ * profile pair -- can be built in full and then written once. Two writes mean
+ * two replacement questions for one user action, and the dialog answers only
+ * one at a time.
+ */
+export async function buildGeometryExport(
+  kind: 'step' | 'stl' | 'profiles',
+  design: DesignDocument,
+  designRevision: number,
+  baseName: string,
+  profileKind?: 'profiles' | 'slices',
+  stepBody: StepBody = 'solid',
+  fetcher: typeof fetch = fetch,
+): Promise<GeometryExportFile> {
+  const query = kind === 'profiles'
+    ? `?kind=${profileKind ?? 'profiles'}`
+    : kind === 'step' ? `?body=${stepBody}` : '';
+  const response = await fetcher(`/api/export/${kind}${query}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      design: serializeDesign(design),
+      designRevision,
+      baseName,
+    }),
+  });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  const warning = response.headers.get('X-Export-Warning')?.trim() || undefined;
+  const suffix = kind === 'profiles' ? `_${profileKind ?? 'profiles'}.csv` : `.${kind}`;
+  const filename = responseFilename(response, `${baseName}${suffix}`);
+  const built: GeometryExportFile = { filename, blob: await response.blob() };
+  return warning ? { ...built, warning } : built;
+}
+
 /**
  * Build a geometry export and write it into the output folder.
  *
@@ -399,27 +444,19 @@ export async function exportGeometryToOutputFolder(
   profileKind?: 'profiles' | 'slices',
   stepBody: StepBody = 'solid',
   fetcher: typeof fetch = fetch,
+  destination?: string,
+  confirmReplacements?: ConfirmReplacements,
 ): Promise<GeometryExportWrite> {
-  const query = kind === 'profiles'
-    ? `?kind=${profileKind ?? 'profiles'}`
-    : kind === 'step' ? `?body=${stepBody}` : '';
-  const response = await fetcher(`/api/export/${kind}${query}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      design: serializeDesign(design),
-      designRevision,
-      baseName,
-    }),
-  });
-  if (!response.ok) throw new Error(await errorMessage(response));
-  const warning = response.headers.get('X-Export-Warning')?.trim() || undefined;
-  const suffix = kind === 'profiles' ? `_${profileKind ?? 'profiles'}.csv` : `.${kind}`;
-  const filename = responseFilename(response, `${baseName}${suffix}`);
+  const { filename, blob, warning } = await buildGeometryExport(
+    kind, design, designRevision, baseName, profileKind, stepBody, fetcher,
+  );
   // Overwrite: re-exporting after an edit is the ordinary case, and a stale
   // file of the same name is exactly what the user is replacing.
   const written = await writeToOutputFolder(
-    baseName, [{ filename, blob: await response.blob() }], fetcher,
+    // `confirm` only when there is a folder to collide in: a workspace export
+    // keeps replacing its own last output without asking.
+    baseName, [{ filename, blob }], fetcher,
+    destination ? 'confirm' : 'overwrite', destination, confirmReplacements,
   );
   return warning ? { ...written, warning } : written;
 }
