@@ -19,6 +19,7 @@ import {
   cadLinkCoordinatorBridge,
   cadPollIntervals,
   resetCadPollIntervals,
+  returnBelongsToAnotherProject,
   showCadJobModel,
 } from './CadLinkCoordinator';
 import { cadSolveBlockerNow, jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
@@ -751,6 +752,104 @@ describe('CadLinkCoordinator', () => {
     })]);
     expect(useCadReturnStore.getState().selectedBundle).toBeNull();
     expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('another CAD-linked project');
+  });
+
+  /** The bundle names its target; an open model that is not it is not it.
+   * A model with no CAD identity used to read as "no objection", which is how
+   * a return for one design was prepared into an unrelated model. */
+  it('treats a design-owned return as foreign to a model with no CAD identity', () => {
+    const owned = { ...initialBundle, designIds: ['wgd_tritonia'] };
+    expect(returnBelongsToAnotherProject(owned, null)).toBe(true);
+    expect(returnBelongsToAnotherProject(owned, undefined)).toBe(true);
+    expect(returnBelongsToAnotherProject(owned, 'wgd_other')).toBe(true);
+    expect(returnBelongsToAnotherProject(owned, 'wgd_tritonia')).toBe(false);
+    // CAD-authored geometry names no design and stays adoptable anywhere.
+    expect(returnBelongsToAnotherProject(initialBundle, null)).toBe(false);
+    expect(returnBelongsToAnotherProject(initialBundle, 'wgd_anything')).toBe(false);
+  });
+
+  it('refuses an arriving return that names a design the open model is not', async () => {
+    // Deliberately no setCadLink: an ordinary parametric model is open, which
+    // is the state the reported incident happened in.
+    const foreign: CadReturnBundle = {
+      ...initialBundle,
+      name: 'tritonia.wgreturn',
+      bundlePath: 'wgreturn/tritonia.wgreturn',
+      documentName: 'waveguide v1',
+      designIds: ['wgd_tritonia'],
+      modifiedAt: new Date().toISOString(),
+    };
+    let ingestCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [foreign] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/api/cadlink/designs')) return json({ items: [] });
+      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
+      return json({}, 404);
+    }));
+
+    await renderCoordinator();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(ingestCalls).toBe(0);
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('another CAD-linked project');
+  });
+
+  /** Refusing is only half the answer. The refusal is shown by entering CAD
+   * Link, and an empty CAD Link used to be filled from the remembered project
+   * -- so WG declined the return the user had just sent and then prepared a
+   * different project's older geometry over the top of the message. */
+  it('does not prepare the remembered project after refusing a foreign return', async () => {
+    rememberCadProject('wgl_partymeh');
+    const foreign: CadReturnBundle = {
+      ...initialBundle,
+      name: 'tritonia.wgreturn',
+      bundlePath: 'wgreturn/tritonia.wgreturn',
+      documentName: 'waveguide v1',
+      designIds: ['wgd_tritonia'],
+      modifiedAt: new Date().toISOString(),
+    };
+    const remembered: CadReturnBundle = {
+      ...initialBundle,
+      name: 'PartyMEH.wgreturn',
+      bundlePath: 'wgreturn/PartyMEH.wgreturn',
+      documentName: 'PartyMEH',
+      designIds: [],
+      modifiedAt: '2026-08-11T00:00:00Z',
+    };
+    const ingested: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) {
+        return json({ cadFolderConfigured: true, items: [foreign, remembered] });
+      }
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/api/cadlink/designs')) return json({ items: [{
+        designId: null, lineageId: 'wgl_partymeh', filename: null,
+        documentName: 'PartyMEH', archiveStem: 'PartyMEH', exportCount: 0,
+        createdAt: '', updatedAt: '',
+      }] });
+      if (path.endsWith('/ingest')) {
+        ingested.push(String((JSON.parse(String(init?.body)) as { bundlePath: string }).bundlePath));
+        return json(ingestRecord);
+      }
+      return json({}, 404);
+    }));
+
+    await renderCoordinator();
+    await act(async () => {
+      await Promise.resolve(); await Promise.resolve();
+      await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(ingested).toEqual([]);
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('another CAD-linked project');
+    expect(rememberedCadProject()).toBe('wgl_partymeh');
   });
 
   /** Everything a Fusion "Solve in WG" needs: a listing, a marker whose value

@@ -671,6 +671,32 @@ def _resolve_project(
     }
 
 
+def _design_target_hint(store: CadLinkStore, design_ids: set[str]) -> str:
+    """Name the design a return targets, as the user would recognise it.
+
+    The registry filename is what the CAD-linked designs list shows, so it is
+    what a refusal has to say. A design id that this workspace has never seen
+    is the other actionable case and must not read as a mere identifier: the
+    user's next move is to open that workspace, not to hunt for the design in
+    this one.
+    """
+
+    described: list[str] = []
+    for design_id in sorted(design_ids):
+        filename = ""
+        try:
+            row = store.get_design(design_id)
+        except Exception:  # pragma: no cover - a lookup must not mask the gate
+            row = None
+        if isinstance(row, Mapping):
+            filename = str(row.get("filename") or "").strip()
+        described.append(
+            f"{filename} · {design_id}" if filename
+            else f"{design_id}, which is not in this workspace"
+        )
+    return "; ".join(described)
+
+
 def ingest_bundle(
     bundle_path: str | Path,
     mesh: Mapping[str, Any],
@@ -704,12 +730,32 @@ def ingest_bundle(
         for instance in manifest["instances"]
         if isinstance(instance, Mapping) and instance.get("design_id")
     }
-    if expected_design_id is not None and returned_design_ids and expected_design_id not in returned_design_ids:
-        raise IngestRefusal(
-            "stage 2 project gate",
-            "the selected CAD return belongs to another CAD-linked project; "
-            "open that project from File → CAD-linked designs before preparing it",
-        )
+    # A return that names its design names its target, and that name is the
+    # only thing here that can. This gate used to fall open whenever the caller
+    # named no design -- which is exactly what an unlinked open model sends --
+    # so a return exported from design A was prepared into whatever the app
+    # happened to have open: the right geometry, silently, in the wrong
+    # project. A named target is required whenever the bundle carries one, and
+    # the fallback is now a refusal the user can act on rather than a build.
+    #
+    # A bundle that names no design at all is CAD-authored geometry, which has
+    # no other project to belong to. That half stays open on purpose: closing
+    # it would break the whole author-in-CAD workflow.
+    if returned_design_ids:
+        if expected_design_id is None:
+            raise IngestRefusal(
+                "stage 2 project gate",
+                "this CAD return belongs to the WG design it was exported from "
+                f"({_design_target_hint(store, returned_design_ids)}); open that "
+                "design from File → CAD-linked designs before preparing it",
+            )
+        if expected_design_id not in returned_design_ids:
+            raise IngestRefusal(
+                "stage 2 project gate",
+                "the selected CAD return belongs to another CAD-linked project "
+                f"({_design_target_hint(store, returned_design_ids)}); "
+                "open that project from File → CAD-linked designs before preparing it",
+            )
     matching_design_instances = [
         instance
         for instance in manifest["instances"]

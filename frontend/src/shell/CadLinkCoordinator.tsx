@@ -235,12 +235,23 @@ function publishBridge(snapshot: CadLinkCoordinatorSnapshot): void {
  * Its feedback is already on screen, so a composed action stops silently. */
 export class SupersededError extends Error {}
 
+/** Whether a return names a design other than the one that is open.
+ *
+ * A return exported from a WG design names that design, and nothing else here
+ * can say where its geometry belongs. This used to answer "no" whenever the
+ * open document had no CAD identity, which read as permission: a return for
+ * design A was adopted, prepared and built into whatever unlinked model
+ * happened to be open. A bundle that names a design belongs to that design, so
+ * an open document that is not it -- including one that is nothing -- is
+ * another project. Returns that name no design at all are CAD-authored and
+ * still adoptable anywhere, which is the whole of that workflow. */
 export function returnBelongsToAnotherProject(
   bundle: CadReturnBundle,
   designId: string | null | undefined,
 ): boolean {
   const returned = bundle.designIds ?? [];
-  return Boolean(designId && returned.length > 0 && !returned.includes(designId));
+  if (returned.length === 0) return false;
+  return !designId || !returned.includes(designId);
 }
 
 /** Whether a return is positively linked to the open registry project.
@@ -872,6 +883,13 @@ export function CadLinkCoordinator() {
   const bundlesRef = useRef<CadReturnBundle[]>([]);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
   const projectOpenPending = useRef(false);
+  // A return was refused because it names a design other than the open one.
+  // Until the user acts on that, WG must not put some third project's geometry
+  // on screen in its place: entering CAD Link is how a refusal is shown, and
+  // the remembered-project restore below would otherwise take that as an empty
+  // mode to fill -- preparing an unrelated, older return and clearing the
+  // refusal off the screen on its way past.
+  const refusedForeignReturn = useRef(false);
   const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(unavailable);
   const returnListRequest = useRef(0);
   const fusionSendRequest = useRef(0);
@@ -995,6 +1013,9 @@ export function CadLinkCoordinator() {
       // return. Drop the previous project's geometry and make the latest
       // positively-linked return eligible for selection on the next listing.
       projectOpenPending.current = true;
+      // Opening a project is exactly what a foreign-return refusal asks for,
+      // so it is what lifts the restore hold.
+      refusedForeignReturn.current = false;
       seenReturnRevisions.current = null;
       returnListRequest.current += 1;
       useCadReturnStore.getState().selectBundle(null);
@@ -1213,6 +1234,7 @@ export function CadLinkCoordinator() {
       }
       if (arrived) {
         if (projectMismatch) {
+          refusedForeignReturn.current = true;
           const reason = `Received ${arrived.documentName ?? arrived.name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`;
           if (arrived.requestId === pendingReturnRequestId.current) {
             pendingReturnRequestId.current = null;
@@ -1286,6 +1308,10 @@ export function CadLinkCoordinator() {
       if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
       if (preferencesStore.getSnapshot().cadApplication === 'onshape') return;
       if (restoringCadProject.current) return;
+      // The mode was entered to show a refusal, not because the user came back
+      // to an empty CAD Link. Filling it here is how a return WG had just
+      // declined became a build of a different project.
+      if (refusedForeignReturn.current) return;
       const lineage = rememberedCadProject();
       if (!lineage) return;
       const current = useCadReturnStore.getState();
@@ -1568,10 +1594,14 @@ export function CadLinkCoordinator() {
    * store generation before they can publish a record or viewport scene. */
   const selectBundle = useCallback((bundle: CadReturnBundle, projectLineageId?: string | null) => {
     if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
+      refusedForeignReturn.current = true;
       setError(`That return belongs to another CAD-linked project. Open it from File → CAD-linked designs first.`);
       enterCadWorkspace();
       return;
     }
+    // A selection the user made themselves is the acknowledgement a standing
+    // refusal was waiting for; the restore's own selection is not.
+    if (!restoringCadProject.current) refusedForeignReturn.current = false;
     useCadReturnStore.getState().selectBundle(bundle, projectLineageId);
     rereadDrivers();
     importedMeshStore.beginIntent();
@@ -1752,6 +1782,7 @@ export function CadLinkCoordinator() {
       }
       if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
         const reason = 'Fusion asked WG to solve a return from another CAD-linked project. Open that project from File → CAD-linked designs, then send the solve again.';
+        refusedForeignReturn.current = true;
         setError(reason);
         await reportSolveCommandOutcome({ commandId: command.commandId, state: 'refused', jobId: null, reason });
         return;

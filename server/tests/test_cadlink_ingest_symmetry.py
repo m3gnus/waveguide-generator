@@ -265,6 +265,11 @@ def _ingest(
         store,
         data_dir,
         prep_options={"symmetry_mode": symmetry_mode},
+        # These bundles name their design, and a real return is prepared with
+        # that design open. Passing it keeps the project gate doing its job
+        # here instead of these symmetry tests silently exercising the
+        # no-target path that let a return build into whatever was open.
+        expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
     )
 
 

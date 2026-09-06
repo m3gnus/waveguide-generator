@@ -513,6 +513,117 @@ def test_ingest_refuses_a_return_from_another_active_project(
     assert refused.value.stage == "stage 2 project gate"
 
 
+def test_ingest_refuses_a_design_owned_return_when_no_design_is_named(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The reported defect: bundle names design A, the open model is not A.
+
+    An unlinked model sends no design id at all, and that used to skip the gate
+    entirely -- so a return exported from design A was prepared into whatever
+    was open. The bundle names its target; an unnamed one is a refusal.
+    """
+
+    monkeypatch.setattr(
+        "server.cadlink.ingest.read_wgreturn",
+        lambda _path: SimpleNamespace(
+            manifest={"instances": [{"design_id": "wgd_tritonia"}]},
+        ),
+    )
+
+    with pytest.raises(IngestRefusal) as refused:
+        ingest_bundle(
+            tmp_path / "tritonia.wgreturn",
+            {},
+            [],
+            CadLinkStore(tmp_path / "cadlink.db"),
+            tmp_path / "data",
+            expected_design_id=None,
+        )
+
+    assert refused.value.stage == "stage 2 project gate"
+    message = str(refused.value)
+    # Actionable: it names the design the geometry belongs to, says that this
+    # workspace does not have it, and says what to do next.
+    assert "wgd_tritonia" in message
+    assert "not in this workspace" in message
+    assert "CAD-linked designs" in message
+
+
+def test_ingest_refusal_names_a_known_target_design_by_its_registry_filename(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = store.save(
+        requested=None,
+        design_hash="sha256:" + hashlib.sha256(b"tritonia").hexdigest(),
+        filename="260308Tritonia-M.cfg",
+        snapshot_builder=lambda identity: f"DesignId={identity.design_id}",
+        saved_at="2026-09-04T13:47:17Z",
+    )
+    design_id = saved["identity"].design_id
+    monkeypatch.setattr(
+        "server.cadlink.ingest.read_wgreturn",
+        lambda _path: SimpleNamespace(
+            manifest={"instances": [{"design_id": design_id}]},
+        ),
+    )
+
+    with pytest.raises(IngestRefusal) as refused:
+        ingest_bundle(
+            tmp_path / "tritonia.wgreturn",
+            {},
+            [],
+            store,
+            tmp_path / "data",
+            expected_design_id="wgd_something_else",
+        )
+
+    assert "260308Tritonia-M.cfg" in str(refused.value)
+    assert "not in this workspace" not in str(refused.value)
+
+
+def test_ingest_still_accepts_a_cad_authored_return_that_names_no_design(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Geometry authored in CAD has no design, so it has no other project.
+
+    The gate must not close on this: it is the whole CAD-authored workflow,
+    and closing it would be a different silent breakage.
+    """
+
+    reached: list[str] = []
+
+    def refuse_at_the_next_stage(*_args, **_kwargs):
+        reached.append("sizes")
+        raise AssertionError("stage 2 was passed")
+
+    monkeypatch.setattr(
+        "server.cadlink.ingest.read_wgreturn",
+        lambda _path: SimpleNamespace(
+            manifest={
+                "instances": [{"instance_id": "anchor", "design_id": None}],
+                "coordinate_system": {"solver_anchor_instance_id": "anchor"},
+                "sources": [],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "server.cadlink.ingest.validate_imported_sizes", refuse_at_the_next_stage
+    )
+
+    with pytest.raises(AssertionError, match="stage 2 was passed"):
+        ingest_bundle(
+            tmp_path / "cad-authored.wgreturn",
+            {},
+            [],
+            CadLinkStore(tmp_path / "cadlink.db"),
+            tmp_path / "data",
+            expected_design_id="wgd_whatever_is_open",
+        )
+
+    assert reached == ["sizes"]
+
+
 def test_design_registry_routes_list_heads_and_open_the_exact_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -1362,11 +1473,11 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
     store = CadLinkStore(data_dir / "cadlink.db")
     def ingest_three() -> tuple[dict, dict, dict]:
         gmsh.option.setNumber("General.Terminal", 0)
-        first = ingest_bundle(bundle, sizes, [], store, data_dir)
-        second = ingest_bundle(bundle, sizes, [], store, data_dir)
+        first = ingest_bundle(bundle, sizes, [], store, data_dir, expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M")
+        second = ingest_bundle(bundle, sizes, [], store, data_dir, expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M")
         changed_sizes = deepcopy(sizes)
         changed_sizes["rigid_size_mm"] = 18
-        third = ingest_bundle(bundle, changed_sizes, [], store, data_dir)
+        third = ingest_bundle(bundle, changed_sizes, [], store, data_dir, expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M")
         return first, second, third
 
     first, second, third = _run_in_gmsh_session(ingest_three)
@@ -1500,6 +1611,7 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
             [],
             store,
             data_dir,
+            expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
         )
 
     with pytest.raises(IngestRefusal, match=r"anchor throat face.*residual 10"):
