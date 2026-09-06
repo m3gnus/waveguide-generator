@@ -66,6 +66,7 @@ attestation. Verify both subjects with the same repository, signer workflow and
 source constraint before inspecting their fields:
 
 ```bash
+set -euo pipefail
 for ASSET in update-app-VERSION.zip update-app-VERSION.manifest.json; do
   gh attestation verify "$ASSET" \
     --repo m3gnus/waveguide-generator \
