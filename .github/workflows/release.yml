@@ -672,19 +672,22 @@ jobs:
             | Windows (x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-windows-x86_64-setup.exe` |
             | Linux (Ubuntu 24.04 LTS, x86-64) | `Waveguide.Generator-${{ needs.spa.outputs.version }}-linux-x86_64.tar.gz` |
 
-            **macOS: open the disk image and double-click `Install Waveguide Generator.command`.**
+            **macOS: drag the app out of the disk image to Applications, then open it.**
             macOS refuses it with "Apple could not verify ... is free of malware" -
-            click **Done**, then go to **System Settings > Privacy & Security**, find
-            the installer under Security, and click **Open Anyway**. It copies the app
-            to Applications, clears the download flag and starts it. No Terminal.
+            click **Done**, then go straight to **System Settings > Privacy & Security**,
+            find the app under Security, and click **Open Anyway**. Once, not every
+            launch. Copy it off the image before opening it: the mounted image is
+            read-only, and the entry names the most recent block, so do not open
+            anything else in between.
 
-            The app itself is refused with the same wording and *cannot* be approved
-            that way: it is ad-hoc signed, which gives Gatekeeper no developer identity
-            to attach an exception to, so Privacy & Security does not list it. A plain
-            script is unsigned, which is a state macOS does offer an override for. That
-            is the only difference between the two files.
+            If the app is not listed there, double-click
+            `Install Waveguide Generator.command` in the disk image and approve *that*
+            the same way. macOS treats it as a separate item and may offer an exception
+            for it when it offers none for the app. It copies the app to Applications,
+            clears the download flag and starts it. No Terminal.
 
-            If the installer is not listed in Privacy & Security either, drag the app to
+            Which of the two macOS offers has not been consistent across versions, so
+            both are listed rather than one. If neither is offered, drag the app to
             Applications and run this once instead:
 
             ```

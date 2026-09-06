@@ -2008,11 +2008,15 @@ def test_the_manifest_names_a_source_commit_only_when_it_is_given_one(
 def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> None:
     """The instruction has to be where the wall is.
 
-    macOS refuses this app on first launch and offers no way to proceed: it is
-    ad-hoc signed, so Gatekeeper has no developer identity to attach an exception
-    to, and Privacy & Security lists nothing to allow. A user who hits that dialog
-    has already left the release page, so the release notes are the wrong and only
-    place for the fix.
+    macOS refuses this app on first launch: it is ad-hoc signed, so Gatekeeper has
+    no developer identity to name. A user who hits that dialog has already left the
+    release page, so the release notes are the wrong and only place for the fix.
+
+    Which items macOS will offer an "Open Anyway" for is not something this project
+    gets to assert. The README used to promise the app would never be listed, on an
+    `spctl` inference; the first real user install went the other way and the
+    promise sent them down the one route that failed for them. The order here is
+    what worked, and no route is described as impossible.
     """
 
     builder = BundleBuilder(
@@ -2022,20 +2026,29 @@ def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> Non
     )
     readme = builder.dmg_readme()
 
-    # The installer script is the route that does not need Terminal, so it comes
-    # first and is named exactly as the file in the disk image.
+    # Approving the app itself is the route that worked on the first real user
+    # install (2026-09-06, macOS 26.5.2), so it comes first, and it only works on
+    # a copy taken off the read-only image.
+    assert "Drag Waveguide Generator onto the Applications shortcut" in readme
+    assert readme.index("Drag Waveguide Generator onto the Applications shortcut") < readme.index(
+        f'Double-click "{builder.DMG_INSTALLER_NAME}"'
+    )
+    # The installer script stays as the route that needs no Terminal, named
+    # exactly as the file in the disk image.
     assert builder.DMG_INSTALLER_NAME == "Install Waveguide Generator.command"
     assert f'Double-click "{builder.DMG_INSTALLER_NAME}"' in readme
     assert "Privacy & Security" in readme
     assert "Open Anyway" in readme
-    # The Terminal command stays as the fallback, and must be exact and
+    # The Terminal command stays as the last fallback, and must be exact and
     # copy-pasteable; a wrong path is worse than none.
     assert 'xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"' in readme
-    # Say what they will actually see, including that the app itself is not
-    # listed in Privacy & Security however long they look for it.
+    # Say what they will actually see.
     assert "Not Opened" in readme
-    assert "will NOT list the app" in readme
     assert "Move to Bin" in readme
+    # Never promise which items macOS will offer an exception for. Asserting the
+    # app would not be listed is exactly what sent the first real user down the
+    # one route that did not work for them.
+    assert "will NOT list the app" not in readme
     # And that it is once, not every launch.
     assert "once, not on every launch" in readme
 

@@ -2321,18 +2321,23 @@ cache under %LOCALAPPDATA%\WaveguideGenerator, which is safe to delete too.
         return output
 
     #: Put the first-launch instruction where the wall is, not on a web page the
-    #: user has already left. macOS refuses this app on first launch and offers
-    #: NO way to proceed from the dialog: the app is ad-hoc signed, so Gatekeeper
-    #: has no developer identity to attach an exception to, and Privacy & Security
-    #: therefore lists nothing to allow. Measured 2026-08-27 and re-measured
-    #: 2026-09-02 on macOS 26.5.2 against a genuinely quarantined download; an
-    #: unsigned build gets `source=no usable signature` and would be allowed, but
-    #: an unsigned arm64 binary cannot execute at all. See
-    #: docs/validation/2026-09/MACOS-GATEKEEPER.md for the transcripts.
+    #: user has already left. macOS refuses this app on first launch: it is ad-hoc
+    #: signed, so Gatekeeper has no developer identity to name. `spctl` reports no
+    #: `source` line for the app and `source=no usable signature` for the script;
+    #: measured 2026-08-27 and re-measured 2026-09-02 on macOS 26.5.2 against a
+    #: genuinely quarantined download. See docs/validation/2026-09/MACOS-GATEKEEPER.md.
     #:
-    #: The installer script beside it exists because a *script* is unsigned in a
-    #: way Gatekeeper can offer an exception for, so it can be approved where the
-    #: app cannot, and it then does the copy and the quarantine removal itself.
+    #: That `spctl` difference was read as meaning Privacy & Security would list
+    #: the script and never the app, and the README said so. The first real user
+    #: install, 2026-09-06 on macOS 26.5.2, came out the other way round: the app
+    #: WAS listed and "Open Anyway" ran it, while the script was never approved
+    #: and its Terminal window never opened. The installed copy proves it - all
+    #: 8696 files still quarantined, so the script's `xattr -dr` never ran, and
+    #: QTN_FLAG_USER_APPROVED set on the app's own attribute. The `source` line is
+    #: therefore not the precondition it was taken for, so the README now offers
+    #: the app route first, the script second and Terminal third, and asserts
+    #: about neither that it cannot work. The script stays: it is cheap, and it
+    #: is the route that needs no Terminal when the app is not offered.
     DMG_README_NAME = "READ ME FIRST.txt"
     DMG_INSTALLER_NAME = "Install Waveguide Generator.command"
     DMG_INSTALLER_SOURCE = "installers/macos/dmg-install.command"
@@ -2346,29 +2351,50 @@ macOS will refuse to open this app the first time, with:
     "Waveguide Generator" Not Opened
     Apple could not verify "Waveguide Generator" is free of malware ...
 
-Only "Done" and "Move to Bin" are offered, and System Settings > Privacy &
-Security will NOT list the app. That is expected. It is a statement about a
-missing Apple signature, not a finding about this app.
+Only "Done" and "Move to Bin" are offered in that dialog. That is expected. It
+is a statement about a missing Apple signature, not a finding about this app.
+The dialog is not the whole story: the approval lives in System Settings.
 
 TO OPEN IT - TRY THIS FIRST
 ---------------------------
 
+1. Drag Waveguide Generator onto the Applications shortcut in this window.
+   Copy it out of the disk image FIRST. An item still sitting on the mounted
+   image is on read-only storage, which is a poor place to be granting
+   exceptions.
+2. Open Applications and double-click Waveguide Generator. macOS shows the
+   refusal above. Click Done.
+3. Straight away, open System Settings > Privacy & Security and scroll down to
+   Security. The app should be listed there, as
+
+       "Waveguide Generator" was blocked to protect your Mac.
+
+   Click "Open Anyway", authenticate, and click Open in the confirmation.
+   Do this promptly - the entry describes the most recent block, so opening
+   something else first can replace it.
+4. The app starts. This is needed once, not on every launch.
+
+IF THE APP IS NOT LISTED IN PRIVACY & SECURITY
+-----------------------------------------------
+
+Then use the installer script, which macOS treats as a separate item and may
+offer an exception for even when it offers none for the app:
+
 1. Double-click "Install Waveguide Generator.command" in this window.
 2. macOS refuses that too, with the same "Apple could not verify" wording.
    Click Done.
-3. Open System Settings > Privacy & Security and scroll to Security.
-   Unlike the app, the installer SHOULD be listed there, as
+3. Open System Settings > Privacy & Security > Security and look for
 
        "Install Waveguide Generator.command" was blocked to protect your Mac.
 
-   Click "Open Anyway", authenticate, and click Open in the confirmation.
-4. The installer copies the app to Applications, removes the download flag,
-   and starts it. You never open Terminal.
+   Click "Open Anyway", authenticate, and click Open. A Terminal window opens
+   and the installer copies the app to Applications, removes the download
+   flag, and starts it.
 
-IF THE INSTALLER IS NOT LISTED IN PRIVACY & SECURITY
-----------------------------------------------------
+IF NEITHER IS OFFERED AN EXCEPTION
+-----------------------------------
 
-Then do it by hand instead:
+Then do it by hand:
 
 1. Drag Waveguide Generator to Applications, as usual.
 2. Open Terminal (Applications > Utilities > Terminal).
@@ -2383,13 +2409,13 @@ WHY
 
 Apps distributed outside the App Store need a paid Apple Developer ID to be
 notarized. This build is signed ad-hoc instead, which lets it run but gives
-macOS no developer identity to offer you an exception for - which is why the
-dialog is a dead end rather than a prompt. A plain script has no signature at
-all, which is a state macOS does offer an override for; that is the only
-difference between the two files, and the whole reason the installer is here.
+macOS no developer identity of ours to show you. Which items macOS will offer
+an "Open Anyway" for has not been consistent across versions and file types,
+which is why three routes are listed rather than one.
 
-Either route removes the "downloaded from the internet" flag that macOS put on
-the file. Nothing else about the app changes.
+Routes 1 and 2 leave the "downloaded from the internet" flag in place and
+record your approval instead; route 3 removes the flag. Either way, nothing
+else about the app changes.
 
 WHAT IT SHOULD DO
 -----------------

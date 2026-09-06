@@ -214,7 +214,45 @@ real ad-hoc signed bundle, quarantines it, runs the shipped script against it,
 and asserts the installed copy has no quarantine attribute left and still passes
 `codesign --verify --deep --strict`.
 
-### What is NOT measured here
+### SETTLED 2026-09-06, the other way round
+
+The manual test below was run by a real user on macOS 26.5.2, downloading the
+`db4956e3` DMG through a browser, and **it contradicts the inference above in
+both directions**:
+
+- The **app** WAS listed in Privacy & Security, and "Open Anyway" ran it. The
+  installed copy carries `com.apple.quarantine` with flags `0x03c1`, which
+  includes `QTN_FLAG_USER_APPROVED` - the approval this document predicted
+  could not exist for an ad-hoc bundle.
+- The **script** was never approved. No Terminal window ever opened, and all
+  8696 files inside `/Applications/Waveguide Generator.app` still carry
+  quarantine, so the script's `xattr -dr` never ran.
+
+```
+$ xattr -p com.apple.quarantine "/Applications/Waveguide Generator.app"
+03c1;6a9da29b;Zen;D0E81700-880D-4369-8414-1B9BA365EBBB
+
+$ xattr -r -l "/Applications/Waveguide Generator.app" | grep -c com.apple.quarantine
+8696
+```
+
+So the `source` line is **not** the precondition for a Privacy & Security
+"Open Anyway", and the table above should be read as an `spctl` result only,
+not as a prediction about System Settings. One difference between this run and
+the 2026-09-02 probes is that the approved app had been copied to
+`/Applications` first, while the probes were assessed in place; an item on the
+read-only mounted image is a poor candidate for a recorded exception. That is a
+hypothesis, not a measurement - what is measured is the outcome above.
+
+`READ ME FIRST.txt`, the release notes and `build_bundle.py`'s comment now offer
+the app route first, the script second and Terminal third, and assert about none
+of them that it cannot work. The script is kept: it costs nothing and it is the
+route that needs no Terminal when the app is not offered.
+
+Still not measured: whether the app is offered on a machine where it has NOT
+been copied out of the image first, and whether the script is ever offered.
+
+### What was NOT measured here (before 2026-09-06)
 
 **Whether "Open Anyway" actually appears for the script, and whether clicking it
 lets the script run.** That is a click in System Settings, and no command-line
