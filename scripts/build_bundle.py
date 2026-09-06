@@ -396,12 +396,24 @@ def write_app_manifest(
     commit: str,
     runtime_id: str,
     executables: frozenset[str] = frozenset(),
+    source_commit: str | None = None,
 ) -> dict[str, object]:
+    """Describe the app layer: its version, the commit it was cut from, its runtime.
+
+    ``source_commit`` is for a build whose ``commit`` is not the commit a person
+    would look for. A build-only version stamp has to be committed to reach the
+    layer at all -- the layer is materialized from Git blobs -- so ``commit``
+    then names that stamp commit, and this names the commit it was made from.
+    Omitted entirely when absent, so a release manifest is byte for byte what it
+    always was.
+    """
+
     assert_app_layer_modes_match_git(app_root, executables)
     payload: dict[str, object] = {
         "schemaVersion": 1,
         "version": version,
         "commit": commit,
+        **({"sourceCommit": source_commit} if source_commit else {}),
         "runtimeId": runtime_id,
         # Computed before the manifest exists, and therefore excluding it: the
         # manifest cannot contain a digest of itself. Consumers comparing two
@@ -1765,6 +1777,7 @@ class BundleBuilder:
         runtime_id: str,
         spa: Path | None,
         commit: str,
+        source_commit: str | None = None,
     ) -> dict[str, object]:
         destination.mkdir()
         tracked = copy_tracked_app_files(
@@ -1792,6 +1805,7 @@ class BundleBuilder:
             commit=commit,
             runtime_id=runtime_id,
             executables=tracked.executables,
+            source_commit=source_commit,
         )
 
     def assemble_bundle(
@@ -2776,6 +2790,7 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 runtime_id=runtime_id,
                 spa=args.spa,
                 commit=commit,
+                source_commit=args.source_commit,
             )
             app_asset = output / release_assets.app_layer_name(version)
             # Canonical modes avoid NTFS/POSIX checkout differences. The archive
@@ -2883,6 +2898,14 @@ def build_parser() -> argparse.ArgumentParser:
     layers.add_argument("--runtime-only", action="store_true")
     layers.add_argument("--app-only", action="store_true")
     parser.add_argument("--skip-verify", action="store_true")
+    parser.add_argument(
+        "--source-commit",
+        help=(
+            "commit this build was made from, when HEAD is a build-only stamp "
+            "commit rather than the commit a person would look for. Recorded in "
+            "the app manifest as sourceCommit; omitted entirely when absent."
+        ),
+    )
     parser.add_argument("--python-version", default=PYTHON_VERSION)
     return parser
 

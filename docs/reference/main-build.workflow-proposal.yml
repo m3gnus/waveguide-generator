@@ -60,22 +60,36 @@ jobs:
           )"
           echo "version=$next-main.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
-  # spa / macos-bundle / windows-bundle / linux-bundle: the jobs in
-  # rc-build.yml, unchanged except that they take the version from `identity`
-  # instead of reading shared/version.json, and that each stamps it in before
-  # packaging:
+  # Every build job (spa / macos-bundle / windows-bundle / linux-bundle) is the
+  # rc-build.yml job unchanged, with one step inserted before it packages
+  # anything:
   #
-  #   python scripts/bump_version.py --set "${{ needs.identity.outputs.version }}"
+  #   - name: Stamp this build's identity
+  #     run: |
+  #       set -euo pipefail
+  #       python scripts/bump_version.py --build-stamp \
+  #         --set "${{ needs.identity.outputs.version }}"
+  #       python scripts/gen_openapi.py --write
+  #       git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com \
+  #         commit -aqm "Build stamp ${{ needs.identity.outputs.version }}"
   #
-  # Two product prerequisites, neither of them in the branch that proposed this
-  # file, both reviewable on their own:
-  #   * `--set` validates against SEMVER = ^(\d+)\.(\d+)\.(\d+)$ and refuses a
-  #     pre-release label. Widening it also moves package.json, the npm lockfile
-  #     and the macOS Info.plist, which npm and Gatekeeper read.
-  #   * scripts/build_bundle.py should record `sourceSha: ${{ github.sha }}` in
-  #     update-app-<version>.manifest.json, so an installed main build names the
-  #     commit it came from rather than a run number. The manifest is a shipped
-  #     artifact contract, so it is a release-owner decision when to add it.
+  # The commit is not optional and is not bureaucracy. scripts/build_bundle.py
+  # materializes the app layer from **Git blobs** at HEAD, and refuses a dirty
+  # worktree before it starts: a stamp left in the checkout would fail the build,
+  # and if it did not, it would package the previous version under the new
+  # name. Committing it is what makes one version reach the packaged backend,
+  # the SPA it embeds, the app manifest and every installer filename together.
+  # It is never pushed and never tagged; it exists inside the runner.
+  # `scripts/tests/test_build_bundle.py` pins this behaviour.
+  #
+  # The app layer is then built with the commit a person would look for:
+  #
+  #   uv run ... scripts/build_bundle.py --spa "$spa" --output build/bundle \
+  #     --source-commit "${{ github.sha }}"
+  #
+  # which records `sourceCommit` in APP-MANIFEST.json beside the stamp commit
+  # `commit` already carries. Both `--build-stamp` and `--source-commit` exist;
+  # neither changes a release, which passes neither.
 
   publish:
     name: Publish an immutable main build

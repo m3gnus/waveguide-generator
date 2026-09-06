@@ -378,6 +378,113 @@ def test_runtime_is_selected_from_an_earlier_release_and_the_list_is_cached(
     assert recent_calls == 1
 
 
+def test_the_companion_is_asked_for_by_tag_before_any_list_is_read(
+    tmp_path: Path,
+) -> None:
+    """The one lookup a busier publication schedule breaks, addressed directly.
+
+    A companion has a known name, so it does not have to be found by reading a
+    twenty-entry list. Asking for it by tag is one request whose answer does not
+    depend on how much has been published since.
+    """
+
+    payload, fetched, updates = _release(include_runtime=True)
+    asked: list[str] = []
+    listed = 0
+
+    def by_tag(tag: str) -> dict[str, object] | None:
+        asked.append(tag)
+        return updates if tag == updates["tag_name"] else None
+
+    def recent() -> list[dict[str, object]]:
+        nonlocal listed
+        listed += 1
+        return []
+
+    result = _service(
+        tmp_path,
+        payload,
+        fetched,
+        recent_releases_fetcher=recent,
+        release_by_tag_fetcher=by_tag,
+    ).get_status()
+
+    assert asked == ["v2.0.1-updates"]
+    assert result["release"]["assetsReady"] is True
+    # The list is never read for a companion the tag lookup already answered --
+    # which is the whole point: it cannot fall out of a window it never enters.
+    assert listed == 0
+
+
+def test_the_companion_falls_back_to_the_list_when_the_tag_lookup_answers_nothing(
+    tmp_path: Path,
+) -> None:
+    """An origin that cannot serve the by-tag request behaves exactly as before.
+
+    A rehearsal origin, or a transient failure, must not turn a resolvable
+    update into an unresolvable one.
+    """
+
+    payload, fetched, updates = _release(include_runtime=True)
+
+    result = _service(
+        tmp_path,
+        payload,
+        fetched,
+        recent_releases_fetcher=lambda: [updates],
+        release_by_tag_fetcher=lambda _tag: None,
+    ).get_status()
+
+    assert result["release"]["assetsReady"] is True
+
+
+def test_a_by_tag_answer_for_the_wrong_tag_is_refused(tmp_path: Path) -> None:
+    """The reply is bound to the tag that was asked for, not trusted blindly."""
+
+    payload, fetched, updates = _release(include_runtime=True)
+    impostor = {**updates, "tag_name": "v9.9.9-updates"}
+
+    result = _service(
+        tmp_path,
+        payload,
+        fetched,
+        recent_releases_fetcher=lambda: [],
+        release_by_tag_fetcher=lambda _tag: impostor,
+    ).get_status()
+
+    # No companion, so the layers are missing and the release is incomplete --
+    # rather than layers resolved from a release nobody asked about.
+    assert result["availability"] == "incomplete"
+
+
+def test_an_earlier_runtime_is_found_on_a_later_page(tmp_path: Path) -> None:
+    """Content-addressed, so it is found by looking, and it sits further back
+    the more has been published since it was current."""
+
+    payload, fetched, updates = _release(include_runtime=False)
+    earlier = _earlier_updates_release(NEW_RUNTIME)
+    pages = {1: [updates], 2: [earlier]}
+    asked: list[int] = []
+
+    def paged(page: int = 1) -> list[dict[str, object]]:
+        asked.append(page)
+        return pages.get(page, [])
+
+    result = _service(
+        tmp_path,
+        payload,
+        fetched,
+        recent_releases_fetcher=paged,
+        release_by_tag_fetcher=lambda _tag: updates,
+    ).get_status()
+
+    assert asked == [1, 2]
+    runtime = next(
+        asset for asset in result["action"]["assets"] if asset["layer"] == "runtime"
+    )
+    assert runtime["name"] == f"update-runtime-macos-arm64-{NEW_RUNTIME}.zip"
+
+
 def test_bad_release_manifest_digest_is_a_guarded_update_error(tmp_path: Path) -> None:
     payload, fetched, updates = _release(include_runtime=True)
     manifest_name = "update-app-2.0.1.manifest.json"

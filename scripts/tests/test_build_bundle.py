@@ -449,6 +449,50 @@ def test_materialized_app_files_carry_gits_mode(tmp_path: Path) -> None:
             build_bundle.assert_app_layer_modes_match_git(destination, frozenset())
 
 
+def test_a_version_stamp_reaches_the_app_layer_only_once_it_is_committed(
+    tmp_path: Path,
+) -> None:
+    """The trap under any build-time version stamp, stated as a test.
+
+    The app layer is materialized from Git blobs at a commit, not from the
+    files in the checkout, so editing shared/version.json and building would
+    package the *previous* version while the artifact names carried the new one
+    -- an app that disagrees with the release it was published under. In
+    practice such a build fails before that: `BundleBuilder.require_clean_worktree`
+    runs before every build. What this checks is the materializer itself.
+
+    So a build-only stamp has to be committed inside the build. That commit is
+    never pushed and never tagged; it exists so that one version reaches the
+    packaged app, the SPA, the manifest and the installer names together.
+    """
+
+    repo = tmp_path / "repo"
+    (repo / "shared").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    version_file = repo / "shared" / "version.json"
+    version_file.write_text('{"version": "0.3.1"}\n', encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "fixture"], cwd=repo, check=True)
+
+    # Stamped in the checkout only, as a naive build would.
+    version_file.write_text('{"version": "0.4.0-main.7"}\n', encoding="utf-8")
+    uncommitted = tmp_path / "app-uncommitted"
+    uncommitted.mkdir()
+    copy_tracked_app_files(repo, uncommitted)
+
+    assert "0.3.1" in (uncommitted / "shared" / "version.json").read_text(encoding="utf-8")
+
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "stamp"], cwd=repo, check=True)
+    committed = tmp_path / "app-committed"
+    committed.mkdir()
+    copy_tracked_app_files(repo, committed)
+
+    assert "0.4.0-main.7" in (committed / "shared" / "version.json").read_text(encoding="utf-8")
+
+
 def test_release_builder_refuses_a_dirty_worktree(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1835,6 +1879,43 @@ def test_the_app_manifest_records_the_tree_digest(tmp_path: Path) -> None:
     assert written["treeSha256"] == build_bundle.tree_digest(
         root, exclude=frozenset({"APP-MANIFEST.json"})
     )
+
+
+def test_the_manifest_names_a_source_commit_only_when_it_is_given_one(
+    tmp_path: Path,
+) -> None:
+    """Inert for a release, and exact for a build whose HEAD is a stamp commit.
+
+    A build-only version stamp has to be committed to reach the app layer at
+    all, so `commit` then names that stamp commit. `sourceCommit` names the one
+    it was made from. A release passes neither, and its manifest is byte for
+    byte what it always was.
+    """
+
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "LICENSE").write_text("licence\n", encoding="utf-8")
+
+    release = build_bundle.write_app_manifest(
+        root, version="0.2.4", commit="0" * 40, runtime_id="abcdef012345"
+    )
+    assert "sourceCommit" not in release
+
+    build = build_bundle.write_app_manifest(
+        root,
+        version="0.4.0-main.7",
+        commit="1" * 40,
+        runtime_id="abcdef012345",
+        source_commit="2" * 40,
+    )
+
+    assert build["sourceCommit"] == "2" * 40
+    assert json.loads((root / "APP-MANIFEST.json").read_text(encoding="utf-8"))[
+        "sourceCommit"
+    ] == "2" * 40
+    # The layer digest is over the files, not over this record of them, so
+    # naming the source commit cannot change what the layer is.
+    assert build["treeSha256"] == release["treeSha256"]
 
 
 def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> None:
