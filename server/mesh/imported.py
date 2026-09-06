@@ -488,16 +488,36 @@ class DeclaredDiscReduction:
     """What a declared pre-cut domain does to one linked throat's disc.
 
     ``retained_fraction`` is the share of the contract's disc that survived,
-    and ``cut_directions`` are the unit in-plane directions the removed halves
-    were taken from -- one per plane that bisects the disc. Both are derived
-    from the *contract's own* geometry against the declared planes, never from
-    the face being tested, so a face cannot talk its way into a different
-    expectation than the one it has to meet.
+    ``cut_directions`` are the unit in-plane directions the removed halves were
+    taken from, and ``centroid_offset_mm`` is where the retained region's
+    centroid therefore sits relative to the disc's centre. All three are
+    derived from the *contract's own* geometry against the declared planes,
+    never from the face being tested, so a face cannot talk its way into a
+    different expectation than the one it has to meet.
+
+    The centroid is a closed form, not an estimate. The validated contract
+    describes a filled circular disc and nothing else: both writer
+    (``wglink_send._source_contract``) and reader
+    (``server/cadlink/wgreturn.py``) refuse a contract whose
+    ``expected_disc_area_mm2`` is not ``pi*throat_diameter_mm^2/4`` within 1%.
+    A disc of radius ``r`` cut through its centre leaves a half whose centroid
+    is ``4r/(3*pi)`` along the retained direction, and a quarter -- two
+    perpendicular cuts -- puts that same distance on each of the two
+    directions.
+
+    It is compared at the ordinary position tolerance, and it fits: measured on
+    this repository's own horn fixture, whose throat is a 16-segment spline
+    approximation of a circle rather than an exact one, the half's centroid
+    lands 0.0149 mm from the prediction and the quarter's 0.0150 mm, against a
+    tolerance of 0.1358 mm. The 1% area slack the contract permits moves the
+    radius by 0.5% and the prediction by the same 0.5%, which scales with the
+    tolerance rather than against it.
     """
 
     retained_fraction: float
     cut_directions: tuple[tuple[float, float, float], ...]
     clear_axes: tuple[int, ...]
+    centroid_offset_mm: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 DOMAIN_PLANE_AXIS = {"x0": 0, "y0": 1}
@@ -542,10 +562,15 @@ def declared_disc_reduction(
     plane_origin = np.asarray(contract["plane_origin_mm"], dtype=float)
     axis_origin = np.asarray(contract["axis_origin_mm"], dtype=float)
     along = float(np.dot(direction, normal))
-    if abs(along) < 1.0e-6:
+    # The contract's disc lies in the throat plane and the throat axis is its
+    # normal. If the two are not parallel, the disc a declared cut would halve
+    # is not the face being matched, and the direction its centroid would move
+    # in is undefined -- so this is refused rather than approximated.
+    if abs(along) < math.cos(math.radians(NORMAL_ANGLE_DEG)):
         raise RoleResolutionError(
-            "role resolution: this throat's axis runs inside its own throat "
-            "plane, so the disc a declared reduced domain would cut is undefined"
+            "role resolution: this throat's axis is not perpendicular to its own "
+            f"throat plane (off by {math.degrees(math.acos(min(1.0, abs(along)))):.4g} "
+            "degrees), so the disc a declared reduced domain would cut is undefined"
         )
     # Where the axis pierces the throat plane: the centre of the disc the
     # contract describes.
@@ -594,7 +619,20 @@ def declared_disc_reduction(
                 "perpendicular within this throat's own plane, so the retained "
                 "wedge is not a quarter of its disc"
             )
-    return DeclaredDiscReduction(fraction, tuple(cuts), tuple(clear))
+    # Where the retained region's centroid sits: 4r/(3*pi) along each direction
+    # a half was taken from. Zero when nothing was cut, which is how the
+    # full-domain gate stays literally the same check.
+    offset = np.zeros(3, dtype=float)
+    for cut in cuts:
+        offset = offset + np.asarray(cut, dtype=float) * (
+            4.0 * radius / (3.0 * math.pi)
+        )
+    return DeclaredDiscReduction(
+        fraction,
+        tuple(cuts),
+        tuple(clear),
+        tuple(float(value) for value in offset),
+    )
 
 
 def geometry_candidate_matches(candidate: Mapping[str, Any], contract: Mapping[str, Any]) -> bool:
@@ -604,28 +642,24 @@ def geometry_candidate_matches(candidate: Mapping[str, Any], contract: Mapping[s
     from the contract, not from this face. It defaults to 1.0, so a full-domain
     return is judged exactly as before.
 
-    The position gate survives a reduction rather than being switched off for
-    it. A face symmetric about the throat axis, cut through its centre, has a
-    centroid that moves **onto the retained side** along the direction the
-    other half was taken from, and stays on the axis in every direction that
-    still has two sides. So the caller reports the offset along each cut
-    direction separately (``cut_offsets_mm``, which must be positive) and the
-    residual perpendicular distance (``centroid_axis_distance_mm``, which must
-    still be ~0). Nothing is erased: an off-axis face of the right area is
-    rejected exactly as it was before the reduction existed.
+    The position gate is one check at one tolerance, whether or not a domain was
+    declared. ``centroid_axis_distance_mm`` is the distance between the face's
+    measured centroid and the place the contract says the retained region's
+    centroid must be -- the axis itself for a full disc, and
+    ``DeclaredDiscReduction.centroid_offset_mm`` away from it for a declared
+    half or quarter. A same-area face translated anywhere else, in any
+    direction, fails it: the reduction moves the target, it does not widen it.
     """
 
     diameter = float(contract["throat_diameter_mm"])
     axis_limit = max(0.10, 0.005 * diameter)
     fraction = float(candidate.get("retained_area_fraction", 1.0))
     expected = float(contract["expected_disc_area_mm2"]) * fraction
-    offsets = [float(value) for value in candidate.get("cut_offsets_mm", ())]
     return (
         bool(candidate.get("planar"))
         and float(candidate.get("plane_distance_mm", math.inf)) <= PLANE_DISTANCE_MM
         and float(candidate.get("normal_angle_deg", math.inf)) <= NORMAL_ANGLE_DEG
         and float(candidate.get("centroid_axis_distance_mm", math.inf)) <= axis_limit
-        and all(offset > axis_limit for offset in offsets)
         and not bool(candidate.get("crosses_declared_plane", False))
         and abs(float(candidate.get("area_mm2", 0.0)) - expected) / expected
         <= AREA_REL_TOLERANCE
@@ -2167,10 +2201,9 @@ def build_imported_mesh(
                 # keeps its whole disc -- one whose mirror twin the cut removed
                 # -- keeps its full expected area and its full position gate.
                 reduction = declared_disc_reduction(contract, declared_cut_planes)
-                cut_directions = [
-                    np.asarray(direction, dtype=float)
-                    for direction in reduction.cut_directions
-                ]
+                expected_centroid_offset = np.asarray(
+                    reduction.centroid_offset_mm, dtype=float
+                )
                 measured: list[dict[str, Any]] = []
                 for surface in surfaces:
                     center = np.asarray(gmsh.model.occ.getCenterOfMass(2, surface), dtype=float)
@@ -2182,16 +2215,10 @@ def build_imported_mesh(
                         angle = math.inf
                     delta = center - axis_origin
                     lateral = delta - np.dot(delta, axis_direction) * axis_direction
-                    # Split the perpendicular offset into the directions the
-                    # removed halves were taken from and the residual. The
-                    # residual still has to be ~0; the cut components have to be
-                    # positive, because a retained half's centroid moves ONTO
-                    # the side that was kept.
-                    cut_offsets = []
-                    for direction in cut_directions:
-                        component = float(np.dot(lateral, direction))
-                        cut_offsets.append(component)
-                        lateral = lateral - component * direction
+                    # How far the centroid is from where the contract says it
+                    # must be. Without a declared cut that place is the axis, so
+                    # this is the distance to the axis exactly as before.
+                    residual = lateral - expected_centroid_offset
                     face_bbox = tuple(
                         float(value)
                         for value in gmsh.model.getBoundingBox(2, int(surface))
@@ -2203,7 +2230,7 @@ def build_imported_mesh(
                         face_bbox[DOMAIN_PLANE_AXIS[plane]] < -PLANE_DISTANCE_MM
                         for plane in declared_cut_planes
                     )
-                    axis_distance = float(np.linalg.norm(lateral))
+                    axis_distance = float(np.linalg.norm(residual))
                     candidate = {
                         "face_id": surface,
                         "planar": planar,
@@ -2212,7 +2239,9 @@ def build_imported_mesh(
                         "centroid_axis_distance_mm": axis_distance,
                         "area_mm2": areas[surface],
                         "retained_area_fraction": reduction.retained_fraction,
-                        "cut_offsets_mm": cut_offsets,
+                        "expected_centroid_offset_mm": [
+                            float(value) for value in expected_centroid_offset
+                        ],
                         "crosses_declared_plane": crosses,
                     }
                     candidate["matches"] = geometry_candidate_matches(candidate, contract)
