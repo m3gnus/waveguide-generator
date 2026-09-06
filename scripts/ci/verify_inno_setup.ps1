@@ -47,12 +47,37 @@ if ($actualVersion -ne $ExpectedVersion) {
     throw "Expected the Inno Setup $ExpectedVersion compiler, got PE file version $fileVersion at $CompilerPath"
 }
 
-# Keep a real execution probe as well. Inno deliberately returns non-zero for
-# /?, so only empty output is an execution failure; the version decision above
-# comes from PE metadata rather than this help text.
-$banner = (& $CompilerPath /? 2>&1 | Out-String)
-if ([string]::IsNullOrWhiteSpace($banner)) {
-    throw "The Inno Setup compiler at $CompilerPath printed no help output."
+# Compile a tiny valid script as a success-producing execution probe. `ISCC /?`
+# prints usage and leaves a non-zero native exit code on the pinned compiler,
+# while merely checking nonempty output would let an unrelated executable pass.
+$probeRoot = Join-Path $env:RUNNER_TEMP ("inno-probe-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $probeRoot | Out-Null
+try {
+    $probeScript = Join-Path $probeRoot "probe.iss"
+    $probeOutput = Join-Path $probeRoot "output"
+    New-Item -ItemType Directory -Path $probeOutput | Out-Null
+    @"
+[Setup]
+AppName=HornLab Inno Setup probe
+AppVersion=1.0.0
+DefaultDirName={autopf}\HornLabInnoSetupProbe
+Uninstallable=no
+OutputDir="$probeOutput"
+OutputBaseFilename=probe
+"@ | Set-Content -LiteralPath $probeScript -Encoding utf8
+
+    $probeOutputText = (& $CompilerPath "/Q" $probeScript 2>&1 | Out-String)
+    $probeExitCode = $LASTEXITCODE
+    if ($probeExitCode -ne 0) {
+        throw "The Inno Setup compiler probe exited $probeExitCode`: $($probeOutputText.Trim())"
+    }
+    $probeExecutable = Join-Path $probeOutput "probe.exe"
+    if (-not (Test-Path -LiteralPath $probeExecutable -PathType Leaf)) {
+        throw "The Inno Setup compiler probe exited successfully but produced no probe.exe."
+    }
+}
+finally {
+    Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "Verified Inno Setup compiler $actualVersion (PE file version $fileVersion) at $CompilerPath"

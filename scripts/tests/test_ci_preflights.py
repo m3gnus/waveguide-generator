@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -38,6 +39,7 @@ def _rc_steps(job: str) -> list[dict]:
     return workflow["jobs"][job]["steps"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the helper requires a POSIX shell")
 def test_linux_preflight_executes_the_documented_packages_and_propagates_failure(
     tmp_path: Path,
 ) -> None:
@@ -126,12 +128,16 @@ def test_inno_verifier_uses_bounded_pe_metadata_and_all_workflow_variants() -> N
     assert "FileVersionInfo]::GetVersionInfo($CompilerPath).FileVersion" in verifier
     assert "ExpectedVersion = \"6.7.1\"" in verifier
     assert "^\\s*(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)" in verifier
+    assert '(& $CompilerPath "/Q" $probeScript 2>&1 | Out-String)' in verifier
+    assert "$probeExitCode -ne 0" in verifier
+    assert 'Test-Path -LiteralPath $probeExecutable -PathType Leaf' in verifier
     assert "Get-ChildItem" not in verifier
     assert '"$env:ProgramFiles(x86)' not in verifier
 
     for workflow_path in (RC_WORKFLOW, RELEASE_WORKFLOW, PROPOSAL_WORKFLOW):
         workflow = workflow_path.read_text(encoding="utf-8")
         assert "choco install innosetup --version=6.7.1" in workflow
+        assert 'if ($LASTEXITCODE -ne 0)' in workflow
         assert "./scripts/ci/verify_inno_setup.ps1" in workflow
         assert '$banner -notmatch "6\\.7\\.1"' not in workflow
 

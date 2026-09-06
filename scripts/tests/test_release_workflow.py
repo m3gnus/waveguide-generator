@@ -563,9 +563,11 @@ def test_the_inno_setup_check_uses_the_compiler_pe_version() -> None:
     assert '[Environment]::GetEnvironmentVariable("ProgramFiles(x86)")' in verifier
     assert "FileVersionInfo]::GetVersionInfo($CompilerPath).FileVersion" in verifier
     assert 'ExpectedVersion = "6.7.1"' in verifier
-    assert "[string]::IsNullOrWhiteSpace($banner)" in verifier
+    assert '(& $CompilerPath "/Q" $probeScript 2>&1 | Out-String)' in verifier
+    assert "$probeExitCode -ne 0" in verifier
     assert "Get-ChildItem" not in verifier
     for name, text in (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)):
         assert "choco install innosetup --version=6.7.1" in text, name
+        assert 'if ($LASTEXITCODE -ne 0)' in text, name
         assert "./scripts/ci/verify_inno_setup.ps1" in text, name
         assert '$banner -notmatch "6\\.7\\.1"' not in text, name

@@ -295,8 +295,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           choco install innosetup --version=6.7.1 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chocolatey Inno Setup install exited $LASTEXITCODE"
+          }
           # The helper uses bounded Program Files paths and the compiler's PE
-          # FileVersion resource. ISCC /? prints usage without the patch.
+          # FileVersion resource and compiles a valid probe script.
           $iscc = & ./scripts/ci/verify_inno_setup.ps1
           "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
