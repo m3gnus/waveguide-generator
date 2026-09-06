@@ -33,6 +33,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* Exit codes distinct from anything Python returns, so a launcher failure is
@@ -42,6 +44,83 @@
 
 static void fail(const char *what) {
     fprintf(stderr, "Waveguide Generator launcher: %s\n", what);
+}
+
+static int is_directory(const char *path) {
+    struct stat info;
+    return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+static int is_regular_file(const char *path) {
+    struct stat info;
+    return stat(path, &info) == 0 && S_ISREG(info.st_mode);
+}
+
+/*
+ * Reach recovery when the app layer is the thing that is missing.
+ *
+ * An update renames `app` aside and puts the staged copy in its place. Killed
+ * between those two renames, it leaves no `app` -- and everything this launcher
+ * used to be able to do next lived inside it. So the recovery route is staged
+ * beside the layers instead, at Resources/recovery, and this runs it with the
+ * bundle's own interpreter: whichever of runtime/ and runtime.previous/ is
+ * there. Nothing is taken from PATH or from the user's data directory; the two
+ * paths below are built from the resolved bundle and from nothing else.
+ *
+ * Run as a child rather than exec'd, because the launcher still has a job
+ * afterwards: if recovery put the app layer back, this start continues into it.
+ * Returns 1 when the app layer exists afterwards.
+ */
+static int attempt_recovery(const char *resources, int argc, char *argv[]) {
+    char entry[PATH_MAX];
+    snprintf(entry, sizeof(entry), "%s/recovery/wg_bundle_recovery.py", resources);
+    if (!is_regular_file(entry)) {
+        return 0;
+    }
+
+    char interpreter[PATH_MAX];
+    snprintf(interpreter, sizeof(interpreter), "%s/runtime/bin/python3.13", resources);
+    if (access(interpreter, X_OK) != 0) {
+        snprintf(interpreter, sizeof(interpreter),
+                 "%s/runtime.previous/bin/python3.13", resources);
+        if (access(interpreter, X_OK) != 0) {
+            return 0;
+        }
+    }
+
+    /* interpreter entry --resources <resources> -- [caller's arguments...] */
+    char **args = calloc((size_t)argc + 6, sizeof(char *));
+    if (args == NULL) {
+        return 0;
+    }
+    int next = 0;
+    args[next++] = interpreter;
+    args[next++] = entry;
+    args[next++] = "--resources";
+    args[next++] = (char *)resources;
+    args[next++] = "--";
+    for (int i = 1; i < argc; i++) {
+        args[next++] = argv[i];
+    }
+    args[next] = NULL;
+
+    pid_t child = fork();
+    if (child == 0) {
+        execv(interpreter, args);
+        _exit(127);
+    }
+    free(args);
+    if (child < 0) {
+        return 0;
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0) {
+        /* Interrupted by a signal; the child is still the one to wait for. */
+    }
+
+    char app_layer[PATH_MAX];
+    snprintf(app_layer, sizeof(app_layer), "%s/app", resources);
+    return is_directory(app_layer);
 }
 
 int main(int argc, char *argv[]) {
@@ -96,6 +175,15 @@ int main(int argc, char *argv[]) {
         snprintf(numba, sizeof(numba), "%s/numba", cache_root);
         setenv("PYTHONPYCACHEPREFIX", pycache, 1);
         setenv("NUMBA_CACHE_DIR", numba, 1);
+    }
+
+    if (!is_directory(app_root)) {
+        if (!attempt_recovery(resources, argc, argv)) {
+            fail("the application layer is missing and could not be recovered; "
+                 "reinstall this version over the top -- your designs and "
+                 "settings live outside the application and are not touched");
+            return EXIT_NO_EXEC;
+        }
     }
 
     if (chdir(app_root) != 0) {

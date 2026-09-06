@@ -1047,7 +1047,12 @@ def test_layer_only_builds_are_refused_as_unverified_publishable_assets(
 def test_windows_bootstrap_executes_only_for_real_no_script_launch(
     tmp_path: Path,
 ) -> None:
-    expected = "runtime\\Lib\nruntime\\DLLs\nruntime\\Lib\\site-packages\napp\nimport site\n"
+    # ``recovery`` precedes ``app``: the site hook that starts everything has to
+    # be findable in the state where the app layer is the missing directory.
+    expected = (
+        "runtime\\Lib\nruntime\\DLLs\nruntime\\Lib\\site-packages\n"
+        "recovery\napp\nimport site\n"
+    )
     assert windows_pth() == expected
     bootstrap = windows_desktop_bootstrap()
     assert 'os.environ["WG2_BUNDLE"] = "1"' in bootstrap
@@ -1564,6 +1569,15 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
     (runtime / "Lib").mkdir()
     (runtime / "Lib" / "os.py").write_text("# stdlib\n", encoding="utf-8")
     (app / "APP-MANIFEST.json").write_text("{}\n", encoding="utf-8")
+    # The recovery layer is copied out of the checkout, so this stand-in repo
+    # root has to carry the two files it copies.
+    (tmp_path / "launchers").mkdir()
+    (tmp_path / "launchers" / "apply_update.py").write_text(
+        "# updater\n", encoding="utf-8"
+    )
+    (tmp_path / "launchers" / "bundle_recovery.py").write_text(
+        "# recovery entry\n", encoding="utf-8"
+    )
     builder = BundleBuilder(tmp_path)
 
     builder.assemble_windows_bundle(
@@ -1579,6 +1593,13 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
     assert (destination / WINDOWS_ICON_NAME).read_bytes() == b"ico"
     assert (destination / "runtime" / "Lib" / "os.py").is_file()
     assert (destination / "app" / "APP-MANIFEST.json").is_file()
+    # Beside the two swappable layers, never inside one, with the site hook the
+    # renamed pythonw needs when ``app`` is the directory that is gone.
+    recovery = destination / "recovery"
+    assert (recovery / "apply_update.py").read_text(encoding="utf-8") == "# updater\n"
+    assert (recovery / "wg_bundle_recovery.py").read_text(encoding="utf-8") == "# recovery entry\n"
+    assert (recovery / "sitecustomize.py").is_file()
+    assert (recovery / "RECOVERY-MANIFEST.json").is_file()
     for filename in ("python313.dll", "python3.dll", *MSVC_RUNTIME_DLLS):
         assert (destination / filename).read_bytes() == (runtime / filename).read_bytes()
 
@@ -2233,9 +2254,22 @@ def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path)
     )
 
     assert sorted(entry.name for entry in bundle.iterdir()) == sorted(
-        ["app", "runtime", LINUX_LAUNCHER_NAME, LINUX_DESKTOP_ENTRY_NAME, LINUX_ICON_NAME]
+        [
+            "app",
+            "runtime",
+            # Beside the two swappable layers, because it has to survive one of
+            # them being renamed aside mid-update.
+            "recovery",
+            LINUX_LAUNCHER_NAME,
+            LINUX_DESKTOP_ENTRY_NAME,
+            LINUX_ICON_NAME,
+        ]
     )
     assert (bundle / "app" / "APP-MANIFEST.json").is_file()
+    assert (bundle / "recovery" / "wg_bundle_recovery.py").is_file()
+    # Only Windows launches through an interpreter, so only Windows needs the
+    # site hook; a shell script and a Mach-O binary call the entry directly.
+    assert not (bundle / "recovery" / "sitecustomize.py").exists()
     assert written == [(bundle / LINUX_ICON_NAME, 512)]
     # The bit that decides whether a double-click runs the application or opens
     # it in a text editor, and the one a checkout cannot be trusted to carry.

@@ -1319,42 +1319,49 @@ def test_the_staged_helper_recovers_a_missing_runtime_without_the_bundle(
     assert _user_data_intact(data_dir)
 
 
-def test_the_native_launchers_cannot_reach_recovery_without_an_app_layer() -> None:
-    """The limitation, asserted rather than described, so it cannot rot silently.
+def test_the_native_launchers_reach_recovery_without_an_app_layer() -> None:
+    """The property, asserted rather than described, so it cannot rot silently.
 
-    Automatic recovery runs inside the application, and every platform launcher
-    reaches the application through the `app` layer. A swap killed between
-    `app` -> `app.previous` and `staged` -> `app` therefore leaves a state no
-    launcher can recover from on its own:
+    This used to assert the opposite. Automatic recovery ran inside the
+    application and every launcher reached the application through the `app`
+    layer, so a swap killed between `app` -> `app.previous` and
+    `staged` -> `app` left a state no launcher could recover from. The route
+    that closes it is staged beside the layers instead of inside one:
+    `<resources>/recovery`, holding a verified copy of this module and the
+    entry that runs it.
 
-    - Linux: the generated launcher refuses outright when `app` is missing or
-      the runtime interpreter is not executable, and says to reinstall.
-    - macOS: `launcher.c` `chdir`s into `app` before exec and fails there, so
-      the interpreter beside it is never reached.
-    - Windows: the interpreter at the bundle root survives -- which is why
-      `rollback_interpreter` uses it -- but the bootstrap it runs
-      (`sitecustomize` -> `wg_desktop_bootstrap`) lives in the app layer.
+    - Linux: the generated launcher runs the entry with whichever of
+      `runtime` and `runtime.previous` survived, and only refuses afterwards.
+    - macOS: `launcher.c` checks for the app layer before it `chdir`s, and runs
+      the same entry as a child before deciding.
+    - Windows: the `._pth` lists `recovery` ahead of `app`, so the site hook
+      that starts everything is found in the directory an update never renames;
+      it hands straight back to the app layer's own bootstrap when that layer
+      is there.
 
-    So the honest statement is: the staged helper makes a *manual* repair
-    always possible, and does not make recovery automatic in that window.
+    `server/tests/test_bundle_recovery.py` drives the first two end to end,
+    including the real compiled macOS binary. The Windows arm is exercised as
+    the Python it is; a double-click on a renamed `pythonw.exe` still needs a
+    Windows machine.
     """
 
-    from scripts.build_bundle import linux_launcher
+    from scripts.build_bundle import linux_launcher, windows_pth
 
     launcher = linux_launcher()
-    assert 'if [ ! -d "$app" ] || [ ! -x "$python" ]; then' in launcher
+    assert "recovery/wg_bundle_recovery.py" in launcher
+    assert "runtime.previous/bin/python3.13" in launcher
+    # The refusal is still there, for what recovery cannot fix.
     assert "installation at %s is incomplete" in launcher
     assert "exit 71" in launcher
 
     macos = Path(apply_update_module.__file__).parents[1] / "launchers" / "macos" / "launcher.c"
     source = macos.read_text(encoding="utf-8")
-    assert "if (chdir(app_root) != 0) {" in source
-    assert "could not enter the application directory" in source
+    assert "attempt_recovery(resources, argc, argv)" in source
+    assert "recovery/wg_bundle_recovery.py" in source
+    assert source.index("attempt_recovery(resources") < source.index("if (chdir(app_root) != 0)")
 
-    windows_bootstrap = Path(
-        apply_update_module.__file__
-    ).parents[1] / "scripts" / "build_bundle.py"
-    assert 'from launchers.desktop import main' in windows_bootstrap.read_text(encoding="utf-8")
+    lines = windows_pth().splitlines()
+    assert lines.index("recovery") < lines.index("app")
 
 
 # ---------------------------------------------------------------------------

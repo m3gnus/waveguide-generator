@@ -190,27 +190,64 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
   transaction opens, not only when a handled failure hands off, so the copy exists
   for the crash that never reaches a handoff.
 
-  **What that does and does not buy, traced through the real launchers.** Automatic
-  recovery runs inside the application, and every platform launcher reaches the
-  application through the `app` layer:
+  **The swap's last window, and what now closes it.** *(Implemented 2026-09-06.)*
+  Automatic recovery ran inside the application, and every platform launcher
+  reached the application through the `app` layer: Linux refused outright
+  (`exit 71`), macOS `chdir`-ed into `app` before `exec` and failed there, and the
+  Windows bootstrap it needed (`sitecustomize` → `wg_desktop_bootstrap`) lived in
+  the app layer. So a swap killed between `app` → `app.previous` and
+  `staged` → `app` was recoverable only by hand.
 
-  - Linux — the generated launcher refuses outright (`exit 71`, "reinstall it by
-    running install.sh") when `app` is missing or `runtime/bin/python3.13` is not
-    executable.
-  - macOS — `launchers/macos/launcher.c` `chdir`s into `app` before `exec`, and
-    fails there, so the interpreter beside it is never reached.
-  - Windows — the interpreter at the bundle root survives a `runtime` rename, which
-    is exactly why `rollback_interpreter` uses it; but the bootstrap it runs
-    (`sitecustomize` → `wg_desktop_bootstrap`) lives in the app layer.
+  The route that closes it is staged **beside** the two layers rather than inside
+  one. `scripts/build_bundle.write_recovery_layer` writes `<resources>/recovery`
+  into every bundle: a byte copy of `launchers/apply_update.py`, the entry
+  `launchers/bundle_recovery.py` that runs it, and `RECOVERY-MANIFEST.json`
+  recording their digests. It is inside the bundle — the same download, the same
+  macOS seal, the same reinstall — and outside `app` and `runtime`, which are the
+  only directories the transaction renames.
 
-  So: **the swap's last window — killed between `app` → `app.previous` and
-  `staged` → `app` — is not automatically recoverable on any platform.** The staged
-  helper makes a *manual* repair always possible there, with any Python 3.13
-  including the bundle's own `runtime/bin/python3.13`; it does not make recovery
-  automatic, and this section does not claim it does. Closing that window means
-  changing the packaged bootstraps, which needs a native build to verify and is not
-  attempted here. `test_the_native_launchers_cannot_reach_recovery_without_an_app_layer`
-  asserts each of the three behaviours above so the statement cannot rot silently.
+  - Linux — the generated launcher runs the entry with whichever of
+    `runtime/bin/python3.13` and `runtime.previous/bin/python3.13` survived, then
+    re-checks; the `exit 71` refusal remains for what recovery cannot fix.
+  - macOS — `launchers/macos/launcher.c` checks for the app layer before it
+    `chdir`s, runs the same entry as a child, waits for it, and continues into the
+    application if the layer came back.
+  - Windows — `Waveguide Generator._pth` lists `recovery` ahead of `app`, so the
+    `import site` hook that starts everything is found in a directory an update
+    never renames. `recovery/sitecustomize.py` hands straight back to the app
+    layer's own `wg_desktop_bootstrap` whenever that layer is present, so the half
+    that changes with the application still ships and updates with it and only the
+    shim is frozen at install time.
+
+  **What it will and will not run.** The helper is named by this project, not by
+  the journal, and is verified against the recorded digest before it is executed;
+  the interpreter is the bundle's own, by absolute path. Nothing comes from `PATH`,
+  from the data directory, or from the record of the interrupted transaction — the
+  journal decides *whether* there is something to recover, inside the helper, and
+  never *what to run*. The staged `<data>/rollback/apply_update.py` copy remains the
+  manual route and is deliberately **not** what the automatic one executes: it is
+  writable by anything that can write the data directory.
+
+  **The live-updater window.** An update in progress is indistinguishable from an
+  interrupted one from outside, because `app` really is absent between two renames.
+  The entry therefore waits for the layer to reappear — ten polls of half a second —
+  before deciding anything, which also makes a start during an update look slow
+  rather than combative. A residual race remains for a swap slower than the dwell;
+  closing it needs an interlock the journal does not carry (a live updater pid, or a
+  lock both parties take), which is recorded here rather than invented in a launcher.
+
+  `test_the_native_launchers_reach_recovery_without_an_app_layer` asserts the three
+  wirings so the statement cannot rot silently, and
+  `server/tests/test_bundle_recovery.py` drives the first two end to end: the real
+  compiled macOS binary and the real generated Linux script, against an installation
+  whose app layer was renamed aside after a real `begin_update_transaction`. On the
+  same fixture the shipped launcher exits 71 having recovered nothing; the changed
+  one restores the layer and continues into the application, with user data intact.
+
+  **The Windows limit, stated plainly.** Its arm is exercised as the Python it is —
+  the shim's decision, the `._pth` ordering, the staged files — and not as a
+  double-click on a renamed `pythonw.exe`. That needs a Windows machine, which this
+  work has never had, and it is the one part of this section that is not measured.
 
   **Evidence, and its limits.** `server/tests/test_update_transaction.py` kills a
   real updater subprocess with `SIGKILL` at each of the four renames and at three

@@ -145,6 +145,12 @@ MSVC_RUNTIME_DLLS = (
 )
 WINDOWS_LAUNCHER_NAME = "Waveguide Generator.exe"
 WINDOWS_PTH_NAME = "Waveguide Generator._pth"
+#: The directory holding the recovery route, beside ``app`` and ``runtime``
+#: rather than inside either, because those are the two an update renames.
+RECOVERY_DIRECTORY_NAME = "recovery"
+RECOVERY_HELPER_NAME = "apply_update.py"
+RECOVERY_ENTRY_NAME = "wg_bundle_recovery.py"
+RECOVERY_MANIFEST_NAME = "RECOVERY-MANIFEST.json"
 WINDOWS_PYVENV_NAME = "pyvenv.cfg"
 WINDOWS_RUNTIME_PTH_NAME = "python._pth"
 WINDOWS_ICON_NAME = "WaveguideGenerator.ico"
@@ -761,7 +767,16 @@ def write_launcher_stub(path: Path, *, repo_root: Path, runner: RunCallable = su
 def windows_pth() -> str:
     """Return the isolated import path used by the renamed ``pythonw.exe``."""
 
-    return "runtime\\Lib\nruntime\\DLLs\nruntime\\Lib\\site-packages\napp\nimport site\n"
+    return (
+        "runtime\\Lib\n"
+        "runtime\\DLLs\n"
+        "runtime\\Lib\\site-packages\n"
+        # Ahead of ``app`` on purpose: the site hook that starts everything has
+        # to be reachable in the state where ``app`` is the missing directory.
+        "recovery\n"
+        "app\n"
+        "import site\n"
+    )
 
 
 def windows_pyvenv_cfg() -> str:
@@ -890,11 +905,90 @@ def write_windows_bootstrap(app_root: Path) -> None:
     (app_root / "wg_desktop_bootstrap.py").write_text(
         windows_desktop_bootstrap(), encoding="utf-8", newline="\n"
     )
-    # CPython permits only ``import site`` in an isolated ._pth file. The site
-    # hook is the supported one-line bridge to the real bootstrap module.
-    (app_root / "sitecustomize.py").write_text(
-        "import wg_desktop_bootstrap\n", encoding="utf-8", newline="\n"
+
+
+def recovery_sitecustomize() -> str:
+    """The Windows bridge into Python code, in the layer an update never renames.
+
+    CPython permits only ``import site`` in an isolated ``._pth``, so the site
+    hook is the one supported entry point -- and it used to land in the app
+    layer, which is exactly the directory that is missing in the state recovery
+    exists for. It lands in ``recovery`` instead, and hands straight back to the
+    app layer's own bootstrap whenever that layer is present, so the half that
+    changes with the application still ships and updates with it.
+    """
+
+    return (
+        "import wg_bundle_recovery\n"
+        "\n"
+        "wg_bundle_recovery.windows_boot()\n"
     )
+
+
+def recovery_manifest(recovery_root: Path, *, runtime_id: str) -> dict[str, object]:
+    """Describe the staged helper so the entry can refuse a substituted one."""
+
+    return {
+        "schemaVersion": 1,
+        "runtimeId": runtime_id,
+        "helper": RECOVERY_HELPER_NAME,
+        "helperSha256": file_sha256(recovery_root / RECOVERY_HELPER_NAME),
+        "entry": RECOVERY_ENTRY_NAME,
+        "entrySha256": file_sha256(recovery_root / RECOVERY_ENTRY_NAME),
+    }
+
+
+def runtime_id_of(runtime_root: Path) -> str:
+    """Read the packaged runtime's own identifier, or say it has none."""
+
+    try:
+        manifest = json.loads(
+            (Path(runtime_root) / "RUNTIME-MANIFEST.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return "unknown"
+    value = manifest.get("runtimeId") if isinstance(manifest, dict) else None
+    return value if isinstance(value, str) and value else "unknown"
+
+
+def write_recovery_layer(
+    resources: Path,
+    *,
+    repo_root: Path,
+    runtime_root: Path,
+    platform_name: str,
+) -> Path:
+    """Stage the recovery route beside the two layers an update replaces.
+
+    Everything here is inside the bundle -- covered by the macOS seal, by the
+    same download, and by the same reinstall -- and outside ``app`` and
+    ``runtime``, which are the only directories the update transaction renames.
+    That is the whole property it needs: it is trusted because it shipped, and
+    it is reachable because nothing moves it.
+
+    The helper is a byte copy of ``launchers/apply_update.py``. Copied rather
+    than imported, because the point is to still exist when the layer holding
+    the original does not; and copied rather than rewritten, so the recovery
+    that runs here is the recovery the tests exercise there.
+    """
+
+    recovery = resources / RECOVERY_DIRECTORY_NAME
+    recovery.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(
+        repo_root / "launchers" / RECOVERY_HELPER_NAME, recovery / RECOVERY_HELPER_NAME
+    )
+    shutil.copyfile(
+        repo_root / "launchers" / "bundle_recovery.py", recovery / RECOVERY_ENTRY_NAME
+    )
+    if platform_name == WINDOWS_PLATFORM:
+        (recovery / "sitecustomize.py").write_text(
+            recovery_sitecustomize(), encoding="utf-8", newline="\n"
+        )
+    write_json(
+        recovery / RECOVERY_MANIFEST_NAME,
+        recovery_manifest(recovery, runtime_id=runtime_id_of(runtime_root)),
+    )
+    return recovery
 
 
 def linux_launcher() -> str:
@@ -935,12 +1029,29 @@ here=$(CDPATH= cd -- "$(dirname -- "$resolved")" && pwd -P)
 
 app=$here/app
 python=$here/runtime/bin/python3.13
+recovery=$here/recovery/wg_bundle_recovery.py
 
+# An interrupted update leaves the app layer, the runtime layer, or both
+# renamed aside. Neither is where the recovery that fixes it used to live, so
+# it lives in `recovery` beside them, and the interpreter that runs it is
+# whichever of the two runtime copies survived. Absolute paths inside the
+# installation only: nothing here is taken from PATH or from the data
+# directory.
 if [ ! -d "$app" ] || [ ! -x "$python" ]; then
+    if [ ! -x "$python" ] && [ -x "$here/runtime.previous/bin/python3.13" ]; then
+        python=$here/runtime.previous/bin/python3.13
+    fi
+    if [ -x "$python" ] && [ -f "$recovery" ]; then
+        "$python" "$recovery" --resources "$here" -- "$@" || true
+    fi
+fi
+
+if [ ! -d "$app" ] || [ ! -x "$here/runtime/bin/python3.13" ]; then
     printf 'Waveguide Generator launcher: the installation at %s is incomplete.\n' "$here" >&2
     printf 'Reinstall it by running install.sh from the release tarball.\n' >&2
     exit 71
 fi
+python=$here/runtime/bin/python3.13
 
 WG2_BUNDLE=1
 WG2_APP_ROOT=$app
@@ -1815,6 +1926,12 @@ class BundleBuilder:
         resources = contents / "Resources"
         shutil.copytree(runtime_root, resources / "runtime", symlinks=True)
         shutil.copytree(app_root, resources / "app", symlinks=True)
+        write_recovery_layer(
+            resources,
+            repo_root=self.repo_root,
+            runtime_root=runtime_root,
+            platform_name=MACOS_PLATFORM,
+        )
         write_launcher_stub(
             contents / "MacOS" / "Waveguide Generator",
             repo_root=self.repo_root,
@@ -1835,6 +1952,12 @@ class BundleBuilder:
         destination.mkdir()
         shutil.copytree(runtime_root, destination / "runtime", symlinks=True)
         shutil.copytree(app_root, destination / "app", symlinks=True)
+        write_recovery_layer(
+            destination,
+            repo_root=self.repo_root,
+            runtime_root=runtime_root,
+            platform_name=WINDOWS_PLATFORM,
+        )
         launcher_files = windows_launcher_files()
         missing = [source for source, _ in launcher_files if not (runtime_root / source).is_file()]
         if missing:
@@ -1875,6 +1998,12 @@ class BundleBuilder:
         destination.mkdir()
         shutil.copytree(runtime_root, destination / "runtime", symlinks=True)
         shutil.copytree(app_root, destination / "app", symlinks=True)
+        write_recovery_layer(
+            destination,
+            repo_root=self.repo_root,
+            runtime_root=runtime_root,
+            platform_name=LINUX_PLATFORM,
+        )
         launcher = destination / LINUX_LAUNCHER_NAME
         # Written and chmod-ed here rather than copied from the checkout, for
         # the reason the .command in the disk image is: a payload that arrives
