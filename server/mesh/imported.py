@@ -1295,6 +1295,61 @@ def _surface_model_bounds_mm(gmsh: Any, surfaces: Iterable[int]) -> tuple[float,
     return tuple(float(value) for value in np.concatenate((lower, upper)))
 
 
+OCC_HEALING_OPTIONS = (
+    "Geometry.OCCFixDegenerated",
+    "Geometry.OCCFixSmallEdges",
+    "Geometry.OCCFixSmallFaces",
+    "Geometry.OCCSewFaces",
+)
+
+
+def apply_occ_healing_options(
+    gmsh: Any, options: Iterable[str], *, declared_solids: int
+) -> dict[str, int]:
+    """Set the OCC healing options for one import, sewing included.
+
+    **Sewing without ``Geometry.OCCMakeSolids`` destroys solids.**
+    ``OCCSewFaces`` stitches the faces back into a shell and stops there; OCC
+    never re-wraps the result in a solid, so a STEP whose only body is one
+    ``MANIFOLD_SOLID_BREP`` imports as zero volumes and one parentless surface
+    per face. Measured with gmsh 4.15.2 on a six-faced solid STEP: one volume
+    and no orphan surfaces unhealed, zero volumes and six orphan surfaces on
+    both the sew rung and the full rung, one volume again with ``OCCMakeSolids``
+    alongside. ``OCCMakeSolids`` is the documented other half of the pair -- it
+    rebuilds a solid from each closed shell the sewing produced -- so the two
+    move together, and this is the single place that decides that.
+
+    What the missing half costs is more than a lost volume. The scope gate then
+    reads the faces where the manifest declared one body and refuses with a
+    count mismatch the healer manufactured, and because that refusal is raised
+    on the healed attempt it *replaces* the mesh failure the healing was called
+    in to repair.
+
+    ``declared_solids`` is why the pairing is not unconditional. Rebuilding a
+    solid is only ever restoration -- a file that declares no
+    ``MANIFOLD_SOLID_BREP`` has no solid to restore, and any volume OCC makes
+    there is invention. That is not hypothetical: two exactly coincident
+    surface bodies sew into a closed shell, and ``OCCMakeSolids`` turns it into
+    a zero-volume solid, after which the same gate counts the sheets once as
+    declared surface models and once as a volume nobody exported. Reading the
+    file's own solid count costs one text scan and keeps the option to the job
+    it is here for.
+
+    Every option is written on every call, including the ones that are off.
+    Gmsh options outlive ``gmsh.clear()`` and the fallback ladder runs several
+    attempts in one session, so an unwritten option is the previous rung's.
+    """
+
+    selected = {str(value) for value in options}
+    applied = {name: int(name in selected) for name in OCC_HEALING_OPTIONS}
+    applied["Geometry.OCCMakeSolids"] = int(
+        bool(applied["Geometry.OCCSewFaces"]) and int(declared_solids) > 0
+    )
+    for option_name, value in applied.items():
+        gmsh.option.setNumber(option_name, value)
+    return applied
+
+
 def _import_occ_root_bodies(gmsh: Any, assembly_path: str | Path) -> list[tuple[int, int]]:
     """Import all STEP topology and return only independently transformable bodies.
 
@@ -1514,14 +1569,18 @@ def build_imported_viewport_mesh(
     gmsh.clear()
     try:
         gmsh.model.add("wgreturn-viewport")
-        selected_healing = {str(value) for value in recipe.get("healing_options", ())}
-        for option_name in {
-            "Geometry.OCCFixDegenerated",
-            "Geometry.OCCFixSmallEdges",
-            "Geometry.OCCFixSmallFaces",
-            "Geometry.OCCSewFaces",
-        }:
-            gmsh.option.setNumber(option_name, 1 if option_name in selected_healing else 0)
+        # The recipe records the options the solve was *given*, not the options
+        # that were set. ``OCCMakeSolids`` is derived here from the same two
+        # inputs the solve derived it from -- the sew flag and the file's own
+        # solid count -- so the replay reproduces the solve bit for bit without
+        # the recipe format changing and without older bundles replaying
+        # differently. The fingerprint check below is what makes that matter:
+        # a viewport that healed differently would fail it.
+        apply_occ_healing_options(
+            gmsh,
+            recipe.get("healing_options", ()),
+            declared_solids=declared_step_bodies(assembly_path)["solid_breps"],
+        )
         imported = _import_occ_root_bodies(gmsh, assembly_path)
         if not imported:
             raise ImportedMeshError("viewport meshing: assembly STEP contains no OCC geometry")
@@ -2161,6 +2220,11 @@ def build_imported_mesh(
         "post_transform_gate_mm": PLANE_DISTANCE_MM,
     }
 
+    # The file's own body inventory, read once: the scope gate reads it below,
+    # and the healing options read it before the import that the gate then
+    # measures. Both readings must come from the same scan of the same file.
+    declared_bodies = declared_step_bodies(assembly_path)
+
     # The unhealed import supplies the topology reference used by the fallback
     # ladder.  Only mesh-generation failure is allowed to enter that ladder.
     def attempt(
@@ -2172,14 +2236,9 @@ def build_imported_mesh(
         gmsh.clear()
         gmsh.model.add("wgreturn-import")
         healing_options = tuple(occ_healing_options)
-        all_healing = {
-            "Geometry.OCCFixDegenerated",
-            "Geometry.OCCFixSmallEdges",
-            "Geometry.OCCFixSmallFaces",
-            "Geometry.OCCSewFaces",
-        }
-        for option_name in all_healing:
-            gmsh.option.setNumber(option_name, 1 if option_name in healing_options else 0)
+        apply_occ_healing_options(
+            gmsh, healing_options, declared_solids=declared_bodies["solid_breps"]
+        )
         imported = _import_occ_root_bodies(gmsh, assembly_path)
         if not imported:
             raise ImportedMeshError("STEP import + normalisation: assembly STEP contains no OCC geometry")
@@ -2245,9 +2304,7 @@ def build_imported_mesh(
         # Bodies, not transformable roots: an open shell is one body however
         # many faces it has, and two shells are two bodies however much they
         # touch. See :func:`scope_body_count` for why both sources are read.
-        body_inventory = scope_body_count(
-            gmsh, imported, declared=declared_step_bodies(assembly_path)
-        )
+        body_inventory = scope_body_count(gmsh, imported, declared=declared_bodies)
         body_count = int(body_inventory["count"])
         expected_bodies = int(manifest["assembly"]["n_bodies_expected"])
         if body_count != expected_bodies:

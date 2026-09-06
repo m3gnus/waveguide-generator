@@ -29,6 +29,7 @@ from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.mesh.imported import (
     ImportedMeshError,
     _import_occ_root_bodies,
+    apply_occ_healing_options,
     build_imported_mesh,
     declared_step_bodies,
     occ_body_groups,
@@ -155,8 +156,14 @@ def _inventory_as_the_gate_sees_it(step_path: Path) -> dict[str, object]:
     def probe() -> dict[str, object]:
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.clear()
-        for option in ("OCCSewFaces", "OCCFixSmallEdges", "OCCFixSmallFaces"):
-            gmsh.option.setNumber(f"Geometry.{option}", 1)
+        # Through the production helper, not by hand: a hand-written option set
+        # here would stop being "the way the gate does it" the moment the gate
+        # changed, which is exactly how the missing ``OCCMakeSolids`` survived.
+        apply_occ_healing_options(
+            gmsh,
+            ("Geometry.OCCSewFaces", "Geometry.OCCFixSmallEdges", "Geometry.OCCFixSmallFaces"),
+            declared_solids=declared["solid_breps"],
+        )
         roots = _import_occ_root_bodies(gmsh, step_path)
         inventory = scope_body_count(gmsh, roots, declared=declared)
         gmsh.clear()
