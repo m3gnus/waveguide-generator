@@ -7,19 +7,24 @@
 # publishes. Read docs/reference/UPDATE-CHANNELS.md first; this file is the
 # mechanics of the design described there.
 #
+# It is a complete graph, not a sketch: every job it names exists here, and
+# `scripts/tests/test_main_build_proposal.py` holds it to that, to the artifact
+# names it passes between jobs, to the asset names `shared/release_assets.py`
+# actually produces, and to the flags the builder actually accepts.
+#
 # What it does: builds every installer from a commit on main, exactly as
 # rc-build.yml already does, and publishes them as an immutable pre-release so
 # the in-app beta channel can install one. No tag is ever moved or deleted, no
 # signing identity is introduced, and the updater's trusted origins are
-# untouched -- the assets are ordinary release downloads of this repository.
+# untouched — the assets are ordinary release downloads of this repository.
 
 name: Main build
 
 on:
   # Deliberately dispatch-only, even after activation. `push: [main]` is a
-  # second decision, and UPDATE-CHANNELS.md's disposition 2 depends on being
-  # able to bound how many live pre-releases exist while old clients still
-  # resolve the update companion by scanning 20 recent releases.
+  # second decision, and UPDATE-CHANNELS.md's disposition depends on being able
+  # to bound how many live pre-releases exist while installs already in the
+  # field still resolve the update companion by scanning 20 recent releases.
   workflow_dispatch:
     inputs:
       sha:
@@ -32,19 +37,33 @@ permissions:
 
 jobs:
   identity:
-    name: Name this build
+    name: Resolve the commit and name the build
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.name.outputs.version }}
-      tag: v${{ steps.name.outputs.version }}
+      # The commit, resolved ONCE. Every later job checks out this SHA rather
+      # than the ref: `main` can move while a build is running, and a run that
+      # built three platforms from three different commits would publish an
+      # installer set that never existed as one tree.
+      source: ${{ steps.resolve.outputs.source }}
+      version: ${{ steps.resolve.outputs.version }}
+      tag: v${{ steps.resolve.outputs.version }}
+      updates_tag: v${{ steps.resolve.outputs.version }}-updates
+      # Fixed for every job, so the stamp commit is byte-identical on all three
+      # platforms and the app manifests agree on `commit` as well as on
+      # `treeSha256`.
+      stamp_date: ${{ steps.resolve.outputs.stamp_date }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.sha }}
-      - id: name
+      - id: resolve
         name: Next patch, plus a monotonic main label
         run: |
           set -euo pipefail
+          source="$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$source" origin/main 2>/dev/null \
+            || git fetch --no-tags --depth=100 origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$source" origin/main
           # NOT shared/version.json as it stands: a pre-release sorts BELOW the
           # release sharing its core numbers, so a build named from the current
           # version is older than the installed copy and reads as "ahead".
@@ -58,38 +77,288 @@ jobs:
           print(f"{major}.{minor}.{patch + 1}")
           PY
           )"
-          echo "version=$next-main.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          {
+            echo "source=$source"
+            echo "version=$next-main.${{ github.run_number }}"
+            echo "stamp_date=$(git show -s --format=%cI "$source")"
+          } >> "$GITHUB_OUTPUT"
 
-  # Every build job (spa / macos-bundle / windows-bundle / linux-bundle) is the
-  # rc-build.yml job unchanged, with one step inserted before it packages
-  # anything:
-  #
-  #   - name: Stamp this build's identity
-  #     run: |
-  #       set -euo pipefail
-  #       python scripts/bump_version.py --build-stamp \
-  #         --set "${{ needs.identity.outputs.version }}"
-  #       python scripts/gen_openapi.py --write
-  #       git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com \
-  #         commit -aqm "Build stamp ${{ needs.identity.outputs.version }}"
-  #
-  # The commit is not optional and is not bureaucracy. scripts/build_bundle.py
-  # materializes the app layer from **Git blobs** at HEAD, and refuses a dirty
-  # worktree before it starts: a stamp left in the checkout would fail the build,
-  # and if it did not, it would package the previous version under the new
-  # name. Committing it is what makes one version reach the packaged backend,
-  # the SPA it embeds, the app manifest and every installer filename together.
-  # It is never pushed and never tagged; it exists inside the runner.
-  # `scripts/tests/test_build_bundle.py` pins this behaviour.
-  #
-  # The app layer is then built with the commit a person would look for:
-  #
-  #   uv run ... scripts/build_bundle.py --spa "$spa" --output build/bundle \
-  #     --source-commit "${{ github.sha }}"
-  #
-  # which records `sourceCommit` in APP-MANIFEST.json beside the stamp commit
-  # `commit` already carries. Both `--build-stamp` and `--source-commit` exist;
-  # neither changes a release, which passes neither.
+  spa:
+    name: Build the SPA
+    runs-on: ubuntu-latest
+    needs: identity
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.identity.outputs.source }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # The stamp comes before `npm ci`: the SPA compiles __WG2_VERSION__ from
+      # package.json, so a build stamped afterwards would report the last
+      # release from inside the running application.
+      - name: Stamp this build's identity
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+          GIT_AUTHOR_DATE: ${{ needs.identity.outputs.stamp_date }}
+          GIT_COMMITTER_DATE: ${{ needs.identity.outputs.stamp_date }}
+        run: |
+          set -euo pipefail
+          python scripts/bump_version.py --build-stamp --set "$VERSION"
+          python scripts/gen_openapi.py --write
+          python scripts/bump_version.py --check --build-stamp
+          git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com \
+            commit -aqm "Build stamp $VERSION" --no-gpg-sign
+      - name: Build the SPA
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Package and verify the SPA
+        run: |
+          set -euo pipefail
+          version="$(python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          archive="$(python -c 'import sys; from shared import release_assets; print(release_assets.spa_archive_name(sys.argv[1]))' "$version")"
+          tar -czf "$archive" -C frontend dist
+          sha256sum "$archive" > "$archive.sha256"
+          echo "artifact=$archive" >> "$GITHUB_ENV"
+          tar -tzf "$archive" | grep -Fx "dist/index.html"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: main-build-spa
+          path: |
+            ${{ env.artifact }}
+            ${{ env.artifact }}.sha256
+          if-no-files-found: error
+
+  macos-bundle:
+    name: Build the macOS standalone app
+    runs-on: macos-latest
+    needs: [identity, spa]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.identity.outputs.source }}
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.2"
+      - uses: actions/download-artifact@v4
+        with:
+          name: main-build-spa
+          path: build/spa
+      # Identical to the SPA job's stamp, with the same fixed dates, so this
+      # commit has the same SHA on every platform. build_bundle materializes
+      # the app layer from Git blobs and refuses a dirty worktree: the commit
+      # is what carries the version into the packaged app at all.
+      - name: Stamp this build's identity
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+          GIT_AUTHOR_DATE: ${{ needs.identity.outputs.stamp_date }}
+          GIT_COMMITTER_DATE: ${{ needs.identity.outputs.stamp_date }}
+        run: |
+          set -euo pipefail
+          python scripts/bump_version.py --build-stamp --set "$VERSION"
+          python scripts/gen_openapi.py --write
+          python scripts/bump_version.py --check --build-stamp
+          git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com \
+            commit -aqm "Build stamp $VERSION" --no-gpg-sign
+      - name: Build and verify the standalone app
+        env:
+          SOURCE: ${{ needs.identity.outputs.source }}
+        run: |
+          set -euo pipefail
+          version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          spa="build/spa/update-spa-$version.tar.gz"
+          test -f "$spa"
+          test -f "$spa.sha256"
+          uv run --no-project --python 3.13.12 scripts/build_bundle.py \
+            --spa "$spa" --output build/bundle --source-commit "$SOURCE"
+      - name: Share the canonical platform-neutral app layer
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-build-app-layer
+          path: |
+            build/bundle/update-app-*.zip
+            build/bundle/update-app-*.zip.sha256
+            build/bundle/update-app-*.manifest.json
+          if-no-files-found: error
+      - name: Share the macOS assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-build-macos
+          path: |
+            build/bundle/Waveguide.Generator-*-macos-arm64.dmg
+            build/bundle/Waveguide.Generator-*-macos-arm64.dmg.sha256
+            build/bundle/update-runtime-macos-arm64-*.zip
+            build/bundle/update-runtime-macos-arm64-*.zip.sha256
+          if-no-files-found: error
+
+  windows-bundle:
+    name: Build the Windows standalone app
+    runs-on: windows-latest
+    needs: [identity, spa, macos-bundle]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.identity.outputs.source }}
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.2"
+      - uses: actions/download-artifact@v4
+        with:
+          name: main-build-spa
+          path: build/spa
+      - uses: actions/download-artifact@v4
+        with:
+          name: main-build-app-layer
+          path: build/app-reference
+      - name: Stamp this build's identity
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+          GIT_AUTHOR_DATE: ${{ needs.identity.outputs.stamp_date }}
+          GIT_COMMITTER_DATE: ${{ needs.identity.outputs.stamp_date }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          python scripts/bump_version.py --build-stamp --set $env:VERSION
+          python scripts/gen_openapi.py --write
+          python scripts/bump_version.py --check --build-stamp
+          git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com commit -aqm "Build stamp $env:VERSION" --no-gpg-sign
+      - name: Install the pinned Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup --version=6.7.1 -y --no-progress
+          $iscc = "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            $iscc = (Get-ChildItem -Path "$env:ProgramFiles","${env:ProgramFiles(x86)}" -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1 -ExpandProperty FullName)
+          }
+          if (-not $iscc) { throw "Inno Setup installed but ISCC.exe was not found." }
+          "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # The installer's VersionInfoVersion is a binary field that takes only
+      # numbers, which is why build_bundle passes it the numeric form of this
+      # version rather than the version string. Without that, ISCC refuses to
+      # compile a pre-release build at all.
+      - name: Build and verify the standalone app
+        shell: pwsh
+        env:
+          SOURCE: ${{ needs.identity.outputs.source }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])'
+          $spa = "build/spa/update-spa-$version.tar.gz"
+          if (-not (Test-Path -LiteralPath $spa) -or -not (Test-Path -LiteralPath "$spa.sha256")) {
+            throw "The verified SPA inputs are missing."
+          }
+          uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform windows --spa $spa --output build/bundle --source-commit $env:SOURCE
+      - name: Assert both platforms built the same app layer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $local = @(Get-ChildItem -File build/bundle/update-app-*.manifest.json)
+          $reference = @(Get-ChildItem -File build/app-reference/update-app-*.manifest.json)
+          if ($local.Count -ne 1 -or $reference.Count -ne 1) {
+            throw "Expected exactly one local and one macOS-built app manifest."
+          }
+          $localTree = (Get-Content -Raw $local[0] | ConvertFrom-Json).treeSha256
+          $referenceTree = (Get-Content -Raw $reference[0] | ConvertFrom-Json).treeSha256
+          if (-not $localTree -or -not $referenceTree) {
+            throw "An app manifest carries no treeSha256; the builder did not write one."
+          }
+          if ($localTree -ne $referenceTree) {
+            throw "Windows and macOS app layers differ: $localTree != $referenceTree"
+          }
+          Write-Host "Cross-platform app layer treeSha256: $localTree"
+      - name: Share the Windows assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-build-windows
+          path: |
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe.sha256
+            build/bundle/Waveguide.Generator-*-windows-x86_64.zip
+            build/bundle/Waveguide.Generator-*-windows-x86_64.zip.sha256
+            build/bundle/update-runtime-windows-x86_64-*.zip
+            build/bundle/update-runtime-windows-x86_64-*.zip.sha256
+          if-no-files-found: error
+
+  linux-bundle:
+    name: Build the Linux standalone app
+    # Pinned to the distribution the build claims to support rather than
+    # ubuntu-latest, so the glibc the runtime is linked against cannot move
+    # under the build without anyone deciding to move it.
+    runs-on: ubuntu-24.04
+    needs: [identity, spa, macos-bundle]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.identity.outputs.source }}
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.2"
+      - uses: actions/download-artifact@v4
+        with:
+          name: main-build-spa
+          path: build/spa
+      - uses: actions/download-artifact@v4
+        with:
+          name: main-build-app-layer
+          path: build/app-reference
+      - name: Stamp this build's identity
+        env:
+          VERSION: ${{ needs.identity.outputs.version }}
+          GIT_AUTHOR_DATE: ${{ needs.identity.outputs.stamp_date }}
+          GIT_COMMITTER_DATE: ${{ needs.identity.outputs.stamp_date }}
+        run: |
+          set -euo pipefail
+          python scripts/bump_version.py --build-stamp --set "$VERSION"
+          python scripts/gen_openapi.py --write
+          python scripts/bump_version.py --check --build-stamp
+          git -c user.name=m-a -c user.email=m3gnus@users.noreply.github.com \
+            commit -aqm "Build stamp $VERSION" --no-gpg-sign
+      - name: Build and verify the standalone app
+        env:
+          SOURCE: ${{ needs.identity.outputs.source }}
+        run: |
+          set -euo pipefail
+          version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          spa="build/spa/update-spa-$version.tar.gz"
+          test -f "$spa"
+          test -f "$spa.sha256"
+          uv run --no-project --python 3.13.12 python scripts/build_bundle.py \
+            --platform linux --spa "$spa" --output build/bundle --source-commit "$SOURCE"
+      - name: Assert this platform built the same app layer
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import json
+
+          local = glob.glob("build/bundle/update-app-*.manifest.json")
+          reference = glob.glob("build/app-reference/update-app-*.manifest.json")
+          if len(local) != 1 or len(reference) != 1:
+              raise SystemExit("Expected exactly one local and one macOS-built app manifest.")
+          trees = [json.load(open(path))["treeSha256"] for path in (local[0], reference[0])]
+          if not all(trees) or trees[0] != trees[1]:
+              raise SystemExit(f"Linux and macOS app layers differ: {trees[0]} != {trees[1]}")
+          print(f"Cross-platform app layer treeSha256: {trees[0]}")
+          PY
+      - name: Share the Linux assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-build-linux
+          path: |
+            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
+            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz.sha256
+            build/bundle/update-runtime-linux-x86_64-*.zip
+            build/bundle/update-runtime-linux-x86_64-*.zip.sha256
+          if-no-files-found: error
 
   publish:
     name: Publish an immutable main build
@@ -99,14 +368,52 @@ jobs:
       # <-- The authorization. GIT-WORKFLOW.md §1.2.5; this is exactly why the
       #     file is not a workflow yet.
       contents: write
+    env:
+      # `gh` needs to know both the repository and the commit it is releasing
+      # from. GH_REPO makes every command below explicit rather than dependent
+      # on the checkout it happens to be standing in.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.identity.outputs.version }}
+      SOURCE: ${{ needs.identity.outputs.source }}
+      TAG: ${{ needs.identity.outputs.tag }}
+      UPDATES_TAG: ${{ needs.identity.outputs.updates_tag }}
     steps:
+      # A checkout, so `shared/release_assets.py` names the assets here rather
+      # than a second copy of those names living in this file.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.identity.outputs.source }}
       - uses: actions/download-artifact@v4
         with:
-          path: build
+          path: build/artifacts
+      - name: Sort the assets into the two releases
+        run: |
+          set -euo pipefail
+          mkdir -p build/downloads build/layers
+          python - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          from shared import release_assets
+
+          version = os.environ["VERSION"]
+          staged = sorted(Path("build/artifacts").rglob("*"))
+          wanted = set(release_assets.user_download_names(version))
+          downloads, layers = Path("build/downloads"), Path("build/layers")
+          for path in staged:
+              if not path.is_file():
+                  continue
+              target = downloads if path.name in wanted else layers
+              shutil.copy2(path, target / path.name)
+          missing = wanted - {path.name for path in downloads.iterdir()}
+          if missing:
+              raise SystemExit(f"The build produced no {sorted(missing)}")
+          print("downloads:", sorted(path.name for path in downloads.iterdir()))
+          print("layers:", sorted(path.name for path in layers.iterdir()))
+          PY
       - name: Publish, as a pre-release, once
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.identity.outputs.tag }}
         run: |
           set -euo pipefail
           # `--prerelease` is what keeps this off the stable channel:
@@ -116,26 +423,22 @@ jobs:
             echo "$TAG already exists. A build is never republished." >&2
             exit 1
           fi
-          gh release create "$TAG" \
+          # The companion first, so the layers exist before anything can look
+          # for them -- the order release.yml publishes in, for the same reason.
+          gh release create "$UPDATES_TAG" \
+            --target "$SOURCE" \
             --prerelease \
-            --title "main build ${{ needs.identity.outputs.version }}" \
-            --notes "Automatic build of main@${{ github.sha }}. Not a release." \
-            build/**/*
-      - name: Publish the update layers as this build's own companion
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          UPDATES_TAG: ${{ needs.identity.outputs.tag }}-updates
-        run: |
-          set -euo pipefail
-          # The same split release.yml publishes: installers on the build's own
-          # page, update layers on `<tag>-updates`. `_layer_asset` reads the
-          # companion first and falls back to the release's own assets, so
-          # either arrangement resolves; matching release.yml keeps one shape.
-          gh release create "$UPDATES_TAG" --prerelease \
-            --title "main build layers" --notes "Update layers for $UPDATES_TAG." \
+            --title "main build $VERSION layers" \
+            --notes "Update layers for $TAG. Not a release." \
             build/layers/*
+          gh release create "$TAG" \
+            --target "$SOURCE" \
+            --prerelease \
+            --title "main build $VERSION" \
+            --notes "Automatic build of main@$SOURCE. Not a release." \
+            build/downloads/*
       # No cleanup step, deliberately. Deleting an older main build would delete
       # a published tag (§1.2.1) and would be the tag mutation this design
-      # exists to avoid. If live pre-releases have to be bounded for old
-      # clients, bound how often this workflow runs -- see
+      # exists to avoid. If live pre-releases have to be bounded for installs
+      # already in the field, bound how often this workflow runs — see
       # UPDATE-CHANNELS.md, "Old-client compatibility".

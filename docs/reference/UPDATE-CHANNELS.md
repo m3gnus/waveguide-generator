@@ -173,6 +173,21 @@ asks for no private key, and does not widen `trusted_asset_url`.
   `v<next-patch>-main.<n>` (SemVer rule 11 again), so a main-build install moves
   onto it without any special case.
 
+### What has and has not been verified
+
+Stated plainly, because "it parses" is not "it builds":
+
+| Checked | How |
+|---|---|
+| The workflow is a complete graph | `scripts/tests/test_main_build_proposal.py`: every `needs` names a job that exists and has steps, artifacts match by name across jobs, and every asset `shared/release_assets.py` produces is matched by an upload path. |
+| One commit is built | The identity job resolves `inputs.sha` once; every other job checks out that SHA, and the manifest records it. |
+| The flags it calls exist | The test runs `--help` on both scripts. |
+| A stamp reaches the app layer only once committed | `scripts/tests/test_build_bundle.py`, against the real materializer. |
+| The native version fields take the value passed to them | `server/tests/test_version_consistency.py` for the plist, `scripts/tests/test_build_bundle.py` for the Inno defines. |
+| An installed copy accepts a pre-release update request | `server/tests/test_update_handoff.py`, both the bundle and the release-tag paths. |
+| **Not checked: that Inno Setup compiles the script** | ISCC is Windows-only and was not run. What is checked is that it is handed four numbers rather than a SemVer string, which is the input that made it refuse. |
+| **Not checked: that macOS packages, or that any installer runs** | Those need the runners, and a published build needs the authorizations below. |
+
 ### Old-client compatibility
 
 Stated as behaviour, per audience:
