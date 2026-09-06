@@ -10,8 +10,41 @@ numpy==2.4.6
 # must not rest on matplotlib and pytest happening to require it.
 packaging==26.3
 pillow==12.2.0
-# Native desktop window around the loopback-served frontend on macOS and Windows.
+# Native desktop window around the loopback-served frontend.
 pywebview==6.2.1
+# ...and the backend that window is drawn with on Linux, which pywebview does
+# not bring by itself. Its Windows and macOS backends arrive through
+# unconditional platform markers (pythonnet, pyobjc-*), but every Linux backend
+# is behind an extra -- so a plain install ships the window library with no way
+# to open a window, which is what the 0.3.1 Linux bundle did.
+#
+# These two lines are what ``pywebview[pyside6]`` resolves to, written out and
+# pinned rather than requested as an extra: an extra names no version, and
+# every other line in this file and its lock does. They must stay in step with
+# that extra; pywebview's qt backend imports its bindings through qtpy and
+# never touches PySide6 directly.
+#
+# PySide6 rather than the GTK backend because GTK needs WebKitGTK *from the
+# distribution*, which would break this application's promise to install
+# nothing system-wide -- and a Fedora 44 desktop was reported on 2026-09-05
+# with no libwebkit2gtk at all. PySide6 rather than PyQt6 because it is the Qt
+# Company's own binding under LGPLv3, where PyQt6 is GPL-or-commercial: both
+# are license-compatible with this AGPLv3 application, only one is compatible
+# with anyone else's.
+#
+# 6.9.3 rather than the current 6.11.2 for one reason: it is the last release
+# whose Linux wheels are manylinux_2_28, and 6.10 onwards moved to
+# manylinux_2_34. glibc 2.28 reaches Ubuntu 20.04, Debian 10 and RHEL 8; 2.34
+# starts at Ubuntu 22.04 and Fedora 35. The bundle targets Ubuntu 24.04 and
+# would not notice, but a source checkout bootstrapped on an older distribution
+# would find no wheel, fall through to an sdist that cannot build, and fail the
+# whole environment over a window. 6.9.3 supports CPython 3.13 (its wheels
+# declare <3.14) and is abi3, so this costs nothing else.
+#
+# It is not small: 265 MB of wheels and roughly three times that installed,
+# because QtWebEngine ships inside PySide6-Addons and that wheel is indivisible.
+PySide6==6.9.3; sys_platform == "linux"
+QtPy==2.4.3; sys_platform == "linux"
 # bempp-cl assembles on an OpenCL *CPU* device, which is hornlab-bempp-bem's own
 # default and what it calls its production backend. That holds on Windows and
 # Linux. It does not hold on Apple Silicon, whose ICD exposes the GPU and no CPU

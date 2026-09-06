@@ -685,6 +685,7 @@ def _headless_view(controller: _ViewController):
     three text variables and two lamps replaced here.
     """
 
+    pytest.importorskip("tkinter", exc_type=ImportError)
     from launchers.statusapp import view as view_module
 
     view = view_module.StatusView.__new__(view_module.StatusView)

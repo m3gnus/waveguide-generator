@@ -32,6 +32,7 @@ portable Julia. See the switch below.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import sys
 
 import pytest
@@ -45,6 +46,93 @@ os.environ.setdefault("WG2_SOLVER_WARMUP", "0")
 # through the same switch an operator would use; the tests that are about the
 # gate call ``start_cpu_provisioning`` with an explicit environment.
 os.environ.setdefault("WG2_SKIP_BEAT_CPU_PROVISION", "1")
+
+
+def pytest_sessionstart(session):
+    """Refuse one missing prerequisite instead of cascading app-mount failures."""
+
+    index = Path(__file__).resolve().parents[2] / "frontend" / "dist" / "index.html"
+    if not index.is_file():
+        raise pytest.UsageError(
+            "The server test suite requires the built frontend. From the repository "
+            "root, run:\n  npm --prefix frontend ci\n"
+            "  npm --prefix frontend run build\nThen rerun pytest."
+        )
+
+
+#: Where a launcher failure would be put on screen. Two modules, because
+#: ``launchers.desktop`` binds the reporter into its own namespace at import
+#: time, so patching the definition alone would leave that copy live.
+_DIALOG_ENTRY_POINTS = (
+    ("launchers.statusapp.__main__", "_show_startup_failure_dialog"),
+    ("launchers.desktop", "_show_startup_failure_dialog"),
+    ("launchers.desktop", "_show_bundle_failure_dialog"),
+)
+
+_startup_dialogs: list[str] = []
+
+
+@pytest.fixture()
+def real_startup_dialogs():
+    """Opt out of the guard below.
+
+    For the handful of tests whose subject *is* the dialog transport -- which
+    command is chosen, what happens when none exists, whether the AppleScript
+    parses. They stub the process layer themselves.
+    """
+
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _no_test_opens_a_dialog(request):
+    """No test may put a modal on the screen of whoever is running it.
+
+    ``_report_startup_failure`` shows a dialog whenever nobody is reading
+    stderr, and under pytest nobody is: the stream is captured, so
+    ``isatty()`` is false. On macOS that dialog was a blocking ``osascript``,
+    so the first test to report a startup failure held the whole run for the
+    300 s faulthandler timeout and left the modal behind afterwards. Eight
+    tests in this suite reach it, and none of them is about the dialog.
+
+    The decision is left alone -- only the delivery is replaced -- so a test
+    can still assert that a failure *would* have been shown, through
+    :func:`startup_dialogs`.
+
+    **Its own ``MonkeyPatch``, deliberately, and not the shared fixture.**
+    Requesting ``monkeypatch`` here would make every test in the suite depend
+    on it, and an autouse fixture at conftest scope is set up before the
+    module-level ones -- so the shared undo, which finalises in reverse, would
+    start running *after* module fixtures that clear an ``lru_cache`` in their
+    teardown. Those fixtures would then find the plain function a test had
+    patched in, and `cache_clear` is not an attribute of one. That is not a
+    hypothetical: it is six teardown errors across
+    ``test_beat_cpu_runtime``/``test_bempp_availability``/``test_solver_beat``
+    in a full run, invisible to any subset that does not include them. A guard
+    with no business in those tests must not reorder their fixtures, so this
+    one owns its patches and undoes them itself.
+    """
+
+    if "real_startup_dialogs" in request.fixturenames:
+        yield
+        return
+    _startup_dialogs.clear()
+    patcher = pytest.MonkeyPatch()
+    try:
+        for module_name, attribute in _DIALOG_ENTRY_POINTS:
+            module = sys.modules.get(module_name)
+            if module is not None and hasattr(module, attribute):
+                patcher.setattr(module, attribute, _startup_dialogs.append)
+        yield
+    finally:
+        patcher.undo()
+
+
+@pytest.fixture()
+def startup_dialogs(_no_test_opens_a_dialog) -> list[str]:
+    """Every message this test would have put on screen, in order."""
+
+    return _startup_dialogs
 
 
 @pytest.fixture(autouse=True)

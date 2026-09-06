@@ -968,6 +968,22 @@ def linux_desktop_entry() -> str:
     is an additional category and needs a main one beside it; a second main
     category makes ``desktop-file-validate`` warn that the entry may appear
     twice in the menu, which it does on GNOME.
+
+    ``Exec`` carries **no field code**. It used to end in ``%U``, which
+    promises that the application accepts URLs -- but the entry declares no
+    ``MimeType``, so nothing was ever going to associate a file with it, and
+    the launcher now rejects arguments it does not recognise instead of
+    forwarding them to the server. A stray ``%U`` expansion would therefore
+    have turned an opened file into exit code 2. The specification requires a
+    field code only for entries that handle files or URLs.
+
+    ``StartupWMClass`` names what Qt actually puts on the window:
+    ``QXcbIntegration::wmClass`` takes WM_CLASS's class from
+    ``QCoreApplication::applicationName``, which ``launchers/desktop.py`` sets
+    to ``LINUX_APPLICATION_NAME``. On Wayland the match is made against the
+    ``app_id`` instead, which Qt takes from ``QGuiApplication::desktopFileName``
+    -- set to this file's own basename, so a compositor resolves it without
+    needing this key at all.
     """
 
     return """[Desktop Entry]
@@ -976,7 +992,7 @@ Version=1.5
 Name=Waveguide Generator
 GenericName=Acoustic waveguide designer
 Comment=Design and simulate acoustic waveguides locally
-Exec=@INSTALL_DIR@/waveguide-generator %U
+Exec=@INSTALL_DIR@/waveguide-generator
 Icon=waveguide-generator
 Terminal=false
 Categories=Science;Engineering;
@@ -1910,6 +1926,12 @@ Open a terminal in this folder and run:
 
     ./install.sh
 
+If you have not used a terminal before: extract the download, then right-click
+the extracted folder and choose "Open in Terminal" (GNOME Files, Nautilus,
+Dolphin and Thunar all offer it, sometimes under "Open Terminal Here"). Type
+the line above into the window that opens and press Enter. Nothing else is
+needed, and nothing will ask for your password.
+
 It copies the application to ~/.local/share/waveguide-generator, adds a
 launcher to your applications menu, and puts `waveguide-generator` on your
 PATH at ~/.local/bin. Run it again to upgrade in place; your designs, job
@@ -1941,10 +1963,17 @@ WHAT IT SHOULD DO
 Waveguide Generator starts a local server on 127.0.0.1 and opens its
 interface. Nothing is sent anywhere; it runs entirely on your machine.
 
-Linux gets the status window and your browser rather than the single native
-window macOS and Windows have. That is the documented behaviour, not a
-failure: the native window needs a system webview this build does not depend
-on.
+You get the same single native window macOS and Windows have. It is drawn by
+the Qt libraries installed beside the application, so nothing has to be added
+to your system for it -- but Qt does load your desktop's X11 or Wayland client
+libraries, and a machine that has never run a Qt application may be missing
+one. If it is, the application says which, tells you the package that provides
+it on Debian/Ubuntu, Fedora and Arch, and opens the status window and your
+browser instead. Everything works there too; only the window is different.
+
+Over SSH, or on any machine with no display at all, use:
+
+    waveguide-generator --no-gui
 """
 
     def linux_readme(self) -> str:

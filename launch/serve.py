@@ -26,6 +26,7 @@ if str(_IMPORT_ROOT) not in sys.path:
 
 import uvicorn  # noqa: E402 - the checkout root must be importable first
 
+from launch.serve_options import PROGRAM_NAME, add_server_arguments  # noqa: E402
 from server.app import BUILD, create_app  # noqa: E402
 from server.platform.console import harden_console  # noqa: E402
 from server.platform.instance import (  # noqa: E402
@@ -160,15 +161,18 @@ def _solver_warmup_enabled() -> bool:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, help="preferred local port (default: 3100)")
-    parser.add_argument("--no-browser", action="store_true", help="do not open a browser")
-    parser.add_argument(
-        "--data-dir", type=Path, help="override the application data directory"
+    """The server's own parser, over the shared option surface.
+
+    ``prog`` is named rather than derived: this module is reached as
+    ``launchers/desktop.py``, as ``launchers/statusapp/__main__.py`` and as an
+    installed ``waveguide-generator``, and argparse would title its usage with
+    whichever file happened to be ``sys.argv[0]`` -- a path the user did not
+    type and cannot run.
+    """
+
+    return add_server_arguments(
+        argparse.ArgumentParser(prog=PROGRAM_NAME, description=__doc__)
     )
-    parser.add_argument("--status-control", type=Path, help=argparse.SUPPRESS)
-    parser.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
-    return parser
 
 
 def _open_browser_when_ready(port: int, stop: threading.Event) -> None:
