@@ -36,7 +36,7 @@ conservative side.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Any, Callable, Mapping
 
@@ -175,10 +175,17 @@ class GridPlan:
 
 @dataclass(frozen=True)
 class CadPlan:
-    """Millimetre sampling target for the solid STEP's own grid refinement."""
+    """Millimetre sampling target for the solid STEP's own grid refinement.
+
+    ``deviation_mm`` is ``None`` when nothing measurable came back, which is
+    also when ``warning`` is set: the file is still written, at the conservative
+    fallback sampling, but nothing has checked it against the tolerance and the
+    export says so rather than implying it was met.
+    """
 
     resolution_mm: float
     deviation_mm: float | None
+    warning: str | None = None
 
 
 #: What ``plan_grid`` asks for a candidate grid: the deviation, and the counts
@@ -832,6 +839,11 @@ def plan_grid(
     tolerance_for_report = min(angular_tolerance, axial_tolerance)
     best: GridPlan | None = None
     finest: GridPlan | None = None
+    # Whether the finest plan's own reading was one the search would have been
+    # willing to accept had it been inside the tolerance. A cubic estimate on a
+    # grid too coarse to validate it is not, and the two say different things.
+    finest_validated = True
+    stalled = False
     for _ in range(max_attempts):
         measured = measure(params, angular_count, length_count)
         if measured is None:
@@ -841,8 +853,17 @@ def plan_grid(
                 None,
                 estimated_triangles(angular_count, length_count),
             )
+            # A candidate that already met the tolerance is still a measured,
+            # passing grid: losing the reading on a *finer* probe says nothing
+            # about it, so that keeps its silence. Falling back with nothing
+            # measured is the case the user cannot otherwise see.
+            if best is not None:
+                return _ceiling_trimmed(best, triangle_ceiling, tolerance_for_report)
             return _ceiling_trimmed(
-                best or plan, triangle_ceiling, tolerance_for_report
+                _with_warning(plan, _unmeasured_warning(tolerance_for_report)),
+                triangle_ceiling,
+                tolerance_for_report,
+                meets_target=False,
             )
         deviation, resolved_angular, resolved_length = measured
         angular_ratio = deviation.of("angular", angular_fit) / angular_tolerance
@@ -853,9 +874,10 @@ def plan_grid(
             deviation.for_fit(angular_fit, axial_fit),
             estimated_triangles(resolved_angular, resolved_length),
         )
+        trustworthy = deviation.cubic_estimate_is_valid or not wants_cubic
         if finest is None or plan.triangles > finest.triangles:
             finest = plan
-        trustworthy = deviation.cubic_estimate_is_valid or not wants_cubic
+            finest_validated = trustworthy
         if max(angular_ratio, axial_ratio) <= 1.0 and trustworthy:
             if best is None or plan.triangles < best.triangles:
                 best = plan
@@ -896,27 +918,119 @@ def plan_grid(
             (resolved_angular, resolved_length),
         )
         if (next_angular, next_length) == (angular_count, length_count):
+            stalled = True
             break
         angular_count, length_count = next_angular, next_length
     # Nothing met the tolerance inside the attempt budget: ship the finest grid
     # tried, with the deviation it was measured at, rather than an unmeasured
     # guess. The ceiling below still applies.
+    #
+    # It also says so. Shipping a grid that missed its target used to be silent,
+    # which made a compromise the export had measured invisible to the person
+    # holding the file. An accepted grid returns first and still carries
+    # nothing, so only a compromise is ever announced.
+    if best is not None:
+        return _ceiling_trimmed(best, triangle_ceiling, tolerance_for_report)
+    if finest is not None and finest.deviation_mm is not None:
+        # Three different things can land here and they are not the same claim:
+        # a reading that exceeded the target, and a reading inside it that the
+        # search would not accept because the model behind it was never
+        # validated on a grid this coarse.
+        warning = (
+            _unmet_warning(finest.deviation_mm, tolerance_for_report, stalled)
+            if finest_validated or finest.deviation_mm > tolerance_for_report
+            else _unvalidated_warning(
+                finest.deviation_mm, tolerance_for_report, stalled
+            )
+        )
+        fallback = _with_warning(finest, warning)
+    else:
+        fallback = _with_warning(
+            finest
+            or GridPlan(
+                angular_count,
+                length_count,
+                None,
+                estimated_triangles(angular_count, length_count),
+            ),
+            _unmeasured_warning(tolerance_for_report),
+        )
     return _ceiling_trimmed(
-        best or finest or GridPlan(
-            angular_count,
-            length_count,
-            None,
-            estimated_triangles(angular_count, length_count),
-        ),
-        triangle_ceiling,
-        tolerance_for_report,
+        fallback, triangle_ceiling, tolerance_for_report, meets_target=False
     )
 
 
+def _unmeasured_warning(tolerance_mm: float) -> str:
+    """What to say when nothing measurable came back for any candidate."""
+
+    return (
+        f"This geometry could not be measured against its {tolerance_mm:g} mm "
+        "target here, so the export used its fallback grid and wrote the file "
+        "anyway; its deviation is unverified rather than known to be met."
+    )
+
+
+def _search_end(stalled: bool) -> str:
+    return (
+        "the search could refine no further"
+        if stalled
+        else "the refinement budget ran out"
+    )
+
+
+def _unmet_warning(deviation_mm: float, tolerance_mm: float, stalled: bool) -> str:
+    """What to say when every candidate was measured and none met the target."""
+
+    return (
+        f"This geometry did not reach its {tolerance_mm:g} mm target before "
+        f"{_search_end(stalled)}; the export was written on the finest grid "
+        f"tried, measured at {deviation_mm:.4g} mm, so fine detail is smoother "
+        "than the target."
+    )
+
+
+def _unvalidated_warning(
+    deviation_mm: float, tolerance_mm: float, stalled: bool
+) -> str:
+    """What to say when the number is inside the target but does not bound it.
+
+    A cubic estimate on a grid too coarse to validate it reads low; that is why
+    the search declines to accept such a grid in the first place. Reporting it
+    as "did not reach the target" would be false -- the number is inside it --
+    and reporting nothing would pass an unvalidated estimate off as a
+    measurement. Neither claim is available, so the note makes the distinction.
+    """
+
+    return (
+        f"This export could not confirm its {tolerance_mm:g} mm target before "
+        f"{_search_end(stalled)}. The finest grid tried reads {deviation_mm:.4g}"
+        " mm, but on a grid this coarse that reading is an estimate the export "
+        "could not validate, so it is not a bound on the real deviation."
+    )
+
+
+def _with_warning(plan: GridPlan, warning: str) -> GridPlan:
+    """Add a warning to a plan, keeping any it already carries."""
+
+    if not plan.warning:
+        return replace(plan, warning=warning)
+    return replace(plan, warning=f"{plan.warning} {warning}")
+
+
 def _ceiling_trimmed(
-    plan: GridPlan, ceiling: int | None, tolerance_mm: float
+    plan: GridPlan,
+    ceiling: int | None,
+    tolerance_mm: float,
+    *,
+    meets_target: bool = True,
 ) -> GridPlan:
     """Trim a plan back to the backstop ceiling, and say so. Never refuse.
+
+    ``meets_target`` is whether the plan being trimmed was measured to hold the
+    tolerance. It only changes the wording, and it has to: the note used to say
+    the untrimmed grid "needs about N triangles to hold" the target, which is a
+    claim about a grid the search may have just reported as missing it. Two
+    compromises are two facts, and the second must not contradict the first.
 
     The counts are requests and ``plan.triangles`` is what the builder resolved
     them to, so the trim scales the plan's *own* triangle count rather than
@@ -927,6 +1041,10 @@ def _ceiling_trimmed(
 
     if ceiling is None or plan.triangles <= ceiling:
         return plan
+    # Whatever the plan already had to say still holds: a grid can both miss its
+    # target and be too large for the ceiling, and reporting only the second
+    # would hide the first.
+    carried = plan.warning
     angular, length = plan.angular, plan.length
     per_cell = plan.triangles / max(1, plan.angular * plan.length)
     resolved = lambda a, ell: per_cell * a * ell  # noqa: E731 - one local rule
@@ -942,17 +1060,26 @@ def _ceiling_trimmed(
         if (angular, length) == (_MIN_ANGULAR, _MIN_LENGTH):
             break
     triangles = int(round(resolved(angular, length)))
+    trimmed = (
+        (
+            f"This geometry needs about {plan.triangles:,} triangles to hold "
+            f"{tolerance_mm:g} mm; the export was coarsened to roughly "
+            f"{triangles:,} to stay inside its {ceiling:,}-triangle ceiling, "
+            "so fine detail is smoother than the target."
+        )
+        if meets_target
+        else (
+            f"That grid would also have needed about {plan.triangles:,} "
+            f"triangles, so it was coarsened further to roughly {triangles:,} "
+            f"to stay inside this export's {ceiling:,}-triangle ceiling."
+        )
+    )
     return GridPlan(
         angular,
         length,
         None,
         triangles,
-        warning=(
-            f"This geometry needs about {plan.triangles:,} triangles to hold "
-            f"{tolerance_mm:g} mm; the export was coarsened to roughly "
-            f"{triangles:,} to stay inside its {ceiling:,}-triangle ceiling, "
-            "so fine detail is smoother than the target."
-        ),
+        warning=f"{carried} {trimmed}" if carried else trimmed,
     )
 
 
@@ -977,12 +1104,16 @@ def plan_cad_resolution(
             resolved = resolve_geometry(probe)
             params, _, _ = build_geometry_params(probe)
         except Exception:  # noqa: BLE001 - a probe must never fail the export
-            return CadPlan(_FALLBACK_CAD_RESOLUTION_MM, None)
+            return CadPlan(
+                _FALLBACK_CAD_RESOLUTION_MM, None, _unmeasured_warning(tolerance_mm)
+            )
         metadata = resolved.sampling_metadata
         angular = int(metadata.get("geometrySampleAngularSegments") or 0)
         length = int(metadata.get("geometrySampleLengthSegments") or 0)
         if angular < 4 or length < 2:
-            return CadPlan(_FALLBACK_CAD_RESOLUTION_MM, None)
+            return CadPlan(
+                _FALLBACK_CAD_RESOLUTION_MM, None, _unmeasured_warning(tolerance_mm)
+            )
         measured = measure_deviation(params, angular, length)
         # No reading at all, or a reading with no cubic model behind it: the
         # solid STEP is a degree-3 fit, and the correspondence-free chord the
@@ -990,7 +1121,9 @@ def plan_cad_resolution(
         # conservative sampling exactly as an absent reading always has, rather
         # than accept a grid on a number that does not describe this artifact.
         if measured is None or not measured[0].cubic_modelled:
-            return CadPlan(_FALLBACK_CAD_RESOLUTION_MM, None)
+            return CadPlan(
+                _FALLBACK_CAD_RESOLUTION_MM, None, _unmeasured_warning(tolerance_mm)
+            )
         deviation, _, _ = measured
         value = deviation.for_fit("cubic", "cubic")
         chord = max(deviation.angular_linear, deviation.axial_linear)
@@ -1027,8 +1160,13 @@ def plan_cad_resolution(
     # Nothing passed inside the attempt budget. Falling back must never be
     # *coarser* than where the search had already got to, or a design that was
     # being refined toward its tolerance would be handed a worse grid for
-    # running out of probes.
-    return CadPlan(min(_FALLBACK_CAD_RESOLUTION_MM, resolution), None)
+    # running out of probes. It is still a compromise the file does not show,
+    # so it is reported rather than left to the log.
+    return CadPlan(
+        min(_FALLBACK_CAD_RESOLUTION_MM, resolution),
+        None,
+        _unmeasured_warning(tolerance_mm),
+    )
 
 
 def _with_resolution(config: Mapping[str, Any], resolution: float) -> dict[str, Any]:

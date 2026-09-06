@@ -49,6 +49,15 @@ class StepSolidResult:
 
     step_text: str
     cad_info: CadInfo
+    warning: str | None = None
+
+
+@dataclass(frozen=True)
+class StepSurfaceResult:
+    """The ruled inner-surface STEP, plus anything its sizing had to say."""
+
+    step_text: str
+    warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -655,14 +664,39 @@ def _surface_grid_plan(design: DesignConfig) -> GridPlan:
     )
 
 
-def _build_step_sync(design_dump: dict[str, Any]) -> str:
+def _build_step_sync(design_dump: dict[str, Any]) -> StepSurfaceResult:
     design = DesignConfig.model_validate(design_dump)
     plan = _surface_grid_plan(design)
-    return _write_step(_inner_grid(design, grid=(plan.angular, plan.length)))
+    if plan.warning:
+        logger.warning("Surface STEP export sizing: %s", plan.warning)
+    logger.info(
+        "STEP inner surface on a %dx%d grid (measured deviation %s mm, tolerance %g mm)",
+        plan.angular,
+        plan.length,
+        "unmeasured" if plan.deviation_mm is None else f"{plan.deviation_mm:.5f}",
+        STL_CHORD_TOLERANCE_MM,
+    )
+    return StepSurfaceResult(
+        step_text=_write_step(_inner_grid(design, grid=(plan.angular, plan.length))),
+        warning=plan.warning,
+    )
 
 
-async def build_step(design: DesignConfig) -> str:
-    """Build the open, ruled, full-domain HornLab inner acoustic surface."""
+async def build_step(design: DesignConfig) -> StepSurfaceResult:
+    """Build the open, ruled, full-domain HornLab inner acoustic surface.
+
+    The plan's warning rides with the text. This export sizes itself, and when
+    the search cannot reach the tolerance it writes the finest grid it managed
+    rather than refusing -- which is right, and was previously invisible: the
+    plan carried the note and nothing ever read it.
+
+    **This returns a result object, not the STEP text.** It returned a bare
+    ``str`` until the warning had somewhere to travel; a second entry point
+    would have left two ways to build the same file, one of them silent. The
+    other two builders in this module already return their own result objects,
+    so the three now agree. The only caller is the export route, and
+    ``test_public_builders_return_their_result_objects`` pins the shape.
+    """
 
     return await run_on_gmsh_worker(_build_step_sync, design.model_dump(mode="json"))
 
@@ -714,6 +748,8 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
         "unmeasured" if plan.deviation_mm is None else f"{plan.deviation_mm:.5f}",
         STEP_SURFACE_TOLERANCE_MM,
     )
+    if plan.warning:
+        logger.warning("Solid STEP export sizing: %s", plan.warning)
     with tempfile.NamedTemporaryFile(
         prefix="waveguide-solid-", suffix=".step", delete=False
     ) as handle:
@@ -733,7 +769,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     finally:
         step_path.unlink(missing_ok=True)
     _assert_step(text)
-    return StepSolidResult(step_text=text, cad_info=cad_info)
+    return StepSolidResult(step_text=text, cad_info=cad_info, warning=plan.warning)
 
 
 async def build_step_solid(design: DesignConfig) -> StepSolidResult:
@@ -981,6 +1017,7 @@ def build_profiles(design: DesignConfig, kind: str) -> str:
 
 __all__ = [
     "StepSolidResult",
+    "StepSurfaceResult",
     "StlResult",
     "binary_stl",
     "build_profiles",

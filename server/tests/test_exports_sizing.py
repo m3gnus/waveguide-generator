@@ -38,6 +38,7 @@ from server.exports.sizing import (
     STL_TRIANGLE_CEILING,
     GridPlan,
     SurfaceDeviation,
+    _MAX_ANGULAR,
     _ceiling_trimmed,
     axial_band_of_column,
     estimated_triangles,
@@ -978,6 +979,218 @@ def test_planning_under_a_tiny_ceiling_returns_a_plan_rather_than_raising() -> N
     )
     assert plan.triangles <= 4_000
     assert plan.warning is not None
+
+
+# --- a compromise the export made has to reach the person holding the file ---
+#
+# These drive `plan_grid` through a stub measurement rather than a design, so
+# each case is the real decision taken deterministically: a design that happens
+# to exhaust the budget today would stop doing so the moment anything about the
+# geometry or the search moved, and the branch would go untested in silence.
+
+
+def _never_good_enough(deviation_mm: float):
+    """A measurement that always reads the same, well outside any tolerance."""
+
+    def measure(_params, angular: int, length: int):
+        return (
+            SurfaceDeviation(deviation_mm, deviation_mm, deviation_mm, deviation_mm),
+            angular,
+            length,
+        )
+
+    return measure
+
+
+def _unmeasurable(_params, _angular: int, _length: int):
+    return None
+
+
+def test_a_grid_that_never_reaches_its_target_says_so() -> None:
+    plan = plan_grid(
+        _params(_seed()),
+        angular=("linear", 0.10),
+        axial=("linear", 0.10),
+        measure=_never_good_enough(0.5),
+    )
+    assert plan.deviation_mm == pytest.approx(0.5)
+    assert plan.warning is not None
+    # The number the user is actually getting, and the one they asked for.
+    assert "0.5" in plan.warning and "0.1 mm" in plan.warning
+    # This stub cannot improve, so the search runs out of room rather than out
+    # of probes; the two are different compromises and the note says which.
+    assert "could refine no further" in plan.warning
+
+
+def test_a_grid_still_improving_when_the_probes_run_out_says_which_it_was() -> None:
+    """The other half of the same decision, and the one the budget names.
+
+    A reading that keeps falling never stalls the search, so the only thing that
+    stops it is the probe budget -- which is why this case forces a small one
+    rather than waiting for a design to exhaust the real one.
+    """
+
+    def measure(_params, angular: int, length: int):
+        # Improves with refinement, never fast enough to arrive.
+        value = 0.4 * (96.0 / max(angular, 1)) ** 0.05
+        return (SurfaceDeviation(value, value, value, value), angular, length)
+
+    plan = plan_grid(
+        _params(_seed()),
+        angular=("linear", 0.10),
+        axial=("linear", 0.10),
+        measure=measure,
+        max_attempts=3,
+    )
+    assert plan.warning is not None
+    assert "refinement budget ran out" in plan.warning
+    assert plan.angular < _MAX_ANGULAR, "it must still have had somewhere to go"
+
+
+def test_a_grid_that_meets_its_target_says_nothing() -> None:
+    """The gate is honesty about compromises, not a warning on every export."""
+
+    plan = plan_grid(
+        _params(_seed()),
+        angular=("linear", 0.10),
+        axial=("linear", 0.10),
+        measure=_never_good_enough(0.001),
+    )
+    assert plan.warning is None
+
+
+def test_losing_the_measurement_outright_is_reported_not_hidden() -> None:
+    plan = plan_grid(
+        _params(_seed()),
+        angular=("linear", 0.10),
+        axial=("linear", 0.10),
+        measure=_unmeasurable,
+    )
+    assert plan.deviation_mm is None
+    assert plan.warning is not None
+    assert "unverified" in plan.warning
+
+
+def test_losing_the_measurement_after_a_passing_grid_keeps_the_passing_grid() -> None:
+    """A lost reading on a finer probe says nothing about the one that passed.
+
+    Warning here would be the noise this gate is not: the export ships a grid
+    that was measured and did meet its tolerance.
+    """
+
+    readings = []
+
+    def measure(_params, angular: int, length: int):
+        readings.append((angular, length))
+        if len(readings) > 1:
+            return None
+        return (SurfaceDeviation(0.001, 0.001, 0.001, 0.001), angular, length)
+
+    plan = plan_grid(
+        _params(_seed()),
+        angular=("linear", 0.10),
+        axial=("linear", 0.10),
+        measure=measure,
+    )
+    assert len(readings) > 1, "the search must actually have probed again"
+    assert plan.deviation_mm is not None
+    assert plan.warning is None
+
+
+def test_a_grid_that_both_misses_and_overflows_reports_both() -> None:
+    """Two compromises are two sentences, not the second one overwriting the first."""
+
+    plan = plan_grid(
+        _params(_seed()),
+        angular=("linear", 0.10),
+        axial=("linear", 0.10),
+        measure=_never_good_enough(0.5),
+        triangle_ceiling=4_000,
+    )
+    assert plan.triangles <= 4_000
+    assert plan.warning is not None
+    assert "did not reach" in plan.warning
+    assert "ceiling" in plan.warning
+    # And the second sentence must not undo the first. The ceiling note used to
+    # say the untrimmed grid "needs about N triangles to hold 0.1 mm" -- about
+    # the very grid the first sentence had just reported as missing 0.1 mm.
+    assert "to hold 0.1 mm" not in plan.warning
+
+
+def test_a_ceiling_on_a_grid_that_did_pass_still_names_what_it_would_have_held() -> None:
+    """The conditional wording must not flatten the case that was always right."""
+
+    plan = plan_grid(
+        _params(_seed()),
+        angular=("linear", 0.001),
+        axial=("linear", 0.001),
+        triangle_ceiling=4_000,
+    )
+    assert plan.triangles <= 4_000
+    assert plan.warning is not None and "ceiling" in plan.warning
+
+
+def test_an_estimate_too_coarse_to_validate_is_not_reported_as_missing_target() -> None:
+    """Inside the number, outside what the number can support.
+
+    ``plan_grid`` refuses a cubic reading it cannot validate even when the value
+    is inside the tolerance -- correctly, because a uniform-cubic estimate on a
+    coarse grid reads low. Saying "did not reach its target" about that would be
+    false, and saying nothing would pass the estimate off as a measurement.
+    """
+
+    def measure(_params, angular: int, length: int):
+        # Cubic value inside the target; linear chord far above the validity
+        # chord, which is what makes the cubic estimate untrustworthy.
+        return (
+            SurfaceDeviation(9.0, 0.001, 9.0, 0.001, cubic_modelled=True),
+            angular,
+            length,
+        )
+
+    plan = plan_grid(
+        _params(_seed()),
+        angular=("cubic", 0.02),
+        axial=("cubic", 0.02),
+        measure=measure,
+    )
+    assert plan.warning is not None
+    assert "could not validate" in plan.warning
+    assert "not a bound" in plan.warning
+    assert "did not reach" not in plan.warning
+
+
+def test_the_solid_step_reports_a_sampling_it_could_not_verify() -> None:
+    """The corner-arc morph takes the conservative CAD fallback by design.
+
+    It is the right fallback and the export still writes the file, but nothing
+    measured that file against the 0.02 mm target, so it cannot be shipped as
+    though something had.
+    """
+
+    from server.exports.core import EXPORT_CORNER_SEGMENTS, _solver_mesher_config
+
+    config = _solver_mesher_config(_rounded(), keep_placement=True)
+    config["mesh"] = {
+        **(config.get("mesh") or {}),
+        "cornerSegments": EXPORT_CORNER_SEGMENTS,
+    }
+    plan = plan_cad_resolution(config, tolerance_mm=0.02)
+    assert plan.deviation_mm is None
+    assert plan.warning is not None and "unverified" in plan.warning
+
+
+def test_a_solid_step_sampling_that_was_measured_stays_quiet() -> None:
+    from server.exports.core import EXPORT_CORNER_SEGMENTS, _solver_mesher_config
+
+    config = _solver_mesher_config(_seed(), keep_placement=True)
+    config["mesh"] = {
+        **(config.get("mesh") or {}),
+        "cornerSegments": EXPORT_CORNER_SEGMENTS,
+    }
+    plan = plan_cad_resolution(config, tolerance_mm=0.02)
+    assert plan.deviation_mm is not None
+    assert plan.warning is None
 
 
 def test_the_backstop_ceiling_leaves_the_useful_fidelity_range_intact() -> None:

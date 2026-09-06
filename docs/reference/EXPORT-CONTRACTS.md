@@ -119,14 +119,40 @@ design, recorded so the order of magnitude is not a surprise; it is not a perfor
 guarantee, and no part of the export contract depends on it. Other hardware, other
 designs and other gmsh builds will differ.
 
-**The tolerance is what the search aims at, not a promise it always reaches.** Each
+**The tolerance is what the search aims at, and the export says when it missed.** Each
 planner refines for a bounded number of probes — six generally, sixteen for the surface
 STEP, whose reading falls more slowly than the step model each refinement is sized from.
-If a design exhausts that budget the planner ships the finest grid it tried, carrying the
-deviation it actually measured, and says nothing further about it. That is long-standing
-behaviour and it is unchanged here; it is recorded because "sized from a 0.10 mm
-tolerance" reads like a guarantee and is not one. The four designs the round-trip test
-qualifies arrive with four probes to spare.
+A design can run out of probes, run out of room to refine, or lose its measurement
+altogether. In every one of those cases the file is still written, on the finest grid the
+search reached, because refusing an export over its own sizing search would be worse than
+serving it. The four designs the round-trip test qualifies arrive with four probes to
+spare.
+
+What changed is that the compromise now leaves the server. Any export whose plan is not a
+grid measured to meet its tolerance returns an `X-Export-Warning` header, which the app
+shows on the line that reports the successful write. Four distinct things can be
+reported, and they are different claims:
+
+| situation | what the note says |
+|---|---|
+| Measured, and outside the target | the deviation it was measured at, and that fine detail is smoother than the target |
+| Measured inside the target, but on a grid too coarse to validate the model behind that number | that the target could not be *confirmed*, and that the reading is an estimate rather than a bound |
+| No usable measurement at all | that the export fell back and its deviation is unverified, rather than known to be met |
+| Coarsened to the triangle ceiling | the triangle counts before and after. When it lands on top of one of the rows above, both are reported, and the ceiling sentence does not claim the untrimmed grid would have held the target — because in that case it would not have |
+
+A grid that was measured and did meet its tolerance reports nothing. That is the whole
+point of the header: it means a compromise was made, so it must not fire on the ordinary
+case.
+
+**Scope: the CAD-link bundle is outside this.** *Send to CAD* does not go through the
+geometry-export planners at all — it hands the design's own resolved geometry to the
+mesher's bundle writer, so it has no fidelity plan, no reading, and nothing to warn
+about. Its manifest carries no sizing note, and that is a real gap rather than an
+oversight: a bundle is an identity-bearing CAD handoff sized by the design, not an export
+sized to a tolerance. `test_the_cad_bundle_is_built_without_the_export_sizing_planners`
+runs that path with the planners replaced by detonators, so if the bundle is ever routed
+through export sizing the gap closes loudly instead of silently shipping an unreported
+compromise.
 
 **The STL's triangle ceiling is a backstop, not a gate.** A design whose tolerance would
 need more than 150,000 triangles is exported anyway, coarsened to the ceiling, with the
