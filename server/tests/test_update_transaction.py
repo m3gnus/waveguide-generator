@@ -20,6 +20,7 @@ reached by killing a process.
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 from pathlib import Path
@@ -159,12 +160,12 @@ def test_a_journal_caught_mid_publication_is_never_read_as_decided(tmp_path: Pat
 
     resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
     _begin(resources, data_dir, staged_app, staged_runtime)
-    apply_update_module.set_journal_state(data_dir, "installed")
-    assert read_journal(data_dir)["state"] == "installed"
+    apply_update_module.set_journal_state(data_dir, resources, "installed")
+    assert read_journal(data_dir, resources)["state"] == "installed"
 
-    journal_temp_path(data_dir).write_text("{}", encoding="utf-8")
+    journal_temp_path(data_dir, resources).write_text("{}", encoding="utf-8")
 
-    record = read_journal(data_dir)
+    record = read_journal(data_dir, resources)
     assert record["state"] == INTERRUPTED_PUBLICATION_STATE
     allowed, detail = commit_transaction(data_dir, resources=resources)
     assert allowed is False
@@ -176,10 +177,10 @@ def test_a_temporary_journal_alone_still_says_a_transaction_was_in_flight(
 ) -> None:
     """No published record at all is not the same as no transaction."""
 
-    _resources, data_dir, _staged_app, _staged_runtime = _installation(tmp_path)
-    journal_temp_path(data_dir).write_text('{"schema": 1}', encoding="utf-8")
+    resources, data_dir, _staged_app, _staged_runtime = _installation(tmp_path)
+    journal_temp_path(data_dir, resources).write_text('{"schema": 1}', encoding="utf-8")
 
-    record = read_journal(data_dir)
+    record = read_journal(data_dir, resources)
     assert record is not None
     assert record["state"] == INTERRUPTED_PUBLICATION_STATE
 
@@ -189,12 +190,13 @@ def test_a_failed_directory_flush_is_reported_rather_than_assumed(
 ) -> None:
     """The journal write says which guarantee it got, and says so in the log."""
 
-    _resources, data_dir, _staged_app, _staged_runtime = _installation(tmp_path)
+    resources, data_dir, _staged_app, _staged_runtime = _installation(tmp_path)
     monkeypatch.setattr(apply_update_module, "sync_directory", lambda *_a, **_k: False)
     logged: list[str] = []
 
     durability = write_journal(
         data_dir,
+        resources,
         {"schema": 1, "operation": "update", "state": "planned", "layers": []},
         log=logged.append,
     )
@@ -243,9 +245,9 @@ def test_a_journal_that_could_not_have_been_written_here_decides_nothing(
     """
 
     resources, data_dir, _staged_app, _staged_runtime = _installation(tmp_path)
-    journal_path(data_dir).write_text(body, encoding="utf-8")
+    journal_path(data_dir, resources).write_text(body, encoding="utf-8")
 
-    record = read_journal(data_dir)
+    record = read_journal(data_dir, resources)
     assert record["state"] == expected
     allowed, _detail = commit_transaction(data_dir, resources=resources)
     assert allowed is False, "an untrusted record must never authorise reclaiming"
@@ -256,19 +258,27 @@ def test_a_journal_that_could_not_have_been_written_here_decides_nothing(
 # ---------------------------------------------------------------------------
 
 
+def _foreign_installation(tmp_path: Path) -> Path:
+    other = tmp_path / "OtherCopy"
+    (other / "app").mkdir(parents=True)
+    (other / "runtime").mkdir(parents=True)
+    return other
+
+
 def test_another_installations_transaction_is_left_strictly_alone(tmp_path: Path) -> None:
     """A shared data directory is not a shared installation.
 
     A second copy of the app, or a `--data-dir` aimed at an existing one, puts
-    two installations behind one journal. Acting on the other copy's record
-    would move directories on the strength of a file that never described them.
+    two installations behind one data directory. Acting on the other copy's
+    record would move directories on the strength of a file that never
+    described them.
     """
 
-    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
-    other = tmp_path / "OtherCopy"
-    (other / "app").mkdir(parents=True)
+    resources, data_dir, staged_app, _staged_runtime = _installation(tmp_path)
+    other = _foreign_installation(tmp_path)
     write_journal(
         data_dir,
+        other,
         {
             "schema": 1,
             "operation": "update",
@@ -284,17 +294,70 @@ def test_another_installations_transaction_is_left_strictly_alone(tmp_path: Path
     outcome = _recover(resources, data_dir)
 
     assert outcome.action == "none"
-    assert "another installation" in outcome.detail
     assert _generations(resources) == before
-    assert json.loads(journal_path(data_dir).read_text(encoding="utf-8"))["transaction"] == (
-        "elsewhere"
-    ), "the other installation's record must survive for its owner"
-    # This copy started healthily, so its own rollback material is spent; the
-    # foreign record neither blocks that nor is destroyed by it.
-    allowed, detail = commit_transaction(data_dir, resources=resources)
+    assert journal_path(data_dir, other).is_file(), (
+        "the other installation's record must survive for its owner"
+    )
+    allowed, _detail = commit_transaction(data_dir, resources=resources)
     assert allowed is True
-    assert "another installation" in detail
-    assert journal_path(data_dir).is_file()
+    assert journal_path(data_dir, other).is_file()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ("truncated", "surviving-temporary"),
+    ids=("corrupt", "half-published"),
+)
+def test_an_unattributable_record_belonging_to_another_copy_is_never_touched(
+    tmp_path: Path, damage: str
+) -> None:
+    """The case content-based scoping could not answer.
+
+    A truncated record, and a record caught mid-publication, both have no
+    readable `resources` field -- so attributing them by *content* meant
+    assuming they belonged to whoever asked. Recovery would then restore this
+    copy's layers and delete a record it could not prove was its own. The
+    record's filename carries the installation now, so the other copy's
+    evidence is neither read nor removed, and this copy correctly sees that it
+    has no transaction of its own.
+    """
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    other = _foreign_installation(tmp_path)
+    if damage == "truncated":
+        journal_path(data_dir, other).write_text("{ truncated", encoding="utf-8")
+    else:
+        write_journal(
+            data_dir,
+            other,
+            {
+                "schema": 1,
+                "operation": "update",
+                "state": "installed",
+                "transaction": "elsewhere",
+                "resources": str(other),
+                "bundle": str(other),
+                "layers": [{"name": "app", "staged": str(staged_app)}],
+            },
+        )
+        journal_temp_path(data_dir, other).write_text('{"schema": 1}', encoding="utf-8")
+    # This copy has finished an update of its own and is about to reclaim.
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    apply_update_module.set_journal_state(data_dir, resources, "installed")
+    foreign_before = journal_path(data_dir, other).read_bytes()
+
+    outcome = _recover(resources, data_dir)
+    allowed, _detail = commit_transaction(data_dir, resources=resources)
+
+    assert outcome.action == "none"
+    assert allowed is True, "another copy's undecidable record must not block this one"
+    assert _generations(resources) == {"app": "new1", "runtime": "new1"}
+    assert journal_path(data_dir, other).read_bytes() == foreign_before
+    if damage == "surviving-temporary":
+        assert journal_temp_path(data_dir, other).is_file(), (
+            "the other copy's half-published record is its evidence, not ours to clear"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +376,7 @@ def test_an_update_that_never_moved_a_layer_is_abandoned_not_rolled_back(
     assert outcome.action == "none"
     assert _generations(resources) == {"app": "old0", "runtime": "old0"}
     assert staged_app.is_dir() and staged_runtime.is_dir()
-    assert read_journal(data_dir)["state"] == "aborted"
+    assert read_journal(data_dir, resources)["state"] == "aborted"
 
 
 def test_a_swap_that_finished_is_confirmed_and_keeps_its_rollback_material(
@@ -335,7 +398,7 @@ def test_a_swap_that_finished_is_confirmed_and_keeps_its_rollback_material(
     assert _generations(resources) == {"app": "new1", "runtime": "new1"}
     assert (resources / "app.previous").is_dir()
     assert (resources / "runtime.previous").is_dir()
-    assert read_journal(data_dir)["state"] == "installed"
+    assert read_journal(data_dir, resources)["state"] == "installed"
     allowed, _detail = commit_transaction(data_dir, resources=resources)
     assert allowed is True
 
@@ -368,7 +431,7 @@ def test_a_rollback_interrupted_after_one_layer_is_finished_not_read_as_an_updat
     resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
     _begin(resources, data_dir, staged_app, staged_runtime)
     swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
-    apply_update_module.set_journal_state(data_dir, ROLLING_BACK_STATE)
+    apply_update_module.set_journal_state(data_dir, resources, ROLLING_BACK_STATE)
     # A restore that got through the runtime and stopped.
     (resources / "runtime").rename(resources / "runtime.failed")
     (resources / "runtime.previous").rename(resources / "runtime")
@@ -379,7 +442,7 @@ def test_a_rollback_interrupted_after_one_layer_is_finished_not_read_as_an_updat
     assert outcome.action == "rolled-back"
     assert _generations(resources) == {"app": "old0", "runtime": "old0"}
     assert not (resources / "app.previous").exists()
-    assert read_journal(data_dir)["state"] == "rolled-back"
+    assert read_journal(data_dir, resources)["state"] == "rolled-back"
 
 
 def test_a_partial_rollback_is_caught_by_the_manifests_when_the_marker_is_lost(
@@ -398,7 +461,7 @@ def test_a_partial_rollback_is_caught_by_the_manifests_when_the_marker_is_lost(
     (resources / "runtime").rename(resources / "runtime.failed")
     (resources / "runtime.previous").rename(resources / "runtime")
     # The marker never reached the disk: the record still describes the swap.
-    apply_update_module.set_journal_state(data_dir, "swapped")
+    apply_update_module.set_journal_state(data_dir, resources, "swapped")
 
     outcome = _recover(resources, data_dir)
 
@@ -421,13 +484,13 @@ def test_a_rollback_that_finished_without_recording_it_is_not_a_failed_recovery(
     _begin(resources, data_dir, staged_app, staged_runtime)
     swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
     assert rollback_previous_layers(resources) is True
-    apply_update_module.set_journal_state(data_dir, ROLLING_BACK_STATE)
+    apply_update_module.set_journal_state(data_dir, resources, ROLLING_BACK_STATE)
 
     outcome = _recover(resources, data_dir)
 
     assert outcome.action == "none", outcome.detail
     assert _generations(resources) == {"app": "old0", "runtime": "old0"}
-    assert read_journal(data_dir)["state"] == "rolled-back"
+    assert read_journal(data_dir, resources)["state"] == "rolled-back"
     allowed, _detail = commit_transaction(data_dir, resources=resources)
     assert allowed is True
 
@@ -448,11 +511,11 @@ def test_recovery_touches_nothing_outside_the_installation_it_was_given(
     (sentinel / "precious.txt").write_text("do not touch", encoding="utf-8")
     _begin(resources, data_dir, staged_app, staged_runtime)
     swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
-    record = read_journal(data_dir)
+    record = read_journal(data_dir, resources)
     for entry in record["layers"]:
         entry["staged"] = str(sentinel)
     record["state"] = "swapping"
-    write_journal(data_dir, record)
+    write_journal(data_dir, resources, record)
 
     _recover(resources, data_dir)
 
@@ -549,7 +612,7 @@ _ROLLBACK_KILL_DRIVER = textwrap.dedent(
     data_dir = Path(sys.argv[3])
     kill_after = int(sys.argv[4])
 
-    set_journal_state(data_dir, "rolling-back")
+    set_journal_state(data_dir, resources, "rolling-back")
     performed = 0
 
 
@@ -832,7 +895,7 @@ def test_the_recover_command_line_takes_no_staged_directories_and_no_parent(
         )
         == 0
     )
-    assert read_journal(data_dir)["state"] == "aborted"
+    assert read_journal(data_dir, resources)["state"] == "aborted"
 
     with pytest.raises(SystemExit):
         run_updater_cli(
@@ -897,7 +960,7 @@ def test_recovery_runs_before_the_mode_branch_for_browser_and_terminal_starts(
     # And the launcher asks for it before it chooses a mode at all.
     source = Path(entry_point.__file__).read_text(encoding="utf-8")
     branch = source.index('if "--no-gui" in arguments')
-    call = source.index("refusal = _recover_interrupted_bundle_update(arguments)")
+    call = source.index("refusal = _recover_interrupted_bundle_update(")
     assert call < branch, "recovery must run before the mode branch, not inside one"
 
 
@@ -929,30 +992,30 @@ def test_an_unresolvable_bundle_layout_is_reported_and_nothing_is_moved(
     assert "could not be resolved" in outcome.detail
 
 
-def test_a_recovery_that_fails_stops_the_start_instead_of_reporting_nothing(
+def test_a_recovery_that_fails_stops_the_start_and_one_that_never_ran_does_not(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A decided failure refuses; a mechanism that could not run does not.
+    """Two failures, and only one of them may be allowed to continue.
 
-    The distinction is deliberate. A launcher that will not start because its
-    recovery step failed to import is strictly worse than one that starts
-    without having run it, because the structural checks that predate the
-    journal still run further in. A recovery that ran and concluded the
-    installation is broken is a different thing, and that one refuses.
+    A recovery module that cannot be *imported* ran nothing and moved nothing,
+    so starting is better than refusing: the checks that predate the journal
+    still run further in. A recovery that *raised* had already begun, and it
+    renames directories -- the exception may have arrived between two of them,
+    leaving a possibly mixed installation that nothing has decided. The first
+    version of this function caught both with one `except Exception` and
+    started anyway, which is failing open into exactly the state the
+    transaction exists to prevent.
     """
 
     from launchers.statusapp import __main__ as entry_point
-
-    reported: list[str] = []
-    monkeypatch.setattr(entry_point, "_report_startup_failure", reported.append)
-    monkeypatch.setattr(
-        entry_point,
-        "_log_startup_failure",
-        lambda *_args, **_kwargs: None,
-    )
-
     from launchers.statusapp import updater as updater_module
 
+    reported: list[str] = []
+    logged: list[str] = []
+    monkeypatch.setattr(entry_point, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(entry_point, "_log_startup_failure", logged.append)
+
+    # 1. Recovery ran and decided the installation is broken.
     monkeypatch.setattr(
         updater_module,
         "recover_interrupted_bundle_update",
@@ -961,14 +1024,75 @@ def test_a_recovery_that_fails_stops_the_start_instead_of_reporting_nothing(
     assert entry_point._recover_interrupted_bundle_update([]) == 1
     assert reported and "the layers are mixed" in reported[0]
 
+    # 2. Recovery ran and raised -- possibly after renaming one layer.
     reported.clear()
 
     def explode(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("the recovery module is broken")
+        raise OSError("the disk went away half-way through")
 
     monkeypatch.setattr(updater_module, "recover_interrupted_bundle_update", explode)
+    assert entry_point._recover_interrupted_bundle_update([]) == 1, (
+        "an exception from recovery may have arrived between two renames"
+    )
+    assert reported and "may be part-way through a change" in reported[0]
+    assert any("the disk went away" in entry for entry in logged)
+
+    # 3. The mechanism could not be loaded: nothing ran, so nothing is undecided.
+    reported.clear()
+    real_import = builtins.__import__
+
+    def refuse_updater(name: str, *args: object, **kwargs: object) -> object:
+        if name == "launchers.statusapp.updater":
+            raise ImportError("no updater module here")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", refuse_updater)
     assert entry_point._recover_interrupted_bundle_update([]) is None
     assert reported == []
+
+
+def test_a_no_gui_start_refuses_a_broken_installation_without_opening_a_window(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--no-gui` promised to open no window of our own, refusals included.
+
+    On this branch the dialog still fires only when there is no `sys.stderr` at
+    all, so a redirected terminal run cannot reach it. `fix/032-linux-review`
+    widens that to "nobody is reading stderr", at which point a recovery
+    refusal delivered through the graphical reporter *would* open a modal in
+    terminal mode -- blocking, on Windows. The refusal therefore chooses its
+    reporter by mode now, so the combined code is correct either way.
+    """
+
+    from launchers.statusapp import __main__ as entry_point
+    from launchers.statusapp import updater as updater_module
+
+    opened: list[str] = []
+    monkeypatch.setattr(entry_point, "_show_startup_failure_dialog", opened.append)
+    monkeypatch.setattr(entry_point, "_log_startup_failure", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        updater_module,
+        "recover_interrupted_bundle_update",
+        lambda *_a, **_k: apply_update_module.RecoveryOutcome("failed", "the layers are mixed"),
+    )
+
+    assert (
+        entry_point._recover_interrupted_bundle_update(
+            ["--no-gui"], report=entry_point._report_terminal_failure
+        )
+        == 1
+    )
+
+    assert opened == [], "terminal mode must not open a window, not even to refuse"
+    captured = capsys.readouterr()
+    assert "the layers are mixed" in captured.err, "the refusal still has to be readable"
+
+    # And main() picks that reporter for --no-gui without being told.
+    source = Path(entry_point.__file__).read_text(encoding="utf-8")
+    assert (
+        'report=_report_terminal_failure if "--no-gui" in arguments else _report_startup_failure'
+        in source
+    )
 
 
 def test_an_unreadable_record_does_not_block_the_installation_for_ever(
@@ -986,13 +1110,13 @@ def test_an_unreadable_record_does_not_block_the_installation_for_ever(
     resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
     _begin(resources, data_dir, staged_app, staged_runtime)
     swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
-    journal_path(data_dir).write_text("{ truncated", encoding="utf-8")
+    journal_path(data_dir, resources).write_text("{ truncated", encoding="utf-8")
 
     outcome = _recover(resources, data_dir)
 
     assert outcome.action == "rolled-back"
     assert _generations(resources) == {"app": "old0", "runtime": "old0"}
-    assert read_journal(data_dir) is None, "a decided transaction must stop blocking"
+    assert read_journal(data_dir, resources) is None, "a decided transaction must stop blocking"
     allowed, _detail = commit_transaction(data_dir, resources=resources)
     assert allowed is True
     # And the next update is not refused by the leftover: an unresolved record
@@ -1012,14 +1136,14 @@ def test_a_publication_interrupted_record_is_also_cleared_once_decided(
     resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
     _begin(resources, data_dir, staged_app, staged_runtime)
     swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
-    apply_update_module.set_journal_state(data_dir, "installed")
-    journal_temp_path(data_dir).write_text('{"schema": 1}', encoding="utf-8")
+    apply_update_module.set_journal_state(data_dir, resources, "installed")
+    journal_temp_path(data_dir, resources).write_text('{"schema": 1}', encoding="utf-8")
 
     outcome = _recover(resources, data_dir)
 
     assert outcome.action == "rolled-back"
-    assert read_journal(data_dir) is None
-    assert not journal_temp_path(data_dir).exists()
+    assert read_journal(data_dir, resources) is None
+    assert not journal_temp_path(data_dir, resources).exists()
 
 
 def test_a_refused_second_update_does_not_decide_the_first_ones_transaction(
@@ -1056,7 +1180,7 @@ def test_a_refused_second_update_does_not_decide_the_first_ones_transaction(
     )
 
     assert result == 2
-    record = read_journal(data_dir)
+    record = read_journal(data_dir, resources)
     assert record["transaction"] == first["transaction"]
     assert record["state"] not in {"aborted", "installed", "rolled-back"}, (
         "the earlier transaction must stay unresolved, and keep protecting its .previous"
@@ -1078,19 +1202,289 @@ def test_a_replayed_record_of_a_finished_transaction_changes_nothing(
     resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
     _begin(resources, data_dir, staged_app, staged_runtime)
     swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
-    replayed = read_journal(data_dir)
+    replayed = read_journal(data_dir, resources)
     replayed["state"] = "installed"
-    write_journal(data_dir, replayed)
+    write_journal(data_dir, resources, replayed)
     assert commit_transaction(data_dir, resources=resources)[0] is True
-    assert read_journal(data_dir) is None
+    assert read_journal(data_dir, resources) is None
     rollback_previous_layers(resources)
     before = _generations(resources)
 
     # The record comes back, exactly as it was when it was current.
-    write_journal(data_dir, replayed)
+    write_journal(data_dir, resources, replayed)
     outcome = _recover(resources, data_dir)
 
     assert outcome.action == "none"
     assert "already installed" in outcome.detail
     assert _generations(resources) == before
     assert _user_data_intact(data_dir)
+
+
+# ---------------------------------------------------------------------------
+# What is reachable when a layer is missing, and what is not
+# ---------------------------------------------------------------------------
+
+
+def test_the_recovery_helper_is_staged_before_the_first_rename(tmp_path: Path) -> None:
+    """The copy has to exist for the crash that never reaches a handoff.
+
+    `launch_rollback_handoff` also stages this module, but only when a
+    *handled* failure hands off. A process killed mid-swap hands off nothing,
+    and the app layer -- which is where this module lives -- can be the very
+    directory that is gone. Staging it when the transaction opens means the
+    manual route exists for every state the swap can leave.
+    """
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    helper = data_dir / apply_update_module.RECOVERY_HELPER_DIRECTORY / (
+        apply_update_module.RECOVERY_HELPER_NAME
+    )
+    assert not helper.exists()
+
+    apply_update_module.apply_update(
+        bundle=resources,
+        data_dir=data_dir,
+        staged_app=staged_app,
+        staged_runtime=staged_runtime,
+        parent_pid=1,
+        platform_name="linux",
+        relauncher=lambda *_a, **_k: None,
+        confirm=lambda _process: None,
+        waiter=lambda _pid: True,
+        failure_reporter=lambda _message: None,
+    )
+
+    assert helper.is_file()
+    assert helper.read_bytes() == Path(apply_update_module.__file__).read_bytes()
+    # The README promises the repair command is in the update log, because this
+    # is the window no launcher can recover from on the user's behalf.
+    update_log = (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "--recover" in update_log
+    assert str(helper) in update_log
+    assert str(resources) in update_log
+    # And it is the same path the rollback handoff uses, not a second one.
+    from launchers.statusapp import updater as updater_module
+
+    assert updater_module.ROLLBACK_HELPER_DIRECTORY == (
+        apply_update_module.RECOVERY_HELPER_DIRECTORY
+    )
+    assert updater_module.ROLLBACK_HELPER_SCRIPT == apply_update_module.RECOVERY_HELPER_NAME
+
+
+def test_the_staged_helper_recovers_a_missing_runtime_without_the_bundle(
+    tmp_path: Path,
+) -> None:
+    """The other half of the missing-layer window, driven from the staged copy.
+
+    The swap installs the runtime first, so `runtime` is the layer that is
+    absent early and `app` the one absent late. This covers the first; the
+    external-helper test above covers the second.
+    """
+
+    bundle, resources, data_dir, staged_app, staged_runtime = _native_installation(tmp_path)
+    planned = plan_layer_swap(resources, staged_app, staged_runtime)
+    begin_update_transaction(
+        data_dir=data_dir,
+        bundle=bundle,
+        resources=resources,
+        layers=planned,
+        platform_name=sys.platform,
+    )
+    helper = apply_update_module.stage_recovery_helper(data_dir)
+    assert helper is not None and helper.is_file()
+    # Killed between the runtime's two renames: no live runtime at all.
+    (resources / "runtime").rename(resources / "runtime.previous")
+
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter, staged script
+        [
+            sys.executable,
+            "-I",
+            str(helper),
+            "--recover",
+            "--bundle",
+            str(bundle),
+            "--data-dir",
+            str(data_dir),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": ""},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (resources / "runtime" / "marker.txt").read_text(encoding="utf-8") == "old0"
+    assert (resources / "app" / "marker.txt").read_text(encoding="utf-8") == "old0"
+    assert _user_data_intact(data_dir)
+
+
+def test_the_native_launchers_cannot_reach_recovery_without_an_app_layer() -> None:
+    """The limitation, asserted rather than described, so it cannot rot silently.
+
+    Automatic recovery runs inside the application, and every platform launcher
+    reaches the application through the `app` layer. A swap killed between
+    `app` -> `app.previous` and `staged` -> `app` therefore leaves a state no
+    launcher can recover from on its own:
+
+    - Linux: the generated launcher refuses outright when `app` is missing or
+      the runtime interpreter is not executable, and says to reinstall.
+    - macOS: `launcher.c` `chdir`s into `app` before exec and fails there, so
+      the interpreter beside it is never reached.
+    - Windows: the interpreter at the bundle root survives -- which is why
+      `rollback_interpreter` uses it -- but the bootstrap it runs
+      (`sitecustomize` -> `wg_desktop_bootstrap`) lives in the app layer.
+
+    So the honest statement is: the staged helper makes a *manual* repair
+    always possible, and does not make recovery automatic in that window.
+    """
+
+    from scripts.build_bundle import linux_launcher
+
+    launcher = linux_launcher()
+    assert 'if [ ! -d "$app" ] || [ ! -x "$python" ]; then' in launcher
+    assert "installation at %s is incomplete" in launcher
+    assert "exit 71" in launcher
+
+    macos = Path(apply_update_module.__file__).parents[1] / "launchers" / "macos" / "launcher.c"
+    source = macos.read_text(encoding="utf-8")
+    assert "if (chdir(app_root) != 0) {" in source
+    assert "could not enter the application directory" in source
+
+    windows_bootstrap = Path(
+        apply_update_module.__file__
+    ).parents[1] / "scripts" / "build_bundle.py"
+    assert 'from launchers.desktop import main' in windows_bootstrap.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# The seal, when the renames are already done
+# ---------------------------------------------------------------------------
+
+
+def _recording_runner(failing: str | None = None):
+    """A `subprocess.run` double that records commands and can fail one."""
+
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):  # type: ignore[no-untyped-def]
+        commands.append(list(command))
+        code = 1 if failing is not None and failing in command[0] else 0
+        return subprocess.CompletedProcess(list(command), code, "", "boom" if code else "")
+
+    return commands, run
+
+
+def test_a_restore_that_finished_its_renames_is_resealed_before_it_is_called_done(
+    tmp_path: Path,
+) -> None:
+    """Renames done, seal not: the gap between the last rename and the reseal.
+
+    Reachable two ways -- a restore killed after its last rename, and one whose
+    terminal state was the write that was lost. Both used to return "nothing to
+    do" while the macOS ad-hoc signature still covered the generation that had
+    just been replaced, so the bundle either would not launch or would launch
+    with a seal that did not describe it.
+    """
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    apply_update_module.set_journal_state(data_dir, resources, ROLLING_BACK_STATE)
+    assert rollback_previous_layers(resources) is True
+    commands, run = _recording_runner()
+
+    outcome = recover_transaction(
+        data_dir=data_dir,
+        resources=resources,
+        bundle=resources,
+        platform_name="darwin",
+        runner=run,
+    )
+
+    assert outcome.action == "none"
+    assert [command[0] for command in commands] == [
+        "/usr/bin/xattr",
+        "/usr/bin/codesign",
+        "/usr/bin/codesign",
+    ]
+    assert read_journal(data_dir, resources)["state"] == "rolled-back"
+
+
+def test_a_reseal_that_fails_keeps_the_transaction_open_for_the_next_start(
+    tmp_path: Path,
+) -> None:
+    """A seal that could not be restored is one the next start has to retry.
+
+    So the terminal state is written only after the reseal succeeds. Marking it
+    first would record the transaction as decided while leaving the bundle
+    unsealed, and nothing would ever come back to it.
+    """
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    apply_update_module.set_journal_state(data_dir, resources, ROLLING_BACK_STATE)
+    assert rollback_previous_layers(resources) is True
+    _commands, failing_run = _recording_runner(failing="codesign")
+
+    outcome = recover_transaction(
+        data_dir=data_dir,
+        resources=resources,
+        bundle=resources,
+        platform_name="darwin",
+        runner=failing_run,
+    )
+
+    assert outcome.action == "failed"
+    assert "could not be signed and verified" in outcome.detail
+    state = read_journal(data_dir, resources)["state"]
+    assert state not in {"installed", "rolled-back", "aborted"}, (
+        "an unsealed bundle must not be recorded as a decided transaction"
+    )
+    allowed, _detail = commit_transaction(data_dir, resources=resources)
+    assert allowed is False
+
+    # The next start retries, and succeeds once the seal can be restored.
+    commands, run = _recording_runner()
+    retried = recover_transaction(
+        data_dir=data_dir,
+        resources=resources,
+        bundle=resources,
+        platform_name="darwin",
+        runner=run,
+    )
+    assert retried.action == "none"
+    assert "/usr/bin/codesign" in [command[0] for command in commands]
+    assert read_journal(data_dir, resources)["state"] == "rolled-back"
+
+
+def test_a_rollback_transaction_whose_layers_are_already_back_is_resealed_too(
+    tmp_path: Path,
+) -> None:
+    """The same gap, reached through the dedicated rollback helper's record."""
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    apply_update_module.begin_rollback_transaction(
+        data_dir=data_dir,
+        bundle=resources,
+        resources=resources,
+        platform_name="darwin",
+        reason="the updated version would not start",
+    )
+    assert rollback_previous_layers(resources) is True
+    commands, run = _recording_runner()
+
+    outcome = recover_transaction(
+        data_dir=data_dir,
+        resources=resources,
+        bundle=resources,
+        platform_name="darwin",
+        runner=run,
+    )
+
+    assert outcome.action == "none"
+    assert "/usr/bin/codesign" in [command[0] for command in commands]
+    assert read_journal(data_dir, resources)["state"] == "rolled-back"

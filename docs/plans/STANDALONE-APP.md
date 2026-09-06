@@ -142,14 +142,19 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
     written to a temporary name, flushed, and renamed into place; the rename is
     durable once the directory is flushed, which POSIX can do and Windows cannot
     (`os.open` offers no `FILE_FLAG_BACKUP_SEMANTICS`, and `FlushFileBuffers` is not
-    documented to do anything useful for a directory handle). So a power cut can
-    leave three states: the new record, the previous record with the temporary file
-    beside it, or no record at all. `read_journal` answers the first two
-    conservatively — a surviving temporary file means "unresolved" whatever is at
-    the published name — and the third leaves the manifest and directory checks that
-    predate the journal in charge, which are themselves conservative. The journal
-    adds information; it never subtracts safety. `write_journal` reports which
-    guarantee it obtained and logs when it got the weaker one.
+    documented to do anything useful for a directory handle). Three states follow
+    from that, and each is answered: the new record; the previous record with the
+    temporary file beside it, which `read_journal` reports as unresolved whatever is
+    at the published name; or no record at all, which leaves the manifest and
+    directory checks that predate the journal in charge. `write_journal` reports
+    which guarantee it obtained and logs when it got the weaker one.
+
+    **This is not a claim that every state a power cut can leave is covered.** It is
+    the narrower one the tests support: these three *journal* states are handled
+    conservatively, and the journal adds information without subtracting the safety
+    that existed before it. Torn writes inside a layer directory, a file system that
+    reorders more than renames, and hardware that acknowledges a flush it has not
+    performed are all outside what any of this establishes.
   - **macOS `fsync` is not a media flush.** `F_FULLFSYNC` is used where the file
     system implements it. Where it does not — reported by `ENOTSUP`, `EINVAL` and
     friends — the code falls back to `fsync` and logs that the guarantee is weaker.
@@ -175,13 +180,37 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
   (`_roll_back_mixed_generation` returned without calling `repair_bundle`, unlike
   the missing-layer path beside it).
 
-  An external entry point exists for the case where the app layer is the thing that
-  is missing: `apply_update.py --recover --bundle … --data-dir …`, the same copy the
-  rollback helper already stages in `<data>/rollback`. It could not previously run
-  in that case at all — the module imported `shared.safe_names` from inside the
-  `app` layer at import time. That import is still eager, because nothing may import
-  lazily once renaming has begun, but its failure is now recorded rather than fatal,
-  and installing launcher files, the one thing that needs it, refuses without it.
+  An external entry point exists for the case where a layer is the thing that is
+  missing: `apply_update.py --recover --bundle … --data-dir …`. It could not
+  previously run in that case at all — the module imported `shared.safe_names` from
+  inside the `app` layer at import time. That import is still eager, because nothing
+  may import lazily once renaming has begun, but its failure is now recorded rather
+  than fatal, and installing launcher files, the one thing that needs it, refuses
+  without it. A copy is now staged at `<data>/rollback/apply_update.py` when the
+  transaction opens, not only when a handled failure hands off, so the copy exists
+  for the crash that never reaches a handoff.
+
+  **What that does and does not buy, traced through the real launchers.** Automatic
+  recovery runs inside the application, and every platform launcher reaches the
+  application through the `app` layer:
+
+  - Linux — the generated launcher refuses outright (`exit 71`, "reinstall it by
+    running install.sh") when `app` is missing or `runtime/bin/python3.13` is not
+    executable.
+  - macOS — `launchers/macos/launcher.c` `chdir`s into `app` before `exec`, and
+    fails there, so the interpreter beside it is never reached.
+  - Windows — the interpreter at the bundle root survives a `runtime` rename, which
+    is exactly why `rollback_interpreter` uses it; but the bootstrap it runs
+    (`sitecustomize` → `wg_desktop_bootstrap`) lives in the app layer.
+
+  So: **the swap's last window — killed between `app` → `app.previous` and
+  `staged` → `app` — is not automatically recoverable on any platform.** The staged
+  helper makes a *manual* repair always possible there, with any Python 3.13
+  including the bundle's own `runtime/bin/python3.13`; it does not make recovery
+  automatic, and this section does not claim it does. Closing that window means
+  changing the packaged bootstraps, which needs a native build to verify and is not
+  attempted here. `test_the_native_launchers_cannot_reach_recovery_without_an_app_layer`
+  asserts each of the three behaviours above so the statement cannot rot silently.
 
   **Evidence, and its limits.** `server/tests/test_update_transaction.py` kills a
   real updater subprocess with `SIGKILL` at each of the four renames and at three
@@ -225,10 +254,20 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
     fetching one, so there is no separate artifact to checksum. The workflows
     assert the compiler's own version banner instead.
 
-  **Not pinnable, and stated in both workflow files rather than implied:** the
-  hosted runner images (`ubuntu-latest`, `macos-latest`, `windows-latest`,
-  `ubuntu-24.04`) are rebuilt weekly and carry no identity a workflow can name.
-  Everything the build consumes from them is pinned on top; the base image is not.
+  **What none of this establishes.** The version checks above are *drift detection*
+  — a substituted binary can print whatever version it likes, so a version match is
+  not authentication of bytes. Authenticating the Node download is possible and is
+  **not implemented**: it would mean fetching the archive in the workflow and
+  checking it against a digest pinned in this repository, which is its own change
+  with its own review. The four pinned tools are uv, the CPython standalone build,
+  Node and Inno Setup — that is the list, not a summary of everything the build
+  touches. The shell, tar, git, `hdiutil`, `codesign`, the system Python and the
+  platform toolchains all arrive with the hosted runner image (`ubuntu-latest`,
+  `macos-latest`, `windows-latest`, `ubuntu-24.04`) at whatever version it carries
+  that week, and those images are rebuilt weekly with no identity a workflow can
+  name. So this is meaningful drift reduction, and it is neither a reproducible nor
+  an authenticated toolchain; neither should be claimed from it. The scoping is
+  written into both workflow files, not only here.
 
   `ci.yml` was deliberately left alone. It gates the release commit rather than
   building the release artifacts, and it is outside this change's scope; pinning it

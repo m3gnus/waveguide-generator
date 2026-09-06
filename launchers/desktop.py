@@ -731,10 +731,10 @@ class DesktopWindow:
             log(f"The rollback could not be recorded, and was not started: {exc}")
             self._report_bundle_failure(f"{message}\n\n{ROLLBACK_FAILED_RESULT}")
             return
-        set_journal_state(data_dir, ROLLING_BACK_STATE, log=log)
+        set_journal_state(data_dir, resources, ROLLING_BACK_STATE, log=log)
         rolled_back = rollback_previous_layers(resources, log=log)
         if rolled_back:
-            set_journal_state(data_dir, "rolled-back", log=log)
+            set_journal_state(data_dir, resources, "rolled-back", log=log)
             try:
                 repair_bundle(bundle, platform_name=sys.platform, log=log)
             except ApplyUpdateError as exc:

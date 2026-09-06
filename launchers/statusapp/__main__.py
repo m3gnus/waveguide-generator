@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -138,9 +139,7 @@ def _report_startup_failure(
     terminal while only the cause and the remedy go on screen.
     """
 
-    if sys.stderr is not None:
-        print(message, file=sys.stderr)
-    _log_startup_failure(message if detail is None else f"{message}\n{detail}")
+    _report_terminal_failure(message, detail=detail)
     if sys.stderr is None:
         _show_startup_failure_dialog(message if dialog is None else dialog)
 
@@ -161,34 +160,75 @@ def _report_failure_with_evidence(failure: "TkFailure", *, detail: str | None = 
     )
 
 
-def _recover_interrupted_bundle_update(arguments: list[str]) -> int | None:
+def _report_terminal_failure(message: str, *, detail: str | None = None) -> None:
+    """Deliver a failure without opening anything.
+
+    ``--no-gui`` is documented, in its own ``--help`` text, as "run in this
+    terminal, opening no window of our own", and that has to hold for the
+    mode's *refusals* too. Both channels that open nothing are here: stderr
+    when there is one, and the log always.
+
+    Deliberately the same function, by the same name, that the launcher-report
+    work on ``fix/032-linux-review`` (`9fbf9264`) introduces. On *this* branch
+    the dialog still fires only when ``sys.stderr is None``, so a redirected
+    ``--no-gui`` run cannot reach it; that branch widens the test to "nobody is
+    reading stderr", at which point a recovery refusal *would* open a modal in
+    a mode that promised not to -- on Windows a blocking one, waiting for a
+    person who is not there. Routing the refusal through this now means the
+    combined code is correct whichever order the two land in. The integrator
+    should keep one copy of the function.
+    """
+
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+    _log_startup_failure(message if detail is None else f"{message}\n{detail}")
+
+
+def _recover_interrupted_bundle_update(
+    arguments: list[str],
+    *,
+    report: Callable[[str], None] | None = None,
+) -> int | None:
     """Finish or undo an interrupted update, whatever mode was asked for.
 
     Returns an exit code when the installation must not be started, and None
     when it may be. Placed before the mode branch on purpose: the recovery that
     shipped lived inside the desktop window's startup wait, so ``--browser``
-    and ``--no-gui`` skipped it entirely -- and those are the modes a user
-    reaches for when the window will not open, which after an interrupted
-    update is exactly when it will not.
+    and ``--no-gui`` skipped it -- and those are the modes a user reaches for
+    when the window will not open, which after an interrupted update is exactly
+    when it will not.
 
-    The import is deferred and every failure of the *mechanism* is swallowed,
-    because a launcher that cannot start because its recovery step could not
-    import is strictly worse than one that starts without having run it: the
-    checks that predate the journal still run inside the desktop path. A
-    recovery that ran and *decided* the installation is broken is a different
-    thing, and that one refuses.
+    **Two failures, and only one of them may continue.** If the recovery module
+    cannot be imported, nothing ran and nothing moved: starting is strictly
+    better than refusing, because the checks that predate the journal still run
+    further in. If the recovery *call* raises, it had already begun -- and it
+    renames directories, so the exception may have arrived between two of them.
+    What is on the disk is then a possibly mixed installation that nothing has
+    decided, and that refuses. Collapsing the two, which the first version of
+    this function did, fails open into precisely the state the transaction
+    exists to prevent.
     """
 
+    deliver = _report_startup_failure if report is None else report
     try:
         from launchers.statusapp.updater import recover_interrupted_bundle_update
-
-        outcome = recover_interrupted_bundle_update(arguments)
-    except Exception as exc:  # noqa: BLE001 - never block a start on this step
-        _log_startup_failure(f"The interrupted-update check could not run: {exc!r}")
+    except Exception as exc:  # noqa: BLE001 - nothing ran, so nothing is undecided
+        _log_startup_failure(f"The interrupted-update check could not be loaded: {exc!r}")
         return None
+    try:
+        outcome = recover_interrupted_bundle_update(arguments)
+    except BaseException as exc:  # noqa: BLE001 - it had started; the disk may have moved
+        message = (
+            "Waveguide Generator stopped while recovering an interrupted update, so it "
+            "did not start. The installation may be part-way through a change and must "
+            f"not be used until it is repaired.\n\n{type(exc).__name__}: {exc}"
+        )
+        _log_startup_failure(f"{message}\n{traceback.format_exc()}")
+        deliver(message)
+        return 1
     if outcome is None or outcome.action != "failed":
         return None
-    _report_startup_failure(
+    deliver(
         "Waveguide Generator could not finish recovering an interrupted update, so it "
         f"did not start.\n\n{outcome.detail}"
     )
@@ -203,7 +243,13 @@ def main(argv: list[str] | None = None) -> int:
     if window_requested and browser_requested:
         _report_startup_failure("Choose only one display mode: --window or --browser.")
         return 2
-    refusal = _recover_interrupted_bundle_update(arguments)
+    # ``--no-gui`` promised to open no window of our own, and a refusal is
+    # still this mode's answer. Same reporter selection `9fbf9264` applies to
+    # the display-mode contradiction just above.
+    refusal = _recover_interrupted_bundle_update(
+        arguments,
+        report=_report_terminal_failure if "--no-gui" in arguments else _report_startup_failure,
+    )
     if refusal is not None:
         return refusal
     if "--no-gui" in arguments:

@@ -21,6 +21,8 @@ from launchers.apply_update import (
     BUNDLE_LAYERS,
     FAILED_SUFFIX,
     PREVIOUS_SUFFIX,
+    RECOVERY_HELPER_DIRECTORY,
+    RECOVERY_HELPER_NAME,
     WINDOWS_LAUNCHER_NAME,
     ApplyUpdateError,
     RecoveryOutcome,
@@ -36,8 +38,11 @@ VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_DETACHED_PROCESS = 0x00000008
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
-ROLLBACK_HELPER_DIRECTORY = "rollback"
-ROLLBACK_HELPER_SCRIPT = "apply_update.py"
+#: Imported rather than respelled: the transaction stages a copy at the same
+#: two names before it renames anything, so a handoff that stages it again must
+#: not be able to drift to a different path.
+ROLLBACK_HELPER_DIRECTORY = RECOVERY_HELPER_DIRECTORY
+ROLLBACK_HELPER_SCRIPT = RECOVERY_HELPER_NAME
 
 
 class UpdateHandoffError(RuntimeError):

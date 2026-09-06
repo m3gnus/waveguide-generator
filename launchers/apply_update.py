@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 import errno
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -103,6 +104,13 @@ WINDOWS_LAUNCHER_NAME = "Waveguide Generator.exe"
 #: which is why ``bundle_from_app_layer`` resolves both with one rule.
 LINUX_LAUNCHER_NAME = "waveguide-generator"
 BUNDLE_LAYERS = ("app", "runtime")
+#: Where the standalone recovery helper is kept, outside the bundle. The
+#: rollback handoff already copies this module there when it hands off; a
+#: transaction stages it up front as well, so the copy exists for the crash
+#: that never reaches a handoff. ``launchers/statusapp/updater.py`` imports
+#: both names rather than spelling them again, so the two cannot drift apart.
+RECOVERY_HELPER_DIRECTORY = "rollback"
+RECOVERY_HELPER_NAME = "apply_update.py"
 PREVIOUS_SUFFIX = ".previous"
 FAILED_SUFFIX = ".failed"
 # The renamed ``pythonw.exe`` parses everything on its command line as an
@@ -277,8 +285,19 @@ def sync_file(path: Path, *, log: LogCallable | None = None) -> bool:
 #: have to be removed again before the ad-hoc seal could be restored -- which is
 #: the dance ``_finish_healthy_macos_update`` already performs for ``.previous``
 #: and which no recovery record should have to join.
-JOURNAL_NAME = "update-transaction.json"
-JOURNAL_TEMP_NAME = "update-transaction.json.new"
+#: The record's *name* carries which installation it belongs to, because its
+#: contents cannot be relied on to: a truncated or half-published record has no
+#: readable ``resources`` field, and one data directory can be shared by two
+#: copies of the application -- a second install, or a ``--data-dir`` aimed at
+#: an existing one. Attribution by filename is what lets recovery act on an
+#: unreadable record that is unambiguously its own, while leaving another
+#: copy's evidence untouched and unread.
+#:
+#: The consequence, stated because it is a real one: moving an installation
+#: between a crash and the next start orphans its record. Nothing then reads or
+#: removes it, and reconciliation falls back to the manifest and directory
+#: checks that predate the journal, which are themselves conservative.
+JOURNAL_PREFIX = "update-transaction"
 JOURNAL_SCHEMA = 1
 
 #: States that mean the transaction has reached a decided end. Only these permit
@@ -319,12 +338,19 @@ UNTRUSTED_JOURNAL_STATES = frozenset(
 ROLLING_BACK_STATE = "rolling-back"
 
 
-def journal_path(data_dir: Path) -> Path:
-    return Path(data_dir) / JOURNAL_NAME
+def installation_key(resources: Path) -> str:
+    """A stable, filename-safe name for one installed copy of the application."""
+
+    normalized = os.path.normcase(os.path.normpath(str(Path(resources))))
+    return hashlib.sha256(normalized.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
-def journal_temp_path(data_dir: Path) -> Path:
-    return Path(data_dir) / JOURNAL_TEMP_NAME
+def journal_path(data_dir: Path, resources: Path) -> Path:
+    return Path(data_dir) / f"{JOURNAL_PREFIX}-{installation_key(resources)}.json"
+
+
+def journal_temp_path(data_dir: Path, resources: Path) -> Path:
+    return Path(data_dir) / f"{JOURNAL_PREFIX}-{installation_key(resources)}.json.new"
 
 
 def _invalid_journal(state: str, detail: str) -> dict[str, Any]:
@@ -393,7 +419,7 @@ def _validate_journal(payload: object) -> dict[str, Any]:
     return dict(payload)
 
 
-def read_journal(data_dir: Path) -> dict[str, Any] | None:
+def read_journal(data_dir: Path, resources: Path) -> dict[str, Any] | None:
     """Return the recorded transaction for this data directory, or None.
 
     Both names are consulted. A surviving ``.json.new`` means a journal was
@@ -407,8 +433,8 @@ def read_journal(data_dir: Path) -> dict[str, Any] | None:
     is still reported unresolved, because the pair cannot say which came first.
     """
 
-    path = journal_path(data_dir)
-    temporary = journal_temp_path(data_dir)
+    path = journal_path(data_dir, resources)
+    temporary = journal_temp_path(data_dir, resources)
     interrupted_publication = temporary.exists() or temporary.is_symlink()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -450,6 +476,7 @@ class JournalDurability:
 
 def write_journal(
     data_dir: Path,
+    resources: Path,
     payload: Mapping[str, Any],
     *,
     log: LogCallable | None = None,
@@ -475,8 +502,8 @@ def write_journal(
     """
 
     directory = Path(data_dir)
-    target = journal_path(directory)
-    temporary = journal_temp_path(directory)
+    target = journal_path(directory, resources)
+    temporary = journal_temp_path(directory, resources)
     contents_fully_synced = True
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -509,7 +536,7 @@ def write_journal(
     )
 
 
-def remove_journal(data_dir: Path, *, log: LogCallable | None = None) -> bool:
+def remove_journal(data_dir: Path, resources: Path, *, log: LogCallable | None = None) -> bool:
     """Delete a decided transaction record, and any leftover temporary with it.
 
     The temporary is removed *first*: it is what makes ``read_journal`` report
@@ -518,7 +545,7 @@ def remove_journal(data_dir: Path, *, log: LogCallable | None = None) -> bool:
     """
 
     removed = True
-    for path in (journal_temp_path(data_dir), journal_path(data_dir)):
+    for path in (journal_temp_path(data_dir, resources), journal_path(data_dir, resources)):
         try:
             path.unlink()
         except FileNotFoundError:
@@ -532,6 +559,7 @@ def remove_journal(data_dir: Path, *, log: LogCallable | None = None) -> bool:
 
 def set_journal_state(
     data_dir: Path,
+    resources: Path,
     state: str,
     *,
     detail: str | None = None,
@@ -549,7 +577,7 @@ def set_journal_state(
     describes has already been done and observed.
     """
 
-    payload = read_journal(data_dir)
+    payload = read_journal(data_dir, resources)
     if payload is None:
         return False
     if payload.get("state") in {
@@ -567,7 +595,7 @@ def set_journal_state(
     if detail is not None:
         payload["detail"] = detail
     try:
-        write_journal(data_dir, payload, log=log)
+        write_journal(data_dir, resources, payload, log=log)
     except ApplyUpdateError as exc:
         _emit_log(log, f"Could not record update progress {state!r}: {exc}")
         return False
@@ -605,15 +633,21 @@ def journal_describes(journal: Mapping[str, Any], resources: Path) -> bool:
     """Whether a recorded transaction is about *this* installation.
 
     A data directory is not private to one copy of the application: a second
-    install, or a ``--data-dir`` aimed at an existing one, shares it. The
-    record therefore names the ``Resources`` directory it was written for, and
-    everything that acts on a record checks that name first.
+    install, or a ``--data-dir`` aimed at an existing one, shares it.
 
-    An untrusted record -- unreadable, invalid, or caught mid-publication --
-    has no usable ``resources`` field and is answered True: it belongs to
-    whoever is asking, because the alternative is to ignore the only evidence
-    that something was in flight. It cannot cause a mutation on its own, since
-    every path recovery touches is derived from the caller's ``resources``.
+    **The record's filename is what attributes it**, not this function.
+    ``journal_path`` derives the name from the installation, so a record that
+    was read at all was already addressed to this copy -- which is what makes
+    it safe to act on an *unreadable* one, and what keeps another copy's
+    evidence unread and unremoved. That mattered: attributing by content meant
+    a truncated or half-published record, which has no readable ``resources``
+    field, had to be assumed to belong to whoever asked, and recovery would
+    then delete a shared record it could not prove was its own.
+
+    This check is the second line, for a record whose contents *are* readable:
+    it catches a file copied between data directories, or one whose name and
+    contents disagree for any other reason. An untrusted record has nothing to
+    compare and is answered by its filename alone, which is now sufficient.
     """
 
     if str(journal.get("state")) in UNTRUSTED_JOURNAL_STATES:
@@ -866,6 +900,49 @@ def plan_layer_swap(
     return layers
 
 
+def stage_recovery_helper(
+    data_dir: Path,
+    *,
+    bundle: Path | None = None,
+    log: LogCallable | None = None,
+) -> Path | None:
+    """Put a runnable copy of this module outside the bundle, before the swap.
+
+    The rollback handoff copies it too, but only when a *handled* failure hands
+    off. A process killed mid-swap hands off nothing, and the copy is then
+    exactly what is missing in the state that needs it most -- the app layer
+    can be the directory that is gone, and this module lives inside it.
+
+    Best effort by design: the swap is not worth failing over the loss of a
+    manual repair route, and the automatic route does not depend on this copy.
+    Returns the staged path, or None with the reason logged.
+    """
+
+    origin = Path(__file__).resolve()
+    destination = Path(data_dir) / RECOVERY_HELPER_DIRECTORY / RECOVERY_HELPER_NAME
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(origin, destination)
+        sync_file(destination, log=log)
+        sync_directory(destination.parent, log=log)
+    except OSError as exc:
+        _emit_log(log, f"Could not stage the recovery helper at {destination}: {exc}")
+        return None
+    # Written out in full because the window this covers is the one where no
+    # launcher can run it for the user: an interruption while the app layer
+    # itself is being replaced leaves nothing that reaches this code
+    # automatically, on any platform. The line below is then the whole repair,
+    # and the update log is where somebody will already be looking.
+    if bundle is not None:
+        _emit_log(
+            log,
+            "If this update is interrupted and the application will not start, "
+            "recover it by running: <python3.13> "
+            f'"{destination}" --recover --bundle "{bundle}" --data-dir "{Path(data_dir)}"',
+        )
+    return destination
+
+
 def begin_update_transaction(
     *,
     data_dir: Path,
@@ -886,7 +963,7 @@ def begin_update_transaction(
     start another one from.
     """
 
-    existing = read_journal(data_dir)
+    existing = read_journal(data_dir, resources)
     if existing is not None and str(existing.get("state")) not in TERMINAL_JOURNAL_STATES:
         raise ApplyUpdateError(
             "An earlier update transaction "
@@ -918,7 +995,7 @@ def begin_update_transaction(
     }
     if existing is not None:
         payload["supersedes"] = existing.get("transaction")
-    write_journal(data_dir, payload)
+    write_journal(data_dir, resources, payload)
     return payload
 
 
@@ -938,7 +1015,7 @@ def begin_rollback_transaction(
     flight, so the previous transaction id is kept.
     """
 
-    existing = read_journal(data_dir)
+    existing = read_journal(data_dir, resources)
     now = datetime.now().isoformat(timespec="seconds")
     payload: dict[str, Any] = {
         "schema": JOURNAL_SCHEMA,
@@ -961,7 +1038,7 @@ def begin_rollback_transaction(
     }
     if existing is not None:
         payload["supersedes"] = existing.get("transaction")
-    write_journal(data_dir, payload)
+    write_journal(data_dir, resources, payload)
     return payload
 
 
@@ -979,7 +1056,7 @@ def swap_staged_layers(
 
     def progress(detail: str) -> None:
         if journal_dir is not None:
-            set_journal_state(journal_dir, "swapping", detail=detail)
+            set_journal_state(journal_dir, resources, "swapping", detail=detail)
 
     moved_old: list[tuple[Path, Path]] = []
     moved_new: list[tuple[Path, Path]] = []
@@ -1468,6 +1545,7 @@ def _restore_previous_layers(
     if data_dir is not None:
         set_journal_state(
             data_dir,
+            resources,
             ROLLING_BACK_STATE,
             detail="restoring the previous layers",
             log=log,
@@ -1494,6 +1572,35 @@ def _restore_previous_layers(
     return True, "the previous version was restored"
 
 
+def _seal_after_recovery(
+    bundle: Path | None,
+    *,
+    platform_name: str,
+    runner: CommandRunner,
+    log: LogCallable | None,
+) -> tuple[bool, str]:
+    """Restore the bundle seal before a recovered installation may be launched.
+
+    Reachable whenever the *layers* are already where they belong but the seal
+    is not: a restore killed after its last rename, or one whose terminal state
+    was the write that was lost. On macOS the ad-hoc signature then still covers
+    the generation that was replaced, and the bundle either will not launch or
+    launches with a seal that does not describe it.
+
+    Called before any terminal state is written, and its failure keeps the
+    transaction open on purpose -- a seal that could not be restored is a seal
+    the next start has to try again.
+    """
+
+    if bundle is None:
+        return True, ""
+    try:
+        repair_bundle(bundle, platform_name=platform_name, runner=runner, log=log)
+    except ApplyUpdateError as exc:
+        return False, f"the recovered bundle could not be signed and verified: {exc}"
+    return True, ""
+
+
 def recover_transaction(
     *,
     data_dir: Path,
@@ -1513,7 +1620,7 @@ def recover_transaction(
     property that a killed process cannot take away.
     """
 
-    journal = read_journal(data_dir)
+    journal = read_journal(data_dir, resources)
     if journal is None:
         return RecoveryOutcome("none", "No update transaction was recorded.")
     state = str(journal.get("state") or "")
@@ -1558,20 +1665,28 @@ def recover_transaction(
         """
 
         if state in UNTRUSTED_JOURNAL_STATES:
-            remove_journal(data_dir, log=log)
+            remove_journal(data_dir, resources, log=log)
             _emit_log(
                 log,
                 f"Removed the unreadable update transaction record after {state_name}: {detail}.",
             )
             return
-        set_journal_state(data_dir, state_name, detail=detail, log=log)
+        set_journal_state(data_dir, resources, state_name, detail=detail, log=log)
 
     def finish(restored: bool, detail: str) -> RecoveryOutcome:
         if restored:
             decide("rolled-back", detail)
             _emit_log(log, f"Recovered update transaction {identifier}: {detail}.")
             return RecoveryOutcome("rolled-back", detail)
-        set_journal_state(data_dir, "recovery-failed", detail=detail, log=log)
+        # Deliberately the rolling-back marker again, with the reason in the
+        # detail, rather than a distinct "recovery-failed" state. The state's
+        # only job is to steer the *next* start, and a restore that has been
+        # announced but not finished is still a restore to finish. A separate
+        # state lost that, and the retry then re-read a correctly restored old
+        # generation as a completed update and recorded it as installed.
+        set_journal_state(
+            data_dir, resources, ROLLING_BACK_STATE, detail=detail, log=log
+        )
         message = (
             f"Update transaction {identifier} could not be recovered: {detail}. "
             "The rollback material was kept."
@@ -1601,8 +1716,28 @@ def recover_transaction(
     if operation == "rollback":
         states = [_rollback_layer_state(resources, entry) for entry in entries]
         if all(value == "settled" for value in states):
+            # The renames finished; the seal may not have. Re-seal *before*
+            # recording the end, so a failure here is retried rather than
+            # locked in behind a terminal state.
+            sealed, seal_detail = _seal_after_recovery(
+                bundle, platform_name=platform_name, runner=runner, log=log
+            )
+            if not sealed:
+                set_journal_state(
+                    data_dir, resources, ROLLING_BACK_STATE, detail=seal_detail, log=log
+                )
+                message = (
+                    f"Rollback transaction {identifier} restored every layer, but "
+                    f"{seal_detail}."
+                )
+                _emit_log(log, message)
+                return RecoveryOutcome("failed", message)
             set_journal_state(
-                data_dir, "rolled-back", detail="every layer was already restored", log=log
+                data_dir,
+                resources,
+                "rolled-back",
+                detail="every layer was already restored",
+                log=log,
             )
             return RecoveryOutcome(
                 "none", f"Rollback transaction {identifier} had already completed."
@@ -1637,12 +1772,22 @@ def recover_transaction(
             data_dir=data_dir,
         )
         if not restored and "no previous layer" in detail:
-            set_journal_state(
-                data_dir,
-                "rolled-back",
-                detail="the restore had already finished",
-                log=log,
+            # Same shape as above: nothing left to move, and a seal that may
+            # still describe the generation that was replaced.
+            sealed, seal_detail = _seal_after_recovery(
+                bundle, platform_name=platform_name, runner=runner, log=log
             )
+            if not sealed:
+                set_journal_state(
+                    data_dir, resources, ROLLING_BACK_STATE, detail=seal_detail, log=log
+                )
+                message = (
+                    f"Update transaction {identifier} had already been rolled back, but "
+                    f"{seal_detail}."
+                )
+                _emit_log(log, message)
+                return RecoveryOutcome("failed", message)
+            decide("rolled-back", "the restore had already finished")
             return RecoveryOutcome(
                 "none", f"Update transaction {identifier} had already been rolled back."
             )
@@ -1650,7 +1795,7 @@ def recover_transaction(
 
     if all(value == "untouched" for value in states):
         detail = "no layer had been swapped when the update stopped"
-        set_journal_state(data_dir, "aborted", detail=detail, log=log)
+        set_journal_state(data_dir, resources, "aborted", detail=detail, log=log)
         _emit_log(log, f"Update transaction {identifier} was abandoned: {detail}.")
         return RecoveryOutcome("none", detail)
 
@@ -1684,7 +1829,7 @@ def recover_transaction(
                         data_dir=data_dir,
                     )
                     return finish(restored, f"the swapped bundle could not be sealed: {exc}")
-            set_journal_state(data_dir, "installed", detail=detail, log=log)
+            set_journal_state(data_dir, resources, "installed", detail=detail, log=log)
             _emit_log(log, f"Update transaction {identifier} completed: {detail}.")
             return RecoveryOutcome("completed", detail)
         _emit_log(
@@ -1722,7 +1867,7 @@ def commit_transaction(
     means recovery has not run or did not finish, and the answer is no.
     """
 
-    journal = read_journal(data_dir)
+    journal = read_journal(data_dir, resources)
     if journal is None:
         return True, "no update transaction was recorded"
     state = str(journal.get("state") or "")
@@ -1737,7 +1882,7 @@ def commit_transaction(
             f"update transaction {identifier} is unresolved (state {state!r}); "
             "the rollback material was kept"
         )
-    remove_journal(data_dir, log=log)
+    remove_journal(data_dir, resources, log=log)
     return True, f"update transaction {identifier} committed from state {state!r}"
 
 
@@ -2149,13 +2294,17 @@ def apply_update(
     def finish_failure_after_mutation(reason: str, exit_code: int) -> int:
         # Do not emit the failure diagnostic until rollback, required signing,
         # and the attempt to reopen the restored version have all run.
-        set_journal_state(data_dir, ROLLING_BACK_STATE, detail=reason, log=selected_logger)
+        set_journal_state(
+            data_dir, resources, ROLLING_BACK_STATE, detail=reason, log=selected_logger
+        )
         rolled_back = rollback_previous_layers(resources, renamer=renamer)
         # Only a rollback that restored everything decides the transaction. One
         # that did not leaves the journal open on purpose, so the next start
         # reconciles it instead of reclaiming what it could not restore.
         if rolled_back:
-            set_journal_state(data_dir, "rolled-back", detail=reason, log=selected_logger)
+            set_journal_state(
+                data_dir, resources, "rolled-back", detail=reason, log=selected_logger
+            )
         repair_error: str | None = None
         if rolled_back:
             try:
@@ -2210,6 +2359,9 @@ def apply_update(
             layers=planned,
             platform_name=platform_name,
         )
+        # After the record, before the renames: from here on there is a copy of
+        # this module outside the bundle whatever the swap leaves behind.
+        stage_recovery_helper(data_dir, bundle=resolved_bundle, log=selected_logger)
     except ApplyUpdateError as exc:
         # Deliberately *not* recorded as aborted. One of the ways to arrive here
         # is that an earlier transaction is still unresolved -- which is exactly
@@ -2229,16 +2381,16 @@ def apply_update(
     except ApplyUpdateError as exc:
         # The swap restored what it had moved before raising, so this
         # transaction really is decided, and it is ours to decide.
-        set_journal_state(data_dir, "aborted", detail=str(exc), log=selected_logger)
+        set_journal_state(data_dir, resources, "aborted", detail=str(exc), log=selected_logger)
         return abandon_before_mutation(str(exc))
 
-    set_journal_state(data_dir, "swapped", log=selected_logger)
+    set_journal_state(data_dir, resources, "swapped", log=selected_logger)
     if staged_runtime is not None:
         try:
             refresh_launcher_files(resources, log=log)
         except ApplyUpdateError as exc:
             return finish_failure_after_mutation(str(exc), 4)
-        set_journal_state(data_dir, "launchers-refreshed", log=selected_logger)
+        set_journal_state(data_dir, resources, "launchers-refreshed", log=selected_logger)
 
     try:
         repair_bundle(resolved_bundle, platform_name=platform_name, runner=runner, log=log)
@@ -2247,7 +2399,7 @@ def apply_update(
     # Installed, sealed, and not yet proven: the journal says "installed", which
     # only permits the next healthy start to reclaim the previous layers. It
     # does not reclaim anything itself.
-    set_journal_state(data_dir, "installed", log=selected_logger)
+    set_journal_state(data_dir, resources, "installed", log=selected_logger)
     if dropped:
         log(
             "The relaunch could not carry these arguments and started without "
@@ -2327,7 +2479,7 @@ def rollback_bundle(
         # restore nobody recorded is a restore nobody can finish.
         log(f"The rollback was not started because it could not be recorded: {exc}")
         return 3
-    set_journal_state(data_dir, ROLLING_BACK_STATE, log=log)
+    set_journal_state(data_dir, resources, ROLLING_BACK_STATE, log=log)
     if not rollback_previous_layers(resources, renamer=renamer, log=log):
         log(
             "The rollback did not restore the previous version, so the "
@@ -2335,7 +2487,7 @@ def rollback_bundle(
             "changing the installation."
         )
         return 2
-    set_journal_state(data_dir, "rolled-back", log=log)
+    set_journal_state(data_dir, resources, "rolled-back", log=log)
 
     try:
         repair_bundle(bundle.resolve(), platform_name=platform_name, runner=runner, log=log)

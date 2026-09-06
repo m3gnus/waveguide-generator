@@ -536,14 +536,16 @@ def test_the_release_and_the_candidate_are_built_by_the_same_actions() -> None:
     (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)),
     ids=("release", "candidate"),
 )
-def test_the_release_node_is_an_exact_patch_and_is_asserted_at_runtime(
+def test_the_release_node_is_an_exact_patch_and_that_patch_is_checked(
     name: str, text: str
 ) -> None:
-    """setup-node verifies no digest, so the version is checked after install.
+    """A major-only spec resolves to whatever the runner image carries.
 
-    Reading actions/setup-node at the pinned commit finds no checksum code on
-    the download path at all. Nothing in this repository can add one, so the
-    workflow asserts the one thing a substituted download would change loudly.
+    The pin is the point; the post-install check is drift detection for it, and
+    is not asserted here to be anything more. `actions/setup-node` verifies no
+    digest on its download -- read at the pinned commit -- and this repository
+    does not authenticate that archive either, which the workflow comment says
+    plainly rather than calling the version check a substitute.
     """
 
     assert f'node-version: "{RELEASE_NODE_VERSION}"' in text, name
@@ -552,17 +554,17 @@ def test_the_release_node_is_an_exact_patch_and_is_asserted_at_runtime(
     assert 'actual="$(node --version)"' in text, name
 
 
-def test_the_inno_setup_compiler_identity_is_asserted_not_assumed() -> None:
-    """The chocolatey package embeds its installer; assert what compiles."""
+def test_the_inno_setup_banner_check_cannot_pass_on_no_output() -> None:
+    """`ISCC /?` exits non-zero, so the exit code cannot be the test.
+
+    That leaves one way for the check to be worthless: an invocation that
+    prints nothing at all, whose empty output no pattern rejects. The output is
+    captured whole and emptiness is failed explicitly, so a compiler that did
+    not run is a failure rather than a silent pass.
+    """
 
     for name, text in (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)):
         assert "choco install innosetup --version=6.7.1" in text, name
+        assert "$banner = (& $iscc /? 2>&1 | Out-String)" in text, name
+        assert "[string]::IsNullOrWhiteSpace($banner)" in text, name
         assert 'if ($banner -notmatch "6\\.7\\.1")' in text, name
-
-
-def test_the_unpinnable_runner_baseline_is_documented_not_implied() -> None:
-    """An honest gap that is written down is not the same as one that is not."""
-
-    for name, text in (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)):
-        assert "hosted runner" in text, name
-        assert "the base image is" in text, name
