@@ -218,30 +218,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           choco install innosetup --version=6.7.1 -y --no-progress
-          $iscc = "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path -LiteralPath $iscc)) {
-            $iscc = (Get-ChildItem -Path "$env:ProgramFiles","${env:ProgramFiles(x86)}" -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue |
-                     Select-Object -First 1 -ExpandProperty FullName)
-          }
-          if (-not $iscc) { throw "Inno Setup installed but ISCC.exe was not found." }
-          # The chocolatey package embeds its installer rather than fetching
-          # one, so there is no separate download to checksum. Asserting which
-          # compiler runs is drift detection, like the Node check, not proof of
-          # the bytes.
-          #
-          # ISCC has no --version and prints its banner from `/?`, which exits
-          # non-zero. So the exit code is deliberately not the test -- and the
-          # output is captured whole before it is matched, because piping it
-          # straight into Select-Object would let an empty or failed invocation
-          # produce an empty banner that no pattern rejects for the wrong
-          # reason. An empty banner is failed explicitly here.
-          $banner = (& $iscc /? 2>&1 | Out-String)
-          if ([string]::IsNullOrWhiteSpace($banner)) {
-            throw "The Inno Setup compiler at $iscc printed no banner."
-          }
-          if ($banner -notmatch "6\.7\.1") {
-            throw "Expected the Inno Setup 6.7.1 compiler, got: $($banner.Trim())"
-          }
+          # The helper uses bounded Program Files paths and the compiler's PE
+          # FileVersion resource. ISCC /? prints usage without the patch.
+          $iscc = & ./scripts/ci/verify_inno_setup.ps1
           "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Build and verify the standalone app
         shell: pwsh
@@ -347,6 +326,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
+      - name: Install documented Linux runtime libraries for package qualification
+        run: scripts/ci/install_linux_runtime_dependencies.sh
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:

@@ -554,17 +554,18 @@ def test_the_release_node_is_an_exact_patch_and_that_patch_is_checked(
     assert 'actual="$(node --version)"' in text, name
 
 
-def test_the_inno_setup_banner_check_cannot_pass_on_no_output() -> None:
-    """`ISCC /?` exits non-zero, so the exit code cannot be the test.
+def test_the_inno_setup_check_uses_the_compiler_pe_version() -> None:
+    """ISCC help omits the patch, so the workflow calls the shared verifier."""
 
-    That leaves one way for the check to be worthless: an invocation that
-    prints nothing at all, whose empty output no pattern rejects. The output is
-    captured whole and emptiness is failed explicitly, so a compiler that did
-    not run is a failure rather than a silent pass.
-    """
-
+    verifier = (ROOT / "scripts" / "ci" / "verify_inno_setup.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert '[Environment]::GetEnvironmentVariable("ProgramFiles(x86)")' in verifier
+    assert "FileVersionInfo]::GetVersionInfo($CompilerPath).FileVersion" in verifier
+    assert 'ExpectedVersion = "6.7.1"' in verifier
+    assert "[string]::IsNullOrWhiteSpace($banner)" in verifier
+    assert "Get-ChildItem" not in verifier
     for name, text in (("release.yml", WORKFLOW), ("rc-build.yml", RC_WORKFLOW)):
         assert "choco install innosetup --version=6.7.1" in text, name
-        assert "$banner = (& $iscc /? 2>&1 | Out-String)" in text, name
-        assert "[string]::IsNullOrWhiteSpace($banner)" in text, name
-        assert 'if ($banner -notmatch "6\\.7\\.1")' in text, name
+        assert "./scripts/ci/verify_inno_setup.ps1" in text, name
+        assert '$banner -notmatch "6\\.7\\.1"' not in text, name
