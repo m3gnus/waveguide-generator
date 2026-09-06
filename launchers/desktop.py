@@ -742,7 +742,13 @@ class DesktopWindow:
             log=log,
             data_dir=data_dir,
         )
-        if not restore.restored:
+        if not restore.attempted:
+            result = (
+                "The rollback was not started because it could not be recorded, so "
+                "nothing was changed. Reopen Waveguide Generator: the next start "
+                "repairs the installation from the record the update already wrote."
+            )
+        elif not restore.restored:
             result = ROLLBACK_FAILED_RESULT
         elif restore.seal_error is not None:
             result = (

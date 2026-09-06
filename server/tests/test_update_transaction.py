@@ -1865,3 +1865,277 @@ def test_a_bundle_that_cannot_even_be_inspected_refuses(
     assert reported and "could not check whether an earlier update was interrupted" in (
         reported[0]
     )
+
+
+# ---------------------------------------------------------------------------
+# The one marker that is not advisory
+# ---------------------------------------------------------------------------
+
+
+def _fail_journal_writes(monkeypatch: pytest.MonkeyPatch, *, when: str) -> list[str]:
+    """Make `write_journal` fail for records whose state matches `when`."""
+
+    attempted: list[str] = []
+    real_write = apply_update_module.write_journal
+
+    def failing_write(data_dir, resources, payload, **kwargs):  # type: ignore[no-untyped-def]
+        state = str(payload.get("state"))
+        attempted.append(state)
+        if state == when:
+            raise apply_update_module.ApplyUpdateError("the data directory is read-only")
+        return real_write(data_dir, resources, payload, **kwargs)
+
+    monkeypatch.setattr(apply_update_module, "write_journal", failing_write)
+    return attempted
+
+
+def test_a_restore_whose_intent_cannot_be_recorded_renames_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rolling-back marker stopped being advisory when a branch depended on it.
+
+    `set_journal_state` still documents progress markers as advisory, and for
+    "swapped" or "launchers-refreshed" that is true: reconciliation decides from
+    the directories. `ROLLING_BACK_STATE` is the exception, because a restore
+    killed after its first layer leaves exactly the shape a finished swap
+    leaves. If that marker never reached the disk and the restore ran anyway, a
+    kill in the middle leaves the *old* update state on the record -- and for an
+    app-only update, or any update whose layers share a `runtimeId`, the
+    manifests cannot tell the two apart either.
+
+    So nothing is renamed until the intent is recorded, exactly as no swap
+    begins until its own intent is.
+    """
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    before = _generations(resources)
+    state_before = read_journal(data_dir, resources)["state"]
+    _fail_journal_writes(monkeypatch, when=ROLLING_BACK_STATE)
+
+    outcome = apply_update_module.restore_previous_generation(
+        resources,
+        None,
+        platform_name="linux",
+        data_dir=data_dir,
+    )
+
+    assert outcome.attempted is False
+    assert outcome.restored is False
+    assert outcome.complete is False
+    assert "could not be written" in outcome.detail
+    assert _generations(resources) == before, "nothing may move on an unrecorded intent"
+    assert (resources / "app.previous").is_dir()
+    assert (resources / "runtime.previous").is_dir()
+    assert not list(resources.glob("*.failed*"))
+    assert read_journal(data_dir, resources)["state"] == state_before
+    assert commit_transaction(data_dir, resources=resources)[0] is False
+
+
+def test_the_same_update_is_still_recoverable_after_a_refused_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refusing costs the attempt, not the installation.
+
+    The record the swap wrote is still there and still says what it said, so
+    the next start reconciles exactly as it would have.
+    """
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    with monkeypatch.context() as failing:
+        _fail_journal_writes(failing, when=ROLLING_BACK_STATE)
+        refused = apply_update_module.restore_previous_generation(
+            resources, None, platform_name="linux", data_dir=data_dir
+        )
+    assert refused.attempted is False
+
+    # Nothing about the transaction changed, so the interruption it was
+    # answering is still reconcilable.
+    (resources / "runtime").rename(resources / "runtime.failed")
+    (resources / "runtime.previous").rename(resources / "runtime")
+    _strip_manifests(resources)
+    apply_update_module.set_journal_state(data_dir, resources, ROLLING_BACK_STATE)
+
+    outcome = _recover(resources, data_dir)
+
+    assert outcome.action == "rolled-back"
+    assert _generations(resources) == {"app": "old0", "runtime": "old0"}
+
+
+def test_an_app_only_update_is_the_case_the_marker_exists_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One layer, one `runtimeId`: the manifests can say nothing at all.
+
+    The review named this shape specifically. With a single layer in the
+    transaction, a restore that completed and one that never started leave
+    states the manifests cannot distinguish, so the marker is the only evidence
+    -- and a marker that was not written must not be assumed.
+    """
+
+    resources, data_dir, staged_app, _staged_runtime = _installation(tmp_path)
+    # Same runtime on both sides: an app-only update.
+    _write_manifest(staged_app, "old0")
+    planned = plan_layer_swap(resources, staged_app, None)
+    assert [target.name for target, _staged in planned] == ["app"]
+    begin_update_transaction(
+        data_dir=data_dir,
+        bundle=resources,
+        resources=resources,
+        layers=planned,
+        platform_name="linux",
+    )
+    swap_staged_layers(resources, staged_app, None, journal_dir=data_dir)
+    assert not layers_disagree(resources), "the ids match, so they cannot decide anything"
+    _fail_journal_writes(monkeypatch, when=ROLLING_BACK_STATE)
+
+    outcome = apply_update_module.restore_previous_generation(
+        resources, None, platform_name="linux", data_dir=data_dir
+    )
+
+    assert outcome.attempted is False
+    assert (resources / "app.previous").is_dir()
+    assert (resources / "app" / "marker.txt").read_text(encoding="utf-8") == "new1"
+
+
+def test_an_untrusted_record_is_not_a_failed_write_and_still_restores(
+    tmp_path: Path,
+) -> None:
+    """"Deliberately not written" must not read as "did not land".
+
+    An untrusted record is left alone on purpose, and it already sends
+    reconciliation down the restoring path, so it needs no marker to steer it.
+    Refusing to restore because that write was declined would strand exactly
+    the installations that most need restoring.
+    """
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    journal_path(data_dir, resources).write_text("{ truncated", encoding="utf-8")
+
+    assert apply_update_module.set_journal_state(
+        data_dir, resources, ROLLING_BACK_STATE
+    ) == apply_update_module.JOURNAL_STATE_UNTRUSTED
+
+    outcome = _recover(resources, data_dir)
+
+    assert outcome.action == "rolled-back"
+    assert _generations(resources) == {"app": "old0", "runtime": "old0"}
+
+
+def test_set_journal_state_separates_all_four_outcomes(tmp_path: Path) -> None:
+    """One bool hid the distinction the restore now depends on."""
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+
+    assert apply_update_module.set_journal_state(
+        data_dir, resources, "swapped"
+    ) == apply_update_module.JOURNAL_STATE_ABSENT
+
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    assert apply_update_module.set_journal_state(
+        data_dir, resources, "swapped"
+    ) == apply_update_module.JOURNAL_STATE_RECORDED
+
+    journal_temp_path(data_dir, resources).write_text('{"schema": 1}', encoding="utf-8")
+    assert apply_update_module.set_journal_state(
+        data_dir, resources, "swapped"
+    ) == apply_update_module.JOURNAL_STATE_UNTRUSTED
+    journal_temp_path(data_dir, resources).unlink()
+
+
+def test_a_failed_terminal_write_is_still_safe_to_lose(tmp_path: Path) -> None:
+    """Only the pre-rename marker is required; the end is not.
+
+    A terminal state is written after the work it describes has been done and
+    observed, so a start that misses it reconciles the same installation again
+    and reaches the same conclusion. Losing it costs a repeated reconciliation,
+    not correctness -- which is why this stays advisory and the other does not.
+    """
+
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+
+    real_write = apply_update_module.write_journal
+    dropped: list[str] = []
+
+    def drop_terminal(data_directory, res, payload, **kwargs):  # type: ignore[no-untyped-def]
+        if str(payload.get("state")) == "rolled-back":
+            dropped.append("rolled-back")
+            raise apply_update_module.ApplyUpdateError("lost on the way to the disk")
+        return real_write(data_directory, res, payload, **kwargs)
+
+    original = apply_update_module.write_journal
+    apply_update_module.write_journal = drop_terminal  # type: ignore[assignment]
+    try:
+        outcome = apply_update_module.restore_previous_generation(
+            resources, None, platform_name="linux", data_dir=data_dir
+        )
+    finally:
+        apply_update_module.write_journal = original  # type: ignore[assignment]
+
+    assert dropped, "the terminal write must have been attempted"
+    assert outcome.complete is True
+    assert _generations(resources) == {"app": "old0", "runtime": "old0"}
+    assert read_journal(data_dir, resources)["state"] == ROLLING_BACK_STATE
+
+    # The next start reaches the same conclusion from the same directories.
+    again = _recover(resources, data_dir)
+    assert again.action == "none"
+    assert read_journal(data_dir, resources)["state"] == "rolled-back"
+
+
+def test_a_record_nobody_can_read_never_calls_an_unsealed_bundle_usable(
+    tmp_path: Path,
+) -> None:
+    """The other boundary the review named: restore renames done, seal not.
+
+    An unreadable record cannot say whether nothing ever moved or whether a
+    restore got through every rename and stopped before its reseal. The second
+    leaves a bundle whose signature still covers the generation that was
+    replaced, so this path re-seals before calling the installation usable --
+    and a seal that will not come back keeps the transaction open rather than
+    closing it as "aborted".
+    """
+
+    bundle, resources, data_dir, staged_app, staged_runtime = _macos_shaped_installation(
+        tmp_path
+    )
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    swap_staged_layers(resources, staged_app, staged_runtime, journal_dir=data_dir)
+    assert rollback_previous_layers(resources) is True
+    # The record was being rewritten when the machine stopped, and nothing is
+    # left to restore -- the state this path used to close as "aborted".
+    journal_path(data_dir, resources).write_text("{ truncated", encoding="utf-8")
+
+    _commands, failing_run = _recording_runner(failing="codesign")
+    refused = recover_transaction(
+        data_dir=data_dir,
+        resources=resources,
+        bundle=bundle,
+        platform_name="darwin",
+        runner=failing_run,
+    )
+
+    assert refused.action == "failed"
+    assert "signed and verified" in refused.detail
+    assert read_journal(data_dir, resources)["state"] != "aborted", (
+        "an unsealed bundle must not be closed as a decided transaction"
+    )
+
+    commands, run = _recording_runner()
+    outcome = recover_transaction(
+        data_dir=data_dir,
+        resources=resources,
+        bundle=bundle,
+        platform_name="darwin",
+        runner=run,
+    )
+
+    assert outcome.action == "none"
+    assert "/usr/bin/codesign" in [command[0] for command in commands]

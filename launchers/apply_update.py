@@ -557,6 +557,21 @@ def remove_journal(data_dir: Path, resources: Path, *, log: LogCallable | None =
     return removed
 
 
+#: The write landed.
+JOURNAL_STATE_RECORDED = "recorded"
+#: There was no record to advance. Reconciliation falls back to the structural
+#: checks that predate the journal, which are conservative on their own.
+JOURNAL_STATE_ABSENT = "absent"
+#: The record cannot be trusted, so it was deliberately left alone. Not a
+#: failure: an untrusted record already sends reconciliation down the restoring
+#: path, so no marker is needed to steer it, and rewriting it from a partial
+#: view would replace evidence with invention.
+JOURNAL_STATE_UNTRUSTED = "untrusted"
+#: The write was attempted and did not land. The only outcome a caller whose
+#: correctness depends on the marker may not continue past.
+JOURNAL_STATE_FAILED = "failed"
+
+
 def set_journal_state(
     data_dir: Path,
     resources: Path,
@@ -564,32 +579,35 @@ def set_journal_state(
     *,
     detail: str | None = None,
     log: LogCallable | None = None,
-) -> bool:
-    """Record how far the transaction got. Advisory, and deliberately so.
+) -> str:
+    """Record how far the transaction got, and say which of four things happened.
 
-    Reconciliation never trusts these markers to decide what to do -- it reads
-    the live directories, which is the only account that a power cut cannot
-    disagree with. They exist so a person reading ``update-transaction.json``
-    after the fact can see where it stopped, and so a *decided* transaction can
-    say so. That is why a failure here is logged instead of raised: losing a
-    progress marker changes no decision, and the marker that does decide
-    something -- a terminal state -- is only ever written after the work it
-    describes has already been done and observed.
+    **Most of these markers are advisory; one is not, and that is why this
+    returns a status rather than a bool.** Reconciliation decides what to do
+    from the live directories, so losing "swapped" or "launchers-refreshed"
+    changes nothing. ``ROLLING_BACK_STATE`` is different: a restore killed after
+    its first layer leaves exactly the shape a finished swap leaves, and for an
+    app-only update -- or any update whose two layers share a ``runtimeId`` --
+    the manifests cannot tell them apart either. That marker is the only thing
+    that can, so a caller about to rename on the strength of it has to know
+    whether it is actually on the disk. Collapsing "written", "nothing to
+    write", "deliberately not written" and "the write failed" into one ``False``
+    hid exactly that distinction.
+
+    A terminal state is still safe to lose: it is only ever written after the
+    work it describes has been done and observed, so a start that misses it
+    reconciles the same installation again and reaches the same conclusion.
     """
 
     payload = read_journal(data_dir, resources)
     if payload is None:
-        return False
-    if payload.get("state") in {
-        INVALID_JOURNAL_STATE,
-        UNREADABLE_JOURNAL_STATE,
-        INTERRUPTED_PUBLICATION_STATE,
-    }:
+        return JOURNAL_STATE_ABSENT
+    if payload.get("state") in UNTRUSTED_JOURNAL_STATES:
         # There is nothing coherent to advance. Rewriting it from this partial
         # view would replace the evidence with a record this process invented.
         reason = payload.get("detail") or "the journal cannot be trusted"
         _emit_log(log, f"Not recording update progress {state!r}: {reason}.")
-        return False
+        return JOURNAL_STATE_UNTRUSTED
     payload["state"] = state
     payload["updatedAt"] = datetime.now().isoformat(timespec="seconds")
     if detail is not None:
@@ -598,8 +616,8 @@ def set_journal_state(
         write_journal(data_dir, resources, payload, log=log)
     except ApplyUpdateError as exc:
         _emit_log(log, f"Could not record update progress {state!r}: {exc}")
-        return False
-    return True
+        return JOURNAL_STATE_FAILED
+    return JOURNAL_STATE_RECORDED
 
 
 def layer_manifest_name(layer_name: str) -> str:
@@ -1526,7 +1544,7 @@ def _launcher_files_are_settled(resources: Path) -> tuple[bool, str]:
 
 @dataclass(frozen=True, slots=True)
 class RestoreOutcome:
-    """What a restore achieved, in the two halves that can fail separately."""
+    """What a restore achieved, in the parts that can fail separately."""
 
     #: Every available ``.previous`` layer and launcher file went back.
     restored: bool
@@ -1534,6 +1552,10 @@ class RestoreOutcome:
     seal_error: str | None
     #: One sentence for a log or a dialog.
     detail: str
+    #: Whether anything was renamed at all. False only when the restore refused
+    #: to begin because it could not record that it had, which is a different
+    #: report to a user than "the rollback failed": nothing moved.
+    attempted: bool = True
 
     @property
     def complete(self) -> bool:
@@ -1571,17 +1593,38 @@ def restore_previous_generation(
     reason in its detail, which is what steers the next start into finishing the
     job.
 
-    ``data_dir`` is given whenever a journal exists. The marker it writes *first*
-    matters too: a restore killed after its first layer leaves exactly the shape
-    a finished update leaves -- one layer with no ``.previous``, one with -- and
-    this is what tells the two apart.
+    ``data_dir`` is given whenever a journal exists, and **the marker written
+    before the first rename is required, not advisory**. A restore killed after
+    its first layer leaves exactly the shape a finished swap leaves; the
+    manifests separate the two only when the layers carry different
+    ``runtimeId``s, which an app-only update and any same-runtime update do not.
+    So if that marker did not reach the disk and the restore ran anyway, a kill
+    in the middle leaves the *old* update state on the record, and the next
+    start can read a restored old app as an installed new one -- and reclaim the
+    only copy of the version that worked. Nothing is renamed until it is
+    recorded, exactly as no swap begins until its intent is.
+
+    "Deliberately not written" is not the same as "did not land". An untrusted
+    record is left alone on purpose and already sends reconciliation down the
+    restoring path, so it needs no marker to steer it; a *failed write* is the
+    one outcome this refuses to continue past.
     """
 
-    def record(state: str, detail: str) -> None:
-        if data_dir is not None:
-            set_journal_state(data_dir, resources, state, detail=detail, log=log)
+    def record(state: str, detail: str) -> str:
+        if data_dir is None:
+            return JOURNAL_STATE_ABSENT
+        return set_journal_state(data_dir, resources, state, detail=detail, log=log)
 
-    record(ROLLING_BACK_STATE, "restoring the previous layers")
+    intent = record(ROLLING_BACK_STATE, "restoring the previous layers")
+    if intent == JOURNAL_STATE_FAILED:
+        detail = (
+            "the rollback was not started because the record that a restore had begun "
+            "could not be written; the installation was left exactly as it was found"
+        )
+        _emit_log(log, detail)
+        return RestoreOutcome(
+            restored=False, seal_error=None, detail=detail, attempted=False
+        )
     pending = [
         name for name in BUNDLE_LAYERS if (resources / f"{name}{PREVIOUS_SUFFIX}").is_dir()
     ] + [
@@ -1773,6 +1816,23 @@ def recover_transaction(
             data_dir=data_dir,
         )
         if not restored and "no previous layer" in detail:
+            # Nothing was left to restore -- but an unreadable record cannot say
+            # whether that is because nothing ever moved or because a restore
+            # got all the way through its renames and stopped before its reseal.
+            # The second leaves a bundle whose signature still covers the
+            # generation that was replaced, so the seal is restored before this
+            # installation is called usable, and a seal that will not come back
+            # keeps the transaction open instead of closing it as "aborted".
+            sealed, seal_detail = _seal_after_recovery(
+                bundle, platform_name=platform_name, runner=runner, log=log
+            )
+            if not sealed:
+                message = (
+                    f"Update transaction {identifier} had nothing left to restore, but "
+                    f"{seal_detail}."
+                )
+                _emit_log(log, message)
+                return RecoveryOutcome("failed", message)
             decide("aborted", detail)
             return RecoveryOutcome("none", f"Update transaction {identifier}: {detail}.")
         return finish(restored, detail)
@@ -2376,7 +2436,16 @@ def apply_update(
         rolled_back = restore.restored
         repair_error = restore.seal_error
         relaunch_error = None if not restore.complete else relaunch_current()
-        if not rolled_back:
+        if not restore.attempted:
+            # Nothing was renamed, so this is not "the rollback failed": the
+            # installation is exactly as this updater found it, and the next
+            # start reconciles it from the record the swap already wrote.
+            outcome = (
+                "The rollback was not started because it could not be recorded, so the "
+                "installation is unchanged and will be repaired at the next start. "
+                "It was not relaunched."
+            )
+        elif not rolled_back:
             outcome = (
                 "Automatic rollback could not restore every required layer and launcher file. "
                 "The installation was not relaunched."
@@ -2552,6 +2621,14 @@ def rollback_bundle(
         log=log,
         data_dir=data_dir,
     )
+    if not restore.attempted:
+        log(
+            "The rollback was not started because the record that a restore had begun "
+            "could not be written, so nothing was moved and the application was not "
+            "reopened. The next start reconciles the installation from the record the "
+            "update already wrote."
+        )
+        return 3
     if not restore.restored:
         log(
             "The rollback did not restore the previous version, so the "

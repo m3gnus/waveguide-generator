@@ -164,8 +164,23 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
     layer leaves exactly the shape a finished swap leaves. Both are covered: every
     path that restores writes a `rolling-back` state before it starts, and for every
     bundle this project builds the two manifests carry `runtimeId`s that disagree in
-    that state anyway. A bundle whose manifests carry neither is covered by the
-    marker alone, which is one write.
+    that state anyway.
+
+    **That marker is the one journal write that is not advisory, and it is
+    required rather than best-effort.** The others are: reconciliation decides
+    from the live directories, so losing "swapped" changes nothing, and a
+    terminal state is written only after the work it describes has been done and
+    observed, so a start that misses it reaches the same conclusion again. The
+    `rolling-back` marker is different because a branch depends on it — and the
+    manifests can only stand in for it when the two layers carry *different*
+    `runtimeId`s, which an app-only update and any same-runtime update do not. So
+    nothing is renamed until it is recorded, exactly as no swap begins until its
+    own intent is; a restore that cannot record itself refuses and leaves the
+    installation as it found it, which the next start still reconciles from the
+    record the swap already wrote. "Deliberately not written" — an untrusted
+    record, left alone on purpose — is distinguished from "the write failed",
+    because an untrusted record already sends reconciliation down the restoring
+    path and needs no marker to steer it.
 
   Recovery now runs for **every start mode**. It used to live inside
   `DesktopWindow._wait_for_frontend`, so `--browser` and `--no-gui` skipped it
