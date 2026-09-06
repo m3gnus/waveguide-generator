@@ -6,13 +6,14 @@ current plans. GitHub's `actions/attest` action obtains a short-lived Sigstore
 certificate through the Actions OIDC token; it does not require a purchased
 certificate or a repository secret.
 
-The RC and manual Beta build jobs attest their own files immediately after the
-build and before uploading them. One attestation may contain several subjects,
-so the installer is bound to the update archive and its manifest produced by
-the same job. A later job only downloads those already-attested files; it never
-creates a new build claim for an old download. The CPU qualification steps stay
-after the upload as they are today. An attestation describes origin and build
-provenance; it is not a CPU qualification result.
+The RC build and the manual Beta proposal (when activated) attest their own
+files immediately after the build and before uploading them. One attestation
+may contain several subjects, so the installer is bound to the update archive
+and its manifest produced by the same job. A later job only downloads those
+already-attested files; it never creates a new build claim for an old download.
+The CPU qualification steps stay after the upload as they are today. An
+attestation describes origin and build provenance; it is not a CPU
+qualification result.
 
 The attestation action is pinned to the immutable `actions/attest` v4.2.1
 commit `508db95dd578ae2727ebd6217d5ba78e4fbda05d`. The action's binary
@@ -60,8 +61,21 @@ subjects and the signed provenance record, add `--format json`; the GitHub CLI
 manual documents the result under
 `.verificationResult.statement`.
 
-The build manifest is a subject of the macOS job's attestation. For a manual
-inspection of its source and content identity:
+The build manifest and canonical app archive are subjects of the macOS job's
+attestation. Verify both subjects with the same repository, signer workflow and
+source constraint before inspecting their fields:
+
+```bash
+for ASSET in update-app-VERSION.zip update-app-VERSION.manifest.json; do
+  gh attestation verify "$ASSET" \
+    --repo m3gnus/waveguide-generator \
+    --signer-workflow m3gnus/waveguide-generator/.github/workflows/rc-build.yml \
+    --source-digest "$SOURCE" \
+    --format json
+done
+```
+
+For a manual inspection of the verified subjects' source and content identity:
 
 ```bash
 jq '{commit, sourceCommit, treeSha256}' update-app-VERSION.manifest.json
@@ -92,11 +106,14 @@ gh attestation verify "$ASSET" \
 ```
 
 The identity job has the same dispatch-source check before it resolves the
-candidate. The stamped Beta app manifest must report that candidate in
+candidate. Verify the Beta app archive and manifest with the same command and
+constraints, substituting `main-build.yml` for `rc-build.yml` in the signer
+workflow path. The stamped Beta app manifest must report that candidate in
 `sourceCommit`, a distinct local `commit` created by the build stamp, and a
 64-character lowercase `treeSha256`. `--source-digest` checks the workflow's
 dispatch source; the manifest fields independently bind the candidate and its
 stamped tree. Those values are evidence about the stamped tree; they do not
 make the updater enforce signatures. The updater continues to use its existing
-checksum and trusted-release checks, and macOS Gatekeeper and Windows
-SmartScreen warnings remain until paid platform signing is separately chosen.
+checksum and trusted-release checks. macOS Gatekeeper and Windows SmartScreen
+behavior remains unchanged; paid platform signing is a separate future choice,
+and SmartScreen reputation is separately accumulated.
