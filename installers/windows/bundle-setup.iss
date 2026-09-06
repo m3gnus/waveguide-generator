@@ -26,6 +26,16 @@
 #ifndef AppVersion
   #error AppVersion must be defined by the build
 #endif
+; The version a person reads and the version Windows stores are not the same
+; string. VersionInfoVersion is written into the binary VERSIONINFO resource --
+; up to four dot-separated NUMBERS, four 16-bit words -- so a build of `main`
+; named 0.4.0-main.7 is not a value it accepts, and ISCC refuses the compile.
+; The build supplies both: AppVersion keeps the SemVer identity everywhere a
+; person sees it, VersionInfoVersion carries its numeric form.
+; https://jrsoftware.org/ishelp/topic_setup_versioninfoversion.htm
+#ifndef VersionInfoVersion
+  #error VersionInfoVersion must be defined by the build
+#endif
 #ifndef PayloadDir
   #error PayloadDir must be defined by the build
 #endif
@@ -42,7 +52,7 @@ AppName=Waveguide Generator
 AppVersion={#AppVersion}
 AppVerName=Waveguide Generator {#AppVersion}
 AppPublisher=Hornlab
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#VersionInfoVersion}
 VersionInfoProductName=Waveguide Generator
 VersionInfoCompany=Hornlab
 

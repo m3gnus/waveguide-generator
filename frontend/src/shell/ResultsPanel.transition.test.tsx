@@ -91,8 +91,7 @@ describe('atomic results display transitions', () => {
     });
     // The export dialog the top bar mounts, answered as the user would.
     provideExportDestinationPrompt(async () => ({
-      token: 'destination-handle',
-      directory: 'C:\\Users\\tester\\AppData\\Roaming\\WaveguideGenerator\\workspace\\1_old',
+      token: 'destination-handle', directory: '/exports',
     }));
     pending = new Map();
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => new Promise<Response>((resolve) => {

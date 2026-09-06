@@ -30,6 +30,7 @@ installed client had a working auto-update path to reach 3.0.0 by either name.
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 
 #: Prefix for everything that is machinery rather than a download.
@@ -225,6 +226,66 @@ VERSION_RE = re.compile(rf"^{_SEMVER}$")
 #: parser, so every asset of every beta was refused as untrusted and no beta
 #: could have been installed. One pattern is the fix that cannot drift again.
 TAG_RE = re.compile(rf"^v{_SEMVER}$")
+
+
+class NativeVersion(NamedTuple):
+    """The version as the platforms' own numeric fields can carry it.
+
+    A SemVer pre-release does not fit them. Inno Setup's ``VersionInfoVersion``
+    takes up to four dot-separated **numbers** -- it is written into the binary
+    VERSIONINFO resource, four 16-bit words -- and Apple documents
+    ``CFBundleShortVersionString`` as one to three integers and
+    ``CFBundleVersion`` as the build, also one to three. ``0.4.0-main.7`` is not
+    a value any of them accepts, so a build named that way has to give each slot
+    a number while the version a person reads, and every asset name, stays the
+    SemVer string.
+    """
+
+    #: ``CFBundleShortVersionString``: the marketing version, without the label.
+    short: str
+    #: ``CFBundleVersion``: the build within that version. A single integer for a
+    #: build, and the version itself for a release, which is what it has always
+    #: been.
+    bundle: str
+    #: Inno Setup's ``VersionInfoVersion``: up to four numbers.
+    windows: str
+
+
+#: The largest value a VERSIONINFO word holds. Each component is 16 bits, so a
+#: build number past this cannot be represented rather than being silently
+#: wrapped into a lower one.
+MAX_NATIVE_VERSION_COMPONENT = 65535
+
+
+def native_version_fields(version: str) -> NativeVersion:
+    """Map a version onto the numeric slots the native installers require.
+
+    A release maps to itself in every slot, which is exactly what the installers
+    already carry -- nothing about a release build changes here.
+
+    A pre-release (`0.4.0-main.7`) keeps its core numbers and contributes the
+    **last numeric identifier of its label** as the build number, which is what
+    such a label carries in practice: `main.7` and `beta.1` are the seventh
+    build of `0.4.0` and the first beta of it. A label ending in something that
+    is not a number has no build number to offer and gets `0`.
+    """
+
+    match = VERSION_RE.fullmatch(version)
+    if match is None:
+        raise ValueError(f"Not a version: {version!r}")
+    major, minor, patch, label = match.groups()
+    if label is None:
+        return NativeVersion(short=version, bundle=version, windows=version)
+    tail = label.rsplit(".", 1)[-1]
+    build = int(tail) if tail.isdigit() else 0
+    core = f"{major}.{minor}.{patch}"
+    components = (int(major), int(minor), int(patch), build)
+    if any(component > MAX_NATIVE_VERSION_COMPONENT for component in components):
+        raise ValueError(
+            f"{version!r} does not fit a native version field: every component "
+            f"must be at most {MAX_NATIVE_VERSION_COMPONENT}"
+        )
+    return NativeVersion(short=core, bundle=str(build), windows=f"{core}.{build}")
 
 
 def is_release_tag(tag: str) -> bool:

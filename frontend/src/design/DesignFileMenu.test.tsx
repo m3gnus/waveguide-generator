@@ -215,9 +215,9 @@ describe('design file export menu', () => {
       requested.push(path);
       if (path === '/api/workspace/write-export') {
         return new Response(JSON.stringify({
-          directory: '/Users/tester/Desktop',
-          files: ['/Users/tester/Desktop/horn.step'],
-          replaced: ['/Users/tester/Desktop/horn.step'],
+          directory: '/exports',
+          files: ['/exports/horn.step'],
+          replaced: ['/exports/horn.step'],
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       // jsdom's Response.blob() does not return a Blob this FormData accepts.

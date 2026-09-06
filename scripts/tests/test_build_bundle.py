@@ -941,6 +941,68 @@ def test_installer_points_every_shown_icon_at_the_staged_ico() -> None:
     assert "SetupIconFile={#PayloadDir}" + chr(92) + WINDOWS_ICON_NAME in script
 
 
+def test_the_installer_gets_a_numeric_version_field_and_the_readable_one() -> None:
+    """`VersionInfoVersion` is a binary field, and a pre-release is not valid in it.
+
+    Inno Setup takes up to four dot-separated numbers there -- it writes the
+    VERSIONINFO resource -- so `/DAppVersion=0.4.0-main.7` alone is a compile
+    error, not a cosmetic issue. The build passes both: the SemVer string for
+    everything a person reads, and its numeric form for the resource.
+    https://jrsoftware.org/ishelp/topic_setup_versioninfoversion.htm
+    """
+
+    script = (
+        Path(__file__).resolve().parents[2] / "installers" / "windows" / "bundle-setup.iss"
+    ).read_text(encoding="utf-8")
+
+    assert "VersionInfoVersion={#VersionInfoVersion}" in script
+    # Supplied by the build, never defaulted back to AppVersion here: a silent
+    # fallback would put the invalid value back the moment someone forgot.
+    assert "#ifndef VersionInfoVersion" in script
+    assert "#error VersionInfoVersion must be defined by the build" in script
+    assert "AppVersion={#AppVersion}" in script
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [("0.3.1", "0.3.1"), ("0.4.0-main.7", "0.4.0.7"), ("0.4.0-beta.2", "0.4.0.2")],
+)
+def test_the_compile_command_carries_both_versions(
+    tmp_path: Path, version: str, expected: str
+) -> None:
+    commands: list[list[str]] = []
+
+    def runner(command, **kwargs):  # type: ignore[no-untyped-def]
+        parts = [str(part) for part in command]
+        commands.append(parts)
+        defines = dict(
+            part.removeprefix("/D").split("=", 1) for part in parts if part.startswith("/D")
+        )
+        Path(defines["OutputDir"], f"{defines['OutputBaseFilename']}.exe").write_bytes(b"setup")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    compiler = tmp_path / "ISCC.exe"
+    compiler.write_text("", encoding="utf-8")
+    bundle = tmp_path / "bundle"
+    (bundle / "app").mkdir(parents=True)
+    (bundle / "app" / "main.py").write_text("x = 1\n", encoding="utf-8")
+    output = tmp_path / "out" / "setup.exe"
+    output.parent.mkdir()
+    builder = BundleBuilder(Path(__file__).resolve().parents[2], runner=runner)
+
+    builder.build_windows_setup(
+        bundle, output, version=version, environment={INNO_COMPILER_ENV: str(compiler)}
+    )
+
+    defines = dict(
+        part.removeprefix("/D").split("=", 1)
+        for part in commands[0]
+        if part.startswith("/D")
+    )
+    assert defines["AppVersion"] == version
+    assert defines["VersionInfoVersion"] == expected
+
+
 def test_installer_script_pins_the_per_user_install_that_the_updater_needs() -> None:
     """launchers/apply_update.py renames directories in place with no elevation
     path, so a Program Files install breaks in-app updates for every non-admin

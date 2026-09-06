@@ -785,9 +785,9 @@ describe('result exporters', () => {
       requests.push({ path, init });
       if (path === '/api/workspace/write-export') {
         return new Response(JSON.stringify({
-          directory: '/Users/tester/Desktop',
-          files: ['/Users/tester/Desktop/horn_1.csv'],
-          replaced: ['/Users/tester/Desktop/horn_1.csv'],
+          directory: '/exports',
+          files: ['/exports/horn_1.csv'],
+          replaced: ['/exports/horn_1.csv'],
         }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
@@ -808,9 +808,9 @@ describe('result exporters', () => {
     expect(payload.subdirectory).toBe('');
     expect(payload.destination).toBe('handle-1');
     expect(payload.existing).toBe('overwrite');
-    expect(bundle.directory).toBe('/Users/tester/Desktop');
+    expect(bundle.directory).toBe('/exports');
     // What was overwritten, so the caller can say so rather than counting.
-    expect(bundle.replaced).toEqual(['/Users/tester/Desktop/horn_1.csv']);
+    expect(bundle.replaced).toEqual(['/exports/horn_1.csv']);
   });
 
   it('asks once before replacing files in the chosen folder, then repeats as overwrite', async () => {
@@ -825,14 +825,14 @@ describe('result exporters', () => {
         return new Response(JSON.stringify({
           code: 'export_collision',
           detail: '1 file(s) would be replaced',
-          directory: '/Users/tester/Desktop',
-          paths: ['/Users/tester/Desktop/horn_1.csv'],
+          directory: '/exports',
+          paths: ['/exports/horn_1.csv'],
         }), { status: 409 });
       }
       return new Response(JSON.stringify({
-        directory: '/Users/tester/Desktop',
-        files: ['/Users/tester/Desktop/horn_1.csv'],
-        replaced: ['/Users/tester/Desktop/horn_1.csv'],
+        directory: '/exports',
+        files: ['/exports/horn_1.csv'],
+        replaced: ['/exports/horn_1.csv'],
       }), { status: 200 });
     });
     const asked: ExportCollision[] = [];
@@ -848,8 +848,8 @@ describe('result exporters', () => {
 
     // One question, carrying every file, before anything was written.
     expect(asked).toEqual([{
-      directory: '/Users/tester/Desktop',
-      paths: ['/Users/tester/Desktop/horn_1.csv'],
+      directory: '/exports',
+      paths: ['/exports/horn_1.csv'],
     }]);
     const writes = requests.filter(({ path }) => path === '/api/workspace/write-export');
     expect(writes.map(({ init }) => workspacePayload(init).existing)).toEqual(['confirm', 'overwrite']);
@@ -859,8 +859,8 @@ describe('result exporters', () => {
     expect(second.members.map(({ relative_path }) => relative_path))
       .toEqual(first.members.map(({ relative_path }) => relative_path));
     expect(await second.members[0].blob.text()).toBe(await first.members[0].blob.text());
-    expect(bundle.files).toEqual(['/Users/tester/Desktop/horn_1.csv']);
-    expect(bundle.replaced).toEqual(['/Users/tester/Desktop/horn_1.csv']);
+    expect(bundle.files).toEqual(['/exports/horn_1.csv']);
+    expect(bundle.replaced).toEqual(['/exports/horn_1.csv']);
   });
 
   it('writes nothing when the replacement is declined', async () => {
@@ -870,8 +870,8 @@ describe('result exporters', () => {
       return new Response(JSON.stringify({
         code: 'export_collision',
         detail: '1 file(s) would be replaced',
-        directory: '/Users/tester/Desktop',
-        paths: ['/Users/tester/Desktop/horn_1.csv'],
+        directory: '/exports',
+        paths: ['/exports/horn_1.csv'],
       }), { status: 409 });
     });
 
@@ -894,8 +894,8 @@ describe('result exporters', () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       code: 'export_collision',
       detail: '1 file(s) would be replaced',
-      directory: '/Users/tester/Desktop',
-      paths: ['/Users/tester/Desktop/horn_1.csv'],
+      directory: '/exports',
+      paths: ['/exports/horn_1.csv'],
     }), { status: 409 }));
 
     await expect(runWorkspaceExportBundle({

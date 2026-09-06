@@ -1,0 +1,601 @@
+"""The inactive main-build workflow proposal, held to being a real one.
+
+`docs/reference/main-build.workflow-proposal.yml` is a complete workflow that
+deliberately lives outside `.github/workflows/`, so GitHub never registers it
+and it has no trigger, token or permission until someone moves it. That makes it
+reviewable and unrunnable at the same time -- and unrunnable means nothing
+executes it, so nothing else would notice if it stopped being coherent.
+
+These are what notice: that every job it needs exists and has steps, that the
+artifacts it passes between jobs match by name, that the asset globs match the
+names `shared/release_assets.py` actually produces, that it builds one resolved
+commit rather than a moving ref, and that the flags it calls exist in the
+scripts it calls them on.
+
+What they do NOT prove, and no test on this machine can: that Inno Setup
+compiles the script, that macOS packages and notarizes the app, or that a
+published main build installs. Those need the runners and a publication
+decision. See `docs/reference/UPDATE-CHANNELS.md`.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+import pytest
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PROPOSAL = REPO_ROOT / "docs" / "reference" / "main-build.workflow-proposal.yml"
+RC_BUILD = REPO_ROOT / ".github" / "workflows" / "rc-build.yml"
+
+#: Everything the stamp reads or rewrites, which is the whole of what a clean
+#: runner needs before any dependency exists.
+STAMPED_PATHS = (
+    "shared",
+    "scripts/bump_version.py",
+    "server/__init__.py",
+    "server/platform",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "launchers",
+    "docs/reference/openapi.v1.json",
+)
+
+sys.path.insert(0, str(REPO_ROOT))
+
+from shared import release_assets  # noqa: E402
+
+#: The version a run of this workflow would name itself, for checking that the
+#: globs it publishes match the files the builder writes under that name.
+SAMPLE_VERSION = "0.4.0-main.7"
+
+
+def _load(path: Path) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def proposal() -> dict:
+    return _load(PROPOSAL)
+
+
+def _steps(job: dict) -> list[dict]:
+    return job.get("steps") or []
+
+
+def _needs(job: dict) -> list[str]:
+    needs = job.get("needs", [])
+    return [needs] if isinstance(needs, str) else list(needs)
+
+
+def test_the_proposal_is_not_a_workflow_yet() -> None:
+    """The whole point: reviewable, and inert until someone decides otherwise."""
+
+    assert PROPOSAL.parent == REPO_ROOT / "docs" / "reference"
+    registered = {path.name for path in (REPO_ROOT / ".github" / "workflows").iterdir()}
+    assert PROPOSAL.name not in registered
+
+
+def test_every_job_it_needs_exists_and_does_something(proposal: dict) -> None:
+    """A `needs` pointing at a comment is a template that cannot run.
+
+    This is the check the first draft failed: `publish` waited on four build
+    jobs that were prose, so the graph looked complete and had one job in it.
+    """
+
+    jobs = proposal["jobs"]
+    assert set(jobs) == {
+        "identity",
+        "spa",
+        "macos-bundle",
+        "windows-bundle",
+        "linux-bundle",
+        "publish",
+    }
+    for name, job in jobs.items():
+        assert _steps(job), f"{name} has no steps"
+        for required in _needs(job):
+            assert required in jobs, f"{name} needs {required}, which does not exist"
+    # And the publish job waits for all four platforms plus the identity.
+    assert set(_needs(jobs["publish"])) == set(jobs) - {"publish"}
+
+
+def test_one_commit_is_resolved_once_and_every_job_builds_that_one(
+    proposal: dict,
+) -> None:
+    """`main` can move while a build runs.
+
+    Checking out the ref in each job would publish an installer set that never
+    existed as one tree, and `github.sha` is the workflow file's commit, not the
+    commit being built. So the identity job resolves it and everyone else takes
+    that value.
+    """
+
+    jobs = proposal["jobs"]
+    identity_steps = _steps(jobs["identity"])
+    assert identity_steps[0]["with"]["ref"] == "${{ inputs.sha }}"
+    assert "git rev-parse HEAD" in identity_steps[1]["run"]
+    assert jobs["identity"]["outputs"]["source"] == "${{ steps.resolve.outputs.source }}"
+
+    for name, job in jobs.items():
+        if name == "identity":
+            continue
+        checkouts = [
+            step for step in _steps(job) if str(step.get("uses", "")).startswith("actions/checkout")
+        ]
+        assert checkouts, f"{name} never checks out the source"
+        for step in checkouts:
+            assert step["with"]["ref"] == "${{ needs.identity.outputs.source }}", name
+
+    # The commit is carried into the artifacts too, not just the checkout.
+    text = PROPOSAL.read_text(encoding="utf-8")
+    assert "--source-commit" in text
+    assert "github.sha" not in text
+
+
+def test_the_build_is_stamped_before_anything_reads_the_version(
+    proposal: dict,
+) -> None:
+    """The SPA compiles its version from package.json, and the app layer comes
+    from Git blobs. A stamp after either is a build that misreports itself."""
+
+    jobs = proposal["jobs"]
+    for name in ("spa", "macos-bundle", "windows-bundle", "linux-bundle"):
+        steps = _steps(jobs[name])
+        names = [step.get("name", "") for step in steps]
+        stamp = names.index("Stamp this build's identity")
+        body = steps[stamp]["run"]
+        assert "bump_version.py --build-stamp --set" in body
+        # The verification the stamp would otherwise skip.
+        assert "bump_version.py --check --build-stamp" in body
+        # Committed, or the builder either refuses the dirty worktree or
+        # packages the previous version.
+        assert "commit -aqm" in body
+        consumers = [
+            index
+            for index, label in enumerate(names)
+            if label in {"Build the SPA", "Build and verify the standalone app"}
+        ]
+        assert consumers, name
+        assert stamp < min(consumers), f"{name} stamps after it builds"
+
+
+def test_the_stamp_commit_is_the_same_on_every_platform(proposal: dict) -> None:
+    """Otherwise the three app manifests disagree on `commit` for one build."""
+
+    jobs = proposal["jobs"]
+    for name in ("spa", "macos-bundle", "windows-bundle", "linux-bundle"):
+        step = next(
+            step
+            for step in _steps(jobs[name])
+            if step.get("name") == "Stamp this build's identity"
+        )
+        environment = step["env"]
+        assert environment["GIT_AUTHOR_DATE"] == "${{ needs.identity.outputs.stamp_date }}"
+        assert environment["GIT_COMMITTER_DATE"] == "${{ needs.identity.outputs.stamp_date }}"
+
+
+def test_the_artifacts_passed_between_jobs_match_by_name(proposal: dict) -> None:
+    """An upload named one thing and a download naming another fails at the
+    fourth job, twenty minutes in."""
+
+    uploaded: set[str] = set()
+    downloaded: set[str] = set()
+    for job in proposal["jobs"].values():
+        for step in _steps(job):
+            uses = str(step.get("uses", ""))
+            with_ = step.get("with") or {}
+            if uses.startswith("actions/upload-artifact"):
+                uploaded.add(with_["name"])
+            elif uses.startswith("actions/download-artifact") and "name" in with_:
+                downloaded.add(with_["name"])
+    assert downloaded <= uploaded, f"downloaded but never uploaded: {downloaded - uploaded}"
+    assert uploaded == {
+        "main-build-spa",
+        "main-build-app-layer",
+        "main-build-macos",
+        "main-build-windows",
+        "main-build-linux",
+    }
+    # The publish job takes everything, by path rather than by name.
+    publish_download = next(
+        step
+        for step in _steps(proposal["jobs"]["publish"])
+        if str(step.get("uses", "")).startswith("actions/download-artifact")
+    )
+    assert "name" not in (publish_download.get("with") or {})
+    assert publish_download["with"]["path"] == "build/artifacts"
+
+
+def test_every_published_asset_name_is_one_the_builder_writes(proposal: dict) -> None:
+    """The globs are checked against `release_assets`, not against themselves.
+
+    Every installer, every layer and the SPA archive has to be matched by one of
+    the upload paths, or it is built and then silently not published.
+    """
+
+    patterns: list[str] = []
+    for job in proposal["jobs"].values():
+        for step in _steps(job):
+            if str(step.get("uses", "")).startswith("actions/upload-artifact"):
+                patterns.extend(
+                    line.strip()
+                    for line in str(step["with"]["path"]).splitlines()
+                    if line.strip()
+                )
+
+    # The SPA archive is uploaded through `env.artifact`, which the step above
+    # sets from `release_assets.spa_archive_name`. Resolve it here rather than
+    # skipping it: an expression nobody checks is how the one asset that is
+    # named indirectly stops being published.
+    spa_step = next(
+        step
+        for step in _steps(proposal["jobs"]["spa"])
+        if step.get("name") == "Package and verify the SPA"
+    )
+    assert "release_assets.spa_archive_name" in spa_step["run"]
+    assert 'echo "artifact=$archive"' in spa_step["run"]
+    resolved = [
+        release_assets.spa_archive_name(SAMPLE_VERSION)
+        if pattern == "${{ env.artifact }}"
+        else release_assets.spa_archive_name(SAMPLE_VERSION) + ".sha256"
+        if pattern == "${{ env.artifact }}.sha256"
+        else pattern
+        for pattern in patterns
+    ]
+    assert not any(pattern.startswith("${{") for pattern in resolved), resolved
+
+    def matched(name: str) -> bool:
+        for pattern in resolved:
+            regex = "^" + re.escape(Path(pattern).name).replace(r"\*", ".*") + "$"
+            if re.match(regex, name):
+                return True
+        return False
+
+    runtime_id = "0123456789ab"
+    expected = [
+        release_assets.spa_archive_name(SAMPLE_VERSION),
+        release_assets.app_layer_name(SAMPLE_VERSION),
+        release_assets.app_manifest_name(SAMPLE_VERSION),
+        release_assets.windows_setup_name(SAMPLE_VERSION),
+        *(
+            release_assets.installer_name(platform, SAMPLE_VERSION)
+            for platform in (
+                release_assets.MACOS_PLATFORM,
+                release_assets.WINDOWS_PLATFORM,
+                release_assets.LINUX_PLATFORM,
+            )
+        ),
+        *(
+            release_assets.runtime_layer_name(platform, runtime_id)
+            for platform in (
+                release_assets.MACOS_PLATFORM,
+                release_assets.WINDOWS_PLATFORM,
+                release_assets.LINUX_PLATFORM,
+            )
+        ),
+    ]
+    # `installer_name(WINDOWS_PLATFORM, ...)` above is the portable folder as a
+    # .zip: a real download, deliberately kept off the user-facing page, so it
+    # belongs on the companion exactly as release.yml puts it there.
+    unmatched = [name for name in expected if not matched(name)]
+    assert not unmatched, f"built but never uploaded: {unmatched}"
+
+
+def test_the_publish_job_can_actually_run_gh(proposal: dict) -> None:
+    """`gh` needs a repository and a token, and this needs the source tree to
+    name the assets with `release_assets` rather than a second copy of them."""
+
+    publish = proposal["jobs"]["publish"]
+    assert publish["permissions"] == {"contents": "write"}
+    assert publish["env"]["GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
+    assert publish["env"]["GH_REPO"] == "${{ github.repository }}"
+    assert any(
+        str(step.get("uses", "")).startswith("actions/checkout") for step in _steps(publish)
+    )
+    body = "\n".join(
+        line
+        for step in _steps(publish)
+        for line in str(step.get("run", "")).splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    # Both releases are created, the companion first, and both as pre-releases:
+    # `releases/latest` never returns a pre-release, which is what keeps a main
+    # build off the stable channel.
+    assert body.count("gh release create") == 2
+    assert body.index("$UPDATES_TAG") < body.index('gh release create "$TAG"')
+    assert body.count("--prerelease") == 2
+    assert '--target "$SOURCE"' in body
+    # Never republished, and never deleted: no tag moves.
+    assert 'gh release view "$TAG"' in body
+    assert "release delete" not in body
+    assert "--cleanup-tag" not in body
+
+
+def test_every_action_is_pinned_to_a_digest_and_node_to_a_patch(
+    proposal: dict,
+) -> None:
+    """A floating `@v4` is a different build tomorrow than the one reviewed.
+
+    Be precise about what this buys: a fixed ref detects **tool drift**. It is
+    not publisher authentication of anything this workflow produces -- WG's own
+    artifacts are unsigned here exactly as they are for a release, which is a
+    separate open decision.
+    """
+
+    def pins(document: dict) -> set[str]:
+        return {
+            str(step["uses"])
+            for job in document["jobs"].values()
+            for step in _steps(job)
+            if "uses" in step
+        }
+
+    proposed = pins(proposal)
+    floating = [pin for pin in proposed if not re.fullmatch(r"[^@]+@[0-9a-f]{40}", pin)]
+    assert not floating, f"not pinned to a digest: {floating}"
+    # The same actions the repository's own build workflow uses, by name: a
+    # proposal that reached for a different action would be reviewed against a
+    # build nobody runs.
+    assert {pin.split("@")[0] for pin in proposed} <= {
+        pin.split("@")[0] for pin in pins(_load(RC_BUILD))
+    }
+    node = [
+        step["with"]["node-version"]
+        for job in proposal["jobs"].values()
+        for step in _steps(job)
+        if "setup-node" in str(step.get("uses", ""))
+    ]
+    assert node and all(re.fullmatch(r"\d+\.\d+\.\d+", version) for version in node), node
+
+
+def _clean_environment() -> dict[str, str]:
+    """A child environment that cannot reach outside the checkout under test.
+
+    `PYTHONPATH` and `PYTHONHOME` would put site-packages back after `-S` took
+    them away, which would make the clean-runner check prove nothing.
+    `WG2_APP_ROOT` is the one that matters most: `server.platform.paths.app_root`
+    honours it, so a stamp inheriting it would rewrite the versions of whichever
+    tree it names -- and a test that edits the repository it is testing is a
+    mistake this file has already made once.
+    """
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHONPATH", "PYTHONHOME", "WG2_APP_ROOT"}
+    }
+    environment["PYTHONNOUSERSITE"] = "1"
+    return environment
+
+
+def _logical_lines(script: str) -> list[str]:
+    """The script's commands, with shell line continuations joined."""
+
+    joined = re.sub(r"\\\n\s*", " ", script)
+    return [line.strip() for line in joined.splitlines() if line.strip()]
+
+
+def stamp_commands(step: dict, version: str) -> list[list[str]]:
+    """The stamp step's commands, as argv, from the template's own text.
+
+    Read rather than restated, and run without a shell. A shell is what made
+    the first version of this test POSIX-only: it wrote a `#!/bin/sh` shim with
+    `sys.executable` interpolated into a double-quoted string, prepended PATH
+    with `:`, and called `bash`. On Windows -- where this suite also runs -- the
+    backslashes in the interpreter path are escapes, `:` is not the separator,
+    and `bash` need not exist, so the shim could have failed or silently found a
+    different Python and "proved" a clean interpreter that was never used.
+
+    The fail-fast prologue is the one line not executed -- `set -euo pipefail`
+    in sh, `$ErrorActionPreference = "Stop"` in PowerShell. Both say the step
+    stops at the first failure, which the caller reproduces by checking each
+    command; a block that carried neither would run on past a failed stamp, so
+    its absence fails here.
+    """
+
+    script = str(step["run"])
+    # No unresolved workflow expression may reach a command: substituting one
+    # by hand would be testing a paraphrase.
+    assert "${{" not in script, script
+    lines = _logical_lines(script)
+    assert lines[0] in {"set -euo pipefail", '$ErrorActionPreference = "Stop"'}, lines[0]
+    commands = []
+    for line in lines[1:]:
+        resolved = (
+            line.replace('"$VERSION"', version)
+            .replace("$env:VERSION", version)
+            .replace("$VERSION", version)
+        )
+        tokens = shlex.split(resolved)
+        if tokens[0] == "python":
+            # The runner's `python`, with site-packages switched off. Passed as
+            # argv rather than through a PATH shim, so the interpreter's own
+            # path needs no quoting on any platform.
+            tokens = [sys.executable, "-S", *tokens[1:]]
+        commands.append(tokens)
+    assert commands, script
+    return commands
+
+
+def test_disabling_site_packages_really_removes_the_server_dependencies() -> None:
+    """The negative control for the check below.
+
+    "It ran under `-S`" says nothing unless `-S` is what stops a server import.
+    If this interpreter could import FastAPI with site-packages disabled -- from
+    PYTHONPATH, or a vendored copy -- then the clean-runner check would pass
+    while proving nothing.
+    """
+
+    environment = _clean_environment()
+    with_site = subprocess.run(
+        [sys.executable, "-c", "import fastapi"],
+        capture_output=True,
+        env=environment,
+    )
+    assert with_site.returncode == 0, "this environment cannot establish the control"
+    without_site = subprocess.run(
+        [sys.executable, "-S", "-c", "import fastapi"],
+        capture_output=True,
+        env=environment,
+    )
+    assert without_site.returncode != 0
+
+
+def test_the_stamp_runs_on_a_runner_with_nothing_installed(tmp_path: Path) -> None:
+    """The template's own stamp commands, executed, with site-packages disabled.
+
+    This is the check a string assertion cannot make. The stamp is the first
+    thing every build job runs, before any dependency is installed, and it has
+    to reach every copy of the version -- including the OpenAPI snapshot's
+    `info.version`, which `check` compares. An earlier draft called
+    `gen_openapi.py` there, which imports `server.app` and therefore FastAPI:
+    correct on a developer machine, and impossible on a clean runner.
+
+    Portable, and shell-free: the commands run as argv on whichever platform the
+    suite runs on. What is still owed is a run on real Windows CI -- this proves
+    the commands and their semantics, not the PowerShell host.
+    """
+
+    proposal = _load(PROPOSAL)
+    step = next(
+        step
+        for step in _steps(proposal["jobs"]["spa"])
+        if step.get("name") == "Stamp this build's identity"
+    )
+    version = "0.4.0-main.7"
+    date = "2026-01-01T00:00:00+00:00"
+    commands = stamp_commands(step, version)
+    # The dates come from the step's own `env:`, so a template that stopped
+    # fixing them would fail here rather than quietly lose determinism.
+    assert set(step["env"]) >= {"GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"}
+
+    def child_environment() -> dict[str, str]:
+        environment = _clean_environment()
+        environment.update(
+            GIT_AUTHOR_DATE=date,
+            GIT_COMMITTER_DATE=date,
+            GIT_AUTHOR_NAME="m-a",
+            GIT_AUTHOR_EMAIL="m3gnus@users.noreply.github.com",
+            GIT_COMMITTER_NAME="m-a",
+            GIT_COMMITTER_EMAIL="m3gnus@users.noreply.github.com",
+        )
+        return environment
+
+    def stamped(root: Path) -> str:
+        environment = child_environment()
+        for setup in (["git", "init", "-q", "."], ["git", "add", "-A"]):
+            subprocess.run(setup, cwd=root, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "source"],
+            cwd=root,
+            check=True,
+            env=environment,
+            capture_output=True,
+        )
+        for command in commands:
+            # `set -euo pipefail`, reproduced: the step stops at the first
+            # command that fails, so nothing after a failure is credited.
+            result = subprocess.run(
+                command, cwd=root, env=environment, capture_output=True, text=True
+            )
+            assert result.returncode == 0, f"{command}\n{result.stdout}{result.stderr}"
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def checkout(into: Path) -> Path:
+        # Copied from the working tree rather than from `git archive HEAD`: the
+        # tree is what a runner checks out and what this test is about, and a
+        # copy taken from HEAD would quietly test the previous commit.
+        root = into / "repo"
+        root.mkdir(parents=True)
+        for relative in STAMPED_PATHS:
+            source = REPO_ROOT / relative
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(
+                    source, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+                )
+            else:
+                shutil.copy2(source, target)
+        return root
+
+    first = checkout(tmp_path / "a")
+    head = stamped(first)
+
+    # Every copy moved, and the check the stamp step runs is the one that says
+    # so -- with no server import anywhere in it.
+    declared = json.loads((first / "shared" / "version.json").read_text(encoding="utf-8"))
+    assert declared["version"] == version
+    snapshot = json.loads(
+        (first / "docs" / "reference" / "openapi.v1.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["info"]["version"] == version
+
+    # And the same source, stamped the same way, produces the same commit: the
+    # four platform jobs each make this commit independently, and their app
+    # manifests record it.
+    second = checkout(tmp_path / "b")
+    assert stamped(second) == head
+
+
+def test_the_windows_stamp_is_the_same_commands(proposal: dict) -> None:
+    """PowerShell, so its host is not exercised here -- but its commands are.
+
+    They resolve to the same argv as the POSIX blocks, which is what carries the
+    executed check above onto the Windows job. A real Windows CI run is still
+    owed and is not claimed: what this refuses is divergence, not a PowerShell
+    quoting bug.
+    """
+
+    version = "0.4.0-main.7"
+    commands = {
+        name: stamp_commands(
+            next(
+                step
+                for step in _steps(proposal["jobs"][name])
+                if step.get("name") == "Stamp this build's identity"
+            ),
+            version,
+        )
+        for name in ("spa", "macos-bundle", "windows-bundle", "linux-bundle")
+    }
+    reference = commands["spa"]
+    for name, argv in commands.items():
+        assert argv == reference, name
+    # And the version really reached them, rather than a literal surviving.
+    assert any(version in token for command in reference for token in command)
+
+
+@pytest.mark.parametrize(
+    ("script", "flag"),
+    [
+        ("scripts/bump_version.py", "--build-stamp"),
+        ("scripts/build_bundle.py", "--source-commit"),
+    ],
+)
+def test_the_flags_it_calls_exist_in_the_scripts_it_calls(script: str, flag: str) -> None:
+    """The template is only as real as the command line it writes."""
+
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / script), "--help"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT,
+    )
+    assert flag in result.stdout
