@@ -2,7 +2,8 @@
 
 Status: canonical current contract, verified against `server/exports/`,
 `frontend/src/results/`, and `frontend/src/jobs/RunExportControl.tsx` on 2026-08-13;
-export sizing reverified 2026-09-04.
+export sizing reverified 2026-09-04; export sizes measured and the surface STEP's
+declared schema recorded 2026-09-07.
 The detailed original-application inventory remains in Git history at `f51a23c`.
 
 ## Provenance rule
@@ -28,6 +29,17 @@ exported per declared channel unless the user has selected a specific one.
 STEP solid is the normal CAD choice. STL and curve CSV remain explicit advanced formats,
 not alternate geometry authorities.
 
+**Declared STEP schema.** The inner-surface export declares
+`AUTOMOTIVE_DESIGN { 1 0 10303 214 2 1 1 }` — AP214 international standard, the same
+schema Fusion writes, so both ends of the CAD round trip claim one. Left to itself
+OpenCASCADE 7.8 declares the 1998 committee draft while writing an
+`APPLICATION_PROTOCOL_DEFINITION` in the same file that says `'international standard'`,
+so the default header contradicts its own data section. It is a declaration and not a
+conversion: for a geometry-only B-rep the two schemas produce the same entities.
+The solid STEP and the `.wglink` bundle are written by the pinned
+`hornlab-waveguide-mesher` and still carry the OpenCASCADE default; correcting them is
+that repository's change, not this one's.
+
 ## Geometry exports size themselves
 
 A geometry export samples the analytic surface as finely as its own **fidelity
@@ -52,6 +64,35 @@ they share a phase with the candidate grid. This is finite sampling rather than 
 over every possible user expression. Density therefore follows measured geometry and
 part size — the same waveguide at twice the scale needs a finer grid to hold the same
 absolute deviation.
+
+### How large the files come out
+
+A STEP file is about 97% `CARTESIAN_POINT` records, so its size *is* the grid the
+fidelity search chose; product and styling boilerplate is under 0.1% of it. Nothing in
+the export reads a size target, and no size figure is a contract — these are
+measurements, recorded so the order of magnitude is not a surprise and so the next
+grid change can be compared against something.
+
+Measured 2026-09-07 by writing each design through `_build_step_sync`, the surface
+export's own path, on one development machine (Apple silicon, Python 3.13,
+gmsh 4.15.2 / OpenCASCADE 7.8). These are the four designs the round-trip test
+qualifies, plus a plain OSSE for a floor:
+
+| design | grid | surface STEP |
+|---|---|---|
+| plain OSSE, L 120, a 45 | 96x56 | 3.08 MB |
+| R-OSSE mouth rollback | 102x60 | 3.62 MB |
+| rounded-rectangle morph | 248x56 | 10.75 MB |
+| superellipse morph | 173x89 | 11.88 MB |
+| rotated guiding curve | 162x94 | 12.10 MB |
+
+Typical is single-digit MB and the worst qualified design is 12.1 MB. **An export over
+16 MiB adds a size note to the `X-Export-Warning` header** saying how big it is and that
+nothing was coarsened or refused for it — none of the designs above reaches that, which
+is the point: like every other note on that header it must not fire on the ordinary case.
+It is a note and not a gate, and an export is never refused for being large. The only
+size that refuses anything is `MAX_STEP_INPUT_BYTES`, 64 MiB, and that governs CAD
+*input* this app reads rather than files it writes.
 
 ### What a fidelity tolerance guarantees, and what it does not
 

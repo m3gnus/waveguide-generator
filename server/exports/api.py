@@ -19,6 +19,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from server.cadlink.identity import CadLink, SaveIdentity, design_hash
+from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.store import CadLinkStore
 from server.design.conventions import artifact_conventions
 from server.design.schema import DesignConfig
@@ -155,13 +156,58 @@ def _lineage_bundle_stem(
     return design_name
 
 
+#: The size at which a geometry export says how big it is.
+#:
+#: Not a limit and not a gate. A STEP file is about 97% ``CARTESIAN_POINT``
+#: records, so its size is the grid the fidelity search chose and nothing else;
+#: a design that needs a fine grid gets a big file and gets it in full. What the
+#: note buys is that a 30 MB download stops being a surprise, and that a user
+#: whose next step is to send the same geometry back through the CAD link knows
+#: it is heading toward ``MAX_STEP_INPUT_BYTES`` -- the 64 MiB refusal budget on
+#: CAD *input*, which is a real gate and stays exactly where it is.
+EXPORT_SIZE_NOTE_BYTES = 16 * 1024 * 1024
+
+
+def _mib(size_bytes: int) -> str:
+    return f"{size_bytes / (1024 * 1024):.1f} MiB"
+
+
+def _size_note(payload: bytes | None) -> str | None:
+    """Say how large a served export is, once it is worth remarking on.
+
+    Returns ``None`` for everything at or below the threshold: the warning
+    header means a compromise was made, so a note that fired on ordinary
+    exports would train the reader to ignore it.
+    """
+
+    if payload is None or len(payload) <= EXPORT_SIZE_NOTE_BYTES:
+        return None
+    return (
+        f"This export is {_mib(len(payload))}, above the "
+        f"{_mib(EXPORT_SIZE_NOTE_BYTES)} an export of this kind is normally "
+        "expected to reach. It was written in full and nothing was coarsened "
+        "or refused for its size; expect a slow open in CAD, and note that "
+        f"reading a file this large back in approaches the "
+        f"{_mib(MAX_STEP_INPUT_BYTES)} ceiling on CAD input."
+    )
+
+
 def _headers(
-    request: ExportRequest, filename: str, warning: str | None = None
+    request: ExportRequest,
+    filename: str,
+    warning: str | None = None,
+    payload: bytes | None = None,
 ) -> dict[str, str]:
     headers = {
         "Content-Disposition": f'attachment; filename="{filename}"',
         "X-Design-Revision": str(request.design_revision),
     }
+    note = _size_note(payload)
+    if note:
+        # Joined with a space, the way the sizing planners already stack their
+        # own notes: a compromised grid and a large file are two facts about
+        # the same export and the user should get both.
+        warning = f"{warning} {note}" if warning else note
     if warning:
         # A sizing backstop reports itself rather than refusing the export, so
         # the file is always served and the note rides with it. Header values
@@ -674,10 +720,15 @@ async def export_step(
     # the STL's sizing backstop already did.
     if warning:
         logger.warning("STEP %s export sizing: %s", body, warning)
+    # Encoded once, here, so the size the note quotes is the size of the bytes
+    # that go out rather than a second measurement of the same text.
+    payload = content.encode("utf-8")
     return Response(
-        content=content,
+        content=payload,
         media_type="model/step",
-        headers=_headers(request, f"{_base_name(request.base_name)}.step", warning),
+        headers=_headers(
+            request, f"{_base_name(request.base_name)}.step", warning, payload
+        ),
     )
 
 
@@ -693,7 +744,7 @@ async def export_stl(request: ExportRequest) -> Response:
         content=result.data,
         media_type="application/sla",
         headers=_headers(
-            request, f"{_base_name(request.base_name)}.stl", result.warning
+            request, f"{_base_name(request.base_name)}.stl", result.warning, result.data
         ),
     )
 
@@ -708,10 +759,13 @@ async def export_profiles(
     except Exception as exc:
         raise _export_error(exc) from exc
     suffix = "profiles" if kind == "profiles" else "slices"
+    payload = content.encode("utf-8")
     return Response(
-        content=content,
+        content=payload,
         media_type="text/csv",
-        headers=_headers(request, f"{_base_name(request.base_name)}_{suffix}.csv"),
+        headers=_headers(
+            request, f"{_base_name(request.base_name)}_{suffix}.csv", None, payload
+        ),
     )
 
 

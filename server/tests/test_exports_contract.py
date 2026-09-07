@@ -292,6 +292,27 @@ def test_both_step_bodies_write_an_iso_10303_21_header() -> None:
         assert positions == sorted(positions), step_text[:400]
 
 
+def test_the_surface_step_declares_the_ap214_is_schema() -> None:
+    """Both ends of the CAD round trip have to claim the same schema.
+
+    Left to itself OpenCASCADE 7.8 declares the 1998 AP214 *committee draft*
+    while writing an ``APPLICATION_PROTOCOL_DEFINITION`` in the same file that
+    says ``'international standard'``, so the header contradicts the data
+    section and contradicts Fusion, which writes AP214 IS. The export sets the
+    identifier explicitly instead of taking whatever the linked OCC defaults to.
+    """
+
+    step_text = _build_step_sync(_design().model_dump(mode="json")).step_text
+    schema = step_text.partition("FILE_SCHEMA")[2].partition(";")[0]
+    assert core.STEP_SCHEMA_IDENTIFIER in schema, schema
+    # The committee-draft identifier differs only in its final field group, so
+    # assert on the whole string rather than on "214" appearing somewhere.
+    assert "10303 214 1 1 1 1" not in schema, schema
+    # And the file it contradicted still says the same thing it always did, so
+    # the two now agree rather than having been made to agree by rewriting both.
+    assert "APPLICATION_PROTOCOL_DEFINITION('international standard'" in step_text
+
+
 def test_public_builders_return_their_result_objects() -> None:
     """The shape each public builder promises, including the one that changed.
 
@@ -464,6 +485,111 @@ def test_an_oversized_stl_is_served_with_its_warning_not_refused(monkeypatch) ->
     assert response.status_code == 200
     assert response.headers["x-export-warning"] == "coarsened to roughly 150,000 triangles"
     assert struct.unpack_from("<I", response.body, 80)[0] == 0
+
+
+# --- a large export says how large it is, and is still served -------------
+#
+# A STEP file is about 97% CARTESIAN_POINT records, so its size is the grid the
+# fidelity search chose. A design that needs a fine grid gets a big file. The
+# note exists so that is not a surprise, and so a user about to send the same
+# geometry back through the CAD link knows it is heading toward the 64 MiB
+# refusal budget on CAD input. It is a note; nothing here may become a gate.
+
+
+def _step_text_of(size_bytes: int) -> str:
+    """A STEP-shaped body of an exact byte length, cheap to build."""
+
+    stub = "ISO-10303-21;\nDATA;\n"
+    tail = "\nENDSEC;\nEND-ISO-10303-21;\n"
+    filler = "#1 = CARTESIAN_POINT('',(0.,0.,0.));"
+    body = (filler * (1 + size_bytes // len(filler)))[
+        : size_bytes - len(stub) - len(tail)
+    ]
+    text = stub + body + tail
+    assert len(text.encode()) == size_bytes
+    return text
+
+
+def test_a_large_step_export_is_served_whole_with_a_size_note(monkeypatch) -> None:
+    oversize = api.EXPORT_SIZE_NOTE_BYTES + 1024 * 1024
+
+    async def fake_surface(_design):
+        return _surface_result(step_text=_step_text_of(oversize))
+
+    monkeypatch.setattr(api, "build_step", fake_surface)
+    response = asyncio.run(api.export_step(_request(), body="surface"))
+
+    # Served whole. This is the rule the note must never turn into a gate:
+    # an export is never refused for being large.
+    assert response.status_code == 200
+    assert len(response.body) == oversize
+    note = response.headers["x-export-warning"]
+    assert "17.0 MiB" in note, note
+    assert "16.0 MiB" in note, note
+    assert "64.0 MiB" in note, note
+    assert "nothing was coarsened or refused for its size" in note
+
+
+def test_an_export_at_the_size_threshold_says_nothing(monkeypatch) -> None:
+    """The header means a compromise was made, so it must not fire routinely."""
+
+    async def fake_surface(_design):
+        return _surface_result(step_text=_step_text_of(api.EXPORT_SIZE_NOTE_BYTES))
+
+    monkeypatch.setattr(api, "build_step", fake_surface)
+    response = asyncio.run(api.export_step(_request(), body="surface"))
+    assert len(response.body) == api.EXPORT_SIZE_NOTE_BYTES
+    assert "x-export-warning" not in response.headers
+
+
+def test_a_size_note_joins_a_sizing_warning_rather_than_replacing_it(
+    monkeypatch,
+) -> None:
+    """A compromised grid and a large file are two facts about one export."""
+
+    async def fake_surface(_design):
+        return _surface_result(
+            step_text=_step_text_of(api.EXPORT_SIZE_NOTE_BYTES + 1024 * 1024),
+            warning=_SIZING_WARNING,
+        )
+
+    monkeypatch.setattr(api, "build_step", fake_surface)
+    response = asyncio.run(api.export_step(_request(), body="surface"))
+    note = response.headers["x-export-warning"]
+    assert note.startswith(_SIZING_WARNING)
+    assert "This export is 17.0 MiB" in note
+
+
+def test_the_size_note_never_becomes_a_refusal_limit() -> None:
+    """The threshold is a note; ``MAX_STEP_INPUT_BYTES`` is the only gate.
+
+    They are also different things -- one bounds what this app will *read*, the
+    other only decides when an export it *wrote* says how big it is -- so the
+    note must sit well below it rather than shadow it.
+    """
+
+    from server.cadlink.limits import MAX_STEP_INPUT_BYTES
+
+    assert MAX_STEP_INPUT_BYTES == 64 * 1024 * 1024
+    assert api.EXPORT_SIZE_NOTE_BYTES == 16 * 1024 * 1024
+    assert api.EXPORT_SIZE_NOTE_BYTES < MAX_STEP_INPUT_BYTES
+
+
+def test_an_ordinary_sized_stl_and_profile_csv_carry_no_size_note(monkeypatch) -> None:
+    """The note is uniform across the geometry routes and silent on small files."""
+
+    async def fake_stl(_design, _name):
+        return StlResult(data=b" " * 80 + struct.pack("<I", 0))
+
+    def fake_profiles(_design, kind):
+        return f"# {kind}\r\n"
+
+    monkeypatch.setattr(api, "build_stl", fake_stl)
+    monkeypatch.setattr(api, "build_profiles", fake_profiles)
+    assert "x-export-warning" not in asyncio.run(api.export_stl(_request())).headers
+    csv = asyncio.run(api.export_profiles(_request(), "profiles"))
+    assert "x-export-warning" not in csv.headers
+    assert csv.body == b"# profiles\r\n"
 
 
 def test_a_warning_with_a_non_latin1_character_does_not_break_the_response(

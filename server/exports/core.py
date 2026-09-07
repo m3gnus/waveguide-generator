@@ -215,6 +215,36 @@ def _inner_grid(
     return points
 
 
+#: The STEP schema this export declares, written verbatim into ``FILE_SCHEMA``.
+#:
+#: Left alone, OpenCASCADE 7.8 -- and so every gmsh that links it -- declares
+#: ``AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }``, the 1998 AP214 *committee
+#: draft*, while writing an ``APPLICATION_PROTOCOL_DEFINITION`` in the same file
+#: that says ``'international standard'`` and ``2000``. The header therefore
+#: contradicts the data section, and it contradicts the other end of the CAD
+#: round trip: Fusion writes AP214 IS. Declaring IS here settles both.
+#:
+#: This is a declaration, not a conversion. Measured on gmsh 4.15.2 / OCC 7.8,
+#: an OCC B-rep written with the identifier set and one written without it
+#: differ in this line and in nothing else, which is why setting it is safe for
+#: a geometry-only export that carries no AP214-CD-specific entity.
+STEP_SCHEMA_IDENTIFIER = "AUTOMOTIVE_DESIGN { 1 0 10303 214 2 1 1 }"
+
+
+def _declare_step_schema() -> None:
+    """Tell gmsh's OCC writer which schema the next STEP write declares.
+
+    Needs an open gmsh session; every caller is inside one. gmsh exposes the
+    header field rather than OCC's ``write.step.schema`` static, so the value
+    is the identifier itself and is not validated -- a keyword like ``AP214IS``
+    would be copied into ``FILE_SCHEMA`` literally.
+    """
+
+    import gmsh
+
+    gmsh.option.setString("Geometry.OCCSTEPSchemaIdentifier", STEP_SCHEMA_IDENTIFIER)
+
+
 # ISO 10303-21 wants file_description before file_name; OpenCASCADE 7.7 and
 # later write them the other way round, so every gmsh from 4.12 on emits a
 # header that strict readers (CATIA) reject -- they take the product structure
@@ -272,6 +302,9 @@ def _write_step(inner_points: np.ndarray) -> str:
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.option.setNumber("Geometry.Tolerance", 1e-8)
         gmsh.option.setNumber("Geometry.ToleranceBoolean", 1e-8)
+        # Set before the write, not after: gmsh reads the option when it builds
+        # the header, and the worker's session outlives this call.
+        _declare_step_schema()
         gmsh.clear()
         gmsh.model.add("WaveguideInnerSurface")
         wire_tags: list[int] = []
@@ -305,6 +338,14 @@ def _write_step(inner_points: np.ndarray) -> str:
             step_path.read_text(encoding="utf-8", errors="replace")
         )
         _assert_step(text)
+        # An option a later gmsh stopped honouring would put the export
+        # silently back on the committee draft, which is the whole failure
+        # being fixed -- so read the declaration back off the written file.
+        if f"FILE_SCHEMA(('{STEP_SCHEMA_IDENTIFIER}'))" not in text:
+            raise RuntimeError(
+                "STEP export did not declare the AP214 IS schema; gmsh wrote "
+                f"{text.partition('FILE_SCHEMA')[2].partition(';')[0].strip()!r}"
+            )
         return text
     finally:
         if step_path is not None:
