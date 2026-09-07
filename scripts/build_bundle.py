@@ -7,6 +7,7 @@ import argparse
 from collections.abc import Callable, Iterable, Mapping, Sequence
 import gzip
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -688,6 +689,55 @@ def _validated_existing_spa(repo_root: Path, version: str) -> Path:
             "the matching release SPA tarball."
         )
     return dist
+
+
+def install_wglink_package(
+    app_root: Path,
+    *,
+    repo_root: Path,
+) -> Path:
+    """Ship the pinned WGLink package inside the app layer.
+
+    An installed application cannot build this for itself: the app layer is
+    read-only and code-signed, and reaching GitHub from a startup path is not
+    something a desktop application should need to do to stay consistent with
+    itself. So the release carries the exact archive an installer would have
+    produced, and updating the add-in after a WG update becomes a local file
+    copy. Placed before the manifest is written, so ``treeSha256`` covers it
+    like every other shipped file.
+    """
+
+    installer = _load_script(repo_root / "scripts" / "install_wglink.py", "wg_install_wglink")
+    builder = _load_script(
+        repo_root / "scripts" / "build_wglink_package.py", "wg_build_wglink_package"
+    )
+    spec = builder.source_spec(repo_root / "integrations" / "wglink" / "source.json")
+    version = builder.declared_version(repo_root / "shared" / "version.json")
+    package = installer.ensure_package(repo_root)
+    expected = installer.shipped_package(repo_root, version, str(spec["commit"])).name
+    if package.name != expected:
+        raise BundleError(
+            f"WGLink package {package.name} does not match the pin {expected}"
+        )
+    destination = app_root / "integrations" / "wglink" / "packages" / package.name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(package, destination)
+    # tree_digest takes the executable bit from Git, and this file is not in
+    # Git; a mode with any x bit would fail the layer's own mode assertion.
+    destination.chmod(0o644)
+    print(f"Shipped the pinned WGLink package: {destination.name}")
+    return destination
+
+
+def _load_script(path: Path, name: str):
+    """Import a sibling build script by path, as install_wglink does."""
+
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise BundleError(f"Could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def install_spa_layer(
@@ -1940,6 +1990,7 @@ class BundleBuilder:
             archive=spa,
             repo_root=self.repo_root,
         )
+        install_wglink_package(destination, repo_root=self.repo_root)
         # This module is part of the platform-neutral app layer. It is inert on
         # macOS, and the top-level Windows executable imports it from its _pth.
         write_windows_bootstrap(destination)

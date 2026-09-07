@@ -368,7 +368,13 @@ For Fusion 360:
    Restart Fusion after installing WG and confirm **Run on Startup** is ticked under
    **Utilities → Scripts and Add-Ins**; Fusion's own record of that toggle
    overrides the add-in manifest, so a copy once started by hand stays manual
-   until the box is ticked. Install from exactly one location — a second copy
+   until the box is ticked. After that, WG keeps the add-in current by itself:
+   each start compares the installed copy against the add-in commit that
+   release pins and updates it from the package the release carries, with no
+   network and no second installer run. Restart Fusion when it does. It updates
+   only an add-in this Waveguide Generator installed — one managed by another WG
+   installation, one installed by something else, and one synced by a developer
+   are each left exactly as they are. Install from exactly one location — a second copy
    loads a second module instance and the two fight over the panel. The installer
    preserves a developer-managed copy instead of overwriting it. Its transcript
    reports a retriable warning if the pinned source could not be fetched; rerun

@@ -377,7 +377,7 @@ def test_fetch_uses_a_disposable_checkout_of_the_exact_commit(tmp_path: Path):
         json.dumps(source_spec), encoding="utf-8"
     )
 
-    package = installer._fetch_package(root)
+    package = installer._fetch_package(root, installer.state_root(root))
 
     provenance, _payloads = installer.verify_package(package, root=root)
     assert provenance["sourceCommit"] == commit
@@ -407,3 +407,51 @@ def test_unsafe_or_aliased_payload_is_refused_before_materialization(
     with pytest.raises(installer.InstallError, match="unsafe member|duplicate member"):
         installer._materialize_runtime(archive, root=root)
     assert not (root / "integrations/wglink/runtime/payloads").exists()
+
+
+def test_a_shipped_package_installs_with_no_network_at_all(tmp_path: Path):
+    """The point of shipping the archive in the release.
+
+    ``repository`` here is an address nothing can reach, so any fetch would
+    fail. An installed application must still be able to bring its add-in up to
+    the pin, because it can neither build the package nor write one into its own
+    code-signed app layer.
+    """
+
+    installer = _load_installer()
+    commit = "c" * 40
+    root, archive = _package(tmp_path, commit)
+    shipped = installer.shipped_package(root, "9.8.7", commit)
+    shipped.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(archive, shipped)
+    addins = tmp_path / "AddIns"
+
+    status, target = installer.install(
+        root=root, addins_dir=addins, data_dir=tmp_path / "data",
+    )
+
+    assert status == "installed"
+    assert (target / "WGLink.py").is_file()
+    marker = json.loads((target / installer.INSTALL_MARKER).read_text(encoding="utf-8"))
+    assert marker["sourceCommit"] == commit
+
+
+def test_a_bundle_keeps_its_writable_state_out_of_the_application(
+    tmp_path: Path, monkeypatch
+):
+    """An app layer is read-only and code-signed. Writing payloads into it is
+    what made a packaged Waveguide Generator unable to install its own add-in."""
+
+    installer = _load_installer()
+    root = _wg_root(tmp_path, "d" * 40)
+    data = tmp_path / "data"
+
+    monkeypatch.delenv("WG2_BUNDLE", raising=False)
+    assert installer.state_root(root, data_dir=data) == (
+        root / "integrations" / "wglink" / "runtime"
+    )
+
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    bundled = installer.state_root(root, data_dir=data)
+    assert root not in bundled.parents and bundled != root
+    assert bundled.parts[-2:] == ("wglink", "runtime")

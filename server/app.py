@@ -30,6 +30,7 @@ from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.integration import mount_integration
 from server.mesh.api import mount_solver_mesh
+from server.cadlink.addin_update import shutdown_addin_refresh, start_addin_refresh
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
 from server.platform.origin import (
@@ -467,6 +468,14 @@ def create_app(
             _signal.signal(_signal.SIGPIPE, _signal.SIG_IGN)
 
     application.router.add_event_handler("startup", _keep_sigpipe_ignored)
+
+    # A WG that updated itself used to keep talking to whatever add-in was last
+    # installed by hand: the in-app updater swaps the app and runtime layers and
+    # has never touched Fusion. Reconciling the two is a marker comparison in
+    # the ordinary case, and a local copy from the package this release ships in
+    # the case that is not -- but it is still file work, so it goes on a thread.
+    application.router.add_event_handler("startup", start_addin_refresh)
+    application.router.add_event_handler("shutdown", shutdown_addin_refresh)
     # Likewise the engine probe: it is the page load's slowest request, and
     # leaving it lazy made it contend with the first symmetry resolution.
     application.router.add_event_handler("startup", engine_registry.prewarm)

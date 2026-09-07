@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
@@ -22,7 +23,7 @@ _IMPORT_ROOT = Path(
 if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
-from server.platform.paths import app_root  # noqa: E402
+from server.platform.paths import app_root, data_paths  # noqa: E402
 from server.platform.staging import publish_staging_directory  # noqa: E402
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
 
@@ -96,9 +97,75 @@ def default_addins_dir(
 
 
 def _venv_python(root: Path) -> Path:
+    """The interpreter the add-in should shell out to for the resampler.
+
+    A source checkout has a prepared ``.venv``. An installed bundle does not --
+    its interpreter is the one already running this code, under
+    ``Resources/runtime`` -- so falling back to ``sys.executable`` is what lets
+    a packaged Waveguide Generator install its own add-in at all.
+    """
+
     windows = root / ".venv" / "Scripts" / "python.exe"
     posix = root / ".venv" / "bin" / "python"
-    return windows if windows.is_file() else posix
+    if windows.is_file():
+        return windows
+    if posix.is_file():
+        return posix
+    return Path(sys.executable)
+
+
+def _bundled(environ: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return env.get("WG2_BUNDLE") == "1"
+
+
+def _writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".wg-write-probe"
+        probe.write_bytes(b"")
+        probe.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def state_root(
+    root: Path,
+    *,
+    data_dir: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    """Where the package cache and materialized payloads may be written.
+
+    A source checkout keeps them where they have always been, inside the
+    checkout. An installed bundle cannot: its app layer lives inside a
+    code-signed application directory, so writing a payload there would either
+    fail or invalidate the signature. That single unwritable-root assumption is
+    why the packaged application had never been able to install or update
+    WGLink at all, and why the only working install on a developer's machine
+    named their *checkout* as its managing root.
+    """
+
+    inside = root / "integrations" / "wglink" / "runtime"
+    if not _bundled(environ) and _writable(inside):
+        return inside
+    paths = data_paths(data_dir) if data_dir is not None else data_paths()
+    return paths.root / "integrations" / "wglink" / "runtime"
+
+
+def shipped_package(root: Path, version: str, commit: str) -> Path:
+    """The pinned add-in package a release carries beside its source pin.
+
+    Built at release time so an installed application can update the add-in
+    with no network at all. Absent from a source checkout, where the cache and
+    the pinned fetch still answer.
+    """
+
+    return (
+        root / "integrations" / "wglink" / "packages"
+        / f"wglink-{version}-{commit}.zip"
+    )
 
 
 def _safe_member(info: zipfile.ZipInfo) -> bool:
@@ -178,23 +245,26 @@ def verify_package(
     return provenance, payloads
 
 
-def _cache_path(root: Path, version: str, commit: str) -> Path:
-    return (
-        root
-        / "integrations"
-        / "wglink"
-        / "runtime"
-        / "packages"
-        / f"wglink-{version}-{commit}.zip"
-    )
+def _cache_path(state: Path, version: str, commit: str) -> Path:
+    return state / "packages" / f"wglink-{version}-{commit}.zip"
 
 
-def _fetch_package(root: Path) -> Path:
+def _fetch_package(root: Path, state: Path) -> Path:
     builder = _load_builder()
     spec = builder.source_spec(root / "integrations" / "wglink" / "source.json")
     version = builder.declared_version(root / "shared" / "version.json")
     commit = str(spec["commit"])
-    cached = _cache_path(root, version, commit)
+    # A release ships the package it pins, so an installed application updates
+    # its add-in without reaching the network at all. Checked before the cache
+    # because it is the authoritative copy for that build.
+    shipped = shipped_package(root, version, commit)
+    if shipped.is_file():
+        try:
+            verify_package(shipped, root=root)
+            return shipped
+        except InstallError:
+            pass
+    cached = _cache_path(state, version, commit)
     if cached.is_file():
         try:
             verify_package(cached, root=root)
@@ -270,13 +340,25 @@ def _runtime_matches(
         return False
 
 
+def ensure_package(root: Path, *, state: Path | None = None) -> Path:
+    """The pinned add-in package, from whatever source can produce it.
+
+    Shared by the installer and by the bundle build, so a release ships exactly
+    the archive an install would have produced: shipped copy first, then this
+    machine's cache, then a shallow fetch of the pinned commit.
+    """
+
+    return _fetch_package(root, state if state is not None else state_root(root))
+
+
 def _materialize_runtime(
     archive_path: Path,
     *,
     root: Path,
+    state: Path,
 ) -> tuple[Path, dict[str, object]]:
     provenance, payloads = verify_package(archive_path, root=root)
-    parent = root / "integrations" / "wglink" / "runtime" / "payloads"
+    parent = state / "payloads"
     destination = parent / _runtime_id(provenance)
     if _runtime_matches(destination / "wglink", provenance, payloads):
         return destination / "wglink", provenance
@@ -333,6 +415,7 @@ def install(
     archive_path: Path | None = None,
     python: Path | None = None,
     replace_external: bool = False,
+    data_dir: Path | None = None,
 ) -> tuple[str, Path | None]:
     root = root.resolve()
     platform = _platform_name(platform)
@@ -348,8 +431,9 @@ def install(
         raise InstallError(
             f"WGLink needs Waveguide Generator's prepared Python environment: {python}"
         )
-    archive_path = archive_path.resolve() if archive_path else _fetch_package(root)
-    runtime_root, provenance = _materialize_runtime(archive_path, root=root)
+    state = state_root(root, data_dir=data_dir)
+    archive_path = archive_path.resolve() if archive_path else _fetch_package(root, state)
+    runtime_root, provenance = _materialize_runtime(archive_path, root=root, state=state)
     source_addin = runtime_root / "fusion-addins" / "WGLink"
     resampler = runtime_root / "scripts" / "wglink_resample.py"
     if not (source_addin / "WGLink.py").is_file() or not resampler.is_file():
@@ -410,6 +494,7 @@ def uninstall(
     root: Path = REPO_ROOT,
     platform: str = "auto",
     addins_dir: Path | None = None,
+    data_dir: Path | None = None,
 ) -> tuple[str, Path | None]:
     root = root.resolve()
     addins_dir = addins_dir or default_addins_dir(_platform_name(platform))
@@ -419,9 +504,15 @@ def uninstall(
     if not is_managed_target(target, root):
         return "preserved-external", target if target.exists() or target.is_symlink() else None
     shutil.rmtree(target)
-    runtime = root / "integrations" / "wglink" / "runtime"
-    if runtime.exists():
-        shutil.rmtree(runtime)
+    # Both, because where the payloads live depends on whether this root was
+    # writable when they were installed, and an uninstall must not leave the
+    # other one behind.
+    for runtime in {
+        root / "integrations" / "wglink" / "runtime",
+        state_root(root, data_dir=data_dir),
+    }:
+        if runtime.exists():
+            shutil.rmtree(runtime)
     return "removed", target
 
 
