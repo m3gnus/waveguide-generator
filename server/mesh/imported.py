@@ -1303,8 +1303,39 @@ OCC_HEALING_OPTIONS = (
 )
 
 
+def hollow_body_healing_refusal(assembly_path: str | Path) -> str:
+    """The refusal text for sewing a file that holds a body with interior voids.
+
+    Written as one place rather than at each call site because it has to state
+    two measurements and a remedy, and a refusal that only says "unsupported"
+    strands the user in CAD with nothing to try.
+    """
+
+    labels = step_void_solid_labels(assembly_path)
+    named = ", ".join(labels) if labels else "an unnamed hollow body"
+    return (
+        f"healing gate: {Path(assembly_path).name} contains a body with interior "
+        f"voids ({named}), and the OCC healing ladder cannot repair it without "
+        "changing its geometry. Measured with gmsh 4.15.2 on a 40 mm box minus a "
+        "fully enclosed r=10 mm sphere: sewing alone dissolves the body, leaving "
+        "zero volumes and its faces loose; sewing with Geometry.OCCMakeSolids "
+        "rebuilds one volume by filling the void and dropping the inner shell, "
+        "turning 59811.21 mm^3 into 64000.00 mm^3 -- the solid box. Neither "
+        "result is this body, so neither is offered. Repair the body in CAD so "
+        "it meshes without healing, or export it so it does not need healing -- "
+        "for example with the cavity opened to the outside, or as separate "
+        "bodies. Only the sewing repairs refuse: a hollow body that meshes as "
+        "exported is never sewn and never reaches this gate."
+    )
+
+
 def apply_occ_healing_options(
-    gmsh: Any, options: Iterable[str], *, declared_solids: int
+    gmsh: Any,
+    options: Iterable[str],
+    *,
+    declared_solids: int,
+    void_solids: int,
+    assembly_path: str | Path,
 ) -> dict[str, int]:
     """Set the OCC healing options for one import, sewing included.
 
@@ -1335,13 +1366,41 @@ def apply_occ_healing_options(
     file's own solid count costs one text scan and keeps the option to the job
     it is here for.
 
+    ``void_solids`` is the case where *neither* setting is right, so this
+    refuses instead of choosing. A ``BREP_WITH_VOIDS`` body is a solid, so
+    ``declared_solids`` counts it and the pairing above would duly turn
+    ``OCCMakeSolids`` on -- and gmsh 4.15.2 then rebuilds the outer shell into a
+    volume, discards the void's shell, and hands back a body of the wrong mass
+    with the right entity counts. Measured on a 40 mm box minus a fully enclosed
+    r=10 mm sphere: 59811.21 mm^3 unhealed, no volume at all sewn without
+    ``OCCMakeSolids``, 64000.00 mm^3 -- the solid box -- sewn with it. The first
+    failure is loud and the second is silent, which makes "pick the lesser evil"
+    a choice between a lie and a stumble; see
+    :func:`hollow_body_healing_refusal`. Only the sewing rungs are affected, so
+    a hollow body that meshes as exported still meshes, exactly as before.
+
     Every option is written on every call, including the ones that are off.
     Gmsh options outlive ``gmsh.clear()`` and the fallback ladder runs several
     attempts in one session, so an unwritten option is the previous rung's.
+
+    An option name this module does not know is a refusal too. Silently
+    dropping it read as "applied" to every caller, and the recipe replay in
+    :func:`build_imported_viewport_mesh` feeds this function strings out of a
+    stored bundle -- exactly the caller a typo can reach without a test seeing
+    it.
     """
 
     selected = {str(value) for value in options}
+    unknown = sorted(selected.difference(OCC_HEALING_OPTIONS))
+    if unknown:
+        raise ImportedMeshError(
+            "healing gate: unknown OCC healing option "
+            f"{', '.join(unknown)}; this import knows only "
+            f"{', '.join(OCC_HEALING_OPTIONS)}"
+        )
     applied = {name: int(name in selected) for name in OCC_HEALING_OPTIONS}
+    if applied["Geometry.OCCSewFaces"] and int(void_solids) > 0:
+        raise ImportedMeshError(hollow_body_healing_refusal(assembly_path))
     applied["Geometry.OCCMakeSolids"] = int(
         bool(applied["Geometry.OCCSewFaces"]) and int(declared_solids) > 0
     )
@@ -1445,6 +1504,45 @@ _STEP_STRING = re.compile(r"'(?:''|[^'])*'")
 #: difference between them is a disagreement about what a body is.
 _STEP_SURFACE_BODY = re.compile(r"\bSHELL_BASED_SURFACE_MODEL\s*\(", re.I)
 _STEP_SOLID_BODY = re.compile(r"\bMANIFOLD_SOLID_BREP\s*\(", re.I)
+#: A solid with interior voids. In EXPRESS ``brep_with_voids`` is a *subtype of*
+#: ``manifold_solid_brep``, and Part 21 writes the most specific type, so a
+#: hollow body appears in the file under this spelling and under no other: the
+#: rule above does not see it. It is one body -- one closed outer shell, plus
+#: one oriented closed shell per void -- and it is counted as one solid body.
+#:
+#: **Counting it is not the same question as healing it.** This constant answers
+#: "how many bodies", :func:`step_void_solid_labels` and the refusal built from
+#: it answer "may this file be sewn", and the two must not be collapsed: adding
+#: this spelling to :data:`_STEP_SOLID_BODY` alone would turn ``OCCMakeSolids``
+#: on for a hollow body and fill its void silently. See
+#: :func:`apply_occ_healing_options`.
+_STEP_VOID_SOLID_BODY = re.compile(r"\bBREP_WITH_VOIDS\s*\(", re.I)
+#: The name a hollow body carries, read from the *unstripped* text on the
+#: refusal path only, so the message can say which body it is about.
+_STEP_VOID_SOLID_NAMED = re.compile(
+    r"\bBREP_WITH_VOIDS\s*\(\s*'((?:''|[^'])*)'", re.I
+)
+
+
+def step_void_solid_labels(assembly_path: str | Path) -> list[str]:
+    """Name every ``BREP_WITH_VOIDS`` body in the file, in file order.
+
+    A separate scan from :func:`declared_step_bodies`, and deliberately so: this
+    one reads names, which are free text a counter must never trust, and it runs
+    only when a refusal is already being written. Nothing gated reads it.
+
+    An unnamed body -- gmsh's own STEP writer emits ``BREP_WITH_VOIDS('',...)``
+    -- gets a positional label instead, because "the second hollow body" is
+    still something a user can find in CAD and an empty quote is not.
+    """
+
+    text = Path(assembly_path).read_text(encoding="ascii", errors="replace")
+    text = _STEP_COMMENT.sub("", text)
+    labels: list[str] = []
+    for index, name in enumerate(_STEP_VOID_SOLID_NAMED.findall(text), start=1):
+        cleaned = name.replace("''", "'").strip()
+        labels.append(f"'{cleaned}'" if cleaned else f"unnamed hollow body {index}")
+    return labels
 
 
 def declared_step_bodies(assembly_path: str | Path) -> dict[str, int]:
@@ -1461,13 +1559,22 @@ def declared_step_bodies(assembly_path: str | Path) -> dict[str, int]:
     merely *coincident* rather than shared are sewn into one connected
     component by the healing this gate runs, so on such a file the name-keyed
     count and the geometric count are both 1 while the file says 2.
+
+    A hollow solid counts once, under ``solid_breps``, alongside the plain ones:
+    ``BREP_WITH_VOIDS`` is a subtype of ``MANIFOLD_SOLID_BREP``, so it *is* a
+    solid B-rep body, and a box with a bubble in it is one body to CAD, to the
+    manifest, and here. ``void_solids`` is a subset of that total reported
+    separately, and it is not a body count -- it is the answer to a different
+    question, asked by :func:`apply_occ_healing_options`.
     """
 
     text = Path(assembly_path).read_text(encoding="ascii", errors="replace")
     text = _STEP_STRING.sub("''", _STEP_COMMENT.sub("", text))
+    void_solids = len(_STEP_VOID_SOLID_BODY.findall(text))
     return {
         "surface_models": len(_STEP_SURFACE_BODY.findall(text)),
-        "solid_breps": len(_STEP_SOLID_BODY.findall(text)),
+        "solid_breps": len(_STEP_SOLID_BODY.findall(text)) + void_solids,
+        "void_solids": void_solids,
     }
 
 
@@ -1576,10 +1683,13 @@ def build_imported_viewport_mesh(
         # the recipe format changing and without older bundles replaying
         # differently. The fingerprint check below is what makes that matter:
         # a viewport that healed differently would fail it.
+        viewport_bodies = declared_step_bodies(assembly_path)
         apply_occ_healing_options(
             gmsh,
             recipe.get("healing_options", ()),
-            declared_solids=declared_step_bodies(assembly_path)["solid_breps"],
+            declared_solids=viewport_bodies["solid_breps"],
+            void_solids=viewport_bodies["void_solids"],
+            assembly_path=assembly_path,
         )
         imported = _import_occ_root_bodies(gmsh, assembly_path)
         if not imported:
@@ -2237,7 +2347,11 @@ def build_imported_mesh(
         gmsh.model.add("wgreturn-import")
         healing_options = tuple(occ_healing_options)
         apply_occ_healing_options(
-            gmsh, healing_options, declared_solids=declared_bodies["solid_breps"]
+            gmsh,
+            healing_options,
+            declared_solids=declared_bodies["solid_breps"],
+            void_solids=declared_bodies["void_solids"],
+            assembly_path=assembly_path,
         )
         imported = _import_occ_root_bodies(gmsh, assembly_path)
         if not imported:
@@ -3082,10 +3196,12 @@ def build_imported_mesh(
             original_traceback=original.__traceback__,
             surface_order_reference=unhealed["surface_order_reference"],
         )
-        mode_options = {
-            "sew": ["Geometry.OCCSewFaces"],
-            "full": ["Geometry.OCCFixDegenerated", "Geometry.OCCFixSmallEdges", "Geometry.OCCFixSmallFaces", "Geometry.OCCSewFaces"],
-        }[mode]
+        # The options the winning attempt was actually given, read back off that
+        # attempt. This was a hardcoded copy of the ladder's rung table, which
+        # would have gone on reporting the old options the day a rung changed --
+        # and the report is what the viewport replay and the finding are built
+        # from, so a stale copy here misreports twice.
+        mode_options = list(healed["viewport_recipe"]["healing_options"])
         return healed, {
             "attempted": True,
             "performed": True,

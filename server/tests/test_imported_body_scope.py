@@ -163,6 +163,8 @@ def _inventory_as_the_gate_sees_it(step_path: Path) -> dict[str, object]:
             gmsh,
             ("Geometry.OCCSewFaces", "Geometry.OCCFixSmallEdges", "Geometry.OCCFixSmallFaces"),
             declared_solids=declared["solid_breps"],
+            void_solids=declared["void_solids"],
+            assembly_path=step_path,
         )
         roots = _import_occ_root_bodies(gmsh, step_path)
         inventory = scope_body_count(gmsh, roots, declared=declared)

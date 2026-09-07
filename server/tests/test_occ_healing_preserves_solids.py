@@ -85,7 +85,11 @@ def _topology(step_path: Path, options: tuple[str, ...]) -> dict[str, object]:
         gmsh.clear()
         gmsh.model.add("healing-probe")
         applied = apply_occ_healing_options(
-            gmsh, options, declared_solids=declared["solid_breps"]
+            gmsh,
+            options,
+            declared_solids=declared["solid_breps"],
+            void_solids=declared["void_solids"],
+            assembly_path=step_path,
         )
         roots = _import_occ_root_bodies(gmsh, step_path)
         volumes = len(gmsh.model.getEntities(3))
@@ -206,7 +210,13 @@ def test_make_solids_is_written_on_every_call(tmp_path: Path) -> None:
             ((), 1),
             (("Geometry.OCCSewFaces",), 0),
         ):
-            apply_occ_healing_options(gmsh, options, declared_solids=declared)
+            apply_occ_healing_options(
+                gmsh,
+                options,
+                declared_solids=declared,
+                void_solids=0,
+                assembly_path=step,
+            )
             readings.append(gmsh.option.getNumber("Geometry.OCCMakeSolids"))
         gmsh.clear()
         return readings
