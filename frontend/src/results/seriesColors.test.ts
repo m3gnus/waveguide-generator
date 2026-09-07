@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { seriesColorsByLabel } from './seriesColors';
+import { runOfLabel, seriesColorsByLabel, stableColorKey } from './seriesColors';
 
 /** The shipped palette width; collision behaviour depends on it. */
 const PALETTE = ['#E0673F', '#5D9BD9', '#AD8400', '#00A6AD', '#CA90F3', '#60B374'];
@@ -60,5 +60,81 @@ describe('label-keyed series colours', () => {
 
   it('falls back rather than emitting an empty colour for an empty palette', () => {
     expect(seriesColorsByLabel(['Run A'], [], '#abc').get('Run A')).toBe('#abc');
+  });
+});
+
+describe('colours that survive a re-solve', () => {
+  it('keeps a design on its colour when it is solved again unchanged', () => {
+    // The reported glitch: run numbers are consecutive per created job, so
+    // pressing Solve twice with nothing changed used to rehash the label and
+    // hand the same curve a different colour.
+    const before = seriesColorsByLabel(['#41 · tritonia-q'], PALETTE, '#000');
+    const after = seriesColorsByLabel(['#42 · tritonia-q'], PALETTE, '#000');
+    expect(after.get('#42 · tritonia-q')).toBe(before.get('#41 · tritonia-q'));
+  });
+
+  it('still separates two runs of the same design being compared', () => {
+    const colors = seriesColorsByLabel(['#41 · tritonia-q', '#42 · tritonia-q'], PALETTE, '#000');
+    expect(colors.get('#42 · tritonia-q')).not.toBe(colors.get('#41 · tritonia-q'));
+  });
+
+  it('keeps the angles of one run distinct from each other', () => {
+    const labels = ['#41 · tritonia-q · On-axis', '#41 · tritonia-q · 30°', '#41 · tritonia-q · 60°'];
+    const colors = seriesColorsByLabel(labels, PALETTE, '#000');
+    expect(new Set(colors.values()).size).toBe(labels.length);
+  });
+
+  it('moves an angled trace with its run, not with the run number', () => {
+    const before = seriesColorsByLabel(['#41 · tritonia-q · 30°'], PALETTE, '#000');
+    const after = seriesColorsByLabel(['#42 · tritonia-q · 30°'], PALETTE, '#000');
+    expect(after.get('#42 · tritonia-q · 30°')).toBe(before.get('#41 · tritonia-q · 30°'));
+  });
+
+  it('leaves a label that carries no run number alone', () => {
+    expect(stableColorKey('Throat')).toBe('Throat');
+    expect(runOfLabel('Throat')).toBe('Throat');
+    expect(stableColorKey('#7 · design_v02 · Woofer')).toBe('design_v02 · Woofer');
+    expect(runOfLabel('#7 · design_v02 · Woofer')).toBe('design_v02');
+  });
+});
+
+describe('the primary run', () => {
+  it('takes the accent slot whatever its name hashes to', () => {
+    const colors = seriesColorsByLabel(
+      ['#41 · tritonia-q', '#40 · asro68'],
+      PALETTE,
+      '#000',
+      'tritonia-q',
+    );
+    expect(colors.get('#41 · tritonia-q')).toBe(PALETTE[0]);
+    expect(colors.get('#40 · asro68')).not.toBe(PALETTE[0]);
+  });
+
+  it('pins its first trace only, so its other angles stay distinct', () => {
+    const labels = ['#41 · tritonia-q · On-axis', '#41 · tritonia-q · 30°'];
+    const colors = seriesColorsByLabel(labels, PALETTE, '#000', 'tritonia-q');
+    expect(colors.get(labels[0])).toBe(PALETTE[0]);
+    expect(colors.get(labels[1])).not.toBe(PALETTE[0]);
+  });
+
+  it('pins nothing when the chart filtered the primary run out', () => {
+    // The impedance chart drops runs with no impedance block. Promoting the
+    // first survivor into the accent slot would recolour the chart around a
+    // run the user did not select, which is the positional failure this
+    // module exists to prevent.
+    const survivors = ['#40 · asro68', '#39 · bigmeh'];
+    const filtered = seriesColorsByLabel(survivors, PALETTE, '#000', 'tritonia-q');
+    expect(filtered).toEqual(seriesColorsByLabel(survivors, PALETTE, '#000'));
+  });
+
+  it('does not depend on where the primary run sits in the list', () => {
+    const forward = seriesColorsByLabel(['#41 · tritonia-q', '#40 · asro68'], PALETTE, '#000', 'tritonia-q');
+    const reversed = seriesColorsByLabel(['#40 · asro68', '#41 · tritonia-q'], PALETTE, '#000', 'tritonia-q');
+    expect(reversed.get('#41 · tritonia-q')).toBe(forward.get('#41 · tritonia-q'));
+    expect(reversed.get('#40 · asro68')).toBe(forward.get('#40 · asro68'));
+  });
+
+  it('falls back rather than emitting an empty colour for an empty palette', () => {
+    expect(seriesColorsByLabel(['#1 · run'], [], '#abc', 'run').get('#1 · run')).toBe('#abc');
   });
 });

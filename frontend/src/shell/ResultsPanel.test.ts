@@ -155,6 +155,49 @@ describe('result comparison charts', () => {
 
 });
 
+/**
+ * The chart-level half of the colour contract. `seriesColors.test.ts` owns the
+ * slot arithmetic; what these prove is that the options actually feed it the
+ * run identity, so a re-solve does not repaint a comparison the user is
+ * reading.
+ */
+describe('a re-solve does not recolour the charts', () => {
+  const paletteTokens: ChartTokens = { ...tokens, series: ['#0ff', '#f90', '#f55', '#5f5'] };
+  const spl = { frequencies: [500, 1_000], spl_on_axis: { frequencies: [500, 1_000], spl: [90, 91] } };
+  const colorOf = (label: string, primary?: boolean) => {
+    const series = splOption(
+      [{ ...named('job', label, spl as ResultPayload), primary }],
+      paletteTokens,
+      'none',
+      'full',
+    ).series as Array<{ lineStyle: { color: string } }>;
+    return series[0].lineStyle.color;
+  };
+
+  it('keeps a design on its colour when the same solve is repeated', () => {
+    expect(colorOf('#42 · tritonia-q')).toBe(colorOf('#41 · tritonia-q'));
+  });
+
+  it('draws the primary run in the accent colour whatever its run number', () => {
+    expect(colorOf('#41 · tritonia-q', true)).toBe(paletteTokens.series[0]);
+    expect(colorOf('#42 · tritonia-q', true)).toBe(paletteTokens.series[0]);
+  });
+
+  it('separates two versions of one design that are being compared', () => {
+    const series = splOption(
+      [
+        { ...named('a', '#41 · tritonia-q', spl as ResultPayload), primary: true },
+        named('b', '#42 · tritonia-q', spl as ResultPayload),
+      ],
+      paletteTokens,
+      'none',
+      'full',
+    ).series as Array<{ lineStyle: { color: string } }>;
+    expect(series[1].lineStyle.color).not.toBe(series[0].lineStyle.color);
+    expect(series[0].lineStyle.color).toBe(paletteTokens.series[0]);
+  });
+});
+
 describe('impedance is drawn in the unit the result declares', () => {
   const acoustic = named('acoustic', 'Waveguide', {
     frequencies: [500, 1_000],

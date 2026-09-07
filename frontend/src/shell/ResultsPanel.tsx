@@ -33,7 +33,7 @@ import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
 import { CHART_TYPES, GROUP_DELAY_UNITS, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
-import { seriesColorsByLabel } from '../results/seriesColors';
+import { runOfLabel, seriesColorsByLabel } from '../results/seriesColors';
 import { parseMeasuredTrace } from '../results/measuredTrace';
 import { electricalDrive, excursionSeries, hasElectricalImpedance } from '../results/drivePower';
 import { deEmbeddedPhaseRadians, hasOnAxisPhase, phaseSpatialSign, phaseUnwrapIsResolved, propagationReference } from '../results/phaseAnalysis';
@@ -70,6 +70,17 @@ export function splSubtitle(result: ResultData | undefined, angles?: { plane: st
 function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['jobs']): string {
   const job = jobs.find((item) => item.id === id);
   return job ? runDisplayName(job) : `osse-${id.slice(0, 6)}`;
+}
+
+/**
+ * The run a chart should pin to the accent slot, or nothing when the primary
+ * selection is not among the entries this chart drew. Every chart derives it
+ * from its own item list, so a chart that filters -- impedance drops runs with
+ * no impedance block -- yields no pin rather than promoting a survivor.
+ */
+function primaryRunOf(items: NamedResult[]): string | undefined {
+  const entry = items.find(({ primary }) => primary);
+  return entry === undefined ? undefined : runOfLabel(entry.label);
 }
 
 /**
@@ -251,7 +262,7 @@ export function splOption(
   reverseNull: ReverseNullTrace[] = [],
 ): EChartsOption {
   const measuredNames = measured.map(({ label }) => measuredSeriesName(label));
-  const colors = seriesColorsByLabel([...items.map(({ label }) => label), ...measuredNames], tokens.series, tokens.accent);
+  const colors = seriesColorsByLabel([...items.map(({ label }) => label), ...measuredNames], tokens.series, tokens.accent, primaryRunOf(items));
   const simulated = splSeries(items, smoothing).map((series, index) => {
     const color = colors.get(series.name) ?? tokens.accent;
     // A member of the combined sum is drawn beneath the curve it adds up to,
@@ -660,6 +671,7 @@ export function heatmapOption(
     comparison ? [comparison.primaryLabel, ...comparison.references.map(({ label }) => label)] : [],
     tokens.series,
     tokens.accent,
+    comparison ? runOfLabel(comparison.primaryLabel) : undefined,
   );
   const baseInset = MAP_GRID[density];
   const inset = comparing && comparison?.showLegend !== false
@@ -800,6 +812,7 @@ export function directivityIndexOption(items: NamedResult[], tokens: ChartTokens
       : groups.flatMap((runSeries) => runSeries.map(({ name }) => name)),
     tokens.series,
     tokens.accent,
+    primaryRunOf(items),
   );
   const series = groups.flatMap((runSeries, runIndex) => runSeries.map((entry) => {
     const color = colors.get(oneMetricPerRun ? items[runIndex].label : entry.name) ?? tokens.accent;
@@ -814,7 +827,7 @@ export function directivityIndexOption(items: NamedResult[], tokens: ChartTokens
 }
 
 export function powerResponseOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
-  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent, primaryRunOf(items));
   const series = items.flatMap((item, index) => powerResponseSeries(item.result as ResultPayload, smoothing).map((entry) => {
     const color = colors.get(item.label) ?? tokens.accent;
     return {
@@ -841,7 +854,7 @@ export function powerResponseOption(items: NamedResult[], tokens: ChartTokens, s
 export function impedanceOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity, display: ReturnType<typeof usePreferences>['impedanceDisplay'] = 'real_imaginary'): EChartsOption {
   const { items: comparable, units } = impedanceComparable(items);
   const magnitudePhase = display === 'magnitude_phase';
-  const colors = seriesColorsByLabel(comparable.map(({ label }) => label), tokens.series, tokens.accent);
+  const colors = seriesColorsByLabel(comparable.map(({ label }) => label), tokens.series, tokens.accent, primaryRunOf(comparable));
   const series = comparable.flatMap((item) => {
     const color = colors.get(item.label) ?? tokens.accent;
     return impedanceSeries(item.result, magnitudePhase ? 'polar' : 'cartesian', smoothing).map((entry, componentIndex) => ({
@@ -896,7 +909,7 @@ export function radiationImpedanceOption(
  */
 export function phaseOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
   const traces = phaseSeries(items);
-  const colors = seriesColorsByLabel(traces.map(({ name }) => name), tokens.series, tokens.accent);
+  const colors = seriesColorsByLabel(traces.map(({ name }) => name), tokens.series, tokens.accent, primaryRunOf(items));
   const series = traces.map(({ name, points }, index) => {
     const color = colors.get(name) ?? tokens.accent;
     return {
@@ -937,7 +950,7 @@ export function formatGroupDelay(value: unknown, unit: GroupDelayUnit): string {
  */
 export function groupDelayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity, unit: GroupDelayUnit = 'ms'): EChartsOption {
   const traces = groupDelaySeries(items, unit);
-  const colors = seriesColorsByLabel(traces.map(({ name }) => name), tokens.series, tokens.accent);
+  const colors = seriesColorsByLabel(traces.map(({ name }) => name), tokens.series, tokens.accent, primaryRunOf(items));
   const series = traces.map((trace, index) => {
     const color = colors.get(trace.name) ?? tokens.accent;
     return {
@@ -984,7 +997,7 @@ export function drivePowerOption(result: ResultPayload, tokens: ChartTokens, den
  * quantities, the same split the single-channel card makes.
  */
 export function drivePowerOverlayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
-  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent, primaryRunOf(items));
   const series = items.flatMap(({ label, result }) => {
     const color = colors.get(label) ?? tokens.accent;
     return drivePowerChartSeries(result as ResultPayload).map((trace) => ({
@@ -999,7 +1012,7 @@ export function drivePowerOverlayOption(items: NamedResult[], tokens: ChartToken
 
 /** Cone excursion for several channels at once, each against its own Xmax. */
 export function excursionOverlayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
-  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent, primaryRunOf(items));
   const series = items.flatMap(({ label, result }) => {
     const color = colors.get(label) ?? tokens.accent;
     return excursionChartSeries(result as ResultPayload).map((trace, index) => ({
@@ -1084,7 +1097,7 @@ export function beamFitOption(result: ResultPayload, tokens: ChartTokens, densit
  * only thing this chart is for.
  */
 export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: PolarPlane, frequencyHz: number, floorDb: number, density: ChartDensity): EChartsOption {
-  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent, primaryRunOf(items));
   const series = items.flatMap(({ label, result, wrapper }) => {
     const index = nearestFrequencyIndex(result.frequencies, frequencyHz);
     const points = polarCut(result, index, plane, wrapper as ResultPayload | undefined);
@@ -1198,7 +1211,7 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
 export function chartUnit(chartType: ChartType, result?: ResultPayload, items?: NamedResult[], groupDelayUnit: GroupDelayUnit = 'ms'): string | undefined {
   if (chartType === 'group_delay') return groupDelayUnit;
   if (chartType === 'impedance') {
-    const candidates = items?.length ? items : result ? [{ id: 'primary', label: 'Primary', result }] : [];
+    const candidates = items?.length ? items : result ? [{ id: 'primary', label: 'Primary', result, primary: true }] : [];
     const { items: comparable, units } = impedanceComparable(candidates);
     return comparable.length ? units.axis : undefined;
   }
@@ -1709,7 +1722,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     if (!COMPARABLE_CHARTS.has(chartType) && !MEMBER_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
     const entries = chartEntries(chartType, named, preferences.showMembersUnderCombined);
     if (entries.length) return entries;
-    return COMPARABLE_CHARTS.has(chartType) ? [{ id: 'primary', label: 'Primary', result }] : NO_NAMED_RESULTS;
+    return COMPARABLE_CHARTS.has(chartType) ? [{ id: 'primary', label: 'Primary', result, primary: true }] : NO_NAMED_RESULTS;
   }, [chartType, named, preferences.showMembersUnderCombined, result]);
   // Which angles the SPL and phase cards read, resolved against this run.
   const measurementSelection = useMemo(
@@ -1943,7 +1956,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
   // The same list ResultChart overlays, so the chip and the subtitle describe
   // the chart that is actually drawn rather than the primary run alone.
-  const impedanceItems = chartType === 'impedance' ? (named.length ? named : [{ id: 'primary', label: 'Primary', result }]) : undefined;
+  const impedanceItems = chartType === 'impedance' ? (named.length ? named : [{ id: 'primary', label: 'Primary', result, primary: true }]) : undefined;
   // Naming the angle the map is referenced to is what makes the field on the
   // design side legible: the shift is a constant per row, so a heatmap gives no
   // other clue what its zero is. `clamped` is the one case the viewer cannot
@@ -2339,12 +2352,18 @@ export function ResultsPanel() {
   }, []);
   const displayLabels = display?.ids.map((id) => labelFor(id, jobs)).join('\u0000') ?? '';
   const named = useMemo(
-    () => display?.ids.flatMap((id, index) => selectResultChannels(
-      id,
-      displayLabels.split('\u0000')[index],
-      display.results[id],
-      view,
-    )) ?? NO_NAMED_RESULTS,
+    () => display?.ids.flatMap((id, index) => {
+      // `ids` is [primary, ...overlays], so index 0 is the run the panel is
+      // built around. Flagging its entries here is what lets every chart find
+      // the primary without trusting its own, possibly filtered, ordering.
+      const channels = selectResultChannels(
+        id,
+        displayLabels.split('\u0000')[index],
+        display.results[id],
+        view,
+      );
+      return index === 0 ? channels.map((entry) => ({ ...entry, primary: true })) : channels;
+    }) ?? NO_NAMED_RESULTS,
     [display, displayLabels, view],
   );
   const error = fetchError?.key === selectionKey ? fetchError.message : null;

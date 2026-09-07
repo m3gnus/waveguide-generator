@@ -19,6 +19,13 @@ export interface NamedResult {
    * `chartEntries`.
    */
   secondary?: boolean;
+  /**
+   * An entry of the run the panel is built around -- the primary selection,
+   * not one of the runs compared with it. Carried on the entry rather than
+   * read off position so that a chart which filters its items cannot promote a
+   * survivor into the role; see `seriesColorsByLabel`.
+   */
+  primary?: boolean;
   /** Which channel of `wrapper` this entry is, for export naming and labels. */
   channelId?: string;
 }
