@@ -25,3 +25,23 @@ export function useUnsavedChanges(): boolean {
   const settings = useSolveOptionsStore(documentSettingsSignature);
   return documentIsUnsaved(revision, savedRevision, savedSettings, settings, designName, savedDesignName);
 }
+
+/**
+ * The same answer, for a caller that is not rendering.
+ *
+ * The auto-open path needs it: opening the project a return names replaces the
+ * working design, so it has to know whether that would discard work -- and it
+ * must reach the identical verdict the dot and the discard prompt reach, which
+ * is the whole reason this module exists.
+ */
+export function unsavedChangesNow(): boolean {
+  const document = useDocumentStore.getState();
+  return documentIsUnsaved(
+    useDesignStore.getState().designRevision,
+    document.savedRevision,
+    document.savedSettings,
+    documentSettingsSignature(),
+    document.designName,
+    document.savedDesignName,
+  );
+}

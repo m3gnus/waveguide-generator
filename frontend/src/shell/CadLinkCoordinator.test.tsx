@@ -719,13 +719,92 @@ describe('CadLinkCoordinator', () => {
     expect(solveCurrentCadImport).toHaveBeenCalledOnce();
   });
 
-  it('refuses a Fusion solve command from another CAD-linked project before ingesting it', async () => {
+  /** Stub the three calls opening a CAD-linked project actually makes. */
+  function projectOpenRoutes(designId: string, lineageId: string, name: string) {
+    return (path: string): Response | null => {
+      if (path.endsWith(`/designs/${designId}`)) {
+        return json({ designId, lineageId, editVersion: 2, filename: `${name}.cfg`, text: 'R = 160' });
+      }
+      if (path.endsWith('/cadlink/designs')) {
+        return json({ items: [{
+          designId, lineageId, filename: `${name}.cfg`, documentName: name,
+          archiveStem: name, exportCount: 1, editVersion: 2,
+          createdAt: '2026-09-04T00:00:00Z', updatedAt: '2026-09-04T00:00:00Z',
+        }] });
+      }
+      if (path === '/api/design/open') {
+        return json({
+          dialect: 'ath', migrationsApplied: [],
+          passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+          design: useDesignStore.getState().design,
+          cadlink: {
+            identity: { designId, lineageId, baseEditVersion: 2 },
+            classification: 'current',
+          },
+        });
+      }
+      return null;
+    };
+  }
+
+  /** Fusion asked for this exact geometry, and the bundle names the project it
+   * belongs to. Printing that name and asking the user to go and open it by
+   * hand is a step WG can take itself; three presses of Solve to be told the
+   * same thing is not a workflow. */
+  it('opens the project a Fusion solve command names, then prepares it', async () => {
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
     }, 'current');
     const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
     const reported: Array<Record<string, unknown>> = [];
     let ingestCalls = 0;
+    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)));
+        return json({ state: 'accepted', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command: {
+        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
+        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
+      }, outcome: null });
+      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
+      return routes(path) ?? json({}, 404);
+    }));
+    const solveCurrentCadImport = vi.fn(async () => {
+      await consumeParkedSolveCommand('job-9');
+      return 'submitted' as const;
+    });
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
+    });
+
+    await renderCoordinator();
+    await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); });
+
+    // The project it named is the one now open, and the return was prepared
+    // against it rather than refused.
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
+    expect(rememberedCadProject()).toBe('wgl_other');
+    expect(ingestCalls).toBe(1);
+    expect(reported.some((entry) => entry.state === 'refused')).toBe(false);
+  });
+
+  /** Opening a project replaces the working design. The manual switcher asks
+   * before discarding, so the automatic one must not be the single path that
+   * discards without asking -- there is nobody at the keyboard to ask. */
+  it('will not open over unsaved work, and says which project it wanted', async () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
+    }, 'current');
+    useDesignStore.getState().updateField('R', 321);
+    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
+    const reported: Array<Record<string, unknown>> = [];
+    let ingestCalls = 0;
+    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
@@ -739,19 +818,55 @@ describe('CadLinkCoordinator', () => {
         manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
       }, outcome: null });
       if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
+      return routes(path) ?? json({}, 404);
+    }));
+
+    await renderCoordinator();
+    await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); });
+
+    expect(ingestCalls).toBe(0);
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
+    expect(useDesignStore.getState().design.R).toBe(321);
+    expect(reported).toEqual([expect.objectContaining({
+      commandId: 'cmd-other', state: 'refused',
+      reason: expect.stringContaining('Tritonia'),
+    })]);
+  });
+
+  it('refuses a Fusion solve command for a design this copy of WG does not hold', async () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
+    }, 'current');
+    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
+    const reported: Array<Record<string, unknown>> = [];
+    let ingestCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/cadlink/designs')) return json({ items: [] });
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)));
+        return json({ state: 'refused', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command: {
+        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
+        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
+      }, outcome: null });
+      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
       return json({}, 404);
     }));
 
     await renderCoordinator();
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); });
 
     expect(ingestCalls).toBe(0);
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
     expect(reported).toEqual([expect.objectContaining({
       commandId: 'cmd-other', state: 'refused',
-      reason: expect.stringContaining('another CAD-linked project'),
+      reason: expect.stringContaining('does not have'),
     })]);
     expect(useCadReturnStore.getState().selectedBundle).toBeNull();
-    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('another CAD-linked project');
   });
 
   /** The bundle names its target; an open model that is not it is not it.
