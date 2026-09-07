@@ -455,3 +455,52 @@ def test_a_bundle_keeps_its_writable_state_out_of_the_application(
     bundled = installer.state_root(root, data_dir=data)
     assert root not in bundled.parents and bundled != root
     assert bundled.parts[-2:] == ("wglink", "runtime")
+
+
+def test_the_package_is_the_same_archive_whatever_the_host_does_to_line_endings(
+    tmp_path: Path, monkeypatch
+):
+    """A build host must not be able to change what the release ships.
+
+    Once a release carries this archive it is inside the app layer's
+    ``treeSha256``, and ``release.yml`` asserts that the Windows and macOS hosts
+    produce an identical layer. The add-in repository declares no ``text``
+    attribute for its sources and Git for Windows defaults to
+    ``core.autocrlf=true``, so an inherited checkout would arrive CRLF on one
+    host and LF on the other: measured before the fix, 13 of 43 members differed,
+    each longer by a byte a line, and the two archives hashed differently.
+
+    ``GIT_CONFIG_GLOBAL`` is what makes this reproducible off Windows -- it is
+    the host configuration the fetch would otherwise inherit.
+    """
+
+    installer = _load_installer()
+    source = _source(tmp_path, "unused")
+    for command in (
+        ["git", "init", "--quiet"],
+        ["git", "config", "user.email", "test@example.invalid"],
+        ["git", "config", "user.name", "WGLink package test"],
+        ["git", "add", "."],
+        ["git", "commit", "--quiet", "-m", "fixture"],
+    ):
+        assert subprocess.run(command, cwd=source).returncode == 0
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source,
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    root = _wg_root(tmp_path, commit)
+    spec = _spec(commit)
+    spec["repository"] = str(source)
+    (root / "integrations" / "wglink" / "source.json").write_text(
+        json.dumps(spec), encoding="utf-8"
+    )
+
+    digests = []
+    for index, autocrlf in enumerate(("false", "true")):
+        config = tmp_path / f"gitconfig-{index}"
+        config.write_text(f"[core]\n\tautocrlf = {autocrlf}\n", encoding="utf-8")
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+        package = installer._fetch_package(root, tmp_path / f"state-{index}")
+        digests.append(hashlib.sha256(package.read_bytes()).hexdigest())
+
+    assert digests[0] == digests[1]
