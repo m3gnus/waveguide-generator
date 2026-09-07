@@ -16,7 +16,7 @@ of its own. The quarantine is a mount option —
 ```
 $ mount | grep Waveguide
 /dev/disk5s1 on /Volumes/Waveguide Generator (apfs, local, nodev, nosuid,
-  read-only, journaled, noowners, quarantine, nobrowse, mounted by magnus)
+  read-only, journaled, noowners, quarantine, nobrowse, mounted by <user>)
 ```
 
 — and the attribute materialises on the copies as they are read out. So check

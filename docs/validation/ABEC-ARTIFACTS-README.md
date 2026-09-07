@@ -1,6 +1,6 @@
 # ABEC validation artifacts
 
-**Placement decided 2026-09-03 by Magnus: these live here, in
+**Placement decided 2026-09-03 by the maintainer: these live here, in
 `waveguide-generator/docs/validation/`.** The alternative considered was a separate
 repository; this won because `SOLVER-QUALIFICATION.md` already lives here and *cites*
 these fixtures, so splitting them would recreate the very problem this move fixes. The

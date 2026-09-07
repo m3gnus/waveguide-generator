@@ -371,7 +371,7 @@ class MacFrame:
         strip kept the top bar always clickable at the cost of 24 px of a
         full screen, every time.
 
-        Magnus reversed that trade-off on 2026-09-04: the always-on margin
+        The maintainer reversed that trade-off on 2026-09-04: the always-on margin
         costs more than the transient overlay it was bought to avoid, so this
         now returns 0 unconditionally, full screen or windowed. In full
         screen the menu bar may briefly cover the top bar on hover; nothing

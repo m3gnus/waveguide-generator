@@ -600,7 +600,7 @@ def test_missing_or_unknown_legacy_family_is_not_assumed_to_be_osse(
 def test_every_real_snapshot_is_converted_or_refused_by_family() -> None:
     """Every snapshot converts faithfully or is refused before ATH is written.
 
-    This database is Magnus's working solve history, so it grows and shrinks as
+    This database is the maintainer's working solve history, so it grows and shrinks as
     he runs and deletes jobs. Asserting a fixed count made the suite fail the
     first time one was deleted, which says nothing about the converter. What
     matters is that supported families convert and every other family fails by

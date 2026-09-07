@@ -43,7 +43,7 @@ from .wgreturn import WgReturnBundle, declared_domain_planes, read_wgreturn
 # A bump would be the conservative choice: it would invalidate every cached mesh
 # so that no design could hold one mesh from each rule. It would also silently
 # re-mesh every existing CAD project on its next ingest and move its acoustics,
-# for projects whose owners did not ask for a new mesh. Magnus chose to leave
+# for projects whose owners did not ask for a new mesh. the maintainer chose to leave
 # existing projects alone and have the new rule govern from the next ingest
 # onwards (2026-08-27).
 #

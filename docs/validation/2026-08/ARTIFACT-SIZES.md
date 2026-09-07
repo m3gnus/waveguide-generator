@@ -33,7 +33,7 @@ or write into the Workspace archive. A representative invocation is:
 
 ```bash
 PYTHONPATH=. .venv/bin/python scripts/measure_artifact_sizes.py \
-  --archives "/Users/magnus/Documents/Waveguide Generator/runs" \
+  --archives "/path/to/Documents/Waveguide Generator/runs" \
   --database /path/to/frozen-normal-simulations.db \
   --database /path/to/frozen-live-campaign-simulations.db \
   --json

@@ -195,7 +195,7 @@ which is the part that changes numbers for the ordinary sealed case.
 - **BP4/BP6 topologies.** Bandpass front chambers belong in `hornlab-sim`'s own
   `bandpass` path. In WG the front side is geometry.
 
-## 9. Open questions for Magnus
+## 9. Open questions for the maintainer
 
 1. Is a second radiation campaign per vented channel acceptable, or should a
    job be capped at one vented rear load until it is measured?

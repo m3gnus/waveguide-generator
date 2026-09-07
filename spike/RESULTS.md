@@ -1,6 +1,6 @@
 # Phase 0 spike — measured results (Mac, 2026-08-03)
 
-Machine: Magnus's Mac (Apple Silicon, macOS 26.5.2), v1 oracle at WG `fd9224d`, mesher pin `e4933f3`, Python 3.13.1.
+Machine: the maintainer's Mac (Apple Silicon, macOS 26.5.2), v1 oracle at WG `fd9224d`, mesher pin `e4933f3`, Python 3.13.1.
 **Windows column: PENDING** — run per README on the Windows box and append here.
 
 ## 1. Server-side preview eval (mesher canonical viewport API, N=40 warm)

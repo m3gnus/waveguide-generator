@@ -725,7 +725,7 @@ Ordered by how much it matters.
    release default because it can overlap a user solve and native shutdown.
    Fixing this properly needs process-isolated solves.
 3. **The viewport has never rendered on a real GPU** — and by decision
-   (Magnus, 2026-08-08) it never has to: *"the windows machine doesn't have GPU,
+   (the maintainer, 2026-08-08) it never has to: *"the windows machine doesn't have GPU,
    and the program shouldn't need gpu."* Software rasterisation is a supported
    target, not a degraded one, so this row is no longer a gap to close but a
    constraint to design against. Check 8 passes; every render on this machine

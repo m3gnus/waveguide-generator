@@ -226,7 +226,7 @@ IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 # * The mesh cache key. ``IMPORT_MESH_PIPELINE_CONTRACT`` deliberately stays at
 #   "wg-import-solve-v5" -- see the reasoning at its definition. A bump would
 #   re-mesh every existing CAD project on its next ingest and move acoustics
-#   nobody asked to have moved; Magnus chose to leave them alone (2026-08-27).
+#   nobody asked to have moved; the maintainer chose to leave them alone (2026-08-27).
 #   The mix stays visible because ``occ_tessellation`` below records which rule
 #   built each mesh.
 # * ``docs/reference/openapi.v1.json`` is regenerated and carries

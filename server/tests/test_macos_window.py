@@ -454,7 +454,7 @@ class TestTopInset:
     Full screen used to reserve the menu bar's height here, deliberately: the
     menu bar is not part of the window, and it slides down over whatever is
     beneath it -- the top bar, in full screen -- when the pointer reaches the
-    top of the screen. Magnus reversed that trade-off on 2026-09-04: the
+    top of the screen. the maintainer reversed that trade-off on 2026-09-04: the
     always-on margin cost more than the transient overlay it bought, so this
     now returns 0 unconditionally, full screen or windowed.
     """

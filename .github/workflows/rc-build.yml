@@ -2,7 +2,7 @@ name: RC build
 
 # Build the installers WITHOUT spending anything: no tag, no draft, no
 # release, no version bump — artifacts only. Exists for the hand-test gate in
-# hornlab-policy/PLAN.md step 5: Magnus tries a DMG and a Windows installer
+# hornlab-policy/PLAN.md step 5: the maintainer tries a DMG and a Windows installer
 # built from a release candidate before the version is pinned. The jobs are
 # the release.yml bundle jobs minus the release guard and the publish job;
 # assets are named by shared/version.json as it stands, so an RC built before

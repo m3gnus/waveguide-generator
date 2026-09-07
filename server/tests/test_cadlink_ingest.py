@@ -310,7 +310,7 @@ def test_the_sizing_change_does_not_re_mesh_existing_projects() -> None:
 
     Bumping ``IMPORT_MESH_PIPELINE_CONTRACT`` would invalidate every cached mesh
     and silently re-mesh every existing CAD project on its next ingest, moving
-    acoustics whose owners did not ask for a new mesh. Magnus chose to leave
+    acoustics whose owners did not ask for a new mesh. the maintainer chose to leave
     them alone (2026-08-27): the sagitta rule governs from the next ingest of
     changed inputs onward.
 
