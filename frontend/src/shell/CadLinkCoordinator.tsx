@@ -47,7 +47,9 @@ import {
   type SymmetryMode,
 } from '../stores/solveOptions';
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
-import { cadProjectName, listCadProjects, newestReturnForProject } from '../api/cadProjects';
+import { cadProjectName, listCadProjects, newestReturnForProject, type CadProject } from '../api/cadProjects';
+import { openCadLinkedProject } from '../design/openCadProject';
+import { unsavedChangesNow } from '../stores/unsavedChanges';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
@@ -257,6 +259,16 @@ export function returnBelongsToAnotherProject(
 /** Whether a return is positively linked to the open registry project.
  * Unlinked returns remain available for manual adoption, but must not be
  * guessed into every project merely because they name no other project. */
+
+/** The one design a return names, when it names exactly one.
+ *
+ * A bundle carrying instances of two different designs has no single target,
+ * so nothing can be opened on its behalf and the refusal stands. */
+export function soleReturnedDesignId(bundle: CadReturnBundle): string | null {
+  const returned = Array.from(new Set(bundle.designIds ?? []));
+  return returned.length === 1 ? returned[0] : null;
+}
+
 export function returnBelongsToProject(
   bundle: CadReturnBundle,
   designId: string | null | undefined,
@@ -1736,6 +1748,53 @@ export function CadLinkCoordinator() {
     }
   }, []);
 
+  /** Open the project a Fusion-requested return names, so the request lands.
+   *
+   * The bundle names its design, WG holds that design, and the user asked for
+   * this exact geometry to be solved: everything needed to put the right
+   * project on screen is already here. Refusing and printing the name of the
+   * project the user should go and open by hand is a step WG can take itself,
+   * and pressing Solve in Fusion three times to be told the same thing is not
+   * a workflow.
+   *
+   * Two things it still will not do. It will not open over unsaved work --
+   * opening a project replaces the working design, and the manual switcher asks
+   * before discarding, so an automatic switch must not be the one path that
+   * discards silently. And it will not guess: a bundle naming two designs names
+   * no single target, and a design this copy of WG does not hold cannot be
+   * opened at all. Both keep the refusal, which now says which project. */
+  const openProjectForReturn = useCallback(
+    async (bundle: CadReturnBundle): Promise<'opened' | string> => {
+      const designId = soleReturnedDesignId(bundle);
+      if (!designId) {
+        return 'Fusion asked WG to solve a return that names more than one CAD-linked design, so WG cannot tell which project to open. Open it from File → CAD-linked designs, then send the solve again.';
+      }
+      let project: CadProject | undefined;
+      try {
+        project = (await listCadProjects()).find((item) => item.designId === designId);
+      } catch {
+        project = undefined;
+      }
+      if (!project) {
+        return 'Fusion asked WG to solve a return from a CAD-linked design this copy of WG does not have.';
+      }
+      const name = cadProjectName(project);
+      if (unsavedChangesNow()) {
+        return `Fusion asked WG to solve a return from ${name}. Save or discard the changes in the open design first, then send the solve again.`;
+      }
+      try {
+        await openCadLinkedProject(designId, fetch, 'cad-project-switch');
+      } catch (reason) {
+        const detail = reason instanceof Error ? reason.message : String(reason);
+        return `Fusion asked WG to solve a return from ${name}, which could not be opened: ${detail}`;
+      }
+      rememberCadProject(project.lineageId);
+      setStatus(`Opened ${name} for the model Fusion sent. Preparing…`);
+      return 'opened';
+    },
+    [],
+  );
+
   /** Run a Fusion-authored "solve in WG" command exactly once.
    *
    * Idempotency is the server's ledger, not this component: a coordinator
@@ -1781,11 +1840,19 @@ export function CadLinkCoordinator() {
         return;
       }
       if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
-        const reason = 'Fusion asked WG to solve a return from another CAD-linked project. Open that project from File → CAD-linked designs, then send the solve again.';
-        refusedForeignReturn.current = true;
-        setError(reason);
-        await reportSolveCommandOutcome({ commandId: command.commandId, state: 'refused', jobId: null, reason });
-        return;
+        const outcome = await openProjectForReturn(bundle);
+        if (outcome !== 'opened') {
+          refusedForeignReturn.current = true;
+          setError(outcome);
+          await reportSolveCommandOutcome({
+            commandId: command.commandId, state: 'refused', jobId: null, reason: outcome,
+          });
+          return;
+        }
+        // The switch is the acknowledgement: the project on screen is now the
+        // one this return belongs to, so a standing refusal is spent and the
+        // remembered-project restore must not undo what was just opened.
+        refusedForeignReturn.current = false;
       }
       // Parked from here on. Everything below is either terminal or a gate the
       // user can satisfy, and the marker survives a gate — so WG has to keep
