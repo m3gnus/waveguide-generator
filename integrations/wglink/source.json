@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://github.com/m3gnus/hornlab-fusion-addin.git",
-  "commit": "63550a504b26ec65ac2da81e270282a76da10760",
+  "commit": "4a1ae9463560d2f1771806d1a4d666924d720963",
   "license": "AGPL-3.0-or-later",
   "addinVersion": "0.1.1"
 }
