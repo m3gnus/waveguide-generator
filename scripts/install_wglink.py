@@ -270,6 +270,20 @@ def _fetch_package(root: Path, state: Path) -> Path:
         source = Path(temporary) / "hornlab-fusion-addin"
         commands = (
             ["git", "init", "--quiet", str(source)],
+            # The package is content-addressed and, once a release ships it, it
+            # is inside the app layer's treeSha256 -- which the release workflow
+            # asserts is identical on the Windows and macOS build hosts. Git for
+            # Windows defaults to core.autocrlf=true and the add-in repository
+            # declares no `text` attribute for its sources, so an inherited
+            # checkout would arrive CRLF there and LF here, and the two hosts
+            # would build different archives from the same commit. Measured: 13
+            # of 43 members differ, each longer by a byte a line.
+            #
+            # waveguide-generator buys this property for its own files with
+            # `* text=auto eol=lf`; this reaches outside that, so it has to
+            # state the same thing here rather than inherit ambient config.
+            ["git", "-C", str(source), "config", "core.autocrlf", "false"],
+            ["git", "-C", str(source), "config", "core.eol", "lf"],
             ["git", "-C", str(source), "remote", "add", "origin", str(spec["repository"])],
             ["git", "-C", str(source), "fetch", "--quiet", "--depth", "1", "origin", commit],
             ["git", "-C", str(source), "checkout", "--quiet", "--detach", "FETCH_HEAD"],
