@@ -214,7 +214,16 @@ def test_beat_facts_answer_none_when_the_interpreter_cannot_be_executed(
     environment = tmp_path / ".venv"
     python = bootstrap._venv_python(environment)
     python.parent.mkdir(parents=True)
-    python.touch()  # exists, zero bytes, and deliberately not executable
-    assert not os.access(python, os.X_OK)
+    python.touch()  # exists, zero bytes, and cannot be executed
+
+    # How it cannot be executed differs, and the guard has to cover both.
+    # POSIX has no execute bit here, so exec fails EACCES -> PermissionError.
+    # Windows has no POSIX execute bit at all -- os.access(..., X_OK) answers
+    # True for any file that exists -- and instead refuses a zero-byte .exe at
+    # load time with WinError 193, "not a valid Win32 application". Both are
+    # OSError, which is what the guard catches and why this assertion is the
+    # same on both platforms.
+    if os.name != "nt":
+        assert not os.access(python, os.X_OK)
 
     assert bootstrap._beat_provision_facts(python) is None
