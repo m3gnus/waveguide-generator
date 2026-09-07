@@ -40,6 +40,9 @@ dist/
 # Node dependencies, caches, tests, and builds
 node_modules/
 frontend/dist/
+# ...and the same name as a symlink: a trailing slash matches a directory
+# only, so a symlink named frontend/dist was not ignored and reached a commit.
+frontend/dist
 integrations/wglink/runtime/
 .vite/
 *.tsbuildinfo
