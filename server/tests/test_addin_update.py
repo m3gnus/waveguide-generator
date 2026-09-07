@@ -144,3 +144,45 @@ def test_an_installer_failure_is_reported_and_never_raised(tmp_path: Path, monke
     verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
     assert verdict == "failed"
     assert "no network" in detail
+
+
+def test_create_app_reconciles_the_add_in_at_boot_and_drains_it_at_shutdown(
+    tmp_path: Path,
+) -> None:
+    """The wiring, not just the decision.
+
+    Every verdict below is reachable only if something actually calls this, and
+    the reconciliation is the one part of the round trip with no user action
+    behind it. Draining rather than cancelling matters here more than for a
+    warmup: this task can be mid-install, and abandoning it would leave a
+    staging directory beside the user's add-in.
+    """
+
+    from server.app import create_app
+
+    application = create_app(data_dir=tmp_path)
+    assert "start_addin_refresh" in {
+        handler.__name__ for handler in application.router.on_startup
+    }
+    assert "shutdown_addin_refresh" in {
+        handler.__name__ for handler in application.router.on_shutdown
+    }
+
+
+def test_the_reconciliation_runs_off_the_startup_thread(monkeypatch) -> None:
+    """Startup must not wait on file work, however short it usually is."""
+
+    import asyncio
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        addin_update, "refresh_and_log", lambda: seen.append("ran") or ("current", "")
+    )
+
+    async def drive() -> None:
+        await addin_update.start_addin_refresh()
+        assert addin_update.addin_refresh.task is not None
+        await addin_update.shutdown_addin_refresh()
+
+    asyncio.run(drive())
+    assert seen == ["ran"]
