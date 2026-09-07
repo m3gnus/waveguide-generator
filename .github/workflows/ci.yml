@@ -139,18 +139,56 @@ jobs:
           ruff check server scripts shared launch launchers
 
   server:
-    name: Server (${{ matrix.os }})
+    name: ${{ matrix.label }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Windows has hung here on a blocking Win32 dialog: the suite stops
-    # making progress but the process never exits, so without a cap the job
-    # sits at GitHub's 6-hour default and only dies when the next push
-    # cancels it. Linux and macOS finish in 5-7 minutes; this leaves room
-    # for a slow Windows runner and still fails a hang inside the hour.
-    timeout-minutes: 25
+    # Two suites, two budgets, because they exhaust a budget differently.
+    #
+    # Windows has hung here on a blocking Win32 dialog: the suite stops making
+    # progress but the process never exits, so without a cap the job sits at
+    # GitHub's 6-hour default and only dies when the next push cancels it. The
+    # detector for that is pytest.ini's faulthandler_timeout=300 with
+    # faulthandler_exit_on_timeout, which names the blocked frame and kills the
+    # run after five minutes on any single test. This job cap is the backstop
+    # behind that detector, not the detector, so it can carry real margin and
+    # still fail a hang well inside the hour.
+    #
+    # Measured on the last green run (34099268979, 2026-09-07) -- pytest wall
+    # time, which excludes the 2-3m of setup above it:
+    #
+    #               server/tests   scripts/tests
+    #   ubuntu           14.4m           0.7m
+    #   macos            13.7m           8.6m
+    #   windows          18.8m           0.5m
+    #
+    # Both suites ran in one job under a single 25m cap until run 34109392034
+    # was cancelled at 25m20s on macOS -- one second past the green run before
+    # it. That is exhaustion, not a flake, and re-running it would not have
+    # fixed anything.
+    #
+    # scripts/tests costs 12-17x more on the macOS runner than on either other
+    # platform. All of it is in test_qualify_installed_cpu.py's 13 stub-harness
+    # tests, at ~35s each there against ~2s both locally and on Linux -- a
+    # near-constant added per test rather than more work being done. Windows
+    # skips exactly those 13 (the stub interpreter is a shebang script). That
+    # cause is not diagnosed, and this split does not fix it: it stops one file
+    # on one platform from setting the budget for the product suite.
+    timeout-minutes: ${{ matrix.budget }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        suite: [server, harness]
+        include:
+          - suite: server
+            label: Server
+            paths: server/tests
+            # Windows, the slowest, sits at ~21m including setup.
+            budget: 40
+          - suite: harness
+            label: Harness
+            paths: scripts/tests
+            # macOS, the slowest, sits at ~11m including setup.
+            budget: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -168,6 +206,11 @@ jobs:
       # gitignored, so app-constructing server tests fail in a clean checkout
       # until the SPA exists. Releases hand users a prebuilt archive instead;
       # CI has Node, so it builds one.
+      #
+      # The harness suite needs this too, for exactly one test --
+      # scripts/tests/test_gen_openapi.py builds the live application to
+      # compare the committed schema against it. Measured, not assumed: with
+      # dist absent, scripts/tests is 304 passed and that one test failed.
       - name: Build the SPA the server mounts
         working-directory: frontend
         run: |
@@ -186,9 +229,13 @@ jobs:
           pip install -r server/requirements-lock.txt
           pip install --no-deps -r server/requirements-pins.txt
           pip install -r server/requirements-dev.txt
-      - name: Server tests
+      - name: ${{ matrix.label }} tests
         # -v, not -q: Linux has been dying mid-run with exit 141 (SIGPIPE) and
         # no summary, so the only way to name the test that takes the process
         # down is to have pytest print each one as it starts. Collection order
         # is already deterministic -- no ordering plugin is installed.
-        run: python -m pytest server/tests scripts/tests -v
+        #
+        # --durations reports setup/call/teardown separately, which is the
+        # split the macOS anomaly above needs and that -v timestamps cannot
+        # give.
+        run: python -m pytest ${{ matrix.paths }} -v --durations=25
