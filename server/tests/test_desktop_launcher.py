@@ -1878,3 +1878,47 @@ def test_a_browser_launch_does_not_pin_a_platform_plugin(
 
     assert desktop.main(["--browser"]) == 0
     assert "QT_QPA_PLATFORM" not in os.environ
+
+def test_the_help_names_the_mode_the_installed_command_actually_takes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``(the default)`` has to mean the branch ``main`` falls through to.
+
+    It stopped being true silently. The help said ``--browser`` was the default
+    from before the native window existed, and when the Linux window landed the
+    sentence became wrong on the one platform whose users had just had their
+    launch mode changed underneath them -- with nothing failing, because no test
+    tied the words to the fall-through.
+
+    So tie them: read which option the help marks, and prove ``main`` with no
+    display flags takes that mode.
+    """
+
+    from launchers.statusapp.__main__ import build_parser
+
+    # Wide, so argparse puts each option and its help on one line. At a normal
+    # terminal width the old wording wrapped and ``(the default)`` landed on a
+    # continuation line -- which would make this test pass or fail on where the
+    # text happened to break rather than on what it said.
+    monkeypatch.setenv("COLUMNS", "200")
+    marked = [
+        line.strip()
+        for line in build_parser().format_help().splitlines()
+        if "(the default)" in line
+    ]
+    assert len(marked) == 1, f"exactly one display mode is the default, got {marked}"
+    assert marked[0].startswith("--window"), marked[0]
+
+    # ...and that is the mode a bare command line reaches.
+    controller = StubController()
+    webview, created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setattr(desktop, "_linux_window_blocker", lambda: None)
+    monkeypatch.setattr(
+        desktop.DesktopWindow, "_name_linux_application", lambda self: None
+    )
+    monkeypatch.setattr(desktop, "StatusController", lambda *, server_args: controller)
+
+    assert desktop.main([]) == 0
+    assert created, "no display flag must open the window the help calls the default"

@@ -309,15 +309,26 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
     )
     display = parser.add_argument_group("display mode")
+    # Which of these is "the default" is a claim about the *installed command*
+    # -- ``prog`` above says so, and that command is ``launchers.desktop.main``,
+    # which falls through to the native window on every platform once the two
+    # explicit modes below have had their turn. This module's own ``main`` still
+    # defaults to the status window, but nobody types ``python -m
+    # launchers.statusapp``; the help belongs to the name in ``prog``.
+    #
+    # It said ``--browser`` until the Linux window landed, which is when the
+    # sentence stopped being true there -- reported from Fedora 44 on
+    # 2026-09-06, against a build whose plain ``waveguide-generator`` had
+    # already stopped opening a browser.
     display.add_argument(
         "--window",
         action="store_true",
-        help="open the native desktop window",
+        help="open the native desktop window (the default)",
     )
     display.add_argument(
         "--browser",
         action="store_true",
-        help="use the status window and your own browser (the default)",
+        help="use the status window and your own browser",
     )
     display.add_argument(
         "--no-gui",
