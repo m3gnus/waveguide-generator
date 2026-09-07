@@ -687,7 +687,19 @@ def _beat_provision_facts(python: Path) -> dict[str, object] | None:
         "'per_backend': hasattr(p, 'read_backend_states')"
         "}))"
     )
-    completed = _capture([str(python), "-c", probe])
+    try:
+        completed = _capture([str(python), "-c", probe])
+    except OSError:
+        # An interpreter that cannot be executed at all is one more way of not
+        # being able to answer, and this function already answers None for
+        # every other one -- a non-zero exit, no output, unparseable output.
+        # Its caller prints "could not be asked what it supports" and carries
+        # on, so None keeps a broken venv from turning an install into a
+        # traceback. _warn_when_gui_unavailable runs the same stub through the
+        # same helper and has caught OSError since it was written; this call
+        # site simply never did, and provisioning happens outside the
+        # bootstrap lock, so the crash took the whole install down with it.
+        return None
     if completed.returncode != 0:
         return None
     try:

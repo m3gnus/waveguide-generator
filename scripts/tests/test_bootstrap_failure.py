@@ -2,6 +2,7 @@
 
 import json
 import multiprocessing
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -184,3 +185,36 @@ def test_check_does_not_rewrite_validation_evidence(
 
     assert stamp.read_text(encoding="utf-8") == original
     assert not stamp.with_name(f"{bootstrap.STAMP_NAME}.tmp").exists()
+
+
+def test_beat_facts_answer_none_when_the_interpreter_cannot_be_executed(
+    tmp_path: Path,
+) -> None:
+    """A venv whose interpreter will not run must not turn an install into a traceback.
+
+    ``_beat_provision_facts`` already answers ``None`` for a non-zero exit, no
+    output and unparseable output, and its caller prints "could not be asked
+    what it supports" and continues. An unrunnable interpreter is one more way
+    of not being able to answer.
+
+    This is a real user's broken venv, not a test artefact: BEAT provisioning
+    runs *outside* the bootstrap lock, so before the guard the PermissionError
+    propagated out of ``bootstrap()`` and took the whole install down. The
+    sibling call site, ``_warn_when_gui_unavailable``, has caught ``OSError``
+    since it was written -- the two paths run the same stub through the same
+    helper and only one of them was guarded.
+
+    It surfaced only when the CI suites were split: ``scripts/tests`` had been
+    inheriting ``WG2_SKIP_BEAT_CPU_PROVISION`` from ``server/tests``' conftest,
+    so nothing here ever reached this code. Guarding the environment stops the
+    suite tripping over it; this test is the part that proves the product does
+    not.
+    """
+
+    environment = tmp_path / ".venv"
+    python = bootstrap._venv_python(environment)
+    python.parent.mkdir(parents=True)
+    python.touch()  # exists, zero bytes, and deliberately not executable
+    assert not os.access(python, os.X_OK)
+
+    assert bootstrap._beat_provision_facts(python) is None
