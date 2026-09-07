@@ -38,6 +38,20 @@ WINDOWS_WEBVIEW_READY = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _isolate_qt_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the launcher's ``QT_QPA_PLATFORM`` pin inside the test that caused it.
+
+    ``main`` pins the platform plugin by writing to the real ``os.environ`` --
+    it has to, because the in-process Qt reads it through ``getenv`` and the
+    probe's child inherits it. Left alone that write escapes into the rest of
+    the session, and the next test to assert the variable is *unset* would pass
+    or fail depending on which tests ran before it.
+    """
+
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+
+
 def _snapshot(state: ServiceState, url: str = "http://127.0.0.1:3199/") -> StatusSnapshot:
     return StatusSnapshot(
         backend=LampStatus(state, "backend ready"),
@@ -478,10 +492,15 @@ def test_the_qt_check_never_buys_a_pass_by_disabling_the_sandbox() -> None:
 
     for escape in ("--no-sandbox", "QTWEBENGINE_DISABLE_SANDBOX", "--disable-gpu-sandbox"):
         assert escape not in program
-    # Nor may it decide the display protocol on the user's behalf: a forced
-    # QT_QPA_PLATFORM answers a question about a session nobody is running.
+    # Nor may the probe decide the display protocol on its own: a QT_QPA_PLATFORM
+    # set *inside* the program would answer a question about a session nobody is
+    # running. The launcher does choose the plugin, but it chooses it in the
+    # parent, before this child inherits the environment -- so the probe still
+    # reports on the session the window will open in. That ordering is the
+    # contract, and it is tested directly in
+    # ``test_linux_pins_the_qt_platform_before_the_probe_reads_it``.
     assert "QT_QPA_PLATFORM" not in program
-    assert "QT_QPA_PLATFORM" not in Path(desktop.__file__).read_text(encoding="utf-8")
+    assert "environ" not in program, "the probe reads its environment, it does not write it"
 
 
 def test_an_explicitly_chosen_qt_backend_is_still_checked() -> None:
@@ -1762,3 +1781,100 @@ def test_a_reported_loss_is_never_re_registered(monkeypatch: pytest.MonkeyPatch)
     assert controller.watchers == []
     if window._loss_report is not None:
         window._loss_report.join(timeout=5.0)
+
+
+def test_linux_pins_the_qt_platform_before_the_probe_reads_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default Linux launch chooses xcb, and the probe sees that choice.
+
+    Order is the whole point. The probe runs a child with a copy of this
+    environment; if the pin landed after it, the probe would be answering about
+    Wayland and the window would open under xcb -- a check about a different
+    machine from the one that runs.
+    """
+
+    controller = StubController()
+    webview, _created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setattr(
+        desktop.DesktopWindow, "_name_linux_application", lambda self: None
+    )
+    monkeypatch.setattr(desktop, "StatusController", lambda *, server_args: controller)
+
+    seen: list[str | None] = []
+
+    def _probe() -> str | None:
+        seen.append(os.environ.get("QT_QPA_PLATFORM"))
+        return None
+
+    monkeypatch.setattr(desktop, "_linux_window_blocker", _probe)
+
+    assert desktop.main([]) == 0
+    assert seen == ["xcb"], "the probe must run under the plugin the window will use"
+    assert os.environ["QT_QPA_PLATFORM"] == "xcb"
+
+
+def test_an_explicit_qt_platform_wins_over_the_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A user whose Wayland session does render can ask for it back.
+
+    The same precedence ``PYWEBVIEW_GUI`` already has over ``gui='qt'``: this
+    launcher picks a default, it does not overrule a choice.
+    """
+
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "wayland")
+
+    assert desktop._pin_linux_qt_platform(os.environ) is None
+    assert os.environ["QT_QPA_PLATFORM"] == "wayland"
+
+
+def test_the_pin_is_linux_only_and_qt_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing else is drawn by the Qt platform plugin, so nothing else is told.
+
+    A ``PYWEBVIEW_GUI=gtk`` launch is WebKitGTK; naming a Qt plugin for it would
+    be a claim about a renderer that launch is not using. macOS and Windows have
+    no platform plugin to choose at all.
+    """
+
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    environment: dict[str, str] = {"PYWEBVIEW_GUI": "gtk"}
+    assert desktop._pin_linux_qt_platform(environment) is None
+    assert environment == {"PYWEBVIEW_GUI": "gtk"}
+
+    for platform in ("darwin", "win32"):
+        monkeypatch.setattr(desktop.sys, "platform", platform)
+        elsewhere: dict[str, str] = {}
+        assert desktop._pin_linux_qt_platform(elsewhere) is None
+        assert elsewhere == {}
+
+
+def test_an_empty_qt_platform_is_not_a_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``QT_QPA_PLATFORM=`` is what a shell leaves behind, not a decision.
+
+    Qt treats an empty value as unset and auto-detects; so must this, or the
+    launcher would hand the blank window back to the one user whose environment
+    mentions the variable without setting it.
+    """
+
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    environment = {"QT_QPA_PLATFORM": "  "}
+    assert desktop._pin_linux_qt_platform(environment) == "xcb"
+    assert environment["QT_QPA_PLATFORM"] == "xcb"
+
+
+def test_a_browser_launch_does_not_pin_a_platform_plugin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--browser`` and ``--no-gui`` open no Qt window, so they choose no plugin."""
+
+    from launchers.statusapp import __main__ as status_entrypoint
+
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    monkeypatch.setattr(status_entrypoint, "main", lambda _arguments: 0)
+
+    assert desktop.main(["--browser"]) == 0
+    assert "QT_QPA_PLATFORM" not in os.environ

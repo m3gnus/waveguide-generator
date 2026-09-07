@@ -14,7 +14,7 @@ import threading
 import time
 import traceback
 from types import ModuleType
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from urllib.parse import urljoin, urlsplit
 import webbrowser
 
@@ -122,6 +122,12 @@ LINUX_DESKTOP_FILE_NAME = "waveguide-generator"
 #: cannot see. So the probe renders local HTML and waits for ``loadFinished``,
 #: which is the shortest path that has actually started a render process.
 #:
+#: That covers a render process that never starts. It does **not** cover one
+#: that starts, loads the page and then never paints: ``loadFinished`` is a
+#: page signal, and nothing here calls ``show()``, so no surface exists and no
+#: compositor is ever asked for a texture. That failure is handled upstream, by
+#: choosing the platform plugin -- :func:`_pin_linux_qt_platform`.
+#:
 #: Nothing here disables the sandbox. A probe that passed by turning off the
 #: thing that was failing would be worse than no probe: it would send the
 #: application into the same blank window with the check saying yes.
@@ -163,6 +169,11 @@ application.processEvents()
 
 sys.exit(verdict)
 """
+#: The Qt platform plugin the launcher selects on Linux. XWayland carries an
+#: xcb client transparently on a Wayland session, which is what Chrome and most
+#: Electron applications do today; see :func:`_pin_linux_qt_platform` for why
+#: this is pinned rather than left to Qt's own auto-detection.
+LINUX_QT_PLATFORM = "xcb"
 #: How long the probe's own event loop waits for that page, in milliseconds.
 #: A cold QtWebEngine start is a second or two; this is the point at which a
 #: render process that is never coming back stops being worth waiting for.
@@ -290,6 +301,57 @@ def _linux_backend_is_qt(environ: Mapping[str, str]) -> bool:
     """
 
     return _forced_pywebview_gui(environ) in (None, "qt")
+
+
+def _pin_linux_qt_platform(environ: MutableMapping[str, str]) -> str | None:
+    """Choose xcb for Qt on Linux, and say so, unless something already has.
+
+    QtWebEngine's Wayland compositing does not produce a surface on every
+    desktop it claims to support. Where it fails it fails *late* -- the server
+    is up, the page loads, ``loadFinished`` is true, and the window is mapped
+    and decorated -- and all the user sees is:
+
+        Backend texture is not a Vulkan texture.
+        Compositor returned null texture
+
+    repeated once per frame that never arrived, and a black rectangle. Nothing
+    on screen says what to do, which is the worst outcome this launcher has:
+    strictly worse than the browser it would have opened instead.
+
+    The probe in :func:`_linux_window_blocker` cannot see it. That probe waits
+    on ``loadFinished``, which is a *page* signal, and it never calls ``show()``
+    -- so no surface is ever created and the compositor is never asked for the
+    texture it fails to return. It catches a missing xcb library and a refused
+    renderer namespace; it cannot catch a compositor that answers every request
+    with nothing.
+
+    So this runs **before** the probe, and mutates the environment the probe
+    inherits, which is what makes pinning safe rather than a second guess: on a
+    session with no XWayland the pin makes Qt fail *early* and *loudly* in the
+    child, and the probe turns that into the status-window fallback that has
+    always been there. The pin cannot strand a user in a window; it can only
+    move the failure to where something is watching.
+
+    An explicit ``QT_QPA_PLATFORM`` always wins, the same way
+    :func:`_forced_pywebview_gui` already lets ``PYWEBVIEW_GUI`` overrule the
+    ``gui='qt'`` this module otherwise passes -- someone whose Wayland session
+    does render can ask for it back, and someone debugging a platform plugin
+    keeps the variable that does that.
+
+    Returns the value it set, or ``None`` when it left the environment alone.
+    """
+
+    if not sys.platform.startswith("linux"):
+        return None
+    if not _linux_backend_is_qt(environ):
+        # A GTK/WebKit backend is not drawn by Qt, so the Qt platform plugin is
+        # not the thing that would render it. Setting the variable there would
+        # be a claim about a renderer this launch is not using.
+        return None
+    if environ.get("QT_QPA_PLATFORM", "").strip():
+        return None
+    environ["QT_QPA_PLATFORM"] = LINUX_QT_PLATFORM
+    return LINUX_QT_PLATFORM
 
 
 def _linux_qt_probe(deadline_ms: int = LINUX_QT_PROBE_DEADLINE_MS) -> str:
@@ -1754,6 +1816,10 @@ def main(argv: list[str] | None = None) -> int:
         # for a terminal and a browser at once is a terminal.
         requested = "--no-gui" if options.no_gui else "--browser"
         return status_main([requested, *server_arguments])
+    # Before the probe, not after: the probe inherits this environment, so
+    # pinning here is what makes the probe's answer be about the platform
+    # plugin the window will actually use. See _pin_linux_qt_platform.
+    _pin_linux_qt_platform(os.environ)
     if sys.platform.startswith("linux") and _linux_backend_is_qt(os.environ):
         blocker = _linux_window_blocker()
         if blocker is not None:
