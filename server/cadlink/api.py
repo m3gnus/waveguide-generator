@@ -36,9 +36,11 @@ from server.workspace.api import (
 from server.workspace.archive import (
     CAD_SUBDIRECTORY,
     archive_cad_document,
+    archive_folder_slug,
     captured_cad_document,
     design_archive_folder,
     place_run_cad_document,
+    reclaim_captured_documents,
 )
 
 from .fusion_status import fusion_process_running, read_fusion_status
@@ -81,12 +83,89 @@ _DEFERRED_VIEWPORTS: dict[str, asyncio.Task[Any]] = {}
 #: task that nobody holds can be collected mid-flight. This is that holder.
 _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 
+#: Captured CAD documents still being copied, keyed by return-state digest.
+#: The run archive joins on this: a solve that finishes before its own capture
+#: does must wait for the copy rather than find nothing to place.
+_CAD_DOCUMENT_CAPTURES: dict[str, asyncio.Task[Any]] = {}
+
+#: How long a run archive waits for an in-flight capture of its own model.
+#: A Fusion archive is tens of megabytes on a possibly cloud-synced volume, so
+#: this is generous; it is a bound against waiting forever, not an expectation.
+_CAPTURE_WAIT_SECONDS = 120.0
+
 
 def _spawn_background(coroutine: Any) -> asyncio.Task[Any]:
     task = asyncio.create_task(coroutine)
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return task
+
+
+def _capture_key(return_state_hash: object) -> str:
+    """The registry key one model state is tracked under while it is copying.
+
+    The hex half of the digest, lowercased, so the key a capture registers
+    under and the key a run archive looks up cannot differ over the ``sha256:``
+    prefix alone.
+    """
+
+    text = str(return_state_hash or "").strip()
+    _, _, hex_part = text.partition(":")
+    return (hex_part or text).lower()
+
+
+def _schedule_cad_document_capture(
+    state: Any,
+    store: CadLinkStore,
+    bundle_path: Path,
+    record: Mapping[str, Any],
+) -> None:
+    """Start the capture the ingestion response deliberately does not wait for.
+
+    Registered by return state, because a fast solve can complete and archive
+    itself while this is still copying tens of megabytes: the run archive
+    joins the task rather than finding no document to place.
+    """
+
+    document = record.get("document")
+    key = _capture_key(
+        (document if isinstance(document, Mapping) else {}).get("return_state_hash")
+    )
+    task = _spawn_background(
+        _archive_cad_document(
+            getattr(state, "workspace", None),
+            getattr(state, "cad_workspace", None),
+            getattr(state, "jobs_runtime", None),
+            store,
+            bundle_path,
+            record,
+        )
+    )
+    if not key:
+        return
+    _CAD_DOCUMENT_CAPTURES[key] = task
+    task.add_done_callback(
+        lambda finished: _CAD_DOCUMENT_CAPTURES.pop(key, None)
+        if _CAD_DOCUMENT_CAPTURES.get(key) is finished
+        else None
+    )
+
+
+async def _await_cad_document_capture(return_state_hash: str) -> None:
+    """Wait for this model state's capture when one is still in flight."""
+
+    task = _CAD_DOCUMENT_CAPTURES.get(_capture_key(return_state_hash))
+    if task is None or task.done():
+        return
+    if task.get_loop() is not asyncio.get_running_loop():
+        # Not this loop's task, so there is nothing here that can be joined.
+        # One process runs one loop, so this is the guard against a stale
+        # registry entry rather than an expected state.
+        return
+    # ``wait`` joins the task without cancelling it and without re-raising its
+    # exception: capture is advisory on both sides of this, and the caller
+    # reports a missing copy on its own terms.
+    await asyncio.wait({task}, timeout=_CAPTURE_WAIT_SECONDS)
 
 
 def _schedule_deferred_viewport(record: Mapping[str, Any], data_dir: Path) -> None:
@@ -971,21 +1050,47 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
     # Filing the captured document is the user's archive, not this response's
     # subject, and it copies tens of megabytes out of a possibly cloud-synced
     # folder. Answering first is what puts the geometry on screen sooner.
-    _spawn_background(
-        _archive_cad_document(
-            getattr(request.app.state, "workspace", None),
-            getattr(request.app.state, "cad_workspace", None),
-            store,
-            bundle_path,
-            record,
-        )
-    )
+    _schedule_cad_document_capture(request.app.state, store, bundle_path, record)
     return record
+
+
+async def _retained_return_states(jobs: Any, stem: str) -> list[str]:
+    """Model states this project's unfinished runs have not released yet.
+
+    A queued or running run has not written its archive, and a complete run
+    without ``archived_at`` has not either; both still have to be given the
+    exact document they were solved from. Advisory, like everything else on
+    this path: if the job registry cannot be read, the capture goes ahead and
+    keeps only the newest state, which is the behaviour that predates this.
+    """
+
+    if jobs is None:
+        return []
+    try:
+        rows = await jobs.unreleased_cad_return_states()
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Could not read which CAD model states runs still need", exc_info=True
+        )
+        return []
+    folder = archive_folder_slug(stem, "design")
+    retained: list[str] = []
+    for row in rows:
+        row_stem = str(row.get("archive_stem") or "")
+        # A run whose archive stem was never recorded is retained rather than
+        # guessed out of its own document.
+        if row_stem and archive_folder_slug(row_stem, "design") != folder:
+            continue
+        digest = str(row.get("return_state_hash") or "")
+        if digest:
+            retained.append(digest)
+    return retained
 
 
 async def _archive_cad_document(
     runs: WorkspaceState | None,
     cad_workspace: CadWorkspaceState | None,
+    jobs: Any,
     store: CadLinkStore,
     bundle_path: Path,
     record: Mapping[str, Any],
@@ -1028,9 +1133,10 @@ async def _archive_cad_document(
             ) or stem
     if not stem:
         return
+    retained = await _retained_return_states(jobs, stem)
     try:
         relative = await asyncio.to_thread(
-            archive_cad_document, bundle_path, record, runs.path(), stem
+            archive_cad_document, bundle_path, record, runs.path(), stem, retained
         )
     except OSError as exc:
         logger.warning("Could not archive the CAD document for %s: %s", bundle_path.name, exc)
@@ -1302,7 +1408,9 @@ async def archive_run_document(
 
     Advisory throughout: the run archive is already written by the time this is
     called, and a missing convenience copy must never make a good run look
-    failed.
+    failed. But it must not go missing quietly either -- the answer says why a
+    copy is absent and whether asking again can still produce it, and the
+    caller reports what it could not file.
     """
 
     cad_workspace: CadWorkspaceState | None = getattr(
@@ -1310,10 +1418,17 @@ async def archive_run_document(
     )
     mode = cad_workspace.capture_mode if cad_workspace is not None else "run"
     if mode != "run":
-        return {"placed": False, "reason": f"Capture mode is {mode}."}
+        return {
+            "placed": False,
+            "retryable": False,
+            "reason": f"Capture mode is {mode}.",
+        }
     if _RETURN_STATE_HASH.fullmatch(payload.returnStateHash) is None:
         raise HTTPException(status_code=422, detail="Malformed return state hash")
     root = _runs_root(request)
+    # A run can outrun the background capture of the model it was solved from,
+    # so join that capture before deciding the document is not there.
+    await _await_cad_document_capture(payload.returnStateHash)
     # The subdirectory is `<project>/<run>`; the placement helper takes the
     # project from the stem, so only the run segment travels on from here.
     segments = _path_segments(payload.subdirectory, "subdirectory")
@@ -1330,8 +1445,51 @@ async def archive_run_document(
         logger.warning(
             "Could not place the CAD document for %s: %s", payload.runStem, exc
         )
-        return {"placed": False, "reason": str(exc)}
-    return {"placed": relative is not None, "relativePath": relative}
+        return {"placed": False, "retryable": True, "reason": str(exc)}
+    if relative is None:
+        source = await asyncio.to_thread(
+            captured_cad_document, root, payload.archiveStem, payload.returnStateHash
+        )
+        missing = source is None
+        logger.warning(
+            "No CAD document was filed for run %s from model state %s",
+            payload.runStem,
+            payload.returnStateHash,
+        )
+        return {
+            "placed": False,
+            "relativePath": None,
+            # A capture that has not arrived can still arrive; a run folder
+            # already holding a different file under that name cannot resolve
+            # itself, so asking again would only repeat the refusal.
+            "retryable": missing,
+            "reason": (
+                "The CAD model this run was solved from is not in the project archive."
+                if missing
+                else "A different file already occupies the run's CAD document name."
+            ),
+        }
+    await _reclaim_captured_documents(request, root, payload.archiveStem)
+    return {"placed": True, "relativePath": relative}
+
+
+async def _reclaim_captured_documents(request: Request, root: Path, stem: str) -> None:
+    """Let go of superseded captures now that one more run has its own copy.
+
+    The other half of the retention rule: a model state is kept in the project
+    folder while runs still have to be archived from it, and dropped once they
+    have been, so the project keeps showing one current model instead of
+    accumulating every state a run ever referenced.
+    """
+
+    jobs = getattr(request.app.state, "jobs_runtime", None)
+    retained = await _retained_return_states(jobs, stem)
+    try:
+        await asyncio.to_thread(reclaim_captured_documents, root, stem, retained)
+    except OSError as exc:
+        logger.warning(
+            "Could not reclaim superseded CAD documents for %s: %s", stem, exc
+        )
 
 
 def mount_cadlink(application: FastAPI) -> None:

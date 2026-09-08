@@ -22,7 +22,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping, NamedTuple
 import unicodedata
 
 from server.platform.staging import publish_staging_directory
@@ -150,31 +150,33 @@ def _find_captured_document(directory: Path, digest: str) -> Path | None:
     return None
 
 
-def _prune_other_captured_documents(directory: Path, keep_digest: str, keep_name: str) -> None:
-    """Remove every other captured document once a newer model state lands.
+class _CapturedDocument(NamedTuple):
+    """One identified capture in a project's ``cad/`` folder."""
 
-    The project-level ``cad/`` folder keeps only the newest model state --
-    each run folder still keeps its own permanent copy via
-    ``place_run_cad_document``, so an old run stays reopenable in Fusion long
-    after the shared project-level copy it started from is gone.
+    document: Path
+    sidecar: Path
+    return_state_hash: str
+    captured_at: str
 
-    A file is only ever removed once its own sidecar confirms it belongs to a
-    *different* return state, new-style name or legacy ``sha256_<digest>``
-    alike; anything without a readable, matching sidecar -- including a file
-    this function has no naming convention for at all -- is left untouched.
-    A deletion that fails is logged and otherwise ignored: the document that
-    was just written is what matters, not the tidying afterwards.
+
+def _captured_documents(directory: Path) -> list[_CapturedDocument]:
+    """Every captured document in one folder that its sidecar can identify.
+
+    A file with no readable, well-formed sidecar is deliberately missing from
+    this list: nothing here can name its return state, so no retention
+    decision below may touch it. That is what keeps a file this module has no
+    naming convention for -- including one a person put in the folder
+    themselves -- out of every deletion.
     """
 
     if not directory.is_dir():
-        return
+        return []
+    entries: list[_CapturedDocument] = []
     for candidate in sorted(directory.iterdir()):
-        if candidate.name == keep_name or candidate.suffix == ".json":
-            continue
-        if candidate.is_symlink() or not candidate.is_file():
+        if candidate.suffix == ".json" or candidate.is_symlink() or not candidate.is_file():
             continue
         sidecar = candidate.with_suffix(".json")
-        if not sidecar.is_file():
+        if sidecar.is_symlink() or not sidecar.is_file():
             continue
         try:
             payload = json.loads(sidecar.read_text(encoding="utf-8"))
@@ -183,15 +185,76 @@ def _prune_other_captured_documents(directory: Path, keep_digest: str, keep_name
         if not isinstance(payload, Mapping):
             continue
         digest = str(payload.get("returnStateHash") or "")
-        if not digest or digest == keep_digest:
+        if not digest:
             continue
-        for victim in (candidate, sidecar):
+        entries.append(
+            _CapturedDocument(
+                candidate, sidecar, digest, str(payload.get("capturedAt") or "")
+            )
+        )
+    return entries
+
+
+def _prune_captured_documents(
+    directory: Path,
+    keep_names: Collection[str],
+    retained_return_states: Collection[str],
+) -> None:
+    """Remove captured documents that are neither current nor still needed.
+
+    The project-level ``cad/`` folder is meant to show one current model
+    state, and each run folder keeps its own permanent copy via
+    ``place_run_cad_document``. But that run copy is made *from this folder*,
+    so a capture may only be dropped once every run that still has to be given
+    it has taken it: ``retained_return_states`` names those, and a document
+    whose return state is in it survives however superseded it is. Without
+    that, ingesting a changed model deleted the only source the previous
+    model's queued or unarchived runs could ever be archived from.
+
+    A file is only ever removed once its own sidecar identifies it, new-style
+    name or legacy ``sha256_<digest>`` alike. A deletion that fails is logged
+    and otherwise ignored: the document that was just written is what matters,
+    not the tidying afterwards.
+    """
+
+    retained = {_digest_hex(value) for value in retained_return_states if value}
+    for entry in _captured_documents(directory):
+        if entry.document.name in keep_names:
+            continue
+        if _digest_hex(entry.return_state_hash) in retained:
+            continue
+        for victim in (entry.document, entry.sidecar):
             try:
                 victim.unlink()
             except OSError as exc:
                 logger.warning(
                     "Could not prune the superseded CAD document %s: %s", victim.name, exc
                 )
+
+
+def reclaim_captured_documents(
+    runs_root: Path, stem: object, retained_return_states: Collection[str] = ()
+) -> None:
+    """Drop superseded captures once every run that referenced them let go.
+
+    Retention is what keeps an older model state alive while a run still needs
+    to be archived from it; this is the other half of that decision, so the
+    folder returns to one current model as soon as the last of those runs has
+    its own copy. It is called after a run copy is placed, and the ordinary
+    case is that it deletes nothing.
+
+    Deliberately conservative about which capture is current: it acts only
+    when every identified capture in the folder carries a capture time, so a
+    legacy folder with no timestamps is left for the next ingestion to prune,
+    which knows exactly what it just wrote.
+    """
+
+    directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
+    entries = _captured_documents(directory)
+    if len(entries) < 2 or any(not entry.captured_at for entry in entries):
+        return
+    newest = max(entries, key=lambda entry: (entry.captured_at, entry.document.name))
+    _prune_captured_documents(directory, {newest.document.name}, retained_return_states)
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
@@ -211,17 +274,21 @@ def archive_cad_document(
     record: Mapping[str, Any],
     runs_root: Path,
     stem: object,
+    retained_return_states: Collection[str] = (),
 ) -> str | None:
     """Copy a return's captured CAD document into the design's archive.
 
-    Only the *newest* model state is kept here, not one file per return: a
-    Fusion archive is tens of megabytes, so a project swept many times must
-    not grow one project-level copy per solve. Writing a new state prunes
-    every other captured document this design folder held, new-style or
-    legacy-named alike -- an old run's own copy survives regardless, since
-    ``place_run_cad_document`` puts that one beside the run itself, outside
-    this pruning. Re-ingesting a return already stored here is a no-op that
-    prunes nothing, since nothing new arrived.
+    Only the newest model state and the states runs have not released are kept
+    here, not one file per return: a Fusion archive is tens of megabytes, so a
+    project swept many times must not grow one project-level copy per solve.
+    Writing a new state prunes the captured documents this design folder held,
+    new-style or legacy-named alike -- except any named in
+    ``retained_return_states``, which are the states queued, running or
+    unarchived runs still have to be archived from. An already-archived run's
+    own copy survives regardless, since ``place_run_cad_document`` puts that
+    one beside the run itself, outside this pruning. Re-ingesting a return
+    already stored here is a no-op that prunes nothing, since nothing new
+    arrived.
 
     Returns the path relative to the design folder, or ``None`` when there is
     nothing to archive.
@@ -266,7 +333,9 @@ def archive_cad_document(
             "capturedAt": record.get("created_at"),
         },
     )
-    _prune_other_captured_documents(destination_directory, digest, destination.name)
+    _prune_captured_documents(
+        destination_directory, {destination.name}, retained_return_states
+    )
     return relative
 
 
@@ -278,6 +347,29 @@ def captured_cad_document(runs_root: Path, stem: object, return_state_hash: str)
         return None
     directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
     return _find_captured_document(directory, digest)
+
+
+def _placed_run_document(
+    destination_directory: Path, run_stem: str, return_state_hash: str
+) -> Path | None:
+    """The copy this run already holds of one model state, if it holds one.
+
+    Identified by its own ``.cad.json`` sidecar rather than by name, because
+    the name alone says which run a file belongs to and not which model state
+    it is.
+    """
+
+    digest = str(return_state_hash or "").strip()
+    if not digest or not destination_directory.is_dir():
+        return None
+    slug = archive_folder_slug(run_stem, "run")
+    for candidate in sorted(destination_directory.glob(f"{slug}.*")):
+        if candidate.suffix == ".json" or candidate.is_symlink() or not candidate.is_file():
+            continue
+        sidecar = candidate.with_suffix(".cad.json")
+        if sidecar.is_file() and _sidecar_matches_digest(sidecar, digest):
+            return candidate
+    return None
 
 
 def place_run_cad_document(
@@ -306,14 +398,21 @@ def place_run_cad_document(
     to place.
     """
 
-    source = captured_cad_document(runs_root, stem, return_state_hash)
-    if source is None:
-        return None
     design_folder = design_archive_folder(runs_root, stem)
     segments = [segment for segment in str(run_subdirectory).split("/") if segment]
     if not segments or any(segment in {".", ".."} for segment in segments):
         return None
     destination_directory = design_folder.joinpath(*segments)
+    source = captured_cad_document(runs_root, stem, return_state_hash)
+    if source is None:
+        # The project-level copy has been reclaimed since this run was first
+        # archived. If the run already holds its own copy of that exact model
+        # state, the archive is complete and saying so is the truth; a retry
+        # must not report a copy it already made as missing.
+        already = _placed_run_document(
+            destination_directory, run_stem, return_state_hash
+        )
+        return f"{'/'.join(segments)}/{already.name}" if already is not None else None
     destination = destination_directory / f"{archive_folder_slug(run_stem, 'run')}{source.suffix}"
     source_sidecar = source.with_suffix(".json")
     destination_sidecar = destination.with_suffix(".cad.json")
@@ -362,4 +461,5 @@ __all__ = [
     "captured_cad_document",
     "design_archive_folder",
     "place_run_cad_document",
+    "reclaim_captured_documents",
 ]

@@ -209,7 +209,11 @@ def test_the_run_copy_is_filed_only_in_run_mode(tmp_path: Path) -> None:
 
     app.state.cad_workspace.set_capture_mode("project")
     declined = asyncio.run(archive_run_document(request, SimpleNamespace(app=app)))
-    assert declined == {"placed": False, "reason": "Capture mode is project."}
+    assert declined == {
+        "placed": False,
+        "retryable": False,
+        "reason": "Capture mode is project.",
+    }
     assert not (runs / "Tritonia" / "14_Tritonia").exists()
 
     app.state.cad_workspace.set_capture_mode("run")

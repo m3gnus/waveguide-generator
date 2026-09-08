@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   groupRunsByModelState,
   listCadProjects,
+  placeRunCadDocument,
   runProjectLineage,
   runReturnStateHash,
   runsForProject,
@@ -155,5 +156,82 @@ describe('splitting a project’s runs where the model changed', () => {
   it('reads a run’s model state from its CAD provenance', () => {
     expect(runReturnStateHash(run({ id: '1', returnStateHash: 'sha256:a' }))).toBe('sha256:a');
     expect(runReturnStateHash(run({ id: '2', imported: false }))).toBeNull();
+  });
+});
+
+describe('filing a run’s CAD document', () => {
+  function cadRun(archiveStem: string | null, returnStateHash: string | null): JobItem {
+    return {
+      id: 'run-1',
+      config_summary: { geometry_type: 'imported' },
+      cad_source: {
+        ingest_id: 'wgi_1',
+        lineage_id: 'wgl_a',
+        archive_stem: archiveStem,
+        return_state_hash: returnStateHash,
+      },
+    } as unknown as JobItem;
+  }
+
+  it('reports the copy the server did not make, instead of discarding the answer', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      placed: false,
+      retryable: false,
+      reason: 'A different file already occupies the run’s CAD document name.',
+    }), { status: 200 }));
+
+    const outcome = await placeRunCadDocument(
+      cadRun('Tritonia', 'sha256:aaa'), 'Tritonia/14_Tritonia', '14_Tritonia', fetcher, async () => {},
+    );
+
+    expect(outcome.requested).toBe(true);
+    expect(outcome.placed).toBe(false);
+    expect(outcome.reason).toContain('already occupies');
+    // Not retryable: asking again would only repeat the refusal.
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again for a copy the server says may still be coming', async () => {
+    const answers = [
+      { placed: false, retryable: true, reason: 'not in the project archive' },
+      { placed: true, relativePath: '14_Tritonia/14_Tritonia.f3d' },
+    ];
+    const fetcher = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify(answers.shift()), { status: 200 }),
+    );
+
+    const outcome = await placeRunCadDocument(
+      cadRun('Tritonia', 'sha256:aaa'), 'Tritonia/14_Tritonia', '14_Tritonia', fetcher, async () => {},
+    );
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(outcome).toEqual({
+      placed: true, relativePath: '14_Tritonia/14_Tritonia.f3d', requested: true,
+    });
+  });
+
+  it('gives up after a bounded number of attempts', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      placed: false, retryable: true, reason: 'not in the project archive',
+    }), { status: 200 }));
+
+    const outcome = await placeRunCadDocument(
+      cadRun('Tritonia', 'sha256:aaa'), 'Tritonia/14_Tritonia', '14_Tritonia', fetcher, async () => {},
+    );
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(outcome.placed).toBe(false);
+    expect(outcome.requested).toBe(true);
+  });
+
+  it('asks for nothing when the run has no CAD model state', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
+
+    const outcome = await placeRunCadDocument(
+      cadRun('Tritonia', null), 'Tritonia/14_Tritonia', '14_Tritonia', fetcher, async () => {},
+    );
+
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ placed: false, requested: false });
   });
 });

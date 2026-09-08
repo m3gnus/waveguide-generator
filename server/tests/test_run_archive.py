@@ -12,6 +12,7 @@ from server.workspace.archive import (
     archive_folder_slug,
     captured_cad_document,
     place_run_cad_document,
+    reclaim_captured_documents,
 )
 
 
@@ -196,6 +197,113 @@ def test_archiving_a_new_model_state_prunes_the_previous_one(tmp_path: Path) -> 
         "Big_Horn_v7_260820-1130_bbb222.f3d",
         "Big_Horn_v7_260820-1130_bbb222.json",
     ]
+
+
+def test_a_retained_model_state_survives_a_newer_capture(tmp_path: Path) -> None:
+    """Pruning is superseded-and-released, not merely superseded.
+
+    A run queued from the first state has not been archived yet, and its own
+    copy is made *from* this folder, so deleting the state here would leave
+    that run with no model to be archived from at all.
+    """
+
+    bundle = bundle_with_document(tmp_path, content=b"first-bytes")
+    runs = tmp_path / "runs"
+    first_record = record_for()
+    first_record["document"]["return_state_hash"] = "sha256:aaa111"
+    archive_cad_document(bundle, first_record, runs, "Big Horn")
+
+    later_bundle = bundle_with_document(tmp_path / "later", content=b"second-bytes")
+    second_record = record_for()
+    second_record["created_at"] = "2026-08-20T11:30:00Z"
+    second_record["document"]["return_state_hash"] = "sha256:bbb222"
+    archive_cad_document(
+        later_bundle, second_record, runs, "Big Horn", ["sha256:aaa111"]
+    )
+
+    assert sorted(path.name for path in (runs / "Big_Horn" / "cad").iterdir()) == [
+        "Big_Horn_v7_260819-1000_aaa111.f3d",
+        "Big_Horn_v7_260819-1000_aaa111.json",
+        "Big_Horn_v7_260820-1130_bbb222.f3d",
+        "Big_Horn_v7_260820-1130_bbb222.json",
+    ]
+    # The retained state is still the one its own runs will be given.
+    placed = place_run_cad_document(
+        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:aaa111"
+    )
+    assert placed == "14_Big_Horn/14_Big_Horn.f3d"
+    assert (runs / "Big_Horn" / placed).read_bytes() == b"first-bytes"
+
+
+def test_a_retained_state_is_matched_by_digest_not_by_spelling(tmp_path: Path) -> None:
+    """``sha256:<hex>`` and a bare ``<hex>`` name one model state, not two."""
+
+    bundle = bundle_with_document(tmp_path, content=b"first-bytes")
+    runs = tmp_path / "runs"
+    first_record = record_for()
+    first_record["document"]["return_state_hash"] = "sha256:AAA111"
+    archive_cad_document(bundle, first_record, runs, "Big Horn")
+
+    later_bundle = bundle_with_document(tmp_path / "later", content=b"second-bytes")
+    second_record = record_for()
+    second_record["created_at"] = "2026-08-20T11:30:00Z"
+    second_record["document"]["return_state_hash"] = "sha256:bbb222"
+    archive_cad_document(later_bundle, second_record, runs, "Big Horn", ["aaa111"])
+
+    assert (runs / "Big_Horn" / "cad" / "Big_Horn_v7_260819-1000_aaa111.f3d").is_file()
+
+
+def test_reclaiming_drops_the_states_no_run_still_needs(tmp_path: Path) -> None:
+    """Retention ends at release: the project view returns to one model."""
+
+    bundle = bundle_with_document(tmp_path, content=b"first-bytes")
+    runs = tmp_path / "runs"
+    first_record = record_for()
+    first_record["document"]["return_state_hash"] = "sha256:aaa111"
+    archive_cad_document(bundle, first_record, runs, "Big Horn")
+    later_bundle = bundle_with_document(tmp_path / "later", content=b"second-bytes")
+    second_record = record_for()
+    second_record["created_at"] = "2026-08-20T11:30:00Z"
+    second_record["document"]["return_state_hash"] = "sha256:bbb222"
+    archive_cad_document(
+        later_bundle, second_record, runs, "Big Horn", ["sha256:aaa111"]
+    )
+
+    # Still held: nothing goes.
+    reclaim_captured_documents(runs, "Big Horn", ["sha256:aaa111"])
+    assert len(list((runs / "Big_Horn" / "cad").iterdir())) == 4
+
+    reclaim_captured_documents(runs, "Big Horn", [])
+
+    assert sorted(path.name for path in (runs / "Big_Horn" / "cad").iterdir()) == [
+        "Big_Horn_v7_260820-1130_bbb222.f3d",
+        "Big_Horn_v7_260820-1130_bbb222.json",
+    ]
+
+
+def test_reclaiming_leaves_a_folder_it_cannot_order_alone(tmp_path: Path) -> None:
+    """No capture time on every entry means no defensible current model.
+
+    Guessing one risks deleting the current one, so this hands the decision to
+    the next ingestion, which knows exactly what it just wrote.
+    """
+
+    runs = tmp_path / "runs"
+    directory = runs / "Big_Horn" / "cad"
+    directory.mkdir(parents=True)
+    (directory / "sha256_aaa111.f3d").write_bytes(b"legacy-bytes")
+    (directory / "sha256_aaa111.json").write_text(
+        json.dumps({"schemaVersion": 1, "returnStateHash": "sha256:aaa111"}),
+        encoding="utf-8",
+    )
+    bundle = bundle_with_document(tmp_path, content=b"second-bytes")
+    record = record_for()
+    record["document"]["return_state_hash"] = "sha256:bbb222"
+    archive_cad_document(bundle, record, runs, "Big Horn", ["sha256:aaa111"])
+
+    reclaim_captured_documents(runs, "Big Horn", [])
+
+    assert (directory / "sha256_aaa111.f3d").is_file()
 
 
 def test_archiving_a_new_model_state_prunes_a_legacy_named_one(tmp_path: Path) -> None:
@@ -407,6 +515,36 @@ def test_placing_the_run_copy_again_is_a_no_op(tmp_path: Path) -> None:
 
     assert again == first
     assert placed.stat().st_mtime_ns == before
+
+
+def test_placing_again_after_the_project_copy_was_reclaimed_is_a_no_op(
+    tmp_path: Path,
+) -> None:
+    """A retry must not call a copy it already made missing.
+
+    Once every run has its own copy the project-level state is reclaimed, so a
+    later re-archive of that run finds no source. The run's own copy is the
+    archive, and it is identified by its sidecar rather than by its name.
+    """
+
+    bundle = bundle_with_document(tmp_path)
+    runs = tmp_path / "runs"
+    archive_cad_document(bundle, record_for(), runs, "Big Horn")
+    first = place_run_cad_document(
+        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
+    )
+    for path in (runs / "Big_Horn" / "cad").iterdir():
+        path.unlink()
+
+    again = place_run_cad_document(
+        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
+    )
+
+    assert again == first == "14_Big_Horn/14_Big_Horn.f3d"
+    # A different model state is still absent, not answered with this one.
+    assert place_run_cad_document(
+        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:other"
+    ) is None
 
 
 def test_a_replaced_run_document_is_never_clobbered(tmp_path: Path) -> None:

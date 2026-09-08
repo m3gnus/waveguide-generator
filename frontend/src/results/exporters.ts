@@ -1033,9 +1033,20 @@ export async function archiveRunToWorkspace(
   );
   // The captured Fusion model, when the capture setting files one per run. It
   // is a convenience copy of something already archived at project level, so a
-  // failure here is reported and dropped rather than failing the archive.
+  // failure here is reported and dropped rather than failing the archive. It is
+  // reported either way: the request can succeed as HTTP while placing nothing,
+  // and that answer used to be discarded, which is how a run could be marked
+  // archived without the model it was solved from.
   try {
-    await placeRunCadDocument(archiveJob, subdirectory, exportStemForJob(archiveJob), fetcher);
+    const placement = await placeRunCadDocument(
+      archiveJob, subdirectory, exportStemForJob(archiveJob), fetcher,
+    );
+    if (placement.requested && !placement.placed) {
+      console.warn(
+        `Could not file the run\u2019s CAD document for ${exportStemForJob(archiveJob)}: `
+        + (placement.reason ?? 'the server did not say why'),
+      );
+    }
   } catch (error) {
     console.warn('Could not file the run\u2019s CAD document', error);
   }
