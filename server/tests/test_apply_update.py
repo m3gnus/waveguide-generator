@@ -67,6 +67,31 @@ def _never_open_the_real_failure_dialog(
     return shown
 
 
+@pytest.fixture(autouse=True)
+def _claims_and_grants_stay_in_the_test_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Keep the update claim and its grants out of the real cache directory.
+
+    ``update_lock`` derives the lock file and every grant from ``cache_root``,
+    which is the host's own per-user cache directory. Tests that assert a grant
+    reached the child were therefore writing into the developer's installation
+    state, and failing wherever that directory is not writable -- and the grant
+    writer answers an unwritable directory by logging and carrying on, so the
+    failure arrived as a missing environment key rather than as an error, which
+    reads exactly like the product not minting a grant at all.
+
+    Redirecting it here is not a relaxation of the requirement: the assertions
+    still demand the grant. Write denial is exercised deliberately, with the
+    diagnostic it is supposed to produce, in
+    ``test_update_relaunch_authorization.py``.
+    """
+
+    root = tmp_path / "cache"
+    monkeypatch.setattr(update_lock, "cache_root", lambda **_kwargs: root)
+    return root
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 handle semantics")
 def test_the_liveness_probe_survives_every_windows_case(tmp_path: Path) -> None:
     """os.kill cannot answer this on Windows, and not for the usual reason.
