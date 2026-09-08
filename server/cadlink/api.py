@@ -740,6 +740,7 @@ async def request_fusion_return(
         current_design_hash="",
         current_formula="",
         design_id=payload.design_id,
+        instance_id=payload.instance_id,
         process_running=await asyncio.to_thread(fusion_process_running),
     )
     session_id = str(status.get("sessionId") or "")

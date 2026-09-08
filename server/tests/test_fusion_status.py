@@ -828,3 +828,34 @@ def test_realized_parameter_absent_and_stale_states_are_explicit(tmp_path: Path)
         store,
         current_design_hash=design_hash(design),
     )["state"] == "no_link"
+
+
+@pytest.mark.parametrize("selected", ["instance-b", "missing"])
+def test_return_request_resolves_the_selected_same_design_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: str,
+) -> None:
+    from fastapi import HTTPException
+    from server.cadlink.api import FusionReturnRequest, request_fusion_return
+    from server.cadlink.fusion_return import RETURN_REQUEST_FILENAME
+
+    _write_status(tmp_path, updated_at=datetime.now(timezone.utc), links=[
+        _link(instanceId="instance-a"), _link(instanceId="instance-b"),
+    ])
+    monkeypatch.setattr("server.cadlink.api.fusion_process_running", lambda: True)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(data_dir=tmp_path)))
+    payload = FusionReturnRequest(
+        designId="wgd_tritonia", documentId="fusion:doc-a", instanceId=selected,
+        expectedReturnStateHash="sha256:state",
+    )
+    marker = tmp_path / "ipc" / "wglink" / RETURN_REQUEST_FILENAME
+    if selected == "missing":
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(request_fusion_return(payload, request))
+        assert error.value.status_code == 409
+        assert not marker.exists()
+    else:
+        result = asyncio.run(request_fusion_return(payload, request))
+        published = json.loads(marker.read_text())
+        assert published["instanceId"] == "instance-b"
+        assert published["requestId"] == result["requestId"]
+        assert published["expectedReturnStateHash"] == "sha256:state"
