@@ -1766,6 +1766,152 @@ describe('CadLinkCoordinator', () => {
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('sequence 2');
   });
 
+  /** A send is slow and the coordinator is mounted for the whole life of the
+   * app, so neither the request counter nor the mounted flag notices that the
+   * document the export described has been replaced. The registry identity the
+   * export creates belongs to the design that was exported — never to whatever
+   * is on screen when the response happens to land. */
+  const deferredSend = () => {
+    const pending = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') return pending.promise;
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      return json({}, 404);
+    }));
+    return pending;
+  };
+
+  const sendResult = () => json({
+    bundlePath: '/workspace/speaker.wglink', bundleId: 'wgb_1', exportId: 'wge_1',
+    sequence: 1, designHash: 'sha256:a', geometryHash: 'sha256:b', artifactSha256: 'sha256:c',
+    identity: { designId: 'wgd_sent', lineageId: 'wgl_sent', baseEditVersion: 1 },
+  });
+
+  const athPolarBlocks = () => Object.keys(useDesignStore.getState().design.extra_blocks ?? {})
+    .filter((name) => name.startsWith('ABEC.Polars:'));
+
+  it.each([
+    ['another design is opened over it', () => {
+      useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'));
+      useDocumentStore.getState().setCadLink({
+        designId: 'wgd_other', lineageId: 'wgl_other', baseEditVersion: 4,
+      }, 'current');
+    }, 'wgd_other'],
+    ['a new design replaces it', () => resetDesignStore(), null],
+  ] as const)('does not apply a completed Fusion send once %s', async (_label, replace, expected) => {
+    const pending = deferredSend();
+    await renderCoordinator();
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      await Promise.resolve();
+    });
+
+    act(replace);
+    await act(async () => { pending.resolve(sendResult()); await send; });
+
+    expect(useDocumentStore.getState().identity?.designId ?? null).toBe(expected);
+    // The polar blocks are the other half of the same write: they are read
+    // from, and written back into, the design store that was just replaced.
+    expect(athPolarBlocks()).toEqual([]);
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('stayed with the design that was exported');
+  });
+
+  /** The other half of the rule: an edit is not a replacement. The document
+   * that asked for this export is still the one on screen, so it keeps the
+   * registry identity the export created for it. */
+  it('keeps the link an export created when the same document is edited while it sends', async () => {
+    const pending = deferredSend();
+    await renderCoordinator();
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      await Promise.resolve();
+    });
+
+    act(() => useDesignStore.getState().updateField('R', 321));
+    await act(async () => { pending.resolve(sendResult()); await send; });
+
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_sent');
+    expect(useDesignStore.getState().design.R).toBe(321);
+    expect(athPolarBlocks()).toContain('ABEC.Polars:SPL_H');
+  });
+
+  /** Recording committed polars writes them into the blocks the next freshness
+   * check hashes. Doing that for a directivity the user has since changed would
+   * report the document as current with settings Fusion has never seen. */
+  it('does not record committed polars over directivity changed while the send was in flight', async () => {
+    const pending = deferredSend();
+    await renderCoordinator();
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      await Promise.resolve();
+    });
+
+    act(() => useSolveOptionsStore.setState((state) => ({ polar: { ...state.polar, distance: 3 } })));
+    await act(async () => { pending.resolve(sendResult()); await send; });
+
+    // The identity still belongs to this document, so it is adopted.
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_sent');
+    expect(athPolarBlocks()).toEqual([]);
+  });
+
+  /** The automatic project switch is another way into the same race: nobody
+   * pressed anything between the send and the document being replaced. */
+  it('does not adopt a send identity after a Fusion solve command opened another project', async () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
+    }, 'current');
+    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
+    const pending = deferred<Response>();
+    // Fusion asks only once the send is on the wire, so the switch is
+    // unambiguously the later event.
+    let commandPending = false;
+    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') return pending.promise;
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) return json({ state: 'accepted', cleared: true });
+      if (path.endsWith('/solve-command')) return json({ command: commandPending ? {
+        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
+        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
+      } : null, outcome: null });
+      if (path.endsWith('/ingest')) return json(ingestRecord);
+      return routes(path) ?? json({}, 404);
+    }));
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...jobsCoordinatorBridge.getSnapshot(),
+      solveCurrentCadImport: vi.fn(async () => {
+        await consumeParkedSolveCommand('job-9');
+        return 'submitted' as const;
+      }),
+    });
+
+    await renderCoordinator();
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      commandPending = true;
+      window.dispatchEvent(new Event('focus'));
+      for (let i = 0; i < 12; i += 1) await Promise.resolve();
+    });
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
+
+    await act(async () => { pending.resolve(sendResult()); await send; });
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
+  });
+
   it.each([
     ['loadDesign', () => useDesignStore.getState().loadDesign(designForFamily('ICW'))],
     ['replaceDesign', () => useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'))],

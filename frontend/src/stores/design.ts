@@ -622,7 +622,32 @@ export function currentDesignLoadSource(): DesignLoadSource {
   return currentLoadSource;
 }
 
+/**
+ * How many documents have been put into this store, counting from the first.
+ *
+ * An edit refines the document that is open; a load, an open, a run recall or a
+ * New design *replaces* it. An asynchronous action that will write back into
+ * document-scoped state has to tell those two apart, because its result belongs
+ * to the document that started it: it reads this counter before its first await
+ * and refuses to apply anything once the number has moved. Nothing else can
+ * answer the question — the design identity is null for every unlinked
+ * document, so two unrelated ones compare equal, and the geometry revision
+ * cannot distinguish a replacement from a keystroke.
+ */
+let documentLoads = 1;
+
+/** The generation of the document now in the store. Capture before an await. */
+export function currentDocumentLoad(): number {
+  return documentLoads;
+}
+
+/** Whether the document that captured `generation` is still the open one. */
+export function isCurrentDocumentLoad(generation: number): boolean {
+  return generation === documentLoads;
+}
+
 function bump(reason: MutationReason, immediate: boolean, loadSource?: DesignLoadSource): void {
+  if (reason === 'load') documentLoads += 1;
   if (reason === 'load' && loadSource) currentLoadSource = loadSource;
   const revision = useDesignStore.getState().designRevision;
   announce({ revision, reason, immediate, ...(loadSource ? { loadSource } : {}) });

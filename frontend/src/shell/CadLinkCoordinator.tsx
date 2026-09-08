@@ -32,7 +32,13 @@ import {
   type DriverPreset,
   type PassiveCardioidForm,
 } from '../stores/cadReturn';
-import { recordCommittedAthPolars, subscribeRevision, useDesignStore } from '../stores/design';
+import {
+  currentDocumentLoad,
+  isCurrentDocumentLoad,
+  recordCommittedAthPolars,
+  subscribeRevision,
+  useDesignStore,
+} from '../stores/design';
 import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
@@ -236,6 +242,23 @@ function publishBridge(snapshot: CadLinkCoordinatorSnapshot): void {
 /** A step abandoned because newer user intent replaced what it was working on.
  * Its feedback is already on screen, so a composed action stops silently. */
 export class SupersededError extends Error {}
+
+/** Whether the directivity settings are still the ones a send committed.
+ *
+ * Recording committed polars writes them into the design's ATH blocks, which
+ * is what the next freshness check hashes. Doing that for settings the user has
+ * since changed would report the document as current with a directivity Fusion
+ * has never been sent — so a send that lost that race records nothing, and the
+ * next one commits the newer settings. */
+function polarConfigStillCommitted(committed: unknown): boolean {
+  try {
+    return JSON.stringify(polarConfigFromUi(useSolveOptionsStore.getState().polar))
+      === JSON.stringify(committed);
+  } catch {
+    // An unsendable directivity grid is by definition not the one just sent.
+    return false;
+  }
+}
 
 /** Whether a return names a design other than the one that is open.
  *
@@ -1364,6 +1387,14 @@ export function CadLinkCoordinator() {
    * refresh cannot drift into subtly different send paths. */
   const sendToFusion = useCallback(async (target?: { documentId: string; instanceId: string; returnStateHash: string | null }) => {
     const request = ++fusionSendRequest.current;
+    // Which document this export describes. An export is slow, and opening a
+    // project, recalling a run or starting a new design while it is in flight
+    // replaces the document without starting a send of its own -- so request
+    // ordering and the mounted flag both say this response is still the newest,
+    // and the registry identity it carries would be pinned onto a model that
+    // was never exported. A later *edit* to the same document is a different
+    // thing: that document did ask for this link, so it keeps it.
+    const documentLoad = currentDocumentLoad();
     setSendingToFusion(true); setError(null); setStatus(null);
     // A send is the start of a CAD round trip; every poll downstream of it is
     // now on the user's clock.
@@ -1381,7 +1412,13 @@ export function CadLinkCoordinator() {
         polarConfig,
       );
       if (request === fusionSendRequest.current && mounted.current) {
-        recordCommittedAthPolars(polarConfig);
+        if (!isCurrentDocumentLoad(documentLoad)) {
+          // The export itself is fine and Fusion has it; only the store writes
+          // are refused, because they would land on somebody else's document.
+          setStatus(`Sent to Fusion 360 · sequence ${result.sequence}. Another design was opened while it was sending, so its CAD link stayed with the design that was exported.`);
+          return result;
+        }
+        if (polarConfigStillCommitted(polarConfig)) recordCommittedAthPolars(polarConfig);
         if (result.identity) setCadLink(result.identity, 'current');
         setStatus(target
           ? `Update sent to Fusion 360 · sequence ${result.sequence}`
