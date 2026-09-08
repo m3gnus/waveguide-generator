@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import logging
@@ -1321,9 +1321,11 @@ def test_terminal_mesh_is_pruned_after_download_or_grace_but_rated_mesh_is_exemp
 def test_result_count_pruning_keeps_job_rows_and_run_numbers(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()
+    # Both runs must remain inside the age window: this test covers count pruning.
+    now = datetime.now()
     for job_id, completed_at in (
-        ("older", "2026-08-08T00:00:00"),
-        ("newer", "2026-08-09T00:00:00"),
+        ("older", (now - timedelta(days=2)).isoformat()),
+        ("newer", (now - timedelta(days=1)).isoformat()),
     ):
         record = _job(job_id, "complete", created_at=completed_at)
         record["completed_at"] = completed_at
