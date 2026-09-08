@@ -358,6 +358,10 @@ def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monk
     )
     response = bempp.solve_bempp_from_msh_text(_cabinet_msh(), _context(axial=True))
     assert captured["assembly_backend"] == "numba"
+    assert captured["adaptive_quadrature"] is True
+    assert captured["adaptive_quadrature_kh_min"] == pytest.approx(0.4)
+    assert captured["adaptive_quadrature_kh_max"] == pytest.approx(2.0)
+    assert captured["adaptive_quadrature_low_order"] == 2
     assert captured["native_symmetry_plane"] == "yz"
     assert captured["return_surface_traces"] is True
     assert created["config"].source_motion == "axial"
@@ -365,6 +369,7 @@ def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monk
     assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
     assert getattr(captured["observation"], "custom_points", None) is None
     assert response["metadata"]["solver_backend"] == "bempp"
+    assert response["metadata"]["bempp"]["adaptive_quadrature"] is True
     assert response["metadata"]["field_trace_retention"] == {
         "estimated_bytes": 384,
         "cap_bytes": 256 * 1024 * 1024,

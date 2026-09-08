@@ -22,8 +22,7 @@ from server.platform.warmup import BackgroundWarmup
 log = logging.getLogger("wg.engines.registry")
 
 
-#: The full-3D backends AUTO walks, best first, on a host that provisions no
-#: BEAT CPU runtime of its own. One list, because it was two:
+#: The full-3D backends AUTO walks, best first. One list, because it was two:
 #: ``resolve_auto_engine`` and the ``/api/capabilities`` payload each kept their
 #: own copy, and a copy that drifted would have made the interface advertise an
 #: order the planner does not follow.
@@ -32,8 +31,11 @@ log = logging.getLogger("wg.engines.registry")
 #: ~20,000, all of it in the solve stage). The BEAT accelerators follow; at most
 #: one of them is ever available on a given host, so their relative order only
 #: settles a two-GPU-family box. BEMPP is ahead of BEAT's CPU path here because
-#: it is the CPU engine this project has measured and shipped -- and BEAT-CPU is
-#: ahead of dryrun, because a slow real solve beats a synthetic one.
+#: it is the faster CPU engine over a complete wide-band sweep in the project's
+#: same-host B6 comparison. BEAT-CPU is competitive at low frequency, but its
+#: deliberately higher high-k quadrature makes it 2-3x slower at 20 kHz and
+#: slower over the full 100 Hz-20 kHz sweep. It remains explicitly selectable
+#: and stays ahead of dryrun, because a slow real solve beats a synthetic one.
 _BASE_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
     "metal",
     "beat-cuda",
@@ -44,54 +46,21 @@ _BASE_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
     "dryrun",
 )
 
-#: Windows and Linux are the platforms where ``beat-cpu`` leads BEMPP. Every
-#: supported platform provisions a BEAT CPU runtime
-#: (``server/solver/beat_cpu_runtime.py``); this order is about which one AUTO
-#: reaches for first, which is a different question and settled by measurement. What makes that safe is what "available" now means for that row:
-#: since the readiness rewrite it is set only when ``hornlab_beat_bem`` has
-#: instantiated the CPU project and solved a 1 kHz probe through the precompiled
-#: engine bundle on this machine, so AUTO can only reach it on a host where a
-#: CPU solve has demonstrably run. On every host where it has not, this order is
-#: the base order.
-#:
-#: A GPU host reaches this order too, and its first four entries are why that
-#: changes nothing: a provisioned CPU runtime on a CUDA box is now representable
-#: and prepared (readiness is recorded per backend in the package), so
-#: ``beat-cpu`` becomes a row a user can actually select there -- but AUTO still
-#: walks Metal and the three accelerators first, and only reaches the CPU path
-#: when none of them is available.
-_CPU_FIRST_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
-    "metal",
-    "beat-cuda",
-    "beat-rocm",
-    "beat-metal",
-    "beat-cpu",
-    "bempp",
-    "dryrun",
-)
-
-
 def full3d_engine_order(system: str | None = None) -> tuple[str, ...]:
     """AUTO's full-3D preference order on this platform.
 
-    macOS is deliberately not in the swap, and it stays out now that the CPU
-    runtime *is* provisioned there too (``beat_cpu_runtime.PROVISION_SYSTEMS``).
-    Being able to choose an engine and being the default are different
-    questions: Metal leads on measured evidence, so moving BEAT-CPU ahead of
-    BEMPP could only change the answer on a Mac whose Metal path is broken, and
-    would put it ahead of the CPU engine this project has measured on the one
-    platform where nothing proved the swap.
+    The order is intentionally platform-independent. Being able to provision
+    BEAT-CPU everywhere changes what a user can choose, not which CPU engine
+    AUTO should prefer. BEMPP wins the measured wide-band CPU sweep; BEAT's
+    robust Burton-Miller/high-k path remains available when that trade-off is
+    wanted explicitly.
 
     Ordering is a *default*, never an override: an explicitly selected engine is
     resolved by name in ``EngineRegistry.resolve`` and never passes through
     here.
     """
 
-    import platform as _platform
-
-    host = _platform.system() if system is None else system
-    if host in {"Windows", "Linux"}:
-        return _CPU_FIRST_FULL3D_ENGINE_ORDER
+    del system
     return _BASE_FULL3D_ENGINE_ORDER
 
 
@@ -505,9 +474,8 @@ def resolve_auto_engine(
     """Resolve AUTO to the best engine this host can actually run.
 
     Solver mode chooses a path inside a backend, not a backend. The order is
-    ``full3d_engine_order()``: Metal, then BEAT's accelerators, then -- on the
-    platforms this application provisions a BEAT CPU runtime for -- BEAT-CPU
-    ahead of BEMPP, and only then the gated dry-run engine.
+    ``full3d_engine_order()``: Metal, then BEAT's accelerators, BEMPP, BEAT-CPU,
+    and only then the gated dry-run engine.
 
     The order is safe because availability already encodes the platform. On a
     Mac, Metal, BEAT-Metal, BEAT-CPU and BEMPP are all available and Metal is
@@ -517,9 +485,8 @@ def resolve_auto_engine(
     margin is the solve stage. Every BEAT variant stays explicitly selectable
     there.
 
-    Where BEAT-CPU sits relative to BEMPP is the one platform-dependent part,
-    and ``full3d_engine_order`` documents why. Either way it stays ahead of
-    dryrun, because a slow real solve beats a synthetic one.
+    BEAT-CPU stays ahead of dryrun, because a slow real solve beats a synthetic
+    one.
 
     ``mounting`` drops candidates that cannot solve the requested mounting at
     all. BEAT rejects every coupled infinite-baffle request, so without this

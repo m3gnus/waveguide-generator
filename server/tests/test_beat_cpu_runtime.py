@@ -528,7 +528,7 @@ def test_availability_is_not_preference() -> None:
     ), "macOS AUTO still reaches BEMPP before the CPU path"
     for system in ("Windows", "Linux"):
         order = full3d_engine_order(system)
-        assert order.index("beat-cpu") < order.index("bempp")
+        assert order.index("bempp") < order.index("beat-cpu")
     assert full3d_engine_order("Darwin")[0] == "metal"
 
 
@@ -876,7 +876,7 @@ def _warmup_host(monkeypatch, *, system: str, cpu_available: bool) -> list[str]:
 
 @pytest.mark.parametrize("system", ["Windows", "Linux"])
 def test_the_boot_warmup_warms_the_engine_auto_would_pick(monkeypatch, system: str) -> None:
-    """Warming BEMPP while AUTO solves on BEAT-CPU is the divergence to avoid.
+    """The warmup and AUTO must agree on the measured CPU preference.
 
     It is the same failure ``resolve_beat_backend`` was written for, one level
     up: the warmup and the planner must not disagree about which engine the
@@ -890,7 +890,7 @@ def test_the_boot_warmup_warms_the_engine_auto_would_pick(monkeypatch, system: s
 
     warmup._run_warmup()
 
-    assert warmed == ["beat-cpu"]
+    assert warmed == ["bempp"]
 
 
 def test_an_unprovisioned_cpu_runtime_leaves_the_warmup_on_bempp(monkeypatch) -> None:

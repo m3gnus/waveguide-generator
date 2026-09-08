@@ -85,6 +85,18 @@ class BemppUnavailable(RuntimeError):
 
 logger = logging.getLogger(__name__)
 
+#: The pinned BEMPP helper's qualified wavelength-adaptive regular quadrature.
+#: On the package's ASRO68 convergence ladder, order 2 in this k*h window moves
+#: the normalized main lobe by 0.02-0.04 dB through most of the window and at
+#: most 0.116 dB RMS in its wider qualification, while leaving singular
+#: quadrature and field evaluation untouched. On the reported 3,502-DOF R-OSSE
+#: case at 4 kHz it reduced a warm frequency from 12.75 s to 11.07 s with
+#: 0.132 dB main-lobe RMS delta against fixed q4. Outside the qualified window
+#: the helper retains q4 bit for bit.
+BEMPP_ADAPTIVE_QUADRATURE_KH_MIN = 0.4
+BEMPP_ADAPTIVE_QUADRATURE_KH_MAX = 2.0
+BEMPP_ADAPTIVE_QUADRATURE_LOW_ORDER = 2
+
 
 @lru_cache(maxsize=1)
 def _version() -> str | None:
@@ -886,6 +898,10 @@ def solve_bempp_from_msh_text(
         "assembly_backend": backend,
         "opencl_device": OPENCL_DEVICE_TYPE,
         "precision": "single",
+        "adaptive_quadrature": True,
+        "adaptive_quadrature_kh_min": BEMPP_ADAPTIVE_QUADRATURE_KH_MIN,
+        "adaptive_quadrature_kh_max": BEMPP_ADAPTIVE_QUADRATURE_KH_MAX,
+        "adaptive_quadrature_low_order": BEMPP_ADAPTIVE_QUADRATURE_LOW_ORDER,
         "return_surface_traces": retain_traces,
     }
     if aperture_tag is not None:
@@ -1030,6 +1046,30 @@ def solve_bempp_from_msh_text(
             "assembly_backend": backend,
             "opencl_device": getattr(config, "opencl_device", OPENCL_DEVICE_TYPE),
             "precision": getattr(config, "precision", "single"),
+            "adaptive_quadrature": bool(
+                getattr(config, "adaptive_quadrature", True)
+            ),
+            "adaptive_quadrature_kh_min": float(
+                getattr(
+                    config,
+                    "adaptive_quadrature_kh_min",
+                    BEMPP_ADAPTIVE_QUADRATURE_KH_MIN,
+                )
+            ),
+            "adaptive_quadrature_kh_max": float(
+                getattr(
+                    config,
+                    "adaptive_quadrature_kh_max",
+                    BEMPP_ADAPTIVE_QUADRATURE_KH_MAX,
+                )
+            ),
+            "adaptive_quadrature_low_order": int(
+                getattr(
+                    config,
+                    "adaptive_quadrature_low_order",
+                    BEMPP_ADAPTIVE_QUADRATURE_LOW_ORDER,
+                )
+            ),
             "workers": getattr(config, "workers", 1),
             "solver_log": json_safe_native_value(response_solver_log(getattr(result, "solver_log", []))),
         },
