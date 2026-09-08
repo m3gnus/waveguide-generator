@@ -8169,7 +8169,7 @@
     },
     "/api/cadlink/runs/archive-document": {
       "post": {
-        "description": "File a run's CAD document beside the run, when the mode asks for it.\n\nAdvisory throughout: the run archive is already written by the time this is\ncalled, and a missing convenience copy must never make a good run look\nfailed.",
+        "description": "File a run's CAD document beside the run, when the mode asks for it.\n\nAdvisory throughout: the run archive is already written by the time this is\ncalled, and a missing convenience copy must never make a good run look\nfailed. But it must not go missing quietly either -- the answer says why a\ncopy is absent and whether asking again can still produce it, and the\ncaller reports what it could not file.",
         "operationId": "archive_run_document_api_cadlink_runs_archive_document_post",
         "requestBody": {
           "content": {

@@ -128,6 +128,15 @@ export async function revealProjectFolder(
   return ((await response.json()) as { path: string }).path;
 }
 
+/** What the server did, or did not, do with a run's requested CAD copy. */
+export interface RunCadDocumentPlacement {
+  placed: boolean;
+  relativePath?: string | null;
+  reason?: string;
+  /** The server says the copy may simply not have arrived yet. */
+  retryable?: boolean;
+}
+
 /**
  * Ask the server to file this run's CAD document beside the run.
  *
@@ -138,14 +147,14 @@ export async function revealProjectFolder(
 export async function archiveRunCadDocument(
   request: { subdirectory: string; runStem: string; archiveStem: string; returnStateHash: string },
   fetcher: typeof fetch = fetch,
-): Promise<{ placed: boolean; relativePath?: string | null; reason?: string }> {
+): Promise<RunCadDocumentPlacement> {
   const response = await fetcher('/api/cadlink/runs/archive-document', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   });
   if (!response.ok) throw await failure(response);
-  return response.json() as Promise<{ placed: boolean; relativePath?: string | null; reason?: string }>;
+  return response.json() as Promise<RunCadDocumentPlacement>;
 }
 
 /** The CAD model state a run was solved from, or null for a run without one. */
@@ -206,22 +215,51 @@ export function groupRunsByModelState(
   return groups;
 }
 
+/** The outcome of asking for a run's CAD copy, including "never asked". */
+export interface RunCadDocumentOutcome extends RunCadDocumentPlacement {
+  /** False for a run with no CAD model state: nothing was ever requested. */
+  requested: boolean;
+}
+
+/**
+ * Further attempts at a copy the server says may still be coming, and the wait
+ * before each. The server already joins an in-flight capture, so these are for
+ * the case where it had nothing to join -- a restart between the ingestion and
+ * the run archive -- rather than for the ordinary race.
+ */
+const PLACEMENT_RETRY_DELAYS_MS = [0, 300];
+
+const pause = (milliseconds: number) => new Promise<void>((resolve) => {
+  setTimeout(resolve, milliseconds);
+});
+
 /**
  * File a completed run's CAD document beside the run, when the setting asks.
  *
  * Advisory by construction: the run archive is already written by the time this
  * runs, and a missing convenience copy must never make a good run look failed.
+ * It is not silent, though — the outcome is returned so the caller can say what
+ * it could not file, and a copy the server calls retryable is asked for again
+ * rather than written off on the first answer.
  */
 export async function placeRunCadDocument(
   job: JobItem,
   subdirectory: string,
   runStem: string,
   fetcher: typeof fetch = fetch,
-): Promise<void> {
+  wait: (milliseconds: number) => Promise<void> = pause,
+): Promise<RunCadDocumentOutcome> {
   const archiveStem = job.cad_source?.archive_stem;
   const returnStateHash = runReturnStateHash(job);
-  if (!archiveStem || !returnStateHash) return;
-  await archiveRunCadDocument({ subdirectory, runStem, archiveStem, returnStateHash }, fetcher);
+  if (!archiveStem || !returnStateHash) return { placed: false, requested: false };
+  const request = { subdirectory, runStem, archiveStem, returnStateHash };
+  let result = await archiveRunCadDocument(request, fetcher);
+  for (const delay of PLACEMENT_RETRY_DELAYS_MS) {
+    if (result.placed || result.retryable !== true) break;
+    await wait(delay);
+    result = await archiveRunCadDocument(request, fetcher);
+  }
+  return { ...result, requested: true };
 }
 
 /**

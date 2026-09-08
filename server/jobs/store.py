@@ -843,6 +843,68 @@ class JobStore:
             ).fetchone()
             return self._row_to_job(row) if row else None
 
+    def unreleased_cad_return_states(self) -> list[dict[str, str]]:
+        """Which captured CAD model states runs still have to be archived from.
+
+        A queued or running run has not written its archive folder yet, and a
+        complete run with results but no ``archived_at`` has not either. Both
+        still have to be handed the exact model they were solved from, so the
+        project-level capture of that model must survive a newer capture until
+        they have it. A failed or cancelled run is never archived and holds
+        nothing.
+
+        Read straight out of the immutable submission metadata rather than
+        through ``_row_to_job``: this is a retention decision on every row in
+        the table, not a listing.
+        """
+
+        # Answerable before the store has ever been initialized, because a CAD
+        # document can be captured on a fresh install that has never solved
+        # anything. No database means no runs, which is the honest answer here
+        # rather than an error the advisory caller would have to swallow.
+        if not self.db_path.is_file():
+            return []
+        with self._lock, self._connection() as conn:
+            if conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'simulation_jobs'"
+            ).fetchone() is None:
+                return []
+            rows = conn.execute(
+                """
+                SELECT DISTINCT
+                    json_extract(
+                        task_metadata_json, '$.imported_geometry.archive_stem'
+                    ) AS archive_stem,
+                    json_extract(
+                        task_metadata_json,
+                        '$.imported_geometry.document.return_state_hash'
+                    ) AS return_state_hash
+                FROM simulation_jobs
+                WHERE json_extract(
+                        task_metadata_json,
+                        '$.imported_geometry.document.return_state_hash'
+                      ) IS NOT NULL
+                  AND (
+                        status IN ('queued', 'running')
+                        OR (
+                            status = 'complete'
+                            AND has_results = 1
+                            AND json_extract(
+                                task_metadata_json, '$.archived_at'
+                            ) IS NULL
+                        )
+                      )
+                """
+            ).fetchall()
+        return [
+            {
+                "archive_stem": str(row["archive_stem"] or ""),
+                "return_state_hash": str(row["return_state_hash"] or ""),
+            }
+            for row in rows
+        ]
+
     def list_jobs(
         self,
         statuses: Sequence[str] | None = None,

@@ -1908,6 +1908,16 @@ class JobRuntime:
 
         return await asyncio.to_thread(load)
 
+    async def unreleased_cad_return_states(self) -> list[dict[str, str]]:
+        """The CAD model states runs still owe an archive copy of.
+
+        Read by the CAD document capture so that ingesting a changed model
+        cannot delete the only copy a queued or unarchived run can still be
+        archived from.
+        """
+
+        return await asyncio.to_thread(self.store.unreleased_cad_return_states)
+
     async def get_results(self, job_id: str) -> dict[str, Any]:
         return json.loads(await self.get_results_text(job_id))
 
