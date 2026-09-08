@@ -208,6 +208,15 @@
             "title": "Areadriftoverrides",
             "type": "array"
           },
+          "bundleOrigin": {
+            "default": "wglink",
+            "enum": [
+              "wglink",
+              "onshape"
+            ],
+            "title": "Bundleorigin",
+            "type": "string"
+          },
           "bundlePath": {
             "minLength": 1,
             "title": "Bundlepath",
