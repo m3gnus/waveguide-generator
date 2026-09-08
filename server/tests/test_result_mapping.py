@@ -90,9 +90,104 @@ def test_off_axis_grid_labels_the_sample_used_for_spl_and_phase() -> None:
     assert response["metadata"]["spl_on_axis"] == {
         "requested_angle_degrees": 0.0,
         "sampled_angle_degrees": 10.0,
+        "plane_reference_spl_db": {
+            "horizontal": pytest.approx([6.0206, 6.0206], abs=1.0e-4)
+        },
     }
     assert response["metadata"]["warning_count"] == 1
     assert "10 degrees" in response["metadata"]["warnings"][0]
+
+
+def _two_plane_result(
+    *, angles: list[float], levels_db: list[list[float]]
+) -> SimpleNamespace:
+    """One frequency, two planes, and a level offset between them.
+
+    ``levels_db`` is one absolute dB SPL row per plane. Both the pressure field
+    and the engine's own dB pattern are built from it, as a real backend's are,
+    so the published (per-plane normalized) patterns and the absolute anchors
+    describe one sound field rather than two unrelated fixtures.
+    """
+
+    frequencies = np.asarray([1000.0])
+    levels = np.asarray(levels_db, dtype=float)[None, :, :]
+    pressure = (20.0e-6 * 10.0 ** (levels / 20.0)).astype(np.complex128)
+    return SimpleNamespace(
+        frequencies_hz=frequencies,
+        observation_angles_deg=np.asarray(angles, dtype=float),
+        observation_planes=["horizontal", "vertical"],
+        pressure_complex=pressure,
+        directivity_db=levels.copy(),
+        impedance=np.zeros(frequencies.size, dtype=np.complex128),
+    )
+
+
+def test_every_plane_publishes_its_own_level_at_the_reference_sample() -> None:
+    """The anchor a client needs to place a secondary plane's off-axis response.
+
+    ``spl_on_axis`` is the first plane's level at the sample nearest zero. On a
+    grid that omits zero that sample is a different observation point in each
+    plane, and each ``directivity`` row is separately normalized, so nothing
+    else in the payload records the offset between the planes.
+    """
+
+    # 100 dB / 98 dB horizontal, 90 dB / 85 dB vertical.
+    result = _two_plane_result(
+        angles=[5.0, 15.0], levels_db=[[100.0, 98.0], [90.0, 85.0]]
+    )
+    context = _context()
+    context.polar_config.update({"angle_range": (5.0, 15.0, 2), "norm_angle": 5.0})
+
+    response = build_solver_response(
+        result=result,
+        config=_config(),
+        context=context,
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=343.0,
+    )
+
+    reference = response["metadata"]["spl_on_axis"]["plane_reference_spl_db"]
+    assert response["metadata"]["spl_on_axis"]["sampled_angle_degrees"] == 5.0
+    assert reference["horizontal"] == pytest.approx([100.0])
+    assert reference["vertical"] == pytest.approx([90.0])
+    # The first plane's row is the same number spl_on_axis reports, so a client
+    # that anchors from either one gets the same answer for that plane.
+    assert reference["horizontal"] == pytest.approx(response["spl_on_axis"]["spl"])
+    # The published patterns cannot supply this: each is normalized to its own
+    # 5-degree sample, so both planes read 0 dB there.
+    assert response["directivity"]["horizontal"][0][0][1] == pytest.approx(0.0)
+    assert response["directivity"]["vertical"][0][0][1] == pytest.approx(0.0)
+    # anchor + D(15) - D(5) recovers the vertical level the solve measured.
+    vertical = response["directivity"]["vertical"][0]
+    assert reference["vertical"][0] + vertical[1][1] - vertical[0][1] == pytest.approx(85.0)
+
+
+def test_plane_reference_is_published_on_a_grid_that_contains_zero() -> None:
+    """The ordinary grid keeps working, and states the same anchor twice."""
+
+    result = _two_plane_result(
+        angles=[0.0, 30.0], levels_db=[[94.0, 91.0], [94.0, 88.0]]
+    )
+    context = _context()
+    context.polar_config.update({"angle_range": (0.0, 30.0, 2), "norm_angle": 0.0})
+
+    response = build_solver_response(
+        result=result,
+        config=_config(),
+        context=context,
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=343.0,
+    )
+
+    reference = response["metadata"]["spl_on_axis"]["plane_reference_spl_db"]
+    assert response["metadata"]["spl_on_axis"]["sampled_angle_degrees"] == 0.0
+    # Both planes meet at a true 0 degrees, so every anchor is the same one and
+    # a payload stored before this field existed was never wrong here.
+    assert reference["horizontal"] == pytest.approx([94.0])
+    assert reference["vertical"] == pytest.approx([94.0])
+    assert response["metadata"]["warning_count"] == 0
 
 
 def test_mesh_resolution_suspects_aggregate_into_one_warning() -> None:

@@ -23,7 +23,7 @@ import { limitingSummary, maxOutputChartSeries, maxOutputMissingReason, maxOutpu
 import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
 import { combinedChannelId, combineMetadataOf, type ResultPayload } from '../results/types';
 import { resolveNormalizationAngle, withNormalizationAngle } from '../results/normalization';
-import { MAX_MEASUREMENT_ANGLES, measurementAngleLabel, measurementAngles, measurementPlanes, nearestMeasurementAngle, onAxisAngle, withMeasurementAngle, type MeasurementPlane } from '../results/measurementAngle';
+import { MAX_MEASUREMENT_ANGLES, measurementAnchorRefusal, measurementAngleLabel, measurementAngles, measurementPlanes, nearestMeasurementAngle, onAxisAngle, withMeasurementAngle, type MeasurementPlane } from '../results/measurementAngle';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -56,12 +56,18 @@ import { powerAgreementHealth } from '../results/radiatedPower';
  * `angles` names the microphone positions when more than the on-axis one is
  * drawn. Without it a card showing four traces gives no clue which is which
  * beyond the legend, and the distance alone reads as if they share a position.
+ *
+ * A run that cannot put an absolute scale on the selected plane says so here
+ * rather than drawing an empty card: the levels are declined on purpose, and
+ * "absolute" would otherwise be the only thing the caption claimed.
  */
 export function splSubtitle(result: ResultData | undefined, angles?: { plane: string; angles: number[]; onAxis: number | null }): string {
   const observation = result?.metadata?.observation;
   const record = observation && typeof observation === 'object' ? observation as Record<string, unknown> : {};
   const distance = Number(record.effective_distance_m ?? record.requested_distance_m);
   const position = Number.isFinite(distance) && distance > 0 ? `absolute · ${Number(distance.toPrecision(4))} m` : 'absolute · distance unspecified';
+  const refusal = result && angles ? measurementAnchorRefusal(result, angles.plane as MeasurementPlane) : null;
+  if (refusal) return refusal;
   const offAxis = angles && angles.angles.length > 1;
   if (!offAxis) return position;
   return `${position} · ${angles.plane.slice(0, 1).toUpperCase()} ${angles.angles.map((angle) => `${Number(angle.toFixed(3))}°`).join(' / ')}`;
@@ -1610,8 +1616,13 @@ export function resolveMeasurementSelection(
 /**
  * One overlay entry per run per selected angle.
  *
- * On-axis alone is the default and returns `items` untouched, so the chart that
- * existed before this did is drawn by the same code path with the same labels.
+ * On-axis alone is the default and keeps `items`' own labels, so the chart that
+ * existed before this did is drawn by the same code path with the same names.
+ * It still runs each result through `withMeasurementAngle`, which hands back
+ * the identical object in every ordinary case -- but not for a secondary plane
+ * on a grid that omits zero, where the stored `spl_on_axis` belongs to a
+ * different observation point and must not be drawn as this plane's.
+ *
  * Members of a combined sum are dropped as soon as a second angle is chosen:
  * the crossover branches at four angles each is eight curves answering two
  * different questions on one axis.
@@ -1621,7 +1632,14 @@ export function measurementAngleEntries(
   selection: MeasurementAngleSelection,
 ): NamedResult[] {
   const { plane, angles, onAxis } = selection;
-  if (angles.length <= 1 && (angles.length === 0 || angles[0] === onAxis)) return items;
+  if (angles.length === 0) return items;
+  if (angles.length === 1 && angles[0] === onAxis) {
+    const anchored = items.map((item) => {
+      const result = withMeasurementAngle(item.result, plane, angles[0]);
+      return result === item.result ? item : { ...item, result };
+    });
+    return anchored.every((entry, index) => entry === items[index]) ? items : anchored;
+  }
   return items.filter(({ secondary }) => !secondary).flatMap((item) => angles.map((angle) => ({
     ...item,
     id: `${item.id}@${plane}:${angle}`,

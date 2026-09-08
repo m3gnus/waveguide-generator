@@ -892,4 +892,58 @@ describe('measurement angle selection', () => {
     expect(splSubtitle(result, resolveMeasurementSelection(result, 'vertical', [60])))
       .toBe('absolute · distance unspecified · V 0° / 60°');
   });
+
+  /**
+   * A grid of 5 to 15 degrees, stored before the contract carried a per-plane
+   * anchor. `spl_on_axis` is horizontal's level at 5 degrees, which is not the
+   * vertical microphone's position, so no vertical absolute level exists in the
+   * payload at any angle. The card says that instead of drawing horizontal's.
+   */
+  const zeroLess = (): ResultPayload => ({
+    frequencies: [1000],
+    directivity: {
+      horizontal: [[[5, 0], [15, -2]]],
+      vertical: [[[5, 0], [15, -5]]],
+    },
+    directivity_phase: { horizontal: [[[5, -20], [15, -55]]], vertical: [[[5, 10], [15, 40]]] },
+    spl_on_axis: { frequencies: [1000], spl: [100], phase_degrees: [-20] },
+    metadata: { spl_on_axis: { requested_angle_degrees: 0, sampled_angle_degrees: 5 } },
+  } as unknown as ResultPayload);
+
+  it('says why a secondary plane has no absolute scale instead of claiming one', () => {
+    const result = zeroLess();
+    expect(splSubtitle(result, resolveMeasurementSelection(result, 'horizontal', [15])))
+      .toBe('absolute · distance unspecified · H 5° / 15°');
+    expect(splSubtitle(result, resolveMeasurementSelection(result, 'vertical', [15])))
+      .toMatch(/^vertical level unavailable: this run's reference sample is 5°/);
+  });
+
+  it('does not draw the first plane\'s level as the secondary plane\'s reference sample', () => {
+    const result = zeroLess();
+    const items: NamedResult[] = [{ id: 'a', label: 'Run A', result }];
+    const onAxisOnly = measurementAngleEntries(items, resolveMeasurementSelection(result, 'vertical', []));
+    expect(onAxisOnly[0].label).toBe('Run A');
+    expect(onAxisOnly[0].result.spl_on_axis?.spl).toEqual([null]);
+    const overlaid = measurementAngleEntries(items, resolveMeasurementSelection(result, 'vertical', [15]));
+    expect(overlaid.map(({ result: payload }) => payload.spl_on_axis?.spl?.[0])).toEqual([null, null]);
+    // The plane spl_on_axis does speak for is unaffected.
+    expect(measurementAngleEntries(items, resolveMeasurementSelection(result, 'horizontal', [15]))
+      .map(({ result: payload }) => payload.spl_on_axis?.spl?.[0])).toEqual([100, 98]);
+  });
+
+  it('uses the per-plane anchor the contract now publishes', () => {
+    const result = zeroLess();
+    result.metadata = {
+      spl_on_axis: {
+        requested_angle_degrees: 0,
+        sampled_angle_degrees: 5,
+        plane_reference_spl_db: { horizontal: [100], vertical: [90] },
+      },
+    };
+    const items: NamedResult[] = [{ id: 'a', label: 'Run A', result }];
+    expect(splSubtitle(result, resolveMeasurementSelection(result, 'vertical', [15])))
+      .toBe('absolute · distance unspecified · V 5° / 15°');
+    expect(measurementAngleEntries(items, resolveMeasurementSelection(result, 'vertical', [15]))
+      .map(({ result: payload }) => payload.spl_on_axis?.spl?.[0])).toEqual([90, 85]);
+  });
 });
