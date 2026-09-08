@@ -13,7 +13,7 @@ import pytest
 from server.design.schema import Expr
 from server.engines.dryrun import DryRunEngine
 from server.engines.registry import EngineInfo, EngineRegistry
-from server.jobs.models import SolveRequest
+from server.jobs.models import ChannelCombineSpec, SolveRequest
 from server.jobs.runtime import (
     JobConflictError,
     JobMeshDiscardedError,
@@ -1027,5 +1027,95 @@ def test_explicit_frequencies_run_verbatim_and_are_summarized_as_such(
         assert summary["num_frequencies"] == len(sweep)
         assert summary["frequency_source"] == "explicit_list"
         await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_recombine_serialises_overlapping_edits_for_one_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crossover edit reverted before its reply must not stay persisted.
+
+    Recombining is a read-modify-write of the stored results. Two overlapping
+    requests for one job would each rebuild from the pre-edit results, and the
+    one the database keeps would be whichever finished last rather than the
+    crossover the rail was left showing.
+    """
+
+    import server.solver.recombine as recombine_module
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    now = datetime.now().isoformat()
+    store.create_job(
+        {
+            "id": "live",
+            "status": "complete",
+            "created_at": now,
+            "updated_at": now,
+            "queued_at": now,
+            "completed_at": now,
+            "progress": 1.0,
+            "stage": "complete",
+            "stage_message": "complete",
+            "config_json": {"design": {"formula": "OSSE", "L": 120}},
+            "config_summary_json": {"formula_type": "OSSE"},
+            "task_metadata": {},
+        }
+    )
+    store.store_results("live", {"frequencies": [1000.0], "crossover_hz": 1000.0})
+    store.store_channel_bases("live", b"bases-npz")
+
+    reads: list[dict[str, Any]] = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_recombine(
+        results: dict[str, Any],
+        bases: bytes,
+        spec: ChannelCombineSpec,
+        request: SolveRequest,
+    ) -> dict[str, Any]:
+        reads.append(results)
+        if not entered.is_set():
+            entered.set()
+            # Hold the first read-modify-write open so the second request has
+            # to be ordered against it rather than racing it.
+            release.wait(10)
+        return {"frequencies": [1000.0], "crossover_hz": spec.crossovers_hz[0]}
+
+    monkeypatch.setattr(recombine_module, "recombine_stored_results", fake_recombine)
+
+    def spec(hz: float) -> ChannelCombineSpec:
+        return ChannelCombineSpec.model_validate(
+            {"id": "combined", "members": ["mf", "hf"], "crossovers_hz": [hz]}
+        )
+
+    async def scenario() -> None:
+        runtime = JobRuntime(store)
+        await runtime.start()
+        try:
+            edited = asyncio.create_task(runtime.recombine_results("live", spec(900.0)))
+            assert await asyncio.to_thread(entered.wait, 10)
+            reverted = asyncio.create_task(
+                runtime.recombine_results("live", spec(1000.0))
+            )
+            await asyncio.sleep(0.2)
+            assert len(reads) == 1, "the second edit read the results mid-write"
+
+            release.set()
+            assert (await edited)["crossover_hz"] == 900.0
+            assert (await reverted)["crossover_hz"] == 1000.0
+
+            # The revert rebuilt from what the edit stored, and is what the
+            # job keeps: the durable result matches the crossover left on
+            # screen, and no turnstile outlives the requests that needed it.
+            assert reads[1]["crossover_hz"] == 900.0
+            stored = await asyncio.to_thread(store.get_results, "live")
+            assert stored["crossover_hz"] == 1000.0
+            assert runtime._result_mutation == {}
+        finally:
+            release.set()
+            await runtime.shutdown()
 
     asyncio.run(scenario())

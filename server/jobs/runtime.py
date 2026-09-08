@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections import deque
+from contextlib import asynccontextmanager
 import copy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,7 +23,7 @@ import math
 import os
 from pathlib import Path
 import time
-from typing import Any, Mapping
+from typing import Any, AsyncIterator, Mapping
 import uuid
 
 from server.cadlink.ingest import get_ingestion_record
@@ -1226,6 +1227,20 @@ class _PendingRuntimeUpdate:
         return self.stage is not None or bool(self.log_lines)
 
 
+@dataclass
+class _JobMutationTurnstile:
+    """One job's serialized-mutation lock, and how many callers still need it.
+
+    The count is what makes the lock safe to drop: releasing an
+    ``asyncio.Lock`` clears ``locked()`` before a queued waiter resumes, so a
+    liveness check on the lock alone would discard a turnstile someone is
+    still queued on and let the next caller build a second one.
+    """
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
 class EventBroker:
     """Fan durable lifecycle events and ephemeral result deltas to subscribers."""
 
@@ -1286,6 +1301,10 @@ class JobRuntime:
         self._started = False
         self._shutting_down = False
         self._start_lock = asyncio.Lock()
+        # One turnstile per job whose stored results are being rewritten in
+        # place. Only recombine does that today; the map holds nothing for a
+        # job with no such request in flight.
+        self._result_mutation: dict[str, _JobMutationTurnstile] = {}
         self._ownership = _RuntimeOwnershipLock(store)
         self.metal_permit = metal_permit or process_metal_permit()
         self.field_plane_service = FieldPlaneService(
@@ -2065,6 +2084,32 @@ class JobRuntime:
                 f"Radiation-impedance artifact could not be read: {exc}"
             ) from exc
 
+    @asynccontextmanager
+    async def _serialized_result_mutation(self, job_id: str) -> AsyncIterator[None]:
+        """Hold one job's results for a whole read-modify-write cycle.
+
+        Rewriting a job's stored results in place is read, rebuild, write.
+        Two overlapping requests for one job would both rebuild from the
+        pre-edit results and the one the database keeps would be whichever
+        finished last -- so a crossover edit that is changed again before its
+        reply returns could leave the abandoned spec persisted, and the client
+        no way to tell. Waiters are served in arrival order, which is also the
+        order the replies describe.
+        """
+
+        turnstile = self._result_mutation.get(job_id)
+        if turnstile is None:
+            turnstile = _JobMutationTurnstile()
+            self._result_mutation[job_id] = turnstile
+        turnstile.users += 1
+        try:
+            async with turnstile.lock:
+                yield
+        finally:
+            turnstile.users -= 1
+            if turnstile.users <= 0 and self._result_mutation.get(job_id) is turnstile:
+                del self._result_mutation[job_id]
+
     async def recombine_results(
         self, job_id: str, spec: ChannelCombineSpec
     ) -> dict[str, Any]:
@@ -2073,25 +2118,30 @@ class JobRuntime:
         from server.solver.recombine import recombine_stored_results
 
         await self.start()
-        row = self._require_job(job_id)
-        if row["status"] != "complete":
-            raise JobConflictError(f"Job not complete. Current status: {row['status']}")
-        results_text = await asyncio.to_thread(self.store.get_results_text, job_id)
-        if results_text is None:
-            raise JobResourceUnavailableError("Results not available")
-        bases = await asyncio.to_thread(self.store.get_channel_bases, job_id)
-        if bases is None:
-            raise JobResourceUnavailableError(
-                "This job has no stored channel bases; re-solve to enable "
-                "crossover changes without a new solve"
+        async with self._serialized_result_mutation(job_id):
+            row = self._require_job(job_id)
+            if row["status"] != "complete":
+                raise JobConflictError(
+                    f"Job not complete. Current status: {row['status']}"
+                )
+            results_text = await asyncio.to_thread(
+                self.store.get_results_text, job_id
             )
-        request = _replay_request(row)
-        results = json.loads(results_text)
-        updated = await asyncio.to_thread(
-            recombine_stored_results, results, bases, spec, request
-        )
-        await asyncio.to_thread(self.store.store_results, job_id, updated)
-        return updated
+            if results_text is None:
+                raise JobResourceUnavailableError("Results not available")
+            bases = await asyncio.to_thread(self.store.get_channel_bases, job_id)
+            if bases is None:
+                raise JobResourceUnavailableError(
+                    "This job has no stored channel bases; re-solve to enable "
+                    "crossover changes without a new solve"
+                )
+            request = _replay_request(row)
+            results = json.loads(results_text)
+            updated = await asyncio.to_thread(
+                recombine_stored_results, results, bases, spec, request
+            )
+            await asyncio.to_thread(self.store.store_results, job_id, updated)
+            return updated
 
     async def evaluate_field_plane(
         self, job_id: str, request: FieldPlaneRequest

@@ -472,29 +472,70 @@ export interface RecombineSpec {
   align?: boolean;
 }
 
+/**
+ * How far a job's recombines have got: issued in order, published in order.
+ *
+ * A recombine is a read-modify-write of the job's stored results, so a reply
+ * only describes the durable result until a later recombine of the same job
+ * replaces it. Publishing a superseded reply into the cache would leave the
+ * cached job holding a crossover the run no longer has, and a later reload,
+ * field evaluation or export would read it back. The entry is dropped once
+ * nothing for that job is in flight, so this map is bounded by concurrency
+ * rather than by how many jobs a session touches.
+ */
+interface RecombineOrder { issued: number; published: number; inFlight: number }
+const recombineOrder = new Map<string, RecombineOrder>();
+
+function issueRecombine(jobId: string): number {
+  const order = recombineOrder.get(jobId) ?? { issued: 0, published: 0, inFlight: 0 };
+  order.issued += 1;
+  order.inFlight += 1;
+  recombineOrder.set(jobId, order);
+  return order.issued;
+}
+
+/** Publish this reply unless a later recombine of the job already published,
+ * then retire the request. `result` is null when it never became one. */
+function settleRecombine(jobId: string, revision: number, result: JobResults | null): void {
+  const order = recombineOrder.get(jobId);
+  if (!order) return;
+  if (result !== null && revision > order.published) {
+    order.published = revision;
+    resultsCache.set(jobId, result);
+  }
+  order.inFlight -= 1;
+  if (order.inFlight <= 0) recombineOrder.delete(jobId);
+}
+
 /** Recompute a job's combined channel from its stored complex bases. The
- * server persists the updated results, so the cache entry is replaced too. */
+ * server persists the updated results, so the cache entry is replaced too --
+ * in the order the recombines were issued, never behind a newer one. */
 export async function recombineJobResults(
   jobId: string,
   spec: RecombineSpec,
   fetcher: typeof fetch = fetch,
 ): Promise<JobResults> {
-  const response = await fetcher(`/api/results/${encodeURIComponent(jobId)}/combine`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(spec),
-  });
-  if (!response.ok) {
-    let detail = `Recombine request failed: ${response.status}`;
-    try {
-      const body = await response.json() as { detail?: string };
-      if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
-    } catch { /* status is enough */ }
-    throw new Error(detail);
+  const revision = issueRecombine(jobId);
+  let result: JobResults | null = null;
+  try {
+    const response = await fetcher(`/api/results/${encodeURIComponent(jobId)}/combine`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(spec),
+    });
+    if (!response.ok) {
+      let detail = `Recombine request failed: ${response.status}`;
+      try {
+        const body = await response.json() as { detail?: string };
+        if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+      } catch { /* status is enough */ }
+      throw new Error(detail);
+    }
+    result = parseFinalResultEnvelope(await response.json());
+    return result;
+  } finally {
+    settleRecombine(jobId, revision, result);
   }
-  const result = parseFinalResultEnvelope(await response.json());
-  resultsCache.set(jobId, result);
-  return result;
 }
 
 export class CompareStore {

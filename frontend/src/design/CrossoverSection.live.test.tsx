@@ -112,6 +112,91 @@ describe('live recombine from the rail', () => {
     expect(onApplied).toHaveBeenCalledWith('job-1', updated);
   });
 
+  it('restores a crossover reverted while its own request is still outstanding', async () => {
+    // The defect this covers: the revert compares equal to the result still on
+    // screen and sends nothing, while the request already in flight is turning
+    // the stored result into the crossover the user just abandoned. What the
+    // rail shows and what the run holds then differ, with nothing said.
+    const lr2 = { channels: {} } as unknown as JobResults;
+    const lr4 = { channels: {} } as unknown as JobResults;
+    let releaseLr2!: (value: JobResults) => void;
+    recombineMocks.recombine
+      .mockReturnValueOnce(new Promise<JobResults>((resolve) => { releaseLr2 = resolve; }))
+      .mockResolvedValueOnce(lr4);
+    render();
+    publishShown();
+
+    setSlope('2');
+    await act(async () => { vi.advanceTimersByTime(450); await Promise.resolve(); });
+    expect(recombineMocks.recombine).toHaveBeenCalledTimes(1);
+
+    // Reverted before the reply: the rail is back on LR4, the run is not.
+    setSlope('4');
+    await act(async () => { vi.advanceTimersByTime(450); await Promise.resolve(); });
+    // One recombine at a time per job: nothing about the order two overlapping
+    // read-modify-writes are sent in orders the writes they persist.
+    expect(recombineMocks.recombine).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain('Updating the shown run…');
+
+    await act(async () => {
+      releaseLr2(lr2);
+      // The queued restoration only starts when the first one is off the wire,
+      // so the settle takes several turns of the microtask queue.
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+    });
+
+    expect(recombineMocks.recombine).toHaveBeenCalledTimes(2);
+    const [, restored] = recombineMocks.recombine.mock.calls[1] as [string, { channels: Record<string, { lp: { order: number } }> }];
+    expect(restored.channels['drive-mf'].lp).toEqual({ family: 'lr', order: 4, fc_hz: 1_000 });
+    // The abandoned reply is not swapped in; the reconciling one is.
+    expect(onApplied).toHaveBeenCalledTimes(1);
+    expect(onApplied).toHaveBeenCalledWith('job-1', lr4);
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="MF → HF slope"]')!.value).toBe('4');
+    expect(host.textContent).toContain('Changes apply to the shown combined result immediately');
+  });
+
+  it('orders two outstanding edits instead of racing them', async () => {
+    // Each recombine is a read-modify-write of the job's stored results, so
+    // two in flight at once persist in whatever order they finish. Ignoring
+    // the stale reply does not order the writes behind it.
+    const shape = { channels: {} } as unknown as JobResults;
+    let releaseSlope!: (value: JobResults) => void;
+    recombineMocks.recombine
+      .mockReturnValueOnce(new Promise<JobResults>((resolve) => { releaseSlope = resolve; }))
+      .mockResolvedValueOnce(shape);
+    render();
+    publishShown();
+
+    setSlope('2');
+    await act(async () => { vi.advanceTimersByTime(450); await Promise.resolve(); });
+    expect(recombineMocks.recombine).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      const family = host.querySelector<HTMLSelectElement>('[aria-label="MF → HF filter family"]')!;
+      family.value = 'butterworth';
+      family.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { vi.advanceTimersByTime(450); await Promise.resolve(); });
+    expect(recombineMocks.recombine).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseSlope({ channels: {} } as unknown as JobResults);
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+    });
+
+    expect(recombineMocks.recombine).toHaveBeenCalledTimes(2);
+    const posted = recombineMocks.recombine.mock.calls.map(
+      ([, wire]) => (wire as { channels: Record<string, { lp: unknown }> }).channels['drive-mf'].lp,
+    );
+    expect(posted).toEqual([
+      { family: 'lr', order: 2, fc_hz: 1_000 },
+      { family: 'butterworth', order: 2, fc_hz: 1_000 },
+    ]);
+    // The last write is the one the screen ends on, and the only one shown.
+    expect(onApplied).toHaveBeenCalledTimes(1);
+    expect(onApplied).toHaveBeenCalledWith('job-1', shape);
+  });
+
   it('stays quiet while the specs already agree, or the run cannot be applied to', async () => {
     render();
     publishShown();

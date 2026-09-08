@@ -175,11 +175,22 @@ function sameMembers(spec: CrossoverSpec, shown: ReturnType<typeof latestCombine
  *
  * Recombining runs from stored bases in milliseconds, so the combined result
  * follows the settings live: whenever the effective spec differs from the one
- * the shown combined channel was computed with, the recombine is posted after
- * a short settle and the dock swaps the repainted result in through the
- * bridge's own callback. The dock then republishes, the specs compare equal,
- * and the loop rests. A run for different channels, a provisional live view,
- * or an incomplete run is never touched.
+ * the stored result carries, the recombine is posted after a short settle and
+ * the dock swaps the repainted result in through the bridge's own callback.
+ * The dock then republishes, the specs compare equal, and the loop rests. A
+ * run for different channels, a provisional live view, or an incomplete run is
+ * never touched.
+ *
+ * Two rules keep the rail and the stored run from parting company, and both
+ * are about the window between a request and its reply:
+ *
+ * - An edit is compared against the spec the server was last *asked* for, not
+ *   against the result still on screen. Inside that window the two differ, and
+ *   comparing against the screen makes a revert look like nothing to do while
+ *   the durable result is already on its way to the abandoned crossover.
+ * - One recombine at a time, per rail. A recombine is a read-modify-write of
+ *   the stored result, and nothing about the order two overlapping requests
+ *   are sent in orders the writes they persist.
  */
 function useLiveRecombine(
   spec: CrossoverSpec | null,
@@ -188,29 +199,45 @@ function useLiveRecombine(
 ): { live: boolean; busy: boolean; error: string | null } {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const generation = useRef(0);
+  /** The crossover the server was last asked to store, and for which run. */
+  const sent = useRef<{ jobId: string; spec: CrossoverSpec } | null>(null);
+  /** Requests posted and not yet settled: what `busy` actually means. */
+  const pending = useRef(0);
+  /** The turnstile the requests queue on, one job's mutations in order. */
+  const chain = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
-    generation.current += 1;
-    const request = generation.current;
-    if (!enabled || !spec || !shown?.canApply) { setBusy(false); setError(null); return; }
+    /** Nothing outstanding and nothing to do: the loop rests here. */
+    const rest = () => { if (pending.current === 0) { setBusy(false); setError(null); } };
+    if (!enabled || !spec || !shown?.canApply) { rest(); return; }
     const applied = fromResult(shown.combine);
     if (!applied) return;
     if (!sameMembers(spec, shown)) return;
-    if (sameSpec(spec, applied)) { setBusy(false); setError(null); return; }
+    const at = shown;
+    // What the stored result holds, or has already been asked to hold.
+    const stored = sent.current?.jobId === at.jobId ? sent.current.spec : applied;
+    if (sameSpec(spec, stored)) { rest(); return; }
+    const target = spec;
     const timer = setTimeout(() => {
-      void (async () => {
-        setBusy(true); setError(null);
+      sent.current = { jobId: at.jobId, spec: target };
+      pending.current += 1;
+      setBusy(true); setError(null);
+      /** Whether this request is still the one the rail is waiting on. */
+      const current = () => sent.current?.jobId === at.jobId && sameSpec(sent.current.spec, target);
+      chain.current = chain.current.then(async () => {
         try {
-          const updated = await recombineJobResults(shown.jobId, { id: shown.channelId, ...toWire(spec) });
-          if (generation.current === request) shown.onApplied(shown.jobId, updated);
+          const updated = await recombineJobResults(at.jobId, { id: at.channelId, ...toWire(target) });
+          // A reply a later edit has already superseded is not swapped in --
+          // the later edit's own reply is what the screen ends on -- and it is
+          // not an error either: its restoring request is queued behind this
+          // one and the two states converge there.
+          if (current()) at.onApplied(at.jobId, updated);
         } catch (reason) {
-          if (generation.current === request) {
-            setError(reason instanceof Error ? reason.message : String(reason));
-          }
+          if (current()) setError(reason instanceof Error ? reason.message : String(reason));
         } finally {
-          if (generation.current === request) setBusy(false);
+          pending.current -= 1;
+          if (pending.current === 0) setBusy(false);
         }
-      })();
+      });
     }, LIVE_RECOMBINE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [spec, enabled, shown]);
