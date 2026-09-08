@@ -526,6 +526,50 @@ describe('recombineJobResults', () => {
       .rejects.toThrow('outside the solved band');
     resultsCache.clear();
   });
+
+  it('never lets a superseded reply publish over a newer one', async () => {
+    // Edit, then revert before the first reply returns: the reply that lands
+    // last is not the crossover the job now holds, and a cache entry written
+    // from it would hand a later reload, field evaluation or export a
+    // crossover the user never left selected.
+    resultsCache.clear();
+    const combined = (order: number): JobResults => ({
+      ...result(),
+      metadata: { combine: { members: ['mf', 'hf'], crossovers_hz: [900], order } },
+    });
+    const replies = new Map<number, (value: Response) => void>();
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const order = (JSON.parse(String(init?.body)) as { order: number }).order;
+      return new Promise<Response>((resolve) => replies.set(order, resolve));
+    });
+    const reply = (order: number) => replies.get(order)!(new Response(
+      JSON.stringify(combined(order)),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+
+    const spec = (order: number) => ({
+      members: ['mf', 'hf'], crossovers_hz: [900], order,
+    } as unknown as Parameters<typeof recombineJobResults>[1]);
+    const superseded = recombineJobResults('job-order', spec(2), fetcher as unknown as typeof fetch);
+    const restored = recombineJobResults('job-order', spec(4), fetcher as unknown as typeof fetch);
+
+    // The restoring reply arrives first; the abandoned one lands after it.
+    reply(4);
+    await restored;
+    expect(resultsCache.get('job-order')).toEqual(combined(4));
+    reply(2);
+    expect(await superseded).toEqual(combined(2));
+    expect(resultsCache.get('job-order')).toEqual(combined(4));
+
+    // A later recombine of the same job still publishes: the ordering is per
+    // job and per request, not a permanent ceiling on it.
+    resultsCache.clear();
+    const later = recombineJobResults('job-order', spec(8), fetcher as unknown as typeof fetch);
+    reply(8);
+    await later;
+    expect(resultsCache.get('job-order')).toEqual(combined(8));
+    resultsCache.clear();
+  });
 });
 
 describe('polar cut mirroring', () => {
