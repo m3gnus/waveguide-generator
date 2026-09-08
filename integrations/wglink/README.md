@@ -1,19 +1,22 @@
 # WGLink packaging contract
 
-Waveguide Generator's macOS and Windows platform installers install WGLink for
-Fusion 360. The user does not clone `hornlab-fusion-addin` or create its
-virtual environment: the installer fetches the exact reviewed Git commit in
-[`source.json`](source.json) into a disposable directory, verifies that Git
-resolved that commit, builds a deterministic source package, and keeps only
-the verified package and extracted runtime payload. WGLink Update uses WG's
+Waveguide Generator's Windows setup offers WGLink as an explicit Fusion 360
+integration task. The release build fetches the exact reviewed Git commit in
+[`source.json`](source.json), verifies that Git resolved that commit, and puts
+a deterministic source package inside the verified application layer. Setup
+installs from that verified package without Git or network access and uses WG's
 existing pinned Python, NumPy, SciPy, and hornlab-waveguide-mesher environment.
+An interactive install preselects the task only when Fusion's AddIns directory
+already exists; a silent install must opt in with `/TASKS="wglink"`.
 
 The package contains the complete `fusion-addins/WGLink` source tree, its
 resampler, the upstream AGPL-3.0-or-later `LICENSE`, and `provenance.json` with
 the upstream repository, full commit, WGLink version, WG version, and SHA-256
 of every member. `scripts/install_wglink.py` rechecks that inventory before any
-Fusion registration is changed. A non-WG-managed copy or symlink is preserved
-unless the installer is explicitly run with `--replace-wglink`.
+Fusion registration is changed. A non-WG-managed copy, a developer-marked copy,
+or a symlink is preserved unless the source-checkout installer is explicitly
+run with `--replace-wglink`. Startup updates only the copy managed by that same
+WG installation; it never silently installs an add-in the user did not select.
 
 To review and advance the pin:
 

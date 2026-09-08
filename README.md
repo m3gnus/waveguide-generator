@@ -83,7 +83,11 @@ info → Run anyway** — and then never again, because the installer writes its
 payload itself and nothing it writes carries the download mark. It installs to
 `%LOCALAPPDATA%\Programs` without elevation, which is what lets the in-app
 updater replace files in place later, and it refuses an over-long install folder
-up front instead of failing partway through.
+up front instead of failing partway through. Setup also offers an explicit
+**Install WGLink for Autodesk Fusion** task. It is preselected only when Fusion's
+AddIns folder already exists, installs entirely from the verified bundle without
+network access, and never replaces a developer or externally managed WGLink.
+Silent installs opt in with `/TASKS="wglink"`.
 
 For a self-contained Linux install, download
 **Waveguide.Generator-&lt;version&gt;-linux-x86_64.tar.gz**, extract it, and run

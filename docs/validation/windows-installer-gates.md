@@ -31,7 +31,19 @@ The build refuses, correctly, on four things worth knowing before you blame it: 
 | 6 | Shortcuts and the uninstall entry show the app icon | The launcher is a byte copy of `pythonw.exe` and nothing patches its resources, so any icon read from the `.exe` is Python's. |
 | 7 | SmartScreen and the real first-run experience | **Cannot be decided on a box with UAC disabled.** See below. |
 | 8 | The update path can rename `app` and `runtime` in place, unelevated | Directly exercises what gate 2 protects. |
-| 9 | Uninstall clears the tree, including bytecode the installer never wrote | `[UninstallDelete]` removes `runtime` and `app` wholesale and `{app}` only if empty, so a planted `__pycache__` is the case worth testing. |
+| 9 | Uninstall clears the tree, including bytecode the installer never wrote | `[UninstallDelete]` removes `runtime` and `app` wholesale and `{app}` only if empty, so a planted `__pycache__` is the case worth testing. It also verifies that the managed WGLink target and any replacement journal/workspace are gone before the disposable AddIns fixture is removed. |
+| 10 | The real setup task installs WGLink with the packaged runtime | The gate creates a disposable Fusion AddIns directory, selects the explicit WGLink task, and verifies a zero setup exit, add-in source, ownership root, exact 40-character source pin, runtime pointer, and absence of a transaction journal/workspace. It never needs a real Fusion installation. |
+| 11 | Setup preserves a developer-marked WGLink copy | The gate repeats setup against a separate disposable AddIns directory containing a developer marker and source file, then verifies both are byte-for-byte unchanged. |
+| 12 | A silent upgrade needs a current WGLink opt-in | After an opted-in setup, the gate plants a unique sentinel in the managed add-in, reruns setup silently without `/TASKS="wglink"`, and verifies both the sentinel and entire tree are unchanged. This prevents Inno's remembered-task default from silently turning old consent into new consent even when the payload version is identical. |
+
+WGLink is an explicit Fusion-integration task. In the interactive wizard it is
+preselected only when an existing Fusion AddIns directory is found; unchecking
+it prevents installation. Silent deployment preserves that consent boundary:
+name `/TASKS="wglink"` to opt in. If Fusion is absent, the task does not create
+an AddIns directory and the final setup page says that WGLink was not installed.
+An existing non-Waveguide Generator copy is preserved rather than overwritten.
+Every silent upgrade needs that current `/TASKS="wglink"` opt-in; a prior setup
+selection is deliberately not reused.
 
 ## Gate 7 needs a different machine, and a human
 

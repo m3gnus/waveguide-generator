@@ -388,6 +388,16 @@ jobs:
           }
           Write-Host "Cross-platform app layer treeSha256: $localTree"
 
+      - name: Run setup-driven Windows installer gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setups = @(Get-ChildItem -File build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe)
+          if ($setups.Count -ne 1) {
+            throw "Expected exactly one Windows setup executable, found $($setups.Count)."
+          }
+          & ./installers/windows/gates.ps1 -Setup $setups[0].FullName
+
       - name: Share the complete Windows release asset set
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

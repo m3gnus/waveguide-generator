@@ -11,6 +11,10 @@ from server.cadlink import addin_update
 def _wg_root(tmp_path: Path, commit: str) -> Path:
     root = tmp_path / "wg"
     (root / "integrations" / "wglink").mkdir(parents=True)
+    (root / "shared").mkdir(parents=True)
+    (root / "shared" / "version.json").write_text(
+        json.dumps({"version": "0.3.2"}), encoding="utf-8"
+    )
     (root / "integrations" / "wglink" / "source.json").write_text(
         json.dumps({
             "schema": 1,
@@ -25,6 +29,10 @@ def _wg_root(tmp_path: Path, commit: str) -> Path:
     real = Path(addin_update.app_root()) / "scripts" / "install_wglink.py"
     (root / "scripts" / "install_wglink.py").write_text(
         real.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    builder = Path(addin_update.app_root()) / "scripts" / "build_wglink_package.py"
+    (root / "scripts" / "build_wglink_package.py").write_text(
+        builder.read_text(encoding="utf-8"), encoding="utf-8"
     )
     return root
 
@@ -92,11 +100,138 @@ def test_an_add_in_with_no_marker_is_left_alone(tmp_path: Path) -> None:
 
 
 def test_nothing_is_installed_when_fusion_has_no_add_in(tmp_path: Path) -> None:
-    """WG reconciles an add-in the user has; it does not install one they never
-    asked for."""
+    """Startup does not silently cross the install-consent boundary."""
 
     root = _wg_root(tmp_path, "a" * 40)
     assert addin_update.refresh_wglink(root=root, addins_dir=tmp_path / "AddIns")[0] == "absent"
+
+
+def test_startup_recovers_a_managed_target_after_a_crash_moved_it_to_backup(
+    tmp_path: Path,
+) -> None:
+    root = _wg_root(tmp_path, "a" * 40)
+    addins = tmp_path / "AddIns"
+    target = _installed(addins, commit="a" * 40, root=root)
+    workspace = addins / ".WGLink-install-recovery"
+    workspace.mkdir()
+    previous = workspace / "previous"
+    target.rename(previous)
+    (previous / "wglink_runtime.json").write_text(
+        json.dumps({
+            "schema": 1,
+            "root": str(root / "runtime"),
+            "python": str(addin_update.sys.executable),
+        }),
+        encoding="utf-8",
+    )
+    marker = json.loads((previous / addin_update.INSTALL_MARKER).read_text(encoding="utf-8"))
+    installer = addin_update._installer(root)
+    (addins / ".WGLink-install-transaction.json").write_text(
+        json.dumps({
+            "schema": 1,
+            "managedBy": "waveguide-generator",
+            "waveguideGeneratorRoot": str(root.resolve()),
+            "workspace": workspace.name,
+            "hadPrevious": True,
+            "replaceExternal": False,
+            "expectedMarker": marker,
+            "expectedFiles": installer._file_inventory(previous),
+            "phase": "previous-moved",
+        }),
+        encoding="utf-8",
+    )
+
+    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+
+    assert verdict == "current"
+    assert "pinned" in detail
+    assert (target / "WGLink.py").is_file()
+    assert not (addins / ".WGLink-install-transaction.json").exists()
+    assert not workspace.exists()
+
+
+def test_an_explicit_first_install_uses_only_the_verified_shipped_package(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = _wg_root(tmp_path, "a" * 40)
+    addins = tmp_path / "AddIns"
+    archive = tmp_path / "wglink.zip"
+    calls: list[dict[str, object]] = []
+    real = addin_update._installer
+
+    def recording(root_path: Path):
+        module = real(root_path)
+
+        def install(**kwargs):
+            calls.append(kwargs)
+            target = addins / "WGLink"
+            target.mkdir(parents=True)
+            (target / "WGLink.py").write_text("# installed\n", encoding="utf-8")
+            return "installed", target
+
+        module.install = install
+        return module
+
+    monkeypatch.setattr(addin_update, "_installer", recording)
+    monkeypatch.setattr(
+        addin_update,
+        "_verified_shipped_package",
+        lambda *_args: (archive, None),
+    )
+
+    verdict, detail = addin_update.refresh_wglink(
+        root=root, addins_dir=addins, install_absent=True
+    )
+
+    assert verdict == "installed"
+    assert "restart Fusion" in detail
+    assert calls and calls[0]["archive_path"] == archive
+
+
+def test_an_implicit_first_install_requires_a_running_fusion(tmp_path: Path, monkeypatch) -> None:
+    root = _wg_root(tmp_path, "a" * 40)
+    addins = tmp_path / "AddIns"
+    real = addin_update._installer
+
+    def recording(root_path: Path):
+        module = real(root_path)
+        module.default_addins_dir = lambda _platform: addins
+        return module
+
+    monkeypatch.setattr(addin_update, "_installer", recording)
+    monkeypatch.setattr(addin_update, "fusion_process_running", lambda: False)
+
+    verdict, detail = addin_update.refresh_wglink(root=root, install_absent=True)
+
+    assert verdict == "not-detected"
+    assert "not running" in detail
+
+
+def test_a_verified_package_failure_is_reported_without_installing(tmp_path: Path, monkeypatch) -> None:
+    root = _wg_root(tmp_path, "a" * 40)
+    addins = tmp_path / "AddIns"
+    calls: list[object] = []
+    real = addin_update._installer
+
+    def recording(root_path: Path):
+        module = real(root_path)
+        module.install = lambda **kwargs: calls.append(kwargs)
+        return module
+
+    monkeypatch.setattr(addin_update, "_installer", recording)
+    monkeypatch.setattr(
+        addin_update,
+        "_verified_shipped_package",
+        lambda *_args: (None, "the bundled WGLink package failed verification: bad hash"),
+    )
+
+    verdict, detail = addin_update.refresh_wglink(
+        root=root, addins_dir=addins, install_absent=True
+    )
+
+    assert verdict == "unavailable"
+    assert "bad hash" in detail
+    assert calls == []
 
 
 def test_a_stale_managed_add_in_is_updated_to_the_pin(tmp_path: Path, monkeypatch) -> None:
@@ -104,6 +239,7 @@ def test_a_stale_managed_add_in_is_updated_to_the_pin(tmp_path: Path, monkeypatc
     addins = tmp_path / "AddIns"
     _installed(addins, commit="b" * 40, root=root)
     calls: list[dict[str, object]] = []
+    monkeypatch.delenv("WG2_BUNDLE", raising=False)
 
     real = addin_update._installer
 
@@ -121,6 +257,40 @@ def test_a_stale_managed_add_in_is_updated_to_the_pin(tmp_path: Path, monkeypatc
     assert verdict == "updated"
     assert "restart Fusion" in detail
     assert calls and calls[0]["root"] == root
+    assert calls[0]["offline_only"] is False
+
+
+def test_a_bundled_managed_update_never_fetches_when_its_package_is_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = _wg_root(tmp_path, "a" * 40)
+    addins = tmp_path / "AddIns"
+    _installed(addins, commit="b" * 40, root=root)
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "data"))
+
+    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+
+    assert verdict == "failed"
+    assert "does not contain its WGLink package" in detail
+
+
+def test_a_bundled_managed_update_refuses_a_tampered_shipped_package(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = _wg_root(tmp_path, "a" * 40)
+    addins = tmp_path / "AddIns"
+    _installed(addins, commit="b" * 40, root=root)
+    package = root / "integrations" / "wglink" / "packages" / f"wglink-0.3.2-{'a' * 40}.zip"
+    package.parent.mkdir(parents=True)
+    package.write_bytes(b"not a WGLink zip")
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "data"))
+
+    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+
+    assert verdict == "failed"
+    assert "Bundled WGLink package failed verification" in detail
 
 
 def test_an_installer_failure_is_reported_and_never_raised(tmp_path: Path, monkeypatch) -> None:

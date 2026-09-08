@@ -6,10 +6,12 @@ from collections.abc import Iterator
 import hashlib
 import importlib.util
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import zipfile
 
 import pytest
@@ -113,6 +115,10 @@ def _package(tmp_path: Path, commit: str) -> tuple[Path, Path]:
     return root, archive
 
 
+class _SimulatedCrash(BaseException):
+    """An abrupt termination which deliberately bypasses ``except Exception``."""
+
+
 def test_package_is_deterministic_and_records_every_source_hash(tmp_path: Path):
     builder = _load_builder()
     commit = "a" * 40
@@ -204,6 +210,61 @@ def test_default_fusion_addins_locations_cover_both_supported_platforms(tmp_path
     assert installer.default_addins_dir("linux", home=home, environ={}) is None
 
 
+def test_operation_lock_serializes_processes_and_is_released_by_a_crash(
+    short_tmp_path: Path,
+):
+    installer = _load_installer()
+    addins = short_tmp_path / "AddIns"
+    addins.mkdir()
+    ready = short_tmp_path / "lock-ready"
+    release = short_tmp_path / "lock-release"
+    child_code = """
+import importlib.util
+import os
+from pathlib import Path
+import sys
+import time
+
+spec = importlib.util.spec_from_file_location("install_wglink_lock_child", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with module._operation_lock(Path(sys.argv[2]), timeout=2.0):
+    Path(sys.argv[3]).write_text("ready", encoding="utf-8")
+    deadline = time.monotonic() + 10.0
+    while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    os._exit(0)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", child_code, str(INSTALLER), str(addins), str(ready), str(release)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5.0
+        while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists(), child.communicate(timeout=1)
+
+        with pytest.raises(installer.InstallError, match="still running"):
+            with installer._operation_lock(addins, timeout=0.1):
+                pass
+
+        release.write_text("release", encoding="utf-8")
+        stdout, stderr = child.communicate(timeout=5)
+        assert child.returncode == 0, (stdout, stderr)
+
+        # os._exit bypassed the child's context-manager cleanup. The kernel,
+        # not a stale lock-file convention, releases ownership on process death.
+        with installer._operation_lock(addins, timeout=0.5):
+            pass
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+
+
 def test_installed_copy_points_to_wgs_existing_python_and_verified_resampler(
     short_tmp_path: Path,
 ):
@@ -283,6 +344,51 @@ def test_payload_directory_shortens_the_commit_without_weakening_identity(
     assert provenance["sourceCommit"] == commit
 
 
+def test_developer_marker_wins_over_a_stale_wg_ownership_marker(
+    short_tmp_path: Path,
+):
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "a" * 40)
+    addins = short_tmp_path / "AddIns"
+    installer.install(root=root, addins_dir=addins, archive_path=archive)
+    target = addins.resolve() / "WGLink"
+    developer_marker = target / installer.DEVELOPER_MARKER
+    developer_marker.write_text('{"managed": "elsewhere"}\n', encoding="utf-8")
+
+    status, observed = installer.install(
+        root=root,
+        addins_dir=addins,
+        archive_path=archive,
+    )
+    assert (status, observed) == ("preserved-external", target)
+    assert developer_marker.is_file()
+
+    status, observed = installer.uninstall(root=root, addins_dir=addins)
+    assert (status, observed) == ("preserved-external", target)
+    assert developer_marker.is_file()
+    assert (target / installer.INSTALL_MARKER).is_file()
+
+
+def test_symlinked_ownership_marker_is_never_treated_as_managed(
+    short_tmp_path: Path, monkeypatch
+):
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "a" * 40)
+    addins = short_tmp_path / "AddIns"
+    installer.install(root=root, addins_dir=addins, archive_path=archive)
+    target = addins.resolve() / "WGLink"
+    marker = target / installer.INSTALL_MARKER
+    real_is_symlink = Path.is_symlink
+
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda path: path == marker or real_is_symlink(path),
+    )
+
+    assert not installer.is_managed_target(target, root)
+
+
 def test_platform_install_preserves_a_developer_managed_copy(tmp_path: Path):
     installer = _load_installer()
     root = _wg_root(tmp_path, "a" * 40)
@@ -328,6 +434,278 @@ def test_tampered_package_is_refused_before_an_existing_install_changes(short_tm
         )
 
     assert (target / "WGLink.py").read_bytes() == before
+
+
+def test_uninstall_recovers_an_external_copy_moved_before_an_install_crash(
+    short_tmp_path: Path, monkeypatch
+):
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "a" * 40)
+    addins = short_tmp_path / "AddIns"
+    target = addins.resolve() / "WGLink"
+    target.mkdir(parents=True)
+    external = target / "external.py"
+    external.write_text("keep me\n", encoding="utf-8")
+    real_rename = Path.rename
+
+    def crash_after_moving_previous(path: Path, destination: Path):
+        result = real_rename(path, destination)
+        if path == target and Path(destination).name == "previous":
+            raise _SimulatedCrash
+        return result
+
+    monkeypatch.setattr(Path, "rename", crash_after_moving_previous)
+    with pytest.raises(_SimulatedCrash):
+        installer.install(
+            root=root,
+            addins_dir=addins,
+            archive_path=archive,
+            replace_external=True,
+        )
+    monkeypatch.setattr(Path, "rename", real_rename)
+
+    assert not target.exists()
+    journal = addins / installer.TRANSACTION_JOURNAL
+    assert journal.is_file()
+
+    status, observed = installer.uninstall(root=root, addins_dir=addins)
+
+    assert (status, observed) == ("preserved-external", target)
+    assert external.read_text(encoding="utf-8") == "keep me\n"
+    assert not journal.exists()
+    assert not list(addins.glob(".WGLink-install-*"))
+
+
+def test_recovery_finishes_an_install_that_crashes_after_publication(
+    short_tmp_path: Path, monkeypatch
+):
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "b" * 40)
+    addins = short_tmp_path / "AddIns"
+    target = addins.resolve() / "WGLink"
+    target.mkdir(parents=True)
+    (target / "external.py").write_text("replace me\n", encoding="utf-8")
+    real_rename = Path.rename
+
+    def crash_after_publishing(path: Path, destination: Path):
+        result = real_rename(path, destination)
+        if (
+            Path(destination) == target
+            and path.name == "WGLink"
+            and path.parent.name.startswith(".WGLink-install-")
+        ):
+            raise _SimulatedCrash
+        return result
+
+    monkeypatch.setattr(Path, "rename", crash_after_publishing)
+    with pytest.raises(_SimulatedCrash):
+        installer.install(
+            root=root,
+            addins_dir=addins,
+            archive_path=archive,
+            replace_external=True,
+        )
+    monkeypatch.setattr(Path, "rename", real_rename)
+
+    journal = addins / installer.TRANSACTION_JOURNAL
+    transaction = json.loads(journal.read_text(encoding="utf-8"))
+    previous = addins / transaction["workspace"] / "previous"
+    assert (target / "WGLink.py").is_file()
+    assert (previous / "external.py").is_file()
+
+    observed = installer.managed_target(root=root, addins_dir=addins)
+
+    assert observed == target
+    assert installer.is_managed_target(target, root)
+    assert not journal.exists()
+    assert not previous.exists()
+    assert not list(addins.glob(".WGLink-install-*"))
+
+
+def test_recovery_tolerates_generated_bytecode_after_publication(
+    short_tmp_path: Path, monkeypatch
+):
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "b" * 40)
+    addins = short_tmp_path / "AddIns"
+    target = addins.resolve() / "WGLink"
+    target.mkdir(parents=True)
+    (target / "external.py").write_text("replace me\n", encoding="utf-8")
+    real_rename = Path.rename
+
+    def crash_after_publishing(path: Path, destination: Path):
+        result = real_rename(path, destination)
+        if (
+            Path(destination) == target
+            and path.name == "WGLink"
+            and path.parent.name.startswith(".WGLink-install-")
+        ):
+            raise _SimulatedCrash
+        return result
+
+    monkeypatch.setattr(Path, "rename", crash_after_publishing)
+    with pytest.raises(_SimulatedCrash):
+        installer.install(
+            root=root,
+            addins_dir=addins,
+            archive_path=archive,
+            replace_external=True,
+        )
+    monkeypatch.setattr(Path, "rename", real_rename)
+
+    journal = addins / installer.TRANSACTION_JOURNAL
+    transaction = json.loads(journal.read_text(encoding="utf-8"))
+    previous = addins / transaction["workspace"] / "previous"
+    bytecode = target / "__pycache__" / "wglink_core.cpython-311.pyc"
+    bytecode.parent.mkdir()
+    bytecode.write_bytes(b"generated while Fusion imported WGLink")
+
+    observed = installer.managed_target(root=root, addins_dir=addins)
+
+    assert observed == target
+    assert bytecode.is_file()
+    assert not journal.exists()
+    assert not previous.exists()
+
+
+@pytest.mark.parametrize(
+    "extra_name",
+    (
+        "__pycache__/not_packaged.cpython-311.pyc",
+        "__pycache__/wglink_core.pyc",
+        "wglink_core.cpython-311.pyc",
+    ),
+)
+def test_recovery_rejects_unrelated_or_nonstandard_bytecode(
+    short_tmp_path: Path, monkeypatch, extra_name: str
+):
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "b" * 40)
+    addins = short_tmp_path / "AddIns"
+    target = addins.resolve() / "WGLink"
+    target.mkdir(parents=True)
+    (target / "external.py").write_text("keep me\n", encoding="utf-8")
+    real_rename = Path.rename
+
+    def crash_after_publishing(path: Path, destination: Path):
+        result = real_rename(path, destination)
+        if (
+            Path(destination) == target
+            and path.name == "WGLink"
+            and path.parent.name.startswith(".WGLink-install-")
+        ):
+            raise _SimulatedCrash
+        return result
+
+    monkeypatch.setattr(Path, "rename", crash_after_publishing)
+    with pytest.raises(_SimulatedCrash):
+        installer.install(
+            root=root,
+            addins_dir=addins,
+            archive_path=archive,
+            replace_external=True,
+        )
+    monkeypatch.setattr(Path, "rename", real_rename)
+
+    journal = addins / installer.TRANSACTION_JOURNAL
+    transaction = json.loads(journal.read_text(encoding="utf-8"))
+    previous = addins / transaction["workspace"] / "previous"
+    extra = target.joinpath(*PurePosixPath(extra_name).parts)
+    extra.parent.mkdir(parents=True, exist_ok=True)
+    extra.write_bytes(b"not a permitted generated cache file")
+
+    with pytest.raises(installer.InstallError, match="unexpected installed target"):
+        installer.managed_target(root=root, addins_dir=addins)
+
+    assert journal.is_file()
+    assert extra.is_file()
+    assert (previous / "external.py").read_text(encoding="utf-8") == "keep me\n"
+
+
+def test_recovery_keeps_the_backup_when_the_published_payload_was_tampered(
+    short_tmp_path: Path, monkeypatch
+):
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "b" * 40)
+    addins = short_tmp_path / "AddIns"
+    target = addins.resolve() / "WGLink"
+    target.mkdir(parents=True)
+    (target / "external.py").write_text("keep me\n", encoding="utf-8")
+    real_rename = Path.rename
+
+    def crash_after_publishing(path: Path, destination: Path):
+        result = real_rename(path, destination)
+        if (
+            Path(destination) == target
+            and path.name == "WGLink"
+            and path.parent.name.startswith(".WGLink-install-")
+        ):
+            raise _SimulatedCrash
+        return result
+
+    monkeypatch.setattr(Path, "rename", crash_after_publishing)
+    with pytest.raises(_SimulatedCrash):
+        installer.install(
+            root=root,
+            addins_dir=addins,
+            archive_path=archive,
+            replace_external=True,
+        )
+    monkeypatch.setattr(Path, "rename", real_rename)
+
+    journal = addins / installer.TRANSACTION_JOURNAL
+    transaction = json.loads(journal.read_text(encoding="utf-8"))
+    previous = addins / transaction["workspace"] / "previous"
+    (target / "WGLink.py").write_text("# incomplete after crash\n", encoding="utf-8")
+
+    with pytest.raises(installer.InstallError, match="unexpected installed target"):
+        installer.managed_target(root=root, addins_dir=addins)
+
+    assert journal.is_file()
+    assert (target / "WGLink.py").read_text(encoding="utf-8") == (
+        "# incomplete after crash\n"
+    )
+    assert (previous / "external.py").read_text(encoding="utf-8") == "keep me\n"
+
+
+def test_recovery_refuses_a_journal_owned_by_another_wg_root(
+    short_tmp_path: Path, monkeypatch
+):
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "c" * 40)
+    other_root = _wg_root(short_tmp_path / "other", "d" * 40)
+    addins = short_tmp_path / "AddIns"
+    target = addins.resolve() / "WGLink"
+    target.mkdir(parents=True)
+    (target / "external.py").write_text("keep me\n", encoding="utf-8")
+    real_rename = Path.rename
+
+    def crash_after_moving_previous(path: Path, destination: Path):
+        result = real_rename(path, destination)
+        if path == target and Path(destination).name == "previous":
+            raise _SimulatedCrash
+        return result
+
+    monkeypatch.setattr(Path, "rename", crash_after_moving_previous)
+    with pytest.raises(_SimulatedCrash):
+        installer.install(
+            root=root,
+            addins_dir=addins,
+            archive_path=archive,
+            replace_external=True,
+        )
+    monkeypatch.setattr(Path, "rename", real_rename)
+
+    journal = addins / installer.TRANSACTION_JOURNAL
+    transaction = json.loads(journal.read_text(encoding="utf-8"))
+    previous = addins / transaction["workspace"] / "previous"
+    with pytest.raises(installer.InstallError, match="belongs to a different"):
+        installer.uninstall(root=other_root, addins_dir=addins)
+
+    assert journal.is_file()
+    assert (previous / "external.py").is_file()
+    installer._recover_install_transaction(addins.resolve(), root.resolve())
+    assert (target / "external.py").read_text(encoding="utf-8") == "keep me\n"
 
 
 def test_uninstall_removes_only_the_copy_managed_by_this_wg_root(short_tmp_path: Path):
@@ -427,13 +805,35 @@ def test_a_shipped_package_installs_with_no_network_at_all(tmp_path: Path):
     addins = tmp_path / "AddIns"
 
     status, target = installer.install(
-        root=root, addins_dir=addins, data_dir=tmp_path / "data",
+        root=root,
+        addins_dir=addins,
+        data_dir=tmp_path / "data",
+        offline_only=True,
     )
 
     assert status == "installed"
     assert (target / "WGLink.py").is_file()
     marker = json.loads((target / installer.INSTALL_MARKER).read_text(encoding="utf-8"))
     assert marker["sourceCommit"] == commit
+
+
+def test_offline_only_refuses_cache_when_the_shipped_package_is_missing(
+    short_tmp_path: Path,
+):
+    installer = _load_installer()
+    commit = "e" * 40
+    root, archive = _package(short_tmp_path, commit)
+    state = installer.state_root(root)
+    cached = installer._cache_path(state, "9.8.7", commit)
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(archive, cached)
+    addins = short_tmp_path / "AddIns"
+
+    with pytest.raises(installer.InstallError, match="does not contain its WGLink package"):
+        installer.install(root=root, addins_dir=addins, offline_only=True)
+
+    assert cached.is_file()
+    assert not (addins / "WGLink").exists()
 
 
 def test_a_bundle_keeps_its_writable_state_out_of_the_application(

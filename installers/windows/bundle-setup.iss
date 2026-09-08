@@ -75,6 +75,12 @@ PrivilegesRequiredOverridesAllowed=
 DefaultDirName={localappdata}\Programs\Waveguide Generator
 DefaultGroupName=Waveguide Generator
 UsePreviousAppDir=yes
+; A prior interactive selection must never become consent for an unattended
+; upgrade. With Inno's default UsePreviousTasks=yes, /VERYSILENT could restore
+; the old wglink task even when this invocation names no /TASKS option. The
+; interactive wizard still makes a fresh Fusion-aware recommendation below;
+; silent deployment must opt in on every invocation.
+UsePreviousTasks=no
 
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -100,12 +106,23 @@ WizardStyle=modern
 DisableWelcomePage=yes
 DisableReadyPage=yes
 LicenseFile={#PayloadDir}\app\LICENSE
+; Keep the outcome of the optional WGLink action available after setup exits.
+; This is particularly important for a silent deployment, where the final page
+; is absent and the setup log is the only actionable record.
+SetupLogging=yes
+UninstallLogging=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+; WGLink changes Fusion's per-user AddIns directory, so it is a separate,
+; visible choice rather than a side effect of starting Waveguide Generator.
+; It is preselected only in the interactive wizard and only when an existing
+; Fusion AddIns directory was found. Silent installs must name /TASKS="wglink"
+; explicitly; otherwise they preserve the user's non-consent.
+Name: "wglink"; Description: "Install the &WGLink add-in for Autodesk Fusion"; GroupDescription: "Fusion integration:"; Flags: unchecked
 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -134,6 +151,324 @@ Type: filesandordirs; Name: "{app}\app"
 Type: dirifempty; Name: "{app}"
 
 [Code]
+const
+  WgLinkTaskName = 'wglink';
+  WgLinkMarkerName = 'wglink_install.json';
+  WgLinkDeveloperMarkerName = 'wglink_dev.json';
+  WgLinkTransactionJournalName = '.WGLink-install-transaction.json';
+
+var
+  WgLinkStatus: String;
+
+function SetEnvironmentVariable(Name, Value: String): Boolean;
+  { No setuponly/uninstallonly qualifier: this process-local Windows API is
+    required by both setup and CurUninstallStepChanged. Inno imports an
+    unqualified external into both the setup and uninstaller executables. }
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+
+procedure WgLinkOutput(const S: String; const Error, FirstLine: Boolean);
+begin
+  if Error then
+    Log('WGLink stderr: ' + S)
+  else
+    Log('WGLink stdout: ' + S);
+end;
+
+function WgLinkAddInsDirectory(): String;
+var
+  OverrideDir, Legacy, Current: String;
+begin
+  { WGLINKADDINSDIR is deliberately an undocumented gate hook. It permits the
+    release gate to exercise the real setup executable against a disposable
+    directory without pretending Fusion is installed. The directory must
+    already exist: ordinary setup never creates a Fusion-looking tree merely
+    because a command-line value was misspelled. }
+  OverrideDir := ExpandConstant('{param:WGLINKADDINSDIR|}');
+  if (OverrideDir <> '') and DirExists(OverrideDir) then
+  begin
+    Result := OverrideDir;
+    exit;
+  end;
+
+  Legacy := ExpandConstant('{userappdata}\Autodesk\Autodesk Fusion 360\API\AddIns');
+  Current := ExpandConstant('{userappdata}\Autodesk\Autodesk Fusion\API\AddIns');
+  if DirExists(Legacy) then
+    Result := Legacy
+  else if DirExists(Current) then
+    Result := Current
+  else
+    Result := '';
+end;
+
+function WgLinkTarget(AddInsDirectory: String): String;
+begin
+  Result := AddBackslash(AddInsDirectory) + 'WGLink';
+end;
+
+function WgLinkManagedByThisInstall(Target: String): Boolean;
+var
+  AddInsDirectory, Parameters: String;
+  ExitCode: Integer;
+  PreviousBundleFlag, PreviousAppRoot: String;
+begin
+  Result := False;
+  if not FileExists(ExpandConstant('{app}\runtime\python.exe')) then
+    exit;
+  { Let install_wglink.py decide ownership. Its structured marker validator is
+    the authority for schema, types, pin and developer-marker precedence; a
+    substring check here could disagree with it and report an update that the
+    Python installer correctly preserved. }
+  AddInsDirectory := ExtractFileDir(Target);
+  PreviousBundleFlag := GetEnv('WG2_BUNDLE');
+  PreviousAppRoot := GetEnv('WG2_APP_ROOT');
+  SetEnvironmentVariable('WG2_BUNDLE', '1');
+  SetEnvironmentVariable('WG2_APP_ROOT', ExpandConstant('{app}\app'));
+  try
+    Parameters :=
+      AddQuotes(ExpandConstant('{app}\app\scripts\install_wglink.py')) +
+      ' --print-managed-target --root ' + AddQuotes(ExpandConstant('{app}\app')) +
+      ' --platform windows --addins-dir ' + AddQuotes(AddInsDirectory);
+    if ExecAndLogOutput(
+      ExpandConstant('{app}\runtime\python.exe'), Parameters, ExpandConstant('{app}'),
+      SW_HIDE, ewWaitUntilTerminated, ExitCode, @WgLinkOutput
+    ) then
+      Result := ExitCode = 0
+    else
+      Log('WGLink ownership query could not start for ' + Target + '.');
+  finally
+    SetEnvironmentVariable('WG2_BUNDLE', PreviousBundleFlag);
+    SetEnvironmentVariable('WG2_APP_ROOT', PreviousAppRoot);
+  end;
+end;
+
+function WgLinkHasMarker(Target: String): Boolean;
+begin
+  Result := FileExists(AddBackslash(Target) + WgLinkMarkerName);
+end;
+
+function WgLinkHasDeveloperMarker(Target: String): Boolean;
+begin
+  Result := FileExists(AddBackslash(Target) + WgLinkDeveloperMarkerName);
+end;
+
+function FusionDetected(): Boolean;
+begin
+  Result := WgLinkAddInsDirectory() <> '';
+end;
+
+procedure InstallWGLink();
+var
+  AddInsDirectory, Target, Parameters: String;
+  ExitCode: Integer;
+  PreviousBundleFlag, PreviousAppRoot: String;
+  WasManaged: Boolean;
+begin
+  AddInsDirectory := WgLinkAddInsDirectory();
+  if AddInsDirectory = '' then
+  begin
+    WgLinkStatus :=
+      'WGLink was not installed because Autodesk Fusion was not detected.' + #13#10 +
+      'Install Fusion first, then run this installer again and select WGLink.';
+    Log('WGLink: skipped; no existing Fusion AddIns directory was found.');
+    exit;
+  end;
+
+  Target := WgLinkTarget(AddInsDirectory);
+  WasManaged := False;
+  if not WgLinkHasDeveloperMarker(Target) then
+    WasManaged := WgLinkManagedByThisInstall(Target);
+  if not FileExists(ExpandConstant('{app}\runtime\python.exe')) then
+  begin
+    WgLinkStatus :=
+      'WGLink could not be installed because the bundled Python runtime is missing.' + #13#10 +
+      'Repair Waveguide Generator, then run the installer again.';
+    Log('WGLink: failed; bundled runtime python.exe is missing.');
+    exit;
+  end;
+
+  PreviousBundleFlag := GetEnv('WG2_BUNDLE');
+  PreviousAppRoot := GetEnv('WG2_APP_ROOT');
+  SetEnvironmentVariable('WG2_BUNDLE', '1');
+  SetEnvironmentVariable('WG2_APP_ROOT', ExpandConstant('{app}\app'));
+  try
+    Parameters :=
+      AddQuotes(ExpandConstant('{app}\app\scripts\install_wglink.py')) +
+      ' --root ' + AddQuotes(ExpandConstant('{app}\app')) +
+      ' --platform windows --offline-only --addins-dir ' + AddQuotes(AddInsDirectory);
+    Log('WGLink: running the packaged installer for ' + Target);
+    if not ExecAndLogOutput(
+      ExpandConstant('{app}\runtime\python.exe'), Parameters, ExpandConstant('{app}'),
+      SW_HIDE, ewWaitUntilTerminated, ExitCode, @WgLinkOutput
+    ) then
+    begin
+      WgLinkStatus :=
+        'WGLink could not be started. See the setup log for details, then run the installer again.';
+      Log('WGLink: Exec failed to start the packaged installer.');
+      exit;
+    end;
+  finally
+    SetEnvironmentVariable('WG2_BUNDLE', PreviousBundleFlag);
+    SetEnvironmentVariable('WG2_APP_ROOT', PreviousAppRoot);
+  end;
+
+  if ExitCode <> 0 then
+  begin
+    WgLinkStatus :=
+      'WGLink could not be installed (exit code ' + IntToStr(ExitCode) + ').' + #13#10 +
+      'See the setup log for details, then run the installer again.';
+    Log('WGLink: packaged installer failed with exit code ' + IntToStr(ExitCode) + '.');
+  end
+  { The developer marker always wins, including if a stale or copied WG
+    ownership marker happens to be beside it. install_wglink.py observes the
+    same rule, so setup must not turn its preserved result into "updated". }
+  else if WgLinkHasDeveloperMarker(Target) then
+  begin
+    WgLinkStatus :=
+      'WGLink was not changed because its developer marker was preserved.' + #13#10 +
+      'Remove that developer-managed copy yourself if you want this installer to manage WGLink.';
+    Log('WGLink: preserved developer marker at ' + Target + '.');
+  end
+  else if WgLinkManagedByThisInstall(Target) then
+  begin
+    if WasManaged then
+      WgLinkStatus := 'WGLink was updated. Restart Fusion to load the update.'
+    else
+      WgLinkStatus :=
+        'WGLink was installed. Restart Fusion, then enable Run on Startup in Scripts and Add-Ins.';
+    Log('WGLink: installed or updated managed copy at ' + Target + '.');
+  end
+  else if WgLinkHasMarker(Target) then
+  begin
+    WgLinkStatus :=
+      'WGLink was not changed because an existing installation marker was preserved.' + #13#10 +
+      'Remove that existing copy yourself if you want this installer to manage WGLink.';
+    Log('WGLink: preserved non-owned target with an installation marker at ' + Target + '.');
+  end
+  else
+  begin
+    WgLinkStatus :=
+      'WGLink was not changed because an existing non-Waveguide Generator copy was preserved.' + #13#10 +
+      'Remove that copy yourself if you want this installer to manage WGLink.';
+    Log('WGLink: preserved an existing non-managed copy at ' + Target + '.');
+  end;
+end;
+
+procedure UninstallWGLink();
+var
+  AddInsDirectory, Target, Parameters, Journal: String;
+  ExitCode: Integer;
+  PreviousBundleFlag, PreviousAppRoot: String;
+  HasTransaction: Boolean;
+begin
+  AddInsDirectory := WgLinkAddInsDirectory();
+  if AddInsDirectory = '' then
+  begin
+    Log('WGLink uninstall: no Fusion AddIns directory was found; nothing to remove.');
+    exit;
+  end;
+
+  Target := WgLinkTarget(AddInsDirectory);
+  Journal := AddBackslash(AddInsDirectory) + WgLinkTransactionJournalName;
+  HasTransaction := FileExists(Journal);
+  { Do not invoke the Python cleanup for a developer copy or one owned by a
+    different WG root. The script has the same guard, but this early branch
+    means setup never even opens an external add-in while uninstalling. An
+    interrupted replacement is the exception: install_wglink.py owns its
+    durable recovery protocol, so it must see the journal before we decide
+    whether the current target is ours. }
+  if WgLinkHasDeveloperMarker(Target) and not HasTransaction then
+  begin
+    Log('WGLink uninstall: preserved developer-managed target at ' + Target + '.');
+    exit;
+  end;
+  if (not WgLinkManagedByThisInstall(Target)) and not HasTransaction then
+  begin
+    Log('WGLink uninstall: preserved non-owned target at ' + Target + '.');
+    exit;
+  end;
+  if not FileExists(ExpandConstant('{app}\runtime\python.exe')) then
+  begin
+    Log('WGLink uninstall: managed target preserved because bundled python.exe is missing.');
+    exit;
+  end;
+
+  PreviousBundleFlag := GetEnv('WG2_BUNDLE');
+  PreviousAppRoot := GetEnv('WG2_APP_ROOT');
+  SetEnvironmentVariable('WG2_BUNDLE', '1');
+  SetEnvironmentVariable('WG2_APP_ROOT', ExpandConstant('{app}\app'));
+  try
+    Parameters :=
+      AddQuotes(ExpandConstant('{app}\app\scripts\install_wglink.py')) +
+      ' --uninstall --yes --root ' + AddQuotes(ExpandConstant('{app}\app')) +
+      ' --platform windows --addins-dir ' + AddQuotes(AddInsDirectory);
+    if HasTransaction then
+      Log('WGLink uninstall: recovering an interrupted replacement before managed cleanup.')
+    else
+      Log('WGLink uninstall: removing the managed target before bundle layers.');
+    if not ExecAndLogOutput(
+      ExpandConstant('{app}\runtime\python.exe'), Parameters, ExpandConstant('{app}'),
+      SW_HIDE, ewWaitUntilTerminated, ExitCode, @WgLinkOutput
+    ) then
+      Log('WGLink uninstall: could not start the managed cleanup command.')
+    else if ExitCode <> 0 then
+      Log('WGLink uninstall: managed cleanup failed with exit code ' + IntToStr(ExitCode) + '.')
+    else if DirExists(Target) and HasTransaction then
+      Log('WGLink uninstall: recovery settled; the resulting non-owned target was preserved at ' + Target + '.')
+    else if DirExists(Target) then
+      Log('WGLink uninstall: managed cleanup returned success but left ' + Target + '.')
+    else
+      Log('WGLink uninstall: removed managed target ' + Target + '.');
+  finally
+    SetEnvironmentVariable('WG2_BUNDLE', PreviousBundleFlag);
+    SetEnvironmentVariable('WG2_APP_ROOT', PreviousAppRoot);
+  end;
+end;
+
+procedure InitializeWizard();
+begin
+  { A normal interactive setup may make the Fusion-aware recommendation. A
+    silent invocation has no user to make that choice, so it must opt in with
+    /TASKS="wglink" instead. }
+  if FusionDetected() then
+  begin
+    Log('WGLink: Fusion AddIns directory detected at ' + WgLinkAddInsDirectory() + '.');
+    if not WizardSilent() then
+      WizardSelectTasks(WgLinkTaskName);
+  end
+  else
+    Log('WGLink: no Fusion AddIns directory detected; task remains unchecked.');
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if WizardIsTaskSelected(WgLinkTaskName) then
+      InstallWGLink()
+    else
+    begin
+      WgLinkStatus := 'WGLink was not installed because it was not selected.';
+      Log('WGLink: not selected.');
+    end;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  { usUninstall runs before [UninstallDelete], while both the app script and
+    bundled runtime still exist. Keep the managed Fusion cleanup ahead of the
+    app/runtime deletion below; external targets are preserved above. }
+  if CurUninstallStep = usUninstall then
+    UninstallWGLink();
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and (WgLinkStatus <> '') then
+    WizardForm.FinishedLabel.Caption :=
+      'Waveguide Generator was installed.' + #13#10#13#10 + WgLinkStatus;
+end;
+
 { The bundle's own deepest relative path is measured at build time and passed
   in as MaxPayloadDepth, rather than written here as a number that would quietly
   rot the first time a dependency gains a deeper file. Windows resolves most

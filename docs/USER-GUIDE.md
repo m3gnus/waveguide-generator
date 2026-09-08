@@ -361,24 +361,30 @@ one-time setup.
 
 For Fusion 360:
 
-1. On macOS and Windows, the Waveguide Generator platform installer also
-   installs WGLink. It verifies the exact compatible AGPL source revision and
-   connects Update to WG's existing pinned scientific environment, so no
+1. On Windows, Setup offers **Install the WGLink add-in for Autodesk Fusion**.
+   It is preselected when Fusion's AddIns directory is detected; uncheck it to
+   leave Fusion untouched. Silent deployment must opt in explicitly with
+   `/TASKS="wglink"`. Setup installs the exact compatible AGPL source revision
+   from the verified package carried by the release, without Git or network
+   access, and connects WGLink to WG's pinned scientific environment, so no
    `hornlab-fusion-addin` checkout or second Python environment is needed.
+   The macOS disk image does not yet perform this initial registration; use the
+   source-checkout installer there for the first WGLink installation.
    Restart Fusion after installing WG and confirm **Run on Startup** is ticked under
    **Utilities → Scripts and Add-Ins**; Fusion's own record of that toggle
    overrides the add-in manifest, so a copy once started by hand stays manual
    until the box is ticked. After that, WG keeps the add-in current by itself:
    each start compares the installed copy against the add-in commit that
    release pins and updates it from the package the release carries, with no
-   network and no second installer run. Restart Fusion when it does. It updates
+   network and no second installer run. It does not install an absent add-in at
+   startup. Restart Fusion when it updates one. It updates
    only an add-in this Waveguide Generator installed — one managed by another WG
    installation, one installed by something else, and one synced by a developer
    are each left exactly as they are. Install from exactly one location — a second copy
    loads a second module instance and the two fight over the panel. The installer
-   preserves a developer-managed copy instead of overwriting it. Its transcript
-   reports a retriable warning if the pinned source could not be fetched; rerun
-   the same platform installer after restoring the network connection.
+   preserves a developer-managed copy instead of overwriting it. Setup reports
+   whether WGLink was installed, updated, not selected, not detected, preserved,
+   or failed, and records the same result in its setup log.
 2. Choose a stable local **WGLink folder** in WG. This is intentionally separate from
    the run-output folder, so changing where runs are written cannot disconnect Fusion;
    the picker offers `Documents/Waveguide Generator/cadlink` beside the runs folder.
