@@ -31,16 +31,24 @@ it is still a writer while the child is starting. Releasing first would leave
 that rollback unguarded, and waiting would deadlock the updater against the
 child it just started -- acquisition is non-blocking everywhere for that reason.
 
-So the updater *authorizes* one start instead. After the layers are swapped and
-the bundle is resealed -- and only there -- it mints a single-use grant with
+So the updater *authorizes* each start it performs instead. Where the layers on
+the disk are the ones to open -- after the swap and the reseal on the successful
+path, and over an intact installation whose transaction is decided when an
+update is cancelled or rolled back -- it mints a single-use grant with
 :func:`grant_relaunch`, hands the nonce to the child it starts through that
 child's environment, and the child spends it with
 :func:`consume_relaunch_grant`. A start holding a valid grant is the updater's
-own post-seal relaunch and proceeds; a start without one, while somebody holds
-the claim, is an arbitrary launch into an installation that is being written and
-refuses. Agreement between the two layer manifests is **not** used for this: it
-is true before the first rename and again before the reseal finishes, so it
-authorizes nothing and races the writer that is about to change it.
+own relaunch and proceeds; a start without one, while somebody holds the claim,
+is an arbitrary launch into an installation that is being written and refuses.
+Agreement between the two layer manifests is **not** used for this: it is true
+before the first rename and again before the reseal finishes, so it authorizes
+nothing and races the writer that is about to change it.
+
+**A grant is per relaunch, not per transaction.** An update whose new version
+will not start relaunches twice -- the new version, then the restored one -- and
+the child that refused has already spent the first nonce, so the second start is
+minted its own. Minting clears any earlier grant for the installation, so one is
+outstanding at a time whatever the path.
 
 The grant is a handshake between this application's own processes, not a
 security boundary: anybody who can write the lock directory can write a grant,
@@ -321,14 +329,18 @@ def grant_relaunch(
 ) -> str:
     """Authorize exactly one start of this installation, and return its nonce.
 
-    Called by the updater after the swap and the reseal, so possession of the
-    nonce is evidence of *when* the granting process had got to, not merely that
-    it exists. Returns the nonce for the caller to put in the child's
-    environment.
+    Called by the updater only where the installation on the disk is the one to
+    open -- after the swap and the reseal, or over an intact installation whose
+    transaction has been decided -- so possession of the nonce is evidence of
+    *what state* the granting process had reached, not merely that it exists.
+    Returns the nonce for the caller to put in the child's environment.
 
-    Any earlier grant for this installation is removed first. The updater is the
-    only minter and it holds the installation's claim while it mints, so at most
-    one grant is outstanding and an abandoned one cannot accumulate.
+    Any earlier grant for this installation is removed first, which is also what
+    keeps a second relaunch in one transaction honest: the nonce the refused
+    child was given stops existing when the restored version's is minted. The
+    updater is the only minter and it holds the installation's claim while it
+    mints, so at most one grant is outstanding and an abandoned one cannot
+    accumulate.
     """
 
     directory, prefix = _grant_directory(

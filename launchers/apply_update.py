@@ -2332,14 +2332,23 @@ def _authorized_relaunch_environment(
     *,
     log: LogCallable,
 ) -> dict[str, str]:
-    """Add this transaction's one-shot start authorization to the child's env.
+    """Add a one-shot start authorization for *this* relaunch to the child's env.
 
-    The grant says the granting process had already swapped and resealed, so a
-    start holding it is this updater's own relaunch rather than somebody opening
-    the application while the installation is being written. Best effort: a
-    grant that cannot be written costs the relaunched start its fast path -- it
-    refuses and the user opens the application again once the update is done --
-    and never costs the update itself.
+    The grant says the granting process had reached a point where the layers on
+    the disk are the ones to open -- the swap and the reseal on the successful
+    path, a decided transaction over an intact installation on the recovery
+    paths -- so a start holding it is this updater's own relaunch rather than
+    somebody opening the application while the installation is being written.
+
+    One per attempt, never one per transaction: an update whose new version will
+    not start relaunches twice, and the child that refused already spent the
+    first nonce. :func:`grant_relaunch` clears any earlier grant for the
+    installation as it mints, so the outstanding grant is always the one the
+    next start is entitled to.
+
+    Best effort: a grant that cannot be written costs the relaunched start its
+    fast path -- it refuses and the user opens the application again once the
+    update is done -- and never costs the update itself.
     """
 
     # ``relaunch_environment`` returns None when the child should inherit this
@@ -2459,11 +2468,62 @@ def apply_update(
             return (resources / LINUX_LAUNCHER_NAME).is_file()
         return True
 
+    def unresolved_transaction() -> str | None:
+        """Name a transaction over this installation that nobody has decided.
+
+        Both layers being present says only that no rename is halfway through.
+        It does not say the transaction that moved them ever ended, and an
+        installation whose last transaction is undecided is one the next start
+        has to reconcile -- so it is not one to hand a grant to, because the
+        grant is precisely the token that tells a start to skip reconciliation.
+
+        Read the same way :func:`recover_transaction` reads it: a terminal state
+        is decided, a record naming another installation decides nothing here,
+        and anything else -- including a record that cannot be parsed -- is
+        still in flight.
+        """
+
+        journal = read_journal(data_dir, resources)
+        if journal is None:
+            return None
+        state = str(journal.get("state") or "")
+        if state in TERMINAL_JOURNAL_STATES:
+            return None
+        if not journal_describes(journal, resources):
+            # A second copy of the application sharing this data directory. Its
+            # record says nothing about the directories being reopened here.
+            return None
+        identifier = str(journal.get("transaction") or "unidentified")
+        return f"transaction {identifier} is still unresolved in state {state!r}"
+
     def relaunch_current() -> str | None:
+        """Reopen the version that is on the disk, under a grant minted for it.
+
+        **Every** start is refused while this updater holds the installation's
+        claim, and it holds it until the last mutation is over -- so a recovery
+        relaunch needs its own single-use grant exactly as the successful
+        update's relaunch does. Passing the environment on unchanged is what
+        this used to do, and it left a cancelled or rolled-back update with the
+        application closed: the child had nothing to present, so the startup
+        gate refused it by design. Reusing the successful path's grant would not
+        help either, because the child that was handed it has already spent it.
+
+        The grant is minted per attempt and only once the two conditions that
+        make a start safe hold: the installation on the disk is whole, and its
+        transaction is decided.
+        """
+
         if not live_installation_is_complete():
             return "the on-disk installation is incomplete and was not relaunched"
+        unresolved = unresolved_transaction()
+        if unresolved is not None:
+            return (
+                f"the installation's {unresolved}, so no start was authorized and it "
+                "was not reopened; the next start reconciles it"
+            )
+        authorized = _authorized_relaunch_environment(environment, resources, log=log)
         try:
-            process = relauncher(command, platform_name, environment=environment)
+            process = relauncher(command, platform_name, environment=authorized)
         except Exception as exc:  # noqa: BLE001 - recovery must describe any launch failure
             return f"the application could not be relaunched: {type(exc).__name__}: {exc}"
         failure = confirmer(process)
@@ -2605,14 +2665,20 @@ def apply_update(
             f"them: {' '.join(dropped)}"
         )
     log("Installed and verified the staged bundle layers.")
-    # Swapped and sealed: this is the only point that may authorize a start, and
-    # the claim is still held because a relaunch that does not stay running is
-    # rolled back below. The child spends this grant instead of inferring
-    # anything from the layer manifests, which agree both before the first
-    # rename and before the reseal finishes.
-    environment = _authorized_relaunch_environment(environment, resources, log=log)
+    # Swapped and sealed, and the claim is still held because a relaunch that
+    # does not stay running is rolled back below. The child spends this grant
+    # instead of inferring anything from the layer manifests, which agree both
+    # before the first rename and before the reseal finishes.
+    #
+    # Bound to a name of its own rather than back over ``environment``: this
+    # grant belongs to *this* start, and if the start fails, ``relaunch_current``
+    # must mint a new one from the un-granted base rather than hand the restored
+    # version a nonce this child has already spent.
+    installed_environment = _authorized_relaunch_environment(
+        environment, resources, log=log
+    )
     try:
-        process = relauncher(command, platform_name, environment=environment)
+        process = relauncher(command, platform_name, environment=installed_environment)
     except Exception as exc:  # noqa: BLE001 - a failed launch must restore the old version
         return finish_failure_after_mutation(
             f"Could not relaunch the updated Waveguide Generator: {type(exc).__name__}: {exc}",
@@ -2846,8 +2912,9 @@ def main(argv: list[str] | None = None) -> int:
     # takes the installation's update claim for the whole of it -- including
     # across the relaunch, because a relaunch that does not stay running is
     # rolled back and that is another mutation. Every other writer and every
-    # start takes the same claim and fails closed against it; the one start this
-    # transaction is entitled to is the one it authorizes with a relaunch grant.
+    # start takes the same claim and fails closed against it; the only starts
+    # this transaction is entitled to are the ones it authorizes with a relaunch
+    # grant, one freshly minted per attempt.
     resources = resources_directory(Path(args.bundle), sys.platform)
     try:
         with _claim_update(resources):
