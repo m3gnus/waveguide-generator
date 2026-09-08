@@ -1051,15 +1051,33 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     if (generation !== ingestIntentGeneration) return false;
     const skipped = new Set(ingestRecord.skipped_source_ids);
     const current = get();
-    const channels = current.driveChannels.flatMap((channel) => {
-      const source_ids = channel.source_ids.filter((id) => !skipped.has(id));
-      return source_ids.length ? [{ ...channel, source_ids }] : [];
-    });
     // The ingestion is what finally states which project this geometry belongs
     // to, so it is the authority on where these settings are filed -- whatever
     // the selection had to assume before it existed.
     const project = ingestRecord.project?.lineage_id ?? current.projectLineageId;
+    // Discovering a different owner means the settings on screen were restored
+    // for somebody else -- or not restored at all. Filing them here would
+    // overwrite this project's own saved profile with another project's setup,
+    // or with the defaults a failed restore left behind, and no geometry gate
+    // can see it: the geometry really does belong to this project, only the
+    // solve settings do not. So the destination's own compatible profile is
+    // loaded instead, and only what the ingestion itself states -- the mesh
+    // sizes and the skipped sources -- overrides it.
+    const adopted = solveProfileOwner(project) !== solveProfileOwner(current.projectLineageId)
+      && current.selectedBundle
+      ? restoreSolveProfile(current.selectedBundle, project)
+      : null;
+    const channels = (adopted?.driveChannels ?? current.driveChannels).flatMap((channel) => {
+      const source_ids = channel.source_ids.filter((id) => !skipped.has(id));
+      return source_ids.length ? [{ ...channel, source_ids }] : [];
+    });
     set({
+      ...(adopted ? {
+        ...adopted,
+        // A skipped source can take a whole channel with it; a driver form only
+        // survives on a channel that still exists and can still carry one.
+        channelDrivers: driversForChannels(adopted.channelDrivers, channels),
+      } : {}),
       ingestRecord,
       projectLineageId: project,
       sourceSizesMm: { ...ingestRecord.mesh_sizes.source_size_mm },

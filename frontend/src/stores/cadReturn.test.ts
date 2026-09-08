@@ -54,6 +54,13 @@ function record(id = 'wgi_one'): CadReturnIngestRecord {
   };
 }
 
+function project(lineage_id: string) {
+  return {
+    lineage_id, design_id: null, document_native_id: null,
+    document_name: null, archive_stem: null,
+  };
+}
+
 describe('CAD return store', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -986,6 +993,70 @@ describe('the CAD project owns its solve settings', () => {
     expect(driversForChannels(drivers, [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }]))
       .toEqual({});
     expect(projectChannelDrivers(bundle, 'wgl_other')).toBeNull();
+  });
+
+  /** Reload, or any first selection: nothing knows which CAD project the open
+   * design belongs to until the ingestion states it, so the selection files the
+   * settings under the design. Saving them under the project the ingestion then
+   * names would put whatever that selection produced -- usually the defaults a
+   * restore under the wrong owner left behind -- over the project's own saved
+   * setup. */
+  it('adopts the project the ingestion names instead of filing the open design’s settings over it', () => {
+    // What this project was last solved with.
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setDriveVoltage(8);
+    useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
+
+    // A reload: the design is open and linked, the return is selected, and no
+    // ingestion has named the project yet.
+    resetCadReturnStore();
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_party', lineageId: 'wgl_party', baseEditVersion: 4,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().driveVoltageV).toBe(2.83);
+
+    const store = useCadReturnStore.getState();
+    store.applyIngest(
+      { ...record(), project: project('wgl_party') },
+      store.beginIngestIntent(),
+    );
+    expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
+    expect(useCadReturnStore.getState().channelDrivers['drive-mf'].preset)
+      .toMatchObject({ id: 'Faital Pro::12RS430::8' });
+
+    // And the durable profile still says 8 V, rather than the 2.83 V the
+    // selection was holding when the ingestion arrived.
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
+  });
+
+  it('keeps a project’s saved setup when the ingested return has a different inventory', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setDriveVoltage(8);
+
+    resetCadReturnStore();
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_party', lineageId: 'wgl_party', baseEditVersion: 4,
+    }, 'current');
+    const smaller = { ...bundle, sources: [bundle.sources[0]], sourceCount: 1 };
+    useCadReturnStore.getState().selectBundle(smaller);
+    useCadReturnStore.getState().setDriveVoltage(5);
+    const store = useCadReturnStore.getState();
+    store.applyIngest({
+      ...record(),
+      project: project('wgl_party'),
+      mesh_sizes: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { 'source-mf': 8 } },
+    }, store.beginIngestIntent());
+
+    // No compatible profile to adopt, so the settings this return was actually
+    // prepared with stand -- and the project's own two-source profile, filed
+    // under its own inventory, is left exactly as it was.
+    expect(useCadReturnStore.getState().driveVoltageV).toBe(5);
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    expect(useCadReturnStore.getState().driveVoltageV).toBe(8);
   });
 
   it('survives a document rename, which is not a new project', () => {

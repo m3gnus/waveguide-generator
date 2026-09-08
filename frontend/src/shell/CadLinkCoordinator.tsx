@@ -1074,7 +1074,12 @@ export function CadLinkCoordinator() {
       refusedForeignReturn.current = false;
       seenReturnRevisions.current = null;
       returnListRequest.current += 1;
-      useCadReturnStore.getState().selectBundle(null);
+      // Explicitly no project, rather than "keep whichever one we were on".
+      // The document that owned those settings has just been replaced, and the
+      // previous owner surviving the replacement is how one project's drivers
+      // and voltage came to be restored into the next one -- and then saved
+      // over its own settings by the ingestion that followed.
+      useCadReturnStore.getState().selectBundle(null, null);
       importedMeshStore.beginIntent();
       importedMeshStore.clear('cad');
       setError(null);
@@ -1274,13 +1279,24 @@ export function CadLinkCoordinator() {
       const projectMismatch = Boolean(
         opened && returnBelongsToAnotherProject(opened, currentDesignId),
       );
+      // A selection made because a project was just opened belongs to that
+      // project, and its lineage is knowable before any ingestion: the registry
+      // states it as the opened document's own, and the ingestion will state
+      // the same one. Resolving it here is what lets `restoreSolveProfile` read
+      // the destination's saved settings instead of the previous project's.
+      // (This listing is queued by the load event, so the open has finished
+      // assigning the identity by the time it runs.) `undefined` everywhere
+      // else keeps a same-project iteration on the project it is already on.
+      const destination = projectOpenPending.current
+        ? useDocumentStore.getState().identity?.lineageId ?? null
+        : undefined;
       let continuity: 'initial' | 'carried' | 'reset' = 'initial';
       if (opened && !projectMismatch) {
         // A compatible current or saved source inventory keeps the user's solve
         // setup; a genuinely first listing starts clean without being a reset.
         continuity = arrived
-          ? useCadReturnStore.getState().selectArrivedBundle(arrived)
-          : (useCadReturnStore.getState().selectBundle(opened), 'initial');
+          ? useCadReturnStore.getState().selectArrivedBundle(arrived, destination)
+          : (useCadReturnStore.getState().selectBundle(opened, destination), 'initial');
         // Quietly here: these drivers were just restored, so the user has not
         // seen the numbers this replaces, and the arrival owns the status line.
         void refreshChannelDriverBases().catch(() => undefined);

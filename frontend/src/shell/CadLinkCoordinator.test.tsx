@@ -2098,6 +2098,95 @@ describe('CadLinkCoordinator', () => {
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Selected the latest matching return');
   });
 
+  /** Opening a project replaces the design, and the settings the CAD rail then
+   * restores must be that project's. They were restored under the project that
+   * was open before it, and the ingestion that followed filed them -- another
+   * project's voltage and drivers -- over the destination's own saved setup. */
+  it('restores the opened project’s own solve profile, and does not save the previous one over it', async () => {
+    const presetA = {
+      id: 'Faital Pro::12RS430::8', label: 'Faital Pro 12RS430', source: 'database' as const,
+      kind: 'lf' as const, z_ohm: 8, xo_min_hz: null,
+      base: { sd_cm2: 552, bl_t_m: 18, re_ohm: 6.8 },
+    };
+    const presetB = {
+      id: 'B&C::DE250::8', label: 'B&C DE250', source: 'database' as const,
+      kind: 'cd' as const, z_ohm: 8, xo_min_hz: 1_200,
+      base: { re_ohm: 5.4, bl_t_m: 17.5 },
+    };
+    const returnA = {
+      ...initialBundle, name: 'a.wgreturn', bundlePath: 'wgreturn/a.wgreturn',
+      documentName: 'Project A', designIds: ['wgd_a'],
+    };
+    const returnB = {
+      ...initialBundle, name: 'b.wgreturn', bundlePath: 'wgreturn/b.wgreturn',
+      documentName: 'Project B', designIds: ['wgd_b'],
+    };
+    const recordB = { ...ingestRecord, project: { lineage_id: 'wgl_b' } };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [returnA, returnB] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/api/cadlink/designs')) return json({ items: [] });
+      if (path.endsWith('/ingest')) return json(recordB);
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh);
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    // Each project's own saved setup, as its own selections would have written
+    // them: 3 V and an LF driver for A, 8 V and a compression driver for B.
+    act(() => {
+      const cad = useCadReturnStore.getState();
+      cad.selectBundle(returnB, 'wgl_b');
+      cad.setDriveVoltage(8);
+      cad.setChannelDriverPreset('drive-hf', presetB);
+      cad.selectBundle(returnA, 'wgl_a');
+      cad.setDriveVoltage(3);
+      cad.setChannelDriverPreset('drive-hf', presetA);
+    });
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 1,
+    }, 'current');
+    expect(useCadReturnStore.getState().driveVoltageV).toBe(3);
+
+    // The project switcher opens B: `applyOpenedDesign` replaces the design
+    // first and assigns the identity immediately afterwards.
+    await act(async () => {
+      useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'), {
+        loadSource: 'cad-project-switch',
+      });
+      useDocumentStore.getState().setCadLink({
+        designId: 'wgd_b', lineageId: 'wgl_b', baseEditVersion: 1,
+      }, 'current');
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    });
+
+    const switched = useCadReturnStore.getState();
+    expect(switched.selectedBundle?.bundlePath).toBe(returnB.bundlePath);
+    expect(switched.projectLineageId).toBe('wgl_b');
+    expect(switched.driveVoltageV).toBe(8);
+    expect(switched.channelDrivers['drive-hf'].preset).toMatchObject({ id: 'B&C::DE250::8' });
+
+    // Preparing B files the settings under B, so reopening B still finds them.
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().ingest(); });
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(recordB.ingest_id);
+
+    act(() => {
+      resetCadReturnStore();
+      useCadReturnStore.getState().selectBundle(returnB, 'wgl_b');
+    });
+    const reopened = useCadReturnStore.getState();
+    expect(reopened.driveVoltageV).toBe(8);
+    expect(reopened.channelDrivers['drive-hf'].preset).toMatchObject({ id: 'B&C::DE250::8' });
+    // A's profile is untouched by any of it.
+    act(() => {
+      resetCadReturnStore();
+      useCadReturnStore.getState().selectBundle(returnA, 'wgl_a');
+    });
+    expect(useCadReturnStore.getState().driveVoltageV).toBe(3);
+  });
+
   it('restores driver, crossover, mesh, and sweep inputs from a historical CAD run', async () => {
     const record = {
       ...ingestRecord,
