@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
 import { selectCadWorkspace } from '../api/cadWorkspace';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { showJobModel } from '../jobs/showJobModel';
 import { preferencesStore } from '../prefs/preferences';
 import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
@@ -2117,6 +2118,112 @@ describe('CadLinkCoordinator', () => {
     } as unknown as import('../api/jobsSocket').JobItem;
     await act(async () => { await showCadJobModel(v2Job); });
     expect(useCadReturnStore.getState().combineSpec).toEqual(v2Spec);
+  });
+
+  /** Two archived CAD runs, picked one after the other while the first
+   * ingestion record is still in flight. The click that selected the second run
+   * is the newest intent there is; a slow response for the first must not
+   * become the CAD rail, the solve inputs, or the geometry on screen. */
+  const archivedCadJob = (
+    runNumber: number, ingestId: string, voltage: number,
+  ) => ({
+    id: `run-${runNumber}`,
+    run_number: runNumber,
+    label: `Run ${runNumber}`,
+    config_summary: { geometry_type: 'imported' },
+    cad_source: { ingest_id: ingestId, document_name: `Document ${runNumber}` },
+    cad_setup: {
+      type: 'imported',
+      ingest_id: ingestId,
+      drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      drive_voltage_v: voltage,
+      mesh: { rigid_size_mm: voltage, transition_mm: voltage, source_size_mm: { 'source-hf': voltage } },
+      skipped_source_ids: [],
+      exterior_only: false,
+    },
+    solve_options: {
+      engine: 'metal', symmetry: 'auto', frequency_range: [200, 20_000],
+      num_frequencies: 24, frequency_spacing: 'log', frequencies_hz: null,
+      verbose: false, mesh_validation_mode: 'warn', polar_config: null,
+      stage_delay_ms: 0,
+    },
+  } as unknown as import('../api/jobsSocket').JobItem);
+
+  const archivedCadRoutes = (slow: string, pending: { promise: Promise<Response> }) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      const ingest = /\/api\/cadlink\/ingest\/([^/]+)$/.exec(path)?.[1];
+      if (ingest) {
+        return ingest === slow
+          ? pending.promise
+          : json({ ...ingestRecord, ingest_id: ingest });
+      }
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh);
+      return json({}, 404);
+    }));
+  };
+
+  it('keeps the newest archived CAD run when an older record arrives after it', async () => {
+    const pending = deferred<Response>();
+    archivedCadRoutes('wgi_first', pending);
+
+    let first!: Promise<boolean>;
+    await act(async () => {
+      first = showCadJobModel(archivedCadJob(1, 'wgi_first', 3));
+      await Promise.resolve();
+    });
+    await act(async () => { await showCadJobModel(archivedCadJob(2, 'wgi_second', 7)); });
+
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_second');
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_second');
+
+    let firstResult = true;
+    await act(async () => {
+      pending.resolve(json({ ...ingestRecord, ingest_id: 'wgi_first' }));
+      firstResult = await first;
+    });
+
+    expect(firstResult).toBe(false);
+    const state = useCadReturnStore.getState();
+    expect(state.ingestRecord?.ingest_id).toBe('wgi_second');
+    expect(state.selectedBundle?.documentName).toBe('Document 2');
+    expect(state.driveVoltageV).toBe(7);
+    expect(state.rigidSizeMm).toBe(7);
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_second');
+  });
+
+  it('drops an archived CAD run whose record lands after a parametric run was selected', async () => {
+    const pending = deferred<Response>();
+    archivedCadRoutes('wgi_first', pending);
+
+    let first!: Promise<boolean>;
+    await act(async () => {
+      first = showCadJobModel(archivedCadJob(1, 'wgi_first', 3));
+      await Promise.resolve();
+    });
+    // The real parametric selection: `selectJob` routes it to `showJobModel`,
+    // which replaces the working design and returns to parametric mode.
+    const parametric = {
+      id: 'run-3',
+      run_number: 3,
+      config_summary: { geometry_type: 'parametric' },
+      script_snapshot: { version: 1, design: designForFamily('ICW') },
+    } as unknown as import('../api/jobsSocket').JobItem;
+    await act(async () => { expect(await showJobModel(parametric)).toBe(true); });
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+
+    let firstResult = true;
+    await act(async () => {
+      pending.resolve(json({ ...ingestRecord, ingest_id: 'wgi_first' }));
+      firstResult = await first;
+    });
+
+    expect(firstResult).toBe(false);
+    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+    expect(importedMeshStore.getSnapshot().cad).toBeNull();
+    expect(useDesignStore.getState().design.formula).toBe('ICW');
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
   });
 
   it('reopens the remembered CAD project when the mode comes back empty', async () => {

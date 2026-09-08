@@ -808,8 +808,24 @@ export async function showCadJobModel(
     return false;
   }
   coordinator.reportStatus(`Loading ${displayName} from run #${job.run_number}…`);
+  // Captured before the first await, and re-checked after every one of them.
+  // Two archived runs can be picked while the first record request is still
+  // out, and the ingestion fetch is the slowest step here -- so an older
+  // response must never be the one that restores the CAD rail, repaints the
+  // viewport, or hands itself a fresh viewport generation on its way past.
+  // Between them the three tokens cover every way this choice is superseded: a
+  // later CAD selection advances the ingest intent, a later viewport choice
+  // advances the mesh intent, and showing a parametric run or opening a
+  // project replaces the document.
+  const selection = useCadReturnStore.getState().beginIngestIntent();
+  const viewportGeneration = importedMeshStore.beginIntent();
+  const documentLoad = currentDocumentLoad();
+  const superseded = () => !useCadReturnStore.getState().isCurrentIngestIntent(selection)
+    || !importedMeshStore.isCurrentGeneration(viewportGeneration)
+    || !isCurrentDocumentLoad(documentLoad);
   try {
     const record = await getIngest(ingestId, fetcher);
+    if (superseded()) return false;
     const bundle: CadReturnBundle = {
       name: `${displayName}.wgreturn`,
       bundlePath: '',
@@ -827,7 +843,6 @@ export async function showCadJobModel(
         defaultDriveChannelId: source.default_drive_channel_id,
       })),
     };
-    useCadReturnStore.getState().beginIngestIntent();
     const savedSetup = cadHistorySetup(job, record);
     const project = record.project?.lineage_id
       ?? useCadReturnStore.getState().projectLineageId
@@ -864,8 +879,12 @@ export async function showCadJobModel(
     // T/S the library's current numbers rather than the ones they were picked
     // with, which is the whole of re-solving an old run with updated drivers.
     const rereadDrivers = await refreshChannelDriverBases(fetcher);
-    const viewportGeneration = importedMeshStore.beginIntent();
+    // Deliberately not a fresh viewport generation: the driver refresh is a
+    // network round trip of its own, and minting one here would hand this
+    // response ownership of a viewport a newer choice had already taken.
+    if (superseded()) return false;
     await showIngestedMeshInViewport(record, displayName, coordinator.reportViewportNotice, fetcher, viewportGeneration);
+    if (superseded()) return false;
     const shown = importedMeshStore.getSnapshot().cad?.ingestId === ingestId;
     if (!shown) {
       coordinator.reportStatus(`Cannot show ${displayName}: the archived CAD mesh artifacts are no longer available.`);
@@ -876,6 +895,8 @@ export async function showCadJobModel(
     }`);
     return true;
   } catch (reason) {
+    // A superseded request's failure is not news about what is on screen.
+    if (superseded()) return false;
     const missing = reason instanceof CadLinkApiError && reason.status === 404;
     coordinator.reportStatus(missing
       ? `Cannot show ${displayName}: the archived CAD ingestion and mesh artifacts are no longer available.`
