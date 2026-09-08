@@ -53,14 +53,32 @@ export function applyOpenedDesign(
   };
 }
 
-/** Open one project from the CAD-link registry as the working design. */
+/**
+ * Refused because the document this open was decided for is no longer the one
+ * on screen. Its own class so a caller can tell it from a failed request: the
+ * project is fine and the open can be repeated, nothing went wrong with it.
+ */
+export class DesignOpenSupersededError extends Error {}
+
+/**
+ * Open one project from the CAD-link registry as the working design.
+ *
+ * `guard` is asked once, synchronously, after the last await and immediately
+ * before the store is written — never earlier. Fetching the registry snapshot
+ * and parsing it are two network round trips, and a caller that decided it was
+ * safe to replace the document before them decided it against a document that
+ * may since have been edited, replaced, or closed. Returning a reason from the
+ * guard refuses the open with that reason and leaves every store untouched.
+ */
 export async function openCadLinkedProject(
   designId: string,
   fetcher: typeof fetch = fetch,
   loadSource: DesignLoadSource = 'ordinary',
+  guard?: () => string | null,
 ): Promise<OpenedDesign> {
   const snapshot = await getCadLinkedDesign(designId, fetcher);
-  return applyOpenedDesign(
-    await openDesignText(snapshot.text, fetcher), snapshot.filename, loadSource,
-  );
+  const opened = await openDesignText(snapshot.text, fetcher);
+  const refusal = guard?.() ?? null;
+  if (refusal) throw new DesignOpenSupersededError(refusal);
+  return applyOpenedDesign(opened, snapshot.filename, loadSource);
 }

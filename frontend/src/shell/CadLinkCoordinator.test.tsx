@@ -12,6 +12,8 @@ import { designForFamily, resetDesignStore, useDesignStore } from '../stores/des
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { documentSettingsSignature } from '../stores/designWire';
+import { unsavedChangesNow } from '../stores/unsavedChanges';
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -884,6 +886,97 @@ describe('CadLinkCoordinator', () => {
       commandId: 'cmd-other', state: 'refused',
       reason: expect.stringContaining('Tritonia'),
     })]);
+  });
+
+  /** The unsaved-work check is made before two network round trips, and the
+   * document it was made about can change during either of them. The guarantee
+   * is about the instant the design is replaced, so that is where it is
+   * checked — after the last await, not before the helper that does them. */
+  it.each([
+    ['the design is edited while the project loads', () => {
+      useDesignStore.getState().updateField('R', 999);
+    }, () => {
+      expect(useDesignStore.getState().design.R).toBe(999);
+      expect(unsavedChangesNow()).toBe(true);
+    }],
+    ['the design is renamed while the project loads', () => {
+      useDocumentStore.getState().setDesignName('Renamed while loading');
+    }, () => {
+      expect(useDocumentStore.getState().designName).toBe('Renamed while loading');
+      expect(unsavedChangesNow()).toBe(true);
+    }],
+    ['solver settings change while the project loads', () => {
+      useSolveOptionsStore.setState({ symmetry: 'quarter' });
+    }, () => {
+      expect(useSolveOptionsStore.getState().symmetry).toBe('quarter');
+      expect(unsavedChangesNow()).toBe(true);
+    }],
+    // Nothing is dirty here: a third design was opened, and it is clean. Only
+    // an explicit document generation can see this — an unlinked document has
+    // no identity, so identity alone compares equal to the one before it.
+    ['another design is opened while the project loads', () => {
+      useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'));
+      useDocumentStore.getState().setCadLink(null, 'missing');
+      useDocumentStore.getState().markSaved(
+        useDesignStore.getState().designRevision, documentSettingsSignature(),
+      );
+    }, () => {
+      expect(useDesignStore.getState().design.formula).toBe('R-OSSE');
+      expect(useDocumentStore.getState().identity).toBeNull();
+      expect(unsavedChangesNow()).toBe(false);
+    }],
+  ] as const)('refuses a Fusion solve command when %s', async (_label, intervene, verify) => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
+    }, 'current');
+    // A saved baseline, so a settings change is unsaved work rather than the
+    // untouched default a fresh window shows.
+    useDocumentStore.getState().markSaved(
+      useDesignStore.getState().designRevision, documentSettingsSignature(),
+    );
+    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
+    const reported: Array<Record<string, unknown>> = [];
+    const pending = deferred<Response>();
+    let ingestCalls = 0;
+    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      // The *last* await of the open, deliberately: a check that ran before it
+      // would pass and the design would still be replaced afterwards.
+      if (path === '/api/design/open') return pending.promise;
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)));
+        return json({ state: 'refused', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command: {
+        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
+        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
+      }, outcome: null });
+      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
+      return routes(path) ?? json({}, 404);
+    }));
+
+    await renderCoordinator();
+    await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); });
+    act(intervene);
+    await act(async () => {
+      pending.resolve(routes('/api/design/open')!);
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    });
+
+    verify();
+    // Neither applied nor marked saved: the project WG was told to open is not
+    // the document, and it did not quietly become the saved baseline either.
+    expect(useDocumentStore.getState().identity?.designId).not.toBe('wgd_other');
+    expect(ingestCalls).toBe(0);
+    expect(reported).toEqual([expect.objectContaining({
+      commandId: 'cmd-other', state: 'refused',
+      reason: expect.stringContaining('Tritonia'),
+    })]);
+    // Retryable: the user is told what to do and that nothing was thrown away.
+    expect(String(reported[0].reason)).toContain('send the solve again');
   });
 
   it('refuses a Fusion solve command for a design this copy of WG does not hold', async () => {

@@ -54,7 +54,7 @@ import {
 } from '../stores/solveOptions';
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
 import { cadProjectName, listCadProjects, newestReturnForProject, type CadProject } from '../api/cadProjects';
-import { openCadLinkedProject } from '../design/openCadProject';
+import { DesignOpenSupersededError, openCadLinkedProject } from '../design/openCadProject';
 import { unsavedChangesNow } from '../stores/unsavedChanges';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -1850,12 +1850,29 @@ export function CadLinkCoordinator() {
         return 'Fusion asked WG to solve a return from a CAD-linked design this copy of WG does not have.';
       }
       const name = cadProjectName(project);
+      // Both halves of "it is safe to replace what is open" are captured here,
+      // and both are asked again at the last instant before the replacement
+      // happens: the registry read and the parse in between are slow enough for
+      // the user to have typed into the open design or opened another one.
+      const documentLoad = currentDocumentLoad();
       if (unsavedChangesNow()) {
         return `Fusion asked WG to solve a return from ${name}. Save or discard the changes in the open design first, then send the solve again.`;
       }
       try {
-        await openCadLinkedProject(designId, fetch, 'cad-project-switch');
+        await openCadLinkedProject(designId, fetch, 'cad-project-switch', () => {
+          // The document generation, not the design identity: two unrelated
+          // unlinked documents both have no identity at all, so identity
+          // cannot see one being replaced by the other.
+          if (!isCurrentDocumentLoad(documentLoad)) {
+            return 'another design was opened while WG was loading it';
+          }
+          if (unsavedChangesNow()) return 'the open design had unsaved changes by then';
+          return null;
+        });
       } catch (reason) {
+        if (reason instanceof DesignOpenSupersededError) {
+          return `Fusion asked WG to solve a return from ${name}, but ${reason.message}. Nothing was replaced — deal with the open design, then send the solve again.`;
+        }
         const detail = reason instanceof Error ? reason.message : String(reason);
         return `Fusion asked WG to solve a return from ${name}, which could not be opened: ${detail}`;
       }
