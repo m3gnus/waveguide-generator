@@ -59,6 +59,11 @@ from .ingest import (
     ingest_bundle,
     resolve_deferred_viewport,
 )
+# The Onshape leg publishes its bundles under WG's own data directory rather
+# than a user-chosen WGLink folder, so re-ingesting one has to be anchored to
+# that directory. Only the location constant is needed here; the Onshape
+# routes and their credentials stay in ``server/cadlink/onshape/``.
+from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
 from .roles import canonical_source_role
 from .store import CadLinkStore
 from .wgreturn import WgReturnError, declared_domain_planes
@@ -211,6 +216,15 @@ class CadReturnIngestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     bundle_path: str = Field(alias="bundlePath", min_length=1)
+    # Which permitted area ``bundlePath`` is relative to. A WGLink return lives
+    # under the folder the user selected in Settings; an Onshape return is
+    # written by the server under its own data directory and there is no
+    # WGLink folder to select. The client states the origin, never a location:
+    # the path stays relative for both, and the server owns each root. Default
+    # "wglink" so every caller that predates the Onshape leg is unchanged.
+    bundle_origin: Literal["wglink", "onshape"] = Field(
+        default="wglink", alias="bundleOrigin"
+    )
     mesh: ImportedMeshRequest
     skipped_source_ids: list[str] = Field(default_factory=list, alias="skippedSourceIds")
     area_drift_overrides: list[str] = Field(
@@ -976,26 +990,63 @@ def _ingest_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=f"CAD-return ingestion failed: {exc}")
 
 
-@router.post("/ingest")
-async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict[str, Any]:
-    workspace: WorkspaceState = request.app.state.cad_workspace
-    selected = workspace.selected_path()
-    if selected is None:
-        raise HTTPException(
-            status_code=409,
-            detail="No WGLink folder has been selected. Choose one in Settings → CAD Link first.",
-        )
+def _onshape_return_root(request: Request) -> Path:
+    """The one directory the Onshape leg publishes its return bundles into."""
+
+    return (Path(request.app.state.data_dir).resolve() / ONSHAPE_RETURN_SUBDIRECTORY).resolve()
+
+
+def _resolve_ingest_bundle(payload: CadReturnIngestRequest, request: Request) -> Path:
+    """Resolve the requested bundle inside the area its origin permits.
+
+    Both origins are containment-checked, and both are checked the same way:
+    the request names a *relative* path, the server picks the root, and the
+    resolved result must land strictly inside that root. What differs is only
+    which root -- the selected WGLink folder, or WG's own Onshape return
+    directory. Never accept an absolute path for either: a caller that can
+    state a filesystem location can name one outside the permitted area, and
+    the relative-path rule is the whole of what prevents that.
+    """
+
+    if payload.bundle_origin == "onshape":
+        # No WGLink folder is involved: the Onshape leg writes into WG's data
+        # directory, so requiring a selected folder here would refuse a valid
+        # Onshape-only setup outright.
+        root = _onshape_return_root(request)
+        label = "WG's Onshape return directory"
+    else:
+        workspace: WorkspaceState = request.app.state.cad_workspace
+        selected = workspace.selected_path()
+        if selected is None:
+            raise HTTPException(
+                status_code=409,
+                detail="No WGLink folder has been selected. Choose one in Settings → CAD Link first.",
+            )
+        root = selected.resolve()
+        label = "the selected workspace"
     try:
         segments = _path_segments(payload.bundle_path, "bundlePath")
-        if not segments or segments[0].casefold() != "wgreturn":
+        if payload.bundle_origin != "onshape" and (
+            not segments or segments[0].casefold() != "wgreturn"
+        ):
             raise ValueError("bundlePath must be under the selected workspace's wgreturn/ directory")
         if not segments[-1].endswith(".wgreturn"):
             raise ValueError("bundlePath must name a .wgreturn bundle directory")
-        workspace_root = selected.resolve()
-        bundle_path = workspace_root.joinpath(*segments).resolve()
-        _strictly_inside(bundle_path, workspace_root, "bundlePath")
+        bundle_path = root.joinpath(*segments).resolve()
+        _strictly_inside(bundle_path, root, "bundlePath")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # ``_strictly_inside`` is shared with the workspace routes and says
+        # "the selected workspace". Name the area this request was actually
+        # measured against instead, rather than a folder it never used; for
+        # the WGLink origin the label is that same phrase, so nothing moves.
+        detail = str(exc).replace("the selected workspace", label)
+        raise HTTPException(status_code=422, detail=detail) from exc
+    return bundle_path
+
+
+@router.post("/ingest")
+async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict[str, Any]:
+    bundle_path = _resolve_ingest_bundle(payload, request)
     store: CadLinkStore = request.app.state.cadlink_store
     mesh = {
         "rigid_size_mm": payload.mesh.rigid_size_mm,

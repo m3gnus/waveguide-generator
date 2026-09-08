@@ -816,6 +816,24 @@ def test_endpoint_error_mapping_and_workspace_guards(monkeypatch, tmp_path: Path
         asyncio.run(post_ingest(escaped, SimpleNamespace(app=app)))
     assert traversal.value.status_code == 422
 
+    # The relative-path rule is the containment guard, not a formatting
+    # preference: an absolute bundlePath names a location the workspace root
+    # never bounded. Adding a second permitted area for Onshape returns must
+    # not turn this into a way in.
+    for absolute in (
+        str((workspace / "wgreturn" / "speaker.wgreturn").resolve()),
+        "/etc/speaker.wgreturn",
+    ):
+        with pytest.raises(Exception) as unbounded:
+            asyncio.run(
+                post_ingest(
+                    payload.model_copy(update={"bundle_path": absolute}),
+                    SimpleNamespace(app=app),
+                )
+            )
+        assert unbounded.value.status_code == 422
+        assert "must be a relative path" in unbounded.value.detail
+
     monkeypatch.setattr(
         "server.cadlink.api.ingest_bundle",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(

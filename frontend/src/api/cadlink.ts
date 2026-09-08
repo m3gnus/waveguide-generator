@@ -22,9 +22,19 @@ export interface CadReturnInstanceSummary {
   driveChannelIds: string[];
 }
 
+/** Which permitted area a bundle path is relative to.
+ *
+ * A WGLink return sits under the folder chosen in Settings; an Onshape return
+ * is written by the server under its own data directory. The path itself is
+ * relative in both cases and the server owns each root, so this is the whole
+ * of what the client has to say about where a bundle lives. Absent means
+ * 'wglink', which is what every workspace listing item is. */
+export type CadReturnBundleOrigin = 'wglink' | 'onshape';
+
 export interface CadReturnBundle {
   name: string;
   bundlePath: string;
+  bundleOrigin?: CadReturnBundleOrigin;
   modifiedAt: string;
   readable: boolean;
   documentName: string | null;
@@ -146,6 +156,7 @@ export interface FusionCadStatus {
 
 export interface CadReturnIngestRequest {
   bundlePath: string;
+  bundleOrigin?: CadReturnBundleOrigin;
   mesh: {
     rigidSizeMm: number;
     transitionMm: number;

@@ -646,7 +646,14 @@ async def return_to_wg(
         "translationId": translation_id,
         "bundle": {
             "name": bundle_path.name,
-            "bundlePath": str(bundle_path),
+            # Relative to WG's own Onshape return directory, and paired with
+            # the origin that names it. The absolute location this used to
+            # report could not be re-ingested: /api/cadlink/ingest refuses an
+            # absolute bundlePath, which is the guard that keeps a request
+            # from naming a path outside a permitted area. The client states
+            # what the bundle is, and the server resolves where it lives.
+            "bundlePath": bundle_path.name,
+            "bundleOrigin": "onshape",
             "documentName": link.get("document_name"),
             "sourceCount": 1,
             "instanceCount": 1,

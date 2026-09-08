@@ -3,7 +3,7 @@ import { currentDesignWire, designWireWithSolveSettings, wgSolveSettingsFromStor
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import type { DesignIdentity } from '../stores/document';
 import type { WgLinkExportResponse } from './designIo';
-import type { CadReturnIngestRecord } from './cadlink';
+import type { CadReturnBundleOrigin, CadReturnIngestRecord } from './cadlink';
 
 export type OnshapeState = 'not_configured' | 'not_linked' | 'instance_selection_required' | 'current' | 'stale';
 
@@ -72,7 +72,9 @@ export interface OnshapeReturnResult {
   translationId: string;
   bundle: {
     name: string;
+    /** Relative to the origin below, never an absolute filesystem location. */
     bundlePath: string;
+    bundleOrigin?: CadReturnBundleOrigin;
     documentName: string | null;
     sourceCount: number;
     instanceCount: number;

@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
 from hornlab_mesher.config_builder import resolve_geometry
+from server.app import create_app
+from server.cadlink.api import CadReturnIngestRequest, post_ingest
 from server.cadlink.onshape.return_leg import (
+    RETURN_SUBDIRECTORY,
     write_and_ingest_return,
     write_return_bundle,
 )
@@ -337,6 +343,153 @@ def test_source_bearing_return_passes_the_existing_ingest_pipeline(tmp_path: Pat
     assert record["return_id"] == read_wgreturn(bundle_path).manifest["return"]["id"]
     assert record["sources"][0]["id"] == "source-hf"
     assert record["mesh_sizes"]["source_size_mm"] == {"source-hf": 4.0}
+
+
+def test_an_onshape_return_rebuilds_with_the_local_mesh_controls(tmp_path: Path) -> None:
+    """The Rebuild mesh button has to work on an Onshape return.
+
+    The panel shows the rigid/source size fields and Force full domain for an
+    Onshape import exactly as it does for a WGLink one, and changing any of
+    them marks the record stale -- so if the rebuild cannot run, the import
+    cannot be solved at all. Returning from Onshape again is not the same
+    thing: that path rebuilds with the sizing the outbound export suggested
+    (4 mm here) and no preparation options.
+
+    The setup is Onshape-only: no WGLink folder is selected, which is the
+    configuration in which the shared ingest endpoint used to answer 409. And
+    no second cloud translation happens -- the endpoint is called directly, no
+    Onshape credentials exist in this app, and the STEP the first return
+    downloaded is asserted byte-identical afterwards.
+    """
+
+    outbound, step = _outbound(tmp_path)
+    data_dir = tmp_path / "data"
+    app = create_app(data_dir=data_dir)
+    bundle_path = _run_in_gmsh_session(
+        write_return_bundle,
+        step,
+        link={
+            "document_id": "DID",
+            "workspace_id": "WID",
+            "part_studio_element_id": "PART",
+            "document_name": "Demo Horn",
+        },
+        export_row={"manifest_json": json.dumps(outbound)},
+        data_dir=data_dir,
+    )
+    assert app.state.cad_workspace.selected_path() is None
+    translated = (bundle_path / "assembly.step").read_bytes()
+
+    # Every mesh control the panel offers, moved off the exported suggestion.
+    payload = CadReturnIngestRequest.model_validate(
+        {
+            "bundlePath": bundle_path.name,
+            "bundleOrigin": "onshape",
+            "mesh": {
+                "rigidSizeMm": 9.5,
+                "transitionMm": 12.0,
+                "sourceSizeMm": {"source-hf": 2.5},
+            },
+            "symmetryMode": "full",
+            "expectedDesignId": outbound["design"]["id"],
+        }
+    )
+
+    async def drive() -> dict:
+        result = await post_ingest(payload, SimpleNamespace(app=app))
+        # The handler answers before its deferred viewport and archive work;
+        # let those finish rather than closing the loop underneath them.
+        for task in [
+            item for item in asyncio.all_tasks() if item is not asyncio.current_task()
+        ]:
+            with contextlib.suppress(Exception):
+                await task
+        return result
+
+    record = asyncio.run(drive())
+
+    assert record["mesh_sizes"]["rigid_size_mm"] == 9.5
+    assert record["mesh_sizes"]["transition_mm"] == 12.0
+    assert record["mesh_sizes"]["source_size_mm"] == {"source-hf": 2.5}
+    assert record["symmetry"]["requested_mode"] == "full"
+    assert record["symmetry"]["cut_planes"] == []
+    # The same translated artifact, re-prepared: no new Onshape round trip.
+    assert record["return_id"] == read_wgreturn(bundle_path).manifest["return"]["id"]
+    assert (bundle_path / "assembly.step").read_bytes() == translated
+
+
+def test_re_ingesting_an_onshape_return_still_refuses_a_path_outside_its_area(
+    tmp_path: Path,
+) -> None:
+    """The Onshape route is anchored, not unguarded.
+
+    The WGLink route's relative-path rule is what stops a caller naming a path
+    outside the return folder, so the Onshape route may not be the absolute
+    escape hatch the WGLink one refuses to be. It has its own root -- WG's
+    Onshape return directory -- and the same two rules: relative only, and the
+    resolved result strictly inside that root.
+    """
+
+    data_dir = tmp_path / "data"
+    app = create_app(data_dir=data_dir)
+    root = data_dir.resolve() / RETURN_SUBDIRECTORY
+    (root / "wgr_demo.wgreturn").mkdir(parents=True)
+    outside = tmp_path / "outside.wgreturn"
+    outside.mkdir()
+    mesh = {"rigidSizeMm": 6, "transitionMm": 8, "sourceSizeMm": {"source-hf": 2}}
+
+    for bundle_path in (
+        str(outside),
+        str(root / "wgr_demo.wgreturn"),
+        "../../outside.wgreturn",
+        "wgr_demo.wgreturn/../../../outside.wgreturn",
+    ):
+        payload = CadReturnIngestRequest.model_validate(
+            {"bundlePath": bundle_path, "bundleOrigin": "onshape", "mesh": mesh}
+        )
+        with pytest.raises(HTTPException) as refusal:
+            asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
+        assert refusal.value.status_code == 422
+
+
+def test_the_onshape_route_stays_anchored_when_a_wglink_folder_is_selected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each origin resolves against its own root, never the other's.
+
+    A machine can have both legs configured. The origin -- not the presence of
+    a selected folder -- decides which permitted area a bundle name is read
+    against, so a selected WGLink folder must not start answering for Onshape
+    names, nor the reverse.
+    """
+
+    data_dir = tmp_path / "data"
+    app = create_app(data_dir=data_dir)
+    onshape_root = data_dir.resolve() / RETURN_SUBDIRECTORY
+    (onshape_root / "wgr_demo.wgreturn").mkdir(parents=True)
+    workspace = tmp_path / "workspace"
+    (workspace / "wgreturn" / "wgr_demo.wgreturn").mkdir(parents=True)
+    app.state.cad_workspace.select(workspace)
+
+    resolved: list[Path] = []
+    monkeypatch.setattr(
+        "server.cadlink.api.ingest_bundle",
+        lambda bundle, *_args, **_kwargs: resolved.append(bundle) or {"ingest_id": "wgi_x"},
+    )
+    mesh = {"rigidSizeMm": 6, "transitionMm": 8, "sourceSizeMm": {"source-hf": 2}}
+    for origin, bundle_path in (
+        ("onshape", "wgr_demo.wgreturn"),
+        ("wglink", "wgreturn/wgr_demo.wgreturn"),
+    ):
+        payload = CadReturnIngestRequest.model_validate(
+            {"bundlePath": bundle_path, "bundleOrigin": origin, "mesh": mesh}
+        )
+        asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
+
+    assert resolved == [
+        onshape_root / "wgr_demo.wgreturn",
+        workspace.resolve() / "wgreturn" / "wgr_demo.wgreturn",
+    ]
 
 
 def test_shipping_o3_open_throat_refuses_instead_of_inventing_source_evidence(tmp_path: Path) -> None:
