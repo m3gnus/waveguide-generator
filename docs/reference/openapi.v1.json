@@ -9894,6 +9894,38 @@
               "title": "Namespace",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "X-WG-Settings-Writer",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Wg-Settings-Writer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-WG-Settings-Seq",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Wg-Settings-Seq"
+            }
           }
         ],
         "responses": {
@@ -9908,6 +9940,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "A later write from the same writer is already stored"
           },
           "422": {
             "content": {
@@ -9936,6 +9971,38 @@
               "title": "Namespace",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "X-WG-Settings-Writer",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Wg-Settings-Writer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-WG-Settings-Seq",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Wg-Settings-Seq"
+            }
           }
         ],
         "requestBody": {
@@ -9960,6 +10027,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "description": "A later write from the same writer is already stored"
           },
           "422": {
             "content": {

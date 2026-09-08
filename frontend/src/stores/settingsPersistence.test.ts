@@ -27,6 +27,70 @@ function response(body: unknown, ok = true): Response {
   return { ok, json: async () => body } as unknown as Response;
 }
 
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+interface BackendCall {
+  namespace: string;
+  method: string;
+  writer: string | null;
+  seq: number | null;
+  ok: boolean;
+}
+
+/**
+ * A stand-in for `server/settings`: it commits in the order requests reach it,
+ * records deletions as tombstones, and refuses a write its ordering guard finds
+ * stale. `ordered: false` is the same contract without the guard -- what a
+ * settings file written by an older build behaves like -- so the client's own
+ * safety net can be tested separately from the server's.
+ */
+function settingsBackend({
+  ordered = true,
+  before,
+}: {
+  ordered?: boolean;
+  before?: (call: { namespace: string; method: string; value: unknown }) => Promise<void> | void;
+} = {}) {
+  const namespaces = new Map<string, unknown>();
+  const deleted = new Set<string>();
+  const accepted = new Map<string, { writer: string; seq: number }>();
+  const calls: BackendCall[] = [];
+  const envelope = () => ({
+    schemaVersion: 1,
+    namespaces: Object.fromEntries(namespaces),
+    deleted: [...deleted],
+  });
+  const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!init?.method) return response(envelope());
+    const url = String(input);
+    const namespace = url.slice(url.lastIndexOf('/') + 1);
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    const writer = headers['X-WG-Settings-Writer'] ?? null;
+    const rawSeq = headers['X-WG-Settings-Seq'];
+    const seq = rawSeq === undefined ? null : Number(rawSeq);
+    const value = init.body === undefined ? null : JSON.parse(String(init.body));
+    await before?.({ namespace, method: init.method, value });
+    const previous = accepted.get(namespace);
+    if (ordered && writer !== null && seq !== null
+        && previous !== undefined && previous.writer === writer && seq <= previous.seq) {
+      calls.push({ namespace, method: init.method, writer, seq, ok: false });
+      return response({ detail: 'A newer settings write is already stored.' }, false);
+    }
+    if (init.method === 'DELETE') {
+      namespaces.delete(namespace);
+      deleted.add(namespace);
+    } else {
+      namespaces.set(namespace, value);
+      deleted.delete(namespace);
+    }
+    if (writer !== null && seq !== null) accepted.set(namespace, { writer, seq });
+    else accepted.delete(namespace);
+    calls.push({ namespace, method: init.method, writer, seq, ok: true });
+    return response(envelope());
+  }) as unknown as typeof fetch;
+  return { namespaces, deleted, calls, fetcher };
+}
+
 describe('opening a design does not discard remembered settings', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
 
@@ -388,5 +452,122 @@ describe('durable settings', () => {
     const settings = new DurableSettings({ storage: null, writeDelayMs: () => 0, fetcher: (async () => response({})) as unknown as typeof fetch });
     settings.set('theme', 'light');
     expect(settings.get('theme')).toBe('light');
+  });
+
+  /**
+   * Closing the window sends the pending value immediately and deliberately
+   * ahead of the request queue, so an upload already on the wire can reach the
+   * server after it. Whichever arrives last, the value the user last chose is
+   * the one that must survive the next launch.
+   */
+  async function flushOvertakesAnUploadInFlight(ordered: boolean) {
+    const release = new Map<string, () => void>();
+    const held = new Map<string, Promise<void>>();
+    for (const value of ['A', 'B']) {
+      held.set(value, new Promise<void>((resolve) => release.set(value, resolve)));
+    }
+    const backend = settingsBackend({
+      ordered,
+      before: async ({ value }) => { await held.get(String(value)); },
+    });
+
+    let delay = 0;
+    const settings = new DurableSettings({ fetcher: backend.fetcher, writeDelayMs: () => delay });
+    settings.set('theme', 'A');
+    await tick(); // A is on the wire, and the server has not committed it yet.
+    delay = 50;
+    settings.set('theme', 'B'); // Debounced: for now only this tab holds B.
+    settings.flush(); // pagehide: keepalive, ahead of the queue.
+    await tick();
+
+    release.get('B')?.();
+    await tick();
+    release.get('A')?.(); // The older request commits last.
+    await tick();
+    await tick();
+
+    return { backend, settings };
+  }
+
+  it('lets the server refuse the stale half of an unload-flush race', async () => {
+    const { backend } = await flushOvertakesAnUploadInFlight(true);
+
+    expect(backend.namespaces.get('theme')).toBe('B');
+    const writes = backend.calls.filter((call) => call.namespace === 'theme');
+    expect(writes.map((call) => call.ok)).toEqual([true, false]);
+    // One writer, increasing sequence numbers: that pair is the whole basis on
+    // which the server can tell the stale request from the fresh one. The
+    // refused request is the one carrying the lower number.
+    expect(typeof writes[0]?.writer).toBe('string');
+    expect(new Set(writes.map((call) => call.writer)).size).toBe(1);
+    expect(writes[1]?.seq as number).toBeLessThan(writes[0]?.seq as number);
+  });
+
+  it('keeps the retry marker when a server without the guard commits the stale write last', async () => {
+    const { backend } = await flushOvertakesAnUploadInFlight(false);
+
+    // Nothing on the client can retract a request the server already accepted,
+    // so the evidence that the browser holds the newer copy has to survive.
+    expect(backend.namespaces.get('theme')).toBe('A');
+    expect(localStorage.getItem(`${SETTINGS_NAMESPACES.theme}.local-newer`)).toBe('1');
+    expect(localStorage.getItem(SETTINGS_NAMESPACES.theme)).toBe('B');
+
+    const restarted = new DurableSettings({ fetcher: backend.fetcher, writeDelayMs: () => 0 });
+    const seen: Array<string | null> = [];
+    restarted.subscribe('theme', (raw) => seen.push(raw));
+    await restarted.hydrate();
+    await tick();
+
+    expect(restarted.get('theme')).toBe('B');
+    expect(backend.namespaces.get('theme')).toBe('B');
+    expect(seen).toEqual([]);
+  });
+
+  /**
+   * A namespace missing from the server cannot say by itself whether it was
+   * deleted or has simply never been migrated, so the server records the
+   * deletion and hydration stops seeding from a cache the deletion could not
+   * clear.
+   */
+  it('does not resurrect a deleted namespace when the browser cache cannot be cleared', async () => {
+    const key = SETTINGS_NAMESPACES.designDraft;
+    localStorage.setItem(key, 'old-draft');
+    const storage = {
+      getItem: (name: string) => localStorage.getItem(name),
+      setItem: () => { throw new Error('Storage is read-only'); },
+      removeItem: () => { throw new Error('Storage is read-only'); },
+    } as unknown as Storage;
+    const backend = settingsBackend();
+    backend.namespaces.set('designDraft', 'old-draft');
+
+    const first = new DurableSettings({ storage, fetcher: backend.fetcher, writeDelayMs: () => 0 });
+    first.set('designDraft', null);
+    await tick();
+    expect(backend.namespaces.has('designDraft')).toBe(false);
+    expect(first.get('designDraft')).toBeNull();
+
+    // The next launch. The browser copy the deletion could not remove is still
+    // there, and this instance has no memory of having deleted anything.
+    const restarted = new DurableSettings({ storage, fetcher: backend.fetcher, writeDelayMs: () => 0 });
+    const seen: Array<string | null> = [];
+    restarted.subscribe('designDraft', (raw) => seen.push(raw));
+    await restarted.hydrate();
+    await tick();
+
+    expect(restarted.get('designDraft')).toBeNull();
+    expect(backend.namespaces.has('designDraft')).toBe(false);
+    expect(backend.calls.filter((call) => call.method === 'PUT')).toEqual([]);
+    expect(seen).toEqual([null]);
+  });
+
+  it('still seeds a namespace the server has never heard of', async () => {
+    localStorage.setItem(SETTINGS_NAMESPACES.theme, 'dark');
+    const backend = settingsBackend();
+    const settings = new DurableSettings({ fetcher: backend.fetcher, writeDelayMs: () => 0 });
+
+    await settings.hydrate();
+    await tick();
+
+    expect(backend.namespaces.get('theme')).toBe('dark');
   });
 });
