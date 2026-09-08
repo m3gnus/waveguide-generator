@@ -1599,6 +1599,10 @@ export function CadLinkCoordinator() {
       const skipped = new Set(current.skippedSourceIds);
       const record = await ingestReturn({
         bundlePath: current.selectedBundle.bundlePath,
+        // A workspace listing item has no origin and is a WGLink return; an
+        // Onshape return carries its own. The server resolves each against
+        // its own root, so this is the only thing that has to be dispatched.
+        bundleOrigin: current.selectedBundle.bundleOrigin ?? 'wglink',
         mesh: {
           rigidSizeMm: current.rigidSizeMm,
           transitionMm: current.transitionMm,
@@ -1731,7 +1735,13 @@ export function CadLinkCoordinator() {
       }));
       const bundle: CadReturnBundle = {
         name: result.bundle.name,
+        // Both halves travel together, and neither is a filesystem location:
+        // the path is relative and the origin says which permitted area it is
+        // relative to. Keeping the origin here is what lets Rebuild mesh
+        // re-ingest this return -- the local mesh controls are displayed for
+        // it, and without the origin the request is refused as a WGLink path.
         bundlePath: result.bundle.bundlePath,
+        bundleOrigin: result.bundle.bundleOrigin ?? 'onshape',
         modifiedAt: result.ingest.created_at,
         readable: true,
         documentName: result.bundle.documentName,

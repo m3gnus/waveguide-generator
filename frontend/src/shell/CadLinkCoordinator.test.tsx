@@ -7,6 +7,7 @@ import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { showJobModel } from '../jobs/showJobModel';
 import { preferencesStore } from '../prefs/preferences';
 import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
+import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
@@ -117,6 +118,7 @@ describe('CadLinkCoordinator', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetCadReturnStore();
+    resetCadPreparationStore();
     resetDesignStore();
     resetDocumentStore();
     resetSolveOptionsStore();
@@ -497,6 +499,105 @@ describe('CadLinkCoordinator', () => {
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(activate).toHaveBeenCalledWith('cadlink');
+  });
+
+  it('rebuilds an Onshape return locally, with no WGLink folder and no second translation', async () => {
+    // The panel shows the mesh-size fields and Force full domain for an
+    // Onshape import, and changing one marks the record stale -- so the
+    // rebuild has to reach the ingest endpoint or the import cannot be
+    // solved at all. The return leg publishes under WG's own data directory,
+    // so the request states the bundle's origin and a name relative to it;
+    // this setup has no WGLink folder to be relative to.
+    preferencesStore.update({ cadApplication: 'onshape' });
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 1,
+    }, 'current');
+    const ingestBodies: Record<string, unknown>[] = [];
+    const paths: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      paths.push(path);
+      if (path.includes('/onshape/connection')) return json({
+        configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+        insecureKeyFile: false, account: { id: 'ACC', name: 'Owner' }, plan: null,
+      });
+      if (path.endsWith('/onshape/status')) return json({
+        state: 'current',
+        credentials: { configured: true, credentialsPath: '/x/onshape.env', detail: null, insecureKeyFile: false },
+        link: null,
+        wgChangesAvailable: false,
+        currentFormula: 'OSSE',
+      });
+      if (path.endsWith('/onshape/return')) return json({
+        translationId: 'tr_1',
+        bundle: {
+          name: 'wgr_demo.wgreturn',
+          bundlePath: 'wgr_demo.wgreturn',
+          bundleOrigin: 'onshape',
+          documentName: 'Speaker',
+          sourceCount: 1,
+          instanceCount: 1,
+        },
+        ingest: ingestRecord,
+      });
+      if (path.endsWith('/cadlink/ingest')) {
+        ingestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json({ ...ingestRecord, ingest_id: 'wgi_rebuilt' });
+      }
+      // No returns listing exists to be relative to: an Onshape-only setup
+      // has never selected a WGLink folder.
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: false, items: [] });
+      return json({}, 404);
+    }));
+    vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    await renderCoordinator();
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().returnFromOnshape(); });
+
+    act(() => {
+      useCadReturnStore.getState().setRigidSize(9.5);
+      useCadReturnStore.getState().setSourceSize('source-hf', 2.5);
+      useCadPreparationStore.getState().setSymmetryMode('full');
+      useCadReturnStore.getState().markIngestStale('The CAD symmetry preparation mode changed.');
+    });
+    expect(useCadReturnStore.getState().needsIngest).toBe(true);
+    const translations = paths.filter((path) => path.endsWith('/onshape/return')).length;
+
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().ingest(); });
+
+    expect(ingestBodies).toHaveLength(1);
+    expect(ingestBodies[0].bundlePath).toBe('wgr_demo.wgreturn');
+    expect(ingestBodies[0].bundleOrigin).toBe('onshape');
+    expect(ingestBodies[0].mesh).toMatchObject({ rigidSizeMm: 9.5, sourceSizeMm: { 'source-hf': 2.5 } });
+    expect(ingestBodies[0].symmetryMode).toBe('full');
+    const state = useCadReturnStore.getState();
+    expect(state.ingestRecord?.ingest_id).toBe('wgi_rebuilt');
+    expect(state.needsIngest).toBe(false);
+    expect(state.ingestStaleReason).toBeNull();
+    // The bundle Onshape already translated was re-prepared where it lay.
+    expect(paths.filter((path) => path.endsWith('/onshape/return'))).toHaveLength(translations);
+  });
+
+  it('rebuilds a workspace return against the WGLink folder, not the Onshape area', async () => {
+    const ingestBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/cadlink/ingest')) {
+        ingestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(ingestRecord);
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    act(() => { useCadReturnStore.getState().selectBundle(initialBundle); });
+
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().ingest(); });
+
+    expect(ingestBodies.at(-1)?.bundlePath).toBe('wgreturn/speaker.wgreturn');
+    expect(ingestBodies.at(-1)?.bundleOrigin).toBe('wglink');
   });
 
   it.each(['design', 'instance'])('discards an Onshape return superseded by a newer %s', async (target) => {

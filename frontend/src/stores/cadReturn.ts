@@ -335,9 +335,15 @@ export const LISTING_GONE_REASON = 'The ingested return no longer appears in the
  * evidence about the archived run. Reconciling one against the listing would
  * report it missing on the first poll after every recall -- 2.5 s -- and latch
  * the recalled run out of being solved again.
+ *
+ * An Onshape return is the same case for the same reason: it is published
+ * under WG's own data directory, so the WGLink return folder never held it and
+ * its absence from that listing says nothing at all. Reconciling one would
+ * latch it stale on the next poll -- including the poll that follows a
+ * successful Rebuild mesh -- and put solving back out of reach.
  */
 function fromWorkspaceListing(bundle: CadReturnBundle): boolean {
-  return bundle.bundlePath !== '';
+  return bundle.bundlePath !== '' && (bundle.bundleOrigin ?? 'wglink') === 'wglink';
 }
 
 function bundleChangeReason(previous: CadReturnBundle, current: CadReturnBundle | null): string | null {

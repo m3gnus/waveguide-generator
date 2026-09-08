@@ -1175,6 +1175,31 @@ describe('listing-gone staleness self-heals', () => {
     expect(useCadReturnStore.getState().ingestStaleReason).toBeNull();
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('');
   });
+
+  it('leaves an Onshape return solvable across WGLink listing polls', () => {
+    // An Onshape return is published under WG's own data directory, so the
+    // WGLink return folder never held it and its absence from that listing is
+    // not evidence about it. Reconciling it would mark the rebuild that just
+    // succeeded stale again on the next poll.
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+    const onshape: CadReturnBundle = {
+      ...bundle,
+      name: 'wgr_demo.wgreturn',
+      bundlePath: 'wgr_demo.wgreturn',
+      bundleOrigin: 'onshape',
+    };
+    const store = useCadReturnStore.getState();
+    store.selectBundle(onshape);
+    store.applyIngest(record(), store.beginIngestIntent());
+
+    useCadReturnStore.getState().refreshSelectedBundle(null);
+
+    expect(useCadReturnStore.getState().needsIngest).toBe(false);
+    expect(useCadReturnStore.getState().ingestStaleReason).toBeNull();
+    expect(useCadReturnStore.getState().selectedBundle?.bundleOrigin).toBe('onshape');
+  });
 });
 
 describe('combined output: band roles', () => {
