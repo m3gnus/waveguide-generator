@@ -11,13 +11,25 @@ is the authority and the browser copy is only a cache for first paint.
 Namespace payloads are stored opaquely.  The frontend already owns the schema,
 its validation, and its migrations; duplicating that here would create a second
 definition to keep in step for no gain.  What this module does own is the
-envelope, the size ceilings, the atomic write, and the order of writes.
+envelope, the size ceilings, the atomic write, and two pieces of state the
+browser cannot hold on its own:
 
-A namespace write may carry the identity of the writer and a sequence number
-that rises across that writer's writes.  Two requests from one page can be in
-flight at once (closing the window sends the pending value immediately,
-deliberately ahead of the request queue), and the network may deliver them in
-either order, so the older one can arrive last and overwrite the newer value.  A write whose sequence number does not exceed the last one
+``deleted`` -- the envelope carries the names of namespaces that were deleted,
+not merely the ones that exist.  An absent namespace is ambiguous: it is what a
+deletion leaves behind *and* what an installation that has never migrated that
+setting looks like, and the client answers those two cases in opposite ways.
+Without the tombstone a browser cache that could not be cleared -- storage that
+reads but refuses to write -- republishes the deleted value on the next launch.
+The key is additive: a file written before it exists simply has no tombstones,
+and a reader that does not know the key ignores it, so ``schemaVersion`` does
+not move.
+
+Write ordering -- a namespace write may carry the identity of the writer and a
+sequence number that rises across that writer's writes.  Two requests from one
+page can be in flight at once (closing the window sends the pending value
+immediately, deliberately ahead of the request queue), and the network may
+deliver them in either order, so the older one can arrive last and overwrite
+the newer value.  A write whose sequence number does not exceed the last one
 accepted *from the same writer* is refused.  This state is per process and is
 never written to the file: it orders requests that overlap in time, and
 requests cannot overlap a restart.  Writes with no ordering hints -- an older
@@ -52,6 +64,10 @@ NAMESPACE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 MAX_NAMESPACE_BYTES = 256 * 1024
 MAX_TOTAL_BYTES = 2 * 1024 * 1024
 MAX_NAMESPACES = 64
+
+#: Tombstones are bounded the same way, oldest dropped first.  A dropped
+#: tombstone only costs the ambiguity that existed before it was recorded.
+MAX_DELETED = MAX_NAMESPACES
 
 
 class SettingsError(ValueError):
@@ -98,6 +114,7 @@ class SettingsStore:
             else (data_paths(data_dir).root / SETTINGS_NAME).resolve()
         )
         self._namespaces: dict[str, Any] = {}
+        self._deleted: list[str] = []
         #: namespace -> (writer, sequence) of the last write accepted from it.
         self._accepted: dict[str, tuple[str, int]] = {}
         self._loaded = False
@@ -149,11 +166,19 @@ class SettingsStore:
         if not isinstance(payload, dict):
             return
         namespaces = payload.get("namespaces")
-        if not isinstance(namespaces, dict):
-            return
-        self._namespaces = {
-            name: value for name, value in namespaces.items() if valid_namespace(str(name))
-        }
+        if isinstance(namespaces, dict):
+            self._namespaces = {
+                name: value for name, value in namespaces.items() if valid_namespace(str(name))
+            }
+        # Absent in every file written before tombstones existed, which is
+        # exactly the pre-existing behaviour: nothing is known to be deleted.
+        deleted = payload.get("deleted")
+        if isinstance(deleted, list):
+            self._deleted = [
+                name
+                for name in dict.fromkeys(str(entry) for entry in deleted)
+                if valid_namespace(name) and name not in self._namespaces
+            ][-MAX_DELETED:]
 
     def _ensure_loaded(self) -> None:
         if not self._loaded:
@@ -173,8 +198,18 @@ class SettingsStore:
         self._ensure_loaded()
         return self._namespaces.get(namespace)
 
+    def deleted(self) -> list[str]:
+        """The namespaces a client has deleted, oldest first."""
+
+        self._ensure_loaded()
+        return list(self._deleted)
+
     def envelope(self) -> dict[str, Any]:
-        return {"schemaVersion": SCHEMA_VERSION, "namespaces": self.all()}
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "namespaces": self.all(),
+            "deleted": self.deleted(),
+        }
 
     def _reject_stale(
         self, namespace: str, writer: str | None, sequence: int | None
@@ -230,12 +265,19 @@ class SettingsStore:
 
         candidate = dict(self._namespaces)
         candidate[namespace] = json.loads(encoded)
-        envelope = {"schemaVersion": SCHEMA_VERSION, "namespaces": candidate}
+        # Writing a namespace revives it: whatever deleted it has been undone.
+        candidate_deleted = [name for name in self._deleted if name != namespace]
+        envelope = {
+            "schemaVersion": SCHEMA_VERSION,
+            "namespaces": candidate,
+            "deleted": candidate_deleted,
+        }
         if len(json.dumps(envelope).encode("utf-8")) > MAX_TOTAL_BYTES:
             raise SettingsError(f"Stored settings exceed {MAX_TOTAL_BYTES} bytes.")
 
         _write_json_atomic(self.settings_path, envelope)
         self._namespaces = candidate
+        self._deleted = candidate_deleted
         self._record_write(namespace, writer, sequence)
         return envelope
 
@@ -249,20 +291,33 @@ class SettingsStore:
         self._ensure_loaded()
         self._ensure_writable()
         self._reject_stale(namespace, writer, sequence)
-        if namespace in self._namespaces:
-            candidate = {
-                name: value for name, value in self._namespaces.items() if name != namespace
-            }
+        # An unusable name can never have been stored, so there is nothing to
+        # delete and nothing worth recording under a name a read would drop.
+        if not valid_namespace(namespace):
+            return self.envelope()
+        candidate = {
+            name: value for name, value in self._namespaces.items() if name != namespace
+        }
+        candidate_deleted = [name for name in self._deleted if name != namespace]
+        candidate_deleted.append(namespace)
+        candidate_deleted = candidate_deleted[-MAX_DELETED:]
+        if candidate != self._namespaces or candidate_deleted != self._deleted:
             _write_json_atomic(
                 self.settings_path,
-                {"schemaVersion": SCHEMA_VERSION, "namespaces": candidate},
+                {
+                    "schemaVersion": SCHEMA_VERSION,
+                    "namespaces": candidate,
+                    "deleted": candidate_deleted,
+                },
             )
             self._namespaces = candidate
+            self._deleted = candidate_deleted
         self._record_write(namespace, writer, sequence)
         return self.envelope()
 
 
 __all__ = [
+    "MAX_DELETED",
     "MAX_NAMESPACES",
     "MAX_NAMESPACE_BYTES",
     "MAX_TOTAL_BYTES",

@@ -38,10 +38,11 @@ interface BackendCall {
 }
 
 /**
- * A stand-in for `server/settings`: it commits in the order requests reach it
- * and refuses a write its ordering guard finds stale. `ordered: false` is the
- * same contract without the guard -- what an older build behaves like -- so
- * the client's own safety net can be tested separately from the server's.
+ * A stand-in for `server/settings`: it commits in the order requests reach it,
+ * records deletions as tombstones, and refuses a write its ordering guard finds
+ * stale. `ordered: false` is the same contract without the guard -- what a
+ * settings file written by an older build behaves like -- so the client's own
+ * safety net can be tested separately from the server's.
  */
 function settingsBackend({
   ordered = true,
@@ -51,9 +52,14 @@ function settingsBackend({
   before?: (call: { namespace: string; method: string; value: unknown }) => Promise<void> | void;
 } = {}) {
   const namespaces = new Map<string, unknown>();
+  const deleted = new Set<string>();
   const accepted = new Map<string, { writer: string; seq: number }>();
   const calls: BackendCall[] = [];
-  const envelope = () => ({ schemaVersion: 1, namespaces: Object.fromEntries(namespaces) });
+  const envelope = () => ({
+    schemaVersion: 1,
+    namespaces: Object.fromEntries(namespaces),
+    deleted: [...deleted],
+  });
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!init?.method) return response(envelope());
     const url = String(input);
@@ -70,14 +76,19 @@ function settingsBackend({
       calls.push({ namespace, method: init.method, writer, seq, ok: false });
       return response({ detail: 'A newer settings write is already stored.' }, false);
     }
-    if (init.method === 'DELETE') namespaces.delete(namespace);
-    else namespaces.set(namespace, value);
+    if (init.method === 'DELETE') {
+      namespaces.delete(namespace);
+      deleted.add(namespace);
+    } else {
+      namespaces.set(namespace, value);
+      deleted.delete(namespace);
+    }
     if (writer !== null && seq !== null) accepted.set(namespace, { writer, seq });
     else accepted.delete(namespace);
     calls.push({ namespace, method: init.method, writer, seq, ok: true });
     return response(envelope());
   }) as unknown as typeof fetch;
-  return { namespaces, calls, fetcher };
+  return { namespaces, deleted, calls, fetcher };
 }
 
 describe('opening a design does not discard remembered settings', () => {
@@ -510,6 +521,43 @@ describe('durable settings', () => {
     expect(restarted.get('theme')).toBe('B');
     expect(backend.namespaces.get('theme')).toBe('B');
     expect(seen).toEqual([]);
+  });
+
+  /**
+   * A namespace missing from the server cannot say by itself whether it was
+   * deleted or has simply never been migrated, so the server records the
+   * deletion and hydration stops seeding from a cache the deletion could not
+   * clear.
+   */
+  it('does not resurrect a deleted namespace when the browser cache cannot be cleared', async () => {
+    const key = SETTINGS_NAMESPACES.designDraft;
+    localStorage.setItem(key, 'old-draft');
+    const storage = {
+      getItem: (name: string) => localStorage.getItem(name),
+      setItem: () => { throw new Error('Storage is read-only'); },
+      removeItem: () => { throw new Error('Storage is read-only'); },
+    } as unknown as Storage;
+    const backend = settingsBackend();
+    backend.namespaces.set('designDraft', 'old-draft');
+
+    const first = new DurableSettings({ storage, fetcher: backend.fetcher, writeDelayMs: () => 0 });
+    first.set('designDraft', null);
+    await tick();
+    expect(backend.namespaces.has('designDraft')).toBe(false);
+    expect(first.get('designDraft')).toBeNull();
+
+    // The next launch. The browser copy the deletion could not remove is still
+    // there, and this instance has no memory of having deleted anything.
+    const restarted = new DurableSettings({ storage, fetcher: backend.fetcher, writeDelayMs: () => 0 });
+    const seen: Array<string | null> = [];
+    restarted.subscribe('designDraft', (raw) => seen.push(raw));
+    await restarted.hydrate();
+    await tick();
+
+    expect(restarted.get('designDraft')).toBeNull();
+    expect(backend.namespaces.has('designDraft')).toBe(false);
+    expect(backend.calls.filter((call) => call.method === 'PUT')).toEqual([]);
+    expect(seen).toEqual([null]);
   });
 
   it('still seeds a namespace the server has never heard of', async () => {

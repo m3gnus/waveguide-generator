@@ -19,10 +19,15 @@
  * locally. Each store keeps its own schema, validation, and migrations; this
  * module deliberately understands none of them.
  *
- * Each write carries this instance's identity and a sequence number that rises
- * across its writes, so a request the network delivered late cannot overwrite
- * the value that superseded it -- nothing here can retract a request the
- * server has already received.
+ * Two parts of the server contract exist because the browser cannot decide
+ * them alone. Each write carries this instance's identity and a sequence
+ * number that rises across its writes, so a request the network delivered late
+ * cannot overwrite the value that superseded it -- nothing here can retract a
+ * request the server has already received. And the envelope names the
+ * namespaces that were deleted, not only the ones that exist, because an
+ * absent namespace is equally what a deletion and a never-migrated setting
+ * look like, and this browser's stale copy must be republished in the second
+ * case and dropped in the first.
  */
 
 /** Namespace -> the `localStorage` key it has always used. */
@@ -58,6 +63,8 @@ const SEQUENCE_HEADER = 'X-WG-Settings-Seq';
 export interface SettingsEnvelope {
   schemaVersion?: number;
   namespaces?: Record<string, unknown>;
+  /** Namespaces the server records as deleted rather than never written. */
+  deleted?: unknown;
 }
 
 type Listener = (raw: string | null) => void;
@@ -174,6 +181,12 @@ export class DurableSettings {
     cachedAtRequest: ReadonlyMap<SettingsNamespace, string | null>,
   ): void {
     const stored = envelope?.namespaces ?? {};
+    // A server that predates tombstones reports none, which is what it meant
+    // before: nothing is known to have been deleted.
+    const deleted = new Set(
+      (Array.isArray(envelope?.deleted) ? envelope.deleted : [])
+        .filter((name): name is string => typeof name === 'string'),
+    );
     for (const namespace of Object.keys(SETTINGS_NAMESPACES) as SettingsNamespace[]) {
       const local = this.get(namespace);
       // A prior publish failed or has not completed. This marker is stored next
@@ -193,6 +206,17 @@ export class DurableSettings {
         if (remote === local) continue;
         this.writeCache(namespace, remote);
         this.notify(namespace, remote);
+        continue;
+      }
+      // Deleted upstream, which an absent namespace alone cannot say. The
+      // browser copy is then a leftover -- a cache the deletion could not
+      // clear, or another origin's -- and republishing it would undo the
+      // deletion on every launch.
+      if (deleted.has(namespace)) {
+        if (local !== null) {
+          this.writeCache(namespace, null);
+          this.notify(namespace, null);
+        }
         continue;
       }
       // Absent upstream: this browser is the only copy, so publish it once.
