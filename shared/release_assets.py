@@ -336,6 +336,88 @@ def is_prerelease(version_or_tag: str) -> bool:
     return prerelease_label(version_or_tag) is not None
 
 
+#: The pre-release identifiers a **release** may carry, lowest first. They are
+#: the three the SemVer specification uses in its own precedence example, the
+#: three `cargo release` accepts as bump levels, and the three GIT-WORKFLOW.md
+#: section 4 writes down (`0.4.0-beta.1`, `1.0.0-rc.1`).
+#:
+#: The order is not enforced by this tuple -- it falls out of SemVer rule 11,
+#: where alphanumeric identifiers compare in ASCII order, so `alpha` < `beta` <
+#: `rc` without anything having to say so. It is listed lowest first because
+#: that is the sequence, and a reader should not have to derive it.
+RELEASE_PRERELEASE_IDENTIFIERS = ("alpha", "beta", "rc")
+
+#: A release pre-release label: one of the identifiers above, optionally with a
+#: number. `rc`, `rc.1`, `beta.2`. Deliberately narrow -- see
+#: ``release_prerelease``.
+RELEASE_PRERELEASE_RE = re.compile(
+    rf"^({'|'.join(RELEASE_PRERELEASE_IDENTIFIERS)})(?:\.(\d+))?$"
+)
+
+
+class ReleasePrerelease(NamedTuple):
+    """A release pre-release label, split into the two things it says."""
+
+    #: `alpha`, `beta` or `rc`.
+    identifier: str
+    #: Which one, within that identifier. A bare `alpha` carries no number and
+    #: reports 0, which is also its precedence: SemVer rule 11 sorts a shorter
+    #: set of identifiers below a longer one whose leading identifiers match, so
+    #: `1.0.0-alpha` < `1.0.0-alpha.1` and counting on from 0 is correct.
+    number: int
+
+
+def release_prerelease(version_or_tag: str) -> ReleasePrerelease | None:
+    """The release pre-release this version is, or ``None`` if it is not one.
+
+    **SemVer gives a release candidate and a build stamp the same slot.** Both
+    are pre-release labels: `0.3.2-rc.1` is a candidate for the 0.3.2 release,
+    and `0.4.0-main.7` is the seventh build of `main` past 0.3.x, which is not a
+    release at all and is published by a different workflow (see
+    ``docs/reference/UPDATE-CHANNELS.md``). Nothing in the SemVer grammar tells
+    them apart, so **the identifier is what does it**, and it is the only thing
+    that can: they differ in intent, not in shape.
+
+    So this is a whitelist rather than a pattern. A label that is not one of the
+    three release identifiers is not a release pre-release -- `main.7` is a
+    build stamp, and so is anything else someone invents. That is the safe
+    direction: a new build-stamp prefix is refused by the release path by
+    default, where the reverse would let one be published as a release the first
+    time somebody chose a new word.
+
+    ``None`` is also returned for a stable release, which is not a pre-release
+    of any kind. Use ``is_build_stamp`` to tell the two ``None`` cases apart.
+    """
+
+    label = prerelease_label(version_or_tag)
+    if label is None:
+        return None
+    match = RELEASE_PRERELEASE_RE.fullmatch(label)
+    if match is None:
+        return None
+    identifier, number = match.groups()
+    return ReleasePrerelease(identifier, int(number) if number is not None else 0)
+
+
+def is_release_prerelease(version_or_tag: str) -> bool:
+    """Whether this names a release candidate, beta or alpha of a release."""
+
+    return release_prerelease(version_or_tag) is not None
+
+
+def is_build_stamp(version_or_tag: str) -> bool:
+    """Whether this names a build rather than a release.
+
+    A build stamp is a pre-release label that is not a release pre-release. It
+    may be published -- as its own immutable pre-release, by its own workflow --
+    but it is never a release, so it must not reach the release path:
+    ``release.yml`` refuses one, and a plain ``scripts/bump_version.py --check``
+    refuses a tree carrying one.
+    """
+
+    return is_prerelease(version_or_tag) and not is_release_prerelease(version_or_tag)
+
+
 def prerelease_precedence(label: str | None) -> tuple[Any, ...]:
     """Order a SemVer pre-release label against its own release (rule 11).
 

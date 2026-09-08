@@ -744,6 +744,24 @@ def test_the_guard_refuses_something_that_is_not_a_release_version(
     assert "prerelease" not in result.outputs
 
 
+@pytest.mark.parametrize("declared", ["0.4.0-main.7", "0.3.2-main.1", "0.4.0-nightly"])
+def test_the_guard_refuses_a_build_stamp(tmp_path: Path, declared: str) -> None:
+    """A build of `main` is not a release, and shares the pre-release slot.
+
+    `docs/reference/UPDATE-CHANNELS.md` states that a main build can never go
+    out through this workflow. That held only because the guard's own parser
+    refused every hyphen, and widening it for release candidates admitted a
+    build stamp with them. The identifier is what tells the two apart, so the
+    guarantee is now asserted rather than inherited.
+    """
+
+    result = _run_guard(tmp_path, declared, ["v0.3.1"])
+
+    assert result.returncode != 0
+    assert "build stamp" in result.stderr
+    assert "prerelease" not in result.outputs
+
+
 def test_the_guard_uses_the_shared_comparator_rather_than_its_own_parser(
     tmp_path: Path,
 ) -> None:

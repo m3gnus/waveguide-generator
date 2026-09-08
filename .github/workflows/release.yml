@@ -148,6 +148,22 @@ jobs:
           except ValueError as exc:
               raise SystemExit(f"shared/version.json does not name a release: {exc}")
 
+          # A release candidate and a build stamp share SemVer's pre-release
+          # slot, and only one of them is a release. `0.4.0-main.7` names a
+          # build of `main` -- published, if ever, by its own workflow, as its
+          # own immutable pre-release. docs/reference/UPDATE-CHANNELS.md states
+          # that a main build can never go out through this workflow, and until
+          # the parser was widened for release candidates that was true only
+          # because the parser refused every hyphen. The identifier is what
+          # tells the two apart now, so the guarantee is stated rather than
+          # inherited from a narrowness that had to go.
+          if release_assets.is_build_stamp(declared):
+              raise SystemExit(
+                  f"{declared} is a build stamp, not a release version. This "
+                  "workflow publishes releases; a build of main is published by "
+                  "its own workflow."
+              )
+
           # `git tag --list v*` also returns the `-updates` companions, which
           # name another version's machinery and are not releases. The comparator
           # refuses them by name, so they filter themselves out here.

@@ -64,11 +64,23 @@ def test_every_declared_version_agrees() -> None:
     assert bump_version.check() == []
 
 
-def test_the_version_is_a_plain_semver_triple() -> None:
-    # The release workflow builds the tag as "v" + this string, so anything the
-    # installer or an update check cannot compare is not usable here.
+def test_the_version_in_the_tree_is_one_a_release_may_carry() -> None:
+    """A release version -- stable or a candidate -- and never a build stamp.
+
+    The release workflow builds the tag as "v" + this string, so anything the
+    installer or an update check cannot compare is not usable here. That admits
+    `0.3.2-rc.1`, which every one of those can compare, and still refuses
+    `0.4.0-main.7`: a build stamp names a build rather than a release, and a
+    tree carrying one must not be releasable.
+    """
+
+    from shared.release_assets import is_build_stamp
+
     version = bump_version.current()
-    assert bump_version.SEMVER.match(version), version
+    assert not is_build_stamp(version), version
+    # And it parses as a release version without anyone having to ask for a
+    # build stamp -- which is what `ci.yml`'s drift job does on every commit.
+    assert bump_version.parse(version, where="test")
 
 
 def test_the_served_version_is_the_shared_one() -> None:
@@ -89,28 +101,208 @@ def test_bump_arithmetic(part: str, expected: str, monkeypatch) -> None:
     assert bump_version.next_version(part) == expected
 
 
-def test_a_non_semver_version_is_refused() -> None:
-    with pytest.raises(bump_version.VersionError):
-        bump_version.parse("2.0.0-rc.1", where="test")
-    with pytest.raises(bump_version.VersionError):
-        bump_version.parse("2.0", where="test")
+@pytest.mark.parametrize(
+    ("version", "part", "expected"),
+    [
+        # From a stable version, a pre-release level opens the next patch --
+        # node-semver's `prerelease` (which it defines as `prepatch`) and
+        # `cargo release`'s `rc`. The number starts at 1, which is how
+        # GIT-WORKFLOW.md section 4 writes them: 0.4.0-beta.1, 1.0.0-rc.1.
+        ("0.3.1", "rc", "0.3.2-rc.1"),
+        ("0.3.1", "beta", "0.3.2-beta.1"),
+        ("0.3.1", "alpha", "0.3.2-alpha.1"),
+        # The same level again counts on within that version.
+        ("0.3.2-rc.1", "rc", "0.3.2-rc.2"),
+        ("0.3.2-beta.2", "beta", "0.3.2-beta.3"),
+        # A bare label carries no number and reads as 0 -- SemVer rule 11 sorts
+        # `1.0.0-alpha` below `1.0.0-alpha.1`, so counting on from 0 is forward.
+        ("1.0.0-alpha", "alpha", "1.0.0-alpha.1"),
+        # Promotion: the core version does not move, the identifier does.
+        ("0.3.2-beta.2", "rc", "0.3.2-rc.1"),
+        ("0.3.2-alpha.4", "beta", "0.3.2-beta.1"),
+    ],
+)
+def test_a_prerelease_level_opens_and_then_counts_on(
+    version: str, part: str, expected: str, monkeypatch
+) -> None:
+    monkeypatch.setattr(bump_version, "current", lambda: version)
+    assert bump_version.next_version(part) == expected
 
 
-def test_a_pre_release_is_a_version_only_when_a_build_asks_for_one() -> None:
-    """`--build-stamp` names a build of `main`, and nothing else.
+@pytest.mark.parametrize(
+    ("version", "part", "expected"),
+    [
+        # THE transition. `patch` on a candidate removes the label and keeps the
+        # core numbers, so the release the candidates were candidates for is
+        # still available. Producing 0.3.3 here would strand 0.3.2 forever: a
+        # published tag is immutable, and 0.3.2 sits above its own RCs, so
+        # nothing could ever fill the hole.
+        ("0.3.2-rc.2", "patch", "0.3.2"),
+        ("0.3.2-beta.1", "patch", "0.3.2"),
+        # The same rule for the other two levels, when the core already names
+        # the version being finalised. node-semver's `inc`; `cargo release`
+        # would give 0.5.0 and 2.0.0 here and strand both.
+        ("0.4.0-rc.1", "minor", "0.4.0"),
+        ("1.0.0-rc.1", "major", "1.0.0"),
+        # And when it does not, the level bumps as usual and the label goes.
+        ("0.3.2-rc.1", "minor", "0.4.0"),
+        ("0.3.2-rc.1", "major", "1.0.0"),
+        ("0.4.1-rc.1", "major", "1.0.0"),
+    ],
+)
+def test_a_candidate_is_finalised_rather_than_stranded(
+    version: str, part: str, expected: str, monkeypatch
+) -> None:
+    monkeypatch.setattr(bump_version, "current", lambda: version)
+    assert bump_version.next_version(part) == expected
 
-    A release is never named this way: `release.yml` independently refuses
-    anything but MAJOR.MINOR.PATCH, and this stays strict everywhere the label
-    is not explicitly allowed -- so the widening cannot leak into a release
-    commit by default.
+
+@pytest.mark.parametrize(
+    ("version", "part"),
+    [
+        # SemVer rule 11 orders the identifiers alphanumerically, so alpha <
+        # beta < rc falls out rather than being asserted anywhere. Asking for a
+        # lower one produces a version that is already published or unreleasable.
+        ("0.3.2-rc.1", "beta"),
+        ("0.3.2-rc.1", "alpha"),
+        ("0.3.2-beta.1", "alpha"),
+    ],
+)
+def test_a_level_that_would_move_backwards_is_refused(
+    version: str, part: str, monkeypatch
+) -> None:
+    monkeypatch.setattr(bump_version, "current", lambda: version)
+    with pytest.raises(bump_version.VersionError, match="does not move forward"):
+        bump_version.next_version(part)
+
+
+def test_a_build_stamp_has_no_next_version(monkeypatch) -> None:
+    """There is no next patch after `0.4.0-main.7`, and asking is the bug.
+
+    A build stamp is not a point on the release line, so nothing can be bumped
+    from it -- the tree it is in is a build, and a build never releases.
     """
 
-    assert bump_version.parse("0.4.0-main.7", where="test", allow_prerelease=True) == (0, 4, 0)
+    # Patching the read rather than `current` keeps the real refusal in the
+    # path: `next_version` reads the tree, and reading a stamped tree is what
+    # must fail.
+    monkeypatch.setattr(
+        bump_version, "_read_json", lambda path: {"version": "0.4.0-main.7"}
+    )
+    with pytest.raises(bump_version.VersionError, match="build stamp"):
+        bump_version.next_version("patch")
+    with pytest.raises(bump_version.VersionError, match="build stamp"):
+        bump_version.next_version("rc")
+
+
+def test_a_non_semver_version_is_refused() -> None:
     with pytest.raises(bump_version.VersionError):
+        bump_version.parse("2.0", where="test")
+    # Build metadata stays unsupported: nothing in this project compares it.
+    with pytest.raises(bump_version.VersionError):
+        bump_version.parse("2.0.0+build", where="test")
+    # An `-updates` companion carries another version's machinery and is not a
+    # version, however much it looks like one.
+    with pytest.raises(bump_version.VersionError, match="companion"):
+        bump_version.parse("2.0.0-updates", where="test")
+
+
+def test_a_release_candidate_is_a_release_version_and_a_build_stamp_is_not() -> None:
+    """The distinction the whole pre-release path rests on.
+
+    SemVer gives both the same slot, so only the identifier separates them.
+    `0.3.2-rc.1` is a release: `release.yml` builds and publishes it, and a
+    release tree may carry it -- so `parse` takes it with nothing asked for.
+    `0.4.0-main.7` is a build of `main`, and a release tree may **not** carry
+    one, which is what `--build-stamp` exists to say out loud.
+    """
+
+    for candidate, core in (
+        ("0.3.2-rc.1", (0, 3, 2)),
+        ("0.4.0-beta.2", (0, 4, 0)),
+        ("1.0.0-alpha", (1, 0, 0)),
+    ):
+        # No flag needed, and the flag does not change the answer.
+        assert bump_version.parse(candidate, where="test") == core
+        assert bump_version.parse(candidate, where="test", allow_prerelease=True) == core
+
+    assert bump_version.parse("0.4.0-main.7", where="test", allow_prerelease=True) == (0, 4, 0)
+    with pytest.raises(bump_version.VersionError, match="build stamp"):
         bump_version.parse("0.4.0-main.7", where="test")
+    # A label that merely looks like one of the three is not one of the three.
+    for stamp in ("0.4.0-RC.1", "0.4.0-rc.1.2", "0.4.0-release"):
+        with pytest.raises(bump_version.VersionError, match="build stamp"):
+            bump_version.parse(stamp, where="test")
+
     for refused in ("0.4.0-", "0.4.0-main..7", "0.4.0+build", "0.4-main.7"):
         with pytest.raises(bump_version.VersionError):
             bump_version.parse(refused, where="test", allow_prerelease=True)
+
+
+def test_a_release_prerelease_is_told_from_a_build_stamp_by_its_identifier() -> None:
+    """One whitelist, in one module, because three callers have to agree.
+
+    `scripts/bump_version.py` decides what a tree may carry, `release.yml`
+    decides what may be published, and the updater decides what may be offered.
+    SemVer puts a candidate and a build stamp in the same slot, so if these
+    three ever spelled the test differently one of them would publish a build.
+    """
+
+    from shared.release_assets import (
+        ReleasePrerelease,
+        is_build_stamp,
+        is_prerelease,
+        is_release_prerelease,
+        release_prerelease,
+    )
+
+    assert release_prerelease("0.3.2-rc.1") == ReleasePrerelease("rc", 1)
+    assert release_prerelease("v0.4.0-beta.12") == ReleasePrerelease("beta", 12)
+    # A bare identifier: no number, and 0 is both its default and its precedence.
+    assert release_prerelease("1.0.0-alpha") == ReleasePrerelease("alpha", 0)
+    assert release_prerelease("0.3.2") is None
+
+    # Whitelist, not a pattern: anything else with a label is a build, and that
+    # is the safe direction. A new build-stamp word is refused by the release
+    # path on the day someone invents it, rather than published as a release.
+    for stamp in ("0.4.0-main.7", "0.4.0-nightly", "0.4.0-RC.1", "0.4.0-rc.1.2"):
+        assert release_prerelease(stamp) is None, stamp
+        assert is_prerelease(stamp), stamp
+        assert is_build_stamp(stamp), stamp
+
+    for candidate in ("0.3.2-rc.1", "0.4.0-beta.2", "1.0.0-alpha"):
+        assert is_release_prerelease(candidate)
+        assert is_prerelease(candidate)
+        assert not is_build_stamp(candidate)
+
+    # A stable release is neither.
+    assert not is_release_prerelease("0.3.2")
+    assert not is_build_stamp("0.3.2")
+
+    # And a companion is not a version at all, in either predicate.
+    for predicate in (is_release_prerelease, is_build_stamp):
+        with pytest.raises(ValueError, match="companion"):
+            predicate("v0.3.2-updates")
+
+
+def test_the_prerelease_identifiers_sort_the_way_the_promotion_order_reads() -> None:
+    """alpha < beta < rc falls out of SemVer rule 11, and nothing asserts it.
+
+    Rule 11 compares alphanumeric identifiers in ASCII order, so the promotion
+    ladder is a consequence of the names rather than a table someone has to keep
+    in step. `bump_version.next_version` relies on exactly this: it refuses a
+    backwards level by comparing versions, not by consulting a ladder.
+    """
+
+    from shared.release_assets import (
+        RELEASE_PRERELEASE_IDENTIFIERS,
+        version_precedence,
+    )
+
+    ordered = [f"0.3.2-{name}.1" for name in RELEASE_PRERELEASE_IDENTIFIERS]
+    ordered.append("0.3.2")
+    assert ordered == sorted(ordered, key=version_precedence)
+    assert list(RELEASE_PRERELEASE_IDENTIFIERS) == ["alpha", "beta", "rc"]
 
 
 def test_native_version_fields_are_numbers_the_platforms_accept() -> None:
@@ -175,6 +367,37 @@ def test_check_validates_a_build_stamp_only_when_asked_to(tmp_path, monkeypatch)
     # knows what each of them should say instead.
     assert bump_version.check() == []
     assert bump_version.main(["--check", "--build-stamp"]) == 0
+    assert bump_version.main(["--check"]) == 1
+
+
+def test_a_candidate_tree_passes_the_plain_check(tmp_path, monkeypatch) -> None:
+    """The half of the pre-release path that no amount of publisher work fixes.
+
+    `ci.yml`'s drift job runs a plain `scripts/bump_version.py --check`, and
+    `release.yml` refuses to build a commit whose CI did not succeed. While this
+    command refused `0.3.2-rc.1`, a candidate's release commit could never go
+    green, so no candidate could be published however far the publisher itself
+    had been widened.
+
+    A build stamp is still refused here, because that guard was protecting
+    something real: a release tree may not carry one.
+    """
+
+    isolate_version_files(tmp_path, monkeypatch)
+
+    bump_version.write("0.3.2-rc.1")
+
+    assert bump_version.check() == []
+    assert bump_version.main(["--check"]) == 0
+    # The natives cannot hold the label and hold its numeric form instead, which
+    # `check` knows about -- this is the same rule the build stamp uses.
+    declared = bump_version.declared_versions()
+    assert declared["shared/version.json"] == "0.3.2-rc.1"
+    assert declared["macOS app CFBundleShortVersionString"] == "0.3.2"
+    assert declared["macOS app CFBundleVersion"] == "1"
+
+    # And a build stamp in the same tree still fails the plain check.
+    bump_version.write("0.4.0-main.7", allow_prerelease=True)
     assert bump_version.main(["--check"]) == 1
 
 

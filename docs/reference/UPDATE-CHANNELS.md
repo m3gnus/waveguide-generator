@@ -116,9 +116,19 @@ it.** Immutable per-commit pre-releases are the design below.
    `scripts/bump_version.py --build-stamp --set <version>` now writes that one
    string to every declared copy: `shared/version.json`, `frontend/package.json`,
    the npm lockfile and the macOS `Info.plist`. Without `--build-stamp` the
-   script refuses a pre-release exactly as before, so a release commit cannot
-   acquire one by accident, and `release.yml` independently requires a plain
-   `MAJOR.MINOR.PATCH` — a main build can never go out through it.
+   script refuses a **build stamp**, so a release commit cannot acquire one by
+   accident, and `release.yml` independently refuses one — a main build can
+   never go out through it.
+
+   Both refusals used to be a side effect of a narrower parser: neither
+   understood a hyphen at all. That had to change, because a *release*
+   pre-release — `0.3.2-rc.1` — is a release and both of them refused it too,
+   so no release candidate could be published. The two are now told apart by
+   the label's identifier (`shared/release_assets.release_prerelease`: `alpha`,
+   `beta`, `rc` are releases, everything else is a build), and each refusal is
+   asserted by its own test rather than inherited. `main.<n>` is a build stamp
+   under that rule, which is what this design has always relied on. See
+   README.md's *Releasing* section.
 
 3. **Old clients must keep working while it runs.** Every *published* client
    resolves the companion inside the 20-entry window. The by-tag lookup below

@@ -17,10 +17,25 @@ they agree.
     python scripts/bump_version.py patch      # 2.0.0 -> 2.0.1
     python scripts/bump_version.py minor      # 2.0.1 -> 2.1.0
     python scripts/bump_version.py major      # 2.1.0 -> 3.0.0
+    python scripts/bump_version.py rc         # 2.1.0 -> 2.1.1-rc.1
+    python scripts/bump_version.py rc         # 2.1.1-rc.1 -> 2.1.1-rc.2
+    python scripts/bump_version.py patch      # 2.1.1-rc.2 -> 2.1.1
     python scripts/bump_version.py --set 2.0.0
 
-Releasing is then: bump, commit, ``git tag v<version>``, push the tag. The tag
-must match, which is what makes this the last chance to notice a drift.
+This script only moves the number. **The tag is created last, by CI** -- see
+``README.md``'s *Releasing* section and GIT-WORKFLOW.md section 4 -- so a failed
+build spends no version. ``release.yml`` refuses to build when the declared
+version disagrees with what it may publish, which is what makes this the last
+chance to notice a drift.
+
+**A release candidate and a build stamp share SemVer's pre-release slot and are
+not the same thing.** ``0.3.2-rc.1`` is a candidate for the 0.3.2 release, built
+and published by ``release.yml``; ``0.4.0-main.7`` is a build of ``main`` that
+is not a release at all. The identifier is what tells them apart --
+``shared/release_assets.release_prerelease`` owns that whitelist -- and this
+script keeps them apart everywhere both can appear: a candidate is an ordinary
+release version here, and a build stamp needs ``--build-stamp`` to be written
+and to pass ``--check``.
 """
 
 from __future__ import annotations
@@ -40,7 +55,13 @@ if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
 from server.platform.paths import app_root  # noqa: E402
-from shared.release_assets import native_version_fields  # noqa: E402
+from shared.release_assets import (  # noqa: E402
+    RELEASE_PRERELEASE_IDENTIFIERS,
+    is_build_stamp,
+    native_version_fields,
+    release_prerelease,
+    version_precedence,
+)
 
 
 REPO_ROOT = app_root()
@@ -61,15 +82,30 @@ APP_PLIST = (
 )
 
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-#: The same triple with a SemVer pre-release label, for a build-only stamp.
+#: The same triple with any SemVer pre-release label.
 #:
-#: A release is never named this way -- `release.yml` independently refuses
-#: anything but MAJOR.MINOR.PATCH -- and neither is a bump: `next_version` reads
-#: the current version to compute the next one, and there is no next patch after
-#: `0.4.0-main.7`. It exists for one job: naming a build of `main` that is not a
-#: release, where the version has to reach every copy at once or the packaged
-#: app disagrees with the file it was published under.
-BUILD_STAMP = re.compile(r"^(\d+)\.(\d+)\.(\d+)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$")
+#: Two different things match this, and the difference is the whole reason the
+#: functions below take an ``allow_prerelease`` argument:
+#:
+#: * A **release pre-release** -- `0.3.2-rc.1`, `0.4.0-beta.2`, `1.0.0-alpha`.
+#:   It is a release: `release.yml` builds and publishes it, flagged as a
+#:   pre-release so `releases/latest` never returns it, and `next_version` can
+#:   compute both the next candidate and the final release from it. A release
+#:   tree may carry one, so a plain `--check` accepts it.
+#: * A **build stamp** -- `0.4.0-main.7`. Not a release: it names a build of
+#:   `main`, published by its own workflow, and there is no next patch after it.
+#:   A release tree may **not** carry one, so a plain `--check` refuses it and
+#:   `--build-stamp` is the build's own route to the same verification.
+#:
+#: `shared/release_assets.release_prerelease` is the one place that decides
+#: which of the two a label is, because `release.yml` has to make the same call.
+#: It was called ``BUILD_STAMP`` while a build stamp was the only thing it could
+#: match; nothing outside this module referred to it by that name.
+PRERELEASE = re.compile(r"^(\d+)\.(\d+)\.(\d+)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$")
+
+#: The bump levels that produce a release pre-release, and the levels the
+#: release script accepts alongside major/minor/patch.
+PRERELEASE_LEVELS = RELEASE_PRERELEASE_IDENTIFIERS
 
 
 class VersionError(RuntimeError):
@@ -84,15 +120,36 @@ def _read_json(path: Path) -> dict:
 
 
 def parse(version: str, *, where: str, allow_prerelease: bool = False) -> tuple[int, int, int]:
+    """The core `(major, minor, patch)` of a version this tree may carry.
+
+    ``allow_prerelease`` admits a **build stamp**, and only that. A release
+    pre-release is admitted unconditionally, because it names a release: the
+    tag check builds "v" + this string and `v0.3.2-rc.1` is a tag the installer
+    and the update check both already compare -- `shared/release_assets.TAG_RE`
+    parses it, `native_version_fields` maps it onto the platforms' numeric
+    slots, and the updater's beta channel orders it. Build metadata (`+build`)
+    stays unsupported everywhere; nothing in this project can compare it.
+    """
+
     match = SEMVER.match(version)
-    if match is None and allow_prerelease:
-        match = BUILD_STAMP.match(version)
+    if match is None and PRERELEASE.match(version):
+        try:
+            stamp = is_build_stamp(version)
+        except ValueError as exc:
+            # An `-updates` companion parses as a pre-release label and is not a
+            # version at all -- the comparator refuses it by name.
+            raise VersionError(f"{where}: {exc}") from exc
+        if allow_prerelease or not stamp:
+            match = PRERELEASE.match(version)
+        else:
+            raise VersionError(
+                f"{where}: {version!r} is a build stamp, not a release version. "
+                "A release tree may not carry one; pass --build-stamp if this is "
+                "a build."
+            )
     if match is None:
-        # Pre-release and build metadata are deliberately unsupported: the tag
-        # check builds "v" + this string, and a release named v2.0.0-rc.1+build
-        # is not something the installer or the update check can compare.
         raise VersionError(f"{where}: {version!r} is not a MAJOR.MINOR.PATCH version")
-    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+    return tuple(int(part) for part in match.groups()[:3])  # type: ignore[return-value]
 
 
 def current(*, allow_prerelease: bool = False) -> str:
@@ -279,27 +336,109 @@ def write(new: str, *, allow_prerelease: bool = False) -> None:
 
 
 def next_version(part: str) -> str:
-    major, minor, patch = parse(current(), where="shared/version.json")
+    """The version ``part`` moves the current one to.
+
+    The rules are node-semver's ``inc`` (npm's `version` command) with one
+    deliberate difference, and they are what keep an RC from stranding the
+    release it is a candidate for:
+
+    ==================  ============  ==================
+    from                level         to
+    ==================  ============  ==================
+    ``0.3.1``           ``patch``     ``0.3.2``
+    ``0.3.1``           ``rc``        ``0.3.2-rc.1``
+    ``0.3.2-rc.1``      ``rc``        ``0.3.2-rc.2``
+    ``0.3.2-beta.2``    ``rc``        ``0.3.2-rc.1``
+    ``0.3.2-rc.2``      ``patch``     ``0.3.2``
+    ``0.3.2-rc.2``      ``minor``     ``0.4.0``
+    ``0.4.0-rc.1``      ``minor``     ``0.4.0``
+    ==================  ============  ==================
+
+    **The RC-to-final transition is the row that matters.** `patch` on a
+    pre-release removes the label and keeps the core numbers, so the final
+    release of `0.3.2-rc.2` is `0.3.2` -- the version the candidates were
+    candidates *for*. Incrementing to `0.3.3` instead would strand `0.3.2`
+    forever, because a published tag is immutable (GIT-WORKFLOW.md section 4)
+    and `0.3.2` could then never be published while its own RCs sat below it.
+    node-semver and `cargo release` both spell this the same way; `cargo
+    release` calls the same operation `release`.
+
+    `minor` and `major` drop the label the same way when the core is already the
+    version being finalised (`0.4.0-rc.1` + `minor` = `0.4.0`), which is
+    node-semver's rule and **not** `cargo release`'s -- that one would produce
+    `0.5.0` and strand `0.4.0`. Same reason: no reachable version may be made
+    unreachable by a bump.
+
+    Nothing here decides whether the result may be *published*. `release.yml`
+    orders it against every published tag with the same comparator; this only
+    refuses to move backwards from the version in the tree, which is what makes
+    `alpha` on an RC an error rather than a silently unpublishable version.
+    """
+
+    version = current()
+    major, minor, patch = parse(version, where="shared/version.json")
+    label = release_prerelease(version)
+
     if part == "major":
-        return f"{major + 1}.0.0"
-    if part == "minor":
-        return f"{major}.{minor + 1}.0"
-    return f"{major}.{minor}.{patch + 1}"
+        # Already the pre-release of that major: finalise it rather than skip it.
+        new = (
+            f"{major}.{minor}.{patch}"
+            if label and minor == 0 and patch == 0
+            else f"{major + 1}.0.0"
+        )
+    elif part == "minor":
+        new = (
+            f"{major}.{minor}.{patch}"
+            if label and patch == 0
+            else f"{major}.{minor + 1}.0"
+        )
+    elif part == "patch":
+        new = f"{major}.{minor}.{patch}" if label else f"{major}.{minor}.{patch + 1}"
+    elif part in PRERELEASE_LEVELS:
+        if label is None:
+            # No candidate in the tree, so this is the first one for the next
+            # patch -- node-semver's `prerelease` from a stable version, which
+            # it defines as `prepatch`, and `cargo release`'s `rc` level.
+            new = f"{major}.{minor}.{patch + 1}-{part}.1"
+        elif label.identifier == part:
+            new = f"{major}.{minor}.{patch}-{part}.{label.number + 1}"
+        else:
+            # A promotion within the same release: beta.2 -> rc.1. Going the
+            # other way produces a lower version and the guard below refuses it.
+            new = f"{major}.{minor}.{patch}-{part}.1"
+    else:  # pragma: no cover - argparse constrains the choices
+        raise VersionError(f"unknown level {part!r}")
+
+    if version_precedence(new) <= version_precedence(version):
+        raise VersionError(
+            f"{part} would move {version} to {new}, which does not move forward. "
+            "Semantic versions only move forward (GIT-WORKFLOW.md section 4)."
+        )
+    return new
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("part", nargs="?", choices=("major", "minor", "patch"))
-    group.add_argument("--set", dest="exact", help="set an exact MAJOR.MINOR.PATCH")
+    group.add_argument(
+        "part",
+        nargs="?",
+        choices=("major", "minor", "patch", *PRERELEASE_LEVELS),
+    )
+    group.add_argument(
+        "--set",
+        dest="exact",
+        help="set an exact version (0.3.2, or 0.3.2-rc.1)",
+    )
     parser.add_argument(
         "--build-stamp",
         action="store_true",
         help=(
-            "allow a pre-release build version (0.4.0-main.7) on --set, and "
-            "accept one on --check. For a build that is not a release; a plain "
-            "--check still refuses a stamped tree, which is what keeps a release "
-            "commit from carrying one."
+            "allow a build stamp (0.4.0-main.7) on --set, and accept one on "
+            "--check. For a build that is not a release; a plain --check still "
+            "refuses a stamped tree, which is what keeps a release commit from "
+            "carrying one. A release candidate (0.3.2-rc.1) is a release "
+            "version and does not need this flag."
         ),
     )
     group.add_argument(
@@ -321,6 +460,13 @@ def main(argv: list[str] | None = None) -> int:
             # one. `--check --build-stamp` is the build's own route to the same
             # verification, and it is the only way to validate the stamp it just
             # wrote.
+            #
+            # A release candidate is not a build stamp and passes a plain
+            # `--check`. It has to: `ci.yml`'s drift job runs exactly this
+            # command, `release.yml` requires that run to have succeeded on the
+            # release commit, and while this refused `0.3.2-rc.1` no candidate
+            # could ever go green -- so none could be published however widely
+            # the publisher itself was opened up.
             print(f"version {current(allow_prerelease=args.build_stamp)} is consistent across all files")
             return 0
 
@@ -346,7 +492,10 @@ def main(argv: list[str] | None = None) -> int:
             # the previous version.
             print("      git commit, in the build only -- never pushed, never tagged")
         else:
-            print(f"      git commit, then git tag v{new} && git push origin v{new}")
+            # No `git tag` instruction: the tag is created last, by release.yml,
+            # after every asset has been built and validated. Printing one here
+            # invited exactly the ordering that spent v0.2.5 and v0.2.6.
+            print("      git commit, then ./release.sh <repo> publish when ready")
         return 0
     except VersionError as exc:
         print(f"error: {exc}", file=sys.stderr)
