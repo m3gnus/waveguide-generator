@@ -496,6 +496,58 @@ describe('CadLinkCoordinator', () => {
     expect(activate).toHaveBeenCalledWith('cadlink');
   });
 
+  it.each(['design', 'instance'])('discards an Onshape return superseded by a newer %s', async (target) => {
+    preferencesStore.update({ cadApplication: 'onshape' });
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 1,
+    }, 'current');
+    const pending = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/onshape/connection')) return json({
+        configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+        insecureKeyFile: false, account: { id: 'ACC', name: 'Owner' }, plan: null,
+      });
+      if (path.endsWith('/onshape/status')) return json({
+        state: 'current',
+        credentials: { configured: true, credentialsPath: '/x/onshape.env', detail: null, insecureKeyFile: false },
+        link: null,
+        wgChangesAvailable: false,
+        currentFormula: 'OSSE',
+      });
+      if (path.endsWith('/onshape/return')) return pending.promise;
+      return json({}, 404);
+    }));
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    await renderCoordinator();
+
+    let operation!: Promise<void>;
+    await act(async () => { operation = cadLinkCoordinatorBridge.getSnapshot().returnFromOnshape(); });
+    await act(async () => {
+      if (target === 'design') {
+        useDesignStore.getState().replaceDesign(designForFamily('OSSE'));
+        useDocumentStore.getState().setCadLink({ designId: 'design-B', lineageId: 'project-B', baseEditVersion: 1 }, 'current');
+      } else {
+        cadLinkCoordinatorBridge.getSnapshot().selectOnshapeInstance('instance-B');
+      }
+    });
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    await act(async () => { pending.resolve(json({
+        translationId: 'tr_1',
+        bundle: { name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', documentName: 'Speaker', sourceCount: 1, instanceCount: 1 },
+        ingest: ingestRecord,
+      })); await operation; });
+    expect(useDocumentStore.getState().identity?.designId).toBe(target === 'design'
+      ? 'design-B' : 'wgd_01K00000000000000000000000');
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+
+    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(activate).not.toHaveBeenCalledWith('cadlink');
+  });
+
   it('resolves a pull with the exact correlated arrival and times the wait out', async () => {
     const linkedFusion: FusionCadStatus = {
       ...closedFusion,

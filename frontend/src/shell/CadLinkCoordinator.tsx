@@ -1124,9 +1124,15 @@ export function CadLinkCoordinator() {
   }, [design, identity, selectedOnshapeInstanceId]);
 
   const selectOnshapeInstance = useCallback((instanceId: string) => {
+    if (instanceId === selectedOnshapeInstanceId) return;
+    useCadReturnStore.getState().beginIngestIntent();
+    importedMeshStore.beginIntent();
+    ingestRequest.current += 1;
+    ingestAbortController.current?.abort();
+    setIngesting(false);
     setSelectedOnshapeInstanceId(instanceId);
     setOnshapeStatus(null);
-  }, []);
+  }, [selectedOnshapeInstanceId]);
 
   // No interval. This status is derived from WG's own registry and changes
   // only when the design or a send does, both of which re-run this effect.
@@ -1629,13 +1635,19 @@ export function CadLinkCoordinator() {
 
   const returnFromOnshape = useCallback(async () => {
     if (!identity?.designId) throw new Error('Send this design to Onshape before returning it.');
-    const ingestGeneration = useCadReturnStore.getState().beginIngestIntent();
+    let ingestGeneration = useCadReturnStore.getState().beginIngestIntent();
+    const request = ++ingestRequest.current;
+    ingestAbortController.current?.abort();
     const viewportGeneration = importedMeshStore.beginIntent();
     setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
     try {
       const result = await returnOnshapeToWg(
         identity.designId, fetch, selectedOnshapeInstanceId,
       );
+      // Translation may finish after a project/model change or a newer return.
+      // Check the original intent before selection creates a fresh generation.
+      if (!mounted.current || request !== ingestRequest.current
+        || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) return;
       const sources = result.ingest.sources.map((source) => ({
         id: source.id,
         role: source.role,
@@ -1658,8 +1670,8 @@ export function CadLinkCoordinator() {
       const state = useCadReturnStore.getState();
       // Same-inventory Onshape iterations keep the user's solve setup too.
       state.selectArrivedBundle(bundle);
-      const selectedGeneration = state.beginIngestIntent();
-      if (!useCadReturnStore.getState().applyIngest(result.ingest, selectedGeneration)) {
+      ingestGeneration = state.beginIngestIntent();
+      if (!useCadReturnStore.getState().applyIngest(result.ingest, ingestGeneration)) {
         setStatus('Discarded the Onshape return because the selected design changed.');
         return;
       }
@@ -1676,12 +1688,13 @@ export function CadLinkCoordinator() {
         viewportGeneration,
       );
     } catch (reason) {
-      if (useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
+      if (mounted.current && request === ingestRequest.current
+        && useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
         setError(reason instanceof Error ? reason.message : String(reason));
       }
       throw reason;
     } finally {
-      setIngesting(false);
+      if (request === ingestRequest.current && mounted.current) setIngesting(false);
     }
   }, [identity?.designId, reportViewportNotice, selectedOnshapeInstanceId]);
 
