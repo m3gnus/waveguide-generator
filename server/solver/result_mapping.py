@@ -636,21 +636,66 @@ def _on_axis_reference_angle(result: Any) -> float | None:
     return reference[1] if reference is not None else None
 
 
+def _spl_db(value: Any) -> float | None:
+    """One complex pressure sample as dB SPL, or ``None`` when it says nothing."""
+
+    amplitude = _finite(np.abs(value))
+    if amplitude is None or amplitude <= 0.0:
+        return None
+    spl = 20.0 * (math.log10(amplitude) - math.log10(REFERENCE_PRESSURE_PA))
+    return spl if math.isfinite(spl) else None
+
+
 def spl_on_axis(result: Any) -> list[float | None]:
     values = _on_axis_pressure(result)
-    count = len(np.asarray(result.frequencies_hz))
+    count = len(np.asarray(result.frequencies_hz).reshape(-1))
     if values is None:
         return [None] * count
-    output: list[float | None] = []
-    for value in values:
-        amplitude = _finite(np.abs(value))
-        if amplitude is None or amplitude <= 0.0:
-            output.append(None)
-            continue
-        spl = 20.0 * (math.log10(amplitude) - math.log10(REFERENCE_PRESSURE_PA))
-        output.append(spl if math.isfinite(spl) else None)
-    count = len(np.asarray(result.frequencies_hz).reshape(-1))
+    output: list[float | None] = [_spl_db(value) for value in values]
     return (output + [None] * count)[:count]
+
+
+def plane_reference_spl(result: Any) -> dict[str, list[float | None]]:
+    """Absolute dB SPL at the on-axis reference sample, one row per polar plane.
+
+    ``spl_on_axis`` is the *first* plane's pressure at the finite sample nearest
+    zero. On a grid that contains 0 degrees every plane meets there, so that one
+    number anchors all of them. On a grid that does not -- 5 to 85 in 10 degree
+    steps, say -- the reference sample is a different observation point in every
+    plane, and the first plane's level anchors nothing but the first plane.
+
+    Each ``directivity`` row is separately normalized, so the per-plane offsets
+    are not recoverable from the published patterns. Publishing each plane's own
+    absolute level at that same sample is what lets a client reconstruct an
+    off-axis response in a secondary plane instead of inventing one. The first
+    plane's row is by construction identical to ``spl_on_axis``.
+    """
+
+    pressure_source = getattr(result, "pressure_complex", None)
+    if pressure_source is None:
+        return {}
+    try:
+        angles = np.asarray(result.observation_angles_deg, dtype=float)
+        pressure = np.asarray(pressure_source, dtype=np.complex128)
+        planes = list(result.observation_planes)
+        count = len(np.asarray(result.frequencies_hz).reshape(-1))
+    except (AttributeError, TypeError, ValueError):
+        return {}
+    if angles.ndim != 1 or pressure.ndim != 3 or pressure.shape[1] == 0:
+        return {}
+    reference = _on_axis_reference(angles, pressure.shape[2])
+    if reference is None:
+        return {}
+    angle_index, _angle_deg = reference
+    output: dict[str, list[float | None]] = {}
+    for plane_index, plane_name in enumerate(planes):
+        if plane_index >= pressure.shape[1]:
+            break
+        row: list[float | None] = [
+            _spl_db(value) for value in pressure[:count, plane_index, angle_index]
+        ]
+        output[str(plane_name)] = (row + [None] * count)[:count]
+    return output
 
 
 def phase_on_axis(result: Any) -> list[float | None]:
@@ -1050,6 +1095,11 @@ def build_solver_response(
     metadata["spl_on_axis"] = {
         "requested_angle_degrees": 0.0,
         "sampled_angle_degrees": on_axis_angle_deg,
+        # Every plane's own absolute level at that same sample. Without it a
+        # client reconstructing an off-axis level in a secondary plane has only
+        # the first plane's anchor, which is a different observation point
+        # whenever the sampled reference is not 0 degrees.
+        "plane_reference_spl_db": plane_reference_spl(result),
     }
     if on_axis_angle_deg is not None and not np.isclose(
         on_axis_angle_deg, 0.0, rtol=0.0, atol=1.0e-9
@@ -1305,6 +1355,7 @@ __all__ = [
     "native_symmetry_plane",
     "observation_config",
     "phase_on_axis",
+    "plane_reference_spl",
     "response_solver_log",
     "specific_impedance_z_over_rho_c",
     "spl_on_axis",

@@ -65,8 +65,9 @@ retaining valid values.
 
 | Field | Contract |
 |---|---|
-| `spl_on_axis.spl` | dB SPL relative to 20 µPa, from the first requested plane at the finite angle nearest 0° |
+| `spl_on_axis.spl` | dB SPL relative to 20 µPa, from the first requested plane at the finite angle nearest 0°. It anchors *that* plane. On a grid without 0° the reference sample is a different observation point in every plane, so use `metadata.spl_on_axis.plane_reference_spl_db` to anchor any other one |
 | `spl_on_axis.phase_degrees` | raw wrapped complex-pressure phase in degrees; zero/invalid amplitude becomes `null` |
+| `metadata.spl_on_axis.plane_reference_spl_db` | `{plane: [dB SPL per frequency]}` — each plane's own absolute level at `metadata.spl_on_axis.sampled_angle_degrees`, the sample `spl_on_axis` speaks for. The first plane's row equals `spl_on_axis.spl` by construction. This is the only published absolute level for a secondary plane: `directivity` rows are normalized per plane, so their per-plane offsets are gone. A client reconstructing `L(theta) = anchor + D(theta) - D(theta_reference)` takes `anchor` from here; without it (payloads stored before this field, and a non-zero reference) the secondary-plane absolute projection is declined rather than anchored to the wrong plane |
 | `directivity[plane]` | per-frequency `[angle_deg, normalized_level_db]` pairs; each row is shifted so the configured normalization angle is 0 dB. The shift is one constant per row, so a reader may re-reference a row to any other angle by shifting it again — that composes exactly and is how the client re-references archived runs at display time. Do not read absolute level out of these: what the unshifted `directivity_db` means is backend-dependent |
 | `directivity_phase[plane]` | raw wrapped pressure phase with the same plane/frequency/angle shape as directivity; it is never level-normalized |
 | `impedance.real/imaginary` | either dimensionless specific acoustic impedance `Z/(rho*c)` from a unit-acceleration solve, or terminal electrical input impedance in ohms for a driver-coupled channel; `metadata.impedance_quantity` and `impedance_units` are authoritative |

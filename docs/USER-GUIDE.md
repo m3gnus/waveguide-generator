@@ -94,6 +94,14 @@ The levels are absolute SPL, the same quantity the on-axis curve has always been
 shape. Only angles the sweep actually sampled are offered: a finer angular step gives
 more of them and costs almost nothing, because the field is evaluated after the solve.
 
+One case cannot be drawn absolutely: a sweep whose angle grid omits 0° — 5° to 85° in
+10° steps, say — has no shared point where the planes meet, so each plane needs its own
+absolute reference, and new solves store one per plane. An archived result that predates
+that field still draws its first measured plane, and every plane's phase; for the other
+planes the SPL card says the level is unavailable and why, rather than showing the first
+plane's level under another plane's name. Re-solving the design supplies the missing
+reference.
+
 Exported polar FRD files carry the same per-angle responses, one file per angle, but
 their level column (`SPL_rel(dB)`) is relative to the normalization angle rather than
 absolute. The on-axis FRD is the one that carries absolute SPL re 20 µPa.
