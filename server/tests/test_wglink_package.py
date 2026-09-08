@@ -382,3 +382,28 @@ def test_fetch_uses_a_disposable_checkout_of_the_exact_commit(tmp_path: Path):
     provenance, _payloads = installer.verify_package(package, root=root)
     assert provenance["sourceCommit"] == commit
     assert package.is_file()
+
+
+@pytest.mark.parametrize("member", [
+    "wglink/D:/outside.txt", "wglink/D:outside.txt", "wglink/file:stream",
+    "wglink/NUL.txt", "wglink/file.", "wglink/file ",
+    "wglink/./alias.txt", "wglink//alias.txt", "wglink/../outside.txt",
+    "wglink/fusion-addins/WGLink/WGLINK.PY",
+])
+def test_unsafe_or_aliased_payload_is_refused_before_materialization(
+    tmp_path: Path, member: str,
+) -> None:
+    installer = _load_installer()
+    root, archive = _package(tmp_path, "a" * 40)
+    with zipfile.ZipFile(archive) as original:
+        payloads = {name: original.read(name) for name in original.namelist()}
+    payloads[member] = b"must not be written"
+    provenance = json.loads(payloads["wglink/provenance.json"])
+    provenance["files"][member] = hashlib.sha256(payloads[member]).hexdigest()
+    payloads["wglink/provenance.json"] = json.dumps(provenance).encode()
+    with zipfile.ZipFile(archive, "w") as edited:
+        for name, data in payloads.items():
+            edited.writestr(name, data)
+    with pytest.raises(installer.InstallError, match="unsafe member|duplicate member"):
+        installer._materialize_runtime(archive, root=root)
+    assert not (root / "integrations/wglink/runtime/payloads").exists()

@@ -24,6 +24,7 @@ if str(_IMPORT_ROOT) not in sys.path:
 
 from server.platform.paths import app_root  # noqa: E402
 from server.platform.staging import publish_staging_directory  # noqa: E402
+from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
 
 
 REPO_ROOT = app_root()
@@ -104,15 +105,21 @@ def _safe_member(info: zipfile.ZipInfo) -> bool:
     name = info.filename
     pure = PurePosixPath(name)
     mode = (info.external_attr >> 16) & 0o170000
-    return (
-        not info.is_dir()
-        and "\\" not in name
-        and not pure.is_absolute()
-        and pure.parts
-        and pure.parts[0] == "wglink"
-        and ".." not in pure.parts
-        and mode != 0o120000
-    )
+    if (
+        info.is_dir()
+        or pure.is_absolute()
+        or len(pure.parts) < 2
+        or pure.parts[0] != "wglink"
+        or pure.as_posix() != name
+        or mode == 0o120000
+    ):
+        return False
+    try:
+        for component in pure.parts:
+            validate_relative_name(component, what="WGLink archive component")
+    except UnsafeName:
+        return False
+    return True
 
 
 def verify_package(
@@ -130,7 +137,7 @@ def verify_package(
     with archive:
         infos = archive.infolist()
         names = [info.filename for info in infos]
-        if not infos or len(infos) > MAX_MEMBERS or len(names) != len(set(names)):
+        if not infos or len(infos) > MAX_MEMBERS or len(names) != len({collision_key(name) for name in names}):
             raise InstallError("WGLink package has an invalid or duplicate member inventory")
         if any(not _safe_member(info) for info in infos):
             raise InstallError("REFUSING TO EXTRACT: WGLink package has an unsafe member")
@@ -280,6 +287,8 @@ def _materialize_runtime(
     try:
         for name, data in payloads.items():
             path = staging.joinpath(*PurePosixPath(name).parts)
+            if not path.resolve().is_relative_to(staging.resolve()):
+                raise InstallError("REFUSING TO EXTRACT: member escapes WGLink staging")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
         (staging / "wglink" / "provenance.json").write_text(
