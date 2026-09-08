@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import textwrap
+from typing import NamedTuple
 
 import pytest
 
@@ -572,3 +573,241 @@ def test_the_inno_setup_check_uses_the_compiler_engine_version() -> None:
         assert 'if ($LASTEXITCODE -ne 0)' in text, name
         assert "./scripts/ci/verify_inno_setup.ps1" in text, name
         assert '$banner -notmatch "6\\.7\\.1"' not in text, name
+
+
+# --- The version guard, and what it lets through ------------------------------
+#
+# `shared/release_assets.py`, the native version fields and the updater's beta
+# channel were all widened to carry a SemVer pre-release. The publication guard
+# was not: it split the declared version on dots and required three all-digit
+# parts, so `0.3.2-rc.1` was refused before anything was built. The product could
+# install a candidate the publisher could not publish.
+#
+# These run the guard itself against real tag inventories, because the logic
+# lives inside a workflow file and a re-implementation here would drift.
+
+
+def _version_guard(tmp_path: Path) -> Path:
+    """The release guard's forward-ordering script, lifted out of the YAML."""
+
+    opener = "          import subprocess\n"
+    start = WORKFLOW.index(opener)
+    end = WORKFLOW.index("\n          PY\n", start)
+    script = textwrap.dedent(WORKFLOW[start:end])
+    assert script.startswith("import subprocess"), script[:80]
+    path = tmp_path / "extracted" / "release_version_guard.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(script + "\n", encoding="utf-8")
+    return path
+
+
+def _tag_inventory(tmp_path: Path, tags: list[str]) -> Path:
+    """A repository whose only interesting property is which tags it carries."""
+
+    repo = tmp_path / "inventory"
+    repo.mkdir()
+    run = lambda *args: subprocess.run(  # noqa: E731 - one line, one purpose
+        ["git", *args], cwd=repo, check=True, stdout=subprocess.DEVNULL
+    )
+    run("init", "-q", "-b", "main")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "T")
+    run("commit", "-q", "--allow-empty", "-m", "base")
+    for tag in tags:
+        run("tag", tag)
+    return repo
+
+
+class GuardRun(NamedTuple):
+    """What the workflow step would have produced."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+    #: Everything the guard appended to GITHUB_OUTPUT, as the step would.
+    outputs: dict[str, str]
+
+
+def _run_guard(tmp_path: Path, declared: str, tags: list[str]) -> GuardRun:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    github_output = tmp_path / "github-output"
+    github_output.write_text("", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(_version_guard(tmp_path)), declared],
+        cwd=_tag_inventory(tmp_path, tags),
+        env={
+            **os.environ,
+            "PYTHONPATH": str(ROOT),
+            "GITHUB_OUTPUT": str(github_output),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    outputs = dict(
+        line.split("=", 1)
+        for line in github_output.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+    return GuardRun(result.returncode, result.stdout, result.stderr, outputs)
+
+
+def test_a_stable_release_passes_the_guard_and_is_not_a_prerelease(
+    tmp_path: Path,
+) -> None:
+    result = _run_guard(tmp_path, "0.3.2", ["v0.3.1", "v0.3.1-updates"])
+
+    assert result.returncode == 0, result.stderr
+    assert result.outputs["prerelease"] == "false"
+
+
+@pytest.mark.parametrize("declared", ["0.3.2-rc.1", "0.4.0-beta.1", "1.0.0-alpha"])
+def test_a_prerelease_passes_the_guard_and_is_flagged(
+    tmp_path: Path, declared: str
+) -> None:
+    """The finding. Each of these was refused before it could be built."""
+
+    result = _run_guard(tmp_path, declared, ["v0.3.1", "v0.3.1-updates"])
+
+    assert result.returncode == 0, result.stderr
+    assert result.outputs["prerelease"] == "true"
+
+
+def test_a_stable_release_may_follow_its_own_candidates(tmp_path: Path) -> None:
+    """SemVer rule 11: `0.3.2` outranks `0.3.2-rc.2`, so the RC is not a wall."""
+
+    result = _run_guard(
+        tmp_path, "0.3.2", ["v0.3.1", "v0.3.2-rc.1", "v0.3.2-rc.2", "v0.3.2-rc.2-updates"]
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.outputs["prerelease"] == "false"
+
+
+def test_a_candidate_may_follow_an_earlier_candidate(tmp_path: Path) -> None:
+    result = _run_guard(tmp_path, "0.3.2-rc.2", ["v0.3.1", "v0.3.2-rc.1"])
+
+    assert result.returncode == 0, result.stderr
+    assert result.outputs["prerelease"] == "true"
+
+
+@pytest.mark.parametrize(
+    ("declared", "tags"),
+    [
+        # A candidate for a version that has already shipped.
+        ("0.3.2-rc.2", ["v0.3.1", "v0.3.2"]),
+        # An earlier candidate than the highest published one.
+        ("0.3.2-rc.1", ["v0.3.2-rc.2"]),
+        # The same version again.
+        ("0.3.2", ["v0.3.2"]),
+        # Backwards.
+        ("0.3.1", ["v0.3.2"]),
+    ],
+)
+def test_the_guard_still_refuses_a_version_that_does_not_move_forward(
+    tmp_path: Path, declared: str, tags: list[str]
+) -> None:
+    """Widening the parser must not widen what may be published."""
+
+    result = _run_guard(tmp_path, declared, tags)
+
+    assert result.returncode != 0
+    assert "does not move forward past the highest tag" in result.stderr
+    assert "prerelease" not in result.outputs
+
+
+def test_a_companion_tag_is_never_the_highest_published_version(
+    tmp_path: Path,
+) -> None:
+    """`git tag --list v*` returns the `-updates` companions too.
+
+    A companion carries another version's machinery. Reading one as a version
+    would let `v0.9.0-updates` block every release below `0.9.0`, and the old
+    all-digit parser dropped them only as a side effect of not understanding a
+    hyphen at all.
+    """
+
+    result = _run_guard(tmp_path, "0.3.2", ["v0.3.1", "v0.9.0-updates"])
+
+    assert result.returncode == 0, result.stderr
+    assert result.outputs["prerelease"] == "false"
+
+
+@pytest.mark.parametrize("declared", ["0.3", "0.3.2.1", "0.3.2+build", "not-a-version"])
+def test_the_guard_refuses_something_that_is_not_a_release_version(
+    tmp_path: Path, declared: str
+) -> None:
+    result = _run_guard(tmp_path, declared, ["v0.3.1"])
+
+    assert result.returncode != 0
+    assert "does not name a release" in result.stderr
+    assert "prerelease" not in result.outputs
+
+
+def test_the_guard_uses_the_shared_comparator_rather_than_its_own_parser(
+    tmp_path: Path,
+) -> None:
+    """The drift this finding is: two parsers, one narrower than the other.
+
+    `shared/release_assets.py` owns the tag pattern the updater matches with, so
+    the publisher must order versions with the same code or the two can disagree
+    again about what a version is.
+    """
+
+    guard = _version_guard(tmp_path).read_text(encoding="utf-8")
+    assert "from shared import release_assets" in guard
+    assert "release_assets.version_precedence" in guard
+    assert "release_assets.is_prerelease" in guard
+    assert "isdigit()" not in guard
+    # The classification reaches the publish job through the step output.
+    assert 'GITHUB_OUTPUT' in guard
+    assert 'f"prerelease={flag}' in guard
+
+
+def test_the_public_release_is_classified_from_the_declared_version() -> None:
+    """Separately from the companion, which is unconditionally a pre-release.
+
+    Asserting that `prerelease: true` appears somewhere in this file only ever
+    proved the companion was hidden. The user-facing release had no
+    classification at all, so an RC would have been published as a full release
+    and offered to every stable install as `/releases/latest`.
+    """
+
+    companion = WORKFLOW.index("Publish the update layers as a companion pre-release")
+    draft = WORKFLOW.index("Upload the validated inventory to a draft release")
+    tail = WORKFLOW.index("Create the annotated tag now that every asset exists")
+
+    # Comments in both steps name the other one's flag, so read the keys only.
+    def _keys(text: str) -> str:
+        return "\n".join(
+            line for line in text.splitlines() if not line.lstrip().startswith("#")
+        )
+
+    companion_step = _keys(WORKFLOW[companion:draft])
+    draft_step = _keys(WORKFLOW[draft:tail])
+
+    # Machinery is hidden whatever the version says.
+    assert "prerelease: true" in companion_step
+    # The release a person installs is classified by its own version.
+    assert "prerelease: ${{ needs.spa.outputs.prerelease }}" in draft_step
+    assert "prerelease: true" not in draft_step
+
+    assert "prerelease: ${{ steps.release_guard.outputs.prerelease }}" in WORKFLOW
+    assert 'handle.write(f"prerelease={flag}\\n")' in WORKFLOW
+
+
+def test_the_flag_the_guard_prints_is_what_the_publisher_would_set(
+    tmp_path: Path,
+) -> None:
+    """End to end across the two jobs, as far as a test can follow it.
+
+    The guard's stdout becomes `steps.release_guard.outputs.prerelease`, which
+    becomes `needs.spa.outputs.prerelease`, which is the publish job's flag. Only
+    the first hop is executable here; the other two are pinned as text above.
+    """
+
+    for declared, expected in (("0.3.2", "false"), ("0.3.3-beta.1", "true")):
+        result = _run_guard(tmp_path / declared, declared, ["v0.3.1"])
+        assert result.returncode == 0, result.stderr
+        assert result.outputs["prerelease"] == expected
+        assert release_assets.is_prerelease(declared) is (expected == "true")

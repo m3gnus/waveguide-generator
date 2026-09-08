@@ -173,43 +173,14 @@ def _iso(timestamp: float | None) -> str | None:
     return datetime.fromtimestamp(timestamp, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
-def _prerelease_precedence(label: str | None) -> tuple[Any, ...]:
-    """Order a SemVer pre-release label against its own release (rule 11).
-
-    A release outranks any pre-release sharing its core numbers, so the absent
-    label sorts highest. Within pre-releases, identifiers compare left to right:
-    numeric ones numerically and below alphanumeric ones, and when everything to
-    the left is equal the longer set wins -- `0.4.0-beta.1` < `0.4.0-beta.1.2`.
-    """
-
-    if label is None:
-        return (1,)
-    identifiers: list[tuple[int, int, str]] = []
-    for identifier in label.split("."):
-        if identifier.isdigit():
-            identifiers.append((0, int(identifier), ""))
-        else:
-            identifiers.append((1, 0, identifier))
-    return (0, tuple(identifiers))
-
-
-def _version(tag_or_version: str) -> tuple[Any, ...]:
-    """Parse a tag or version into a tuple that sorts by release precedence."""
-
-    # `updates` is a syntactically valid SemVer pre-release identifier, so
-    # `v0.4.0-updates` parses as a version unless it is refused here. It is not
-    # one: it names the companion release that carries another version's update
-    # layers, and sorting it just below `v0.4.0` would let a companion stand in
-    # for the release it belongs to.
-    if tag_or_version.endswith(release_assets.UPDATES_TAG_SUFFIX):
-        raise ValueError(f"Not a version, but an update companion: {tag_or_version!r}")
-    match = TAG_RE.fullmatch(
-        tag_or_version if tag_or_version.startswith("v") else f"v{tag_or_version}"
-    )
-    if match is None:
-        raise ValueError(f"Unsupported release version: {tag_or_version!r}")
-    major, minor, patch, label = match.groups()
-    return (int(major), int(minor), int(patch), _prerelease_precedence(label))
+# Release precedence lives in `shared/release_assets.py`, beside the tag pattern
+# it parses with. It was defined here, and `release.yml`'s publication guard
+# carried a second, three-integer-only parser that refused every pre-release the
+# tag pattern accepts -- so the updater offered a beta channel that the release
+# workflow could not publish into. The comparator that decides what is offered
+# and the one that decides what may be published must be the same function.
+_prerelease_precedence = release_assets.prerelease_precedence
+_version = release_assets.version_precedence
 
 
 def _is_update_layer_carrier(tag: str) -> bool:

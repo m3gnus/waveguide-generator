@@ -47,6 +47,11 @@ jobs:
     outputs:
       tag: ${{ steps.release_guard.outputs.tag }}
       version: ${{ steps.release_guard.outputs.version }}
+      # "true" when shared/version.json declares a SemVer pre-release label, and
+      # it is the publish job's `prerelease:` flag. GIT-WORKFLOW.md section 4:
+      # the flag is what hides a build from the stable channel, so it has to be
+      # derived from the version rather than remembered by whoever dispatched.
+      prerelease: ${{ steps.release_guard.outputs.prerelease }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -112,36 +117,65 @@ jobs:
             exit 1
           fi
           # Semantic versions only move forward, including past the tags that
-          # earlier failed builds spent.
+          # earlier failed builds spent -- and "forward" is SemVer precedence,
+          # not a three-integer tuple. This guard carried its own parser that
+          # split on dots and required every part to be digits, so it refused
+          # `0.3.2-rc.1` outright while `shared/release_assets.py`, the native
+          # version fields, the asset names and the updater's beta channel had
+          # all been widened to carry exactly that. The publisher could not
+          # publish what the product could already install. It reads the same
+          # comparator now: one function decides both what may be published and
+          # what may be offered, so the two cannot drift apart again.
+          #
+          # It writes the pre-release flag to GITHUB_OUTPUT itself rather than
+          # printing it into a shell variable, so the classification the publish
+          # job needs comes out of the same parse that admitted the version and
+          # is never re-derived from a string in another job. Directly, not
+          # through `$(...)`: bash tokenizes a command substitution before it
+          # runs, and an apostrophe in a heredoc nested inside one is read as an
+          # opening quote -- `unexpected EOF while looking for matching`, on a
+          # line of Python comment.
           python - "$declared" <<'PY'
           import subprocess
+          import os
           import sys
 
-          def parse(name: str) -> tuple[int, int, int] | None:
-              parts = name[1:].split(".")
-              if len(parts) != 3 or not all(p.isdigit() for p in parts):
-                  return None
-              return tuple(int(p) for p in parts)
+          from shared import release_assets
 
-          candidate = parse("v" + sys.argv[1])
-          if candidate is None:
-              raise SystemExit(f"shared/version.json is not MAJOR.MINOR.PATCH: {sys.argv[1]}")
-          published = [
-              version
-              for version in (
-                  parse(line)
-                  for line in subprocess.run(
-                      ["git", "tag", "--list", "v*"],
-                      capture_output=True, text=True, check=True,
-                  ).stdout.split()
-              )
-              if version is not None
-          ]
-          if published and candidate <= max(published):
-              highest = ".".join(str(part) for part in max(published))
-              raise SystemExit(
-                  f"{sys.argv[1]} does not move forward past the highest tag v{highest}."
-              )
+          declared = sys.argv[1]
+          try:
+              candidate = release_assets.version_precedence(declared)
+          except ValueError as exc:
+              raise SystemExit(f"shared/version.json does not name a release: {exc}")
+
+          # `git tag --list v*` also returns the `-updates` companions, which
+          # name another version's machinery and are not releases. The comparator
+          # refuses them by name, so they filter themselves out here.
+          published: list[tuple[tuple, str]] = []
+          for name in subprocess.run(
+              ["git", "tag", "--list", "v*"],
+              capture_output=True, text=True, check=True,
+          ).stdout.split():
+              try:
+                  published.append((release_assets.version_precedence(name), name))
+              except ValueError:
+                  continue
+          if published:
+              highest, highest_tag = max(published)
+              if candidate <= highest:
+                  raise SystemExit(
+                      f"{declared} does not move forward past the highest tag {highest_tag}."
+                  )
+
+          # GIT-WORKFLOW.md section 4: the pre-release flag is what hides a build
+          # from the stable channel. A pre-release published without it becomes
+          # what /releases/latest returns and is offered to every stable install.
+          flag = "true" if release_assets.is_prerelease(declared) else "false"
+          print(f"{declared} is a pre-release: {flag}")
+          destination = os.environ.get("GITHUB_OUTPUT")
+          if destination:
+              with open(destination, "a", encoding="utf-8") as handle:
+                  handle.write(f"prerelease={flag}\n")
           PY
           echo "version=$declared" >> "$GITHUB_ENV"
           echo "version=$declared" >> "$GITHUB_OUTPUT"
@@ -658,6 +692,18 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           draft: true
+          # Derived from shared/version.json by the release guard, never from
+          # whoever dispatched the workflow. `true` for `0.4.0-beta.1`, `false`
+          # for `0.4.0`. This is the flag GIT-WORKFLOW.md section 4 calls the
+          # thing that hides a build from the stable channel: without it a
+          # candidate becomes what `/releases/latest` returns and every stable
+          # install is offered it.
+          #
+          # Distinct from the companion above, which is unconditionally
+          # `prerelease: true` because it carries machinery rather than a
+          # release. Asserting "prerelease: true appears in this file" only ever
+          # proved the companion was hidden, which is why this half was missing.
+          prerelease: ${{ needs.spa.outputs.prerelease }}
           overwrite_files: true
           files: build/release-assets/*
           fail_on_unmatched_files: true

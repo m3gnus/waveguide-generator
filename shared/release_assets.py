@@ -30,7 +30,7 @@ installed client had a working auto-update path to reach 3.0.0 by either name.
 from __future__ import annotations
 
 import re
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 
 #: Prefix for everything that is machinery rather than a download.
@@ -297,6 +297,78 @@ def is_release_tag(tag: str) -> bool:
     """
 
     return TAG_RE.fullmatch(tag.removesuffix(UPDATES_TAG_SUFFIX)) is not None
+
+
+def _parsed(version_or_tag: str) -> "re.Match[str]":
+    """``version_or_tag`` split into its SemVer parts, with a ``v`` or without.
+
+    A companion is refused rather than parsed. ``updates`` is a syntactically
+    valid SemVer pre-release identifier, so ``v0.4.0-updates`` reads as a version
+    unless something says otherwise -- and sorting it just below ``v0.4.0`` would
+    let a companion, which carries another version's machinery, stand in for the
+    release it belongs to.
+    """
+
+    if version_or_tag.endswith(UPDATES_TAG_SUFFIX):
+        raise ValueError(f"Not a version, but an update companion: {version_or_tag!r}")
+    match = TAG_RE.fullmatch(
+        version_or_tag if version_or_tag.startswith("v") else f"v{version_or_tag}"
+    )
+    if match is None:
+        raise ValueError(f"Unsupported release version: {version_or_tag!r}")
+    return match
+
+
+def prerelease_label(version_or_tag: str) -> str | None:
+    """The SemVer pre-release label, or ``None`` for a stable release."""
+
+    return _parsed(version_or_tag).group(4)
+
+
+def is_prerelease(version_or_tag: str) -> bool:
+    """Whether this version must be flagged as a pre-release on GitHub.
+
+    GIT-WORKFLOW.md section 4: the flag is what hides a build from the stable
+    channel, so it is not decoration -- an RC published without it becomes the
+    release ``/releases/latest`` returns, and every stable install is offered it.
+    """
+
+    return prerelease_label(version_or_tag) is not None
+
+
+def prerelease_precedence(label: str | None) -> tuple[Any, ...]:
+    """Order a SemVer pre-release label against its own release (rule 11).
+
+    A release outranks any pre-release sharing its core numbers, so the absent
+    label sorts highest. Within pre-releases, identifiers compare left to right:
+    numeric ones numerically and below alphanumeric ones, and when everything to
+    the left is equal the longer set wins -- `0.4.0-beta.1` < `0.4.0-beta.1.2`.
+    """
+
+    if label is None:
+        return (1,)
+    identifiers: list[tuple[int, int, str]] = []
+    for identifier in label.split("."):
+        if identifier.isdigit():
+            identifiers.append((0, int(identifier), ""))
+        else:
+            identifiers.append((1, 0, identifier))
+    return (0, tuple(identifiers))
+
+
+def version_precedence(version_or_tag: str) -> tuple[Any, ...]:
+    """Parse a tag or version into a tuple that sorts by release precedence.
+
+    One comparator, because three places have to agree on the order and cannot
+    all import each other: the updater, which decides what to offer a channel;
+    `server/updates/service.py`, which reads it from here; and `release.yml`,
+    whose guard refuses a version that does not move past the highest published
+    tag. That guard used to carry its own three-integer parser, and so refused
+    every pre-release the rest of this module had already been widened to name.
+    """
+
+    major, minor, patch, label = _parsed(version_or_tag).groups()
+    return (int(major), int(minor), int(patch), prerelease_precedence(label))
 
 
 # The update bridge is gone, as of 0.3.2. v0.3.1 published its app layer and

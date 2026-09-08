@@ -1083,7 +1083,17 @@ def test_release_workflow_publishes_one_complete_draft_inventory() -> None:
     assert len(set(uploads)) == 1, f"the two upload steps use different pins: {uploads}"
     # Exactly one of them is the user-facing release, and it is the drafted one.
     assert workflow.count("draft: true") == 1
-    assert workflow.count("prerelease: true") == 1
+    # Exactly one release is a pre-release WHATEVER the version says: the
+    # companion, which carries machinery. The user-facing one is classified from
+    # `shared/version.json` instead, so that a candidate is hidden from the
+    # stable channel and a stable release is not -- counting `prerelease: true`
+    # across the whole file proved only the companion, and for a while that was
+    # the only classification the workflow had.
+    keys = "\n".join(
+        line for line in workflow.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert keys.count("prerelease: true") == 1
+    assert keys.count("prerelease: ${{ needs.spa.outputs.prerelease }}") == 1
     assert "needs: [spa, macos-bundle, windows-bundle, linux-bundle]" in workflow
     assert 'gh release edit "$RELEASE_TAG" --draft=false' in workflow
     assert "Reuse a runtime already published" not in workflow
