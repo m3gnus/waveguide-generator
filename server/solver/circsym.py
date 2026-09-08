@@ -194,6 +194,12 @@ def circsym_status() -> dict[str, Any]:
 
 def axisymmetric_eligibility_reasons(request: SolveRequest) -> list[str]:
     """Return authoritative geometry/runtime reasons the meridian path cannot run."""
+    if request.options.ground_plane.enabled:
+        # The meridian solver models a body of revolution in free space (or its
+        # coupled mouth baffle).  It has no image boundary for a floor/wall.
+        # AUTO must therefore fall through to a full-3D engine that advertises
+        # ground-plane support; a forced meridian request must fail explicitly.
+        return ["a rigid ground plane requires a full-3D solver"]
     if circsym_rejection_reasons is None:
         return [
             "hornlab-waveguide-mesher does not expose the axisymmetric "

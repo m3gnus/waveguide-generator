@@ -30,7 +30,7 @@ export type GroundPlaneAxis = 'x' | 'y' | 'z';
 
 export const GROUND_PLANE_AXES: GroundPlaneAxis[] = ['x', 'y', 'z'];
 
-export const SOLVER_MODES: SolverMode[] = ['auto', 'full_3d'];
+export const SOLVER_MODES: SolverMode[] = ['auto', 'full_3d', 'circsym'];
 
 export { MAX_FREQUENCY_POINTS, parseFrequencyList };
 export type { FrequencyListParse };
@@ -294,15 +294,6 @@ export function normalizePolarUi(raw: unknown, fallback: PolarUiState = defaultP
   };
 }
 
-// Retained solver implementations are explicit API experiments, not UI choices.
-function uiEngine(engine: string): string {
-  return ['axisym', 'circsym'].includes(engine.trim().toLowerCase()) ? 'auto' : engine;
-}
-
-function uiSolverMode(mode: SolverMode): SolverMode {
-  return mode === 'circsym' ? 'auto' : mode;
-}
-
 /**
  * The same treatment for the flat solver settings around the rig.
  *
@@ -317,8 +308,8 @@ export function normalizePersistedSolveOptions(
 ): PersistedSolveOptions {
   const stored = isRecord(raw) ? raw : {};
   return {
-    engine: uiEngine(typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine),
-    solverMode: stored.solverMode === 'circsym' ? 'auto' : oneOf(stored.solverMode, SOLVER_MODES, uiSolverMode(fallback.solverMode)),
+    engine: typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine,
+    solverMode: oneOf(stored.solverMode, SOLVER_MODES, fallback.solverMode),
     symmetry: oneOf(stored.symmetry, SYMMETRY_MODES, fallback.symmetry),
     meshValidationMode: oneOf(stored.meshValidationMode, MESH_VALIDATION_MODES, fallback.meshValidationMode),
     verbose: typeof stored.verbose === 'boolean' ? stored.verbose : fallback.verbose,
@@ -364,8 +355,8 @@ interface SolveOptionsStore extends PersistedSolveOptions {
 
 export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, get) => ({
   ...defaultSolveOptions(),
-  setEngine: (engine) => set({ engine: uiEngine(engine) }),
-  setSolverMode: (solverMode) => set({ solverMode: uiSolverMode(solverMode) }),
+  setEngine: (engine) => set({ engine }),
+  setSolverMode: (solverMode) => set({ solverMode }),
   setSymmetry: (symmetry) => set({ symmetry }),
   setMeshValidationMode: (meshValidationMode) => set({ meshValidationMode }),
   setVerbose: (verbose) => set({ verbose }),
@@ -391,8 +382,8 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
   }),
   options: () => {
     const base: SolveOptions = {
-      engine: uiEngine(get().engine),
-      solver_mode: uiSolverMode(get().solverMode),
+      engine: get().engine,
+      solver_mode: get().solverMode,
       symmetry: get().symmetry,
       mesh_validation_mode: get().meshValidationMode,
       verbose: get().verbose,

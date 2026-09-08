@@ -29,7 +29,7 @@ from server.jobs.models import (
     PORT_APERTURE_NAME_GROUPS,
     SolveRequest,
 )
-from server.mesh.builder import _solver_mesher_config, build_solver_mesh
+from server.mesh.builder import build_solver_mesh
 from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
@@ -2378,38 +2378,11 @@ def solve_imported_metal_from_msh_text(
 
 
 def _circsym_eligibility_reasons(request: SolveRequest) -> list[str]:
-    """Run the mesher/native CircSym probes together, away from the event loop."""
+    """Use the same authoritative meridian predicate as the outer planner."""
 
     from . import circsym as circsym_adapter
 
-    reasons: list[str] = []
-    if circsym_adapter.circsym_rejection_reasons is None:
-        reasons.append("installed mesher does not expose axisymmetric-meridian eligibility")
-    else:
-        try:
-            reasons.extend(
-                str(reason)
-                for reason in circsym_adapter.circsym_rejection_reasons(
-                    _solver_mesher_config(request.design)
-                )
-            )
-        except Exception as exc:
-            reasons.append(f"axisymmetric-meridian eligibility check failed: {exc}")
-
-    try:
-        context = SolverContext.from_request(request, solver_mode="circsym")
-        observation_rejection = circsym_adapter.circsym_observation_rejection_reason(
-            context
-        )
-        if observation_rejection is not None:
-            reasons.append(observation_rejection)
-    except Exception as exc:
-        reasons.append(f"axisymmetric observation eligibility check failed: {exc}")
-
-    status = circsym_adapter.circsym_status()
-    if not status["available"] and not reasons:
-        reasons.append(str(status["reason"]))
-    return reasons
+    return circsym_adapter.axisymmetric_eligibility_reasons(request)
 
 
 circsym_eligibility_reasons = _circsym_eligibility_reasons
@@ -2531,7 +2504,7 @@ class MetalEngine:
             raise ValueError("solver_mode must be auto, full_3d, or circsym")
 
         eligibility_reasons: list[str] = []
-        if mode == "circsym":
+        if mode in {"auto", "circsym"}:
             eligibility_reasons = await asyncio.to_thread(
                 _circsym_eligibility_reasons, request
             )
@@ -2555,6 +2528,9 @@ class MetalEngine:
                 metadata["axisymmetric_eligibility_reasons"] = []
                 metadata["solve_path_reason"] = (
                     "forced by solver_mode='circsym'"
+                    if mode == "circsym"
+                    else "solver_mode='auto' selected the eligible Metal "
+                    "axisymmetric meridian fast path"
                 )
                 outcome.field_trace_unavailable_reason = (
                     "unsupported_axisymmetric_formulation"
@@ -2605,10 +2581,12 @@ class MetalEngine:
         metadata["solve_path"] = "full-3d"
         metadata["axisymmetric_eligibility_reasons"] = eligibility_reasons
         metadata["solve_path_reason"] = (
-            "solver_mode='full_3d' selected native full 3D"
+            "solver_mode='full_3d' explicitly opts out of the meridian fast path"
             if mode == "full_3d"
             else (
-                "solver_mode='auto' selected native full 3D"
+                "solver_mode='auto' selected native full 3D because the "
+                "axisymmetric meridian fast path is not eligible: "
+                + "; ".join(eligibility_reasons)
             )
         )
         field_traces = results.pop("_field_traces", None)

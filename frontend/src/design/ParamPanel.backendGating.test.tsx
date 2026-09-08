@@ -134,7 +134,7 @@ describe('solver-backend parameter gating', () => {
     expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
   });
 
-  it('keeps AUTO capability gating on ordinary backends', async () => {
+  it('replans the AUTO backend gate when solver mode changes formulation', async () => {
     const payload = {
       engines: [
         engine('beat', true, ['free-standing']),
@@ -147,7 +147,7 @@ describe('solver-backend parameter gating', () => {
     };
 
     await mount(payload);
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
+    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
 
     await act(async () => {
       useSolveOptionsStore.setState({ solverMode: 'full_3d' });

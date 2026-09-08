@@ -74,7 +74,17 @@ export function engineStatusLabel(
   try {
     effectiveEngine = resolveEngine(selectedEngine, { engines, engineSelection }, solverMode);
   } catch {
-    return `${effectiveEngine.toUpperCase()} · INVALID`;
+    // A forced meridian solve cannot fall back to the selected full-3D engine.
+    // Name the advertised dependency that is offline instead of implying AUTO
+    // or an explicit full-3D selection remains the path that will run.
+    const requested = selectedEngine.trim().toLowerCase();
+    const requestedIsKnown = requested === 'auto'
+      || engines.some((item) => item.name.toLowerCase() === requested);
+    if (solverMode === 'circsym' && requested !== 'dryrun' && requestedIsKnown) {
+      effectiveEngine = engineSelection.axisymmetricRunner.trim().toLowerCase() || 'axisym';
+    } else {
+      return `${effectiveEngine.toUpperCase()} · INVALID`;
+    }
   }
   const engine = engines.find((item) => item.name.toLowerCase() === effectiveEngine);
   if (engine) return `${engine.name.toUpperCase()} · ${engine.available ? engine.version ?? 'READY' : 'OFFLINE'}`;

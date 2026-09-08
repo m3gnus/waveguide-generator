@@ -415,6 +415,52 @@ def _grounded_request(*, engine: str = "auto", solver_mode: str = "auto"):
     )
 
 
+def test_ground_plane_is_not_axisymmetric_eligible():
+    from server.solver.circsym import axisymmetric_eligibility_reasons
+
+    assert axisymmetric_eligibility_reasons(_grounded_request()) == [
+        "a rigid ground plane requires a full-3D solver"
+    ]
+
+
+def test_auto_axisymmetric_planner_falls_through_to_ground_capable_backend():
+    import asyncio
+
+    from server.engines import registry
+    from server.jobs.runtime import resolve_submission
+
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo(
+                "axisym", True, "test", "1", mountings=("free-standing",)
+            ),
+            registry.EngineInfo(
+                "bempp",
+                True,
+                "test",
+                "1",
+                mountings=("free-standing", "ground-plane"),
+                ground_plane_axes=("x", "y", "z"),
+            ),
+        ],
+        factory=lambda name: object(),
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(_grounded_request(), engine_registry)
+    )
+
+    assert resolution.engine_name == "bempp"
+    assert resolution.symmetry_metadata["solver_plan"] == {
+        "formulation": "full-3d",
+        "engine": "bempp",
+        "reason": "axisymmetric formulation was not eligible",
+        "eligibility_reasons": [
+            "a rigid ground plane requires a full-3D solver"
+        ],
+    }
+
+
 @pytest.mark.parametrize("engine", ["beat-cpu", "metal", "dryrun"])
 def test_an_explicitly_chosen_engine_that_cannot_ground_is_refused(engine):
     """The AUTO mounting gate does not cover an explicitly selected engine.

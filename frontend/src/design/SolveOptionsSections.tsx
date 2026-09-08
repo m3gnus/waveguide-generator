@@ -20,9 +20,16 @@ import {
   type ObservationOrigin,
   type PolarAxis,
   type PolarUiState,
+  type SolverMode,
 } from '../stores/solveOptions';
 import { runDisplayName } from '../prefs/preferences';
 import type { WorkspaceMode } from '../stores/workspaceMode';
+
+export const solverModeLabels = {
+  auto: 'Auto (fastest eligible)',
+  full_3d: 'Full 3D',
+  circsym: 'Axisymmetric (meridian)',
+} as const;
 
 /**
  * Sweep-point source: a generated grid, or the exact frequencies to solve.
@@ -65,12 +72,22 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   const store = useSolveOptionsStore();
   const { engines, error } = useCapabilities();
   const backendEngines = engines.filter((engine) => !['axisym', 'circsym'].includes(engine.name.toLowerCase()));
+  const axisymEngine = engines.find((engine) => engine.name.toLowerCase() === 'axisym');
+  const meridianAvailable = axisymEngine?.available === true;
   const metalAvailable = engines.some((engine) => engine.name.toLowerCase() === 'metal' && engine.available);
   return <>
     {mode === 'parametric' ? <>
       <HelpTipRow className="select-row" text="Which BEM engine runs the solve. AUTO takes the first backend that is actually available on this machine. All backends solve the same problem; they differ in speed and in which fast paths they support."><label htmlFor="solve-engine">Solver backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">AUTO — first available</option>
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.label || engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
+      </select></HelpTipRow>
+      <p className="section-note">{meridianAvailable
+        ? 'Axisymmetric meridian capability: AUTO uses it for eligible circular designs on any OS; the selected backend handles full 3D fallback.'
+        : 'Selected backend capability: Full 3D. The axisymmetric runner is unavailable.'}</p>
+      <HelpTipRow className="select-row" text="Machine-local formulation choice. AUTO uses the platform-neutral axisymmetric meridian solver for eligible circular designs and the selected full-3D backend otherwise. The choice is not saved into design files."><label htmlFor="solve-mode">Solver path</label><select id="solve-mode" value={store.solverMode} onChange={(event) => store.setSolverMode(event.target.value as SolverMode)}>
+        <option value="auto">{solverModeLabels.auto}</option>
+        <option value="full_3d">{solverModeLabels.full_3d}</option>
+        {(meridianAvailable || store.solverMode === 'circsym') && <option value="circsym" disabled={!meridianAvailable}>{solverModeLabels.circsym}{meridianAvailable ? '' : ' · unavailable'}</option>}
       </select></HelpTipRow>
     </> : <>
       {/* Imported submissions force both values. Static facts keep the rail
@@ -393,7 +410,7 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     {cardinalDiagonal && <p className="section-note" role="status">A diagonal at {Number(polar.diagonalAngle.toFixed(6))}° is the {Math.abs((polar.diagonalAngle % 180 + 180) % 180 - 90) < 1e-6 ? 'vertical' : 'horizontal'} plane, so it will be measured and plotted twice. Use an angle between the planes, such as 45°.</p>}
     <HelpTipRow className="select-row" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></HelpTipRow>
     <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
-    <ToggleRow id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
+    <ToggleRow id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This needs a full-3D solve (not axisymmetric) and adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
     <p className="section-note">Directivity Index always uses the complete spherical field. “Keep 3D balloon result” controls whether WG also stores that field for 3D views.</p>
     {effective && <div className={`effective-grid-readout${effective.widened ? ' widened' : ''}`} role="status"><b>{effective.summary}</b><span>{effective.detail}</span><small>Display planes and angle range only; Directivity Index always uses the complete spherical field.</small></div>}
     <SolvedWithReadout/>

@@ -38,7 +38,7 @@ describe('solve submission', () => {
     expect(resolveEngine('dryrun', capabilities, 'auto')).toBe('dryrun');
     expect(resolveEngine('metal', capabilities, 'full_3d')).toBe('metal');
 
-    expect(plannedEngineNames('metal', capabilities, 'auto')).toEqual(['metal']);
+    expect(plannedEngineNames('metal', capabilities, 'auto')).toEqual(['axisym', 'metal']);
     expect(plannedEngineNames('auto', capabilities, 'full_3d')).toEqual(['metal', 'dryrun']);
     expect(plannedEngineNames('metal', capabilities, 'circsym')).toEqual(['axisym']);
     expect(plannedEngineNames('dryrun', capabilities, 'auto')).toEqual(['dryrun']);
@@ -53,18 +53,22 @@ describe('solve submission', () => {
       },
     };
     expect(resolveEngine('beat', staleBeat, 'auto')).toBe('beat');
-    expect(plannedEngineNames('beat', staleBeat, 'auto')).toEqual(['beat']);
+    expect(plannedEngineNames('beat', staleBeat, 'auto')).toEqual(['axisym', 'beat']);
     expect(resolveEngine('beat', staleBeat, 'full_3d')).toBe('beat');
   });
 
-  it('refuses AUTO when only the axisymmetric engine is available', () => {
+  it('resolves AUTO to Axisym when it is the only engine the host has', () => {
+    // The server planner routes an eligible circular design to the meridian
+    // runner before any full-3D fallback, so throwing here blocked Run on a
+    // design the server would have solved; the only escape was knowing to
+    // force the meridian mode by hand.
     const axisymOnly = { engines: [
       { name: 'axisym', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'] },
       { name: 'bempp', available: false, reason: 'not installed', version: null, fast_paths: [] },
     ], engineSelection: {
       default: 'auto', resolvedDefault: null, full3dOrder: ['bempp'], axisymmetricRunner: 'axisym',
     } };
-    expect(() => resolveEngine('auto', axisymOnly)).toThrow('No full-3D solver backend');
+    expect(resolveEngine('auto', axisymOnly)).toBe('axisym');
     expect(() => resolveEngine('auto', axisymOnly, 'full_3d')).toThrow('No full-3D solver backend');
 
     // A full-3D backend still wins when the host has one, and a host with
@@ -77,7 +81,7 @@ describe('solve submission', () => {
       resolvedDefault: 'bempp',
     } };
     expect(resolveEngine('auto', withBempp)).toBe('bempp');
-    expect(() => resolveEngine('auto', { engines: [] })).toThrow('No full-3D solver backend is currently available');
+    expect(() => resolveEngine('auto', { engines: [] })).toThrow('No solver backend is currently available');
     expect(() => resolveEngine('removed-engine', withBempp)).toThrow('Unknown solve engine');
   });
 

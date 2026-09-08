@@ -498,14 +498,17 @@ async def resolve_submission(
     if engine_name not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
 
-    # Axisymmetric execution is explicit-only pending speed/accuracy qualification.
-    # AUTO always uses an ordinary backend, with geometric symmetry reduction.
+    # Formulation is planned before the full-3D backend. Axisymmetric geometry
+    # uses the platform-neutral meridian runner on every OS; Metal/BEMPP/BEAT
+    # remain interchangeable execution choices only for the full-3D branch.
     solver_mode = str(request.options.solver_mode or "auto").strip().lower()
     forced_axisym = engine_name == "axisym" or solver_mode == "circsym"
     if engine_name == "axisym" and solver_mode == "full_3d":
         raise ValueError("engine='axisym' cannot run solver_mode='full_3d'")
     axisym_reasons: list[str] = []
-    probe_axisym = engine_name != "dryrun" and forced_axisym
+    probe_axisym = engine_name != "dryrun" and (
+        engine_name == "axisym" or solver_mode in {"auto", "circsym"}
+    )
     axisym_registered = (
         await engine_registry.get_engine("axisym") is not None
         if probe_axisym
@@ -517,7 +520,10 @@ async def resolve_submission(
             "The Axisymmetric runner is unavailable. "
             + (reason or "No capability reason was reported.")
         )
-    consider_axisym = axisym_registered and forced_axisym
+    consider_axisym = (
+        axisym_registered
+        and (engine_name == "axisym" or solver_mode in {"auto", "circsym"})
+    )
     if consider_axisym:
         from server.solver.circsym import (
             axisymmetric_eligibility_reasons,
@@ -535,6 +541,15 @@ async def resolve_submission(
             )
         if not axisym_reasons:
             symmetry_metadata = _axisymmetric_symmetry_metadata(request)
+            axisym_reason = (
+                "forced by solver_mode='circsym'"
+                if solver_mode == "circsym"
+                else (
+                    "selected by engine='axisym'"
+                    if engine_name == "axisym"
+                    else "AUTO selected the eligible platform-neutral axisymmetric runner"
+                )
+            )
             try:
                 plan_cost = await asyncio.to_thread(
                     axisymmetric_plan_cost,
@@ -556,14 +571,30 @@ async def resolve_submission(
             symmetry_metadata["solver_plan"] = {
                 "formulation": "axisymmetric",
                 "engine": "axisym",
-                "reason": (
-                    "forced by solver_mode='circsym'"
-                    if solver_mode == "circsym"
-                    else "explicit axisymmetric engine"
-                ),
+                "reason": axisym_reason,
                 "eligibility_reasons": [],
                 "cost_evidence": plan_cost,
             }
+            # Say so. Swapping the backend under a user who asked for AUTO
+            # changes their wall clock *and* their numbers, and until this line
+            # existed the only way to find out was to call the plan endpoint or
+            # read the result metadata. A support question of the form "the
+            # solver got faster and the results moved" was unanswerable from a
+            # server log. This is engine selection, not per-frequency detail,
+            # so it is not gated behind WG.Solve.Verbose.
+            if not forced_axisym:
+                # Not a design key: a design-stated solver mode is stripped by
+                # migration 006_machine_solver_mode_not_portable, because
+                # whether the meridian runner can run at all is a property of
+                # the host. The override lives in solve options.
+                logger.info(
+                    "AUTO selected the axisymmetric meridian runner instead of "
+                    "the full-3D backend: this design is a closed body of "
+                    "revolution. It is solved by a different formulation than a "
+                    "full-3D solve of the same design, so results will not match "
+                    "one exactly. Choose the full-3D solver mode in the solve "
+                    "options to keep the full-3D backend.",
+                )
     if engine_name != "axisym":
         resolution = await asyncio.to_thread(resolve_symmetry, request.design)
         # Subtract the mirror plane a ground plane makes unavailable before the
@@ -591,7 +622,7 @@ async def resolve_submission(
             "reason": (
                 "explicit solver_mode='full_3d'"
                 if solver_mode == "full_3d"
-                else "AUTO uses the selected full-3D backend"
+                else "axisymmetric formulation was not eligible"
             ),
             "eligibility_reasons": axisym_reasons,
         }
@@ -615,7 +646,7 @@ async def resolve_submission(
             }.get(mounting or "", "")
             raise EngineUnavailableError(
                 f"AUTO could not resolve a compatible solve engine{unsupported} from "
-                "this host's capabilities. Install/enable Metal, BEAT, "
+                "this host's capabilities. Install/enable Axisymmetric, Metal, BEAT, "
                 "or BEMPP; explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
                 "synthetic development solves."
             )
@@ -639,7 +670,7 @@ async def resolve_submission(
             # takes over, which is the correct outcome for that case.
             #
             # Deliberately here rather than at the whitelist check above: an
-            # explicit experimental axisymmetric request resolves to the
+            # explicit "beat" with eligible circular geometry resolves to the
             # axisymmetric meridian runner without BEAT's availability ever
             # being consulted, and mapping the name early would have taken
             # that away.
@@ -689,7 +720,7 @@ async def resolve_submission(
                     f"Solve engine '{engine_name}' is unavailable, and no other "
                     f"engine on this host{unsupported} can take its place. "
                     + (unavailable_reason or "No capability reason was reported.")
-                    + " Install/enable Metal, BEAT, or BEMPP; "
+                    + " Install/enable Axisymmetric, Metal, BEAT, or BEMPP; "
                     "explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
                     "synthetic development solves."
                 )
