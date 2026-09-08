@@ -105,13 +105,24 @@ jobs:
         run: git fetch --no-tags --prune origin "+refs/heads/*:refs/remotes/origin/*"
       - name: Check new commits for AI attribution
         env:
-          # A pull request is measured against its own base; a push to trunk
-          # against main itself, i.e. exactly the commits the push adds.
+          # A pull request is measured against its own base. A push is measured
+          # against the commit the ref pointed at BEFORE it, which is the only
+          # thing that names the commits the push adds.
+          #
+          # It used to be measured against `origin/${BASE_REF:-main}`, and on a
+          # push that resolves to the commit just pushed: the checkout IS
+          # origin/main, so `origin/main..HEAD` was empty and the gate reported
+          # success over a batch whose messages it never read. An empty range is
+          # indistinguishable from a clean branch in the output, which is why it
+          # survived. The script prints the range it actually used.
+          EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
-          upstream="origin/${BASE_REF:-main}"
-          echo "checking ${upstream}..HEAD"
-          python scripts/check_no_ai_attribution.py --upstream "$upstream"
+          python scripts/check_no_ai_attribution.py \
+            --event "$EVENT_NAME" \
+            --base-ref "$BASE_REF" \
+            --before "$BEFORE_SHA"
 
   drift:
     name: Generated-file drift
