@@ -73,6 +73,7 @@ export class DurableSettings {
   /** Serialises per namespace so a slow request cannot land after a newer one. */
   private readonly inFlight = new Map<SettingsNamespace, Promise<void>>();
   private readonly memory = new Map<SettingsNamespace, string | null>();
+  private readonly failedCacheWrites = new Set<SettingsNamespace>();
   private readonly memoryLocalNewer = new Set<SettingsNamespace>();
   private hydrated = false;
 
@@ -90,10 +91,11 @@ export class DurableSettings {
    * The browser copy is the cache and stays the thing that is read.
    *
    * `memory` is only a fallback for a browser that has no usable storage at
-   * all -- private windows, storage disabled, a full quota. Preferring it would
+   * all, or for a namespace whose latest cache write failed. Otherwise preferring it would
    * make the cache write-only and hide any change made outside this instance.
    */
   get(namespace: SettingsNamespace): string | null {
+    if (this.failedCacheWrites.has(namespace)) return this.memory.get(namespace) ?? null;
     try {
       if (this.storage) return this.storage.getItem(SETTINGS_NAMESPACES[namespace]);
     } catch { /* fall through to the in-memory copy */ }
@@ -184,7 +186,12 @@ export class DurableSettings {
     try {
       if (raw === null) this.storage?.removeItem(SETTINGS_NAMESPACES[namespace]);
       else this.storage?.setItem(SETTINGS_NAMESPACES[namespace], raw);
-    } catch { /* the cache is best effort; the server copy is the durable one */ }
+      this.failedCacheWrites.delete(namespace);
+    } catch {
+      // Readable storage can still reject writes (for example at quota). Its
+      // older value must not replace this draft in the next server upload.
+      this.failedCacheWrites.add(namespace);
+    }
   }
 
   private notify(namespace: SettingsNamespace, raw: string | null): void {

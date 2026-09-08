@@ -348,6 +348,42 @@ describe('durable settings', () => {
     expect(afterRetry.get('theme')).toBe('server-newer');
   });
 
+  it.each([
+    { cached: 'old-draft', next: 'new-draft' },
+    { cached: null, next: 'first-draft' },
+    { cached: 'old-draft', next: null },
+  ])('uploads the latest draft when cache writes fail: $cached → $next', async ({ cached, next }) => {
+    const key = SETTINGS_NAMESPACES.designDraft;
+    if (cached !== null) localStorage.setItem(key, cached);
+    let failWrites = true;
+    const storage = {
+      getItem: (name: string) => localStorage.getItem(name),
+      setItem: (name: string, value: string) => {
+        if (failWrites) throw new DOMException('Quota exceeded', 'QuotaExceededError');
+        localStorage.setItem(name, value);
+      },
+      removeItem: (name: string) => {
+        if (failWrites) throw new Error('Storage is read-only');
+        localStorage.removeItem(name);
+      },
+    } as Storage;
+    const fetcher = vi.fn(async () => response({}));
+    const settings = new DurableSettings({ storage, fetcher, writeDelayMs: () => 0 });
+    settings.set('designDraft', next);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settings.get('designDraft')).toBe(next);
+    expect(fetcher).toHaveBeenCalledWith('/api/settings/designDraft', expect.objectContaining({
+      method: next === null ? 'DELETE' : 'PUT',
+      body: next === null ? undefined : JSON.stringify(next),
+    }));
+    // A later successful cache write restores ordinary shared-cache reads.
+    failWrites = false;
+    settings.set('designDraft', 'recovered');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    localStorage.setItem(key, 'external-change');
+    expect(settings.get('designDraft')).toBe('external-change');
+  });
+
   it('keeps working when the browser refuses to store anything', async () => {
     const settings = new DurableSettings({ storage: null, writeDelayMs: () => 0, fetcher: (async () => response({})) as unknown as typeof fetch });
     settings.set('theme', 'light');
