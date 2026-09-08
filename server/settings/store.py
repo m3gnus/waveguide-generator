@@ -11,7 +11,17 @@ is the authority and the browser copy is only a cache for first paint.
 Namespace payloads are stored opaquely.  The frontend already owns the schema,
 its validation, and its migrations; duplicating that here would create a second
 definition to keep in step for no gain.  What this module does own is the
-envelope, the size ceilings, and the atomic write.
+envelope, the size ceilings, the atomic write, and the order of writes.
+
+A namespace write may carry the identity of the writer and a sequence number
+that rises across that writer's writes.  Two requests from one page can be in
+flight at once (closing the window sends the pending value immediately,
+deliberately ahead of the request queue), and the network may deliver them in
+either order, so the older one can arrive last and overwrite the newer value.  A write whose sequence number does not exceed the last one
+accepted *from the same writer* is refused.  This state is per process and is
+never written to the file: it orders requests that overlap in time, and
+requests cannot overlap a restart.  Writes with no ordering hints -- an older
+client -- are accepted as before.
 """
 
 from __future__ import annotations
@@ -48,6 +58,15 @@ class SettingsError(ValueError):
     """A settings operation that cannot safely be completed."""
 
 
+class StaleWriteError(SettingsError):
+    """A write the same writer has already superseded.
+
+    Separate from :class:`SettingsError` because it is not a malformed request:
+    the client sent something valid that another of its own requests overtook,
+    so the right answer is a conflict rather than a rejection of the payload.
+    """
+
+
 def valid_namespace(name: str) -> bool:
     return bool(NAMESPACE_PATTERN.match(name))
 
@@ -79,6 +98,8 @@ class SettingsStore:
             else (data_paths(data_dir).root / SETTINGS_NAME).resolve()
         )
         self._namespaces: dict[str, Any] = {}
+        #: namespace -> (writer, sequence) of the last write accepted from it.
+        self._accepted: dict[str, tuple[str, int]] = {}
         self._loaded = False
         self._load_error: OSError | None = None
 
@@ -155,7 +176,38 @@ class SettingsStore:
     def envelope(self) -> dict[str, Any]:
         return {"schemaVersion": SCHEMA_VERSION, "namespaces": self.all()}
 
-    def put(self, namespace: str, value: Any) -> dict[str, Any]:
+    def _reject_stale(
+        self, namespace: str, writer: str | None, sequence: int | None
+    ) -> None:
+        """Refuse a write that one of the same writer's own writes overtook."""
+
+        if writer is None or sequence is None:
+            return
+        accepted = self._accepted.get(namespace)
+        if accepted is not None and accepted[0] == writer and sequence <= accepted[1]:
+            raise StaleWriteError(
+                f"Settings for {namespace!r} were already written at sequence "
+                f"{accepted[1]}; {sequence} is stale."
+            )
+
+    def _record_write(
+        self, namespace: str, writer: str | None, sequence: int | None
+    ) -> None:
+        if writer is None or sequence is None:
+            # A client that sends no ordering hints cannot be ordered against,
+            # and leaving a stale pair behind would refuse its successor's.
+            self._accepted.pop(namespace, None)
+            return
+        self._accepted[namespace] = (writer, sequence)
+
+    def put(
+        self,
+        namespace: str,
+        value: Any,
+        *,
+        writer: str | None = None,
+        sequence: int | None = None,
+    ) -> dict[str, Any]:
         """Replace one namespace and persist the whole envelope."""
 
         if not valid_namespace(namespace):
@@ -164,6 +216,7 @@ class SettingsStore:
             )
         self._ensure_loaded()
         self._ensure_writable()
+        self._reject_stale(namespace, writer, sequence)
         try:
             encoded = json.dumps(value)
         except (TypeError, ValueError) as exc:
@@ -183,11 +236,19 @@ class SettingsStore:
 
         _write_json_atomic(self.settings_path, envelope)
         self._namespaces = candidate
+        self._record_write(namespace, writer, sequence)
         return envelope
 
-    def delete(self, namespace: str) -> dict[str, Any]:
+    def delete(
+        self,
+        namespace: str,
+        *,
+        writer: str | None = None,
+        sequence: int | None = None,
+    ) -> dict[str, Any]:
         self._ensure_loaded()
         self._ensure_writable()
+        self._reject_stale(namespace, writer, sequence)
         if namespace in self._namespaces:
             candidate = {
                 name: value for name, value in self._namespaces.items() if name != namespace
@@ -197,6 +258,7 @@ class SettingsStore:
                 {"schemaVersion": SCHEMA_VERSION, "namespaces": candidate},
             )
             self._namespaces = candidate
+        self._record_write(namespace, writer, sequence)
         return self.envelope()
 
 
@@ -208,5 +270,6 @@ __all__ = [
     "SETTINGS_NAME",
     "SettingsError",
     "SettingsStore",
+    "StaleWriteError",
     "valid_namespace",
 ]

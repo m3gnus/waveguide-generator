@@ -18,6 +18,11 @@
  * Values are opaque strings -- exactly the strings that used to be stored
  * locally. Each store keeps its own schema, validation, and migrations; this
  * module deliberately understands none of them.
+ *
+ * Each write carries this instance's identity and a sequence number that rises
+ * across its writes, so a request the network delivered late cannot overwrite
+ * the value that superseded it -- nothing here can retract a request the
+ * server has already received.
  */
 
 /** Namespace -> the `localStorage` key it has always used. */
@@ -46,6 +51,10 @@ const WRITE_DELAY_MS: Partial<Record<SettingsNamespace, number>> = { designDraft
 const DEFAULT_WRITE_DELAY_MS = 400;
 const LOCAL_NEWER_SUFFIX = '.local-newer';
 
+/** Identifies the writing page and orders its own overlapping writes. */
+const WRITER_HEADER = 'X-WG-Settings-Writer';
+const SEQUENCE_HEADER = 'X-WG-Settings-Seq';
+
 export interface SettingsEnvelope {
   schemaVersion?: number;
   namespaces?: Record<string, unknown>;
@@ -55,6 +64,15 @@ type Listener = (raw: string | null) => void;
 
 function defaultStorage(): Storage | null {
   try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; }
+}
+
+/** Unique per page, and only ever compared for equality by the server. */
+function newWriterId(): string {
+  try {
+    const uuid = globalThis.crypto?.randomUUID?.();
+    if (uuid) return uuid;
+  } catch { /* fall through to a value that needs no platform support */ }
+  return `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export interface DurableSettingsOptions {
@@ -75,6 +93,12 @@ export class DurableSettings {
   private readonly memory = new Map<SettingsNamespace, string | null>();
   private readonly failedCacheWrites = new Set<SettingsNamespace>();
   private readonly memoryLocalNewer = new Set<SettingsNamespace>();
+  /** Requests issued and not yet settled, per namespace. */
+  private readonly outstanding = new Map<SettingsNamespace, number>();
+  /** The value the server last told us it committed, per namespace. */
+  private readonly acknowledged = new Map<SettingsNamespace, string | null>();
+  private readonly writer = newWriterId();
+  private writeSequence = 0;
   private hydrated = false;
 
   constructor({ storage, fetcher, writeDelayMs }: DurableSettingsOptions = {}) {
@@ -237,27 +261,48 @@ export class DurableSettings {
   private upload(namespace: SettingsNamespace, keepalive: boolean): Promise<void> {
     // An unload flush must reach the network now. Waiting behind an in-flight
     // request would mean it is never issued, and the newer value would then be
-    // overwritten by the server's older copy on the next start. Both requests
-    // read the value at send time, so racing them cannot publish a stale one.
+    // overwritten by the server's older copy on the next start. That leaves
+    // two requests racing, which is why each carries a sequence number the
+    // server uses to refuse the older one.
     const previous = keepalive ? Promise.resolve() : this.inFlight.get(namespace) ?? Promise.resolve();
     const next = previous.then(async () => {
       // Read at send time, not at schedule time, so the newest value wins even
       // when several changes collapsed into this one request.
       const raw = this.get(namespace);
+      const sequence = ++this.writeSequence;
+      this.outstanding.set(namespace, (this.outstanding.get(namespace) ?? 0) + 1);
       try {
         const response = await this.fetcher(`/api/settings/${namespace}`, {
           method: raw === null ? 'DELETE' : 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            [WRITER_HEADER]: this.writer,
+            [SEQUENCE_HEADER]: String(sequence),
+          },
           body: raw === null ? undefined : JSON.stringify(raw),
           keepalive,
         });
-        // Non-OK responses are failed writes too. Clear only when the server
-        // accepted the value that is still current; a later local edit keeps
-        // its own marker and queued upload.
-        if (response.ok && this.get(namespace) === raw) {
+        // An accepted write is the latest thing the server holds from us: a
+        // server with the ordering guard refuses a request its successor
+        // overtook, and one without it commits in arrival order, so the last
+        // acceptance is the last commit either way. Non-OK responses are
+        // failed writes and say nothing about what is stored.
+        if (response.ok) this.acknowledged.set(namespace, raw);
+      } catch { /* the cache still holds it; the next change or hydration retries */ }
+      finally {
+        const left = (this.outstanding.get(namespace) ?? 1) - 1;
+        if (left > 0) this.outstanding.set(namespace, left);
+        else this.outstanding.delete(namespace);
+        // Drop the retry marker only once nothing is still in flight and the
+        // value the server acknowledged last is the one that is current. An
+        // older request settling after a newer one therefore keeps the marker,
+        // and hydration republishes this browser's copy on the next start.
+        if (left <= 0
+            && this.acknowledged.has(namespace)
+            && this.acknowledged.get(namespace) === this.get(namespace)) {
           this.clearLocalNewer(namespace);
         }
-      } catch { /* the cache still holds it; the next change or hydration retries */ }
+      }
     }).finally(() => {
       if (this.inFlight.get(namespace) === next) this.inFlight.delete(namespace);
     });

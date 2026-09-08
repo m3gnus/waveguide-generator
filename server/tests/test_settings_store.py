@@ -14,6 +14,7 @@ from server.settings.store import (
     SCHEMA_VERSION,
     SettingsError,
     SettingsStore,
+    StaleWriteError,
 )
 
 
@@ -153,6 +154,93 @@ def test_routes_read_and_write_the_same_store(tmp_path: Path) -> None:
         "namespaces": {"theme": "light"},
     }
     assert store_for(tmp_path).get("theme") == "light"
+
+
+def test_a_write_its_own_successor_overtook_is_refused(tmp_path: Path) -> None:
+    """One page can have two writes for a namespace in flight at once, because
+    closing the window sends the pending value ahead of the request queue. If
+    the network delivers them in the other order the older one arrives last."""
+
+    store = store_for(tmp_path)
+    store.put("theme", "A", writer="page-1", sequence=1)
+    store.put("theme", "B", writer="page-1", sequence=2)
+
+    with pytest.raises(StaleWriteError):
+        store.put("theme", "A", writer="page-1", sequence=1)
+    assert store_for(tmp_path).get("theme") == "B"
+
+    # A delete is a write like any other and is ordered the same way.
+    with pytest.raises(StaleWriteError):
+        store.delete("theme", writer="page-1", sequence=2)
+    assert store_for(tmp_path).get("theme") == "B"
+
+
+def test_another_page_is_never_refused(tmp_path: Path) -> None:
+    """Sequence numbers are only comparable within the page that issued them.
+    A second window starting from 1 is not stale; it is a different writer."""
+
+    store = store_for(tmp_path)
+    store.put("theme", "B", writer="page-1", sequence=7)
+    store.put("theme", "C", writer="page-2", sequence=1)
+    assert store_for(tmp_path).get("theme") == "C"
+
+
+def test_a_client_that_sends_no_ordering_hints_is_written_as_before(tmp_path: Path) -> None:
+    store = store_for(tmp_path)
+    store.put("theme", "B", writer="page-1", sequence=9)
+    store.put("theme", "C")
+    assert store_for(tmp_path).get("theme") == "C"
+    # The old client cleared the order, so its successor's numbering stands.
+    store.put("theme", "D", writer="page-1", sequence=1)
+    assert store_for(tmp_path).get("theme") == "D"
+
+
+def test_a_refused_write_leaves_the_ordering_state_alone(tmp_path: Path) -> None:
+    store = store_for(tmp_path)
+    store.put("theme", "B", writer="page-1", sequence=2)
+    with pytest.raises(StaleWriteError):
+        store.put("theme", "A", writer="page-1", sequence=1)
+    store.put("theme", "C", writer="page-1", sequence=3)
+    assert store_for(tmp_path).get("theme") == "C"
+
+
+def test_routes_carry_the_ordering_headers(tmp_path: Path) -> None:
+    from server.settings.api import SEQUENCE_HEADER, WRITER_HEADER, create_settings_router
+    from server.tests.test_app_batch_e import TestClient
+
+    from fastapi import FastAPI
+
+    store = store_for(tmp_path)
+    application = FastAPI()
+    application.include_router(create_settings_router(store))
+    client = TestClient(application)
+
+    def write(value: str, sequence: int) -> int:
+        return client.request(
+            "PUT",
+            "/api/settings/theme",
+            headers={
+                "content-type": "application/json",
+                WRITER_HEADER: "page-1",
+                SEQUENCE_HEADER: str(sequence),
+            },
+            body=json.dumps(value).encode("utf-8"),
+        ).status_code
+
+    assert write("A", 1) == 200
+    assert write("B", 2) == 200
+    # The older request, delivered last: refused as a conflict rather than as a
+    # malformed body, because nothing about it was malformed.
+    assert write("A", 1) == 409
+    assert client.get("/api/settings").json()["namespaces"]["theme"] == "B"
+
+    removed = client.request(
+        "DELETE",
+        "/api/settings/theme",
+        headers={WRITER_HEADER: "page-1", SEQUENCE_HEADER: "3"},
+    )
+    assert removed.status_code == 200
+    assert client.get("/api/settings").json()["namespaces"] == {}
 
 
 def test_driver_library_namespace_round_trips(tmp_path: Path) -> None:
