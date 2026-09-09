@@ -636,9 +636,23 @@ def test_real_gmsh_session_preserves_native_windows_path(tmp_path: Path) -> None
     assert kernel32.GetEnvironmentVariableW("PATH", buffer, size) < size
     native_path = buffer.value
 
+    system32 = Path(os.environ["SystemRoot"]) / "System32"
     probe = tmp_path / "wg2-gmsh-path-probe.exe"
-    shutil.copy2(Path(os.environ["SystemRoot"]) / "System32" / "where.exe", probe)
-    test_path = f"{native_path}{os.pathsep}{tmp_path}"
+    shutil.copy2(system32 / "where.exe", probe)
+    # System32 leads, so the probe's own lookup of cmd.exe does not depend on
+    # the inherited PATH being intact. Building the test PATH out of the
+    # process value alone made this test order-dependent through the very
+    # global it exists to police: anything earlier in the run that truncated
+    # PATH -- an unguarded ``gmsh.initialize()`` is the known way -- failed the
+    # first probe below, before a Gmsh session was opened at all, and reported
+    # a Gmsh regression that had not happened here.
+    #
+    # The inherited value stays in the middle rather than being dropped: a
+    # truncation is only visible on a PATH long enough to be cut, and a
+    # two-entry PATH would pass a length-limited truncation that a realistic
+    # one catches. ``tmp_path`` stays last so any truncation at all stops the
+    # probe resolving.
+    test_path = f"{system32}{os.pathsep}{native_path}{os.pathsep}{tmp_path}"
 
     def set_native_path(value: str) -> None:
         assert kernel32.SetEnvironmentVariableW("PATH", value)

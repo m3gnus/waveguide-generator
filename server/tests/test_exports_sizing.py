@@ -46,6 +46,7 @@ from server.exports.sizing import (
     plan_cad_resolution,
     plan_grid,
 )
+from server.mesh.gmsh_worker import _preserve_native_windows_path
 
 SEED_ROSSE = {
     "formula": "R-OSSE",
@@ -872,7 +873,14 @@ def test_written_surface_step_meets_its_chord_target_after_occ_round_trip(
     step_path = tmp_path / "surface.step"
     step_path.write_text(_write_step(source), encoding="utf-8")
 
-    gmsh.initialize()
+    # Every other ``gmsh.initialize()`` in this repository holds this guard,
+    # and this one was the exception. Gmsh truncates the native Windows PATH
+    # on some hosts (see ``test_gmsh_worker_path``), and ``os.environ`` does
+    # not show it -- so an unguarded session here leaks a damaged PATH into
+    # the rest of the pytest process, where later tests resolve ``git``,
+    # ``node`` and ``cmd`` by bare name.
+    with _preserve_native_windows_path():
+        gmsh.initialize()
     try:
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.model.add("written-surface-fidelity")
@@ -950,7 +958,8 @@ def test_written_surface_step_meets_its_chord_target_after_occ_round_trip(
 
         assert maximum <= STL_CHORD_TOLERANCE_MM
     finally:
-        gmsh.finalize()
+        with _preserve_native_windows_path():
+            gmsh.finalize()
 
 
 # --- the backstop warns and trims; it never refuses ------------------------

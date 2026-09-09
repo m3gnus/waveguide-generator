@@ -362,8 +362,19 @@ def _open_gmsh_session() -> Any:
             "CAD-return ingestion requires hornlab-waveguide-mesher, gmsh, and meshio",
             error_type="ImportedMeshDependencyError",
         ) from exc
+    # Imported here, not at module scope: this module must stay cheap to
+    # import (see the module docstring), and this is already the post-
+    # confinement path where ``gmsh`` itself is imported.
+    from server.mesh.gmsh_worker import _preserve_native_windows_path
+
     if not gmsh.isInitialized():
-        gmsh.initialize(interruptible=False)
+        # Gmsh truncates the native Windows PATH on some hosts and leaves
+        # ``os.environ`` untouched, so the damage is invisible from Python.
+        # The worker thread and the exporters have held this guard since
+        # ``eb8b68a8``; this child ran the same call without it, and it goes on
+        # to import the mesher and drive OCC afterwards.
+        with _preserve_native_windows_path():
+            gmsh.initialize(interruptible=False)
         gmsh.option.setNumber("General.Terminal", 0)
     return gmsh
 
