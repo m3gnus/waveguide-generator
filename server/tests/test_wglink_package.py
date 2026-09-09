@@ -782,8 +782,10 @@ def test_unsafe_or_aliased_payload_is_refused_before_materialization(
     with zipfile.ZipFile(archive, "w") as edited:
         for name, data in payloads.items():
             edited.writestr(name, data)
+    state = installer.state_root(root)
     with pytest.raises(installer.InstallError, match="unsafe member|duplicate member"):
-        installer._materialize_runtime(archive, root=root)
+        installer._materialize_runtime(archive, root=root, state=state)
+    assert not (state / "payloads").exists()
     assert not (root / "integrations/wglink/runtime/payloads").exists()
 
 
