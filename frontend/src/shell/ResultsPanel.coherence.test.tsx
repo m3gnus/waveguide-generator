@@ -319,9 +319,13 @@ describe('results run coherence', () => {
 
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
     const hint = host.querySelector<HTMLElement>('.result-power-check')!;
-    expect(hint.textContent).toBe('Power check: far-field vs surface differ by 0.6 dB');
-    expect(hint.title).toContain('mesh or spherical-quadrature error');
+    expect(hint.textContent).toBe('Power check: −0.60 dB at 1.00 kHz');
+    expect(hint.title).toContain('driven-surface flux reads higher');
+    expect(hint.title).toContain('Treat results at 1.00 kHz cautiously');
+    // The 2.4 dB point is above the joined validity ceiling, so it is neither
+    // reported nor counted among the checked frequencies.
     expect(hint.textContent).not.toContain('2.4');
+    expect(hint.title).toContain('One of 2 checked frequencies');
   });
 
   it('shows no radiated-power health hint when the optional block is absent', async () => {

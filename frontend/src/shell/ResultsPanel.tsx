@@ -48,7 +48,7 @@ import { useDesignStore } from '../stores/design';
 import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
 import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
-import { powerAgreementHealth } from '../results/radiatedPower';
+import { powerAgreementHealth, powerCheckMessage } from '../results/radiatedPower';
 
 /**
  * Where the SPL card's curves were measured.
@@ -2645,11 +2645,10 @@ export function ResultsPanel() {
         return <span className="result-single-run" title={`${comparing} of ${preferences.chartTypes.length} charts overlay every selected run. The rest describe one run at a time and show ${labelFor(ids[0], jobs)}.`}>{comparing}/{preferences.chartTypes.length} compare</span>;
       })()}
       {primaryIsProvisional && <span className="pill accent" role="status">Live · {liveCompleted}{liveExpected ? `/${liveExpected}` : ''} frequencies</span>}
-      {powerHealth && <span
-        className="pill result-power-check"
-        role="status"
-        title="A far-field sphere integral that disagrees with driven-surface power indicates mesh or spherical-quadrature error. Only frequencies inside the result's valid band are checked."
-      >Power check: far-field vs surface differ by {Number(powerHealth.maxDifferenceDb.toFixed(3))} dB</span>}
+      {powerHealth && (() => {
+        const message = powerCheckMessage(powerHealth);
+        return <span className="pill result-power-check" role="status" title={message.title}>{message.label}</span>;
+      })()}
       <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => {
         const marker = runContextMarker(job, coherenceContext);
         return <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}{marker ? ` · ${marker}` : ''}</option>;
