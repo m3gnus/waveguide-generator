@@ -1,4 +1,9 @@
-import { DRIVER_FIELD_LABELS, type DriverFieldKey, type PassiveCardioidNumberField } from '../stores/cadReturn';
+import {
+  DRIVER_FIELD_LABELS,
+  DRIVER_INSTALLATION_KEYS,
+  type DriverFieldKey,
+  type PassiveCardioidNumberField,
+} from '../stores/cadReturn';
 import type { ParameterTab } from './parameterRegistry';
 
 export const CAD_CONTROL_SECTIONS = {
@@ -223,10 +228,11 @@ const driverField = (
   driverKey: DriverFieldKey,
   unit: string,
   step: number,
+  keywords: readonly string[] = ['driver', 'T/S', 'Thiele-Small'],
 ): CadDriverFieldDescriptor => ({
   ...control(
     `cad.driver.${driverKey}`, DRIVER_FIELD_LABELS[driverKey], CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
-    ['driver', 'T/S', 'Thiele-Small', driverKey], 'ingested-return', 'cad.drive-channels',
+    [...keywords, driverKey], 'ingested-return', 'cad.drive-channels',
   ),
   driverKey,
   unit,
@@ -250,9 +256,21 @@ export const CAD_DRIVER_FIELD_CONTROLS: readonly CadDriverFieldDescriptor[] = [
   driverField('xmax_mm', 'mm', 0.5),
   driverField('power_w', 'W', 10),
   driverField('z_nom_ohm', 'Ω', 1),
-  driverField('count', '', 1),
-  driverField('rear_volume_l', 'L', 0.5),
+  driverField('count', '', 1, ['driver', 'installation', 'how many', 'units', 'multiple drivers']),
+  driverField('rear_volume_l', 'L', 0.5, ['driver', 'installation', 'rear chamber', 'back volume', 'sealed box', 'litres']),
 ];
+
+/** Channel installation values that do not belong to a driver's datasheet. */
+export const CAD_DRIVER_INSTALLATION_FIELDS: readonly CadDriverFieldDescriptor[] =
+  CAD_DRIVER_FIELD_CONTROLS.filter(
+    (descriptor) => DRIVER_INSTALLATION_KEYS.includes(descriptor.driverKey),
+  );
+
+/** Driver properties offered when entering a complete datasheet by hand. */
+export const CAD_DRIVER_TS_FIELDS: readonly CadDriverFieldDescriptor[] =
+  CAD_DRIVER_FIELD_CONTROLS.filter(
+    (descriptor) => !DRIVER_INSTALLATION_KEYS.includes(descriptor.driverKey),
+  );
 
 /**
  * The datasheet fields the *Edit T/S* sheet offers, in reading order.
@@ -264,7 +282,7 @@ export const CAD_DRIVER_FIELD_CONTROLS: readonly CadDriverFieldDescriptor[] = [
  */
 export const CAD_DRIVER_SHEET_FIELDS: readonly CadDriverFieldDescriptor[] = [
   'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mms_g', 'fs_hz', 'vas_l', 'qms', 'xmax_mm',
-  'power_w', 'z_nom_ohm', 'count', 'rear_volume_l',
+  'power_w', 'z_nom_ohm',
 ].map((key) => CAD_DRIVER_FIELD_CONTROLS.find((control) => control.driverKey === key)!);
 
 export interface CadCardioidFieldDescriptor extends CadControlDescriptor {

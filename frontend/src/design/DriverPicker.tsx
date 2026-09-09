@@ -30,8 +30,9 @@ import {
 import { Icon } from '../shell/icons';
 import {
   CAD_CONTROLS,
-  CAD_DRIVER_FIELD_CONTROLS,
+  CAD_DRIVER_INSTALLATION_FIELDS,
   CAD_DRIVER_SHEET_FIELDS,
+  CAD_DRIVER_TS_FIELDS,
 } from './cadControlRegistry';
 import { driverDerivedValues, driverValuesDisagree } from './driverDerived';
 import {
@@ -161,7 +162,8 @@ function KindToggle({ kind, counts, onChange, channelId }: {
 }
 
 /** Hornresp-unit T/S entry for one drive channel. Plain inputs are required:
- * an empty field means "not provided", which NumberField cannot represent. */
+ * an empty field means "not provided", which NumberField cannot represent.
+ * Installation values live separately in `DriverInstallationFields`. */
 export function DriverFields({ channel, form, onField }: {
   channel: CadDriveChannel;
   form: ChannelDriverForm | undefined;
@@ -170,7 +172,7 @@ export function DriverFields({ channel, form, onField }: {
   const values = driverValues(form);
   const missing = driverShortfallText(form);
   return <div className="cad-driver-grid">
-    {CAD_DRIVER_FIELD_CONTROLS.map(({ driverKey, label, unit, step, reveal }) => <label key={driverKey} className="cad-driver-field" data-control-reveal-id={reveal.id}>
+    {CAD_DRIVER_TS_FIELDS.map(({ driverKey, label, unit, step, reveal }) => <label key={driverKey} className="cad-driver-field" data-control-reveal-id={reveal.id}>
       <span>{label}{unit ? ` (${unit})` : ''}</span>
       <input
         type="number"
@@ -184,6 +186,32 @@ export function DriverFields({ channel, form, onField }: {
     {missing && <p className="cad-driver-hint">Required: {missing}. {channelDriverPresent(form)
       ? 'The solve is refused while a started driver is missing them.'
       : 'With nothing entered the channel solves as a unit-drive basis.'}</p>}
+  </div>;
+}
+
+/** Values that describe this channel's installation rather than the driver. */
+export function DriverInstallationFields({ channel, form, onField }: {
+  channel: CadDriveChannel;
+  form: ChannelDriverForm | undefined;
+  onField: (field: DriverFieldKey, value: number | null) => void;
+}) {
+  const values = driverValues(form);
+  return <div className="driver-installation" role="group" aria-label={`Installation for ${channel.id}`}>
+    {CAD_DRIVER_INSTALLATION_FIELDS.map(({ driverKey, label, unit, step, reveal }) => <label
+      key={driverKey}
+      className="cad-driver-field"
+      data-control-reveal-id={reveal.id}
+    >
+      <span>{label}{unit ? ` (${unit})` : ''}</span>
+      <input
+        type="number"
+        min={0}
+        step={step}
+        value={values[driverKey] ?? ''}
+        aria-label={`${label} for ${channel.id}`}
+        onChange={(event) => onField(driverKey, event.target.value === '' ? null : Number(event.target.value))}
+      />
+    </label>)}
   </div>;
 }
 
@@ -596,7 +624,7 @@ function DriverSheet({ channel, form, onClose }: {
   // entry used to reach them through the no-library grid. A picked driver keeps
   // the shorter set, where a second mass beside the library's own would be an
   // invitation to state two (`channelDriverWire` sends only one either way).
-  const sheetFields = nameEditable ? CAD_DRIVER_FIELD_CONTROLS : CAD_DRIVER_SHEET_FIELDS;
+  const sheetFields = nameEditable ? CAD_DRIVER_TS_FIELDS : CAD_DRIVER_SHEET_FIELDS;
   const savedId = preset === null ? null : preset.source === 'mine' ? preset.id : `mine:${preset.id}`;
   const saved = savedId !== null && savedAs === `${savedId}::${preset!.label}`;
   const inMyDrivers = savedId !== null && savedDrivers.some((driver) => driver.id === savedId);
@@ -781,13 +809,11 @@ function DriverSummary({ channel, form, sheetOpen, onEdit, onClear }: {
   const preset = form.preset!;
   const z = impedanceText(preset.z_ohm);
   const shortfall = shortfallText(form);
-  const count = values.count ?? 1;
   return <div className="driver-summary">
     <div className="driver-summary-head">
       <span className="driver-chip name">{preset.label}{z ? ` · ${z}` : ''}</span>
       {preset.source === 'mine' && <span className="driver-chip">mine</span>}
       {preset.source === 'manual' && <span className="driver-chip">manual</span>}
-      {count > 1 && <span className="driver-chip">×{count}</span>}
       <button
         type="button"
         className="driver-edit-link"
@@ -844,6 +870,11 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
           ? 'Looking for a driver library…'
           : 'No driver library found — enter the Thiele-Small values below, or add CSV files to the driver library folder in Settings.'}
       </p>
+      <DriverInstallationFields
+        channel={channel}
+        form={form}
+        onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}
+      />
       <DriverFields
         channel={channel}
         form={form}
@@ -878,6 +909,11 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
             state.setChannelDriverPreset(channel.id, null);
           }}
         />}
+    <DriverInstallationFields
+      channel={channel}
+      form={form}
+      onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}
+    />
     {sheetOpen && preset !== null && form
       && <DriverSheet channel={channel} form={form} onClose={() => setSheetOpen(false)}/>}
   </div>;

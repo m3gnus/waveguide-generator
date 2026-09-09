@@ -109,6 +109,9 @@ describe('CommandPalette', () => {
 
     expect(cad.find((entry) => entry.id === 'cad-control-cad.frequency.start')?.matches?.('frequencyStartHz')).toBe(true);
     expect(cad.find((entry) => entry.id === 'cad-control-cad.driver.sd_cm2')?.matches?.('Thiele-Small Sd')).toBe(true);
+    expect(cad.find((entry) => entry.id === 'cad-control-cad.driver.count')?.matches?.('Thiele-Small')).toBe(false);
+    expect(cad.find((entry) => entry.id === 'cad-control-cad.driver.count')?.matches?.('multiple drivers')).toBe(true);
+    expect(cad.find((entry) => entry.id === 'cad-control-cad.driver.rear_volume_l')?.matches?.('rear chamber')).toBe(true);
     expect(cad.find((entry) => entry.id === 'cad-control-cad.crossover')?.matches?.('LR4 crossover')).toBe(true);
     expect(cad.some((entry) => entry.id === 'parameter-simulation.f1')).toBe(false);
     expect(cad.some((entry) => entry.id === 'parameter-source.velocity')).toBe(false);

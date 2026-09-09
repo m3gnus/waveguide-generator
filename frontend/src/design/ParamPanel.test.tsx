@@ -1338,10 +1338,27 @@ describe('driver picker', () => {
     expect(card.textContent).toContain('No driver library found');
     // Exactly the grid the rail has always shown, now including the API's
     // alternatives so a datasheet driver can be typed in as printed.
-    const labels = [...card.querySelectorAll<HTMLElement>('.cad-driver-field > span')].map((span) => span.textContent);
+    const labels = [...card.querySelectorAll<HTMLElement>('.cad-driver-grid .cad-driver-field > span')].map((span) => span.textContent);
     expect(labels).toContain('Sd (cm²)');
     expect(labels).toContain('Mms (g)');
     expect(labels).toContain('Fs (Hz)');
+    expect(labels).not.toContain('Count');
+    expect(labels).not.toContain('Rear vol (L)');
+    expect([...card.querySelectorAll<HTMLElement>('.driver-installation .cad-driver-field > span')]
+      .map((span) => span.textContent)).toEqual(['Count', 'Rear vol (L)']);
+  });
+
+  it('keeps count and rear volume on the card, out of the T/S grid', async () => {
+    await mountWithLibrary();
+    const card = channelCard();
+    expect(card.querySelector('input[role="combobox"]')).not.toBeNull();
+    expect([...card.querySelectorAll<HTMLElement>('.driver-installation .cad-driver-field > span')]
+      .map((span) => span.textContent)).toEqual(['Count', 'Rear vol (L)']);
+
+    await type(installationField('Rear vol (L)'), '3.5');
+    await settle();
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].fields).toEqual({ rear_volume_l: 3.5 });
+    expect(driverEditedKeys(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual([]);
   });
 
   it('derives values in the T/S sheet, counts the edits, and resets them', async () => {
@@ -1373,12 +1390,13 @@ describe('driver picker', () => {
 
     expect(document.querySelector('.driver-chip.accent')?.textContent).toBe('1 edited');
     expect(blField.className).toContain('edited');
-    // Count is WG's own input and never reads as an edit of the driver.
-    const countField = [...sheet.querySelectorAll<HTMLElement>('.cad-driver-field')]
-      .find((field) => field.querySelector('span')?.textContent === 'Count')!;
-    await type(countField.querySelector<HTMLInputElement>('input')!, '2');
+    // Count is the installation's, never a datasheet field or driver edit.
+    expect([...sheet.querySelectorAll<HTMLElement>('.cad-driver-field > span')].map((span) => span.textContent))
+      .not.toContain('Count');
+    await type(installationField('Count'), '2');
     await settle();
     expect(document.querySelector('.driver-chip.accent')?.textContent).toBe('1 edited');
+    expect(document.querySelector('.driver-summary-head')?.textContent).not.toContain('×2');
 
     act(() => [...document.querySelectorAll<HTMLButtonElement>('.driver-sheet-actions button')]
       .find((button) => button.textContent === 'Reset to database values')!.click());
@@ -1391,6 +1409,9 @@ describe('driver picker', () => {
   const manualRow = () => [...channelCard().querySelectorAll<HTMLButtonElement>('[role="option"]')]
     .find((option) => option.querySelector('.driver-result-name')?.textContent === 'Enter T/S manually…');
   const sheetField = (label: string) => [...document.querySelectorAll<HTMLElement>('.driver-sheet .cad-driver-field')]
+    .find((field) => field.querySelector('span')?.textContent === label)!
+    .querySelector<HTMLInputElement>('input')!;
+  const installationField = (label: string) => [...channelCard().querySelectorAll<HTMLElement>('.driver-installation .cad-driver-field')]
     .find((field) => field.querySelector('span')?.textContent === label)!
     .querySelector<HTMLInputElement>('input')!;
   const sheetButton = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('.driver-sheet-actions button')]
@@ -1527,7 +1548,7 @@ describe('driver picker', () => {
       .toBe(true);
     expect(sheet.textContent).toContain('Typed by hand');
     expect(sheet.textContent).toContain('Still needed:');
-    // Nothing to reset to, so neither the count nor the button is offered.
+    // Nothing to reset to, so the reset button is not offered.
     expect(sheetButton('Reset to database values')).toBeUndefined();
 
     for (const [label, value] of [['Sd (cm²)', '26'], ['Bl (T·m)', '12.4'], ['Re (Ω)', '6.2'], ['Mms (g)', '2.4'], ['Fs (Hz)', '620']] as const) {
@@ -1557,10 +1578,12 @@ describe('driver picker', () => {
     act(() => manualRow()!.click());
     await settle();
 
-    for (const [label, value] of [['Sd (cm²)', '26'], ['Bl (T·m)', '12.4'], ['Re (Ω)', '6.2'], ['Mms (g)', '2.4'], ['Fs (Hz)', '620'], ['Count', '2']] as const) {
+    for (const [label, value] of [['Sd (cm²)', '26'], ['Bl (T·m)', '12.4'], ['Re (Ω)', '6.2'], ['Mms (g)', '2.4'], ['Fs (Hz)', '620']] as const) {
       await type(sheetField(label), value);
       await settle();
     }
+    await type(installationField('Count'), '2');
+    await settle();
     act(() => sheetButton('Save to My drivers')!.click());
     await settle();
 

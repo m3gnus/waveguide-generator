@@ -1284,6 +1284,12 @@ textarea:disabled { opacity: .48; }
 .driver-clear-link { color: var(--fg3); }
 .driver-edit-link:hover, .driver-clear-link:hover { text-decoration: underline; }
 
+/* Count and rear volume describe the channel installation, not the driver's
+   datasheet. Keep the two compact controls together below search/summary. */
+.driver-installation { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.driver-installation .cad-driver-field { width: 108px; }
+.driver-installation .cad-driver-field input { width: 100%; }
+
 /* Edit T/S expands in place under the driver it belongs to, so the numbers
    stay beside the channel they are for instead of covering the rail. */
 .driver-sheet { display: grid; gap: 6px; margin-top: 2px; padding: 6px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--ov1); }
