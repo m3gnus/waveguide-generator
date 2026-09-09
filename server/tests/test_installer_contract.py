@@ -66,6 +66,25 @@ ALL_BATCH_FILES = (
 )
 BOTH_INSTALLERS = (SHELL_INSTALLER, BATCH_INSTALLER)
 
+#: Wall-clock ceiling for the installer subprocesses this module *executes*.
+#: Their own work is sub-second, so this is a hang bound rather than a
+#: performance budget. The Windows entry point shells out to
+#: ``powershell -NoProfile -ExecutionPolicy Bypass -Command`` and pipes through
+#: ``Tee-Object``; a cold Windows PowerShell start on a hosted runner -- module
+#: autoloading and the on-access scan included -- has by itself exhausted a
+#: 30-second budget that passed locally and passed again on a bare re-run of
+#: the same commit. A generous ceiling costs a passing run nothing, because a
+#: passing run never approaches it, and still bounds a genuine hang.
+#:
+#: It must stay well under ``pytest.ini``'s ``faulthandler_timeout = 300``,
+#: which has ``exit_on_timeout`` set and so kills the whole run at 300s on any
+#: single test. Raising this past that ceiling would not buy patience, it would
+#: just hand the hang back to the blunter backstop. The margin also absorbs the
+#: drain after a timeout: ``subprocess.run`` kills the child and then blocks in
+#: ``communicate()`` until every inherited handle closes, so a grandchild that
+#: outlives the kill can push the observed failure some way past this number.
+INSTALLER_SUBPROCESS_TIMEOUT = 180
+
 VENV_REFERENCE = re.compile(r"\.venv(?:\b|[/\\])", re.IGNORECASE)
 DESTRUCTIVE_COMMAND = re.compile(
     r"\b(?:rm|mv|rd|rmdir|del|move|ren|rename|rmtree|remove_tree|delete_tree)\b|"
@@ -76,6 +95,42 @@ DESTRUCTIVE_COMMAND = re.compile(
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _transcript(stream: str | bytes | None) -> str:
+    """Render whatever a timed-out subprocess had emitted, in whichever form."""
+
+    if stream is None:
+        return "(nothing captured before the timeout)"
+    if isinstance(stream, bytes):
+        stream = stream.decode("utf-8", "replace")
+    return stream.strip() or "(empty)"
+
+
+def run_installer_subprocess(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """Run an installer subprocess, and make a timeout say what it was doing.
+
+    ``subprocess.run`` hangs the partial transcript off ``TimeoutExpired``
+    rather than printing it, so an uncaught one names the command and the
+    budget but never the output -- which is the half that says *where* the run
+    stopped. Turn it into a test failure carrying that transcript, so the next
+    timeout is diagnosable from the CI log alone rather than only by re-running.
+    """
+
+    kwargs.setdefault("timeout", INSTALLER_SUBPROCESS_TIMEOUT)
+    try:
+        return subprocess.run(command, **kwargs)
+    except subprocess.TimeoutExpired as expired:
+        pytest.fail(
+            "\n".join(
+                (
+                    f"{Path(command[0]).name} did not finish within {expired.timeout:g}s.",
+                    f"command: {command}",
+                    f"stdout:\n{_transcript(expired.stdout)}",
+                    f"stderr:\n{_transcript(expired.stderr)}",
+                )
+            )
+        )
 
 
 def destroys_virtual_environment(source: str) -> bool:
@@ -691,7 +746,7 @@ def test_the_windows_entry_point_runs_from_non_ascii_user_paths(tmp_path: Path):
     Path(environment["APPDATA"]).mkdir()
     comspec = environment.get("COMSPEC", "cmd.exe")
 
-    completed = subprocess.run(
+    completed = run_installer_subprocess(
         [comspec, "/d", "/c", str(entry), "--no-launch"],
         cwd=root,
         env=environment,
@@ -699,7 +754,6 @@ def test_the_windows_entry_point_runs_from_non_ascii_user_paths(tmp_path: Path):
         capture_output=True,
         text=True,
         errors="replace",
-        timeout=30,
         check=False,
     )
 
@@ -1061,7 +1115,7 @@ def test_batch_uninstaller_yes_removes_the_invoked_checkout(tmp_path: Path):
     (checkout / "frontend" / "dist").mkdir(parents=True)
     (checkout / "frontend" / "dist" / "index.html").write_text("built", encoding="utf-8")
 
-    completed = subprocess.run(
+    completed = run_installer_subprocess(
         ["cmd.exe", "/d", "/c", str(uninstaller), "--yes"],
         cwd=launch_directory,
         check=False,
