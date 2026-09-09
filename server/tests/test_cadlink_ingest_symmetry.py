@@ -390,8 +390,38 @@ def test_vertically_offset_return_keeps_the_quarter_reduction(tmp_path: Path) ->
     assert frame["source_center_m"][1] == pytest.approx(0.0, abs=1.0e-9)
 
     # Nothing acoustic changed: the same body, the same quarter of the same
-    # source, in the frame the solver mirrors in.
+    # source, in the frame the solver mirrors in. Compare the physical and
+    # topological contracts rather than requiring byte-identical unstructured
+    # tessellations. OCC surfaces that differ only by floating-point noise can
+    # legitimately make Gmsh choose a different diagonal or add a few nodes.
     centred = _ingest(tmp_path / "centred", _horn_bundle(tmp_path / "centred", "round"))
+    assert centred["symmetry"]["cut_planes"] == ["x0", "y0"]
+    assert centred["symmetry_verification"]["verified"] is True
+
+    offset_stats = offset["mesh"]["stats"]
+    centred_stats = centred["mesh"]["stats"]
+    assert offset_stats["domain_multiplier"] == centred_stats["domain_multiplier"] == 4.0
+    assert (
+        offset_stats["dense_solver_domain_multiplier"]
+        == centred_stats["dense_solver_domain_multiplier"]
+        == 4
+    )
+    assert offset_stats["bounds_m"] == pytest.approx(
+        centred_stats["bounds_m"], rel=0.0, abs=1.0e-9
+    )
+    assert offset_stats["tag_counts"].keys() == centred_stats["tag_counts"].keys()
+    assert all(int(count) > 0 for count in offset_stats["tag_counts"].values())
+    assert all(int(count) > 0 for count in centred_stats["tag_counts"].values())
+    assert offset["healing"]["topology_before"] == centred["healing"]["topology_before"]
+    assert offset["healing"]["topology_after"] == centred["healing"]["topology_after"]
+
+    centred_frame = centred["anchor"]["throat_frame"]
+    assert offset["anchor"]["throat_frame"].keys() == centred_frame.keys()
+    for name, vector in centred_frame.items():
+        assert offset["anchor"]["throat_frame"][name] == pytest.approx(
+            vector, rel=0.0, abs=1.0e-9
+        )
+
     assert centred["post_cut_source_areas"].keys() == offset["post_cut_source_areas"].keys()
     for source_id, provenance in centred["post_cut_source_areas"].items():
         placed = offset["post_cut_source_areas"][source_id]
@@ -401,9 +431,40 @@ def test_vertically_offset_return_keeps_the_quarter_reduction(tmp_path: Path) ->
         assert placed["retained_child_area_mm2"] == pytest.approx(
             provenance["retained_child_area_mm2"], rel=1.0e-9
         )
-    assert offset["mesh"]["stats"]["triangle_count"] == centred["mesh"]["stats"][
-        "triangle_count"
-    ]
+    for record in (offset, centred):
+        verification = record["symmetry_verification"]
+        assert verification["cut_planes"] == ["x0", "y0"]
+        assert verification["detected_planes"] == ["x0", "y0"]
+        assert verification["off_plane_free_edge_count"] == 0
+        assert verification["integrity_off_plane_open_edge_count"] == 0
+        assert "fallback" not in verification
+
+        integrity = record["mesh"]["integrity"]
+        assert integrity["valid"] is True
+        assert integrity["orientation_valid"] is True
+        assert integrity["degenerate_triangle_count"] == 0
+        assert integrity["duplicate_triangle_count"] == 0
+        assert integrity["nonmanifold_edge_count"] == 0
+        assert integrity["inconsistent_edge_count"] == 0
+        assert integrity["self_intersection"]["intersecting_triangle_count"] == 0
+
+    # Translation must not weaken the requested mesh-density ceiling. The
+    # exact triangle inventory is not canonical, but a large complexity jump
+    # would still expose a placement-sensitive sizing or topology regression.
+    offset_frequency = offset["mesh"]["metadata"]["mesh_frequency_validation"]
+    centred_frequency = centred["mesh"]["metadata"]["mesh_frequency_validation"]
+    for frequency in (offset_frequency, centred_frequency):
+        assert frequency["global_max_edge_m"] <= _SIZES["rigid_size_mm"] * 1.0e-3
+        assert frequency["per_source"]["source-hf"]["max_edge_m"] <= (
+            _SIZES["source_size_mm"]["source-hf"] * 1.0e-3
+        )
+    complexity_ratio = offset_stats["triangle_count"] / centred_stats["triangle_count"]
+    assert 0.95 <= complexity_ratio <= 1.05
+    vertex_ratio = (
+        offset_stats["dense_solver_used_vertex_count"]
+        / centred_stats["dense_solver_used_vertex_count"]
+    )
+    assert 0.95 <= vertex_ratio <= 1.05
 
 
 def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(tmp_path: Path) -> None:
