@@ -26,7 +26,7 @@ import { runDisplayName } from '../prefs/preferences';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 
 export const solverModeLabels = {
-  auto: 'Auto (fastest eligible)',
+  auto: 'Full 3D (legacy automatic mode)',
   full_3d: 'Full 3D',
   circsym: 'Axisymmetric (meridian)',
 } as const;
@@ -77,15 +77,14 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   const metalAvailable = engines.some((engine) => engine.name.toLowerCase() === 'metal' && engine.available);
   return <>
     {mode === 'parametric' ? <>
-      <HelpTipRow className="select-row" text="Which BEM engine runs the solve. AUTO takes the first backend that is actually available on this machine. All backends solve the same problem; they differ in speed and in which fast paths they support."><label htmlFor="solve-engine">Solver backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+      <HelpTipRow className="select-row" text="Which BEM engine runs Full 3D. AUTO takes the first full-3D backend that is actually available on this machine. Axisymmetric uses the portable meridian runner independently of this choice."><label htmlFor="solve-engine">Full 3D backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">AUTO — first available</option>
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.label || engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></HelpTipRow>
       <p className="section-note">{meridianAvailable
-        ? 'Axisymmetric meridian capability: AUTO uses it for eligible circular designs on any OS; the selected backend handles full 3D fallback.'
+        ? 'Axisymmetric is available as an explicit solver path on this machine. It is never selected automatically.'
         : 'Selected backend capability: Full 3D. The axisymmetric runner is unavailable.'}</p>
-      <HelpTipRow className="select-row" text="Machine-local formulation choice. AUTO uses the platform-neutral axisymmetric meridian solver for eligible circular designs and the selected full-3D backend otherwise. The choice is not saved into design files."><label htmlFor="solve-mode">Solver path</label><select id="solve-mode" value={store.solverMode} onChange={(event) => store.setSolverMode(event.target.value as SolverMode)}>
-        <option value="auto">{solverModeLabels.auto}</option>
+      <HelpTipRow className="select-row" text="Machine-local formulation choice. Full 3D is the default. Axisymmetric must be selected explicitly and uses the same portable meridian runner with any Full 3D backend choice. The choice is not saved into design files."><label htmlFor="solve-mode">Solver path</label><select id="solve-mode" value={store.solverMode === 'auto' ? 'full_3d' : store.solverMode} onChange={(event) => store.setSolverMode(event.target.value as SolverMode)}>
         <option value="full_3d">{solverModeLabels.full_3d}</option>
         {(meridianAvailable || store.solverMode === 'circsym') && <option value="circsym" disabled={!meridianAvailable}>{solverModeLabels.circsym}{meridianAvailable ? '' : ' · unavailable'}</option>}
       </select></HelpTipRow>

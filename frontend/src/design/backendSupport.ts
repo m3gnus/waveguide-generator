@@ -39,7 +39,7 @@ const FEATURE_REMEDIES: Record<BackendFeature, string> = {
   'ground-plane':
     'Ground-plane solves need BEMPP full 3D on this build. Note that an infinite baffle is a different boundary, not a substitute.',
   'meridian-fast-path':
-    'Use Auto or Force full 3D; this geometry cannot use the platform-neutral meridian runner.',
+    'Use Full 3D; this geometry cannot use the platform-neutral meridian runner.',
   'imported-geometry':
     'Imported CAD solves need the Metal backend. The parametric workspace solves on this machine.',
 };
@@ -85,11 +85,9 @@ export function activeBackendCapability(
 /**
  * Available capabilities the server may plan for the requested engine.
  *
- * Solver mode AUTO can first select the advertised meridian runner for
- * eligible geometry, even with an explicit non-dryrun backend chosen as the
- * full-3D fallback. An AUTO engine then walks the server-advertised full-3D
- * order. Forced Full 3D excludes the meridian runner; forced CircSym includes
- * only that runner. Keeping the whole AUTO-engine plan matters on a GPU host:
+ * Full 3D walks the server-advertised backend order when the engine is AUTO.
+ * Explicit CircSym includes only the advertised meridian runner, independently
+ * of the selected full-3D backend. Keeping the whole AUTO-engine plan matters on a GPU host:
  * BEAT can be the resolved free-standing default while BEMPP later in the plan
  * handles coupled infinite-baffle solves.
  *
@@ -101,7 +99,7 @@ export function plannedBackendCapabilities(
   engine: string,
   engines: readonly EngineCapability[],
   selection?: Readonly<EngineSelection>,
-  solverMode: SolverMode = 'auto',
+  solverMode: SolverMode = 'full_3d',
 ): readonly EngineCapability[] {
   let advertised: readonly string[];
   try {

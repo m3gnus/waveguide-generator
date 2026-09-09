@@ -216,7 +216,7 @@ const common = {
   },
   simulation: {
     f1: 400, f2: 16_000, num_frequencies: 20,
-    sim_type: 'freestanding' as const, solver_mode: 'auto',
+    sim_type: 'freestanding' as const, solver_mode: 'full_3d',
   },
   output: { stl: 0, msh: 0 },
   extra_keys: {} as Record<string, string>,

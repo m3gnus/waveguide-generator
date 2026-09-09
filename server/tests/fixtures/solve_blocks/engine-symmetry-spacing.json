@@ -13,7 +13,7 @@
   },
   "expected": {
     "engine": "auto",
-    "solver_mode": "auto",
+    "solver_mode": "full_3d",
     "symmetry": "half_yz",
     "mesh_validation_mode": "strict",
     "verbose": true,

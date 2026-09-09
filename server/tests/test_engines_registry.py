@@ -564,7 +564,7 @@ def test_legacy_beat_name_resolves_to_the_best_available_variant() -> None:
 def _planner_request(
     *,
     engine: str = "auto",
-    solver_mode: str = "auto",
+    solver_mode: str = "full_3d",
     sim_type: str = "freestanding",
     symmetry: str = "auto",
 ) -> SolveRequest:
@@ -590,7 +590,7 @@ def _planner_request(
     )
 
 
-def _reported_rosse_request(*, engine: str) -> SolveRequest:
+def _reported_rosse_request(*, engine: str, solver_mode: str = "circsym") -> SolveRequest:
     """The circular support case that regressed between 0.3.1 and 0.3.2."""
 
     return SolveRequest.model_validate(
@@ -616,15 +616,18 @@ def _reported_rosse_request(*, engine: str) -> SolveRequest:
             },
             "options": {
                 "engine": engine,
-                "solver_mode": "auto",
+                "solver_mode": solver_mode,
                 "symmetry": "auto",
             },
         }
     )
 
 
-@pytest.mark.parametrize("engine", ["bempp", "beat-cpu"])
-def test_reported_circular_rosse_auto_uses_frequency_refined_meridian(
+@pytest.mark.parametrize(
+    "engine",
+    ["auto", "metal", "bempp", "beat", "beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"],
+)
+def test_reported_circular_rosse_explicit_axisym_works_with_every_backend_choice(
     monkeypatch,
     engine: str,
 ) -> None:
@@ -642,7 +645,11 @@ def test_reported_circular_rosse_auto_uses_frequency_refined_meridian(
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
             registry.EngineInfo("axisym", True, "portable CPU", "1"),
-            registry.EngineInfo(engine, True, "full-3D fallback", "1"),
+            *(
+                []
+                if engine == "auto"
+                else [registry.EngineInfo(engine, True, "full-3D preference", "1")]
+            ),
         ],
         factory=lambda name: object(),
     )
@@ -653,7 +660,7 @@ def test_reported_circular_rosse_auto_uses_frequency_refined_meridian(
 
     assert resolution.engine_name == "axisym"
     assert resolution.symmetry_metadata["solver_plan"]["reason"] == (
-        "AUTO selected the eligible platform-neutral axisymmetric runner"
+        "forced by solver_mode='circsym'"
     )
 
 
@@ -675,10 +682,8 @@ def test_reported_circular_rosse_is_eligible_and_refined_to_20khz() -> None:
     )
 
 
-@pytest.mark.parametrize("solver_mode", ["auto", "circsym"])
 def test_formulation_planner_uses_portable_axisym_without_revolved_symmetry(
     monkeypatch,
-    solver_mode: str,
 ) -> None:
     from server.solver import circsym
 
@@ -706,7 +711,7 @@ def test_formulation_planner_uses_portable_axisym_without_revolved_symmetry(
     )
 
     resolution = asyncio.run(
-        resolve_submission(_planner_request(solver_mode=solver_mode), engine_registry)
+        resolve_submission(_planner_request(solver_mode="circsym"), engine_registry)
     )
 
     assert resolution.engine_name == "axisym"
@@ -714,11 +719,7 @@ def test_formulation_planner_uses_portable_axisym_without_revolved_symmetry(
     assert resolution.symmetry_metadata["solver_plan"] == {
         "formulation": "axisymmetric",
         "engine": "axisym",
-        "reason": (
-            "forced by solver_mode='circsym'"
-            if solver_mode == "circsym"
-            else "AUTO selected the eligible platform-neutral axisymmetric runner"
-        ),
+        "reason": "forced by solver_mode='circsym'",
         "eligibility_reasons": [],
         "cost_evidence": {"model": "test", "full_3d_quadrants": 1},
     }
@@ -773,8 +774,8 @@ def test_formulation_planner_falls_back_to_selected_full_3d_backend(
     assert resolution.symmetry_metadata["solver_plan"] == {
         "formulation": "full-3d",
         "engine": "bempp",
-        "reason": "axisymmetric formulation was not eligible",
-        "eligibility_reasons": ["mouth is not circular"],
+        "reason": "explicit solver_mode='full_3d'",
+        "eligibility_reasons": [],
     }
 
 
@@ -814,7 +815,7 @@ def test_submission_plan_endpoint_uses_the_submitted_design(
         for route in create_jobs_router(runtime).routes
         if getattr(route, "path", None) == "/api/solve/plan"
     )
-    request = _planner_request(engine="beat", solver_mode="auto")
+    request = _planner_request(engine="beat", solver_mode="circsym")
 
     eligible = asyncio.run(endpoint(request))
     assert eligible.engine == "axisym"
@@ -823,29 +824,19 @@ def test_submission_plan_endpoint_uses_the_submitted_design(
 
     eligibility_reasons.append("mouth is not circular")
     ineligible = asyncio.run(endpoint(request))
-    assert ineligible.status_code == 503
+    assert ineligible.status_code == 422
     refusal = json.loads(ineligible.body)
-    assert refusal["error"]["code"] == "engine_unavailable"
-    # Still a refusal, and it must stay one: the axisymmetric runner is the
-    # only registered engine and this design is not eligible for it, so there
-    # is genuinely nothing to fall back to. The message now says that rather
-    # than naming BEAT alone, because "install BEAT" is not the only remedy.
-    assert refusal["error"]["message"] == (
-        "Solve engine 'beat' is unavailable, and no other engine on this "
-        "host can take its place. GPU backend is offline Install/enable "
-        "Axisymmetric, Metal, BEAT, or BEMPP; explicitly enable dry-run "
-        "with WG2_ENABLE_DRYRUN=1 for synthetic development solves."
-    )
+    assert refusal["error"]["code"] == "invalid_solve_plan"
+    assert "Forced axisymmetric solver mode is not eligible" in refusal["error"]["message"]
+    assert "mouth is not circular" in refusal["error"]["message"]
 
 
 def test_a_stored_legacy_beat_request_still_submits(monkeypatch) -> None:
     """A design file written before the backends were separately selectable.
 
     It says ``engine: beat``, which no longer matches an advertised engine. The
-    submission must resolve it to a variant this host can run -- and it must do
-    so *after* the axisymmetric planner, which resolves an explicit ``beat``
-    request to the meridian runner for eligible circular geometry without ever
-    consulting BEAT's availability.
+    submission must resolve it to a variant this host can run. Legacy automatic
+    formulation selection now means Full 3D and never opts into Axisymmetric.
     """
 
     from server.solver import circsym

@@ -148,7 +148,9 @@ class SolveOptions(JobModel):
     """Execution choices kept separate from the authoritative v2 design."""
 
     engine: str = "auto"
-    solver_mode: Literal["auto", "full_3d", "circsym"] = "auto"
+    # ``auto`` remains accepted for old clients but resolves as Full 3D. The
+    # axisymmetric formulation is explicit-only through ``circsym``.
+    solver_mode: Literal["auto", "full_3d", "circsym"] = "full_3d"
     symmetry: str = "auto"
     frequency_range: list[float] | None = None
     num_frequencies: int | None = Field(default=None, ge=1, le=401)

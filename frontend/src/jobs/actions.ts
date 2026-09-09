@@ -192,8 +192,8 @@ function engineModePlan(
 /**
  * Server-advertised candidates the formulation planner may reach, in order.
  *
- * This is shared by capability gating and submission resolution so AUTO's
- * conditional Axisym-first path cannot drift between those two UI surfaces.
+ * This is shared by capability gating and submission resolution so explicit
+ * Axisymmetric routing cannot drift between those two UI surfaces.
  */
 export function plannedEngineNames(
   engine: string,
@@ -201,11 +201,11 @@ export function plannedEngineNames(
     engines: readonly EngineCapability[];
     engineSelection?: Readonly<EngineSelection>;
   },
-  solverMode: SolverMode = 'auto',
+  solverMode: SolverMode = 'full_3d',
 ): readonly string[] {
   const plan = engineModePlan(engine, capabilities, solverMode);
   if (plan.solverMode === 'circsym') return plan.runner ? [plan.runner] : [];
-  if (plan.solverMode === 'full_3d') {
+  if (plan.solverMode === 'full_3d' || plan.solverMode === 'auto') {
     return plan.requested === 'auto' ? plan.full3dOrder : [plan.requested];
   }
   if (plan.requested === 'dryrun' || plan.requested === plan.runner) {
@@ -223,7 +223,7 @@ export function resolveEngine(
     engines: readonly EngineCapability[];
     engineSelection?: Readonly<EngineSelection>;
   },
-  solverMode: SolverMode = 'auto',
+  solverMode: SolverMode = 'full_3d',
 ): string {
   const plan = engineModePlan(engine, capabilities, solverMode);
   const selection = capabilities.engineSelection;
@@ -246,13 +246,9 @@ export function resolveEngine(
     ?? order.flatMap((name) => capabilities.engines.filter((item) => item.available
       && item.name.toLowerCase() === name))[0];
   if (available) return available.name.toLowerCase();
-  // An Axisym-only host is not a host without a solver. The server planner
-  // selects the meridian runner for an eligible circular design before any
-  // full-3D fallback, so throwing here left JobsCoordinator with no capability
-  // and Run blocked on a design the server would have solved -- escapable only
-  // by knowing to force the meridian mode by hand. Geometry eligibility is the
-  // planner's to judge, not this function's.
-  if (solverMode === 'full_3d') {
+  // AUTO is retained only as a wire/storage compatibility value and now means
+  // Full 3D. Axisymmetric is reached exclusively through explicit CircSym.
+  if (solverMode === 'full_3d' || solverMode === 'auto') {
     throw new Error('No full-3D solver backend is currently available');
   }
   const runner = plan.runner;

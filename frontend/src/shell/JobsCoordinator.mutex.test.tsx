@@ -240,7 +240,7 @@ describe('solve invocation mutex', () => {
     expect(solve.title).toContain('Unknown solve engine');
   });
 
-  it('allows AUTO formulation planning when Axisym is available but the explicit fallback is offline', async () => {
+  it('allows explicit Axisymmetric planning when the saved Full 3D backend is offline', async () => {
     mocks.capabilities.engines = [
       { name: 'beat', available: false, reason: 'GPU backend is offline', version: null, fast_paths: [], formulations: ['full-3d'] },
       { name: 'axisym', available: true, reason: null, version: '1', fast_paths: [], formulations: ['axisymmetric'] },
@@ -251,11 +251,11 @@ describe('solve invocation mutex', () => {
     };
     mocks.solvePlan = {
       engine: 'axisym', formulation: 'axisymmetric',
-      reason: 'AUTO selected the eligible platform-neutral axisymmetric runner',
+      reason: "forced by solver_mode='circsym'",
       eligibility_reasons: [],
     };
     mocks.planSolveDesign.mockResolvedValue(mocks.solvePlan);
-    useSolveOptionsStore.setState({ engine: 'beat', solverMode: 'auto' });
+    useSolveOptionsStore.setState({ engine: 'beat', solverMode: 'circsym' });
     mocks.submitDesign.mockResolvedValue('axisym-job');
     await act(async () => {
       root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
@@ -331,13 +331,13 @@ describe('solve invocation mutex', () => {
     expect(solve.title).toBe('Solve current design with AUTO (BEMPP)');
   });
 
-  it('names Axisym when an eligible AUTO design bypasses the full-3D default', async () => {
+  it('names Axisym when the formulation is selected explicitly', async () => {
     mocks.solvePlan = {
       engine: 'axisym', formulation: 'axisymmetric',
-      reason: 'AUTO selected the eligible platform-neutral axisymmetric runner',
+      reason: "forced by solver_mode='circsym'",
       eligibility_reasons: [],
     };
-    useSolveOptionsStore.setState({ engine: 'auto', solverMode: 'auto' });
+    useSolveOptionsStore.setState({ engine: 'auto', solverMode: 'circsym' });
     await act(async () => {
       root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
     });

@@ -619,7 +619,7 @@ class AxisymmetricEngine:
         metadata["solve_path_reason"] = (
             "forced by solver_mode='circsym'"
             if request.options.solver_mode == "circsym"
-            else "AUTO selected the eligible platform-neutral axisymmetric runner"
+            else "selected by engine='axisym'"
         )
         return EngineRunResult(
             results=results,

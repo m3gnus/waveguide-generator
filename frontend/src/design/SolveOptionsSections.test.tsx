@@ -61,8 +61,9 @@ describe('solve and directivity control help', () => {
     render(<SolveOptionsControls />);
     const control = host.querySelector<HTMLSelectElement>('#solve-mode')!;
     expect([...control.options].map((option) => option.textContent)).toEqual([
-      'Auto (fastest eligible)', 'Full 3D', 'Axisymmetric (meridian)',
+      'Full 3D', 'Axisymmetric (meridian)',
     ]);
+    expect(control.value).toBe('full_3d');
     act(() => {
       control.value = 'circsym';
       control.dispatchEvent(new Event('change', { bubbles: true }));

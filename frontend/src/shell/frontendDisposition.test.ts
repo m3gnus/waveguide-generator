@@ -86,7 +86,7 @@ describe('frontend result and status labels', () => {
     expect(engineStatusLabel(engines, selection, 'axisym', 'full_3d')).toBe('AXISYM · INVALID');
   });
 
-  it('keeps an unavailable explicit fallback honest while AUTO may try Axisym', () => {
+  it('keeps an unavailable Full 3D backend honest while Axisym remains explicit', () => {
     const engines = [
       { name: 'beat', available: false, reason: 'GPU offline', version: null, fast_paths: [] },
       { name: 'axisym', available: true, reason: null, version: '1.0', fast_paths: [] },

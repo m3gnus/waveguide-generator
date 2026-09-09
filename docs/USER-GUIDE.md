@@ -138,12 +138,12 @@ has not been solved has no measured rig to show, and WG does not guess one.
 
 ### What each backend can solve
 
-WG plans the **formulation** separately from the full-3D backend. Eligible round
-designs use the portable **Axisymmetric (meridian)** runner on macOS, Windows,
-and Linux; it runs on CPU everywhere and can use Metal acceleration on Apple
-Silicon. Non-axisymmetric designs fall back to **Metal** (Apple GPU), one of the
-**BEAT** engines, or **BEMPP** (CPU/OpenCL), according to the host and the
-backend selected in Solve options.
+WG selects the **formulation** separately from the Full 3D backend. **Full 3D**
+is the default formulation. **Axisymmetric (meridian)** is an explicit choice
+for eligible round designs; it runs on CPU on macOS, Windows, and Linux and can
+use Metal acceleration on Apple Silicon. The Full 3D backend selector chooses
+**Metal** (Apple GPU), one of the **BEAT** engines, or **BEMPP** (CPU/OpenCL).
+Changing that backend preference does not change an explicit Axisymmetric run.
 
 BEAT is one solver with four interchangeable execution backends, and the Solver
 backend list offers each of them separately:

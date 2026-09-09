@@ -498,16 +498,17 @@ async def resolve_submission(
     if engine_name not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
 
-    # Formulation is planned before the full-3D backend. Axisymmetric geometry
-    # uses the platform-neutral meridian runner on every OS; Metal/BEMPP/BEAT
-    # remain interchangeable execution choices only for the full-3D branch.
-    solver_mode = str(request.options.solver_mode or "auto").strip().lower()
+    # Axisymmetric is an explicit formulation choice. ``auto`` remains a
+    # backwards-compatible wire value but follows Full 3D; it must never opt a
+    # design into a different formulation. Metal/BEMPP/BEAT remain selectable
+    # full-3D backends while explicit CircSym uses the portable runner on every OS.
+    solver_mode = str(request.options.solver_mode or "full_3d").strip().lower()
     forced_axisym = engine_name == "axisym" or solver_mode == "circsym"
     if engine_name == "axisym" and solver_mode == "full_3d":
         raise ValueError("engine='axisym' cannot run solver_mode='full_3d'")
     axisym_reasons: list[str] = []
     probe_axisym = engine_name != "dryrun" and (
-        engine_name == "axisym" or solver_mode in {"auto", "circsym"}
+        engine_name == "axisym" or solver_mode == "circsym"
     )
     axisym_registered = (
         await engine_registry.get_engine("axisym") is not None
@@ -522,7 +523,7 @@ async def resolve_submission(
         )
     consider_axisym = (
         axisym_registered
-        and (engine_name == "axisym" or solver_mode in {"auto", "circsym"})
+        and (engine_name == "axisym" or solver_mode == "circsym")
     )
     if consider_axisym:
         from server.solver.circsym import (
@@ -544,11 +545,7 @@ async def resolve_submission(
             axisym_reason = (
                 "forced by solver_mode='circsym'"
                 if solver_mode == "circsym"
-                else (
-                    "selected by engine='axisym'"
-                    if engine_name == "axisym"
-                    else "AUTO selected the eligible platform-neutral axisymmetric runner"
-                )
+                else "selected by engine='axisym'"
             )
             try:
                 plan_cost = await asyncio.to_thread(
@@ -575,26 +572,6 @@ async def resolve_submission(
                 "eligibility_reasons": [],
                 "cost_evidence": plan_cost,
             }
-            # Say so. Swapping the backend under a user who asked for AUTO
-            # changes their wall clock *and* their numbers, and until this line
-            # existed the only way to find out was to call the plan endpoint or
-            # read the result metadata. A support question of the form "the
-            # solver got faster and the results moved" was unanswerable from a
-            # server log. This is engine selection, not per-frequency detail,
-            # so it is not gated behind WG.Solve.Verbose.
-            if not forced_axisym:
-                # Not a design key: a design-stated solver mode is stripped by
-                # migration 006_machine_solver_mode_not_portable, because
-                # whether the meridian runner can run at all is a property of
-                # the host. The override lives in solve options.
-                logger.info(
-                    "AUTO selected the axisymmetric meridian runner instead of "
-                    "the full-3D backend: this design is a closed body of "
-                    "revolution. It is solved by a different formulation than a "
-                    "full-3D solve of the same design, so results will not match "
-                    "one exactly. Choose the full-3D solver mode in the solve "
-                    "options to keep the full-3D backend.",
-                )
     if engine_name != "axisym":
         resolution = await asyncio.to_thread(resolve_symmetry, request.design)
         # Subtract the mirror plane a ground plane makes unavailable before the
@@ -622,7 +599,7 @@ async def resolve_submission(
             "reason": (
                 "explicit solver_mode='full_3d'"
                 if solver_mode == "full_3d"
-                else "axisymmetric formulation was not eligible"
+                else "legacy solver_mode='auto' defaults to full-3d"
             ),
             "eligibility_reasons": axisym_reasons,
         }

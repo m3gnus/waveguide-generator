@@ -22,7 +22,7 @@
   },
   "expected": {
     "engine": "auto",
-    "solver_mode": "auto",
+    "solver_mode": "full_3d",
     "symmetry": "auto",
     "mesh_validation_mode": "warn",
     "verbose": false,

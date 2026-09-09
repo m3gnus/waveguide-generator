@@ -216,11 +216,11 @@ def _metal_request(mode: str = "auto", *, diagonal_angle: float = 45.0) -> Solve
     )
 
 
-def test_metal_auto_uses_eligible_axisymmetric_metal_path(monkeypatch) -> None:
+def test_metal_explicit_axisym_uses_meridian_path(monkeypatch) -> None:
     from server.solver import circsym, metal
 
     async def forbidden_mesh(*_args, **_kwargs):
-        pytest.fail("eligible AUTO must not build a full-3D mesh")
+        pytest.fail("explicit Axisymmetric must not build a full-3D mesh")
 
     class FakeCircSym:
         async def run(self, *_args, **_kwargs):
@@ -236,8 +236,8 @@ def test_metal_auto_uses_eligible_axisymmetric_metal_path(monkeypatch) -> None:
     monkeypatch.setattr(metal, "build_solver_mesh", forbidden_mesh)
 
     async def scenario() -> None:
-        request = _metal_request()
-        # A legacy portable value is inert; machine-local options remain AUTO.
+        request = _metal_request(mode="circsym")
+        # A legacy design-local value is inert; machine-local options decide.
         request.design.root.simulation.solver_mode = "circsym"
         outcome = await MetalEngine().run(
             request, cancel_cb=lambda: None, stage_cb=lambda *_args: None
@@ -245,15 +245,12 @@ def test_metal_auto_uses_eligible_axisymmetric_metal_path(monkeypatch) -> None:
         metadata = outcome.results["metadata"]
         assert metadata["solve_path"] == "axisymmetric-meridian"
         assert metadata["axisymmetric_eligibility_reasons"] == []
-        assert metadata["solve_path_reason"] == (
-            "solver_mode='auto' selected the eligible Metal axisymmetric "
-            "meridian fast path"
-        )
+        assert metadata["solve_path_reason"] == "forced by solver_mode='circsym'"
 
     asyncio.run(scenario())
 
 
-def test_metal_auto_sends_a_custom_diagonal_to_the_full_3d_path(monkeypatch) -> None:
+def test_metal_legacy_auto_always_uses_the_full_3d_path(monkeypatch) -> None:
     from server.solver import circsym, metal
 
     class ObservationWithoutNativeInclination:
@@ -280,7 +277,7 @@ def test_metal_auto_sends_a_custom_diagonal_to_the_full_3d_path(monkeypatch) -> 
 
     class ForbiddenCircSym:
         async def run(self, *_args, **_kwargs):
-            pytest.fail("a custom diagonal cannot enter the mesh-free CircSym path")
+            pytest.fail("legacy AUTO must never enter the mesh-free CircSym path")
 
     async def fake_mesh(*_args, **_kwargs):
         return {
@@ -312,12 +309,10 @@ def test_metal_auto_sends_a_custom_diagonal_to_the_full_3d_path(monkeypatch) -> 
         )
         metadata = outcome.results["metadata"]
         assert metadata["solve_path"] == "full-3d"
-        assert metadata["axisymmetric_eligibility_reasons"] == [
-            "a non-45-degree diagonal plane requires the full-3D mesh"
-        ]
-        assert "axisymmetric meridian fast path is not eligible" in metadata[
-            "solve_path_reason"
-        ]
+        assert metadata["axisymmetric_eligibility_reasons"] == []
+        assert metadata["solve_path_reason"] == (
+            "legacy solver_mode='auto' defaults to native full 3D"
+        )
 
     asyncio.run(scenario())
 

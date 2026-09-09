@@ -2499,12 +2499,12 @@ class MetalEngine:
                 field_trace_unavailable_reason=field_trace_reason,
             )
 
-        mode = str(request.options.solver_mode or "auto").strip().lower()
+        mode = str(request.options.solver_mode or "full_3d").strip().lower()
         if mode not in {"auto", "full_3d", "circsym"}:
             raise ValueError("solver_mode must be auto, full_3d, or circsym")
 
         eligibility_reasons: list[str] = []
-        if mode in {"auto", "circsym"}:
+        if mode == "circsym":
             eligibility_reasons = await asyncio.to_thread(
                 _circsym_eligibility_reasons, request
             )
@@ -2526,12 +2526,7 @@ class MetalEngine:
                 metadata = outcome.results.setdefault("metadata", {})
                 metadata["solve_path"] = "axisymmetric-meridian"
                 metadata["axisymmetric_eligibility_reasons"] = []
-                metadata["solve_path_reason"] = (
-                    "forced by solver_mode='circsym'"
-                    if mode == "circsym"
-                    else "solver_mode='auto' selected the eligible Metal "
-                    "axisymmetric meridian fast path"
-                )
+                metadata["solve_path_reason"] = "forced by solver_mode='circsym'"
                 outcome.field_trace_unavailable_reason = (
                     "unsupported_axisymmetric_formulation"
                 )
@@ -2581,13 +2576,9 @@ class MetalEngine:
         metadata["solve_path"] = "full-3d"
         metadata["axisymmetric_eligibility_reasons"] = eligibility_reasons
         metadata["solve_path_reason"] = (
-            "solver_mode='full_3d' explicitly opts out of the meridian fast path"
+            "solver_mode='full_3d' selected native full 3D"
             if mode == "full_3d"
-            else (
-                "solver_mode='auto' selected native full 3D because the "
-                "axisymmetric meridian fast path is not eligible: "
-                + "; ".join(eligibility_reasons)
-            )
+            else "legacy solver_mode='auto' defaults to native full 3D"
         )
         field_traces = results.pop("_field_traces", None)
         field_trace_reason = results.pop("_field_trace_unavailable_reason", None)

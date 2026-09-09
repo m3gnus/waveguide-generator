@@ -13,11 +13,11 @@ import {
 describe('solve and directivity options', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
 
-  it('defaults to AUTO, v1 solve policies, and the new polar_config field names', () => {
+  it('defaults to Full 3D, v1 solve policies, and the new polar_config field names', () => {
     const options = useSolveOptionsStore.getState().options();
     expect(options).toEqual({
       engine: 'auto',
-      solver_mode: 'auto',
+      solver_mode: 'full_3d',
       symmetry: 'auto',
       mesh_validation_mode: 'warn',
       verbose: false,
@@ -66,6 +66,18 @@ describe('solve and directivity options', () => {
     const stored = JSON.parse(localStorage.getItem('waveguide-v2-solve-options') ?? '{}') as { state?: { solverMode?: string } };
     expect(stored.state?.solverMode).toBe('circsym');
     expect(useSolveOptionsStore.getState().options().solver_mode).toBe('circsym');
+  });
+
+  it('migrates the legacy automatic formulation to Full 3D', async () => {
+    localStorage.setItem('waveguide-v2-solve-options', JSON.stringify({
+      state: { solverMode: 'auto' },
+      version: 0,
+    }));
+
+    await useSolveOptionsStore.persist.rehydrate();
+
+    expect(useSolveOptionsStore.getState().solverMode).toBe('full_3d');
+    expect(useSolveOptionsStore.getState().options().solver_mode).toBe('full_3d');
   });
 
   it('converts angular step to a sample count and never allows zero enabled planes', () => {

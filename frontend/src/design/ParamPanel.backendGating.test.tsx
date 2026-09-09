@@ -134,7 +134,7 @@ describe('solver-backend parameter gating', () => {
     expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
   });
 
-  it('replans the AUTO backend gate when solver mode changes formulation', async () => {
+  it('replans backend gating when Axisymmetric is selected explicitly', async () => {
     const payload = {
       engines: [
         engine('beat', true, ['free-standing']),
@@ -147,12 +147,6 @@ describe('solver-backend parameter gating', () => {
     };
 
     await mount(payload);
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
-
-    await act(async () => {
-      useSolveOptionsStore.setState({ solverMode: 'full_3d' });
-      await Promise.resolve();
-    });
     expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
 
     await act(async () => {

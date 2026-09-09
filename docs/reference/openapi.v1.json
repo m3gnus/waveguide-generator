@@ -6891,7 +6891,7 @@
             "$ref": "#/components/schemas/PolarConfig"
           },
           "solver_mode": {
-            "default": "auto",
+            "default": "full_3d",
             "enum": [
               "auto",
               "full_3d",

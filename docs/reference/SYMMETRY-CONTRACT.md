@@ -71,9 +71,7 @@ Symmetry-domain reduction, formulation, and execution backend are independent
 decisions. The solve planner considers the machine-local `solver_mode` before it
 chooses a full-3D backend:
 
-- `auto`: use the platform-neutral `axisym` meridian runner when the authoritative
-  mesher eligibility predicate succeeds; otherwise use the selected/AUTO full-3D
-  backend and record every rejection reason.
+- `auto`: legacy wire spelling for Full 3D. It never selects Axisymmetric.
 - `full_3d`: always use Metal, BEAT, or BEMPP full 3D.
 - `circsym`: force the axisymmetric formulation and fail with the eligibility
   reasons if it cannot run. `circsym` remains the compatibility wire spelling;
@@ -81,13 +79,11 @@ chooses a full-3D backend:
 
 `axisym` is advertised independently by `/api/capabilities` and runs on CPU on
 all supported operating systems, with optional Metal acceleration where present.
-The backend selector therefore chooses the *full-3D fallback*, not the
+The backend selector therefore chooses the Full 3D implementation, not the
 axisymmetric implementation. The meridian is refined from the highest requested
-frequency, unlike the fixed full-3D mesh: this is why AUTO must prefer it for an
-eligible circular design instead of silently changing both runtime and the
-resolved high-frequency range when the ordinary backend selection changes.
-A rigid ground plane is never eligible because the meridian formulation has no
-ground-image boundary; AUTO falls through to a compatible full-3D backend.
+frequency, unlike a fixed Full 3D mesh. A rigid ground plane is never eligible
+because the meridian formulation has no ground-image boundary; an explicit
+Axisymmetric request is refused with that reason rather than changing formulation.
 
 `Simulation.SolverMode` in legacy design text is a
 machine setting, not a portable one, so it is never read from a design and
@@ -101,7 +97,7 @@ author's bytes unchanged and the line survives there; the first real edit
 serializes canonically and removes it.
 
 Result/job symmetry metadata records `solver_plan` with the chosen
-formulation, engine, reason, and eligibility reasons. Axisymmetric AUTO plans
+formulation, engine, reason, and eligibility reasons. Explicit Axisymmetric plans
 also include `cost_evidence`: deterministic counts from the frequency-refined
 meridian (unknowns, azimuthal quadrature work, matrix memory, and a revolved
 full-3D triangle scale for the requested symmetry domain). These are transparent

@@ -423,7 +423,7 @@ def test_ground_plane_is_not_axisymmetric_eligible():
     ]
 
 
-def test_auto_axisymmetric_planner_falls_through_to_ground_capable_backend():
+def test_auto_formulation_defaults_to_ground_capable_full_3d_backend():
     import asyncio
 
     from server.engines import registry
@@ -454,10 +454,8 @@ def test_auto_axisymmetric_planner_falls_through_to_ground_capable_backend():
     assert resolution.symmetry_metadata["solver_plan"] == {
         "formulation": "full-3d",
         "engine": "bempp",
-        "reason": "axisymmetric formulation was not eligible",
-        "eligibility_reasons": [
-            "a rigid ground plane requires a full-3D solver"
-        ],
+        "reason": "legacy solver_mode='auto' defaults to full-3d",
+        "eligibility_reasons": [],
     }
 
 
@@ -521,11 +519,8 @@ def test_an_engine_that_can_ground_is_accepted():
 def test_an_axisymmetric_plan_does_not_smuggle_a_ground_plane_past_the_gate():
     """Finding that motivated the boundary refusal, pinned.
 
-    The axisymmetric formulation is chosen BEFORE the AUTO mounting gate and
-    sets the engine itself, so the gate never sees it. ``server/solver/
-    circsym.py`` has no ground-plane handling at all, and this path is
-    reachable from default frontend settings -- AUTO engine, AUTO solver mode,
-    an axisym-eligible design -- with no explicit engine choice by the user.
+    Explicit Axisymmetric planning happens before the Full 3D mounting gate,
+    so its own eligibility refusal must keep an unsupported ground plane out.
     """
     import asyncio
 

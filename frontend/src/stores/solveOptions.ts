@@ -215,7 +215,7 @@ export interface PersistedSolveOptions {
 
 export const DEFAULT_SOLVE_OPTIONS: Readonly<PersistedSolveOptions> = Object.freeze({
   engine: 'auto',
-  solverMode: 'auto',
+  solverMode: 'full_3d',
   symmetry: 'auto',
   meshValidationMode: 'warn',
   verbose: false,
@@ -307,9 +307,13 @@ export function normalizePersistedSolveOptions(
   fallback: PersistedSolveOptions = DEFAULT_SOLVE_OPTIONS,
 ): PersistedSolveOptions {
   const stored = isRecord(raw) ? raw : {};
+  const storedSolverMode = oneOf(stored.solverMode, SOLVER_MODES, fallback.solverMode);
   return {
     engine: typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine,
-    solverMode: oneOf(stored.solverMode, SOLVER_MODES, fallback.solverMode),
+    // AUTO historically opted eligible designs into Axisymmetric. It is now a
+    // legacy spelling of Full 3D so old machine-local settings cannot silently
+    // select a different formulation after upgrade.
+    solverMode: storedSolverMode === 'auto' ? 'full_3d' : storedSolverMode,
     symmetry: oneOf(stored.symmetry, SYMMETRY_MODES, fallback.symmetry),
     meshValidationMode: oneOf(stored.meshValidationMode, MESH_VALIDATION_MODES, fallback.meshValidationMode),
     verbose: typeof stored.verbose === 'boolean' ? stored.verbose : fallback.verbose,
