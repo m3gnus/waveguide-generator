@@ -431,8 +431,8 @@ proves every copy agrees. CI runs `--check` on every push; so does
 Releases are two deliberate commands, and **the tag is created last, by CI**:
 
 ```bash
-../release.sh waveguide-generator patch   # bump, commit, push main, wait for CI
-../release.sh waveguide-generator publish # build, validate, tag, publish
+../hornlab-policy/release.sh waveguide-generator patch   # bump, commit, push main, wait for CI
+../hornlab-policy/release.sh waveguide-generator publish # build, validate, tag, publish
 ```
 
 Phase 1 stops once CI is green on the exact release commit; nothing is tagged
@@ -491,12 +491,12 @@ cross-platform; a pure solver or UI change does not need one
 the sequence is the same two commands each time:
 
 ```bash
-../release.sh waveguide-generator rc       # 0.3.1      -> 0.3.2-rc.1
-../release.sh waveguide-generator publish
-../release.sh waveguide-generator rc       # 0.3.2-rc.1 -> 0.3.2-rc.2
-../release.sh waveguide-generator publish
-../release.sh waveguide-generator patch    # 0.3.2-rc.2 -> 0.3.2   (the release)
-../release.sh waveguide-generator publish
+../hornlab-policy/release.sh waveguide-generator rc       # 0.3.1      -> 0.3.2-rc.1
+../hornlab-policy/release.sh waveguide-generator publish
+../hornlab-policy/release.sh waveguide-generator rc       # 0.3.2-rc.1 -> 0.3.2-rc.2
+../hornlab-policy/release.sh waveguide-generator publish
+../hornlab-policy/release.sh waveguide-generator patch    # 0.3.2-rc.2 -> 0.3.2   (the release)
+../hornlab-policy/release.sh waveguide-generator publish
 ```
 
 **`patch` on a candidate removes the label and keeps the core numbers.** That is
