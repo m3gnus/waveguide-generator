@@ -217,6 +217,12 @@ Gate 9 "uninstall clears the tree including planted bytecode" $uninstallOk $unin
 # a managed add-in available to the installed application's next version.
 if (Test-Path $gateRoot) { Remove-Item -Recurse -Force $gateRoot }
 
+# Leave the installer as the gates found it. The RC workflow's next step
+# launches this same file through ShellExecute, which honours the ZoneId=3 mark
+# by raising the attachment-manager prompt; a runner cannot answer it, so the
+# launch failed "The operation was canceled by the user".
+Unblock-File -LiteralPath $Setup
+
 # --- Gate 7: not run, and why -------------------------------------------------
 Gate 7 "SmartScreen / first-run experience" $null `
     "NOT RUN: UAC is disabled here (EnableLUA=0), so every process is High integrity and any result, including a negative one, would be untrustworthy. Needs a box with UAC enabled."
