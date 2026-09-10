@@ -1682,7 +1682,7 @@
       "step": 1,
       "precision": 2,
       "options": [],
-      "description": "Rounds the corners of a Rectangle target, clamped to the smaller half-dimension of that target. It has no effect on a Circle or Superellipse target. A genuinely sharp rectangle cannot be reached by morph because the intermediate outlines become non-convex and are rejected; on a measured 320 × 220 mm mouth, 10 mm or less was rejected and 15 mm or more accepted regardless of where morphing began. The mesher error reports the minimum feasible radius for the actual geometry. Use a cross-section station for a genuinely sharp rectangle."
+      "description": "Rounds the corners of a Rectangle target, clamped to the smaller half-dimension of that target. It has no effect on a Circle or Superellipse target. On R-OSSE, OSSE and ICW, 0 gives a sharp rectangle. FREEFORM rejects a morph whose intermediate outlines turn non-convex, which a small corner or a target far from the drawn mouth can cause; the error names a minimum corner radius only when some radius would pass. For a rectangular FREEFORM mouth, make the mouth cross-section station a Rounded rectangle instead."
     },
     {
       "id": "morph.rate",
