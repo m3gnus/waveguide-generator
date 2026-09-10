@@ -29,12 +29,15 @@ name: RC build
 # attestations. That records which workflow produced each exact file; it does
 # not sign the macOS or Windows installer for the operating system, and it does
 # not make the updater enforce signatures.
-# Each job also fails before building if the checked-out candidate does not
-# equal github.sha, the tip of the ref this run was dispatched on. The
-# attestation records github.sha as its source digest, so without that check an
-# RC built from inputs.sha would name the dispatch ref's commit instead. The
-# consequence for dispatching: `--ref` must resolve to `sha`. Build a fix
-# branch with `gh workflow run rc-build.yml --ref <branch> -f sha=<branch tip>`;
+# The SPA job checks out inputs.sha and fails before building if it is not
+# github.sha, the tip of the ref this run was dispatched on. The attestation
+# records github.sha as its source digest, so without that check an RC built
+# from inputs.sha would name the dispatch ref's commit instead. Every later job
+# checks out github.sha itself and repeats the check: the input is resolved
+# once, so a push to the ref while the run is in progress cannot move the
+# Windows or Linux build onto another commit. The consequence for dispatching:
+# `--ref` must resolve to `sha` when the run starts. Build a fix branch with
+# `gh workflow run rc-build.yml --ref <branch> -f sha=<branch tip>`;
 # `--ref main -f sha=<branch tip>` now fails before building anything.
 on:
   workflow_dispatch:
@@ -135,9 +138,11 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # github.sha, not inputs.sha: the SPA job already proved they are the same
+      # commit, and re-resolving a moving ref such as main here could not be.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.sha }}
+          ref: ${{ github.sha }}
       - name: Verify the candidate matches the workflow source
         env:
           WORKFLOW_SHA: ${{ github.sha }}
@@ -254,9 +259,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # github.sha, not inputs.sha; see the macOS job.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.sha }}
+          ref: ${{ github.sha }}
       - name: Verify the candidate matches the workflow source
         env:
           WORKFLOW_SHA: ${{ github.sha }}
@@ -412,9 +418,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # github.sha, not inputs.sha; see the macOS job.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.sha }}
+          ref: ${{ github.sha }}
       - name: Verify the candidate matches the workflow source
         env:
           WORKFLOW_SHA: ${{ github.sha }}

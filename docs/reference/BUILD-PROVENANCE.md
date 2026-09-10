@@ -65,25 +65,30 @@ check in its identity job.
 - **RC of a fix branch:** dispatch on that branch, with its tip as the input:
   `gh workflow run rc-build.yml --ref BRANCH -f sha=BRANCH_TIP`. The earlier
   habit of `--ref main -f sha=BRANCH_TIP` now fails at the guard. The defaults
-  (`main` and `main`) still build main's tip.
+  (`main` and `main`) still build main's tip as of the moment the run starts.
+  Only the RC's SPA job resolves the input; every later job checks out
+  `github.sha`, so a push to the branch or to `main` during the run cannot
+  split one RC across two commits.
 - **Release:** phase 2 of `release.sh` dispatches `release.yml` on `main` with
   the release commit, which passes while that commit is still main's tip. If
   `main` has moved on in between, the run fails before building or tagging
   anything, so no version is spent. To build it anyway, dispatch from a branch
-  whose tip is the release commit; the release guard still requires the commit
-  to be on `main`.
+  whose tip is the release commit. Creating that branch is a push, so it needs
+  the release owner's go-ahead; the release guard still requires the commit to
+  be on `main`.
 
 ## Verify an RC installer
 
 Run the command from the directory containing the downloaded installer. Set
-`SOURCE` to the exact candidate commit supplied to the RC dispatch. The
-workflow has already failed closed if the checked-out candidate and dispatch
-source differ, so keep the `--source-digest` constraint: current GitHub CLI
-versions then make the command fail when the attestation names another source
-revision.
+`SOURCE` to the run's full 40-character head commit, not a branch name or the
+`main` default the input may have been given: `--source-digest` is compared
+with the full SHA in the signing certificate. The workflow has already failed
+closed if the checked-out candidate and dispatch source differ, so keep the
+`--source-digest` constraint: current GitHub CLI versions then make the command
+fail when the attestation names another source revision.
 
 ```bash
-SOURCE=COMMIT_SHA
+SOURCE="$(gh run view RUN_ID --repo m3gnus/waveguide-generator --json headSha --jq .headSha)"
 ASSET=Waveguide.Generator-VERSION-macos-arm64.dmg
 
 gh attestation verify "$ASSET" \
@@ -95,16 +100,14 @@ gh attestation verify "$ASSET" \
 Use the matching asset and the same command for the Windows setup executable
 or Linux tarball. The SPA archive is attested by the SPA job and can be checked
 with the same repository and signer workflow constraints. To inspect the
-subjects and the signed provenance record, add `--format json`; the GitHub CLI
-manual documents the result under
-`.verificationResult.statement`.
+subjects and the signed provenance record, add `--format json`; the result is
+an array, with each statement under `.[].verificationResult.statement`.
 
 The build manifest and canonical app archive are subjects of the macOS job's
 attestation. Verify both subjects with the same repository, signer workflow and
 source constraint before inspecting their fields:
 
 ```bash
-set -euo pipefail
 for ASSET in update-app-VERSION.zip update-app-VERSION.manifest.json; do
   gh attestation verify "$ASSET" \
     --repo m3gnus/waveguide-generator \

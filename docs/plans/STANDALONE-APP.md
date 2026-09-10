@@ -110,7 +110,11 @@ move to 0.3.3 is an open question with the release owner, not settled below.**
   A third route, **Sigstore keyless signing** from the release workflow, needs no
   long-lived private key — but it needs `id-token: write` on the workflow, which is
   `GIT-WORKFLOW.md` §1.2.5 and the maintainer's call, every time. Named so the option is not
-  lost, not proposed as taken.
+  lost, not proposed as taken. *Since 0.3.3 it is taken for build provenance only:
+  the RC and release build jobs attest their outputs keylessly, with that
+  permission granted to them alone. That records which workflow built each file;
+  it is not an updater signature and the updater does not check it. See
+  [BUILD-PROVENANCE.md](../reference/BUILD-PROVENANCE.md).*
 
   Until one of those exists, **0.3.2 ships with integrity verification and says so**,
   in the README and in the release notes. Nothing in the product may describe the

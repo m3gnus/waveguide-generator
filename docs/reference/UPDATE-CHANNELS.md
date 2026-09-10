@@ -138,7 +138,9 @@ it.** Immutable per-commit pre-releases are the design below.
 
 4. **Authorization.** Publishing on push needs a workflow with `contents: write`
    on `push: [main]` (§1.2.5, repository settings and workflow permissions) and
-   creates releases (§1.2.3). Both are per-operation authorizations from the
+   creates releases (§1.2.3). Its build jobs also carry `id-token: write` and
+   `attestations: write` for build-provenance attestations, which are workflow
+   permissions under the same section. Both are per-operation authorizations from the
    release owner. Nothing in this branch enables either: the proposal below is a
    template outside `.github/workflows/`, so GitHub never registers it.
 
@@ -152,8 +154,11 @@ pre-releases included, and is per release candidate rather than per commit.
 this file, is the concrete workflow — deliberately **not** under
 `.github/workflows/`, so it has no triggers and no permissions until someone
 moves it there. It builds the same installers `rc-build.yml` already builds and
-publishes them as an immutable pre-release; it introduces no signing identity,
-asks for no private key, and does not widen `trusted_asset_url`.
+publishes them as an immutable pre-release; it introduces no paid platform
+signing identity, asks for no private key, and does not widen
+`trusted_asset_url`. Its build jobs give their outputs the same free keyless
+build-provenance attestations as the RC and release builds; see
+[BUILD-PROVENANCE.md](BUILD-PROVENANCE.md).
 
 ### Version identity
 
@@ -194,7 +199,7 @@ Stated plainly, because "it parses" is not "it builds":
 | The flags it calls exist | The test runs `--help` on both scripts. |
 | **The stamp runs on a runner with nothing installed** | The test executes the template's own stamp commands as argv — no shell, so it means the same thing on every platform the suite runs on — in a fresh checkout with site-packages disabled, and proves that disabling them is what stops a server import. `bump_version.py` reaches every copy of the version — including the OpenAPI snapshot's `info.version` — using only the standard library, so no dependency set has to exist before the version is decided. |
 | The four platform stamp commits are the same commit | The same test stamps two independent checkouts and compares the resulting SHA. |
-| Actions are pinned to digests, Node to a patch | Asserted, against the same action names `rc-build.yml` uses. A fixed ref detects **tool drift**; it is not publisher authentication of anything the workflow produces. |
+| Actions are pinned to digests, Node to a patch | Asserted, against the same action names `rc-build.yml` uses. A fixed ref detects **tool drift**; it is not publisher authentication of anything the workflow produces. That is what the build jobs' provenance attestations add, per file ([BUILD-PROVENANCE.md](BUILD-PROVENANCE.md)). |
 | A stamp reaches the app layer only once committed | `scripts/tests/test_build_bundle.py`, against the real materializer. |
 | The native version fields take the value passed to them | `server/tests/test_version_consistency.py` for the plist, `scripts/tests/test_build_bundle.py` for the Inno defines. |
 | An installed copy accepts a pre-release update request | `server/tests/test_update_handoff.py`, both the bundle and the release-tag paths. |
