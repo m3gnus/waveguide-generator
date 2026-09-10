@@ -48,6 +48,101 @@ describe('FREEFORM editor workflows', () => {
     expect(converted.profile_v!.points).toEqual([{ t: 0, r: 10 }, { t: .5, r: 15 }, { t: 1, r: 20 }]);
   });
 
+  describe('converting a morphed mouth', () => {
+    // An axisymmetric horn 100 mm long flaring from 10 to 80 mm, written the way
+    // the profile export writes it: one x;y;z section in cm per meridian.
+    const plainRadius = (u: number) => 10 + 70 * u * u;
+    const exportCsv = (radius: (phi: number, u: number) => number, meridians: number) => {
+      const lines = ['# x_cm;y_cm;z_cm'];
+      for (let index = 0; index < meridians; index += 1) {
+        const phi = 2 * Math.PI * index / meridians;
+        for (let row = 0; row <= 20; row += 1) {
+          const u = row / 20;
+          const r = radius(phi, u);
+          lines.push(`${(r * Math.cos(phi) / 10).toFixed(6)};${(r * Math.sin(phi) / 10).toFixed(6)};${(10 * u).toFixed(6)}`);
+        }
+        lines.push('');
+      }
+      return `${lines.join('\r\n')}\r\n`;
+    };
+    const plainCsv = exportCsv((_phi, u) => plainRadius(u), 40);
+    const rectangle = (phi: number) => Math.min(180 / Math.abs(Math.cos(phi)), 110 / Math.abs(Math.sin(phi)));
+    const superellipse = (phi: number) => ((Math.abs(Math.cos(phi)) / 180) ** 6 + (Math.abs(Math.sin(phi)) / 110) ** 6) ** (-1 / 6);
+    // Fixed part 0 and rate 3, on the export's own corner-aware angle list.
+    const morphedCsv = (target: (phi: number) => number) => exportCsv((phi, u) => plainRadius(u) + u ** 3 * (target(phi) - plainRadius(1)), 44);
+
+    const morphed = (targetShape: number, changes: Partial<ReturnType<typeof designForFamily>['morph']> = {}) => {
+      const design = designForFamily('R-OSSE');
+      design.morph = { ...design.morph, target_shape: targetShape, target_width: 360, target_height: 220, ...changes };
+      return design;
+    };
+    const convert = async (design: ReturnType<typeof designForFamily>, morphedExport: string) => {
+      const profileRequests: number[] = [];
+      const fetcher = async (url: string, init?: RequestInit) => {
+        if (url.startsWith('/api/design/convert')) return new Response('', { status: 405 });
+        const target = (JSON.parse(String(init?.body)) as { design: { morph: { target_shape: number } } }).design.morph.target_shape;
+        profileRequests.push(target);
+        return new Response(target === 0 ? plainCsv : morphedExport, { status: 200 });
+      };
+      return { converted: await convertDesignToFreeform(design, fetcher as typeof fetch), profileRequests };
+    };
+
+    it('reproduces a Rectangle morph with a rounded-rectangle mouth station and leaves morph off', async () => {
+      const { converted, profileRequests } = await convert(morphed(1, { corner_radius: 10 }), morphedCsv(rectangle));
+      expect(profileRequests).toEqual([1, 0]);
+      expect(converted.morph.target_shape).toBe(0);
+      expect(converted.profile_h!.points.at(-1)!.r).toBeCloseTo(180, 3);
+      expect(converted.profile_v!.points.at(-1)!.r).toBeCloseTo(110, 3);
+      const stations = converted.cross_sections!;
+      expect(stations[0]).toEqual({ t: 0, shape: 'ellipse' });
+      // The u^3 blend reaches half at t = 0.794, where the smootherstep from
+      // the blend-start ellipse to the mouth reaches half too.
+      expect(stations[1].shape).toBe('ellipse');
+      expect(stations[1].t).toBeCloseTo(.587, 2);
+      expect(stations.at(-1)).toEqual({ t: 1, shape: 'rounded_rectangle', corner_radius_mm: 10 });
+      // A small corner is reached through a rounder rectangle midway.
+      expect(stations[2].shape).toBe('rounded_rectangle');
+      expect(stations[2].t).toBeCloseTo((stations[1].t + 1) / 2, 4);
+      expect(stations[2].corner_radius_mm).toBeGreaterThan(10);
+    });
+
+    it('raises a sharp Rectangle corner to the smallest station corner the mesher accepts', async () => {
+      const { converted } = await convert(morphed(1, { corner_radius: 0 }), morphedCsv(rectangle));
+      // 2% of the 110 mm half-height.
+      expect(converted.cross_sections!.at(-1)).toEqual({ t: 1, shape: 'rounded_rectangle', corner_radius_mm: 2.2 });
+    });
+
+    it('takes a large Rectangle corner straight to the mouth', async () => {
+      const { converted } = await convert(morphed(1, { corner_radius: 80 }), morphedCsv(rectangle));
+      expect(converted.cross_sections!.map((station) => station.shape)).toEqual(['ellipse', 'ellipse', 'rounded_rectangle']);
+      expect(converted.cross_sections!.at(-1)!.corner_radius_mm).toBe(80);
+    });
+
+    it('carries a Superellipse morph exponent into the mouth station', async () => {
+      const design = morphed(3);
+      (design.morph as typeof design.morph & { target_exponent?: number }).target_exponent = 6;
+      const { converted } = await convert(design, morphedCsv(superellipse));
+      expect(converted.morph.target_shape).toBe(0);
+      expect(converted.cross_sections!.at(-1)).toEqual({ t: 1, shape: 'superellipse', exponent: 6 });
+      expect(converted.cross_sections!.map((station) => station.shape)).toEqual(['ellipse', 'ellipse', 'superellipse']);
+    });
+
+    it('converts an inactive or circular morph as before, without a second export', async () => {
+      for (const design of [morphed(0), morphed(1, { fixed_part: 1 }), morphed(2)]) {
+        const { converted, profileRequests } = await convert(design, plainCsv);
+        expect(profileRequests).toHaveLength(1);
+        expect(converted.cross_sections).toEqual([{ t: 0, shape: 'ellipse' }, { t: 1, shape: 'ellipse' }]);
+        expect(converted.morph.target_shape).toBe(0);
+      }
+    });
+
+    it('keeps ellipse stations when the morph moves no part of the mouth', async () => {
+      const { converted, profileRequests } = await convert(morphed(1, { corner_radius: 10 }), plainCsv);
+      expect(profileRequests).toEqual([1, 0]);
+      expect(converted.cross_sections).toEqual([{ t: 0, shape: 'ellipse' }, { t: 1, shape: 'ellipse' }]);
+    });
+  });
+
   it('keeps every imported point when the current design is shorter than the imported span', () => {
     const imported = parsePointPaste('0 12.7\n25 20\n70 35\n120 60').points;
     const current = [{ t: 0, r: 12.7 }, { t: 1, r: 50 }];

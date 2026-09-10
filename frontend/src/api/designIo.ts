@@ -2,6 +2,7 @@ import {
   designForFamily,
   decodeQuadrants,
   serializeDesign,
+  type CrossSectionStation,
   type DesignDocument,
   type DesignFamily,
   type ExprNumber,
@@ -239,8 +240,9 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
 }
 
 /**
- * Use a future server converter when present; older servers fall back to a
- * two-anchor FREEFORM document that preserves the current endpoints.
+ * Use a future server converter when present. Older servers convert from the
+ * profile export instead, and failing that fall back to a two-anchor FREEFORM
+ * document that preserves the current endpoints.
  */
 export async function convertDesignToFreeform(
   design: DesignDocument,
@@ -257,13 +259,15 @@ export async function convertDesignToFreeform(
   }
   if (response.status !== 404 && response.status !== 405) throw new Error(await errorMessage(response));
 
-  const profileResponse = await fetcher('/api/export/profiles?kind=profiles', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: serializeDesign(design), designRevision: 0, baseName: 'freeform-conversion' }),
-  });
-  if (profileResponse.ok) {
-    try { return freeformFromProfileCsv(await profileResponse.text(), design); } catch { /* use endpoint fallback */ }
+  const profileText = await exportProfileCsv(design, fetcher);
+  if (profileText !== null) {
+    let converted: DesignDocument | null = null;
+    try { converted = freeformFromProfileCsv(profileText, design); } catch { /* use endpoint fallback */ }
+    if (converted) {
+      const stations = await morphStations(design, converted, profileText, fetcher);
+      if (stations) converted.cross_sections = stations;
+      return converted;
+    }
   }
 
   const fallback = preserveSharedForFreeform(designForFamily('FREEFORM'), design);
@@ -278,6 +282,236 @@ export async function convertDesignToFreeform(
   fallback.profile_h!.mouth_angle_deg = design.a ?? 60;
   fallback.profile_v!.mouth_angle_deg = design.a ?? 60;
   return fallback;
+}
+
+async function exportProfileCsv(design: DesignDocument, fetcher: typeof fetch): Promise<string | null> {
+  const response = await fetcher('/api/export/profiles?kind=profiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ design: serializeDesign(design), designRevision: 0, baseName: 'freeform-conversion' }),
+  });
+  return response.ok ? response.text() : null;
+}
+
+type MorphMouth =
+  | { shape: 'rounded_rectangle'; cornerRadius: number }
+  | { shape: 'superellipse'; exponent: number };
+
+/** Where a morph's blend starts and reaches half, as FREEFORM `t` (z / length). */
+interface MorphBlend {
+  start: number;
+  half: number;
+}
+
+/**
+ * The mouth station an active Rectangle or Superellipse morph needs, or null
+ * when the H/V meridians already describe its outline.
+ *
+ * A Circle target needs no station: the exported meridians both reach its
+ * radius, and an ellipse through them is that circle. Nor does a Superellipse
+ * at exponent 2, which is an ellipse through the target extents.
+ */
+function morphMouth(design: DesignDocument): MorphMouth | null {
+  const morph = design.morph as DesignDocument['morph'] & { target_exponent?: number | null };
+  const fixed = morph.fixed_part;
+  // Fixed part 1 disables the morph, as does reaching R-OSSE's truncation
+  // limit. An expression is left to the measurement below to decide.
+  if (Number.isFinite(fixed) && (fixed >= 1 || (design.formula === 'R-OSSE' && fixed >= (design.tmax ?? 1)))) return null;
+  if (morph.target_shape === 1) {
+    return { shape: 'rounded_rectangle', cornerRadius: Number.isFinite(morph.corner_radius) ? morph.corner_radius : 0 };
+  }
+  if (morph.target_shape === 3) {
+    const exponent = Math.min(16, Math.max(2, Number.isFinite(morph.target_exponent) ? morph.target_exponent! : 2));
+    return exponent > 2 ? { shape: 'superellipse', exponent } : null;
+  }
+  return null;
+}
+
+function withoutMorph(design: DesignDocument): DesignDocument {
+  const plain = structuredClone(design);
+  plain.morph.target_shape = 0;
+  if (plain._expressions) delete plain._expressions['morph.target_shape'];
+  if (plain._absent) plain._absent = plain._absent.filter((path) => path !== 'morph.target_shape');
+  return plain;
+}
+
+/**
+ * Cross-section stations that carry an active Rectangle or Superellipse morph
+ * into FREEFORM, or null when the converted meridians already describe it.
+ *
+ * The profile export has the morph baked into every meridian, so the H/V
+ * profiles already reach the target's half-width and half-height. What they
+ * cannot carry is the outline between them. The converted design keeps morph
+ * off, so nothing is applied twice; the stations reproduce the outline.
+ */
+async function morphStations(
+  design: DesignDocument,
+  converted: DesignDocument,
+  morphedCsv: string,
+  fetcher: typeof fetch,
+): Promise<CrossSectionStation[] | null> {
+  const mouth = morphMouth(design);
+  if (!mouth) return null;
+  // Without a morph-free export to compare against, blend over the whole length.
+  let blend: MorphBlend | null = { start: 0, half: .5 };
+  try {
+    const plainCsv = await exportProfileCsv(withoutMorph(design), fetcher);
+    if (plainCsv !== null) blend = measureMorphBlend(morphedCsv, plainCsv, design, converted.length ?? 0);
+  } catch { /* keep the whole-length blend */ }
+  return blend ? stationsForMorph(mouth, converted, blend) : null;
+}
+
+interface Meridian {
+  phi: number;
+  z: number[];
+  r: number[];
+}
+
+function profileMeridians(text: string, scale: number): Meridian[] {
+  return profileSections(text).map((rows) => {
+    const [x, y] = rows.at(-1)!;
+    return {
+      phi: modTau(Math.atan2(y, x)),
+      z: rows.map(([, , z]) => z * 10 / scale),
+      r: rows.map(([rx, ry]) => Math.hypot(rx, ry) * 10 / scale),
+    };
+  }).sort((left, right) => left.phi - right.phi);
+}
+
+function modTau(angle: number): number {
+  const tau = 2 * Math.PI;
+  return ((angle % tau) + tau) % tau;
+}
+
+/** Row `row` of the morph-free surface at azimuth `phi`, between its two nearest meridians. */
+function radiusAtAngle(sorted: Meridian[], phi: number, row: number): number {
+  const upperIndex = sorted.findIndex((meridian) => meridian.phi >= phi);
+  const upper = sorted[upperIndex === -1 ? 0 : upperIndex];
+  const lower = sorted[((upperIndex === -1 ? 0 : upperIndex) - 1 + sorted.length) % sorted.length];
+  // `lower` precedes `phi` and `upper` is at or after it, so u is in (0, 1];
+  // a lone meridian interpolates against itself.
+  const span = modTau(upper.phi - lower.phi) || 2 * Math.PI;
+  const u = modTau(phi - lower.phi) / span;
+  return lower.r[row] + (upper.r[row] - lower.r[row]) * u;
+}
+
+/**
+ * Measure a morph's blend from the same export with and without it.
+ *
+ * Reading it back from the surface rather than recomputing it from Fixed part
+ * and Morph rate keeps the mesher's own rules -- R-OSSE's truncation limit,
+ * OSSE's reserved throat-extension slices, snapping to the axial grid, and
+ * the sampling mode -- in one place. Morph angles are corner-aware and differ
+ * from the plain export's, so the plain surface is interpolated to them.
+ * Returns null when the morph moves no part of the mouth.
+ */
+export function measureMorphBlend(morphedCsv: string, plainCsv: string, design: DesignDocument, length: number): MorphBlend | null {
+  const scale = Number.isFinite(design.scale) && design.scale > 0 ? design.scale : 1;
+  const morphed = profileMeridians(morphedCsv, scale);
+  const plain = profileMeridians(plainCsv, scale);
+  const rows = plain[0]?.r.length ?? 0;
+  if (!(length > 0) || rows < 2 || plain.some((meridian) => meridian.r.length !== rows)) return { start: 0, half: .5 };
+  let best: { meridian: Meridian; base: number[]; departure: number } | null = null;
+  for (const meridian of morphed) {
+    if (meridian.r.length !== rows) continue;
+    const base = meridian.r.map((_radius, row) => radiusAtAngle(plain, meridian.phi, row));
+    const departure = meridian.r.at(-1)! - base.at(-1)!;
+    if (!best || Math.abs(departure) > Math.abs(best.departure)) best = { meridian, base, departure };
+  }
+  if (!best || Math.abs(best.departure) < .05) return null;
+  const { meridian, base, departure } = best;
+  const t = meridian.z.map((z) => Math.min(1, Math.max(0, z / length)));
+  const factor = meridian.r.map((radius, row) => (radius - base[row]) / departure);
+  let start = 0;
+  for (let row = 0; row < rows && Math.abs(factor[row]) <= 1e-3; row += 1) start = t[row];
+  let half = 1;
+  for (let row = 1; row < rows; row += 1) {
+    if (factor[row] >= .5) {
+      const ratio = (.5 - factor[row - 1]) / (factor[row] - factor[row - 1] || 1);
+      half = t[row - 1] + ratio * (t[row] - t[row - 1]);
+      break;
+    }
+  }
+  return { start, half: Math.max(start, half) };
+}
+
+function interpolateRadius(points: { t: number; r: number }[], t: number): number {
+  const right = points.findIndex((point) => point.t >= t);
+  if (right <= 0) return right === 0 ? points[0].r : points.at(-1)!.r;
+  const left = points[right - 1];
+  const ratio = (t - left.t) / (points[right].t - left.t || 1);
+  return left.r + ratio * (points[right].r - left.r);
+}
+
+function smootherstep(u: number): number {
+  return u * u * u * (u * (u * 6 - 15) + 10);
+}
+
+const roundT = (t: number) => Math.round(t * 10_000) / 10_000;
+const floorTenth = (value: number) => Math.floor(value * 10) / 10;
+const ceilTenth = (value: number) => Math.ceil(value * 10 - 1e-9) / 10;
+
+/**
+ * Build the stations for one measured morph.
+ *
+ * FREEFORM blends neighbouring stations with a fixed smootherstep, so Morph
+ * rate cannot be reproduced exactly. The blend-start ellipse is placed so that
+ * the smootherstep reaches half where the morph itself does, and never before
+ * the morph starts.
+ *
+ * The corner rules follow the mesher's FREEFORM checks
+ * (`hornlab_mesher/freeform.py`). A rounded-rectangle corner must be at least
+ * 2% of the smaller local half-size, and its blend weight times the radius may
+ * not exceed the local half-size anywhere in its spans; radii stay under 90%
+ * of that limit because the limit is estimated here from the anchors rather
+ * than the spline. Every outline must also stay convex. An ellipse blends
+ * convexly into a rounded rectangle whose corner is at least half the smaller
+ * half-size, and a blend between two rounded rectangles stays convex even to
+ * the 2% floor, so a smaller corner is reached through an intermediate station
+ * at half the local half-size. Checked against the mesher for aspect ratios 1
+ * to 5, mouths of 40 to 250 mm, and blend starts from the throat to t = 0.95.
+ */
+function stationsForMorph(mouth: MorphMouth, converted: DesignDocument, blend: MorphBlend): CrossSectionStation[] {
+  const blendStart = roundT(Math.min(Math.max(2 * blend.half - 1, blend.start), .96));
+  const start = blendStart >= 1e-3 ? blendStart : 0;
+  const stations: CrossSectionStation[] = [{ t: 0, shape: 'ellipse' }];
+  if (start > 0) stations.push({ t: start, shape: 'ellipse' });
+  if (mouth.shape === 'superellipse') return [...stations, { t: 1, shape: 'superellipse', exponent: mouth.exponent }];
+
+  const halfSize = (t: number) => Math.min(interpolateRadius(converted.profile_h!.points, t), interpolateRadius(converted.profile_v!.points, t));
+  /** The largest corner radius a station keeps under its weight-aware limit over one span. */
+  const spanLimit = (from: number, to: number, rising: boolean) => {
+    let limit = Infinity;
+    for (let step = 1; step <= 200; step += 1) {
+      const t = from + (to - from) * step / 200;
+      const weight = rising ? smootherstep(step / 200) : 1 - smootherstep(step / 200);
+      if (weight > 1e-6) limit = Math.min(limit, halfSize(t) / weight);
+    }
+    return limit;
+  };
+  const mouthHalfSize = halfSize(1);
+  const floor = ceilTenth(Math.max(1, .02 * mouthHalfSize));
+  const wanted = Math.min(Math.max(mouth.cornerRadius, floor), mouthHalfSize);
+  const direct = floorTenth(Math.min(wanted, .9 * spanLimit(start, 1, true)));
+  if (direct >= .5 * mouthHalfSize) return [...stations, { t: 1, shape: 'rounded_rectangle', corner_radius_mm: direct }];
+
+  const middleT = roundT((start + 1) / 2);
+  const middle = floorTenth(Math.min(.5 * halfSize(middleT), .9 * spanLimit(start, middleT, true), .9 * spanLimit(middleT, 1, false)));
+  const last = Math.max(floor, floorTenth(Math.min(wanted, .9 * spanLimit(middleT, 1, true))));
+  return [
+    ...stations,
+    { t: middleT, shape: 'rounded_rectangle', corner_radius_mm: middle },
+    { t: 1, shape: 'rounded_rectangle', corner_radius_mm: last },
+  ];
+}
+
+function profileSections(text: string): number[][][] {
+  return text.split(/\r?\n\s*\r?\n/).map((section) => section.split(/\r?\n/).flatMap((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return [];
+    const values = trimmed.split(';').map(Number);
+    return values.length === 3 && values.every(Number.isFinite) ? [values] : [];
+  })).filter((rows) => rows.length >= 2);
 }
 
 function axisSection(sections: number[][][], axis: 'H' | 'V'): number[][] {
@@ -303,12 +537,7 @@ function tangentAngle(points: { z: number; r: number }[], mouth = false): number
 
 /** Convert the existing server profile-export format into editable H/V anchors. */
 export function freeformFromProfileCsv(text: string, source: DesignDocument): DesignDocument {
-  const sections = text.split(/\r?\n\s*\r?\n/).map((section) => section.split(/\r?\n/).flatMap((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return [];
-    const values = trimmed.split(';').map(Number);
-    return values.length === 3 && values.every(Number.isFinite) ? [values] : [];
-  })).filter((rows) => rows.length >= 2);
+  const sections = profileSections(text);
   if (sections.length < 2) throw new Error('Profile export did not contain horizontal and vertical meridians.');
   const scale = Number.isFinite(source.scale) && source.scale > 0 ? source.scale : 1;
   const horizontal = sampleProfile(axisSection(sections, 'H'), scale);
