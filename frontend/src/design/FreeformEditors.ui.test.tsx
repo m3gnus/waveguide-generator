@@ -23,6 +23,13 @@ function inputWithLabel(host: HTMLElement, text: string): HTMLInputElement {
   return input;
 }
 
+function chooseShape(host: HTMLElement, label: string, value: CrossSectionStation['shape']): void {
+  const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);
+  if (!select) throw new Error(`Missing select: ${label}`);
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, value);
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
 function enterDraft(input: HTMLInputElement, value: string): void {
   input.focus();
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
@@ -94,5 +101,41 @@ describe('FREEFORM numeric tables', () => {
     act(() => exponent.blur());
     expect(exponent.value).toBe('4.00');
     expect(updateValue).not.toHaveBeenCalled();
+  });
+
+  it('stores the value a newly chosen station shape shows, and drops the one it no longer takes', () => {
+    const stored = () => useDesignStore.getState().design.cross_sections!;
+    const render = () => act(() => root.render(<EditableStationTable field={stationField} stations={stored()}/>));
+    act(() => useDesignStore.getState().updateValue('cross_sections', [{ t: 0, shape: 'ellipse' }, { t: 1, shape: 'ellipse' }]));
+    render();
+
+    act(() => chooseShape(host, 'Station 2 shape', 'rounded_rectangle'));
+    expect(stored()[1]).toEqual({ t: 1, shape: 'rounded_rectangle', corner_radius_mm: 10 });
+    render();
+    expect(inputWithLabel(host, 'Station 2 corner radius').value).toBe('10.00');
+
+    act(() => chooseShape(host, 'Station 2 shape', 'superellipse'));
+    expect(stored()[1]).toEqual({ t: 1, shape: 'superellipse', exponent: 4 });
+    render();
+    expect(inputWithLabel(host, 'Station 2 exponent').value).toBe('4.00');
+
+    act(() => chooseShape(host, 'Station 2 shape', 'ellipse'));
+    expect(stored()[1]).toEqual({ t: 1, shape: 'ellipse' });
+  });
+
+  it('shows the value the mesher will use for a loaded station that omits its parameter', () => {
+    const stations: CrossSectionStation[] = [
+      { t: 0, shape: 'ellipse' },
+      { t: .5, shape: 'superellipse' },
+      { t: 1, shape: 'rounded_rectangle' },
+    ];
+    act(() => root.render(<EditableStationTable field={stationField} stations={stations}/>));
+
+    // The mesher's own default exponent, not a friendlier-looking 4.
+    expect(inputWithLabel(host, 'Station 2 exponent').value).toBe('2.00');
+    // The mesher has no default corner radius and rejects the station, so the
+    // field is empty and says so rather than showing a value that is not there.
+    expect(inputWithLabel(host, 'Station 3 corner radius').value).toBe('');
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe('This value is required.');
   });
 });

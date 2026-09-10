@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { convertDesignToFreeform, freeformFromProfileCsv } from '../api/designIo';
 import { designForFamily } from '../stores/design';
-import { normalizedImportedPoints, parsePointPaste } from './FreeformEditors';
+import { normalizedImportedPoints, parsePointPaste, withStationShape } from './FreeformEditors';
 
 describe('FREEFORM editor workflows', () => {
+  it('keeps a station parameter the new shape still takes and drops one it does not', () => {
+    expect(withStationShape({ t: .5, shape: 'superellipse', exponent: 6 }, 'superellipse')).toEqual({ t: .5, shape: 'superellipse', exponent: 6 });
+    expect(withStationShape({ t: 1, shape: 'rounded_rectangle', corner_radius_mm: 25 }, 'rounded_rectangle')).toEqual({ t: 1, shape: 'rounded_rectangle', corner_radius_mm: 25 });
+    expect(withStationShape({ t: 1, shape: 'rounded_rectangle', corner_radius_mm: 25 }, 'superellipse')).toEqual({ t: 1, shape: 'superellipse', exponent: 4 });
+    expect(withStationShape({ t: .5, shape: 'superellipse', exponent: 6 }, 'rounded_rectangle')).toEqual({ t: .5, shape: 'rounded_rectangle', corner_radius_mm: 10 });
+    expect(withStationShape({ t: .5, shape: 'superellipse', exponent: 6 }, 'ellipse')).toEqual({ t: .5, shape: 'ellipse' });
+  });
+
   it('parses H/V compact CSV and two- or three-column point rows with ranges', () => {
     const compact = parsePointPaste('# z_cm;r_h_cm;r_v_cm\n0;1.27;1.27\n12;14;10');
     expect(compact.importedLength).toBe(120);

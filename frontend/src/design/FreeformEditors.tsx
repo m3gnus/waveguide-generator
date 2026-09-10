@@ -154,12 +154,38 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
   </div>;
 }
 
+/**
+ * The exponent the mesher uses for a superellipse station that omits one
+ * (`hornlab_mesher/freeform.py`, `_normalise_stations`): an ellipse.
+ */
+export const MESHER_SUPERELLIPSE_EXPONENT = 2;
+/** Written when a station becomes a superellipse, so it visibly squares off. */
+export const NEW_SUPERELLIPSE_EXPONENT = 4;
+/** Written when a station becomes a rounded rectangle; the mesher has no default. */
+export const NEW_STATION_CORNER_RADIUS_MM = 10;
+
+/**
+ * Switch a station to another shape, storing the parameter the new shape needs
+ * and dropping the one it does not.
+ *
+ * The station field shows these values, so they have to be in the design: the
+ * mesher requires `cornerRadiusMm` on every rounded rectangle, and rejects an
+ * exponent or a corner radius on a shape that does not take it.
+ */
+export function withStationShape(station: CrossSectionStation, shape: CrossSectionStation['shape']): CrossSectionStation {
+  const { exponent, corner_radius_mm: cornerRadius, ...rest } = station;
+  if (shape === 'superellipse') return { ...rest, shape, exponent: exponent ?? NEW_SUPERELLIPSE_EXPONENT };
+  if (shape === 'rounded_rectangle') return { ...rest, shape, corner_radius_mm: cornerRadius ?? NEW_STATION_CORNER_RADIUS_MM };
+  return { ...rest, shape };
+}
+
 export function EditableStationTable({ field, stations }: { field: ParameterDefinition; stations: CrossSectionStation[] }) {
   const updateValue = useDesignStore((state) => state.updateValue);
-  const update = (index: number, update: Partial<CrossSectionStation>) => {
-    const next = stations.map((station, item) => item === index ? { ...station, ...update } : station).sort((a, b) => a.t - b.t);
+  const write = (index: number, replacement: CrossSectionStation) => {
+    const next = stations.map((station, item) => item === index ? replacement : station).sort((a, b) => a.t - b.t);
     updateValue('cross_sections', next);
   };
+  const update = (index: number, patch: Partial<CrossSectionStation>) => write(index, { ...stations[index], ...patch });
   const positionMessage = (index: number, value: number) => {
     if (value <= 0 || value >= 1) return 'Must be greater than 0 and less than 1.';
     return stations.some((station, item) => item !== index && Math.abs(station.t - value) < 1e-9)
@@ -178,8 +204,11 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
     <table><thead><tr><th>t</th><th>shape</th><th>n / radius</th><th /></tr></thead><tbody>
       {stations.map((station, index) => <tr key={`${index}-${station.t}`}>
         <td><NumberField label={`Station ${index + 1} position`} value={station.t} min={0} max={1} step={.01} precision={4} disabled={index === 0 || index === stations.length - 1} validate={index === 0 || index === stations.length - 1 ? undefined : (value) => positionMessage(index, value)} onCommit={(value) => update(index, { t: value })} /></td>
-        <td><select aria-label={`Station ${index + 1} shape`} value={station.shape} disabled={index === 0} onChange={(event) => update(index, { shape: event.target.value as CrossSectionStation['shape'] })}><option value="ellipse">Ellipse</option><option value="superellipse">Superellipse</option><option value="rounded_rectangle">Rounded rectangle</option></select></td>
-        <td>{station.shape === 'superellipse' ? <NumberField label={`Station ${index + 1} exponent`} value={station.exponent ?? 4} min={2} max={16} step={.1} precision={2} onCommit={(value) => update(index, { exponent: value })} /> : station.shape === 'rounded_rectangle' ? <NumberField label={`Station ${index + 1} corner radius`} value={station.corner_radius_mm ?? 10} min={1} step={1} precision={2} unit="mm" onCommit={(value) => update(index, { corner_radius_mm: value })} /> : '—'}</td>
+        <td><select aria-label={`Station ${index + 1} shape`} value={station.shape} disabled={index === 0} onChange={(event) => write(index, withStationShape(station, event.target.value as CrossSectionStation['shape']))}><option value="ellipse">Ellipse</option><option value="superellipse">Superellipse</option><option value="rounded_rectangle">Rounded rectangle</option></select></td>
+        {/* A value missing from a loaded file shows what the mesher will use: its
+            default exponent, or an empty required corner radius, which it has no
+            default for and rejects the station without. */}
+        <td>{station.shape === 'superellipse' ? <NumberField label={`Station ${index + 1} exponent`} value={station.exponent ?? MESHER_SUPERELLIPSE_EXPONENT} min={2} max={16} step={.1} precision={2} onCommit={(value) => update(index, { exponent: value })} /> : station.shape === 'rounded_rectangle' ? <NumberField label={`Station ${index + 1} corner radius`} value={station.corner_radius_mm} min={1} step={1} precision={2} unit="mm" onCommit={(value) => update(index, { corner_radius_mm: value })} /> : '—'}</td>
         <td><button aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => updateValue('cross_sections', stations.filter((_station, item) => item !== index))}>−</button></td>
       </tr>)}
     </tbody></table>
