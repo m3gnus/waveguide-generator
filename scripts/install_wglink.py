@@ -318,9 +318,15 @@ def _fetch_package(root: Path, state: Path, *, offline_only: bool = False) -> Pa
                     "Could not fetch the pinned WGLink source commit; check the network "
                     "connection and re-run the installer."
                 )
-        temporary_archive = Path(temporary) / cached.name
-        builder.build_package(source, temporary_archive, spec=spec, version=version)
-        temporary_archive.replace(cached)
+        # Build beside the cache, not in the system temporary directory: a
+        # rename cannot cross volumes, and the Windows runner keeps TEMP on C:
+        # while the checkout, and so this cache, is on D: (WinError 17).
+        with tempfile.TemporaryDirectory(
+            prefix=".wglink-package-", dir=cached.parent
+        ) as staging:
+            temporary_archive = Path(staging) / cached.name
+            builder.build_package(source, temporary_archive, spec=spec, version=version)
+            temporary_archive.replace(cached)
     verify_package(cached, root=root)
     return cached
 

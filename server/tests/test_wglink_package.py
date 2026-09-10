@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import errno
 import hashlib
 import importlib.util
 import json
@@ -760,6 +761,54 @@ def test_fetch_uses_a_disposable_checkout_of_the_exact_commit(tmp_path: Path):
     provenance, _payloads = installer.verify_package(package, root=root)
     assert provenance["sourceCommit"] == commit
     assert package.is_file()
+
+
+def test_fetch_never_renames_the_package_across_volumes(tmp_path: Path, monkeypatch):
+    """A rename cannot cross volumes.
+
+    The Windows RC runner keeps TEMP on C: and the checkout on D:, so moving an
+    archive built in the system temporary directory into the checkout's cache
+    failed the bundle build with WinError 17. Put the temporary directory on a
+    pretend second volume and refuse any rename that leaves it, as Windows does.
+    """
+
+    installer = _load_installer()
+    source = _source(tmp_path, "unused")
+    for command in (
+        ["git", "init", "--quiet"],
+        ["git", "config", "user.email", "test@example.invalid"],
+        ["git", "config", "user.name", "WGLink package test"],
+        ["git", "add", "."],
+        ["git", "commit", "--quiet", "-m", "fixture"],
+    ):
+        assert subprocess.run(command, cwd=source).returncode == 0
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source,
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    root = _wg_root(tmp_path / "wg", commit)
+    spec = _spec(commit)
+    spec["repository"] = str(source)
+    (root / "integrations" / "wglink" / "source.json").write_text(
+        json.dumps(spec), encoding="utf-8"
+    )
+    other_volume = tmp_path / "other-volume"
+    other_volume.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(other_volume))
+    replace = Path.replace
+
+    def replace_within_one_volume(self: Path, target):
+        if self.is_relative_to(other_volume) != Path(target).is_relative_to(other_volume):
+            raise OSError(errno.EXDEV, "Invalid cross-device link", str(self), None, str(target))
+        return replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", replace_within_one_volume)
+
+    package = installer._fetch_package(root, installer.state_root(root))
+
+    provenance, _payloads = installer.verify_package(package, root=root)
+    assert provenance["sourceCommit"] == commit
+    assert list(package.parent.iterdir()) == [package]
 
 
 @pytest.mark.parametrize("member", [
