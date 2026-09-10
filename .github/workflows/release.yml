@@ -28,6 +28,16 @@ name: Release
 # and the platform toolchains all arrive with the image at whatever version it
 # carries that week. So this is meaningful drift reduction, and it is not a
 # reproducible or authenticated toolchain; neither claim should be made from it.
+#
+# Each build job gives the exact files it produced a free GitHub/Sigstore
+# keyless build-provenance attestation, after building them and before
+# uploading them. Each also fails before building if the checked-out release
+# commit is not github.sha, the tip of main this run was dispatched on: the
+# attestation records github.sha as its source digest, so that check is what
+# makes it name the release commit. The publish job never attests; it only
+# publishes files the build jobs already attested. Provenance is not operating
+# system signing and does not make the updater enforce signatures. See
+# docs/reference/BUILD-PROVENANCE.md.
 
 on:
   workflow_dispatch:
@@ -44,6 +54,14 @@ jobs:
   spa:
     name: Build the SPA
     runs-on: ubuntu-latest
+    # A job-level block replaces the workflow's, so the two workflow-level
+    # permissions are restated here and in each build job: this job's CI check
+    # needs actions: read. Only the attestation adds id-token and attestations.
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
     outputs:
       tag: ${{ steps.release_guard.outputs.tag }}
       version: ${{ steps.release_guard.outputs.version }}
@@ -57,6 +75,17 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.sha }}
+
+      - name: Verify the candidate matches the workflow source
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(git rev-parse HEAD)"
+          test "$resolved" = "$WORKFLOW_SHA" \
+            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
+          echo "Candidate $resolved matches the dispatch source."
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -245,6 +274,11 @@ jobs:
           # SIGPIPE under pipefail.
           tar -tzf "$archive" | grep -Fx "dist/index.html"
 
+      - name: Attest the exact SPA archive before transfer
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ${{ env.artifact }}
+
       - name: Share the SPA with bundle and publisher jobs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -258,10 +292,26 @@ jobs:
     name: Build the macOS standalone app
     runs-on: macos-latest
     needs: spa
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
+
+      - name: Verify the candidate matches the workflow source
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(git rev-parse HEAD)"
+          test "$resolved" = "$WORKFLOW_SHA" \
+            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
+          echo "Candidate $resolved matches the dispatch source."
 
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -282,6 +332,19 @@ jobs:
           test -f "$spa"
           test -f "$spa.sha256"
           uv run --no-project --python 3.13.12 scripts/build_bundle.py --spa "$spa" --output build/bundle
+
+      - name: Attest the exact macOS installer, update and runtime subjects before transfer
+        # This job's local outputs, in one attestation, so the installer is
+        # bound to the update archive and manifest built beside it. The SPA was
+        # attested by the SPA job and is deliberately not re-attested after
+        # download. Payloads only: the .sha256 sidecars are not subjects.
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            build/bundle/Waveguide.Generator-*-macos-arm64.dmg
+            build/bundle/update-app-*.zip
+            build/bundle/update-app-*.manifest.json
+            build/bundle/update-runtime-macos-arm64-*.zip
 
       - name: Share the canonical platform-neutral app layer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -314,10 +377,26 @@ jobs:
     # The macOS job produces the canonical app archive. Waiting for it lets
     # Windows prove that its independently materialized Git blobs are exact.
     needs: [spa, macos-bundle]
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
+
+      - name: Verify the candidate matches the workflow source
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(git rev-parse HEAD)"
+          test "$resolved" = "$WORKFLOW_SHA" \
+            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
+          echo "Candidate $resolved matches the dispatch source."
 
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -398,6 +477,17 @@ jobs:
           }
           & ./installers/windows/gates.ps1 -Setup $setups[0].FullName
 
+      - name: Attest the exact Windows installer, portable and runtime archives before transfer
+        # The SPA and canonical app layer were produced and attested by other
+        # jobs; only the local Windows outputs are subjects here. After the
+        # installer gates, so a setup that failed them is never attested.
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
+            build/bundle/Waveguide.Generator-*-windows-x86_64.zip
+            build/bundle/update-runtime-windows-x86_64-*.zip
+
       - name: Share the complete Windows release asset set
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -423,10 +513,26 @@ jobs:
     # archive, so waiting for it lets this one prove its independently
     # materialized Git blobs are exact.
     needs: [spa, macos-bundle]
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
+
+      - name: Verify the candidate matches the workflow source
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(git rev-parse HEAD)"
+          test "$resolved" = "$WORKFLOW_SHA" \
+            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
+          echo "Candidate $resolved matches the dispatch source."
 
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -475,6 +581,15 @@ jobs:
               raise SystemExit(f"Linux and macOS app layers differ: {trees[0]} != {trees[1]}")
           print(f"Cross-platform app layer treeSha256: {trees[0]}")
           PY
+
+      - name: Attest the exact Linux installer and runtime archive before transfer
+        # The SPA and canonical app layer were produced and attested by other
+        # jobs; only the local Linux outputs are subjects here.
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
+            build/bundle/update-runtime-linux-x86_64-*.zip
 
       - name: Share the complete Linux release asset set
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

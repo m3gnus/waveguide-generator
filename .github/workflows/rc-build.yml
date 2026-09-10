@@ -25,11 +25,22 @@ name: RC build
 # and the platform toolchains all arrive with the image at whatever version it
 # carries that week. So this is meaningful drift reduction, and it is not a
 # reproducible or authenticated toolchain; neither claim should be made from it.
+# The build outputs below also receive free GitHub/Sigstore keyless provenance
+# attestations. That records which workflow produced each exact file; it does
+# not sign the macOS or Windows installer for the operating system, and it does
+# not make the updater enforce signatures.
+# Each job also fails before building if the checked-out candidate does not
+# equal github.sha, the tip of the ref this run was dispatched on. The
+# attestation records github.sha as its source digest, so without that check an
+# RC built from inputs.sha would name the dispatch ref's commit instead. The
+# consequence for dispatching: `--ref` must resolve to `sha`. Build a fix
+# branch with `gh workflow run rc-build.yml --ref <branch> -f sha=<branch tip>`;
+# `--ref main -f sha=<branch tip>` now fails before building anything.
 on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Commit on main to build (defaults to main's head)"
+        description: "Commit to build; must be the tip of the dispatch ref (defaults to main's head)"
         required: false
         default: "main"
 
@@ -40,10 +51,24 @@ jobs:
   spa:
     name: Build the SPA
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
+      - name: Verify the candidate matches the workflow source
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(git rev-parse HEAD)"
+          test "$resolved" = "$WORKFLOW_SHA" \
+            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
+          echo "Candidate $resolved matches the dispatch source."
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20.20.2"
@@ -89,6 +114,10 @@ jobs:
           sha256sum "$archive" > "$archive.sha256"
           echo "artifact=$archive" >> "$GITHUB_ENV"
           tar -tzf "$archive" | grep -Fx "dist/index.html"
+      - name: Attest the exact SPA archive before transfer
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ${{ env.artifact }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-spa
@@ -101,10 +130,24 @@ jobs:
     name: Build the macOS standalone app
     runs-on: macos-latest
     needs: spa
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
+      - name: Verify the candidate matches the workflow source
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(git rev-parse HEAD)"
+          test "$resolved" = "$WORKFLOW_SHA" \
+            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
+          echo "Candidate $resolved matches the dispatch source."
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
@@ -121,6 +164,15 @@ jobs:
           test -f "$spa"
           test -f "$spa.sha256"
           uv run --no-project --python 3.13.12 scripts/build_bundle.py --spa "$spa" --output build/bundle
+      - name: Attest the exact macOS installer and update subjects before transfer
+        # These are this job's local outputs. The SPA was attested by the SPA
+        # job and is deliberately not re-attested after download.
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            build/bundle/Waveguide.Generator-*-macos-arm64.dmg
+            build/bundle/update-app-*.zip
+            build/bundle/update-app-*.manifest.json
       - name: Share the canonical platform-neutral app layer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -197,10 +249,24 @@ jobs:
     name: Build the Windows standalone app
     runs-on: windows-latest
     needs: [spa, macos-bundle]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
+      - name: Verify the candidate matches the workflow source
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(git rev-parse HEAD)"
+          test "$resolved" = "$WORKFLOW_SHA" \
+            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
+          echo "Candidate $resolved matches the dispatch source."
       - name: Install pinned uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
@@ -262,6 +328,13 @@ jobs:
             throw "Expected exactly one Windows setup executable, found $($setups.Count)."
           }
           & ./installers/windows/gates.ps1 -Setup $setups[0].FullName
+      - name: Attest the exact Windows installer before transfer
+        # The SPA and canonical app layer were produced by other jobs. Only the
+        # installer built here is a subject of this job's attestation. After the
+        # installer gates, so a setup that failed them is never attested.
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe
       - name: Share the Windows RC assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -334,10 +407,24 @@ jobs:
     # under the release without anyone deciding to move it.
     runs-on: ubuntu-24.04
     needs: [spa, macos-bundle]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.sha }}
+      - name: Verify the candidate matches the workflow source
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolved="$(git rev-parse HEAD)"
+          test "$resolved" = "$WORKFLOW_SHA" \
+            || { echo "Dispatch ref does not resolve to inputs.sha: $WORKFLOW_SHA vs $resolved" >&2; exit 1; }
+          echo "Candidate $resolved matches the dispatch source."
       - name: Install documented Linux runtime libraries for package qualification
         run: scripts/ci/install_linux_runtime_dependencies.sh
       - name: Install pinned uv
@@ -376,6 +463,12 @@ jobs:
               raise SystemExit(f"Linux and macOS app layers differ: {trees[0]} != {trees[1]}")
           print(f"Cross-platform app layer treeSha256: {trees[0]}")
           PY
+      - name: Attest the exact Linux installer before transfer
+        # The SPA and canonical app layer were produced by other jobs. Only the
+        # tarball built here is a subject of this job's attestation.
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: build/bundle/Waveguide.Generator-*-linux-x86_64.tar.gz
       - name: Share the Linux RC assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

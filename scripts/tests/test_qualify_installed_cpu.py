@@ -604,12 +604,12 @@ def test_no_step_turns_a_failed_qualification_into_a_pass() -> None:
                 )
 
 
-def test_the_gate_adds_no_new_action_reference() -> None:
-    """Kept to `run:` steps on purpose.
+def test_the_workflow_action_inventory_is_explicit() -> None:
+    """Every workflow action is reviewed and pinned in its owning test.
 
-    A new `uses:` here would need pinning to a commit like every other one, and
-    would collide with the branch that is pinning them. Everything this gate
-    needs is a shell and the packaged interpreter.
+    The provenance step adds one deliberate action to the bundle workflow. It
+    does not belong to the installed-candidate gate itself, which remains pure
+    shell plus the packaged interpreter.
     """
 
     spec = _workflow()
@@ -627,6 +627,7 @@ def test_the_gate_adds_no_new_action_reference() -> None:
         "actions/setup-node",
         "actions/upload-artifact",
         "actions/download-artifact",
+        "actions/attest",
         "astral-sh/setup-uv",
     }
 

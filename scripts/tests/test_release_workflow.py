@@ -466,7 +466,7 @@ USES_RE = re.compile(
 IMMUTABLE_REF_RE = re.compile(r"^[0-9a-f]{40}$")
 
 #: Every action the two release-building workflows may use, and the commit it is
-#: pinned to. Resolved from GitHub on 2026-09-05 with `gh api repos/<action>/
+#: pinned to. Resolved from GitHub on 2026-09-06 with `gh api repos/<action>/
 #: commits/<tag>`; the comment beside each `uses:` names the release that commit
 #: belonged to. This table is the drift check: moving a pin means changing it
 #: here, in the same commit, with the new SHA resolved the same way.
@@ -475,6 +475,7 @@ RELEASE_ACTION_PINS = {
     "actions/setup-node": "49933ea5288caeca8642d1e84afbd3f7d6820020",
     "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
     "actions/download-artifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+    "actions/attest": "508db95dd578ae2727ebd6217d5ba78e4fbda05d",
     "actions/github-script": "f28e40c7f34bde8b3046d885e986cb6290c5673b",
     "astral-sh/setup-uv": "08807647e7069bb48b6ef5acd8ec9567f424441b",
     "softprops/action-gh-release": "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65",
