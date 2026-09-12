@@ -345,10 +345,12 @@ async def beat_worker_prewarm(
     """Warm the BEAT Julia worker once the engine to warm is known.
 
     The same shape as ``bempp_worker_prewarm``, and for the same reason: BEAT
-    keeps one persistent Julia worker for the life of this process, so its
-    startup, package loading, engine compilation and GPU kernel compilation
-    are paid once -- but until this hook existed nothing paid them, and a GPU
-    host's first solve waited through all of it before its first frequency.
+    keeps its Julia worker alive between solves (in a persistent host that can
+    outlive this process, or in a child process under
+    ``HORNLAB_BEAT_PERSISTENT_HOST=0``), so its startup, package loading,
+    engine compilation and GPU kernel compilation are paid once -- but until
+    this hook existed nothing paid them, and a GPU host's first solve waited
+    through all of it before its first frequency.
     Both hooks are registered; each returns immediately unless
     ``resolve_prewarm_engine`` named its own engine, so at most one ever warms
     anything.

@@ -64,9 +64,14 @@ DESIGN: dict[str, Any] = {
 SOLVE_FREQUENCIES = [500.0, 1000.0]
 
 #: The engine row this gate is about, and the contract a solve with it must
-#: report back. ``beat-cpu`` is selected by name rather than through AUTO: AUTO
-#: is allowed to substitute, and a gate that let it would prove nothing about
-#: the CPU path on a host where something else was available.
+#: report back. ``beat-cpu`` is selected by name rather than through AUTO, so
+#: AUTO's preference order cannot hand the solve to an accelerator on a host
+#: that has one. Naming it does not rule out a substitution, though: the server
+#: still replaces a named engine it finds unavailable with what AUTO would have
+#: chosen (``resolve_submission`` in ``server/jobs/runtime.py``). What catches
+#: a swap is this gate: it refuses to solve unless the application offers this
+#: row, and ``check_solve`` compares the contract below with what the solve
+#: reported.
 CPU_ENGINE = "beat-cpu"
 CPU_RESULT_CONTRACT = {
     "engine": "hornlab-beat-bem",
@@ -715,12 +720,14 @@ def gpu_independence(capabilities: dict[str, Any], solve: dict[str, Any]) -> dic
     """What this run establishes about the CPU path not needing an accelerator.
 
     Three facts, and the claim is only ever as strong as the host allows. The
-    engine was selected **by name**, so AUTO could not substitute anything. The
-    solve reported ``beat_backend`` ``cpu``, which is the backend that ran, not
-    the one that was asked for. And the accelerator rows the application itself
-    reports are recorded: on a host where none is available, a CPU solve is
-    independence by construction; on a host where one is, it is evidence that
-    selecting CPU keeps CPU.
+    engine was selected **by name**, so AUTO's preference order did not choose
+    it. The solve reported ``beat_backend`` ``cpu``, which is the backend that
+    ran, not the one that was asked for -- a named engine can still be
+    substituted when it is unavailable, and ``check_solve`` has already refused
+    a result that does not carry the CPU contract. And the accelerator rows
+    the application itself reports are recorded: on a host where none is
+    available, a CPU solve is independence by construction; on a host where
+    one is, it is evidence that selecting CPU keeps CPU.
     """
 
     accelerators = {

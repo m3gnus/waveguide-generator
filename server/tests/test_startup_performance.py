@@ -257,11 +257,14 @@ def test_the_beat_worker_prewarm_is_registered_and_stopped_by_default(
 ) -> None:
     """A GPU host's first solve waited through the whole Julia start-up.
 
-    BEAT keeps one persistent Julia worker per server process, so the cost is
-    paid once -- but nothing paid it until a user asked for a solve. Warming it
-    is registered by default for the same reason as BEMPP's: the work is in a
-    child process the app can terminate, so it cannot lengthen a Quit. Which
-    also means it must be stopped with the app.
+    BEAT's Julia worker pays that cost once, but nothing paid it until a user
+    asked for a solve. Warming it is registered by default because the work
+    happens outside this process. The worker lives in a persistent host that
+    outlives the app: Quit only detaches from it, and the next launch can adopt
+    it. Under ``HORNLAB_BEAT_PERSISTENT_HOST=0`` it lives in a child process
+    that Quit terminates instead. Either way warming cannot lengthen a Quit.
+    The quit hook must still be registered: it cancels the prewarm and releases
+    the worker.
     """
 
     application = create_app(data_dir=tmp_path)

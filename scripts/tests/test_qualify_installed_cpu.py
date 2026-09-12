@@ -223,8 +223,9 @@ def test_a_real_cpu_solve_passes_every_check() -> None:
 def test_a_solve_that_ran_on_another_backend_fails() -> None:
     """The gate is about the CPU path, so the backend that ran has to be it.
 
-    Selecting `beat-cpu` by name is what stops AUTO substituting; this is what
-    catches a substitution that happened anyway.
+    Selecting `beat-cpu` by name keeps AUTO's preference order out of it, but
+    the server still substitutes a named engine it finds unavailable; this is
+    what catches such a swap.
     """
 
     metal = dict(gate.CPU_RESULT_CONTRACT, beat_backend="metal")
