@@ -160,20 +160,17 @@ def _ground_plane_axes(name: str, status: Mapping[str, Any]) -> tuple[str, ...]:
     (z the horn axis, y vertical, per the same config.py) is the floor: the
     common case, not a corner.
 
-    What is missing is on this side. ``server/solver/beat.py`` never reads
-    ``SolverContext.ground_plane`` -- enumerated, not grepped: the adapter
-    reads frequency_range, frequency_spacing, mesh_validation_mode,
-    num_frequencies, solver_mode, source_motion, validate and verbose, and its
-    only dynamic attribute access is for polar_config. So a grounded solve
-    dispatched to BEAT would place no mesh, apply no image plane, and return a
-    free-standing answer to a question about a floor.
+    What is missing is on this side. ``server/solver/beat.py`` only reads
+    ``SolverContext.ground_plane`` to refuse it; it does not translate the
+    plane into BEAT's native image geometry. Without that refusal, a grounded
+    solve dispatched to BEAT would return a free-standing answer to a question
+    about a floor.
 
-    The mounting gate in ``resolve_auto_engine`` is the only thing preventing
-    that, so advertising the axis before the adapter exists would not merely
-    be optimistic -- it would let AUTO route a grounded solve to an engine that
-    silently ignores the ground. Withholding it costs a user nothing today
-    (BEMPP does all three axes); advertising it costs a wrong answer that looks
-    right. Wire the adapter, then add BEAT here, in that order.
+    The mounting gate in ``resolve_auto_engine`` avoids selecting an engine
+    that must refuse the request; the adapter's own guard is defense in depth.
+    Advertising the axis before a native ground translation exists would be
+    false even with that guard. Wire the adapter, then add BEAT here, in that
+    order.
     """
 
     if name != "bempp":

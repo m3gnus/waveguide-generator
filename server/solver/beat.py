@@ -26,7 +26,7 @@ from pathlib import Path
 import tempfile
 from typing import Any, Mapping
 
-from server.jobs.models import SolveRequest
+from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
 
 from .acoustics import solver_sound_speed_m_per_s
@@ -34,6 +34,7 @@ from .base import (
     ArtifactCallback,
     CancelCallback,
     EngineRunResult,
+    FULL3D_SOLVER_PORT_MARKER,
     ResultCallback,
     StageCallback,
 )
@@ -543,6 +544,11 @@ def solve_beat_from_msh_text(
 
     context.validate()
     del mesh_metadata
+    if context.ground_plane is not None:
+        raise BeatUnavailable(
+            "The HornLab BEAT adapter cannot apply a rigid ground plane; "
+            "select a ground-plane-capable engine."
+        )
     if context.solver_mode == "circsym":
         raise ValueError("BEAT cannot run solver_mode='circsym'; use the Axisymmetric runner or full_3d")
     reject_beat_infinite_baffle(context)
@@ -769,6 +775,8 @@ class BeatEngine:
     backends became separately selectable.
     """
 
+    solver_port_marker = FULL3D_SOLVER_PORT_MARKER
+
     def __init__(self, backend: str | None = None) -> None:
         if backend is not None and backend not in BEAT_BACKENDS:
             raise ValueError(
@@ -786,7 +794,18 @@ class BeatEngine:
         stage_cb: StageCallback,
         artifact_cb: ArtifactCallback | None = None,
         result_cb: ResultCallback | None = None,
+        imported_record: Mapping[str, Any] | None = None,
     ) -> EngineRunResult:
+        if request.options.ground_plane.enabled:
+            raise BeatUnavailable(
+                "The HornLab BEAT adapter cannot apply a rigid ground plane; "
+                "select a ground-plane-capable engine."
+            )
+        if imported_record is not None or isinstance(request.geometry, ImportedGeometrySource):
+            raise BeatUnavailable(
+                "The HornLab BEAT adapter does not support imported geometry or "
+                "multi-source drive channels; select Metal."
+            )
         if (request.options.solver_mode or "").strip().lower() == "circsym":
             raise ValueError("BEAT cannot run solver_mode='circsym'; select Axisymmetric or use full_3d")
         context = SolverContext.from_request(request, solver_mode="full_3d")
