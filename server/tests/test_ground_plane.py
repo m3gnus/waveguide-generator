@@ -348,12 +348,10 @@ def test_no_beat_engine_advertises_a_ground_plane_it_cannot_apply():
     hornlab-beat-bem CAN express a rigid half space at the pin this repository
     carries -- it exports GroundPlane, SolveConfig.ground_plane and
     GROUND_PLANE_AXES=("y",), and y is the floor in this application's frame.
-    It is tempting to advertise that. But ``server/solver/beat.py`` never reads
-    ``SolverContext.ground_plane``, and the mounting gate in
-    ``resolve_auto_engine`` is the only thing keeping a grounded solve away
-    from an engine that ignores it. Advertising the mounting first would let
-    AUTO route a grounded solve to BEAT and return a FREE-STANDING answer to a
-    question about a floor -- no error, just a wrong number.
+    It is tempting to advertise that. But ``server/solver/beat.py`` only
+    reads ``SolverContext.ground_plane`` to refuse it; it does not translate
+    the request into a native image plane. The mounting gate in
+    ``resolve_auto_engine`` must therefore keep grounded solves away from BEAT.
 
     So this fails the moment someone re-adds the capability without wiring the
     adapter, which is the order the ``_ground_plane_axes`` docstring states.
@@ -366,27 +364,19 @@ def test_no_beat_engine_advertises_a_ground_plane_it_cannot_apply():
         assert info.ground_plane_axes == (), info.name
 
 
-def test_the_beat_adapter_really_does_not_consume_the_ground_plane():
-    """Pins the evidence the decision above rests on, by enumeration.
-
-    Greping for the word proves only that a spelling is absent. This reads
-    every attribute the BEAT adapter takes off a solver context and asserts
-    ``ground_plane`` is not among them, so the day someone wires it up this
-    test fails and points at its sibling above.
-    """
-    import inspect
-    import re
-
+def test_the_beat_adapter_refuses_ground_before_native_execution():
+    """A direct caller cannot bypass the capability gate and get free air."""
     from server.solver import beat as beat_module
+    from server.solver.context import SolverContext
 
-    source = inspect.getsource(beat_module)
-    named = set(re.findall(r"\bcontext\.([A-Za-z_]\w*)", source))
-    dynamic = set(re.findall(r"getattr\(\s*context\s*,\s*[\"'](\w+)[\"']", source))
-
-    assert "ground_plane" not in named | dynamic
-    # And no escape hatch that would reach the field without naming it.
-    for escape in ("vars(context", "asdict(context", "context.__dict__", "**context"):
-        assert escape not in source, escape
+    context = SolverContext(
+        design=None,
+        frequency_range=(500.0, 1000.0),
+        num_frequencies=2,
+        ground_plane=GroundPlane(axis="y", height_m=1.0),
+    )
+    with pytest.raises(beat_module.BeatUnavailable, match="rigid ground plane"):
+        beat_module.solve_beat_from_msh_text("$MeshFormat\n", context)
 
 
 def _grounded_request(*, engine: str = "auto", solver_mode: str = "auto"):
@@ -465,9 +455,9 @@ def test_an_explicitly_chosen_engine_that_cannot_ground_is_refused(engine):
 
     It runs only inside ``if engine_name == "auto"``. An engine named outright
     skips it entirely, so without a refusal at the submission boundary the
-    solve is accepted and handed to an adapter that never reads
-    ``SolverContext.ground_plane`` -- a free-standing answer to a question
-    about a floor, with no error anywhere.
+    solve could be accepted and handed to an adapter without a native image
+    plane -- a free-standing answer to a question about a floor. Both the
+    submission gate and the adapter's early refusal prevent that now.
     """
     import asyncio
 
@@ -655,7 +645,7 @@ def test_imported_cad_geometry_refuses_a_ground_plane():
 
     They are refused earlier as a separate path, so a ground plane left enabled
     in the parametric panel and carried into a CAD solve reached Metal, whose
-    adapter does not read it -- a free-standing answer with full field traces
+    adapter cannot apply it -- a free-standing answer with full field traces
     and no warning. Refused where the imported context is built, which is the
     one place every imported solve passes through.
     """

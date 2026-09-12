@@ -65,6 +65,7 @@ from server.solver.symmetry import (
 )
 from server.solver.field_plane import FieldPlaneEvaluation, FieldPlaneService
 from server.solver.metal_permit import MetalPermit, process_metal_permit
+from server.solver.base import is_full3d_solver_port, run_full3d_solver_port
 
 
 logger = logging.getLogger(__name__)
@@ -2773,21 +2774,34 @@ class JobRuntime:
                 artifact_persisted = True
 
         try:
-            run_kwargs: dict[str, Any] = {
-                "cancel_cb": lambda: self._check_cancelled(job_id),
-                "stage_cb": stage_callback,
-            }
-            if "artifact_cb" in inspect.signature(engine.run).parameters:
-                run_kwargs["artifact_cb"] = artifact_callback
-            if "result_cb" in inspect.signature(engine.run).parameters:
-                run_kwargs["result_cb"] = result_callback
-            if (
-                imported_record is not None
-                and "imported_record" in inspect.signature(engine.run).parameters
-            ):
-                run_kwargs["imported_record"] = imported_record
             solve_started = time.perf_counter()
-            outcome = await engine.run(request, **run_kwargs)
+            if is_full3d_solver_port(engine):
+                # BEAT and Metal have one HornLab-facing port. Their native
+                # protocols differ; the scheduler never needs to inspect them.
+                outcome = await run_full3d_solver_port(
+                    engine,
+                    request,
+                    cancel_cb=lambda: self._check_cancelled(job_id),
+                    stage_cb=stage_callback,
+                    artifact_cb=artifact_callback,
+                    result_cb=result_callback,
+                    imported_record=imported_record,
+                )
+            else:
+                run_kwargs: dict[str, Any] = {
+                    "cancel_cb": lambda: self._check_cancelled(job_id),
+                    "stage_cb": stage_callback,
+                }
+                if "artifact_cb" in inspect.signature(engine.run).parameters:
+                    run_kwargs["artifact_cb"] = artifact_callback
+                if "result_cb" in inspect.signature(engine.run).parameters:
+                    run_kwargs["result_cb"] = result_callback
+                if (
+                    imported_record is not None
+                    and "imported_record" in inspect.signature(engine.run).parameters
+                ):
+                    run_kwargs["imported_record"] = imported_record
+                outcome = await engine.run(request, **run_kwargs)
         finally:
             # Drain callbacks queued by the final native frequency/result hook.
             await asyncio.sleep(0)

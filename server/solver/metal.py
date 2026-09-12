@@ -44,6 +44,7 @@ from .base import (
     ArtifactCallback,
     CancelCallback,
     EngineRunResult,
+    FULL3D_SOLVER_PORT_MARKER,
     ResultCallback,
     StageCallback,
 )
@@ -516,6 +517,11 @@ def solve_metal_from_msh_text(
     """
 
     context.validate()
+    if context.ground_plane is not None:
+        raise MetalUnavailable(
+            "The HornLab Metal adapter cannot apply a rigid ground plane; "
+            "select a ground-plane-capable engine."
+        )
     if ladder_bands is not None:
         if not ladder_bands:
             raise ValueError("mesh ladder solve requires at least one band")
@@ -1739,6 +1745,11 @@ def solve_imported_metal_from_msh_text(
     geometry = request.geometry
     if not isinstance(geometry, ImportedGeometrySource):
         raise ValueError("imported Metal solve requires imported geometry")
+    if request.options.ground_plane.enabled:
+        raise MetalUnavailable(
+            "The HornLab Metal adapter cannot apply a rigid ground plane to "
+            "imported geometry."
+        )
     if native_config is None or native_solve_multi_source is None:
         raise MetalUnavailable(
             "Installed hornlab-metal-bem does not support multi-source solves."
@@ -2436,6 +2447,7 @@ async def _resolve_mesh_ladder(
 
 class MetalEngine:
     name = "metal"
+    solver_port_marker = FULL3D_SOLVER_PORT_MARKER
 
     async def run(
         self,
@@ -2447,6 +2459,11 @@ class MetalEngine:
         result_cb: ResultCallback | None = None,
         imported_record: Mapping[str, Any] | None = None,
     ) -> EngineRunResult:
+        if request.options.ground_plane.enabled:
+            raise MetalUnavailable(
+                "The HornLab Metal adapter cannot apply a rigid ground plane; "
+                "select a ground-plane-capable engine."
+            )
         if isinstance(request.geometry, ImportedGeometrySource):
             if imported_record is None:
                 raise ValueError("imported Metal solve requires its ingestion record")
