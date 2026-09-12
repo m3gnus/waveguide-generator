@@ -11,6 +11,7 @@ import {
   type CadReturnBundle,
   type CadReturnIngestRecord,
   type FusionCadStatus,
+  type PendingSolveCommand,
 } from '../api/cadlink';
 import type { CadSetup, JobItem } from '../api/jobsSocket';
 import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
@@ -224,6 +225,89 @@ function startAdaptivePoll(
     if (timer !== null) window.clearTimeout(timer);
     timer = null;
   };
+}
+
+/** Why the project a Fusion-requested return names could not be put on screen. */
+type ReturnOpenCode =
+  | 'ambiguous_design'
+  | 'project_list_unavailable'
+  | 'design_not_held'
+  | 'unsaved_changes'
+  | 'superseded_by_open'
+  | 'project_open_failed';
+
+/** The answer to "open the project this Fusion-requested return names", and
+ * with it what may happen to the request next.
+ *
+ * Only `rejected` is refused back to Fusion. A refusal is permanent -- its
+ * ledger entry is what deletes the marker -- so it is kept for what can never
+ * succeed. `retryable` is a condition that may clear on its own: WG reports
+ * nothing and tries again later. `needs_user_input` keeps the request and
+ * waits for the user. "Cannot right now" is not "never". */
+type ReturnOpenOutcome =
+  | { kind: 'ready' }
+  | { kind: 'retryable' | 'needs_user_input' | 'rejected'; code: ReturnOpenCode; message: string };
+
+/** Classify a project open that failed for a reason other than the guard.
+ *
+ * Only a 4xx is refused: it is the server's considered answer about this
+ * design. The server erroring (5xx) or not answering at all (`fetch` rejects
+ * with a TypeError) may clear on its own, so it is retried. So is a failure
+ * that carries no status at all: the design-text request's client keeps none,
+ * and its 5xx must not become a permanent refusal. The retry is bounded and
+ * ends with the user, never with a refusal. */
+function classifyOpenFailure(reason: unknown, projectName: string): ReturnOpenOutcome {
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  const status = reason instanceof CadLinkApiError ? reason.status : null;
+  const refusedByServer = status !== null && status >= 400 && status < 500;
+  return {
+    kind: refusedByServer ? 'rejected' : 'retryable',
+    code: 'project_open_failed',
+    message: `Fusion asked WG to solve a return from ${projectName}, which could not be opened: ${detail}`,
+  };
+}
+
+/** End a message with a full stop so another sentence can follow it: a
+ * failure's detail ("Failed to fetch") often has none of its own. */
+function asSentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/** Where one Fusion solve command stands, for the life of this coordinator.
+ *
+ * - `processing`: WG owns it and works on it at the first poll at or after
+ *   `nextAttemptAt`. A transient failure lands here again, later.
+ * - `waiting-for-user`: parked with a blocker the user has to clear.
+ * - `finished`: its outcome reached Fusion, or was shown; never looked at again.
+ *
+ * This replaces a single "seen" latch, which made any failure before the
+ * command was parked permanent until the coordinator remounted. */
+interface SolveCommandProgress {
+  state: 'processing' | 'waiting-for-user' | 'finished';
+  /** Transient failures so far, for the bounded retry. */
+  attempts: number;
+  nextAttemptAt: number;
+  /** Waiting before WG took the request on: nothing was prepared for it, so
+   * resuming it means processing it again from the start, not solving
+   * whatever else is on screen. */
+  resumeFromStart: boolean;
+  /** Why it waits, when that can clear without the user pressing anything. */
+  code: ReturnOpenCode | null;
+}
+
+/** After this many transient failures a command waits for the user instead. */
+const SOLVE_COMMAND_MAX_ATTEMPTS = 6;
+
+/** 2, 4, 8, 16 and 32 s after the first five failures; never over a minute. */
+function solveCommandRetryDelayMs(failures: number): number {
+  return Math.min(1_000 * 2 ** failures, 60_000);
+}
+
+/** A parked command WG has not taken on yet, so Solve must start it over. */
+function heldBeforeTakenOn(progress: Map<string, SolveCommandProgress>, commandId: string): boolean {
+  const entry = progress.get(commandId);
+  return entry?.state === 'waiting-for-user' && entry.resumeFromStart;
 }
 
 export const cadLinkCoordinatorBridge = {
@@ -961,7 +1045,8 @@ export function CadLinkCoordinator() {
   // still the only thing that discovers returns; this lets a composed action
   // (pull, then ingest, then solve) continue from that discovery.
   const solveCommandInFlight = useRef(false);
-  const solveCommandSeen = useRef<string | null>(null);
+  const solveCommandProgress = useRef(new Map<string, SolveCommandProgress>());
+  const consumeSolveCommandRef = useRef<() => Promise<void>>(async () => undefined);
   const autoIngestPending = useRef(false);
   const ingestSelectedRef = useRef<() => Promise<CadReturnIngestRecord>>(unavailable);
   const selectBundleRef = useRef<(bundle: CadReturnBundle, projectLineageId?: string | null) => void>(() => undefined);
@@ -1050,7 +1135,10 @@ export function CadLinkCoordinator() {
    * poll is merely checking; remember that arrival and retry after the check
    * proves there is no command to consume. */
   const autoIngestSelected = useCallback(() => {
-    if (parkedSolveCommandStore.getSnapshot().command) {
+    const parked = parkedSolveCommandStore.getSnapshot().command;
+    // A request still waiting to open its own project owns nothing on screen
+    // yet, so it does not hold up preparing the open project's returns.
+    if (parked && !heldBeforeTakenOn(solveCommandProgress.current, parked.commandId)) {
       autoIngestPending.current = false;
       return;
     }
@@ -1329,7 +1417,14 @@ export function CadLinkCoordinator() {
           return;
         }
         const parked = parkedSolveCommandStore.getSnapshot().command;
-        if (parked && parked.bundlePath !== arrived.bundlePath) {
+        // A request WG has not taken on yet is waiting for the user, not for
+        // a newer return: it names its own return, which may belong to
+        // another project entirely, and a newer one does not replace it.
+        if (
+          parked
+          && parked.bundlePath !== arrived.bundlePath
+          && !heldBeforeTakenOn(solveCommandProgress.current, parked.commandId)
+        ) {
           await refuseParkedSolveCommand('Superseded by a newer return from Fusion.');
         }
         if (arrived.requestId === pendingReturnRequestId.current) {
@@ -1818,6 +1913,18 @@ export function CadLinkCoordinator() {
     const parked = parkedSolveCommandStore.getSnapshot().command;
     if (!parked) return;
     setError(null);
+    if (heldBeforeTakenOn(solveCommandProgress.current, parked.commandId)) {
+      // Nothing is prepared for this request yet, so solving now would solve
+      // whatever else is on screen. Take it from the top instead -- open its
+      // project, prepare its return, solve -- with a fresh retry budget,
+      // because pressing Solve is the user saying "try again".
+      solveCommandProgress.current.set(parked.commandId, {
+        state: 'processing', attempts: 0, nextAttemptAt: 0, resumeFromStart: false, code: null,
+      });
+      parkedSolveCommandStore.clear();
+      await consumeSolveCommandRef.current();
+      return;
+    }
     try {
       const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
       if (outcome === 'busy') {
@@ -1857,23 +1964,41 @@ export function CadLinkCoordinator() {
    * Two things it still will not do. It will not open over unsaved work --
    * opening a project replaces the working design, and the manual switcher asks
    * before discarding, so an automatic switch must not be the one path that
-   * discards silently. And it will not guess: a bundle naming two designs names
-   * no single target, and a design this copy of WG does not hold cannot be
-   * opened at all. Both keep the refusal, which now says which project. */
+   * discards silently. Unsaved work makes the request wait for the user
+   * instead, and it goes ahead once nothing would be lost. And it will not guess:
+   * a bundle naming two designs names no single target, and a design this copy
+   * of WG does not hold cannot be opened at all. Those two are refused, and the
+   * refusal says which project. A project list or an open that fails on its
+   * own is neither: WG tries again later. */
   const openProjectForReturn = useCallback(
-    async (bundle: CadReturnBundle): Promise<'opened' | string> => {
+    async (bundle: CadReturnBundle): Promise<ReturnOpenOutcome> => {
       const designId = soleReturnedDesignId(bundle);
       if (!designId) {
-        return 'Fusion asked WG to solve a return that names more than one CAD-linked design, so WG cannot tell which project to open. Open it from File → CAD-linked designs, then send the solve again.';
+        return {
+          kind: 'rejected',
+          code: 'ambiguous_design',
+          message: 'Fusion asked WG to solve a return that names more than one CAD-linked design, so WG cannot tell which project to open. Open it from File → CAD-linked designs, then send the solve again.',
+        };
       }
       let project: CadProject | undefined;
       try {
         project = (await listCadProjects()).find((item) => item.designId === designId);
-      } catch {
-        project = undefined;
+      } catch (reason) {
+        // A list that cannot be read right now says nothing about whether WG
+        // holds the design. Reading it as "not held" refused the request for good.
+        const detail = reason instanceof Error ? reason.message : String(reason);
+        return {
+          kind: 'retryable',
+          code: 'project_list_unavailable',
+          message: `Fusion asked WG to solve a return from ${bundle.documentName ?? bundle.name}, but WG could not read its list of CAD-linked projects: ${detail}`,
+        };
       }
       if (!project) {
-        return 'Fusion asked WG to solve a return from a CAD-linked design this copy of WG does not have.';
+        return {
+          kind: 'rejected',
+          code: 'design_not_held',
+          message: 'Fusion asked WG to solve a return from a CAD-linked design this copy of WG does not have.',
+        };
       }
       const name = cadProjectName(project);
       // Both halves of "it is safe to replace what is open" are captured here,
@@ -1882,29 +2007,45 @@ export function CadLinkCoordinator() {
       // the user to have typed into the open design or opened another one.
       const documentLoad = currentDocumentLoad();
       if (unsavedChangesNow()) {
-        return `Fusion asked WG to solve a return from ${name}. Save or discard the changes in the open design first, then send the solve again.`;
+        return {
+          kind: 'needs_user_input',
+          code: 'unsaved_changes',
+          message: `Fusion asked WG to solve a return from ${name}, but the open design has unsaved changes and WG will not replace them. Open ${name} from File → CAD-linked designs, which asks before discarding, and the request carries on; or dismiss it.`,
+        };
       }
+      // Which half of the guard refused, so the wait can say what clears it.
+      const refusedBy: { code: 'unsaved_changes' | 'superseded_by_open' } = { code: 'superseded_by_open' };
       try {
         await openCadLinkedProject(designId, fetch, 'cad-project-switch', () => {
           // The document generation, not the design identity: two unrelated
           // unlinked documents both have no identity at all, so identity
           // cannot see one being replaced by the other.
           if (!isCurrentDocumentLoad(documentLoad)) {
+            refusedBy.code = 'superseded_by_open';
             return 'another design was opened while WG was loading it';
           }
-          if (unsavedChangesNow()) return 'the open design had unsaved changes by then';
+          if (unsavedChangesNow()) {
+            refusedBy.code = 'unsaved_changes';
+            return 'the open design had unsaved changes by then';
+          }
           return null;
         });
       } catch (reason) {
         if (reason instanceof DesignOpenSupersededError) {
-          return `Fusion asked WG to solve a return from ${name}, but ${reason.message}. Nothing was replaced — deal with the open design, then send the solve again.`;
+          const remedy = refusedBy.code === 'unsaved_changes'
+            ? `open ${name} from File → CAD-linked designs, which asks before discarding, and the request carries on; or dismiss it`
+            : `press Solve now to open ${name}, or dismiss the request`;
+          return {
+            kind: 'needs_user_input',
+            code: refusedBy.code,
+            message: `Fusion asked WG to solve a return from ${name}, but ${reason.message}. Nothing was replaced — ${remedy}.`,
+          };
         }
-        const detail = reason instanceof Error ? reason.message : String(reason);
-        return `Fusion asked WG to solve a return from ${name}, which could not be opened: ${detail}`;
+        return classifyOpenFailure(reason, name);
       }
       rememberCadProject(project.lineageId);
       setStatus(`Opened ${name} for the model Fusion sent. Preparing…`);
-      return 'opened';
+      return { kind: 'ready' };
     },
     [],
   );
@@ -1914,10 +2055,52 @@ export function CadLinkCoordinator() {
    * Idempotency is the server's ledger, not this component: a coordinator
    * remount or a second poll must surface the existing job rather than submit
    * again. A blocked gate is parked, not discarded — the user resolves the
-   * blocker and presses Solve, which consumes the same request. */
+   * blocker and presses Solve, which consumes the same request.
+   *
+   * What this component does own is where each command stands
+   * (`SolveCommandProgress`). A failure before the command is parked -- the
+   * return listing, the project list or the project open failing on their own
+   * -- leaves it eligible and retried on a later poll, after a growing delay.
+   * Only a finished command is never looked at again. */
   const consumeSolveCommand = useCallback(async () => {
     if (solveCommandInFlight.current) return;
     solveCommandInFlight.current = true;
+    const progress = solveCommandProgress.current;
+    const settle = (commandId: string, next: Partial<SolveCommandProgress>) => {
+      progress.set(commandId, {
+        state: 'processing', attempts: 0, nextAttemptAt: 0, resumeFromStart: false, code: null,
+        ...progress.get(commandId),
+        ...next,
+      });
+    };
+    /** Park a command WG has not taken on yet, with what the user must do. */
+    const waitForUser = (command: PendingSolveCommand, blocker: string, code: ReturnOpenCode | null) => {
+      settle(command.commandId, { state: 'waiting-for-user', nextAttemptAt: 0, resumeFromStart: true, code });
+      parkedSolveCommandStore.park({
+        commandId: command.commandId,
+        bundlePath: command.bundlePath,
+        blockers: [blocker],
+        parkedAt: command.requestedAt || new Date().toISOString(),
+      });
+      setStatus(null);
+    };
+    /** Try again on a later poll, or wait for the user once retrying is spent.
+     * Nothing is reported to Fusion either way: a refusal would be permanent. */
+    const retryLater = (command: PendingSolveCommand, message: string) => {
+      const attempts = (progress.get(command.commandId)?.attempts ?? 0) + 1;
+      settle(command.commandId, { attempts });
+      if (attempts >= SOLVE_COMMAND_MAX_ATTEMPTS) {
+        waitForUser(command, `${asSentence(message)} WG stopped retrying after ${attempts} attempts; press Solve now to try again.`, null);
+        return;
+      }
+      const delayMs = solveCommandRetryDelayMs(attempts);
+      settle(command.commandId, { state: 'processing', nextAttemptAt: Date.now() + delayMs });
+      setStatus(`${asSentence(message)} WG will try again in ${Math.round(delayMs / 1_000)} s.`);
+    };
+    // The command this round is working on, and whether it got as far as
+    // being parked: a failure before that point is retried, never lost.
+    let working: PendingSolveCommand | null = null;
+    let parkedThisRound = false;
     try {
       // Reading the marker is advisory, like the status heartbeat: an older
       // server or a transient failure must not raise an error banner over a
@@ -1928,9 +2111,17 @@ export function CadLinkCoordinator() {
       // Fusion asked for something: whatever cadence got us here, the rest of
       // this round trip runs at the base rate.
       noteCadActivity();
+      const entry = progress.get(command.commandId);
       if (pending.outcome) {
-        if (solveCommandSeen.current === command.commandId) return;
-        solveCommandSeen.current = command.commandId;
+        settle(command.commandId, { state: 'finished' });
+        // Terminal on the server, so a parked copy of it is spent: offering it
+        // again would let Solve now act on a request nobody is waiting for.
+        if (parkedSolveCommandStore.getSnapshot().command?.commandId === command.commandId) {
+          parkedSolveCommandStore.clear();
+        }
+        // Already WG's: the outcome is its own report, or the user's through
+        // the panel, coming back -- and it was shown where it was made.
+        if (entry) return;
         if (pending.outcome.state === 'refused') {
           // A refusal is the user's to see, and it renders only in CAD mode.
           enterCadWorkspace();
@@ -1940,8 +2131,22 @@ export function CadLinkCoordinator() {
         }
         return;
       }
-      if (solveCommandSeen.current === command.commandId) return;
-      solveCommandSeen.current = command.commandId;
+      if (entry?.state === 'finished') return;
+      if (entry?.state === 'processing' && Date.now() < entry.nextAttemptAt) return;
+      if (entry?.state === 'waiting-for-user') {
+        // Whatever consumed or refused the parked command reported its outcome
+        // on the way, so a command that is no longer parked is finished.
+        if (parkedSolveCommandStore.getSnapshot().command?.commandId !== command.commandId) {
+          settle(command.commandId, { state: 'finished' });
+          return;
+        }
+        // Unsaved work is the one blocker the poll can see clear by itself,
+        // and looking costs nothing. Everything else waits for the user.
+        if (entry.code !== 'unsaved_changes' || unsavedChangesNow()) return;
+        parkedSolveCommandStore.clear();
+      }
+      working = command;
+      settle(command.commandId, { state: 'processing', nextAttemptAt: 0, resumeFromStart: false, code: null });
       setStatus('Fusion asked WG to solve this model. Preparing…');
       // The request is only actionable from the workspace that renders it.
       enterCadWorkspace();
@@ -1951,16 +2156,28 @@ export function CadLinkCoordinator() {
         const reason = 'Fusion asked WG to solve a return that is not readable in the workspace.';
         setError(reason);
         await reportSolveCommandOutcome({ commandId: command.commandId, state: 'refused', jobId: null, reason });
+        settle(command.commandId, { state: 'finished' });
         return;
       }
       if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
         const outcome = await openProjectForReturn(bundle);
-        if (outcome !== 'opened') {
+        if (outcome.kind !== 'ready') {
+          // The return was not taken, so an empty CAD Link must not be filled
+          // from the remembered project in its place.
           refusedForeignReturn.current = true;
-          setError(outcome);
+          if (outcome.kind === 'needs_user_input') {
+            waitForUser(command, outcome.message, outcome.code);
+            return;
+          }
+          if (outcome.kind === 'retryable') {
+            retryLater(command, outcome.message);
+            return;
+          }
+          setError(outcome.message);
           await reportSolveCommandOutcome({
-            commandId: command.commandId, state: 'refused', jobId: null, reason: outcome,
+            commandId: command.commandId, state: 'refused', jobId: null, reason: outcome.message,
           });
+          settle(command.commandId, { state: 'finished' });
           return;
         }
         // The switch is the acknowledgement: the project on screen is now the
@@ -1977,6 +2194,10 @@ export function CadLinkCoordinator() {
         blockers: [],
         parkedAt: command.requestedAt || new Date().toISOString(),
       });
+      parkedThisRound = true;
+      // The parked store owns it now; the poll leaves it alone until a solve
+      // consumes it or the user refuses it, both of which report the outcome.
+      settle(command.commandId, { state: 'waiting-for-user', resumeFromStart: false, code: null });
       autoIngestPending.current = false;
       const continuity = useCadReturnStore.getState().selectArrivedBundle(bundle);
       await ingestSelected();
@@ -1996,6 +2217,14 @@ export function CadLinkCoordinator() {
       // The accepted outcome is reported by the solve path itself, which is
       // the only place that knows the job id.
     } catch (reason) {
+      if (working && !parkedThisRound) {
+        // Nothing was taken on yet, so nothing is lost: WG still owns the
+        // request and a later poll tries it again. The return listing above is
+        // the known case; it used to latch the command until a remount.
+        const message = reason instanceof Error ? reason.message : String(reason);
+        retryLater(working, `Fusion asked WG to solve this model, but: ${message}`);
+        return;
+      }
       if (reason instanceof SupersededError) return;
       const message = reason instanceof Error ? reason.message : String(reason);
       if (mounted.current) setError(`Fusion asked WG to solve this model, but: ${message}`);
@@ -2012,11 +2241,13 @@ export function CadLinkCoordinator() {
       if (parked) parkedSolveCommandStore.setBlockers(parked.commandId, [message]);
     } finally {
       solveCommandInFlight.current = false;
-      if (autoIngestPending.current && !parkedSolveCommandStore.getSnapshot().command) {
+      const parked = parkedSolveCommandStore.getSnapshot().command;
+      if (autoIngestPending.current && (!parked || heldBeforeTakenOn(progress, parked.commandId))) {
         autoIngestSelected();
       }
     }
   }, [autoIngestSelected, ingestSelected, noteCadActivity]);
+  consumeSolveCommandRef.current = consumeSolveCommand;
 
   // Faster than the returns poll, and Fusion-only: Onshape has no marker.
   // This one reads a single small marker file rather than listing a workspace,
