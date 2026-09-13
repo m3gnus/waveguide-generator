@@ -8,7 +8,7 @@ import {
   replacingWouldLoseNow,
 } from '../design/replacementCheck';
 import { toSolveDesign } from '../jobs/actions';
-import { AUTOSAVE_KEY, restoreAutosave } from './autosave';
+import { AUTOSAVE_KEY, restoreAutosave, writeAutosave } from './autosave';
 import { resetDesignStore, seedDesign, serializeDesign, useDesignStore, type DesignDocument } from './design';
 import { designContentKey, DESIGN_CONTENT_KEY_VERSION, type DesignFileSettings } from './designContentKey';
 import { wgSolveSettingsFromStore } from './designWire';
@@ -368,5 +368,74 @@ describe('would replacing the design on screen lose it', () => {
     expect(after.document).toBe(before.document);
     expect(after.solveOptions).toBe(before.solveOptions);
     expect(JSON.stringify(after)).toBe(serialized);
+  });
+});
+
+describe('a restored autosave draft', () => {
+  function memoryStorage() {
+    const values = new Map<string, string>();
+    return {
+      values,
+      getItem: (name: string) => values.get(name) ?? null,
+      setItem: (name: string, value: string) => { values.set(name, value); },
+      removeItem: (name: string) => { values.delete(name); },
+    };
+  }
+
+  /** A restart: every store back to a fresh window's, then the draft restored. */
+  function restart(storage: ReturnType<typeof memoryStorage>): boolean {
+    resetDesignStore();
+    resetDocumentStore();
+    return restoreAutosave(storage);
+  }
+
+  it('keeps the kept verdict of a draft still equal to what was opened', () => {
+    const storage = memoryStorage();
+    applyOpenedDesign(openedReport(150), 'horn.cfg');
+    const opened = useDocumentStore.getState().openedContentKey;
+    expect(writeAutosave(storage)).toBe(true);
+
+    expect(restart(storage)).toBe(true);
+
+    expect(useDesignStore.getState().design.R).toBe(150);
+    expect(useDocumentStore.getState().openedContentKey).toBe(opened);
+    expect(replacingWouldLoseNow()).toBe(false);
+  });
+
+  it('restores the key recorded beside an edited draft, not one derived from the draft', () => {
+    const storage = memoryStorage();
+    applyOpenedDesign(openedReport(150), 'horn.cfg');
+    const opened = useDocumentStore.getState().openedContentKey;
+    useDesignStore.getState().updateField('R', 321);
+    expect(writeAutosave(storage)).toBe(true);
+
+    expect(restart(storage)).toBe(true);
+
+    expect(useDesignStore.getState().design.R).toBe(321);
+    expect(useDocumentStore.getState().openedContentKey).toBe(opened);
+    expect(useDocumentStore.getState().openedContentKey).not.toBe(keptContentKeyNow());
+    expect(replacingWouldLoseNow()).toBe(true);
+    // The edit taken back after the restart is the opened design again.
+    useDesignStore.getState().updateField('R', 150);
+    expect(replacingWouldLoseNow()).toBe(false);
+  });
+
+  it.each([
+    ['another key format', { contentKeyVersion: 'v0' }],
+    ['no key format', { contentKeyVersion: undefined }],
+    ['a key that is not text', { openedContentKey: 42 }],
+    ['a key under another prefix than its format', { openedContentKey: 'v0:{}' }],
+  ])('restores a draft recorded with %s, and counts it as kept nowhere', (_case, change) => {
+    const storage = memoryStorage();
+    applyOpenedDesign(openedReport(150), 'horn.cfg');
+    expect(writeAutosave(storage)).toBe(true);
+    const record = { ...JSON.parse(storage.values.get(AUTOSAVE_KEY)!), ...change };
+    storage.values.set(AUTOSAVE_KEY, JSON.stringify(record));
+
+    expect(restart(storage)).toBe(true);
+
+    expect(useDesignStore.getState().design.R).toBe(150);
+    expect(useDocumentStore.getState()).toMatchObject({ designName: 'horn', openedContentKey: null });
+    expect(replacingWouldLoseNow()).toBe(true);
   });
 });

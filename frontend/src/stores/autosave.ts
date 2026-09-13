@@ -1,4 +1,5 @@
 import { useDesignStore, type DesignDocument } from './design';
+import { DESIGN_CONTENT_KEY_VERSION } from './designContentKey';
 import { durableSettings, namespaceStorage } from './durableSettings';
 import { designNameFromFilename } from './designName';
 import {
@@ -28,6 +29,15 @@ interface AutosaveRecord {
   savedSettings?: string | null;
   identity?: DesignIdentity | null;
   classification?: CadLinkClassification | null;
+  /**
+   * The document's `openedContentKey` when the draft was written: the content
+   * WG last opened or wrote somewhere it can be had back from. Stored beside
+   * the draft, never computed from it. Absent in drafts written before it was
+   * kept, and such a draft counts as kept nowhere.
+   */
+  openedContentKey?: string | null;
+  /** The key format `openedContentKey` was written under (`DESIGN_CONTENT_KEY_VERSION`). */
+  contentKeyVersion?: string;
   design: DesignDocument;
 }
 
@@ -74,11 +84,25 @@ function hasValidCadLink(record: AutosaveRecord): boolean {
     && (record.classification === undefined || record.classification === null || isClassification(record.classification));
 }
 
+/**
+ * The remembered-copy key the record stored, or null. A key written under
+ * another format, or none at all, cannot be compared with one computed now,
+ * so it keeps nothing -- while the draft beside it still restores.
+ */
+function storedOpenedContentKey(record: AutosaveRecord): string | null {
+  const key = record.openedContentKey;
+  return record.contentKeyVersion === DESIGN_CONTENT_KEY_VERSION
+    && typeof key === 'string'
+    && key.startsWith(`${DESIGN_CONTENT_KEY_VERSION}:`)
+    ? key
+    : null;
+}
+
 export function writeAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
   const { design, designRevision } = useDesignStore.getState();
   const {
-    designName, filename, savedRevision, savedDesignName, savedSettings, identity, classification,
+    designName, filename, savedRevision, savedDesignName, savedSettings, openedContentKey, identity, classification,
   } = useDocumentStore.getState();
   const record: AutosaveRecord = {
     version: 1,
@@ -91,6 +115,8 @@ export function writeAutosave(storage: DraftStorage | null = defaultStorage()): 
     savedSettings,
     identity: identity ? { ...identity } : null,
     classification,
+    openedContentKey,
+    contentKeyVersion: DESIGN_CONTENT_KEY_VERSION,
     design: structuredClone(design),
   };
   try {
@@ -103,7 +129,12 @@ export function writeAutosave(storage: DraftStorage | null = defaultStorage()): 
 
 /** Restore the most recent local draft before React mounts. Autosave is crash
  * recovery, not opening a new file baseline, so the stored savedRevision is
- * retained and the unsaved indicator remains accurate after restart. */
+ * retained and the unsaved indicator remains accurate after restart.
+ *
+ * The same goes for the replacement check: the remembered-copy key is the one
+ * the record stored beside the draft, so a draft still equal to what was last
+ * opened or written stays kept after a restart, and an edited one does not.
+ * No key is ever derived from the draft itself. */
 export function restoreAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
   let raw: string | null;
@@ -129,6 +160,7 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
       savedDesignName: typeof record.savedDesignName === 'string' ? record.savedDesignName : undefined,
       savedRevision: record.savedRevision,
       savedSettings: typeof record.savedSettings === 'string' ? record.savedSettings : null,
+      openedContentKey: storedOpenedContentKey(record),
       identity: record.identity ? { ...record.identity } : null,
       classification: record.classification ?? null,
     });
@@ -191,6 +223,9 @@ export function startAutosave(
       || state.filename !== previous.filename
       || state.savedRevision !== previous.savedRevision
       || state.savedSettings !== previous.savedSettings
+      // Export a copy and Send to CAD change only this: the draft must record
+      // the copy they wrote, or a restart forgets it.
+      || state.openedContentKey !== previous.openedContentKey
       || state.identity !== previous.identity
       || state.classification !== previous.classification) schedule();
   });

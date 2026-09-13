@@ -49,8 +49,9 @@ export interface DocumentState {
    * to. Null when there is no such copy.
    *
    * One of the things a replacement check counts as "kept elsewhere" (see
-   * `design/replacementCheck.ts`). A restored autosave draft never gets one:
-   * the draft is the only copy of whatever it holds.
+   * `design/replacementCheck.ts`). Autosave records it beside the draft and
+   * restores that recorded key; it never derives one from the draft, which is
+   * the only copy of whatever it holds.
    */
   openedContentKey: string | null;
   identity: DesignIdentity | null;
@@ -62,7 +63,7 @@ export interface DocumentState {
   adoptSavedIdentity: (identity: DesignIdentity) => void;
   restoreDocumentState: (
     state: Pick<DocumentState, 'savedRevision' | 'identity' | 'classification'>
-      & Partial<Pick<DocumentState, 'designName' | 'savedSettings' | 'savedDesignName'>>,
+      & Partial<Pick<DocumentState, 'designName' | 'savedSettings' | 'savedDesignName' | 'openedContentKey'>>,
   ) => void;
 }
 
@@ -107,7 +108,9 @@ export const useDocumentStore = create<DocumentState>((set) => ({
   setOpenedContentKey: (openedContentKey) => set({ openedContentKey }),
   setCadLink: (identity, classification) => set({ identity, classification }),
   adoptSavedIdentity: (identity) => set({ identity, classification: 'current' }),
-  restoreDocumentState: ({ designName, savedRevision, savedSettings, savedDesignName, identity, classification }) => {
+  restoreDocumentState: ({
+    designName, savedRevision, savedSettings, savedDesignName, openedContentKey, identity, classification,
+  }) => {
     const name = normalizeDesignName(designName);
     set({
       designName: name,
@@ -115,9 +118,10 @@ export const useDocumentStore = create<DocumentState>((set) => ({
       savedRevision,
       savedDesignName: normalizeDesignName(savedDesignName ?? name),
       savedSettings: savedSettings ?? null,
-      // Never derived from the draft being restored: a draft is the only copy
-      // of what it holds, so it counts as kept nowhere.
-      openedContentKey: null,
+      // Only ever the key the caller recorded beside the draft, never one
+      // derived from the draft being restored: a draft is the only copy of
+      // what it holds. Without a recorded key it counts as kept nowhere.
+      openedContentKey: openedContentKey ?? null,
       identity,
       classification,
     });

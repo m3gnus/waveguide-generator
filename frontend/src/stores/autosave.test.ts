@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTOSAVE_KEY, restoreAutosave, restoreAutosaveWithLateRetry, startAutosave, writeAutosave } from './autosave';
 import { resetDesignStore, seedDesign, useDesignStore } from './design';
+import { DESIGN_CONTENT_KEY_VERSION } from './designContentKey';
 import { resetDocumentStore, useDocumentStore } from './document';
 
 describe('design autosave', () => {
@@ -44,6 +45,52 @@ describe('design autosave', () => {
       identity: { baseEditVersion: 7 },
       classification: 'stale_copy',
     });
+  });
+
+  it('records the remembered-copy key and its format beside the draft, not in it', () => {
+    useDesignStore.getState().updateField('R', 177);
+    useDocumentStore.getState().setOpenedContentKey(`${DESIGN_CONTENT_KEY_VERSION}:opened`);
+    expect(writeAutosave()).toBe(true);
+
+    const record = JSON.parse(localStorage.getItem(AUTOSAVE_KEY)!);
+    expect(record).toMatchObject({
+      openedContentKey: `${DESIGN_CONTENT_KEY_VERSION}:opened`,
+      contentKeyVersion: DESIGN_CONTENT_KEY_VERSION,
+    });
+    expect(record.design).not.toHaveProperty('openedContentKey');
+
+    resetDesignStore();
+    resetDocumentStore();
+    expect(restoreAutosave()).toBe(true);
+    expect(useDocumentStore.getState().openedContentKey).toBe(`${DESIGN_CONTENT_KEY_VERSION}:opened`);
+  });
+
+  it('restores a draft written before the remembered-copy key with none', () => {
+    useDesignStore.getState().updateField('R', 177);
+    useDocumentStore.getState().setOpenedContentKey(`${DESIGN_CONTENT_KEY_VERSION}:opened`);
+    expect(writeAutosave()).toBe(true);
+    const legacy = JSON.parse(localStorage.getItem(AUTOSAVE_KEY)!);
+    delete legacy.openedContentKey;
+    delete legacy.contentKeyVersion;
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(legacy));
+
+    resetDesignStore();
+    expect(restoreAutosave()).toBe(true);
+    expect(useDesignStore.getState().design.R).toBe(177);
+    expect(useDocumentStore.getState().openedContentKey).toBeNull();
+  });
+
+  it('rewrites the draft when only the remembered copy changes', () => {
+    vi.useFakeTimers();
+    const controller = startAutosave(localStorage, 250, window, document);
+    // What Export a copy or a successful Send to CAD does to the document.
+    useDocumentStore.getState().setOpenedContentKey(`${DESIGN_CONTENT_KEY_VERSION}:exported`);
+    vi.advanceTimersByTime(250);
+
+    expect(localStorage.getItem(AUTOSAVE_KEY)).not.toBeNull();
+    expect(JSON.parse(localStorage.getItem(AUTOSAVE_KEY)!).openedContentKey)
+      .toBe(`${DESIGN_CONTENT_KEY_VERSION}:exported`);
+    controller.dispose();
   });
 
   it('restores a version-1 draft written before identity was added as unlinked', () => {
