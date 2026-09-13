@@ -62,6 +62,7 @@ from server.jobs.runtime import (
 from server.jobs.store import JobStore, SubmissionConflictError
 from server.engines.registry import EngineRegistry
 from server.platform.origin import websocket_request_allowed
+from server.updates.restart import UPDATE_RESTART_PENDING, RestartApproval
 
 
 def _json_tokens(value: Any) -> Iterator[str]:
@@ -298,14 +299,37 @@ class _JobsContractRoute(APIRoute):
 
 
 def create_jobs_router(
-    runtime: JobRuntime, *, extra_ws_origins: Collection[str] = ()
+    runtime: JobRuntime,
+    *,
+    extra_ws_origins: Collection[str] = (),
+    restart_approval: RestartApproval | None = None,
 ) -> APIRouter:
     """Build bound routes with v1 error mappings and response shapes.
 
     Route coverage follows v1 ``server/api/routes_simulation.py:69-297``.
+
+    ``restart_approval`` is the server's restart-approved latch
+    (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.2). While it is set,
+    the two routes that start a job -- ``POST /api/solve`` and
+    ``POST /api/jobs/{job_id}/retry`` -- refuse with HTTP 409. Every other
+    route here reads, or acts on a job that already exists within its own
+    request, so they stay open.
     """
 
     router = APIRouter(route_class=_JobsContractRoute)
+
+    def restart_refusal(client_request_id: str | None = None) -> JSONResponse | None:
+        message = restart_approval.refusal() if restart_approval is not None else None
+        if message is None:
+            return None
+        return _error_response(
+            409,
+            code=UPDATE_RESTART_PENDING,
+            stage="submission",
+            message=message,
+            retryable=True,
+            client_request_id=client_request_id,
+        )
     router.add_event_handler("startup", runtime.start)
     router.add_event_handler("shutdown", runtime.shutdown)
 
@@ -376,12 +400,18 @@ def create_jobs_router(
         response_model=SolveAccepted,
         response_model_exclude_none=True,
         responses={
-            409: {"model": ErrorEnvelope, "description": "Submission key conflict"},
+            409: {
+                "model": ErrorEnvelope,
+                "description": "Submission key conflict, or an update restart is pending",
+            },
             422: {"model": ErrorEnvelope, "description": "Solve request refused"},
             503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
         },
     )
     async def submit_solve(body: SolveRequest) -> SolveAccepted | JSONResponse:
+        refused = restart_refusal(body.client_request_id)
+        if refused is not None:
+            return refused
         try:
             job_id = await runtime.submit(body)
         except UnknownEngineError as exc:
@@ -439,8 +469,17 @@ def create_jobs_router(
         except JobConflictError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @router.post("/api/jobs/{job_id}/retry", response_model=SolveAccepted)
-    async def retry_job(job_id: str) -> SolveAccepted:
+    @router.post(
+        "/api/jobs/{job_id}/retry",
+        response_model=SolveAccepted,
+        responses={
+            409: {"model": ErrorEnvelope, "description": "An update restart is pending"},
+        },
+    )
+    async def retry_job(job_id: str) -> SolveAccepted | JSONResponse:
+        refused = restart_refusal()
+        if refused is not None:
+            return refused
         try:
             return SolveAccepted(job_id=await runtime.retry(job_id))
         except JobNotFoundError as exc:
@@ -811,6 +850,7 @@ def mount_jobs(
     engine_registry: EngineRegistry | None = None,
     *,
     extra_ws_origins: Collection[str] = (),
+    restart_approval: RestartApproval | None = None,
 ) -> JobRuntime:
     """Attach one data-dir-bound runtime before the frontend catch-all mount."""
 
@@ -822,7 +862,11 @@ def mount_jobs(
     )
     application.state.jobs_runtime = runtime
     application.include_router(
-        create_jobs_router(runtime, extra_ws_origins=extra_ws_origins)
+        create_jobs_router(
+            runtime,
+            extra_ws_origins=extra_ws_origins,
+            restart_approval=restart_approval,
+        )
     )
     return runtime
 

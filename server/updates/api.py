@@ -6,9 +6,12 @@ import asyncio
 from pathlib import Path
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 
+from server.integration.contracts import error_envelope
 from server.settings.store import SettingsStore
 
+from .restart import UPDATE_RESTART_PENDING, RestartApproval
 from .service import UpdateChannelUnavailable, UpdateInstallUnavailable, UpdateService
 
 
@@ -21,13 +24,22 @@ def mount_updates(
     update_request_path: Path | None = None,
     service: UpdateService | None = None,
     settings: SettingsStore | None = None,
+    restart_approval: RestartApproval | None = None,
 ) -> UpdateService:
+    """Attach the update routes.
+
+    ``restart_approval`` is the server's restart-approved latch (contract
+    §4.2), shared with the job routes. A supplied ``service`` already owns one,
+    and that one is used.
+    """
+
     update_service = service or UpdateService(
         running_version=running_version,
         data_dir=data_dir,
         repo_root=repo_root,
         update_request_path=update_request_path,
         settings=settings,
+        restart_approval=restart_approval,
     )
     application.state.update_service = update_service
 
@@ -77,6 +89,22 @@ def mount_updates(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="The update confirmation header is missing.",
+            )
+        # A restart is already approved, so another installation would stage
+        # or hand off under one that is about to happen (contract §4.2). The
+        # envelope's ``detail`` is the message, which is all the update dialog
+        # reads. A service without a latch has approved nothing.
+        approval = getattr(update_service, "restart_approval", None)
+        refusal = approval.refusal() if approval is not None else None
+        if refusal is not None:
+            return JSONResponse(  # type: ignore[return-value]
+                status_code=status.HTTP_409_CONFLICT,
+                content=error_envelope(
+                    code=UPDATE_RESTART_PENDING,
+                    stage="submission",
+                    message=refusal,
+                    retryable=True,
+                ),
             )
         try:
             return await asyncio.to_thread(update_service.request_install)

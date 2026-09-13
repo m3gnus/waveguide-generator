@@ -29,8 +29,10 @@ from scripts.frontend_freshness import (
     installer_hint,
     refresh_hint,
 )
+from launch.serve_options import UPDATE_RELEASED_FILENAME
 from server.platform.instance import requested_port
 from server.platform.paths import app_root, resolve_data_dir
+from .healthy_start import BundlePaths, HealthyStartSettlement, Report, resolve_bundle_paths
 from .updater import (
     BundleUpdateRequest,
     UpdateHandoffError,
@@ -92,6 +94,20 @@ class StatusSnapshot:
     @property
     def running(self) -> bool:
         return self.pid is not None and self.exit_code is None
+
+
+def frontend_ready(snapshot: StatusSnapshot) -> bool:
+    """Whether the interface is being served: the evidence of a healthy start.
+
+    WARNING is an interface served from a stale build. The status window shows
+    that as a yellow lamp beside its "Open in browser" button; it is still a
+    served interface, and requiring OK instead left a perfectly good update
+    holding its rollback material for good. The desktop window waits on exactly
+    this, and the controller settles an update transaction on it
+    (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5).
+    """
+
+    return snapshot.frontend.state in {ServiceState.OK, ServiceState.WARNING}
 
 
 RequestProbe = Callable[[str, float], tuple[int, bytes]]
@@ -320,6 +336,7 @@ class StatusController:
         adopted_probe_interval: float = ADOPTED_PROBE_INTERVAL,
         adopted_retry_delay: float = ADOPTED_RETRY_DELAY,
         clock: Callable[[], float] = time.monotonic,
+        settle_on_ready: bool = True,
     ) -> None:
         self.environ = dict(os.environ if environ is None else environ)
         self.repo_root = Path(repo_root or app_root(environ=self.environ)).resolve()
@@ -343,6 +360,14 @@ class StatusController:
         self.adopted_probe_interval = adopted_probe_interval
         self.adopted_retry_delay = adopted_retry_delay
         self.clock = clock
+        #: Settle an update transaction on the first ready poll (contract
+        #: §4.5). Browser mode relies on it; the desktop window turns it off
+        #: and asks itself, once its native event loop is running.
+        self.settle_on_ready = settle_on_ready
+        # Asked at settle time, so the paths are the ones this controller has
+        # then, and so a caller can replace ``bundle_paths``.
+        self._healthy_start = HealthyStartSettlement(lambda: self.bundle_paths())
+        self._settle_attempted = False
 
         self._lock = threading.RLock()
         self._process: subprocess.Popen[str] | None = None
@@ -396,6 +421,38 @@ class StatusController:
     @property
     def logs_dir(self) -> Path:
         return self._data_dir() / "logs"
+
+    def bundle_paths(self) -> BundlePaths | None:
+        """This installation's bundle, resources and data directory; ``None`` for a checkout."""
+
+        try:
+            data_dir = self._data_dir()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+        return resolve_bundle_paths(self.environ, self.repo_root, data_dir)
+
+    def settle_update_transaction(
+        self, snapshot: StatusSnapshot, *, report: Report | None = None
+    ) -> bool:
+        """Settle this start's update transaction on ``snapshot``, once.
+
+        ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5, for the window
+        and browser modes: ``commit_transaction`` and the healthy-start cleanup
+        scoped to the committed transaction, on a snapshot that satisfies
+        :func:`frontend_ready`. A snapshot that does not is declined, and
+        ``update.log`` says which lamps it showed and which transaction stays
+        open. ``report`` puts a failed macOS re-seal in front of the user; the
+        desktop window passes its own bundle reporter. Returns whether the
+        transaction is settled.
+        """
+
+        return self._healthy_start.settle(
+            ready=frontend_ready(snapshot),
+            evidence=(
+                f"backend {snapshot.backend.state.name}, frontend {snapshot.frontend.state.name}"
+            ),
+            report=report,
+        )
 
     def open_logs_folder(self) -> Path:
         """Show the logs in the platform's file manager.
@@ -885,7 +942,21 @@ class StatusController:
                 pid=None if observing_existing else process.pid,
                 exit_code=2 if observing_existing else None,
             )
-            return self._snapshot
+            snapshot = self._snapshot
+            # The first snapshot that satisfies the frontend-ready predicate is
+            # the evidence of a healthy start (contract §4.5), in browser mode
+            # as in the window, which waits on the same predicate.
+            settle = (
+                self.settle_on_ready
+                and not self._settle_attempted
+                and frontend_ready(snapshot)
+            )
+            if settle:
+                self._settle_attempted = True
+        if settle:
+            # Outside the lock: settling is file work, and on macOS a re-seal.
+            self.settle_update_transaction(snapshot)
+        return snapshot
 
     @staticmethod
     def _is_adopted(snapshot: StatusSnapshot) -> bool:
@@ -1067,7 +1138,38 @@ class StatusController:
             # restarted child starts with its own buffer (see ``start()``).
             with self._output_lock:
                 self._output.append(str(exc))
+            if not path.exists():
+                # Discarded rather than handed off. The server latched "restart
+                # approved" as it wrote the request, and no restart is coming
+                # now (contract §4.2). A request still on disk is read again on
+                # the next tick, so that server stays latched.
+                self.release_update_restart(str(exc))
             return None
+
+    def release_update_restart(self, reason: str) -> bool:
+        """Tell the owned server that no handoff is pending, so it clears its latch.
+
+        ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.2: a server must
+        never stay latched with no handoff pending. The notice is a file in the
+        status control directory, beside the stop file the server already
+        watches (``UPDATE_RELEASED_FILENAME``). Returns whether it was written.
+        With no owned server running there is nobody to tell, and a server that
+        is started again starts unlatched.
+        """
+
+        with self._lock:
+            control_path = self._control_path
+            process = self._process
+        if control_path is None or process is None or process.poll() is not None:
+            return False
+        notice = control_path.with_name(UPDATE_RELEASED_FILENAME)
+        temporary = notice.with_name(f".{notice.name}.tmp")
+        try:
+            temporary.write_text(json.dumps({"reason": reason}) + "\n", encoding="utf-8")
+            temporary.replace(notice)
+        except OSError:
+            return False
+        return True
 
     def launch_update(self, request: UpdateRequest) -> None:
         """Start the independent updater before this status owner shuts down."""

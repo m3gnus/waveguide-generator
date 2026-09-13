@@ -16,7 +16,13 @@ import pytest
 
 from launchers import apply_update as apply_update_module
 from launchers import desktop
-from launchers.statusapp.controller import LampStatus, ServiceState, StatusSnapshot
+from launchers.statusapp import healthy_start
+from launchers.statusapp.controller import (
+    LampStatus,
+    ServiceState,
+    StatusController,
+    StatusSnapshot,
+)
 from launchers.statusapp.updater import (
     BundleUpdateRequest,
     UpdateHandoffError,
@@ -76,6 +82,26 @@ class StubController:
     #: controller answers this with a thread parked in ``Popen.wait()``; a test
     #: calls the callback directly to stand in for the child dying.
     watchers: list[Callable[[StatusSnapshot], None]] = field(default_factory=list)
+    #: Every reason the window gave the server for calling off its restart.
+    released: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # The real healthy-start settlement over this stub's paths: the window
+        # delegates its commit and cleanup to the controller (contract §4.5).
+        self._healthy_start = healthy_start.HealthyStartSettlement(lambda: self.bundle_paths())
+
+    settle_update_transaction = StatusController.settle_update_transaction
+
+    def bundle_paths(self) -> healthy_start.BundlePaths | None:
+        return healthy_start.resolve_bundle_paths(
+            getattr(self, "environ", {}),
+            getattr(self, "repo_root", "."),
+            getattr(self, "data_dir", "."),
+        )
+
+    def release_update_restart(self, reason: str) -> bool:
+        self.released.append(reason)
+        return True
 
     @property
     def url(self) -> str:
@@ -307,7 +333,7 @@ def test_linux_opens_the_native_window_when_qt_answers(monkeypatch: pytest.Monke
     )
     windows: list[StubController] = []
     monkeypatch.setattr(
-        desktop, "StatusController", lambda *, server_args: windows.append(server_args) or controller
+        desktop, "StatusController", lambda *, server_args, **_kwargs: windows.append(server_args) or controller
     )
 
     assert desktop.main(["--port", "3199"]) == 0
@@ -401,7 +427,7 @@ def test_the_linux_check_is_skipped_when_the_user_has_chosen_a_backend(
         raise AssertionError("a chosen backend must not be probed for Qt")
 
     monkeypatch.setattr(desktop, "_linux_window_blocker", _must_not_probe)
-    monkeypatch.setattr(desktop, "StatusController", lambda *, server_args: controller)
+    monkeypatch.setattr(desktop, "StatusController", lambda *, server_args, **_kwargs: controller)
 
     assert desktop.main([]) == 0
     # ...and pywebview is left to honour the variable itself.
@@ -883,8 +909,8 @@ def test_a_stale_frontend_still_counts_as_a_healthy_start_for_cleanup(
         exit_code=None,
     )
     window = desktop.DesktopWindow(StubController(poll_snapshot=stale_start), **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
-    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
-    monkeypatch.setattr(desktop, "repair_bundle", lambda *a, **k: None)
+    monkeypatch.setattr(window.controller, "bundle_paths", lambda: (bundle, bundle, data))
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *a, **k: None)
 
     window._finish_healthy_bundle_update(stale_start)
 
@@ -911,7 +937,7 @@ def test_declining_to_clean_says_so_in_the_update_log(
         exit_code=None,
     )
     window = desktop.DesktopWindow(StubController(poll_snapshot=not_serving), **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
-    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
+    monkeypatch.setattr(window.controller, "bundle_paths", lambda: (bundle, bundle, data))
 
     window._finish_healthy_bundle_update(not_serving)
 
@@ -948,8 +974,8 @@ def test_the_cleanup_guard_is_never_stricter_than_the_loop_that_calls_it(
     )
     window = desktop.DesktopWindow(StubController(poll_snapshot=serving), **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
     assert window._frontend_ready(serving) is True
-    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
-    monkeypatch.setattr(desktop, "repair_bundle", lambda *a, **k: None)
+    monkeypatch.setattr(window.controller, "bundle_paths", lambda: (bundle, bundle, data))
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *a, **k: None)
 
     window._finish_healthy_bundle_update(serving)
 
@@ -1132,7 +1158,7 @@ def test_first_healthy_bundle_start_removes_previous_layers_and_resigns(
     monkeypatch.setitem(sys.modules, "webview", webview)
     repaired: list[Path] = []
     monkeypatch.setattr(
-        desktop,
+        healthy_start,
         "repair_bundle",
         lambda bundle, **_kwargs: repaired.append(bundle),
     )
@@ -1253,7 +1279,7 @@ def test_macos_cleanup_sign_failure_restores_rollback_material(
         if repair_calls == 1:
             raise desktop.ApplyUpdateError("injected verification failure")
 
-    monkeypatch.setattr(desktop, "repair_bundle", repair)
+    monkeypatch.setattr(healthy_start, "repair_bundle", repair)
     reported: list[str] = []
     shown: list[str] = []
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
@@ -1341,6 +1367,9 @@ def test_second_bundle_update_with_pending_previous_stays_visible_and_running(
 
     assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
     assert controller.launched == []
+    # The request was consumed and not handed off, so the server that wrote it
+    # must be told to clear its restart latch (contract §4.2).
+    assert controller.released, "a consumed request that was refused left the server latched"
     assert controller.closes == 1
     assert window.destroyed == 0
     assert "rollback material from an earlier update" in reported[0]
@@ -1835,7 +1864,7 @@ def test_linux_pins_the_qt_platform_before_the_probe_reads_it(
     monkeypatch.setattr(
         desktop.DesktopWindow, "_name_linux_application", lambda self: None
     )
-    monkeypatch.setattr(desktop, "StatusController", lambda *, server_args: controller)
+    monkeypatch.setattr(desktop, "StatusController", lambda *, server_args, **_kwargs: controller)
 
     seen: list[str | None] = []
 
@@ -1952,7 +1981,7 @@ def test_the_help_names_the_mode_the_installed_command_actually_takes(
     monkeypatch.setattr(
         desktop.DesktopWindow, "_name_linux_application", lambda self: None
     )
-    monkeypatch.setattr(desktop, "StatusController", lambda *, server_args: controller)
+    monkeypatch.setattr(desktop, "StatusController", lambda *, server_args, **_kwargs: controller)
 
     assert desktop.main([]) == 0
     assert created, "no display flag must open the window the help calls the default"

@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 import os
 from pathlib import Path
-import shutil
 import signal
 import subprocess
 import sys
@@ -26,21 +25,26 @@ from launchers.statusapp.__main__ import (
     _show_startup_failure_dialog,
     parse_arguments,
 )
-from launchers.statusapp.controller import ServiceState, StatusController, StatusSnapshot
+from launchers.statusapp.controller import (
+    ServiceState,
+    StatusController,
+    StatusSnapshot,
+    frontend_ready,
+)
+from launchers.statusapp.healthy_start import (
+    cleanup_holding_directory,
+    previous_generation_paths,
+    resolve_bundle_paths,
+)
 from launchers.macoswindow import install_custom_frame as install_macos_frame
 from launchers.windowframe import enable_non_client_regions, install_custom_frame
 from launchers.apply_update import (
     ApplyUpdateError,
     append_update_log,
     begin_rollback_transaction,
-    bundle_from_app_layer,
-    cleanup_previous_layers,
-    commit_transaction,
     layer_runtime_ids,
-    reclaim_committed_staging,
     recover_transaction,
     repair_bundle,
-    resources_directory,
     restore_previous_generation,
     rollback_previous_layers,
 )
@@ -596,7 +600,6 @@ class DesktopWindow:
         #: explain it.
         self._custom_frame: object | None = None
         self._hwnd: int | None = None
-        self._healthy_bundle_checked = False
         self._startup_snapshot: StatusSnapshot | None = None
         self._exit_code = 0
         self._backend_loss_reported = False
@@ -609,217 +612,42 @@ class DesktopWindow:
         if environment.get("WG2_BUNDLE") != "1":
             return None
         try:
-            app_layer = Path(getattr(self.controller, "repo_root")).resolve()
-            bundle = bundle_from_app_layer(app_layer, sys.platform)
-            data_dir = Path(getattr(self.controller, "data_dir")).resolve()
-        except (ApplyUpdateError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            app_layer = getattr(self.controller, "repo_root")
+            data_dir = getattr(self.controller, "data_dir")
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return None
-        return bundle, resources_directory(bundle, sys.platform), data_dir
+        return resolve_bundle_paths(environment, app_layer, data_dir)
 
     @staticmethod
     def _previous_generation_paths(resources: Path) -> list[Path]:
         """Return layer and launcher backups that belong to one pending update."""
 
-        paths = [
-            path
-            for name in ("app.previous", "runtime.previous")
-            if ((path := resources / name).exists() or path.is_symlink())
-        ]
-        paths.extend(
-            path
-            for path in sorted(resources.glob("*.previous"))
-            if path not in paths and (path.is_file() or path.is_symlink())
-        )
-        return paths
+        return previous_generation_paths(resources)
 
     def _finish_healthy_bundle_update(self, snapshot: StatusSnapshot) -> None:
-        # Exactly the predicate _wait_for_frontend loops on, and deliberately
-        # not a stricter one. This runs on the single snapshot that ended that
-        # loop, so any extra condition here is a condition the loop never
-        # promised to satisfy -- and the failure is silent, because a skipped
-        # cleanup logs nothing at all. Requiring the frontend lamp to be OK
-        # rather than OK-or-WARNING left a perfectly good update holding both
-        # .previous layers and its downloaded archives for good: 1.08 GB
-        # against 0.56 GB swept, on a bundle whose only fault was a dist whose
-        # timestamps looked older than its sources. Requiring the backend lamp
-        # to be OK as well, which is the shape this had while that was being
-        # fixed, reintroduced the same silence from the other side.
-        if self._healthy_bundle_checked:
-            return
-        paths = self._bundle_paths()
-        if paths is None:
-            return
-        bundle, resources, data_dir = paths
+        """Settle this start's update transaction, through the controller.
 
-        def log(message: str) -> None:
-            append_update_log(data_dir, message)
+        ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5. The commit and
+        the scoped cleanup are the controller's (``healthy_start.py``), so the
+        window, browser mode and ``--no-gui`` write the same ``update.log``
+        lines; this only decides when to ask.
 
-        # Say so when it declines. Both times this broke, the whole symptom was
-        # a gigabyte that never came back and an update.log that stopped after
-        # "Relaunched" -- there was nothing to search for. A refusal that
-        # names the two lamps turns the third occurrence into one grep.
-        if not self._frontend_ready(snapshot):
-            log(
-                "Not reclaiming the previous layers yet: backend "
-                f"{snapshot.backend.state.name}, frontend {snapshot.frontend.state.name}."
-            )
-            return
-        # A healthy interface is the only evidence that an update worked, and
-        # this is the only place that has it. Close the transaction here, and
-        # refuse to reclaim anything while one is still open: a ``.previous``
-        # removed under an undecided transaction is the rollback material for a
-        # failure nobody has ruled out yet.
-        committed, commit_detail = commit_transaction(data_dir, resources=resources, log=log)
-        if not committed:
-            log(f"Not reclaiming the previous layers: {commit_detail}.")
-            return
-        self._healthy_bundle_checked = True
-        if commit_detail.startswith("update transaction"):
-            log(f"Healthy start: {commit_detail}.")
+        ``snapshot`` is the one that ended ``_wait_for_frontend``: the first
+        that satisfied the frontend-ready predicate, and deliberately nothing
+        stricter. An extra condition would be one that loop never promised to
+        satisfy, and both times that happened the cleanup was silently skipped
+        -- a gigabyte of rollback material and downloads that never came back.
+        The window asks only once pywebview's native event loop is running, or
+        once the browser fallback has opened, because HTTP readiness alone is
+        not enough to discard rollback material; ``main`` builds its controller
+        with ``settle_on_ready=False`` so the controller waits for this call.
+        """
 
-        previous = self._previous_generation_paths(resources)
-        if sys.platform == "darwin":
-            if not previous:
-                # Nothing to reseal around. A start that stopped part-way
-                # through this cleanup may still have left the committed
-                # transaction's staging; its completion record says so.
-                reclaim_committed_staging(data_dir, resources, log=log)
-                return
-            self._finish_healthy_macos_update(bundle, resources, data_dir, previous)
-            return
-
-        # ``.failed`` is the trail a rollback leaves: Windows would not let the
-        # helper delete a directory whose DLLs were still mapped, so the
-        # deletion was deferred to exactly here, where nothing holds them and
-        # the download that produced them is equally spent.
-        had_previous = any(
-            (resources / f"{name}{suffix}").exists()
-            for name in ("app", "runtime")
-            for suffix in (".previous", ".failed")
-        )
-        try:
-            cleanup_previous_layers(resources, log=log)
-        except OSError as exc:
-            log(f"Could not remove healthy-start rollback layers: {exc}")
-        finally:
-            if had_previous:
-                repair_bundle(bundle, platform_name=sys.platform, log=log)
-            # The staged layers moved into the bundle; what is left of the
-            # committed transaction's staging is its downloaded archives (the
-            # runtime zip alone is well over 100 MB). Only that transaction's
-            # own folders go: <data>/updates is shared with other transactions
-            # and other installations, so it is never removed whole.
-            reclaim_committed_staging(data_dir, resources, log=log)
+        self.controller.settle_update_transaction(snapshot, report=self._report_bundle_failure)
 
     @staticmethod
     def _cleanup_holding_directory(bundle: Path) -> Path:
-        return bundle.with_name(f".{bundle.name}.update-rollback")
-
-    @staticmethod
-    def _restore_held_previous(
-        holding: Path,
-        moved: list[tuple[Path, Path]],
-    ) -> list[str]:
-        errors: list[str] = []
-        for original, saved in reversed(moved):
-            try:
-                if (saved.exists() or saved.is_symlink()) and not (
-                    original.exists() or original.is_symlink()
-                ):
-                    os.replace(saved, original)
-            except OSError as exc:
-                errors.append(f"{original}: {exc}")
-        try:
-            holding.rmdir()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            if holding.exists():
-                errors.append(f"{holding}: {exc}")
-        return errors
-
-    def _finish_healthy_macos_update(
-        self,
-        bundle: Path,
-        resources: Path,
-        data_dir: Path,
-        previous: list[Path],
-    ) -> None:
-        """Remove sealed rollback content only around a required sign/verify."""
-
-        def log(message: str) -> None:
-            append_update_log(data_dir, message)
-
-        holding = self._cleanup_holding_directory(bundle)
-        if holding.exists() or holding.is_symlink():
-            message = (
-                f"Waveguide Generator could not finish update cleanup because recovery material "
-                f"already exists at {holding}. The current version remains open and rollback "
-                "material was retained."
-            )
-            log(message)
-            self._report_bundle_failure(message)
-            return
-
-        moved: list[tuple[Path, Path]] = []
-        try:
-            holding.mkdir()
-            for original in previous:
-                saved = holding / original.name
-                os.replace(original, saved)
-                moved.append((original, saved))
-        except OSError as exc:
-            restore_errors = self._restore_held_previous(holding, moved)
-            if moved and not restore_errors:
-                try:
-                    repair_bundle(bundle, platform_name="darwin", log=log)
-                except ApplyUpdateError as repair_exc:
-                    restore_errors.append(str(repair_exc))
-            detail = "; ".join(restore_errors) if restore_errors else "rollback material restored"
-            message = (
-                f"Waveguide Generator could not stage healthy-update cleanup: {exc}. "
-                f"Recovery result: {detail}."
-            )
-            log(message)
-            self._report_bundle_failure(message)
-            return
-        try:
-            repair_bundle(bundle, platform_name="darwin", log=log)
-        except ApplyUpdateError as exc:
-            restore_errors = self._restore_held_previous(holding, moved)
-            repair_error: ApplyUpdateError | None = None
-            if not restore_errors:
-                try:
-                    repair_bundle(bundle, platform_name="darwin", log=log)
-                except ApplyUpdateError as restored_exc:
-                    repair_error = restored_exc
-            if restore_errors:
-                outcome = "Rollback material could not be fully restored: " + "; ".join(
-                    restore_errors
-                )
-            elif repair_error is not None:
-                outcome = (
-                    "Rollback material was restored, but the restored bundle also failed "
-                    f"signature verification: {repair_error}"
-                )
-            else:
-                outcome = "Rollback material was restored and the current version remains open."
-            message = f"Waveguide Generator could not verify healthy-update cleanup: {exc}. {outcome}"
-            log(message)
-            self._report_bundle_failure(message)
-            return
-
-        try:
-            shutil.rmtree(holding)
-        except OSError as exc:
-            # The holding directory is outside the signed bundle. Failure to
-            # remove it wastes space but cannot invalidate the verified app.
-            log(f"Could not remove obsolete update rollback material {holding}: {exc}")
-        for original in previous:
-            kind = "layer" if original.name in {"app.previous", "runtime.previous"} else "launcher file"
-            log(f"Removed healthy-start rollback {kind}: {original}")
-        # Only the committed transaction's own staging, as on the other path.
-        reclaim_committed_staging(data_dir, resources, log=log)
+        return cleanup_holding_directory(bundle)
 
     @staticmethod
     def _report_bundle_failure(message: str, *, detail: str | None = None) -> None:
@@ -1113,10 +941,11 @@ class DesktopWindow:
 
     @staticmethod
     def _frontend_ready(snapshot: StatusSnapshot) -> bool:
-        # WARNING is an interface that is being served from a stale build. The
-        # status window shows that as a yellow lamp beside its "Open in browser"
-        # button; the desktop window has no lamps, so it shows the interface.
-        return snapshot.frontend.state in {ServiceState.OK, ServiceState.WARNING}
+        # The controller's own predicate, so the window waits on exactly the
+        # evidence an update transaction is settled on. WARNING, a stale build
+        # being served, counts: the desktop window has no lamps, so it shows the
+        # interface.
+        return frontend_ready(snapshot)
 
     @staticmethod
     def _startup_failed(snapshot: StatusSnapshot) -> bool:
@@ -1629,6 +1458,11 @@ class DesktopWindow:
                     + "\n".join(str(path) for path in pending)
                     + "\n\nThe current version remains open. Review update.log before trying again."
                 )
+                # The request was consumed and will not be handed off, and the
+                # server that wrote it is still running, latched (contract §4.2).
+                self.controller.release_update_restart(
+                    "an earlier update's rollback material is still present"
+                )
                 return False
         try:
             if isinstance(request, BundleUpdateRequest):
@@ -1656,6 +1490,11 @@ class DesktopWindow:
                     "The unusable window was closed."
                 )
                 return True
+            # The same server stays up, latched for a restart that is not
+            # coming. Tell it so (contract §4.2).
+            self.controller.release_update_restart(
+                f"the update installer could not be started: {exc}"
+            )
             _report_startup_failure(
                 f"Waveguide Generator could not start the {label} update: {exc}\n\n"
                 "The current version stays open."
@@ -1810,7 +1649,12 @@ def main(argv: list[str] | None = None) -> int:
         blocker = _linux_window_blocker()
         if blocker is not None:
             return _fall_back_to_status_window(blocker, server_arguments)
-    return DesktopWindow(StatusController(server_args=server_arguments)).run()
+    # The window settles an update transaction itself, once its native event
+    # loop is running (``DesktopWindow._finish_healthy_bundle_update``), so its
+    # controller must not settle on its first ready poll ahead of that.
+    return DesktopWindow(
+        StatusController(server_args=server_arguments, settle_on_ready=False)
+    ).run()
 
 
 if __name__ == "__main__":

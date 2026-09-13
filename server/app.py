@@ -50,6 +50,7 @@ from server.solver.symmetry import resolve_symmetry
 from server.workspace import mount_workspace
 from server.workspace.api import MAX_EXPORT_REQUEST_BODY_BYTES
 from server.updates import mount_updates
+from server.updates.restart import RestartApproval
 
 
 APP_ROOT = app_root()
@@ -689,10 +690,16 @@ def create_app(
     mount_preview(application, extra_ws_origins=extra_ws_origins)
     mount_design_io(application)
     mount_exports(application)
+    # One restart-approved latch per server process (contract §4.2). The update
+    # service sets it as it writes the handoff request, and the routes that
+    # start installation-owned work refuse while it is set.
+    restart_approval = RestartApproval()
+    application.state.update_restart = restart_approval
     mount_jobs(
         application,
         engine_registry,
         extra_ws_origins=extra_ws_origins,
+        restart_approval=restart_approval,
     )
     mount_integration(application)
     if workspace_dir is not None:
@@ -762,6 +769,7 @@ def create_app(
         # The update channel is remembered here rather than in the browser
         # because it has to survive the update it controls.
         settings=settings_store,
+        restart_approval=restart_approval,
     )
     # Last, because a problem report describes every store above it and reads
     # them off ``application.state`` rather than building a second copy.

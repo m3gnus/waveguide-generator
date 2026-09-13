@@ -9,7 +9,7 @@ from tkinter import ttk
 import time
 import webbrowser
 
-from .controller import ServiceState, StatusController, StatusSnapshot
+from .controller import ServiceState, StatusController, StatusSnapshot, frontend_ready
 from .diagnostics import WindowUnavailable
 from .updater import BundleUpdateRequest, UpdateRequest
 
@@ -31,6 +31,13 @@ TICK_MS = 250
 #: Between startup polls, and only until the backend answers once. After that
 #: the view stops asking altogether -- see :meth:`StatusView._settle`.
 STARTUP_POLL_INTERVAL = 0.55
+#: How long startup polling goes on for the interface once the backend answers.
+#: One poll asks both, so they nearly always settle together. The exception is
+#: an interface request that timed out while the backend answered, and that is
+#: exactly the snapshot that must not end startup polling: the controller
+#: settles an update transaction only on a served interface
+#: (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5).
+FRONTEND_READY_GRACE = 30.0
 
 
 class StatusView:
@@ -43,15 +50,18 @@ class StatusView:
         *,
         tick_ms: int = TICK_MS,
         startup_poll_interval: float = STARTUP_POLL_INTERVAL,
+        frontend_ready_grace: float = FRONTEND_READY_GRACE,
     ) -> None:
         self.root = root
         self.controller = controller
         self._tick_ms = tick_ms
         self._startup_poll_interval = startup_poll_interval
+        self._frontend_ready_grace = frontend_ready_grace
         self._closing = False
         self._starting = True
         self._poll_running = False
         self._settled = False
+        self._backend_ok_since: float | None = None
         self._next_poll_at = 0.0
         self._updates: queue.SimpleQueue[tuple[str, StatusSnapshot]] = queue.SimpleQueue()
         self._update_errors: queue.SimpleQueue[str] = queue.SimpleQueue()
@@ -116,6 +126,7 @@ class StatusView:
             # that would have said so was ended by the stop. Go back to startup
             # polling until the replacement answers and settles this again.
             self._settled = False
+            self._backend_ok_since = None
             self._next_poll_at = 0.0
             error = self._update_errors.get()
             self._backend_reason.set("Update could not start")
@@ -136,7 +147,7 @@ class StatusView:
             if not self._closing:
                 self._render(snapshot)
                 if not self._settled and snapshot.backend.state is ServiceState.OK:
-                    self._settle()
+                    self._settle_when_served(snapshot)
         if not self._closing:
             requested_update = self.controller.take_update_request()
             if requested_update is not None:
@@ -151,6 +162,30 @@ class StatusView:
             self._poll_running = True
             threading.Thread(target=self._poll, name="wg2-status-poll", daemon=True).start()
         self.root.after(self._tick_ms, self._tick)
+
+    def _settle_when_served(self, snapshot: StatusSnapshot) -> None:
+        """End startup polling on a served interface, or once waiting is pointless.
+
+        The controller settles an update transaction during the poll that first
+        sees a served interface (contract §4.5). Ending startup polling on the
+        backend alone could therefore stop one poll too early and leave that
+        transaction open for good, which blocks every later update. A backend
+        that answers while its interface keeps failing gets
+        ``frontend_ready_grace`` seconds; after that the controller is asked
+        with that snapshot, so ``update.log`` names the transaction that stayed
+        open and why, and polling ends as it always did.
+        """
+
+        if frontend_ready(snapshot):
+            self._settle()
+            return
+        now = time.monotonic()
+        if self._backend_ok_since is None:
+            self._backend_ok_since = now
+        if now - self._backend_ok_since < self._frontend_ready_grace:
+            return
+        self.controller.settle_update_transaction(snapshot)
+        self._settle()
 
     def _settle(self) -> None:
         """Stop asking the server questions, and arrange to be told instead.
@@ -194,9 +229,17 @@ class StatusView:
                 self.controller.close()
             self.controller.launch_update(request)
         except Exception as exc:  # noqa: BLE001 - keep the current healthy app usable
+            reason = str(exc) or type(exc).__name__
             if isinstance(request, BundleUpdateRequest):
+                # A fresh server, and a fresh process starts unlatched.
                 self.controller.start()
-            self._update_errors.put(str(exc) or type(exc).__name__)
+            else:
+                # The same server stays up, latched for a restart that is not
+                # coming. Tell it so (contract §4.2).
+                self.controller.release_update_restart(
+                    f"the update installer could not be started: {reason}"
+                )
+            self._update_errors.put(reason)
             return
         self._updates.put(("closed", self.controller.close()))
 

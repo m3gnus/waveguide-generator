@@ -23,6 +23,15 @@ import argparse
 from pathlib import Path
 
 
+#: The release notice of the status control channel
+#: (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.2). The status window
+#: writes it beside ``--status-control`` when it discards an update request
+#: instead of handing off, so the server it still owns clears its
+#: restart-approved latch. Written by ``launchers/statusapp/controller.py``,
+#: read by ``_watch_statusapp`` in ``launch/serve.py``.
+UPDATE_RELEASED_FILENAME = "update-released.json"
+
+
 #: What users type, on every platform: the installed command, the ``~/.local/bin``
 #: symlink and the macOS/Windows launchers all present this name. argparse would
 #: otherwise derive ``prog`` from ``sys.argv[0]`` and title the help

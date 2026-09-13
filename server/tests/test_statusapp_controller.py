@@ -696,6 +696,8 @@ def _headless_view(controller: _ViewController):
     view._closing = False
     view._starting = False
     view._settled = False
+    view._frontend_ready_grace = view_module.FRONTEND_READY_GRACE
+    view._backend_ok_since = None
     view._poll_running = False
     view._next_poll_at = 0.0
     view._updates = queue.SimpleQueue()
@@ -762,6 +764,44 @@ def test_the_status_window_does_poll_until_the_backend_answers(tmp_path: Path) -
 
     assert view._settled is False
     assert controller.watchers == []
+
+
+def test_the_status_window_polls_on_until_the_interface_is_served(tmp_path: Path) -> None:
+    """Contract §4.5: the controller settles an update transaction on a served interface.
+
+    Ending startup polling on the backend alone could stop before the
+    controller ever saw one, and leave the transaction open for good. A backend
+    whose interface keeps failing gets a grace period and then one explicit
+    settle request, so ``update.log`` says which transaction stayed open.
+    """
+
+    unserved = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "Healthy — vtest"),
+        frontend=LampStatus(ServiceState.ERROR, "SPA route failed: request timed out"),
+        url="http://127.0.0.1:3199/",
+        pid=123,
+        exit_code=None,
+    )
+    controller = _ViewController(unserved)
+    asked: list[StatusSnapshot] = []
+    controller.settle_update_transaction = (  # type: ignore[attr-defined]
+        lambda snapshot, **_kwargs: bool(asked.append(snapshot))
+    )
+    view = _headless_view(controller)
+    view._updates.put(("snapshot", unserved))
+    view._tick()
+
+    assert view._settled is False
+    assert controller.watchers == []
+    assert asked == []
+
+    view._backend_ok_since = time.monotonic() - view._frontend_ready_grace
+    view._updates.put(("snapshot", unserved))
+    view._tick()
+
+    assert view._settled is True
+    assert asked == [unserved]
+    assert len(controller.watchers) == 1
 
 
 def test_existing_instance_exit_two_keeps_its_real_url_healthy(tmp_path: Path) -> None:

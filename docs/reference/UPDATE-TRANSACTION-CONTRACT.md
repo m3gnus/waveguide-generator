@@ -27,29 +27,35 @@ the release owner that this contract records but does not design.
 | The journal validator requires only its known keys and keeps unknown ones. v0.3.2 has the same validator. | `apply_update.py:402-453`; `v0.3.2:launchers/apply_update.py:402-453` |
 | **Committing deletes the journal.** `commit_transaction` calls `remove_journal` as soon as the state is terminal. Nothing else records the outcome. | `apply_update.py:2044-2049` |
 | Recovery leaves a terminal journal alone, and removes an untrusted one. | `apply_update.py:1775-1776`, `:1814-1819` |
-| **Only the desktop window commits.** `commit_transaction` has one caller, reached from the window's frontend wait. | `launchers/desktop.py:671`, via `:1254` and `:1573` |
+| **Every launch mode settles** (§4.5). `commit_transaction` has one caller, `HealthyStartSettlement.settle`. The window and browser modes reach it through `StatusController.settle_update_transaction`, and `--no-gui` through `_NoGuiHealthyStart`. | `launchers/statusapp/healthy_start.py`; `launchers/statusapp/controller.py`; `launch/serve.py` |
 | **Healthy-start cleanup deletes the whole `<data>/updates` folder**, on both paths. | Off macOS `desktop.py:705-713`; macOS `desktop.py:822`, `:825-836` |
 | An uncommitted transaction keeps `.previous`, and the next update then refuses to start. | `apply_update.py:948-950` ("A previous update has not completed its healthy-start check") |
 | `--browser` and `--no-gui` run through `status_main`. Linux falls back to browser mode when Qt cannot open a window. | `desktop.py:1778-1780`, `:1812-1818` |
-| Browser mode settles its lamps when the backend answers, and commits nothing. `--no-gui` runs the server in-process with no controller. | `launchers/statusapp/view.py:137-139`, `:155-171`; `launchers/statusapp/__main__.py:499-518`, `:529-568` |
+| Browser mode settles on the controller's first poll whose interface is served. The status window polls until then, for up to 30 s after the backend answers. `--no-gui` runs the server in-process with no controller, and settles after a self-probe. | `launchers/statusapp/controller.py` `poll`; `launchers/statusapp/view.py` `_settle_when_served`; `launch/serve.py` `_NoGuiHealthyStart` |
 | Staging is keyed by version: `<data>/updates/<version>/{downloads,staged}`. | `server/updates/bundle.py:866-869` |
 | The installer refuses when staging and the app are on different volumes, and v0.3.2 does the same. | `bundle.py:774-786` |
 | The server writes the schema-1 handoff request at the end of staging, then reports `ready`. | `bundle.py:940-953` |
 | The launcher accepts the request only with exactly its five keys and staged paths inside the data directory. It deletes the request as it consumes it. | `launchers/statusapp/updater.py:108-175` |
 | The launcher runs the **staged** helper, `<staged app>/launchers/apply_update.py`, with `cwd` at the data directory. It checks containment again. | `updater.py:562-566`, `:571`, `:587-604`, `:611-616` |
 | The launcher consumes the request **before** it stops the server. | `launchers/statusapp/controller.py:1013-1026`; `view.py:141`, `:191-201` |
-| Nothing refuses new work during an update: the install route has no job check, and neither has `/api/solve`. | `server/updates/api.py:70-87`; `server/jobs/api.py:351`, `:419` |
+| Writing the handoff request latches "restart approved" in the server (§4.2). While it is latched, `POST /api/solve`, `POST /api/jobs/{job_id}/retry` and `POST /api/updates/install` answer 409 `update_restart_pending`. | `server/updates/restart.py`; writers in `server/updates/bundle.py` and `server/updates/service.py`; routes in `server/jobs/api.py` and `server/updates/api.py` |
 
 After `8bccff0c`, the writing side of area 1 was implemented. `commit_transaction` writes
 the completion record (§2.2) before `remove_journal`, and healthy-start cleanup on both
 paths removes only the committed transaction's staging roots (§2.5), through
 `reclaim_committed_staging` in `launchers/apply_update.py`. The two rows above that say
-otherwise describe `8bccff0c`. Still to do:
+otherwise describe `8bccff0c`.
+
+The restart latch (§4.2) and launch-mode settling (§4.5) were implemented after that. The
+three rows that describe them name files and functions, not line numbers.
+
+Still to do:
 
 - the update service reading the record: explaining the last outcome, applying
   suppression and the explicit retry (§2.2 "Readers", §2.3);
 - carrying the channel into the record, which stays `null` until the handoff carries it
-  (§2.2 `channel`).
+  (§2.2 `channel`);
+- recording a job ended by the restart as ended by the update restart (§4.3).
 
 ---
 
@@ -294,11 +300,34 @@ product question this contract leaves open (§6).
   status control channel it already owns, and the server treats it as a failed attempt.
   A server must never stay latched with no handoff pending.
 
+In the code, the latch is `RestartApproval` in `server/updates/restart.py`, one per server
+process (`application.state.update_restart`):
+
+- The bundle installer and the checkout install set it just before they write the
+  request, and release it if the write fails.
+- Three routes refuse while it is set: `POST /api/solve`, `POST /api/jobs/{job_id}/retry`
+  and `POST /api/updates/install`. The other job routes act on a job that already exists,
+  and finish within their own request. The CAD Link solve command reaches `/api/solve`
+  through the interface, so it is refused there, and the interface keeps it parked.
+- The launcher's notice is `update-released.json` in the status control directory
+  (`UPDATE_RELEASED_FILENAME` in `launch/serve_options.py`). It is written when the
+  launcher discards a request, when a checkout handoff cannot start, and when the window
+  refuses a bundle request because an earlier update's rollback material is still present.
+  The server's status watcher (`_watch_statusapp` in `launch/serve.py`) removes it and
+  releases the latch.
+- The interface shows the refusal's message where it shows any refused solve, retry or
+  install.
+
 ### 4.3 Existing work
 
 Before files are replaced, every running job has either finished or been cancelled with
 a recorded reason, such as "cancelled for the update restart". A job ended by the
 restart is never left reading as running, or as failed for no stated reason.
+
+Not implemented. Today the restart stops the server the way Quit does, and
+`JobRuntime.shutdown` marks each running job interrupted by Quit before it waits. So a
+reason is recorded, but it names Quit, not the update restart. A job queued before
+approval can still start before the server stops. This is a static reading.
 
 ### 4.4 Scoped shutdown
 
@@ -330,6 +359,20 @@ reason. It never leaves the transaction open silently. The evidence differs by m
     modes start run `create_app` too, and a commit there would pre-empt the controller's
     frontend evidence.
 
+In the code, `launchers/statusapp/healthy_start.py` is the one path, and it writes the
+same `update.log` lines in every mode:
+
+- The controller settles on its first ready poll (`settle_on_ready`).
+- The desktop window builds its controller with `settle_on_ready=False`. It delegates from
+  its native event loop, as it always committed, because HTTP readiness alone is not
+  enough to discard rollback material there. It passes the snapshot that ended its
+  frontend wait.
+- `--no-gui` probes `/health`, which must name this build, and `/` for up to 20 s after
+  uvicorn reports started.
+- A mode that cannot confirm writes
+  `This start did not confirm update transaction <id> (state '<state>'): <reason>.`, and
+  settles nothing.
+
 Why this matters: an open `installed` transaction keeps `.previous`, and the next update
 is refused (`apply_update.py:948-950`). A Linux installation whose Qt cannot open a
 window reaches browser mode on every relaunch. It can therefore update once and never
@@ -345,6 +388,14 @@ A start is healthy when all four of these hold:
 - the essential local services have started.
 
 It never depends on the internet, on Fusion, or on a solver qualification run.
+
+The evidence each mode has for these:
+
+- The window and browser modes take the first two from a served `/health` and interface
+  route. The server refuses at start an interface stamped for a different version.
+- `--no-gui` also checks that `/health` names this process's build.
+- The last two are implied rather than checked. uvicorn serves, and reports started, only
+  after the application's startup handlers have run, and the job store opens there.
 
 ---
 
@@ -415,14 +466,9 @@ These are recorded, not designed.
 
 ## 7. Tests
 
-**Strict expected failures.** Remove the marker in the change that implements the
-section.
-
-| Test | Section | Fails today because |
-| --- | --- | --- |
-| `test_a_browser_mode_start_settles_the_update_transaction` | §4.5 | The controller reaches a healthy start, and the journal stays `installed` |
-| `test_a_no_gui_start_confirms_or_reports_the_update_transaction` | §4.5 | The `--no-gui` start neither commits nor writes anything about the transaction |
-| `test_a_solve_submitted_after_restart_approval_is_refused` | §4.2 | `/api/solve` accepts a solve after the handoff request is written |
+**Strict expected failures.** None at present. The three that §4.2 and §4.5 had are
+regression tests now. A new requirement written ahead of its code gets one, and the change
+that implements it removes the marker.
 
 **Regression tests.**
 
@@ -445,9 +491,25 @@ section.
 | `test_the_v032_reader_accepts_this_helpers_journal_and_its_commit_keeps_the_record` | §2.2, §3.3 | v0.3.2's own reader accepts the new journal keys, and its commit leaves the record. Skipped where the tag is unreachable, as below. |
 | `test_the_candidate_helper_installs_from_a_v03x_launchers_command_line` | §3.2 | This checkout's helper installs from the v0.3.x command line and staging layout, app-only and with a runtime. The command line is frozen in the test, so this runs everywhere. |
 | `test_a_released_launcher_hands_the_candidate_a_command_it_accepts` | §3.1, §3.2 | The v0.3.1 and v0.3.2 launchers themselves, extracted from their tags, consume a schema-1 request and build exactly the frozen command line, and this checkout's helper installs from it. It is skipped where the tags are unreachable: CI checks out one commit with no tags. The frozen test above still runs there. |
+| `test_a_browser_mode_start_settles_the_update_transaction` | §4.5 | Browser mode's controller settles on its first ready poll |
+| `test_a_no_gui_start_confirms_or_reports_the_update_transaction` | §4.5 | A `--no-gui` server that never served leaves the transaction open and names it in `update.log` |
+| `test_a_no_gui_start_whose_self_probe_fails_reports_the_transaction` | §4.5 | A server that started but failed its self-probe reports once and settles nothing |
+| `test_a_no_gui_start_that_serves_its_interface_settles_the_transaction` | §4.5 | Live uvicorn and a real self-probe: the commit, the record and the cleanup |
+| `test_the_desktop_window_settles_from_its_event_loop_not_its_first_poll` | §4.5 | The window's controller waits for the window |
+| `test_a_solve_submitted_after_restart_approval_is_refused` | §4.2 | `/api/solve` answers 409 once the handoff request is written |
+| `test_a_retry_after_restart_approval_is_refused_while_reads_stay_open` | §4.2 | Retry and install refuse with the error envelope; a read route stays open |
+| `test_a_restart_approval_is_released_when_the_handoff_request_cannot_be_written` | §4.2 | A bundle request that cannot be written releases the latch, and solves are accepted again |
+| `test_a_request_the_launcher_discards_releases_the_servers_latch` | §4.2 | The launcher's discard reaches the server's watcher and clears the latch |
 
-§4.3, §4.4 and the positive no-GUI confirmation need a live server or real processes.
-Their tests belong with the implementation.
+Outside this file: `server/tests/test_updates.py`
+`test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it` (§4.2,
+checkout flow); `server/tests/test_statusapp_controller.py`
+`test_the_status_window_polls_on_until_the_interface_is_served` (§4.5, browser mode's
+polling); and in `server/tests/test_desktop_launcher.py`, the window's refusal of a second
+update while rollback material is pending now also checks that it releases the latch
+(§4.2).
+
+§4.3 and §4.4 need real processes. Their tests belong with the implementation.
 
 The released-launcher test is the only one that runs real released code, and today it
 runs only where the tags exist. Fetching `v0.3.1` and `v0.3.2` in the server test job

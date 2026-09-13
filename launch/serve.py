@@ -27,7 +27,11 @@ if str(_IMPORT_ROOT) not in sys.path:
 
 import uvicorn  # noqa: E402 - the checkout root must be importable first
 
-from launch.serve_options import PROGRAM_NAME, add_server_arguments  # noqa: E402
+from launch.serve_options import (  # noqa: E402
+    PROGRAM_NAME,
+    UPDATE_RELEASED_FILENAME,
+    add_server_arguments,
+)
 from server.app import BUILD, create_app  # noqa: E402
 from server.mesh.gmsh_worker import gmsh_call_abandoned  # noqa: E402
 from server.platform.console import harden_console  # noqa: E402
@@ -197,6 +201,41 @@ def _open_browser_when_ready(port: int, stop: threading.Event) -> None:
         )
 
 
+def _take_update_release(control_path: Path, on_released: Callable[[str], object]) -> None:
+    """Pass on the status window's release notice, if it wrote one (contract §4.2).
+
+    The file existing is the message; the reason in it is best effort. It is
+    removed before it is acted on, so one notice releases once.
+    """
+
+    notice = control_path.with_name(UPDATE_RELEASED_FILENAME)
+    if not notice.is_file():
+        return
+    reason = "the status window discarded the update request"
+    try:
+        payload = json.loads(notice.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and isinstance(payload.get("reason"), str) and payload["reason"]:
+            reason = payload["reason"]
+    except (OSError, ValueError):
+        pass
+    try:
+        notice.unlink()
+    except OSError:
+        pass
+    try:
+        on_released(reason)
+    except Exception:  # noqa: BLE001 - the stop watch must outlive a bad callback
+        logging.getLogger("wg.launch").exception("Could not release the update restart")
+
+
+def _release_update_restart(app: object, reason: str) -> None:
+    """Clear the server's restart latch: its status window will not hand off."""
+
+    approval = getattr(getattr(app, "state", None), "update_restart", None)
+    if approval is not None:
+        approval.release(f"the status window did not hand off: {reason}")
+
+
 def _watch_statusapp(
     server: uvicorn.Server,
     control_path: Path,
@@ -205,8 +244,14 @@ def _watch_statusapp(
     *,
     poll_interval: float = DEFAULT_PID_POLL_INTERVAL,
     on_stop: Callable[[str], object] | None = None,
+    on_update_released: Callable[[str], object] | None = None,
 ) -> None:
     """Gracefully stop when the owning status window closes or disappears.
+
+    ``on_update_released`` is told when the status window discarded an update
+    request instead of handing off (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md``
+    §4.2): no restart is coming, so the server clears its restart latch. The
+    notice is a file beside the control file, so it rides the same wakeups.
 
     ``on_stop`` is told why, after ``should_exit`` is set. ``main`` passes the
     shutdown backstop's ``begin``, so every stop from here runs against a
@@ -250,6 +295,8 @@ def _watch_statusapp(
             # on later passes it is the arm-then-check ordering that stops a
             # change during the handover from being missed by both the wait and
             # the test.
+            if on_update_released is not None:
+                _take_update_release(control_path, on_update_released)
             requested = control_path.is_file()
             parent_gone = parent_pid is not None and not pid_is_running(parent_pid)
             if requested or parent_gone:
@@ -283,6 +330,168 @@ def _watch_statusapp(
     finally:
         if wakeup is not None:
             wakeup.close()
+
+
+#: How long ``--no-gui`` keeps asking its own server for a healthy start after
+#: uvicorn reports that it started, how long it waits between attempts, and how
+#: long one request may take.
+HEALTHY_START_PROBE_SECONDS = 20.0
+HEALTHY_START_PROBE_INTERVAL = 0.25
+HEALTHY_START_PROBE_TIMEOUT = 2.0
+
+
+def _probe_healthy_start(port: int, timeout: float) -> str | None:
+    """Ask this process's own server for ``/health`` and the interface route.
+
+    ``None`` when both answer the way a healthy start of this build must
+    (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.6): ``/health`` names
+    this build, and the interface route serves HTML. Otherwise, what was wrong.
+    uvicorn reports started only after the application's startup handlers have
+    run, and the job store is opened there, so a server that answers at all has
+    its stores and local services up.
+    """
+
+    import http.client
+
+    for target in ("/health", "/"):
+        connection = http.client.HTTPConnection(HOST, port, timeout=timeout)
+        try:
+            connection.request(
+                "GET", target, headers={"User-Agent": "WaveguideGenerator-HealthyStart"}
+            )
+            response = connection.getresponse()
+            status, body = response.status, response.read(256 * 1024)
+        except (OSError, http.client.HTTPException) as exc:
+            return f"GET {target} failed: {exc or type(exc).__name__}"
+        finally:
+            connection.close()
+        if status != 200:
+            return f"GET {target} answered HTTP {status}"
+        if target == "/health":
+            try:
+                build = json.loads(body).get("build")
+            except (ValueError, AttributeError):
+                return "GET /health did not answer with a JSON object"
+            if build != BUILD:
+                return f"GET /health named build {build!r}, not {BUILD!r}"
+        elif b"<html" not in body.lower():
+            return "GET / did not serve the interface"
+    return None
+
+
+class _NoGuiHealthyStart:
+    """Settle, or report, the update transaction of a start no controller owns.
+
+    ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5, for ``--no-gui``.
+    There is no status controller watching the interface, so this process asks
+    itself. It settles -- ``commit_transaction`` and the scoped healthy-start
+    cleanup, the same code and the same ``update.log`` lines as the window --
+    only after uvicorn reports that it started and a self-probe of ``/health``
+    and the interface route succeeds. If the probe keeps failing, or the server
+    stops first, it writes the transaction id and the reason to ``update.log``
+    instead, and settles nothing.
+
+    It is never started from ``create_app``. The servers the window and browser
+    modes start run that too, and their controllers settle on their own
+    evidence; only this launcher knows no controller owns the server.
+    """
+
+    def __init__(self, server: uvicorn.Server, port: int, paths: tuple[Path, Path, Path]) -> None:
+        self._server = server
+        self._port = port
+        self._paths = paths
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._decided = False
+        self._last_problem: str | None = None
+        self._thread = threading.Thread(
+            target=self._run, name="wg2-healthy-start", daemon=True
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not getattr(self._server, "started", False):
+            if self._stop.wait(0.05):
+                return
+        deadline = time.monotonic() + HEALTHY_START_PROBE_SECONDS
+        while True:
+            problem = _probe_healthy_start(self._port, HEALTHY_START_PROBE_TIMEOUT)
+            if problem is None:
+                break
+            self._last_problem = problem
+            if time.monotonic() >= deadline:
+                self._report(
+                    "the --no-gui self-probe of /health and the interface kept failing: "
+                    + problem
+                )
+                return
+            if self._stop.wait(HEALTHY_START_PROBE_INTERVAL):
+                return
+        with self._lock:
+            if self._decided:
+                return
+            self._decided = True
+        log = logging.getLogger("wg.launch")
+        try:
+            from launchers.statusapp.healthy_start import HealthyStartSettlement
+
+            HealthyStartSettlement(lambda: self._paths).settle(
+                ready=True,
+                evidence=f"this --no-gui server answered /health as {BUILD} and served the interface",
+                # --no-gui opens no window of its own, not even to report.
+                report=log.error,
+            )
+        except Exception:  # noqa: BLE001 - a running server outlives a failed cleanup
+            log.exception("Could not settle the update transaction after a healthy start")
+
+    def _report(self, reason: str) -> None:
+        with self._lock:
+            if self._decided:
+                return
+            self._decided = True
+        try:
+            from launchers.statusapp.healthy_start import report_unconfirmed_start
+
+            report_unconfirmed_start(self._paths, reason)
+        except Exception:  # noqa: BLE001 - reporting must not replace the exit path
+            logging.getLogger("wg.launch").exception("Could not report the update transaction")
+
+    def finish(self, reason: str) -> None:
+        """The server has stopped: report the transaction unless it was already decided.
+
+        A settle already under way is waited for, briefly, and then left to
+        finish; its steps are each safe to interrupt, and the completion record
+        says what is left for the next start.
+        """
+
+        self._stop.set()
+        self._thread.join(timeout=HEALTHY_START_PROBE_TIMEOUT + 3.0)
+        if self._last_problem is not None:
+            reason = f"{reason} (the last self-probe said: {self._last_problem})"
+        self._report(reason)
+
+
+def _no_gui_healthy_start(
+    server: uvicorn.Server, port: int, data_dir: Path
+) -> _NoGuiHealthyStart | None:
+    """Start the healthy-start check of a bundle that no status controller owns."""
+
+    if os.environ.get("WG2_BUNDLE") != "1":
+        return None
+    try:
+        from launchers.statusapp.healthy_start import resolve_bundle_paths
+
+        paths = resolve_bundle_paths(os.environ, app_root(), data_dir)
+    except Exception:  # noqa: BLE001 - never refuse a start over this
+        logging.getLogger("wg.launch").exception("Could not prepare the healthy-start check")
+        return None
+    if paths is None:
+        return None
+    check = _NoGuiHealthyStart(server, port, paths)
+    check.start()
+    return check
 
 
 def _shutdown_signals() -> tuple[int, ...]:
@@ -445,6 +654,7 @@ def main(argv: list[str] | None = None) -> int:
     # Before the app, so the capability probe this start runs can already report
     # "provisioning" rather than "not provisioned". It only starts a thread.
     _start_beat_cpu_provisioning()
+    no_gui_start: _NoGuiHealthyStart | None = None
     try:
         backstop.activate()
         app = create_app(
@@ -509,10 +719,17 @@ def main(argv: list[str] | None = None) -> int:
             threading.Thread(
                 target=_watch_statusapp,
                 args=(server, args.status_control, args.parent_pid, stop_status_watch),
-                kwargs={"on_stop": backstop.begin},
+                kwargs={
+                    "on_stop": backstop.begin,
+                    "on_update_released": lambda reason: _release_update_restart(app, reason),
+                },
                 name="wg2-status-control",
                 daemon=True,
             ).start()
+        else:
+            # No status controller owns this server, so nothing else will settle
+            # an update transaction for it (contract §4.5).
+            no_gui_start = _no_gui_healthy_start(server, port, paths.root)
 
         if open_browser:
             threading.Thread(
@@ -543,6 +760,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             stop_browser.set()
             stop_status_watch.set()
+            if no_gui_start is not None:
+                no_gui_start.finish(
+                    "the --no-gui server stopped before it confirmed a healthy start"
+                )
             if listener is not None:
                 listener.close()
             if lock is not None:

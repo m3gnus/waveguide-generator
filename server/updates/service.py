@@ -38,6 +38,7 @@ from server.updates.bundle import (
     trusted_asset_url,
     updates_api_base,
 )
+from server.updates.restart import RestartApproval
 
 
 REPOSITORY = GITHUB_REPOSITORY
@@ -854,6 +855,7 @@ class UpdateService:
         update_request_path: Path | None = None,
         bundle_installer: BundleUpdateInstaller | None = None,
         settings: SettingsStore | None = None,
+        restart_approval: RestartApproval | None = None,
     ) -> None:
         _version(running_version)
         self.running_version = running_version
@@ -891,11 +893,20 @@ class UpdateService:
         self._release_pages: list[list[dict[str, Any]]] = []
         self._runtime_asset_cache: dict[str, dict[str, Any] | None] = {}
         self.bundle_installer = bundle_installer
+        #: The restart-approved latch (contract §4.2). An injected installer
+        #: brings its own, and then that one is the latch: both flows must set
+        #: the same object the job routes read.
+        self.restart_approval: RestartApproval = (
+            restart_approval
+            if restart_approval is not None
+            else getattr(bundle_installer, "restart_approval", None) or RestartApproval()
+        )
         if self.bundle_installer is None and self.update_request_path is not None:
             self.bundle_installer = BundleUpdateInstaller(
                 data_dir=self.data_dir,
                 destination_app_dir=self.repo_root,
                 request_path=self.update_request_path,
+                restart_approval=self.restart_approval,
             )
 
     def channel(self) -> str:
@@ -1605,6 +1616,10 @@ class UpdateService:
             raise UpdateInstallUnavailable(
                 "Automatic installation is available only when WG is running from its status window."
             )
+        pending = self.restart_approval.refusal()
+        if pending is not None:
+            # A restart is already approved (contract §4.2).
+            raise UpdateInstallUnavailable(pending)
 
         status = self.get_status()
         release = status.get("release")
@@ -1665,10 +1680,14 @@ class UpdateService:
         temporary = request_path.with_name(
             f".{request_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
         )
+        # Writing the request approves the restart (contract §4.1), so the latch
+        # goes up first, and comes down again if the request is never written.
+        self.restart_approval.approve(tag)
         try:
             temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
             temporary.replace(request_path)
         except OSError as exc:
+            self.restart_approval.release(f"the handoff request could not be written: {exc}")
             try:
                 temporary.unlink()
             except OSError:

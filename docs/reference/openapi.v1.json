@@ -9431,6 +9431,16 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "An update restart is pending"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -10136,7 +10146,7 @@
                 }
               }
             },
-            "description": "Submission key conflict"
+            "description": "Submission key conflict, or an update restart is pending"
           },
           "422": {
             "content": {

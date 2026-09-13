@@ -23,6 +23,7 @@ from scripts.fetch_spa import SpaError, expected_digest, file_digest
 from shared import release_assets
 from shared.release_assets import is_release_tag
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name
+from server.updates.restart import RestartApproval
 
 
 DEFAULT_UPDATES_API_BASE = "https://api.github.com"
@@ -639,10 +640,15 @@ class BundleUpdateInstaller:
         small_fetcher: SmallFetcher = fetch_url_bytes,
         volume_probe: VolumeProbe = filesystem_volume,
         free_space_probe: FreeSpaceProbe = free_disk_bytes,
+        restart_approval: RestartApproval | None = None,
     ) -> None:
         self.data_dir = Path(data_dir).resolve()
         self.destination_app_dir = Path(destination_app_dir).resolve()
         self.request_path = Path(request_path).resolve()
+        #: Set as the handoff request is written (contract §4.1, §4.2).
+        self.restart_approval = (
+            restart_approval if restart_approval is not None else RestartApproval()
+        )
         self.downloader = downloader
         self.small_fetcher = small_fetcher
         self.volume_probe = volume_probe
@@ -948,8 +954,21 @@ class BundleUpdateInstaller:
             temporary = self.request_path.with_name(
                 f".{self.request_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
             )
-            temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
-            temporary.replace(self.request_path)
+            # Writing the request approves the restart (contract §4.1), so the
+            # latch goes up first: no solve may slip in between the file
+            # appearing and the latch being set. If the request is never
+            # written, nothing will restart, and the latch comes down again.
+            self.restart_approval.approve(f"v{version}")
+            try:
+                temporary.write_text(
+                    json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
+                )
+                temporary.replace(self.request_path)
+            except BaseException as exc:
+                self.restart_approval.release(
+                    f"the handoff request could not be written: {exc or type(exc).__name__}"
+                )
+                raise
             self._set_state(installState="ready", downloadedBytes=completed, error=None)
         except Exception as exc:  # noqa: BLE001 - all worker failures become API state
             self._set_state(installState="failed", error=str(exc) or type(exc).__name__)

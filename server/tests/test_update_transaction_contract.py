@@ -1,25 +1,15 @@
 """Tests for ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md``.
 
-Two kinds of test live here.
+Every test here is a regression test. The records and scoped cleanup of §2,
+the handoff from an old release's launcher of §3, and the restart latch (§4.2)
+and launch-mode settling (§4.5) of §4 are implemented, and these keep them.
 
-**Strict expected failures** (contract §4). Each one encodes a
-requirement the updater does not meet yet, and is marked
-``xfail(strict=True, raises=AssertionError)``:
-
-* While the behaviour is missing, the contract assertion fails and pytest
-  reports an expected failure, so the suite stays green and nothing broken is
-  committed as passing.
-* When a change implements the behaviour but leaves the marker in place, the
-  test passes unexpectedly and ``strict`` turns that into a failure. Remove the
-  marker in the change that implements the behaviour.
-* Any exception other than ``AssertionError`` is an ordinary failure. Set-up
-  checks therefore use ``pytest.fail``, never ``assert``: a fixture that broke
-  must not pass itself off as the behaviour that is missing.
-
-**Regression tests** (contract §2 and §3). The completion record and the
-scoped cleanup of §2 are implemented, and these keep them. An old release's
-launcher runs the candidate's helper with the old command line, and that
-already works; the §3 tests keep it working.
+A requirement written ahead of its implementation gets a strict expected
+failure, ``xfail(strict=True, raises=AssertionError)``: green while the
+behaviour is missing, red if the behaviour arrives with the marker still in
+place, so the marker goes in the change that implements it. Set-up checks
+therefore use ``pytest.fail``, never ``assert``: a fixture that broke must not
+pass itself off as the behaviour under test.
 """
 
 from __future__ import annotations
@@ -33,15 +23,19 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import socket
 import tarfile
 import textwrap
+import threading
 import time
+from types import SimpleNamespace
 from typing import Any, NamedTuple
 import zipfile
 
 import pytest
 
 from launch import serve
+from launch.serve_options import UPDATE_RELEASED_FILENAME
 from launchers import apply_update as apply_update_module
 from launchers import desktop
 from launchers import update_lock
@@ -55,6 +49,7 @@ from launchers.apply_update import (
     swap_staged_layers,
 )
 from launchers.statusapp import __main__ as statusapp_main
+from launchers.statusapp import healthy_start
 from launchers.statusapp.controller import (
     LampStatus,
     ServiceState,
@@ -63,6 +58,7 @@ from launchers.statusapp.controller import (
 )
 from server.app import create_app
 from server.platform.paths import ensure_data_layout
+from server.updates.restart import RestartApproval
 
 
 REPOSITORY_ROOT = Path(apply_update_module.__file__).resolve().parents[1]
@@ -228,12 +224,6 @@ def test_a_committed_update_leaves_a_completion_record_when_its_journal_goes(
     assert payload.get("installation") == key
 
 
-class _UnusedController:
-    """The cleanup path never talks to the controller; ``_bundle_paths`` is replaced."""
-
-    url = "http://127.0.0.1:3199/"
-
-
 def test_healthy_start_cleanup_removes_only_the_committed_transactions_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -250,21 +240,9 @@ def test_healthy_start_cleanup_removes_only_the_committed_transactions_files(
     other.parent.mkdir(parents=True)
     other.write_bytes(b"another transaction's download")
 
-    window = desktop.DesktopWindow(
-        _UnusedController(),  # type: ignore[arg-type]
-        pythonnet_loader=lambda: object(),
-        webview2_probe=lambda: True,
-    )
-    monkeypatch.setattr(
-        window,
-        "_bundle_paths",
-        lambda: (installation.bundle, installation.resources, installation.data_dir),
-    )
-    # The macOS path reseals with codesign. What is under test here is which
-    # files the cleanup removes, not the seal.
-    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
-
-    window._finish_healthy_bundle_update(_healthy_snapshot())
+    # This host's own path. Which files the cleanup removes is under test, not
+    # the seal, which ``_healthy_start`` replaces.
+    _healthy_start(installation, monkeypatch, sys.platform)
 
     if (installation.resources / "app.previous").exists():
         pytest.fail(
@@ -311,19 +289,27 @@ def _signed(command: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
 def _healthy_start(
     installation: Installation, monkeypatch: pytest.MonkeyPatch, platform_name: str
 ) -> None:
-    """The desktop window's healthy-start commit and cleanup, on one platform's path."""
+    """The desktop window's healthy-start commit and cleanup, on one platform's path.
 
+    The window delegates to its controller, which settles through
+    ``launchers/statusapp/healthy_start.py`` (contract §4.5). The controller is
+    a real one with no server started, and its paths are replaced: the
+    fixture's bundle is laid out for Linux even when the macOS path runs.
+    """
+
+    controller = StatusController(environ={**os.environ, "WG2_BUNDLE": "1"})
+    monkeypatch.setattr(
+        controller,
+        "bundle_paths",
+        lambda: (installation.bundle, installation.resources, installation.data_dir),
+    )
     window = desktop.DesktopWindow(
-        _UnusedController(),  # type: ignore[arg-type]
+        controller,
         pythonnet_loader=lambda: object(),
         webview2_probe=lambda: True,
     )
-    monkeypatch.setattr(
-        window,
-        "_bundle_paths",
-        lambda: (installation.bundle, installation.resources, installation.data_dir),
-    )
-    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+    # The macOS path reseals with codesign; the seal is not under test.
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(desktop.sys, "platform", platform_name)
     window._finish_healthy_bundle_update(_healthy_snapshot())
 
@@ -837,22 +823,20 @@ _FAKE_SERVER = textwrap.dedent(
 )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="contract §4.5: only the desktop window commits the update transaction",
-)
-def test_a_browser_mode_start_settles_the_update_transaction(tmp_path: Path) -> None:
-    """Browser mode reaches a healthy start and leaves the transaction open.
+def test_a_browser_mode_start_settles_the_update_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Browser mode settles on the controller's first ready poll (contract §4.5).
 
-    ``commit_transaction`` has one caller, the desktop window
-    (``desktop.py:671``). Browser mode runs the same ``StatusController``
-    without that window, and Linux lands in it on every relaunch when Qt
-    cannot open a window (``desktop.py:1778-1780``). The open transaction keeps
-    ``.previous``, and the next update is then refused
-    (``apply_update.py:948-950``).
+    ``commit_transaction`` used to have one caller, the desktop window. Browser
+    mode runs the same ``StatusController`` without that window, and Linux
+    lands in it on every relaunch when Qt cannot open a window. An open
+    transaction keeps ``.previous``, and the next update is then refused ("A
+    previous update has not completed its healthy-start check").
     """
 
+    # The macOS path reseals with codesign; the seal is not under test.
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
     installation = _installation(tmp_path, sys.platform)
     transaction = _decided_update(installation, sys.platform)
     app_layer = installation.resources / "app"
@@ -924,22 +908,16 @@ class _ServerThatNeverServed:
         return None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="contract §4.5: a --no-gui start neither confirms nor reports the transaction",
-)
 def test_a_no_gui_start_confirms_or_reports_the_update_transaction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``--no-gui`` runs the server in-process, with no controller and no window.
 
-    Nothing on that path (``statusapp/__main__.py:493-518``) commits the
-    transaction or says why it did not. The stand-in server never serves, so
-    there is no evidence of a healthy start, and the only right answer is the
-    report: the transaction stays open and ``update.log`` names it. Committing
-    here would be the wrong fix. The positive half, a live server that confirms
-    its build, needs a real server and belongs with the implementation.
+    The stand-in server never serves, so there is no evidence of a healthy
+    start, and the only right answer is the report: the transaction stays open
+    and ``update.log`` names it. Committing here would be the wrong fix. The
+    positive half, a live server that confirms its build, is
+    ``test_a_no_gui_start_that_serves_its_interface_settles_the_transaction``.
 
     The stand-in replaces ``uvicorn.Server`` where ``launch/serve.py`` looks it
     up at call time. The interface check before the server starts reads the
@@ -1033,8 +1011,15 @@ def _app_archive(version: str) -> bytes:
     )
 
 
-async def _post(app: Any, path: str, body: dict[str, Any]) -> tuple[int, bytes]:
-    """One loopback POST straight through the ASGI app, as ``test_jobs_api.py`` sends them."""
+async def _post(
+    app: Any,
+    path: str,
+    body: dict[str, Any] | None,
+    *,
+    method: str = "POST",
+    headers: tuple[tuple[bytes, bytes], ...] = (),
+) -> tuple[int, bytes]:
+    """One loopback request straight through the ASGI app, as ``test_jobs_api.py`` sends them."""
 
     sent: list[dict[str, Any]] = []
     delivered = False
@@ -1045,7 +1030,7 @@ async def _post(app: Any, path: str, body: dict[str, Any]) -> tuple[int, bytes]:
             delivered = True
             return {
                 "type": "http.request",
-                "body": json.dumps(body).encode(),
+                "body": b"" if body is None else json.dumps(body).encode(),
                 "more_body": False,
             }
         # A live connection blocks here until the client goes away; answering
@@ -1061,13 +1046,17 @@ async def _post(app: Any, path: str, body: dict[str, Any]) -> tuple[int, bytes]:
             "type": "http",
             "asgi": {"version": "3.0", "spec_version": "2.3"},
             "http_version": "1.1",
-            "method": "POST",
+            "method": method,
             "scheme": "http",
             "path": path,
             "raw_path": path.encode("ascii"),
             "query_string": b"",
             "root_path": "",
-            "headers": [(b"host", b"127.0.0.1:3100"), (b"content-type", b"application/json")],
+            "headers": [
+                (b"host", b"127.0.0.1:3100"),
+                (b"content-type", b"application/json"),
+                *headers,
+            ],
             "client": ("127.0.0.1", 1234),
             "server": ("127.0.0.1", 3100),
         },
@@ -1081,19 +1070,13 @@ async def _post(app: Any, path: str, body: dict[str, Any]) -> tuple[int, bytes]:
     return start["status"], response
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="contract §4.2: nothing refuses new work once a restart has been approved",
-)
 def test_a_solve_submitted_after_restart_approval_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A solve that starts after approval is ended by a restart it never heard of.
+    """A solve that started after approval would be ended by a restart it never heard of.
 
-    Approval is the moment the handoff request is written (contract §4.1). The
-    install route has no job check (``updates/api.py:70-87``), and neither has
-    ``/api/solve`` (``jobs/api.py:351``).
+    Approval is the moment the handoff request is written (contract §4.1), and
+    the restart latch goes up with it (§4.2).
     """
 
     monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
@@ -1155,6 +1138,366 @@ def test_a_solve_submitted_after_restart_approval_is_refused(
         f"and its handoff request written: {raw[:200]!r}"
     )
     assert json.loads(raw).get("error", {}).get("code") == "update_restart_pending"
+
+
+def _stage_through_the_app(app: Any) -> dict[str, object]:
+    """Stage one app-only update with the app's own installer; return its end state.
+
+    The network and the disk probes are replaced; everything from the checksum
+    to writing the handoff request is real.
+    """
+
+    archive = _app_archive("2.0.1")
+    digest = hashlib.sha256(archive).hexdigest()
+    name = "update-app-2.0.1.zip"
+    base = "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/"
+
+    def download(_url: str, destination: Path, _limit: int, progress: Any) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(archive)
+        progress(len(archive))
+
+    installer = app.state.update_service.bundle_installer
+    if installer is None:
+        pytest.fail("set-up: an app given an update request path has no bundle installer")
+    installer.downloader = download
+    installer.small_fetcher = lambda _url, _limit: f"{digest}  {name}\n".encode()
+    installer.volume_probe = lambda _path: "one volume"
+    installer.free_space_probe = lambda _path: 10**12
+    installer.start(
+        "2.0.1",
+        [
+            {
+                "name": name,
+                "url": base + name,
+                "sha256Url": base + name + ".sha256",
+                "bytes": len(archive),
+                "layer": "app",
+            }
+        ],
+        expected_runtime_id=RUNTIME_ID,
+        installed_runtime_id=RUNTIME_ID,
+    )
+    deadline = time.monotonic() + 20.0
+    while (state := installer.status())["installState"] not in {"ready", "failed"}:
+        if time.monotonic() > deadline:
+            pytest.fail(f"set-up: staging never finished: {state}")
+        time.sleep(0.02)
+    return state
+
+
+def test_a_restart_approval_is_released_when_the_handoff_request_cannot_be_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.2: the latch comes down when the attempt fails before the handoff.
+
+    A directory stands where the request file belongs, so the restart is
+    approved and the final rename then fails. Nothing will restart, so solves
+    must be accepted again.
+    """
+
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+    request_path = tmp_path / "control" / "update.json"
+    request_path.mkdir(parents=True)
+    app = create_app(data_dir=tmp_path / "data", update_request_path=request_path)
+    latch = app.state.update_restart
+    if app.state.update_service.bundle_installer.restart_approval is not latch:
+        pytest.fail("set-up: the installer and the job routes hold different latches")
+    approved: list[str] = []
+    approve = latch.approve
+    monkeypatch.setattr(
+        latch, "approve", lambda target: (approved.append(target), approve(target))
+    )
+
+    state = _stage_through_the_app(app)
+
+    if approved != ["v2.0.1"]:
+        pytest.fail(f"set-up: the restart was never approved, so nothing was released: {state}")
+    assert state["installState"] == "failed"
+    assert latch.pending is None, "a handoff request that was never written left the restart latched"
+
+    async def scenario() -> tuple[int, bytes]:
+        runtime = app.state.jobs_runtime
+        try:
+            return await _post(app, "/api/solve", SOLVE_BODY)
+        finally:
+            await runtime.wait_idle()
+            await runtime.shutdown()
+
+    status, raw = asyncio.run(scenario())
+
+    assert status == 200, f"a solve was refused after the restart was called off: {raw[:200]!r}"
+
+
+def test_a_request_the_launcher_discards_releases_the_servers_latch(tmp_path: Path) -> None:
+    """Contract §4.2: a server must never stay latched with no handoff pending.
+
+    The launcher deletes a request it cannot trust instead of handing off, and
+    the same server keeps running. It says so over the status control channel,
+    and the server's own watcher clears the latch.
+    """
+
+    app_layer = tmp_path / "app"
+    _with_interface(app_layer)
+    fake_server = tmp_path / "fake_server.py"
+    fake_server.write_text(_FAKE_SERVER, encoding="utf-8")
+    controller = StatusController(
+        repo_root=app_layer,
+        server_command=(sys.executable, str(fake_server)),
+        server_args=("--data-dir", str(tmp_path / "data")),
+        environ=dict(os.environ),
+        request_timeout=0.2,
+        shutdown_timeout=1.0,
+    )
+    latch = RestartApproval()
+    latch.approve("v2.0.1")
+    server_app = SimpleNamespace(state=SimpleNamespace(update_restart=latch))
+    stop = threading.Event()
+    try:
+        controller.start()
+        request = controller.update_request_path
+        if request is None:
+            pytest.fail("set-up: the controller started with no status control directory")
+        request.write_text("{not a request", encoding="utf-8")
+
+        assert controller.take_update_request() is None
+        notice = request.with_name(UPDATE_RELEASED_FILENAME)
+        assert notice.is_file(), "the launcher discarded the request and told the server nothing"
+
+        watcher = threading.Thread(
+            target=serve._watch_statusapp,
+            args=(SimpleNamespace(should_exit=False), request.with_name("stop"), None, stop),
+            kwargs={
+                "on_update_released": lambda reason: serve._release_update_restart(
+                    server_app, reason
+                )
+            },
+            daemon=True,
+        )
+        watcher.start()
+        deadline = time.monotonic() + 10.0
+        while latch.pending is not None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        stop.set()
+        watcher.join(timeout=2.0)
+    finally:
+        stop.set()
+        controller.close()
+
+    assert latch.pending is None, "the server stayed latched for a restart nobody will start"
+    assert not notice.exists(), "the release notice was left to release again"
+
+
+def test_a_retry_after_restart_approval_is_refused_while_reads_stay_open(
+    tmp_path: Path,
+) -> None:
+    """Contract §4.2: every route that starts installation-owned work refuses alike."""
+
+    async def scenario() -> list[tuple[int, bytes]]:
+        app = create_app(data_dir=tmp_path / "data")
+        app.state.update_restart.approve("v2.0.1")
+        runtime = app.state.jobs_runtime
+        try:
+            return [
+                await _post(app, "/api/jobs/any-job/retry", {}),
+                await _post(
+                    app, "/api/updates/install", {}, headers=((b"x-wg-update", b"install"),)
+                ),
+                await _post(app, "/api/jobs", None, method="GET"),
+            ]
+        finally:
+            await runtime.shutdown()
+
+    (retry, retry_raw), (install, install_raw), (listing, _listing_raw) = asyncio.run(
+        scenario()
+    )
+
+    assert retry == 409, f"a retry started after the restart was approved: {retry_raw[:200]!r}"
+    error = json.loads(retry_raw)["error"]
+    assert error["code"] == "update_restart_pending"
+    assert error["stage"] == "submission"
+    assert error["retryable"] is True
+    assert "restart" in error["message"] and "v2.0.1" in error["message"]
+    assert install == 409
+    assert json.loads(install_raw)["error"]["code"] == "update_restart_pending"
+    assert listing == 200, "a read route closed while a restart was pending"
+
+
+def _no_gui_start_in_this_process(
+    monkeypatch: pytest.MonkeyPatch,
+    installation: Installation,
+    *,
+    server_class: type,
+    create: Any = lambda **_kwargs: object(),
+    reserve: Any = lambda *_args, **_kwargs: (_FakeListener(), 3100),
+) -> int:
+    """``--no-gui`` in this process, with the host's lock, logs and port left alone."""
+
+    app_layer = installation.resources / "app"
+    paths = ensure_data_layout(installation.data_dir)
+    monkeypatch.delenv("WG2_PORT", raising=False)
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    monkeypatch.setenv("WG2_APP_ROOT", str(app_layer))
+    monkeypatch.setenv("WG2_DATA_DIR", str(installation.data_dir))
+    monkeypatch.setenv("WG2_NO_BROWSER", "1")
+    monkeypatch.setattr(serve, "ensure_data_layout", lambda: paths)
+    monkeypatch.setattr(serve, "setup_logging", lambda _paths: None)
+    monkeypatch.setattr(serve, "flush_logs", lambda: None)
+    monkeypatch.setattr(serve, "InstanceLock", lambda _path: _FakeLock())
+    monkeypatch.setattr(serve, "_release_interface_error", lambda: None)
+    monkeypatch.setattr(serve, "auto_migrate_v1", lambda *_args: [])
+    monkeypatch.setattr(serve, "reserve_port", reserve)
+    monkeypatch.setattr(serve, "create_app", create)
+    monkeypatch.setattr(serve.uvicorn, "Server", server_class)
+    monkeypatch.setattr(serve, "harden_console", lambda *_args: None)
+    return statusapp_main.main(["--no-gui", "--data-dir", str(installation.data_dir)])
+
+
+def test_a_no_gui_start_whose_self_probe_fails_reports_the_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.5: a server that started but never answered itself confirms nothing."""
+
+    installation = _installation(tmp_path, sys.platform)
+    transaction = _decided_update(installation, sys.platform)
+    before = _update_log(installation)
+
+    class _ServerThatNeverAnswers:
+        def __init__(self, _config: object) -> None:
+            self.should_exit = False
+            self.started = False
+
+        def run(self, *, sockets: list[object]) -> None:
+            self.started = True
+            deadline = time.monotonic() + 10.0
+            while transaction not in _update_log(installation)[len(before) :]:
+                if time.monotonic() > deadline:
+                    return
+                time.sleep(0.02)
+
+    monkeypatch.setattr(
+        serve,
+        "_probe_healthy_start",
+        lambda _port, _timeout: "GET /health failed: [Errno 61] Connection refused",
+    )
+    monkeypatch.setattr(serve, "HEALTHY_START_PROBE_SECONDS", 0.0)
+
+    exit_code = _no_gui_start_in_this_process(
+        monkeypatch, installation, server_class=_ServerThatNeverAnswers
+    )
+
+    if exit_code != 0:
+        pytest.fail(f"set-up: the --no-gui start did not run (exit {exit_code})")
+    journal = read_journal(installation.data_dir, installation.resources)
+    written = _update_log(installation)[len(before) :]
+    assert journal is not None and journal.get("state") == "installed", (
+        f"a --no-gui start that never answered its own probe settled anyway: {journal!r}"
+    )
+    assert transaction in written and "self-probe" in written and "Connection refused" in written
+    assert written.count("did not confirm") == 1, f"reported more than once: {written}"
+
+
+def test_a_no_gui_start_that_serves_its_interface_settles_the_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.5: a live --no-gui server that answers itself settles, as the window does.
+
+    Real uvicorn on a loopback port, a real self-probe and the real settlement.
+    The application is a stand-in that answers ``/health`` for this build and
+    serves an interface page; ``create_app`` is not what is under test.
+    """
+
+    from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse
+
+    # The macOS path reseals with codesign; the seal is not under test.
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
+    installation = _installation(tmp_path, sys.platform)
+    transaction = _decided_update(installation, sys.platform)
+    before = _update_log(installation)
+
+    interface = FastAPI()
+
+    @interface.get("/health")
+    async def health() -> dict[str, object]:
+        return {"version": "test", "build": serve.BUILD}
+
+    @interface.get("/")
+    async def index() -> HTMLResponse:
+        return HTMLResponse("<!doctype html><html><body>WG</body></html>")
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    servers: list[Any] = []
+
+    class _RecordingServer(serve.uvicorn.Server):  # type: ignore[name-defined, misc]
+        def __init__(self, config: Any) -> None:
+            super().__init__(config)
+            servers.append(self)
+
+    def stop_once_settled() -> None:
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            record = _completion_record(installation.data_dir, installation.resources) or {}
+            if servers and record.get("rollbackMaterial") == "reclaimed":
+                break
+            time.sleep(0.05)
+        if servers:
+            servers[0].should_exit = True
+
+    stopper = threading.Thread(target=stop_once_settled, daemon=True)
+    stopper.start()
+    exit_code = _no_gui_start_in_this_process(
+        monkeypatch,
+        installation,
+        server_class=_RecordingServer,
+        create=lambda **_kwargs: interface,
+        reserve=lambda *_args, **_kwargs: (listener, port),
+    )
+    stopper.join(timeout=5.0)
+
+    if exit_code != 0:
+        pytest.fail(f"set-up: the --no-gui start did not run (exit {exit_code})")
+    written = _update_log(installation)[len(before) :]
+    assert read_journal(installation.data_dir, installation.resources) is None, written
+    record = _completion_record(installation.data_dir, installation.resources) or {}
+    assert record.get("transaction") == transaction
+    assert record.get("outcome") == "installed"
+    assert record.get("rollbackMaterial") == "reclaimed"
+    assert f"Healthy start: update transaction {transaction} committed" in written
+    assert "did not confirm" not in written
+    assert not (installation.resources / "app.previous").exists()
+
+
+def test_the_desktop_window_settles_from_its_event_loop_not_its_first_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Contract §4.5: the window keeps its moment, and the controller waits for it.
+
+    The window asks only once pywebview's native event loop is running, because
+    HTTP readiness alone is not enough to discard rollback material. A
+    controller that settled on its own first ready poll would get there first.
+    """
+
+    built: list[Any] = []
+
+    class _Window:
+        def __init__(self, controller: Any) -> None:
+            built.append(controller)
+
+        def run(self) -> int:
+            return 0
+
+    monkeypatch.setattr(desktop, "DesktopWindow", _Window)
+    monkeypatch.setattr(desktop, "_pin_linux_qt_platform", lambda _environ: None)
+    monkeypatch.setattr(desktop, "_linux_window_blocker", lambda: None)
+
+    assert desktop.main([]) == 0
+    (controller,) = built
+    assert isinstance(controller, StatusController)
+    assert controller.settle_on_ready is False
 
 
 # ---------------------------------------------------------------------------

@@ -166,6 +166,52 @@ def test_ready_release_can_signal_the_status_owner_for_installation(tmp_path: Pa
     assert payload["readyAtEpoch"] > 0
 
 
+def test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it(
+    tmp_path: Path,
+):
+    """Contract §4.1, §4.2: writing the checkout request approves the restart.
+
+    The latch goes up with the request and stays up, so a second install is
+    refused. A request that cannot be written approves nothing that will
+    happen, so its latch comes down again.
+    """
+
+    now = [1_700_000_000.0]
+    request_path = tmp_path / "control" / "update.json"
+    request_path.parent.mkdir()
+    update = service(
+        tmp_path,
+        lambda _etag: ReleaseResponse(release("2.0.1"), None),
+        now,
+        platform_name="darwin",
+        update_request_path=request_path,
+    )
+
+    update.request_install()
+
+    assert update.restart_approval.pending == "v2.0.1"
+    with pytest.raises(UpdateInstallUnavailable, match="about to restart"):
+        update.request_install()
+
+    unwritable = tmp_path / "missing" / "update.json"
+    failing = service(
+        tmp_path / "second",
+        lambda _etag: ReleaseResponse(release("2.0.1"), None),
+        now,
+        platform_name="darwin",
+        update_request_path=unwritable,
+    )
+    approved: list[str] = []
+    approve = failing.restart_approval.approve
+    failing.restart_approval.approve = lambda target: (approved.append(target), approve(target))  # type: ignore[method-assign]
+
+    with pytest.raises(UpdateInstallUnavailable, match="could not create the update handoff"):
+        failing.request_install()
+
+    assert approved == ["v2.0.1"]
+    assert failing.restart_approval.pending is None
+
+
 def test_incomplete_release_rechecks_quickly_and_never_offers_an_action(tmp_path: Path):
     now = [1_700_000_000.0]
     calls = 0
