@@ -18,12 +18,14 @@ import os
 import tempfile
 from collections.abc import Callable, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from server.design.schema import DesignConfig, Expr
+from server.platform.memory import PhysicalMemory, physical_memory
 from server.preview.translate import design_to_mesher_config
 from server.solver.quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
 
@@ -53,57 +55,257 @@ LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES = 18_000
 MAX_SOLVER_MESH_ARTIFACT_TRIANGLES = 22_000
 
 
-def _dense_solver_memory_limit_bytes() -> int:
-    """How much RAM one dense BEM matrix may claim.
+# The dense-solver memory ceiling: how much RAM one dense BEM matrix may claim.
+#
+# This ceiling is what actually bounds the solvable frequency: the matrix costs
+# ``bytes_per_dof_squared * dof**2``, DOF grows as ``1/h**2``, and the mesh's
+# valid frequency grows only as ``1/h`` -- so the reachable frequency scales as
+# the fourth root of this number. A flat 8 GiB was 12.5% of a 64 GB workstation
+# and silently capped a large imported cabinet near 2 kHz, which reads as a
+# physics limit and is not one.
+#
+# A raised ceiling is permission, not advice. It stops the preflight refusing
+# meshes the host can afford; it is not a reason to spend the DOFs. Measured
+# ladders put normalised directivity and response shape converging 3-10x past
+# the elements-per-wavelength limit, so refining to satisfy that rule can cost
+# an order of magnitude for charts that already matched. The large-mesh
+# advisory above is what carries that cost warning.
+DENSE_SOLVER_MEMORY_CAP_BYTES = 64 * 1024**3
+# Used only when physical memory cannot be determined. It is a conservative
+# choice, not a measurement, and is reported as such.
+DENSE_SOLVER_UNKNOWN_MEMORY_LIMIT_BYTES = 4 * 1024**3
+DENSE_SOLVER_MEMORY_LIMIT_ENV = "WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES"
+DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV = "WG2_DENSE_SOLVER_MEMORY_LIMIT_UNSAFE"
 
-    This ceiling is what actually bounds the solvable frequency: the matrix
-    costs ``bytes_per_dof_squared * dof**2``, DOF grows as ``1/h**2``, and the
-    mesh's valid frequency grows only as ``1/h`` -- so the reachable frequency
-    scales as the fourth root of this number. A flat 8 GiB was 12.5% of a
-    64 GB workstation and silently capped a large imported cabinet near 2 kHz,
-    which reads as a physics limit and is not one.
 
-    Default to half of physical RAM, clamped to the old 8 GiB floor so no
-    machine gets *less* than before, and to 64 GiB so a very large host cannot
-    talk the preflight into approving a mesh nothing will finish solving.
-    ``WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES`` overrides it outright.
+def _format_memory_size(value: int | None) -> str:
+    """Bytes as GiB truncated to two places, so a stated size never exceeds the real one."""
 
-    A raised ceiling is permission, not advice. It stops the preflight
-    refusing meshes the host can afford; it is not a reason to spend the DOFs.
-    Measured ladders put normalised directivity and response shape converging
-    3-10x past the elements-per-wavelength limit, so refining to satisfy that
-    rule can cost an order of magnitude for charts that already matched. The
-    large-mesh advisory above is what carries that cost warning.
+    if value is None:
+        return "an unknown amount of"
+    if value < 1024**3 // 100:
+        return f"{value:,} bytes"
+    hundredths = value * 100 // 1024**3
+    return f"{hundredths // 100}.{hundredths % 100:02d}".rstrip("0").rstrip(".") + " GiB"
+
+
+@dataclass(frozen=True)
+class DenseSolverMemoryLimit:
+    """The dense-solver memory ceiling in force, and where it came from.
+
+    ``source`` is one of:
+
+    - ``physical-memory``: half of known physical memory;
+    - ``physical-memory-capped``: half of known physical memory exceeded
+      ``DENSE_SOLVER_MEMORY_CAP_BYTES``, so a very large host cannot talk the
+      preflight into approving a mesh nothing will finish solving;
+    - ``unknown-memory-default``: physical memory could not be determined, so
+      the conservative ``DENSE_SOLVER_UNKNOWN_MEMORY_LIMIT_BYTES`` applies;
+    - ``override``: ``WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES``, used exactly as
+      given, at or below physical memory -- or, when that is unknown, at or
+      below the conservative default, unchecked;
+    - ``unsafe-override``: the override exceeds physical memory (or, when that
+      is unknown, the conservative default) and
+      ``WG2_DENSE_SOLVER_MEMORY_LIMIT_UNSAFE=1`` allowed it.
     """
 
-    override = os.environ.get("WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES")
-    if override:
-        try:
-            requested = int(override)
-        except ValueError:
-            logger.warning(
-                "WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES=%r is not an integer; "
-                "using the derived limit",
-                override,
+    bytes: int
+    source: str
+    physical: PhysicalMemory
+
+    def describe(self) -> str:
+        host = _format_memory_size(self.physical.bytes)
+        if self.source == "physical-memory":
+            return f"half of this host's {host} physical memory"
+        if self.source == "physical-memory-capped":
+            return (
+                f"the {_format_memory_size(DENSE_SOLVER_MEMORY_CAP_BYTES)} cap, "
+                f"below half of this host's {host} physical memory"
             )
-        else:
-            if requested > 0:
-                return requested
-            logger.warning(
-                "WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES=%r is not positive; "
-                "using the derived limit",
-                override,
+        if self.source == "unknown-memory-default":
+            return (
+                "a conservative default, because this host's physical memory "
+                "could not be determined"
             )
-    floor = 8 * 1024**3
-    ceiling = 64 * 1024**3
-    try:
-        physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except (AttributeError, ValueError, OSError):
-        return floor
-    return max(floor, min(ceiling, physical // 2))
+        if self.source == "unsafe-override":
+            flagged = (
+                f"set by {DENSE_SOLVER_MEMORY_LIMIT_ENV} with "
+                f"{DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV}=1"
+            )
+            if self.physical.known:
+                return f"{flagged}, above this host's {host} physical memory"
+            return (
+                f"{flagged}; it could not be checked against physical memory, "
+                "which could not be determined"
+            )
+        if self.physical.known:
+            return f"set by {DENSE_SOLVER_MEMORY_LIMIT_ENV}, within this host's {host} physical memory"
+        return (
+            f"set by {DENSE_SOLVER_MEMORY_LIMIT_ENV}; it could not be checked "
+            "against physical memory, which could not be determined"
+        )
 
 
-DENSE_SOLVER_MEMORY_LIMIT_BYTES = _dense_solver_memory_limit_bytes()
+def _derived_dense_solver_memory_limit(host: PhysicalMemory) -> DenseSolverMemoryLimit:
+    # The old 8 GiB floor is gone on purpose: it handed an 8 GB host all of its
+    # RAM. A known host gets half, whatever that is.
+    if not host.known or host.bytes is None:
+        return DenseSolverMemoryLimit(
+            DENSE_SOLVER_UNKNOWN_MEMORY_LIMIT_BYTES, "unknown-memory-default", host
+        )
+    half = host.bytes // 2
+    if half > DENSE_SOLVER_MEMORY_CAP_BYTES:
+        return DenseSolverMemoryLimit(
+            DENSE_SOLVER_MEMORY_CAP_BYTES, "physical-memory-capped", host
+        )
+    return DenseSolverMemoryLimit(half, "physical-memory", host)
+
+
+def _refuse_override(message: str, *args: Any) -> None:
+    logger.warning(message + "; using the derived limit instead", *args)
+
+
+def _resolve_with_override(
+    host: PhysicalMemory, environ: Mapping[str, str]
+) -> DenseSolverMemoryLimit:
+    raw = environ.get(DENSE_SOLVER_MEMORY_LIMIT_ENV)
+    if raw is None or raw == "":
+        return _derived_dense_solver_memory_limit(host)
+    text = raw.strip()
+    if not (text.isascii() and text.isdigit()) or int(text) <= 0:
+        _refuse_override(
+            "%s=%r is not a positive whole number of bytes",
+            DENSE_SOLVER_MEMORY_LIMIT_ENV,
+            raw,
+        )
+        return _derived_dense_solver_memory_limit(host)
+    requested = int(text)
+    unsafe = environ.get(DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV, "").strip() == "1"
+    if not host.known or host.bytes is None:
+        # Nothing to check the override against. Lowering the ceiling is
+        # always safe; raising it past the conservative default is a claim
+        # about capacity nobody measured, so it needs the unsafe flag.
+        if requested <= DENSE_SOLVER_UNKNOWN_MEMORY_LIMIT_BYTES:
+            return DenseSolverMemoryLimit(requested, "override", host)
+        if unsafe:
+            logger.warning(
+                "%s=%d is above the conservative %s default and cannot be "
+                "checked: this host's physical memory could not be determined "
+                "(%s); using it anyway because %s=1",
+                DENSE_SOLVER_MEMORY_LIMIT_ENV,
+                requested,
+                _format_memory_size(DENSE_SOLVER_UNKNOWN_MEMORY_LIMIT_BYTES),
+                host.detail,
+                DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV,
+            )
+            return DenseSolverMemoryLimit(requested, "unsafe-override", host)
+        _refuse_override(
+            "%s=%d is above the conservative %s default and cannot be checked "
+            "against physical memory, which could not be determined (%s); set "
+            "%s=1 to use it unchecked",
+            DENSE_SOLVER_MEMORY_LIMIT_ENV,
+            requested,
+            _format_memory_size(DENSE_SOLVER_UNKNOWN_MEMORY_LIMIT_BYTES),
+            host.detail,
+            DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV,
+        )
+        return _derived_dense_solver_memory_limit(host)
+    if requested > host.bytes:
+        if unsafe:
+            logger.warning(
+                "%s=%d exceeds this host's %s physical memory (%s); using it "
+                "anyway because %s=1. A dense solve that large can exhaust memory.",
+                DENSE_SOLVER_MEMORY_LIMIT_ENV,
+                requested,
+                _format_memory_size(host.bytes),
+                host.source,
+                DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV,
+            )
+            return DenseSolverMemoryLimit(requested, "unsafe-override", host)
+        _refuse_override(
+            "%s=%d exceeds this host's %s physical memory (%s); set %s=1 to "
+            "allow a limit above physical memory",
+            DENSE_SOLVER_MEMORY_LIMIT_ENV,
+            requested,
+            _format_memory_size(host.bytes),
+            host.source,
+            DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV,
+        )
+        return _derived_dense_solver_memory_limit(host)
+    return DenseSolverMemoryLimit(requested, "override", host)
+
+
+def resolve_dense_solver_memory_limit(
+    *,
+    physical: PhysicalMemory | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> DenseSolverMemoryLimit:
+    """Work out the ceiling afresh from physical memory and the environment.
+
+    - Known physical memory: half of it, capped at 64 GiB. No floor lifts the
+      result above that half.
+    - Unknown physical memory: the conservative 4 GiB default, reported as
+      ``unknown-memory-default``, not as measured capacity.
+    - ``WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES``: a positive whole number of
+      bytes, used exactly as given. A malformed value is refused with a
+      warning. A value above known physical memory -- or, when that is
+      unknown, above the 4 GiB default -- is refused unless
+      ``WG2_DENSE_SOLVER_MEMORY_LIMIT_UNSAFE=1``.
+
+    Probes the host on every call; the solver path uses the cached
+    ``dense_solver_memory_limit()`` instead.
+    """
+
+    host = physical_memory() if physical is None else physical
+    limit = _resolve_with_override(host, os.environ if environ is None else environ)
+    if limit.source == "unknown-memory-default":
+        logger.warning(
+            "This host's physical memory could not be determined (%s); the "
+            "dense-solver memory ceiling is the conservative %s default",
+            host.detail or host.source,
+            _format_memory_size(limit.bytes),
+        )
+    return limit
+
+
+@functools.lru_cache(maxsize=1)
+def dense_solver_memory_limit() -> DenseSolverMemoryLimit:
+    """The ceiling for this process: resolved on first use, then fixed.
+
+    Resolving on first use rather than at import means the probe and any
+    refusal warning happen after logging is configured. Fixing it afterwards
+    means a mesh admitted under one ceiling is never reported under another,
+    and a cached mesh artifact stays consistent with the limit that admitted
+    it. Tests that change the environment call ``cache_clear()``.
+    """
+
+    limit = resolve_dense_solver_memory_limit()
+    logger.info(
+        "Dense-solver memory ceiling: %s (%s)",
+        _format_memory_size(limit.bytes),
+        limit.describe(),
+    )
+    return limit
+
+
+def _dense_solver_memory_limit_bytes() -> int:
+    """The ceiling in bytes, resolved afresh (uncached)."""
+
+    return resolve_dense_solver_memory_limit().bytes
+
+
+def _dense_solver_memory_limit_stats(limit: DenseSolverMemoryLimit) -> dict[str, Any]:
+    """The applied ceiling and its provenance, as mesh ``stats`` fields."""
+
+    return {
+        "dense_solver_memory_limit_bytes": limit.bytes,
+        "dense_solver_memory_limit_source": limit.source,
+        "dense_solver_physical_memory_bytes": limit.physical.bytes,
+        "dense_solver_physical_memory_source": limit.physical.source,
+        "dense_solver_physical_memory_known": limit.physical.known,
+    }
+
+
 # 2: integrity now carries a self_intersection report.
 SOLVER_MESH_CACHE_FORMAT_VERSION = 2
 
@@ -346,14 +548,18 @@ def _enforce_dense_solver_memory_ceiling(
     *,
     mode: str = "",
     tags: np.ndarray | None = None,
-) -> dict[str, int]:
+    limit: DenseSolverMemoryLimit | None = None,
+) -> dict[str, Any]:
     """Fail before assembly when conservative dense storage exceeds the limit.
 
-    The limit is ``DENSE_SOLVER_MEMORY_LIMIT_BYTES``, which is derived from
-    the host's RAM rather than fixed -- so tests that assert a boundary DOF
-    count must pin it rather than inherit it.
+    The limit is ``dense_solver_memory_limit()`` unless one is passed. It is
+    derived from the host's RAM rather than fixed -- so tests that assert a
+    boundary DOF count must pin it rather than inherit it. The returned
+    requirements carry the limit applied under ``"limit"``, so a caller
+    reports exactly the ceiling the mesh was held to.
     """
 
+    applied = dense_solver_memory_limit() if limit is None else limit
     requirements = _dense_solver_memory_requirements(
         triangles,
         quadrants,
@@ -362,7 +568,7 @@ def _enforce_dense_solver_memory_ceiling(
     )
     used_vertex_count = requirements["used_vertex_count"]
     estimated_bytes = requirements["estimated_bytes"]
-    if estimated_bytes > DENSE_SOLVER_MEMORY_LIMIT_BYTES:
+    if estimated_bytes > applied.bytes:
         multiplier = _domain_multiplier_for_quadrants(normalise_quadrants(quadrants))
         coupled = (
             f" plus {requirements['aperture_triangle_count']:,} aperture P0 DOFs"
@@ -375,10 +581,11 @@ def _enforce_dense_solver_memory_ceiling(
             f"{multiplier}x symmetry domain, with a conservative dense-solver "
             "memory estimate of "
             f"{estimated_bytes / 1024**3:.2f} GiB. This exceeds the "
-            f"{DENSE_SOLVER_MEMORY_LIMIT_BYTES / 1024**3:.0f} GiB safety "
-            "ceiling; coarsen the relevant mm mesh resolution before solving."
+            f"{_format_memory_size(applied.bytes)} safety ceiling "
+            f"({applied.describe()}); coarsen the relevant mm mesh resolution "
+            "before solving."
         )
-    return requirements
+    return {**requirements, "limit": applied}
 
 
 def _require_closed_acoustic_topology(
@@ -803,7 +1010,11 @@ def _build_sync(
             ),
             "meshTriangleLimitExceeded": full_domain_count > budget_full_domain,
             "meshArtifactActualDomainTriangleLimit": MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
-            "meshDenseMemoryLimitBytes": DENSE_SOLVER_MEMORY_LIMIT_BYTES,
+            "meshDenseMemoryLimitBytes": dense_memory["limit"].bytes,
+            "meshDenseMemoryLimitSource": dense_memory["limit"].source,
+            "meshDenseMemoryPhysicalBytes": dense_memory["limit"].physical.bytes,
+            "meshDenseMemoryPhysicalSource": dense_memory["limit"].physical.source,
+            "meshDenseMemoryPhysicalKnown": dense_memory["limit"].physical.known,
             "meshDenseMemoryEstimateBytes": dense_memory["estimated_bytes"],
             "meshDenseMetalEstimateBytes": dense_memory["metal_bytes"],
             "meshDenseBemppEstimateBytes": dense_memory["bempp_bytes"],
@@ -885,7 +1096,7 @@ def _build_sync(
         "max_edge_guard_mm": max_edge_guard_mm,
         "soft_warning_full_domain_triangle_limit": budget_full_domain,
         "artifact_actual_domain_triangle_limit": MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
-        "dense_solver_memory_limit_bytes": DENSE_SOLVER_MEMORY_LIMIT_BYTES,
+        **_dense_solver_memory_limit_stats(dense_memory["limit"]),
         "dense_solver_memory_estimate_bytes": dense_memory["estimated_bytes"],
         "dense_solver_used_vertex_count": dense_memory["used_vertex_count"],
         "dense_solver_metal_dof_count": dense_memory["metal_dof_count"],
@@ -992,7 +1203,11 @@ async def build_solver_mesh(
 
 __all__ = [
     "CANONICAL_SURFACE_TAGS",
-    "DENSE_SOLVER_MEMORY_LIMIT_BYTES",
+    "DENSE_SOLVER_MEMORY_CAP_BYTES",
+    "DENSE_SOLVER_MEMORY_LIMIT_ENV",
+    "DENSE_SOLVER_MEMORY_LIMIT_UNSAFE_ENV",
+    "DENSE_SOLVER_UNKNOWN_MEMORY_LIMIT_BYTES",
+    "DenseSolverMemoryLimit",
     "LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES",
     "MAX_SOLVER_MESH_ARTIFACT_TRIANGLES",
     "MOUTH_APERTURE_SURFACE_TAG",
@@ -1001,5 +1216,7 @@ __all__ = [
     "SOLVER_MESH_CACHE_FORMAT_VERSION",
     "build_solver_mesh",
     "clear_solver_mesh_cache",
+    "dense_solver_memory_limit",
+    "resolve_dense_solver_memory_limit",
     "solver_mesh_cache_info",
 ]

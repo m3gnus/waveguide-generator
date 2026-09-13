@@ -20,8 +20,8 @@ from typing import Any
 import numpy as np
 
 from server.mesh.builder import (
-    DENSE_SOLVER_MEMORY_LIMIT_BYTES,
     MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
+    _dense_solver_memory_limit_stats,
     _enforce_artifact_triangle_ceiling,
     _enforce_dense_solver_memory_ceiling,
     _self_intersection_warnings,
@@ -3133,7 +3133,7 @@ def build_imported_mesh(
                     "bounds_m": {"min_x": float(bounds_min[0]), "min_y": float(bounds_min[1]), "min_z": float(bounds_min[2]), "max_x": float(bounds_max[0]), "max_y": float(bounds_max[1]), "max_z": float(bounds_max[2])},
                     "domain_multiplier": float(dense["domain_multiplier"]),
                     "artifact_actual_domain_triangle_limit": MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
-                    "dense_solver_memory_limit_bytes": DENSE_SOLVER_MEMORY_LIMIT_BYTES,
+                    **_dense_solver_memory_limit_stats(dense["limit"]),
                     "dense_solver_memory_estimate_bytes": dense["estimated_bytes"],
                     "dense_solver_used_vertex_count": dense["used_vertex_count"],
                     "dense_solver_metal_dof_count": dense["metal_dof_count"],

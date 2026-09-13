@@ -7,6 +7,7 @@ import ctypes
 import importlib.util
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import sys
@@ -218,6 +219,19 @@ def test_build_solver_mesh_continues_past_user_budget_and_preserves_warning(
         result["stats"]["dense_solver_metal_estimate_bytes"],
         result["stats"]["dense_solver_bempp_estimate_bytes"],
     )
+    # The ceiling the mesh was admitted under is reported with its provenance,
+    # in the stats and in the metadata that already carried the byte count.
+    applied = mesh_builder.dense_solver_memory_limit()
+    assert result["stats"]["dense_solver_memory_limit_bytes"] == applied.bytes
+    assert result["stats"]["dense_solver_memory_limit_source"] == applied.source
+    assert result["stats"]["dense_solver_physical_memory_bytes"] == applied.physical.bytes
+    assert result["stats"]["dense_solver_physical_memory_source"] == applied.physical.source
+    assert result["stats"]["dense_solver_physical_memory_known"] is applied.physical.known
+    assert result["metadata"]["meshDenseMemoryLimitBytes"] == applied.bytes
+    assert result["metadata"]["meshDenseMemoryLimitSource"] == applied.source
+    assert result["metadata"]["meshDenseMemoryPhysicalBytes"] == applied.physical.bytes
+    assert result["metadata"]["meshDenseMemoryPhysicalSource"] == applied.physical.source
+    assert result["metadata"]["meshDenseMemoryPhysicalKnown"] is applied.physical.known
     assert len(result["stats"]["warnings"]) == 1
     warning = result["stats"]["warnings"][0]
     assert "7,173" in warning
@@ -273,14 +287,21 @@ def _triangles_using(vertex_count: int) -> np.ndarray:
 def eight_gib_ceiling(monkeypatch: pytest.MonkeyPatch) -> int:
     """Pin the dense-memory limit so DOF boundaries are host-independent.
 
-    ``DENSE_SOLVER_MEMORY_LIMIT_BYTES`` is derived from physical RAM, so a
-    test that inherits it asserts a different boundary on every machine --
-    and would pass here while failing in CI. These tests are about the
-    boundary *arithmetic*, so they supply the limit themselves.
+    ``dense_solver_memory_limit()`` is derived from physical RAM, so a test
+    that inherits it asserts a different boundary on every machine -- and
+    would pass here while failing in CI. These tests are about the boundary
+    *arithmetic*, so they supply the limit themselves.
     """
 
+    from server.platform.memory import PhysicalMemory
+
     limit = 8 * 1024**3
-    monkeypatch.setattr(mesh_builder, "DENSE_SOLVER_MEMORY_LIMIT_BYTES", limit)
+    pinned = mesh_builder.DenseSolverMemoryLimit(
+        bytes=limit,
+        source="physical-memory",
+        physical=PhysicalMemory(bytes=2 * limit, source="sysconf", known=True),
+    )
+    monkeypatch.setattr(mesh_builder, "dense_solver_memory_limit", lambda: pinned)
     return limit
 
 
@@ -305,13 +326,254 @@ def test_dense_solver_memory_ceiling_boundaries_follow_p1_dofs_and_symmetry(
         )
 
 
-def test_dense_solver_memory_limit_follows_host_ram_within_bounds() -> None:
-    """Never below the historical 8 GiB, never above 64 GiB, and overridable."""
+GIB = 1024**3
+_OVERRIDE = "WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES"
+_UNSAFE = "WG2_DENSE_SOLVER_MEMORY_LIMIT_UNSAFE"
 
-    from server.mesh.builder import _dense_solver_memory_limit_bytes
 
-    derived = _dense_solver_memory_limit_bytes()
-    assert 8 * 1024**3 <= derived <= 64 * 1024**3
+class _FakeGlobalMemoryStatusEx:
+    """``kernel32.GlobalMemoryStatusEx`` for a Windows host simulated off Windows."""
+
+    def __init__(self, total_bytes: int | None) -> None:
+        self.total_bytes = total_bytes
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, status_pointer) -> int:
+        if self.total_bytes is None:
+            return 0
+        status_pointer.contents.ullTotalPhys = self.total_bytes
+        return 1
+
+
+def _simulate_windows_host(
+    monkeypatch: pytest.MonkeyPatch, total_bytes: int | None
+) -> None:
+    """Windows as the limit sees it: no ``os.sysconf`` at all, RAM via kernel32."""
+
+    query = _FakeGlobalMemoryStatusEx(total_bytes)
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    monkeypatch.delattr(os, "sysconf", raising=False)
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(GlobalMemoryStatusEx=query),
+        raising=False,
+    )
+
+
+def _simulate_posix_host(
+    monkeypatch: pytest.MonkeyPatch, total_bytes: int | None
+) -> None:
+    """A Linux host whose ``sysconf`` reports ``total_bytes``, or fails for None."""
+
+    page_size = 4096
+
+    def sysconf(name: str) -> int:
+        if total_bytes is None:
+            raise OSError("sysconf failed")
+        return {"SC_PAGE_SIZE": page_size, "SC_PHYS_PAGES": total_bytes // page_size}[name]
+
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(os, "sysconf", sysconf, raising=False)
+
+
+@pytest.fixture
+def memory_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """No inherited override: every limit below comes from the simulated host."""
+
+    monkeypatch.delenv(_OVERRIDE, raising=False)
+    monkeypatch.delenv(_UNSAFE, raising=False)
+    return monkeypatch
+
+
+def test_windows_32gb_host_gets_half_its_ram(memory_env: pytest.MonkeyPatch) -> None:
+    # Windows has no os.sysconf, so this used to be the 8 GiB floor on every
+    # Windows host, whatever its RAM.
+    _simulate_windows_host(memory_env, 32 * GIB)
+
+    assert mesh_builder._dense_solver_memory_limit_bytes() == 16 * GIB
+    limit = mesh_builder.resolve_dense_solver_memory_limit()
+    assert limit.source == "physical-memory"
+    assert limit.physical.source == "GlobalMemoryStatusEx"
+    assert limit.physical.known is True
+
+
+def test_small_host_is_not_lifted_above_its_safe_half(memory_env: pytest.MonkeyPatch) -> None:
+    # The old 8 GiB floor handed an 8 GB host all of its RAM.
+    _simulate_posix_host(memory_env, 8 * GIB)
+
+    assert mesh_builder._dense_solver_memory_limit_bytes() == 4 * GIB
+
+
+def test_large_host_is_capped_at_64_gib(memory_env: pytest.MonkeyPatch) -> None:
+    _simulate_posix_host(memory_env, 256 * GIB)
+
+    assert mesh_builder._dense_solver_memory_limit_bytes() == 64 * GIB
+    assert mesh_builder.resolve_dense_solver_memory_limit().source == "physical-memory-capped"
+
+
+@pytest.mark.parametrize("host", ["windows", "posix"])
+def test_failing_memory_probe_is_unknown_and_conservative(
+    memory_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, host: str
+) -> None:
+    if host == "windows":
+        _simulate_windows_host(memory_env, None)
+    else:
+        _simulate_posix_host(memory_env, None)
+
+    with caplog.at_level("WARNING", logger="server.mesh.builder"):
+        assert mesh_builder._dense_solver_memory_limit_bytes() == 4 * GIB
+        limit = mesh_builder.resolve_dense_solver_memory_limit()
+    assert limit.bytes == 4 * GIB
+    assert limit.source == "unknown-memory-default"
+    assert limit.physical.known is False
+    assert limit.physical.bytes is None
+    assert "could not be determined" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "value", ["lots", "8GiB", "1.5e9", "0", "-4096", "+4096", "4_096", "   "]
+)
+def test_malformed_override_is_refused_and_reported(
+    memory_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, value: str
+) -> None:
+    _simulate_posix_host(memory_env, 16 * GIB)
+    memory_env.setenv(_OVERRIDE, value)
+
+    with caplog.at_level("WARNING", logger="server.mesh.builder"):
+        assert mesh_builder._dense_solver_memory_limit_bytes() == 8 * GIB
+        limit = mesh_builder.resolve_dense_solver_memory_limit()
+    assert limit.source == "physical-memory"
+    assert _OVERRIDE in caplog.text
+
+
+def test_override_within_ram_is_used_exactly_not_clamped(
+    memory_env: pytest.MonkeyPatch,
+) -> None:
+    # Above the derived 64 GiB cap but below RAM: the operator asked for it,
+    # so it is used as given and reported as an override.
+    _simulate_posix_host(memory_env, 256 * GIB)
+    memory_env.setenv(_OVERRIDE, str(100 * GIB))
+
+    assert mesh_builder._dense_solver_memory_limit_bytes() == 100 * GIB
+    limit = mesh_builder.resolve_dense_solver_memory_limit()
+    assert limit.source == "override"
+    assert limit.physical.bytes == 256 * GIB
+
+
+@pytest.mark.parametrize("flag", [None, "0", "yes", "true"])
+def test_override_above_ram_without_the_unsafe_flag_is_refused(
+    memory_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, flag: str | None
+) -> None:
+    _simulate_posix_host(memory_env, 16 * GIB)
+    memory_env.setenv(_OVERRIDE, str(32 * GIB))
+    if flag is not None:
+        memory_env.setenv(_UNSAFE, flag)
+
+    with caplog.at_level("WARNING", logger="server.mesh.builder"):
+        assert mesh_builder._dense_solver_memory_limit_bytes() == 8 * GIB
+        limit = mesh_builder.resolve_dense_solver_memory_limit()
+    assert limit.source == "physical-memory"
+    assert _UNSAFE in caplog.text
+
+
+def test_override_above_ram_with_the_unsafe_flag_is_used_and_marked(
+    memory_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _simulate_posix_host(memory_env, 16 * GIB)
+    memory_env.setenv(_OVERRIDE, str(32 * GIB))
+    memory_env.setenv(_UNSAFE, "1")
+
+    with caplog.at_level("WARNING", logger="server.mesh.builder"):
+        assert mesh_builder._dense_solver_memory_limit_bytes() == 32 * GIB
+        limit = mesh_builder.resolve_dense_solver_memory_limit()
+    assert limit.source == "unsafe-override"
+    assert "exceeds" in caplog.text
+
+
+def test_lowering_override_on_a_host_of_unknown_memory_is_used_and_marked_unverified(
+    memory_env: pytest.MonkeyPatch,
+) -> None:
+    _simulate_posix_host(memory_env, None)
+    memory_env.setenv(_OVERRIDE, str(3 * GIB))
+
+    assert mesh_builder._dense_solver_memory_limit_bytes() == 3 * GIB
+    limit = mesh_builder.resolve_dense_solver_memory_limit()
+    assert limit.source == "override"
+    assert limit.physical.known is False
+    assert "could not be checked" in limit.describe()
+
+
+def test_unverifiable_override_above_the_default_needs_the_unsafe_flag(
+    memory_env: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # With physical memory unknown, raising the ceiling past the conservative
+    # default claims capacity nobody measured.
+    _simulate_posix_host(memory_env, None)
+    memory_env.setenv(_OVERRIDE, str(6 * GIB))
+
+    with caplog.at_level("WARNING", logger="server.mesh.builder"):
+        assert mesh_builder._dense_solver_memory_limit_bytes() == 4 * GIB
+        refused = mesh_builder.resolve_dense_solver_memory_limit()
+    assert refused.source == "unknown-memory-default"
+    assert _UNSAFE in caplog.text
+
+    memory_env.setenv(_UNSAFE, "1")
+    allowed = mesh_builder.resolve_dense_solver_memory_limit()
+    assert allowed.bytes == 6 * GIB
+    assert allowed.source == "unsafe-override"
+    assert "could not be checked" in allowed.describe()
+
+
+def test_limit_is_resolved_on_first_use_not_at_import(
+    memory_env: pytest.MonkeyPatch,
+) -> None:
+    _simulate_posix_host(memory_env, 16 * GIB)
+    assert not hasattr(mesh_builder, "DENSE_SOLVER_MEMORY_LIMIT_BYTES")
+    mesh_builder.dense_solver_memory_limit.cache_clear()
+    try:
+        memory_env.setenv(_OVERRIDE, str(3 * GIB))
+        assert mesh_builder.dense_solver_memory_limit().bytes == 3 * GIB
+        # Cached once resolved: a mesh admitted under one limit is never
+        # reported under another within the same process.
+        memory_env.setenv(_OVERRIDE, str(5 * GIB))
+        assert mesh_builder.dense_solver_memory_limit().bytes == 3 * GIB
+    finally:
+        mesh_builder.dense_solver_memory_limit.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("physical_bytes", "shown", "reason"),
+    [
+        (None, "4 GiB", "physical memory could not be determined"),
+        (31 * GIB // 2, "7.75 GiB", "half of this host's 15.5 GiB physical memory"),
+    ],
+)
+def test_ceiling_refusal_states_the_limit_and_its_source(
+    physical_bytes: int | None, shown: str, reason: str
+) -> None:
+    from server.platform.memory import PhysicalMemory
+
+    physical = PhysicalMemory(
+        bytes=physical_bytes,
+        source="sysconf" if physical_bytes else "unknown",
+        known=physical_bytes is not None,
+    )
+    limit = mesh_builder.resolve_dense_solver_memory_limit(physical=physical, environ={})
+    # Rounding 7.75 GiB to "8 GiB" would state a ceiling the host does not have.
+    with pytest.raises(RuntimeError) as excinfo:
+        _enforce_dense_solver_memory_ceiling(_triangles_using(9_880), 1234, limit=limit)
+    message = str(excinfo.value)
+    assert f"{shown} safety ceiling" in message
+    assert reason in message
+
+
+def test_stated_memory_sizes_are_truncated_never_rounded_up() -> None:
+    assert mesh_builder._format_memory_size(8 * GIB - 1) == "7.99 GiB"
+    assert mesh_builder._format_memory_size(8 * GIB) == "8 GiB"
+    assert mesh_builder._format_memory_size(31 * GIB // 2) == "15.5 GiB"
+    assert mesh_builder._format_memory_size(4096) == "4,096 bytes"
 
 
 def test_dense_solver_guard_counts_only_vertices_referenced_by_triangles() -> None:

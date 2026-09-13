@@ -322,6 +322,17 @@ def test_symmetric_return_is_cut_to_a_quarter_with_tags_and_areas_intact(
         stats["dense_solver_metal_estimate_bytes"],
         stats["dense_solver_bempp_estimate_bytes"],
     )
+    # The imported path reports the ceiling it was held to, with provenance.
+    # The mesh is built in the isolated CAD child, whose environment is an
+    # allowlist with no WG2_* variables (server/cadlink/isolation.py), so the
+    # child resolves the ceiling from this host with no override in force.
+    from server.mesh.builder import resolve_dense_solver_memory_limit
+
+    applied = resolve_dense_solver_memory_limit(environ={})
+    assert stats["dense_solver_memory_limit_bytes"] == applied.bytes
+    assert stats["dense_solver_memory_limit_source"] == applied.source
+    assert stats["dense_solver_physical_memory_source"] == applied.physical.source
+    assert stats["dense_solver_physical_memory_known"] is applied.physical.known
 
     # The throat disc straddles both cut planes, so a quarter of it is left.
     provenance = record["post_cut_source_areas"]["source-hf"]
