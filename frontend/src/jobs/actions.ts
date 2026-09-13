@@ -392,6 +392,42 @@ export async function submitDesign(
   return ((await response.json()) as { job_id: string }).job_id;
 }
 
+/**
+ * The server refused an imported solve submission.
+ *
+ * The message is exactly what `detail()` produces, so a caller that only reads
+ * messages sees no difference. The code is the error envelope's `error.code`,
+ * kept because one refusal has to be told apart from the rest: "no engine on
+ * this machine can solve imported geometry" is a capability the host lacks,
+ * not a verdict on the request.
+ */
+export class SolveSubmissionRefused extends Error {
+  readonly status: number;
+  readonly code: string | null;
+
+  constructor(message: string, status: number, code: string | null) {
+    super(message);
+    this.name = 'SolveSubmissionRefused';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function submissionRefusal(response: Response): Promise<SolveSubmissionRefused> {
+  let message: string | null = null;
+  let code: string | null = null;
+  try {
+    const body = await response.json() as { detail?: unknown; error?: { code?: unknown } | null };
+    message = formatApiDetail(body.detail);
+    code = typeof body.error?.code === 'string' ? body.error.code : null;
+  } catch { /* fall through */ }
+  return new SolveSubmissionRefused(
+    message || `${response.status} ${response.statusText}`.trim(),
+    response.status,
+    code,
+  );
+}
+
 export async function submitImported(
   submission: ImportedSolveSubmission,
   fetcher: typeof fetch = fetch,
@@ -407,6 +443,6 @@ export async function submitImported(
       ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
     }),
   });
-  if (!response.ok) throw new Error(await detail(response));
+  if (!response.ok) throw await submissionRefusal(response);
   return ((await response.json()) as { job_id: string }).job_id;
 }

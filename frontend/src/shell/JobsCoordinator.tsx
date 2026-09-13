@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
-import { planSolveDesign, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
+import { planSolveDesign, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import {
   useCapabilities,
   useCapabilityRefreshOnReconnect,
@@ -48,10 +48,17 @@ interface SolveControl {
   notice: SolveNotice | null;
 }
 
-/** The imported path forces Metal, so an unavailable engine is not a gate the
- * user can satisfy — it is a permanent refusal on this machine. Automatic
- * callers need to tell that apart from a blocker to avoid parking forever. */
+/** No engine on this machine can solve imported geometry right now. The server
+ * decides that from what each engine declares it can solve. It is a capability
+ * the host lacks, not a verdict on the request, so an automatic caller keeps
+ * the request -- blocked, with a way forward -- instead of refusing it. */
 export class SolveEngineUnavailableError extends Error {}
+
+/** The server refusal that means "no engine here can take this geometry".
+ * `imported_engine_unsupported` is deliberately absent: it answers a request
+ * that named an engine, which is a verdict on that request, and runImported
+ * always sends AUTO. */
+const IMPORTED_CAPABILITY_CODES: ReadonlySet<string> = new Set(['engine_unavailable']);
 
 interface CoordinatorBridgeSnapshot {
   run(design: DesignDocument, designRevision?: number): Promise<void>;
@@ -59,8 +66,8 @@ interface CoordinatorBridgeSnapshot {
    * refused this call. */
   runImported(submission: ImportedSolveSubmission): Promise<string | null>;
   /** The single CAD solve entry point: readiness gate, submission build, and
-   * submit through runImported so every caller inherits the Metal capability
-   * check, the submission mutex, run naming, and the job-list refresh.
+   * submit through runImported so every caller inherits the typed capability
+   * error, the submission mutex, run naming, and the job-list refresh.
    * Throws the blocking reason; returns 'busy' when a solve is already in
    * flight so an automatic caller can say so instead of silently doing
    * nothing. */
@@ -271,11 +278,12 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (submissionInFlight.current) return null;
     submissionInFlight.current = true;
     try {
-      const metal = capabilities.find((engine) => engine.name.toLowerCase() === 'metal');
-      if (!metal?.available) throw new SolveEngineUnavailableError(metal?.reason ?? capabilityError ?? 'Metal engine is unavailable');
       setSubmitting(true);
       setActionError(null);
-      const options: SolveOptions = { ...submission.options, engine: 'metal', symmetry: 'auto' };
+      // The server picks the engine from what each engine declares it can
+      // solve (`resolve_imported_submission`); a client-side Metal check and a
+      // forced engine here would pre-empt that decision.
+      const options: SolveOptions = { ...submission.options, engine: 'auto', symmetry: 'auto' };
       const effectiveSubmission = { ...submission, options };
       // The CAD document names its own runs; see jobs/runNameSource.
       const designName = currentRunNameSource().name;
@@ -288,6 +296,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // A typed refusal is the server naming a condition; the user needs the
       // remedy. Translating here covers every imported entry point at once.
       const jobId = await submitImported(effectiveSubmission, fetch, label, clientRequestId).catch((error) => {
+        // No engine here can solve imported geometry: a capability this
+        // machine lacks, which an automatic caller keeps rather than refuses.
+        if (
+          error instanceof SolveSubmissionRefused
+          && error.code !== null
+          && IMPORTED_CAPABILITY_CODES.has(error.code)
+        ) {
+          throw new SolveEngineUnavailableError(error.message);
+        }
         throw error instanceof Error
           ? new Error(explainImportedRefusal(error.message))
           : error;
@@ -308,7 +325,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capabilities, capabilityError, now, preferences]);
+  }, [now, preferences]);
 
   // Nothing awaits between the mutex read and runImported's own claim of it,
   // so a busy report here cannot race a submission into existence.

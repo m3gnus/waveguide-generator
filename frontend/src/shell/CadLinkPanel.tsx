@@ -505,11 +505,12 @@ export function CadLinkPanel() {
   const sendToFusion = () => { void cadCoordinator.sendWgToFusion().catch(() => undefined); };
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
-  // Imported geometry is solved on Metal or not at all: runtime.py rewrites
-  // AUTO to metal and refuses bempp outright. Without Metal the whole round
-  // trip still works as a CAD workflow and only the solve is out of reach, so
-  // this states the boundary up front instead of hiding the panel or letting
-  // someone discover it after exporting and preparing the model.
+  // Imported geometry is solved only by an engine that declares it (runtime.py
+  // `resolve_imported_submission`), and today that is Metal alone. Without
+  // Metal the whole round trip still works as a CAD workflow and only the
+  // solve is out of reach, so this states the boundary up front instead of
+  // hiding the panel or letting someone discover it after exporting and
+  // preparing the model.
   const { engines: solverEngines, isLoading: capabilitiesLoading } = useCapabilities();
   const metalUnavailable = !capabilitiesLoading
     && !solverEngines.some((engine) => engine.name.toLowerCase() === 'metal' && engine.available);
