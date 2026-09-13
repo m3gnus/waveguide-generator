@@ -385,10 +385,12 @@ add-in it ships.
   `.fusion-return-request.json` and `.fusion-handoff.json`, their records
   (`.legacy-slot.json`), and request files of another schema. No add-in this WG talks to
   runs them.
-- **A rollback** to a WG older than version 3 puts that release's add-in back at its
-  next start, because that WG also brings the managed add-in to its own pin. The pair
-  therefore always matches. The older WG removes nothing of version 3; it does not read
-  those files, and the next update removes nothing it still needs.
+- **A rollback** to a release before version 3 (v0.3.2, v0.3.3-rc.1) leaves the newer
+  add-in in place: those releases do not manage WGLink. The add-in refuses that WG's
+  requests and says so, and a solve command it writes waits untaken, with a notice (see
+  "Capability file"). Reinstalling the release's WGLink, or updating WG, restores a
+  matching pair. The older WG removes nothing of version 3; the next update of WG takes
+  what is still waiting.
 
 ## Capability file
 
@@ -402,8 +404,14 @@ WG tells the add-in which delivery version it reads in
 - **Reading it.** A reader ignores fields it does not know. A missing or unreadable file,
   a `schemaVersion` the reader does not know, or a value that is not an integer read as
   "WG does not speak version 3", and the add-in refuses as above.
-- **A stale file.** WG never deletes it. An older WG that runs on the same data folder
-  overwrites it with its own versions at its start.
+- **A stale file.** WG never deletes it, and a release before version 3 neither writes
+  nor removes it. After a downgrade it can therefore still say 3 while the older WG
+  runs. The add-in does not rely on it alone:
+  - it reports a single-slot marker, or a request file of another schema, as an older
+    WG's whatever the file says. A version-3 WG removes those at its start, before it
+    advertises, so one found beside a "3" was written since;
+  - it tells the user when WG has not taken a solve command within about a minute. The
+    command is not moved or dropped; it runs when a WG that reads it takes it.
 
 ## WG-produced Fusion requests
 
