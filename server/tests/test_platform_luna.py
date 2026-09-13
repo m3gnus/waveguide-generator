@@ -35,7 +35,7 @@ from server.platform.origin import (
     parse_extra_websocket_origins,
     websocket_request_allowed,
 )
-from server.platform.paths import default_runs_dir, ensure_data_layout
+from server.platform.paths import DATA_DIR_ENV, default_runs_dir, ensure_data_layout
 from server.platform.signal_rearm import (
     rearm_registered_signals,
     register_signal_rearm,
@@ -269,6 +269,11 @@ def test_launcher_stops_log_listener_on_early_port_failure(
     """Port validation happens after logging starts and must still drain it."""
 
     monkeypatch.setenv("WG2_PORT", "not-a-port")
+    # ``--data-dir`` makes serve.main write WG2_DATA_DIR into os.environ for the
+    # rest of the process -- right for a launcher, wrong in a shared test
+    # process, where every later test would inherit this tmp_path. Registering
+    # the variable first lets monkeypatch put the suite's value back.
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
 
     assert serve.main(["--no-browser", "--data-dir", str(tmp_path)]) == 1
     assert logging_setup._listener is None

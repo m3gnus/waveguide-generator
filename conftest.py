@@ -50,3 +50,61 @@ def sandbox_data_dir() -> Iterator[Path]:
         yield SANDBOX_DATA_DIR
     finally:
         shutil.rmtree(SANDBOX_DATA_DIR, ignore_errors=True)
+
+
+#: Every variable the application reads is spelled ``WG2_*``.
+APPLICATION_ENV_PREFIX = "WG2_"
+
+
+def _application_environment() -> dict[str, str]:
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name.startswith(APPLICATION_ENV_PREFIX)
+    }
+
+
+@pytest.fixture(autouse=True)
+def _no_test_leaks_application_environment(
+    request: pytest.FixtureRequest,
+) -> Iterator[None]:
+    """Fail the test that leaves a ``WG2_*`` variable changed for later tests.
+
+    Production code may write the process environment: ``launch/serve.py``
+    stores ``--data-dir`` in ``WG2_DATA_DIR`` so every later accessor agrees
+    with it, which is right for a launcher that owns its process and wrong for
+    a test that shares one. A test that calls such an entry point in-process
+    without registering the variable with ``monkeypatch`` hands its own
+    ``tmp_path`` to every test after it, and the test that then fails is a
+    stranger, in another file, whose log paths name the leaker's directory.
+
+    ``monkeypatch`` restores before this teardown runs (this autouse fixture is
+    set up first, so it is torn down last), so only an unrestored write is
+    reported. The environment is put back before failing, so one leak costs one
+    error rather than every test that follows it.
+
+    No ``monkeypatch`` here, for the reason ``server/tests/conftest.py`` gives
+    at ``_no_test_opens_a_dialog``: requesting it from a suite-wide autouse
+    fixture reorders teardown for every test.
+    """
+
+    before = _application_environment()
+    yield
+    after = _application_environment()
+    if after == before:
+        return
+    changed = sorted(
+        name for name in before.keys() | after.keys() if before.get(name) != after.get(name)
+    )
+    for name in after.keys() - before.keys():
+        del os.environ[name]
+    os.environ.update(before)
+    details = "; ".join(
+        f"{name}: {before.get(name)!r} -> {after.get(name)!r}" for name in changed
+    )
+    pytest.fail(
+        f"{request.node.nodeid} left the application environment changed "
+        f"({details}). Register the variable with monkeypatch.setenv or "
+        "monkeypatch.delenv before calling code that writes os.environ.",
+        pytrace=False,
+    )
