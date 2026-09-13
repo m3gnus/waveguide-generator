@@ -782,9 +782,15 @@ export const useDesignStore = create<DesignStore>()(
 );
 
 export function resetDesignStore(): void {
-  useDesignStore.temporal.getState().clear();
-  useDesignStore.temporal.getState().resume();
-  useDesignStore.setState({ design: structuredClone(seedDesign), designRevision: 1, dragSnapshot: null });
+  // New starts a document, so the one it replaces must not become an undo step
+  // inside it: reset while history is paused, then start history empty.
+  useDesignStore.temporal.getState().pause();
+  try {
+    useDesignStore.setState({ design: structuredClone(seedDesign), designRevision: 1, dragSnapshot: null });
+  } finally {
+    useDesignStore.temporal.getState().clear();
+    useDesignStore.temporal.getState().resume();
+  }
   bump('load', true, 'ordinary');
 }
 
@@ -793,14 +799,29 @@ export function resetDesignStore(): void {
  * geometry revision. Directivity changes do not alter the preview mesh; this
  * sidecar update keeps CAD-link hashing and the next CAD-linked export aligned
  * with the committed `.cfg` while avoiding a pointless coarse/fine geometry rebuild.
+ *
+ * It is bookkeeping, not an edit, so it is never an undo step of its own:
+ * otherwise the next undo would silently revert only this and leave the user's
+ * last change in place. Undoing a real change restores the whole earlier design,
+ * including the blocks it had then; that is harmless because every payload that
+ * carries these blocks re-derives them from the live directivity settings
+ * (`composeDesignFileWire`). A user's own change to `extra_blocks` goes through
+ * the store's actions and stays undoable.
  */
 export function recordCommittedAthPolars(polarConfig: unknown): void {
   const state = useDesignStore.getState();
   const extraBlocks = replaceAthPolarBlocks(state.design.extra_blocks, polarConfig);
   if (extraBlocks === null) return;
-  useDesignStore.setState({
-    design: { ...state.design, extra_blocks: extraBlocks },
-  });
+  // A drag in progress has already paused history; leave it paused.
+  const tracking = useDesignStore.temporal.getState().isTracking;
+  if (tracking) useDesignStore.temporal.getState().pause();
+  try {
+    useDesignStore.setState({
+      design: { ...state.design, extra_blocks: extraBlocks },
+    });
+  } finally {
+    if (tracking) useDesignStore.temporal.getState().resume();
+  }
 }
 
 /**

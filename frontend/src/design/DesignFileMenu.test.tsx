@@ -930,6 +930,21 @@ describe('replacing the design on screen', () => {
     expect(useDesignStore.getState().design.R).toBe(140);
   });
 
+  it('does not bring the previous design back when New is undone', async () => {
+    openRoutes();
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    await openLocalDesign();
+    expect(useDesignStore.getState().design.R).toBe(OPENED_R);
+
+    await chooseMenuItem('New');
+    expect(useDesignStore.getState().design.R).toBe(140);
+    act(() => useDesignStore.getState().undo());
+
+    // New starts a document; the one it replaced is not an undo step inside it.
+    expect(useDesignStore.getState().design.R).toBe(140);
+  });
+
   it('does not ask before opening another file when an edit was undone back to the opened design', async () => {
     openRoutes();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);

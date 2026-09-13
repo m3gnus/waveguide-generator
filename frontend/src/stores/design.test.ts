@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  currentDocumentLoad,
   designForFamily,
+  recordCommittedAthPolars,
   registerRevisionTimer,
   resetDesignStore,
   seedDesign,
@@ -11,6 +13,8 @@ import {
   type DesignFamily,
   type RevisionEvent,
 } from './design';
+import { composeDesignFileWire } from './designWire';
+import { currentEditorMutation } from './editorMutation';
 
 function configuredDesign(family: DesignFamily): DesignDocument {
   const design = designForFamily(family);
@@ -178,6 +182,123 @@ describe('design store revision semantics', () => {
     expect(design).not.toHaveProperty('overshoot_policy');
     expect(design.profile_h).not.toHaveProperty('throat_tangent_scale');
     expect(design.profile_h).not.toHaveProperty('mouth_tangent_scale');
+  });
+});
+
+describe('undo history boundaries', () => {
+  // Directivity settings as the CAD link commits them to the linked `.cfg`.
+  const committedPolars = {
+    angle_range: [0, 180, 37],
+    distance: 2,
+    norm_angle: 10,
+    inclination: 45,
+    enabled_axes: ['horizontal', 'vertical'],
+  };
+
+  // Start every case with an empty history, whatever the reset records, so a
+  // failure names the boundary under test.
+  beforeEach(() => {
+    resetDesignStore();
+    useDesignStore.temporal.getState().clear();
+  });
+
+  it('New then undo does not bring the previous design back', () => {
+    useDesignStore.getState().updateField('R', 175);
+    resetDesignStore();
+
+    useDesignStore.getState().undo();
+
+    expect(useDesignStore.getState().design).toEqual(seedDesign);
+    expect(useDesignStore.temporal.getState().pastStates).toEqual([]);
+  });
+
+  it('New during a drag leaves no undo step and resumes tracking', () => {
+    useDesignStore.getState().beginDrag();
+    useDesignStore.getState().updateField('R', 175);
+    resetDesignStore();
+
+    expect(useDesignStore.getState().dragSnapshot).toBeNull();
+    expect(useDesignStore.temporal.getState().isTracking).toBe(true);
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design).toEqual(seedDesign);
+
+    // History records again once the new document is edited.
+    useDesignStore.getState().updateField('R', 176);
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design.R).toBe(seedDesign.R);
+  });
+
+  it('does not make polar bookkeeping an undo step of its own', () => {
+    recordCommittedAthPolars(committedPolars);
+    const recorded = useDesignStore.getState().design.extra_blocks;
+    expect(recorded).not.toEqual(seedDesign.extra_blocks);
+
+    useDesignStore.getState().undo();
+
+    expect(useDesignStore.getState().design.extra_blocks).toEqual(recorded);
+    expect(useDesignStore.temporal.getState().pastStates).toEqual([]);
+  });
+
+  it('undo after polar bookkeeping reverts the prior user edit in one step', () => {
+    useDesignStore.getState().updateField('R', 175);
+    recordCommittedAthPolars(committedPolars);
+    const recorded = useDesignStore.getState().design.extra_blocks;
+    expect(recorded).not.toEqual(seedDesign.extra_blocks);
+
+    useDesignStore.getState().undo();
+
+    expect(useDesignStore.getState().design.R).toBe(seedDesign.R);
+    expect(useDesignStore.temporal.getState().pastStates).toEqual([]);
+    // The undone design carries the blocks it had before the commit, but a send,
+    // a written file and the content key all re-derive them from the live
+    // directivity settings, so none of them sees the difference.
+    const undone = useDesignStore.getState().design;
+    const wireBlocks = (design: DesignDocument) => (
+      composeDesignFileWire(serializeDesign(design), committedPolars, null, '').extra_blocks
+    );
+    expect(wireBlocks(undone)).toHaveProperty(['ABEC.Polars:SPL_H']);
+    expect(wireBlocks(undone)).toEqual(wireBlocks({ ...undone, extra_blocks: recorded }));
+  });
+
+  it('keeps a user change to extra_blocks undoable', () => {
+    recordCommittedAthPolars(committedPolars);
+    const recorded = useDesignStore.getState().design.extra_blocks;
+    const userReport = { items: { Title: 'user edit' }, lines: [] };
+    useDesignStore.getState().loadDesign({
+      ...structuredClone(useDesignStore.getState().design),
+      extra_blocks: { ...recorded, Report: userReport },
+    });
+
+    useDesignStore.getState().undo();
+
+    expect(useDesignStore.getState().design.extra_blocks).toEqual(recorded);
+    useDesignStore.getState().redo();
+    expect(useDesignStore.getState().design.extra_blocks.Report).toEqual(userReport);
+  });
+
+  it('keeps a drag one undo step when polar bookkeeping lands in the middle of it', () => {
+    useDesignStore.getState().beginDrag();
+    useDesignStore.getState().updateField('R', 175);
+    recordCommittedAthPolars(committedPolars);
+    expect(useDesignStore.temporal.getState().isTracking).toBe(false);
+    useDesignStore.getState().updateField('R', 176);
+    useDesignStore.getState().endDrag();
+
+    expect(useDesignStore.temporal.getState().pastStates).toHaveLength(1);
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design.R).toBe(seedDesign.R);
+  });
+
+  it('moves the load generation and the editor mutation token exactly as before', () => {
+    const load = currentDocumentLoad();
+    const mutation = currentEditorMutation();
+    recordCommittedAthPolars(committedPolars);
+    expect(currentDocumentLoad()).toBe(load);
+    expect(currentEditorMutation()).toBe(mutation);
+
+    resetDesignStore();
+    expect(currentDocumentLoad()).toBe(load + 1);
+    expect(currentEditorMutation()).toBe(mutation + 1);
   });
 });
 
