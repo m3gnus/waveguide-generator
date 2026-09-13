@@ -535,3 +535,38 @@ def test_a_command_with_no_job_under_its_key_is_handed_out_as_before(
     result = _pending_solve_command(data_dir, workspace.resolve(), store, {}.get)
 
     assert (result["command"]["commandId"], result["outcome"]) == ("cmd-1", None)
+
+
+def test_the_route_reconciles_through_the_real_jobs_store(data_dir, workspace, store, tmp_path) -> None:
+    """The same, wired as the app wires it: app.state.jobs_runtime.store."""
+
+    from server.cadlink.api import get_solve_command
+    from server.jobs.store import JobStore
+
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+    jobs = JobStore(tmp_path / "jobs.db")
+    jobs.initialize()
+    now = "2026-09-13T12:00:00"
+    jobs.create_job_idempotent(
+        {
+            "id": "job-7", "status": "queued", "created_at": now, "updated_at": now,
+            "queued_at": now, "progress": 0.0, "stage": "queued", "stage_message": "queued",
+            "config_json": {}, "config_summary_json": {}, "task_metadata": {},
+        },
+        submission_key="cad-solve:cmd-1",
+        request_sha256="a" * 64,
+        initial_event=("queued", {}),
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        data_dir=str(data_dir),
+        cadlink_store=store,
+        cad_workspace=SimpleNamespace(selected_path=lambda: workspace),
+        jobs_runtime=SimpleNamespace(store=jobs),
+    )))
+
+    result = asyncio.run(get_solve_command(request))
+
+    assert result["command"]["commandId"] == "cmd-1"
+    assert (result["outcome"]["state"], result["outcome"]["jobId"]) == ("accepted", "job-7")
+    assert asyncio.run(get_solve_command(request)) == {"command": None}

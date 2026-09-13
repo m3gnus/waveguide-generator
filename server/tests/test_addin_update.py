@@ -86,9 +86,27 @@ def test_an_add_in_managed_by_another_wg_installation_is_left_alone(tmp_path: Pa
 
     root = _wg_root(tmp_path, "a" * 40)
     addins = tmp_path / "AddIns"
-    _installed(addins, commit="b" * 40, root=tmp_path / "another-wg")
+    other = tmp_path / "another-wg"
+    (other / "scripts").mkdir(parents=True)
+    (other / "scripts" / "install_wglink.py").write_text("# installer\n", encoding="utf-8")
+    _installed(addins, commit="b" * 40, root=other)
 
     assert addin_update.refresh_wglink(root=root, addins_dir=addins)[0] == "external"
+
+
+def test_an_add_in_whose_managing_wg_is_gone_is_replaced(tmp_path: Path, monkeypatch) -> None:
+    """A moved or removed WG manages nothing; leaving its add-in would strand the user."""
+
+    root = _wg_root(tmp_path, "a" * 40)
+    addins = tmp_path / "AddIns"
+    _installed(addins, commit="b" * 40, root=tmp_path / "Downloads" / "moved-away")
+    archive = tmp_path / "wglink.zip"
+    calls: list[dict[str, object]] = []
+    _recording_installer(monkeypatch, addins, calls)
+    monkeypatch.setattr(addin_update, "_verified_shipped_package", lambda *_args: (archive, None))
+
+    assert addin_update.refresh_wglink(root=root, addins_dir=addins)[0] == "replaced"
+    assert calls[0]["replace_external"] is True and calls[0]["archive_path"] == archive
 
 
 def _recording_installer(monkeypatch, addins: Path, calls: list[dict[str, object]]) -> None:
@@ -125,12 +143,35 @@ def test_an_add_in_no_waveguide_generator_manages_is_replaced(
     _installed(addins, commit=None, root=None)
     calls: list[dict[str, object]] = []
     _recording_installer(monkeypatch, addins, calls)
+    archive = tmp_path / "wglink.zip"
+    monkeypatch.setattr(addin_update, "_verified_shipped_package", lambda *_args: (archive, None))
 
     verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
 
     assert verdict == "replaced"
     assert "restart Fusion" in detail
     assert calls and calls[0]["replace_external"] is True
+    # Only the verified package this build ships replaces it; never a fetch.
+    assert calls[0]["archive_path"] == archive
+
+
+def test_an_unmanaged_add_in_is_left_when_no_verified_package_ships(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = _wg_root(tmp_path, "a" * 40)
+    addins = tmp_path / "AddIns"
+    target = _installed(addins, commit=None, root=None)
+    calls: list[dict[str, object]] = []
+    _recording_installer(monkeypatch, addins, calls)
+    monkeypatch.setattr(
+        addin_update, "_verified_shipped_package",
+        lambda *_args: (None, "the bundled WGLink package is missing: wglink.zip"),
+    )
+
+    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+
+    assert verdict == "unavailable" and "missing" in detail
+    assert calls == [] and (target / "WGLink.py").is_file()
 
 
 def test_an_absent_add_in_stays_absent_only_when_asked(tmp_path: Path) -> None:

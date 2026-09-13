@@ -103,7 +103,13 @@ def _other_manager(target: Path) -> str | None:
     if not isinstance(payload, Mapping) or payload.get("managedBy") != "waveguide-generator":
         return None
     other = payload.get("waveguideGeneratorRoot")
-    return str(other) if isinstance(other, str) and other else None
+    if not isinstance(other, str) or not other:
+        return None
+    # A marker naming a WG that is no longer there -- the app was moved, or
+    # removed -- manages nothing: the add-in is replaced like an unmanaged one.
+    if not (Path(other) / "scripts" / "install_wglink.py").is_file():
+        return None
+    return other
 
 
 def _fusion_installed(addins_dir: Path) -> bool:
@@ -225,10 +231,19 @@ def refresh_wglink(
                 f"{target} is managed by another Waveguide Generator at {other}; left alone",
             )
         current = None
+        # Replacing an add-in nobody manages takes only the verified package
+        # this build ships, as a first install does; never a fetch.
+        archive, package_error = _verified_shipped_package(root, installer, pin)
+        if package_error is not None or archive is None:
+            return "unavailable", package_error or "the bundled WGLink package is unavailable"
+        package = {"archive_path": archive}
     else:
         current = installed_commit(target)
         if current == pin:
             return "current", f"WGLink is at the pinned {pin[:12]}"
+        # A packaged app must never turn startup reconciliation into a network
+        # fetch. Source checkouts retain the existing fetch path.
+        package = {"offline_only": bool(getattr(installer, "_bundled", lambda: False)())}
 
     try:
         status, _installed = installer.install(
@@ -236,9 +251,7 @@ def refresh_wglink(
             python=Path(sys.executable),
             # A WGLink no WG manages is replaced by the one this build ships.
             replace_external=replace_external,
-            # A packaged app must never turn startup reconciliation into a
-            # network fetch. Source checkouts retain the existing fetch path.
-            offline_only=bool(getattr(installer, "_bundled", lambda: False)()),
+            **package,
         )
     except Exception as exc:  # noqa: BLE001 - never let this stop the app starting
         return "failed", f"could not update WGLink to {pin[:12]}: {exc}"

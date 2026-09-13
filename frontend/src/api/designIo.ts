@@ -76,6 +76,8 @@ export interface WgLinkExportResponse {
   cadHandoffRequestId?: string;
   /** Unstarted updates of the same Fusion link that this one replaced. */
   cadHandoffSuperseded?: string[];
+  /** Set when the add-in Fusion runs is too old to take it yet: the remedy. */
+  cadHandoffWaiting?: string;
   cadLaunch?: boolean;
   /** The committed identity; absent when the design has moved on since the export. */
   identity?: DesignIdentity;

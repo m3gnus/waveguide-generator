@@ -109,3 +109,24 @@ def test_handoff_refuses_a_bundle_outside_the_selected_workspace(
     with pytest.raises(ValueError, match="outside the selected workspace"):
         publish_fusion_handoff(tmp_path / "data", workspace, _result(outside))
     assert not (tmp_path / "data" / "ipc" / "wglink" / HANDOFFS_DIRECTORY).exists()
+
+
+def test_a_handoff_to_an_outdated_addin_says_why_nothing_happens_yet(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
+    from server.exports.api import _handoff_waiting_notice
+
+    folder = tmp_path / "ipc" / "wglink"
+    folder.mkdir(parents=True)
+    heartbeat = {
+        "schemaVersion": 1, "cadApplication": "fusion360", "sessionId": "s",
+        "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "document": None,
+    }
+    (folder / ".fusion-status.json").write_text(json.dumps(heartbeat))
+    assert "older than this Waveguide Generator" in (_handoff_waiting_notice(tmp_path) or "")
+
+    (folder / ".fusion-status.json").write_text(json.dumps({**heartbeat, "deliveryVersion": 3}))
+    assert _handoff_waiting_notice(tmp_path) is None
+    (folder / ".fusion-status.json").unlink()
+    assert _handoff_waiting_notice(tmp_path) is None

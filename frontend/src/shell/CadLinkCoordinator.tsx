@@ -1637,9 +1637,10 @@ export function CadLinkCoordinator() {
         const superseded = result.cadHandoffSuperseded?.length
           ? ' It replaced an earlier update Fusion had not started yet.'
           : '';
+        const waiting = result.cadHandoffWaiting ? ` ${result.cadHandoffWaiting}` : '';
         setStatus(target
-          ? `Update sent to Fusion 360 · sequence ${result.sequence}.${superseded}`
-          : `Opening in Fusion 360 · sequence ${result.sequence}`);
+          ? `Update sent to Fusion 360 · sequence ${result.sequence}.${superseded}${waiting}`
+          : `Opening in Fusion 360 · sequence ${result.sequence}.${waiting}`);
         await refresh();
       }
       return result;

@@ -31,6 +31,8 @@ from server.preview.translate import design_to_mesher_config
 from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
 
 from .cad_launch import focus_cad
+from server.cadlink.fusion_status import ADDIN_OUTDATED_MESSAGE, read_fusion_status
+
 from .cad_handoff import UPDATE_TARGET_REQUIRED, publish_fusion_handoff
 from .core import build_profiles, build_step, build_step_solid, build_stl
 from .geometry_identity import geometry_hash as _geometry_hash
@@ -817,6 +819,11 @@ async def export_wglink(
         if published.withdrawn:
             # An unstarted update of the same link that this one replaced.
             result["cadHandoffSuperseded"] = list(published.withdrawn)
+        waiting = await asyncio.to_thread(
+            _handoff_waiting_notice, Path(request.app.state.data_dir)
+        )
+        if waiting is not None:
+            result["cadHandoffWaiting"] = waiting
     except (OSError, TypeError, ValueError) as exc:
         logger.warning("Could not publish the Fusion handoff: %s", exc)
         result["cadHandoff"] = "failed"
@@ -825,6 +832,20 @@ async def export_wglink(
     # its outcome only reaches the log.
     result["cadLaunch"] = await asyncio.to_thread(focus_cad)
     return result
+
+
+def _handoff_waiting_notice(data_dir: Path) -> str | None:
+    """The remedy when the add-in Fusion runs is too old to take the handoff.
+
+    The handoff is published anyway: the add-in WG installed takes it once
+    Fusion loads it. Until then nothing happens in Fusion, so the user is told
+    why rather than left waiting.
+    """
+
+    status = read_fusion_status(
+        data_dir, current_design_hash="", current_formula="", design_id=None
+    )
+    return ADDIN_OUTDATED_MESSAGE if status.get("state") == "addin_outdated" else None
 
 
 def mount_exports(application: FastAPI) -> None:
