@@ -178,22 +178,21 @@ class SolverContext:
         """Build a design-free context for an immutable imported mesh."""
 
         if request.options.ground_plane.enabled:
-            # Imported geometry always solves on Metal, whose adapter does not
-            # read `ground_plane` -- enumerated: it takes design,
-            # frequencies_hz, frequency_range, frequency_spacing,
-            # mesh_validation_mode, num_frequencies, sim_type, source_motion,
-            # validate and verbose, and dynamically only polar_config. So the
-            # option would be carried the whole way here and then dropped, and
-            # the run would report a free-standing answer to a question about
-            # a floor.
-            #
-            # The parametric path refuses this at the submission boundary, but
-            # imported solves are refused earlier and never reach it, so the
-            # refusal has to exist here too. Raising rather than zeroing the
-            # option: silently dropping it is the failure being prevented.
+            # No engine solves imported geometry above a rigid ground plane,
+            # and submission refuses it (``resolve_imported_submission``).
+            # This is the adapters' backstop: neither imported adapter reads
+            # `ground_plane` -- Metal's takes design, frequencies_hz,
+            # frequency_range, frequency_spacing, mesh_validation_mode,
+            # num_frequencies, sim_type, source_motion, validate and verbose,
+            # and dynamically only polar_config, and BEAT's imported path
+            # translates no ground image either. So the option would be
+            # carried the whole way here and then dropped, and the run would
+            # report a free-standing answer to a question about a floor.
+            # Raising rather than zeroing the option: silently dropping it is
+            # the failure being prevented.
             raise ValueError(
                 "A rigid ground plane is not available for imported CAD "
-                "geometry, which solves on Metal. Turn the ground plane off, "
+                "geometry on any engine. Turn the ground plane off, "
                 "or solve the parametric design with BEMPP."
             )
 

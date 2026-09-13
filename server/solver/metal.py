@@ -70,6 +70,7 @@ from .field_traces_store import (
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import require_full_3d_aperture_tag
 from .imported import (
+    imported_anchor_frame,
     imported_domain_planes,
     imported_symmetry_from_cut_planes,
     mesh_frequency_validation,
@@ -869,55 +870,7 @@ def _imported_frame(record: Mapping[str, Any], context: SolverContext) -> Any:
         raise MetalUnavailable(
             "Installed hornlab-metal-bem does not expose ObservationFrame."
         )
-    anchor = record.get("anchor")
-    anchor = anchor if isinstance(anchor, Mapping) else {}
-    frame = anchor.get("throat_frame")
-    if not isinstance(frame, Mapping):
-        normalisation = record.get("normalisation")
-        normalisation = normalisation if isinstance(normalisation, Mapping) else {}
-        frame = normalisation.get("anchor_throat_frame")
-    if not isinstance(frame, Mapping):
-        normalisation = record.get("normalisation")
-        normalisation = normalisation if isinstance(normalisation, Mapping) else {}
-        if bool(normalisation.get("assembly_frame_is_solver_frame")):
-            frame = {
-                "axis": [0.0, 0.0, 1.0],
-                "origin_m": [0.0, 0.0, 0.0],
-                "u": [1.0, 0.0, 0.0],
-                "v": [0.0, 1.0, 0.0],
-                "mouth_center_m": [0.0, 0.0, 0.0],
-                "source_center_m": [0.0, 0.0, 0.0],
-            }
-        else:
-            raise ValueError(
-                "ingestion record has no anchor throat frame; re-ingest the CAD return"
-            )
-
-    def vector(name: str, *fallback_names: str) -> np.ndarray:
-        value = frame.get(name)
-        if value is None:
-            for fallback in fallback_names:
-                value = frame.get(fallback)
-                if value is not None:
-                    break
-        result = np.asarray(value, dtype=float)
-        if result.shape != (3,) or not np.isfinite(result).all():
-            raise ValueError(f"ingestion anchor throat frame {name!r} must be a finite 3-vector")
-        return result
-
-    axis = vector("axis", "normal")
-    axis /= np.linalg.norm(axis)
-    source_center = vector("source_center_m", "origin_m", "origin")
-    mouth_center = vector("mouth_center_m", "origin_m", "origin")
-    origin = source_center
-    return ObservationFrame(
-        axis=axis,
-        origin=origin,
-        u=vector("u", "horizontal"),
-        v=vector("v", "vertical"),
-        mouth_center=mouth_center,
-        source_center=source_center,
-    )
+    return ObservationFrame(**imported_anchor_frame(record))
 
 
 def _imported_validity_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -2257,8 +2210,16 @@ def solve_imported_metal_from_msh_text(
         "solver_mode": "full_3d",
         "solve_path": "full-3d",
         "axisymmetric_eligibility_reasons": [
-            "imported geometry is restricted to Metal full 3-D"
+            "imported geometry solves full 3-D only"
         ],
+        "solver_engine": {
+            "engine": "metal",
+            "package": "hornlab-metal-bem",
+            "package_version": status.get("version"),
+            "device": "metal",
+            "formulation": kwargs["formulation"],
+            "complex_k_shift": kwargs["complex_k_shift"],
+        },
         "ingest_id": geometry.ingest_id,
         "manifest_sha256": geometry.manifest_sha256,
         "artifact_sha256": geometry.artifact_sha256,

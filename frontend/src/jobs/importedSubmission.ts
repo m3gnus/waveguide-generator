@@ -240,7 +240,10 @@ export function buildImportedSubmission(
     options.frequency_range = [state.frequencyStartHz, state.frequencyEndHz];
     options.num_frequencies = state.frequencyCount;
   }
-  options.engine = 'metal';
+  // The engine stays the user's choice, as for a parametric design. Imported
+  // geometry solves in full 3-D only, whatever the parametric solver path is,
+  // and the domain is the one the ingestion record describes.
+  options.solver_mode = 'full_3d';
   options.symmetry = 'auto';
   widenPolarToDerivation(options, record.polar_grid_derivation);
   const combine = combineWire(state);

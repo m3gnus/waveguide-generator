@@ -146,7 +146,7 @@ describe('backend feature support', () => {
     const message = backendLimitation(engine('bempp', true), 'imported-geometry');
     expect(message).toContain('BEMPP');
     expect(message).toContain('imported');
-    expect(message).toContain('Metal');
+    expect(message).toContain('Choose AUTO');
     expect(backendLimitation(engine('metal', true), 'infinite-baffle')).toBeUndefined();
   });
 });

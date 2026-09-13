@@ -18,6 +18,8 @@ export interface EngineCapability {
   /** Single axes this engine can bound with a rigid half space, e.g. ['y']. */
   ground_plane_axes?: string[];
   geometry_sources?: string[];
+  /** Imported-geometry features beyond the mesh itself, e.g. 'passive-cardioid'. */
+  imported_features?: string[];
   symmetry_domains?: string[];
   field_traces?: boolean;
   di_sphere?: boolean;

@@ -96,7 +96,7 @@ function unavailableFormatReason(
   }
   if (item.needsResult && !job.has_results) return 'This run\'s results were removed by retention.';
   if (item.needsPressureBasis && !job.has_pressure_basis_artifact) {
-    return 'This run has no retained complex pressure basis. Re-solve an imported Metal run to create one.';
+    return 'This run has no retained complex pressure basis. Re-solve the imported CAD model to create one.';
   }
   if (item.needsDesign && !designExportable) return designUnavailableReason;
   return undefined;

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+import numpy as np
+
 from server.mesh.artifact import (
     ImportedMeshArtifactError,
     mesh_text_sha256,
@@ -73,6 +75,69 @@ def imported_domain_planes(record: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(plane) for plane in planes)
 
 
+def imported_anchor_frame(record: Mapping[str, Any]) -> dict[str, np.ndarray]:
+    """The observation frame an ingestion record's solve is measured in.
+
+    The anchor's throat frame, built during normalisation from the anchor's
+    transformed axis datum (``server/mesh/imported.py``), with the throat as
+    the observation origin. A record with no anchor falls back to the assembly
+    frame only when normalisation said that frame *is* the solver frame.
+
+    Every engine reads the frame here, so two engines handed the same record
+    measure on the same arc. Returns ``axis`` (unit), ``origin``, ``u``, ``v``,
+    ``mouth_center`` and ``source_center`` as float 3-vectors.
+    """
+
+    anchor = record.get("anchor")
+    anchor = anchor if isinstance(anchor, Mapping) else {}
+    frame = anchor.get("throat_frame")
+    if not isinstance(frame, Mapping):
+        normalisation = record.get("normalisation")
+        normalisation = normalisation if isinstance(normalisation, Mapping) else {}
+        frame = normalisation.get("anchor_throat_frame")
+    if not isinstance(frame, Mapping):
+        normalisation = record.get("normalisation")
+        normalisation = normalisation if isinstance(normalisation, Mapping) else {}
+        if bool(normalisation.get("assembly_frame_is_solver_frame")):
+            frame = {
+                "axis": [0.0, 0.0, 1.0],
+                "origin_m": [0.0, 0.0, 0.0],
+                "u": [1.0, 0.0, 0.0],
+                "v": [0.0, 1.0, 0.0],
+                "mouth_center_m": [0.0, 0.0, 0.0],
+                "source_center_m": [0.0, 0.0, 0.0],
+            }
+        else:
+            raise ValueError(
+                "ingestion record has no anchor throat frame; re-ingest the CAD return"
+            )
+
+    def vector(name: str, *fallback_names: str) -> np.ndarray:
+        value = frame.get(name)
+        if value is None:
+            for fallback in fallback_names:
+                value = frame.get(fallback)
+                if value is not None:
+                    break
+        result = np.asarray(value, dtype=float)
+        if result.shape != (3,) or not np.isfinite(result).all():
+            raise ValueError(f"ingestion anchor throat frame {name!r} must be a finite 3-vector")
+        return result
+
+    axis = vector("axis", "normal")
+    axis /= np.linalg.norm(axis)
+    source_center = vector("source_center_m", "origin_m", "origin")
+    mouth_center = vector("mouth_center_m", "origin_m", "origin")
+    return {
+        "axis": axis,
+        "origin": source_center,
+        "u": vector("u", "horizontal"),
+        "v": vector("v", "vertical"),
+        "mouth_center": mouth_center,
+        "source_center": source_center,
+    }
+
+
 def mesh_frequency_validation(record: Mapping[str, Any]) -> Mapping[str, Any]:
     mesh = record.get("mesh")
     mesh = mesh if isinstance(mesh, Mapping) else {}
@@ -86,6 +151,7 @@ __all__ = [
     "ImportedSymmetry",
     "ImportedSymmetryUnsupportedError",
     "ImportedMeshArtifactError",
+    "imported_anchor_frame",
     "imported_domain_planes",
     "imported_symmetry_from_cut_planes",
     "mesh_frequency_validation",

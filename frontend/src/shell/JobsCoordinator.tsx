@@ -12,6 +12,7 @@ import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { importedSolveEngine } from '../design/backendSupport';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
@@ -189,6 +190,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const automation = useRef(new JobAutomation()).current;
   const {
     engines: capabilities,
+    engineSelection,
     error: capabilityError,
   } = useCapabilities();
   const [actionError, setActionError] = useState<string | null>(null);
@@ -213,7 +215,12 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     currentOptions,
     workspaceMode === 'parametric',
   );
-  const metalCapability = capabilities.find((engine) => engine.name.toLowerCase() === 'metal') ?? null;
+  // Imported geometry takes the same engine choice as a parametric design; this
+  // names where that choice lands, or why it cannot solve a CAD model here.
+  const importedChoice = importedSolveEngine(selectedEngine, capabilities, engineSelection);
+  const importedEngineLabel = importedChoice.engine
+    ? importedChoice.engine.label || importedChoice.engine.name
+    : null;
   const visibleImported = viewportGeometry.showing === 'cad'
     ? viewportGeometry.cad
     : viewportGeometry.showing === 'file'
@@ -280,10 +287,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     try {
       setSubmitting(true);
       setActionError(null);
-      // The server picks the engine from what each engine declares it can
-      // solve (`resolve_imported_submission`); a client-side Metal check and a
-      // forced engine here would pre-empt that decision.
-      const options: SolveOptions = { ...submission.options, engine: 'auto', symmetry: 'auto' };
+      // The user's engine choice goes to the server as it is, exactly as for a
+      // parametric design; the server resolves AUTO from what each engine
+      // declares it can solve (`resolve_imported_submission`) and refuses an
+      // explicit engine that cannot, with the reason. The formulation is not
+      // a choice here: imported geometry solves in full 3-D only, and the
+      // domain is the one the ingestion record describes.
+      const options: SolveOptions = { ...submission.options, solver_mode: 'full_3d', symmetry: 'auto' };
       const effectiveSubmission = { ...submission, options };
       // The CAD document names its own runs; see jobs/runNameSource.
       const designName = currentRunNameSource().name;
@@ -396,7 +406,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     ?? solvePlanError
     ?? (solvePlanPending ? 'Planning solve for the current design…' : 'Solve plan is unavailable');
   const solveAvailable = cadGeometryActive
-    ? Boolean(metalCapability?.available)
+    ? importedChoice.engine !== null
     : solvePlan !== null && !solvePlanPending && solvePlanError === null;
   const solve = useCallback(() => {
     const action = async () => {
@@ -444,14 +454,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ? 'Standalone imported meshes are viewport-only. Show Parametric to solve the WG design.'
         : solveBlocker
           ? solveBlocker
-          : cadGeometryActive && metalCapability?.available
-            ? 'Solve the displayed CAD Link model with Metal'
+          : cadGeometryActive && importedEngineLabel
+            ? `Solve the displayed CAD Link model with ${importedEngineLabel}`
             : solvePlan
               ? solvePlanTitle(solvePlan, selectedEngine)
               : cadGeometryActive
-                ? metalCapability?.reason ?? capabilityError ?? 'Metal engine is unavailable'
+                ? capabilityError ?? importedChoice.reason ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable,
-  }), [cadGeometryActive, capabilityError, fileGeometryActive, metalCapability?.available, metalCapability?.reason, notice, parametricUnavailable, selectedEngine, solve, solveAvailable, solveBlocker, solvePlan, submitting]);
+  }), [cadGeometryActive, capabilityError, fileGeometryActive, importedChoice.reason, importedEngineLabel, notice, parametricUnavailable, selectedEngine, solve, solveAvailable, solveBlocker, solvePlan, submitting]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }
@@ -459,9 +469,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 /**
  * The notice shown beside Solve: why it cannot run, or what it swapped.
  *
- * Only the parametric path produces one. The CAD path already renders Metal's
- * own availability text elsewhere, and duplicating it here would put the same
- * sentence on screen twice.
+ * Only the parametric path produces one. The CAD path already renders the
+ * chosen engine's availability text in its rail, and duplicating it here
+ * would put the same sentence on screen twice.
  *
  * A pending plan is deliberately silent. Planning is debounced and re-runs on
  * every parameter keystroke, so reporting "no plan yet" would flash a warning

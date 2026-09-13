@@ -47,13 +47,18 @@ selectable while that bridge is developed.
 
 ## Rollout boundaries
 
-The current BEAT port accepts parametric single-source exterior solves. It
-refuses imported CAD/multi-source solves, coupled infinite-baffle solves and
-rigid ground-plane solves. Their `run` entry points refuse ground before
+The current BEAT port accepts parametric single-source exterior solves and, on
+its CPU backend only, imported CAD solves with any number of drive channels
+(`server/solver/beat_imported.py`): each channel is one solve with its source
+tags merged into BEAT's one driven tag, on the verified record mesh rotated
+rigidly into BEAT's +z frame. It refuses coupled infinite-baffle solves, rigid
+ground-plane solves, a y-only imported half and the passive-cardioid campaign.
+Their `run` entry points refuse ground before
 meshing or publishing an artifact, and the native mesh entry points refuse it
 again; neither may silently return a
-free-standing result. Metal retains imported multi-source and coupled-baffle
-paths that the official BEAT bridge must not advertise without implementation.
+free-standing result. Metal retains the coupled-baffle and passive-cardioid
+paths, which the official BEAT bridge must not advertise without
+implementation; the bridge still refuses imported and multi-source geometry.
 
 The initial official bridge must reject axial-piston source motion: its
 `normal_velocity` port applies one scalar to a source boundary, not the

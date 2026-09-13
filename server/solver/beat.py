@@ -48,6 +48,7 @@ from .frequency_sweep import (
     live_execution_frequencies,
     sort_native_result_frequencies,
 )
+from .imported import read_verified_import_mesh, verify_record_mesh_text
 from .infinite_baffle import reject_beat_infinite_baffle
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -801,10 +802,20 @@ class BeatEngine:
                 "The HornLab BEAT adapter cannot apply a rigid ground plane; "
                 "select a ground-plane-capable engine."
             )
-        if imported_record is not None or isinstance(request.geometry, ImportedGeometrySource):
+        if isinstance(request.geometry, ImportedGeometrySource):
+            return await self._run_imported(
+                request,
+                imported_record,
+                cancel_cb=cancel_cb,
+                stage_cb=stage_cb,
+                artifact_cb=artifact_cb,
+                result_cb=result_cb,
+            )
+        if imported_record is not None:
             raise BeatUnavailable(
-                "The HornLab BEAT adapter does not support imported geometry or "
-                "multi-source drive channels; select Metal."
+                "The HornLab BEAT adapter was handed an ingestion record for a "
+                "request without imported geometry; refusing rather than "
+                "guessing which of the two to solve."
             )
         if (request.options.solver_mode or "").strip().lower() == "circsym":
             raise ValueError("BEAT cannot run solver_mode='circsym'; select Axisymmetric or use full_3d")
@@ -841,6 +852,79 @@ class BeatEngine:
             results=results,
             msh_text=mesh["msh_text"],
             mesh_stats=mesh["stats"],
+            field_traces=field_traces,
+            field_trace_unavailable_reason=field_trace_reason,
+        )
+
+    def _imported_refusal(self) -> str | None:
+        if self.backend == BEAT_CPU_BACKEND:
+            return None
+        label = BEAT_BACKEND_LABELS.get(self.backend or "", self.name)
+        return (
+            f"{label} does not solve imported CAD geometry: BEAT's imported path "
+            "is qualified on its CPU backend only. Select BEAT · CPU or Metal."
+        )
+
+    def imported_preflight(self, record: Mapping[str, Any], msh_text: str) -> str | None:
+        """Why this engine cannot solve an ingestion record, asked at submission."""
+
+        refusal = self._imported_refusal()
+        if refusal is not None:
+            return refusal
+        from .beat_imported import imported_beat_preflight
+
+        return imported_beat_preflight(record, msh_text)
+
+    async def _run_imported(
+        self,
+        request: SolveRequest,
+        imported_record: Mapping[str, Any] | None,
+        *,
+        cancel_cb: CancelCallback,
+        stage_cb: StageCallback,
+        artifact_cb: ArtifactCallback | None,
+        result_cb: ResultCallback | None,
+    ) -> EngineRunResult:
+        refusal = self._imported_refusal()
+        if refusal is not None:
+            raise BeatUnavailable(refusal)
+        if imported_record is None:
+            raise ValueError("imported BEAT solve requires its ingestion record")
+        from .beat_imported import solve_imported_beat_from_msh_text
+
+        # The verified record mesh, never a re-mesh: the same bytes Metal is
+        # handed for the same record.
+        execution_msh = imported_record.get("_execution_msh_text")
+        if isinstance(execution_msh, str):
+            msh_text = verify_record_mesh_text(imported_record, execution_msh)
+        else:
+            msh_text = await asyncio.to_thread(read_verified_import_mesh, imported_record)
+        mesh_record = imported_record.get("mesh")
+        mesh_stats = (
+            dict(mesh_record.get("stats") or {}) if isinstance(mesh_record, Mapping) else {}
+        )
+        if artifact_cb is not None:
+            await artifact_cb(msh_text, mesh_stats)
+        cancel_cb()
+        results = await asyncio.to_thread(
+            solve_imported_beat_from_msh_text,
+            msh_text,
+            request,
+            imported_record,
+            backend=BEAT_CPU_BACKEND,
+            stage_callback=stage_cb,
+            cancellation_callback=cancel_cb,
+            result_callback=result_cb,
+        )
+        results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
+        channel_bases = results.pop("_channel_bases_npz", None)
+        field_traces = results.pop("_field_traces", None)
+        field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
+        return EngineRunResult(
+            results=results,
+            msh_text=msh_text,
+            mesh_stats=mesh_stats,
+            channel_bases=channel_bases,
             field_traces=field_traces,
             field_trace_unavailable_reason=field_trace_reason,
         )

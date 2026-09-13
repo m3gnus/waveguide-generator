@@ -184,7 +184,7 @@ export const CAD_CONTROLS = {
   ),
   solveOptions: control(
     'cad.solve-options', 'Solve options', CAD_CONTROL_SECTIONS.solveOptions, 'simulation',
-    ['Metal', 'full 3-D', 'cut planes', 'mesh validation', 'sweep points', 'sweep spacing', 'explicit list', 'verbose logging'],
+    ['solver', 'engine', 'Metal', 'BEAT', 'full 3-D', 'cut planes', 'mesh validation', 'sweep points', 'sweep spacing', 'explicit list', 'verbose logging'],
   ),
   meshDetail: control(
     'cad.mesh-detail', 'Mesh detail', CAD_CONTROL_SECTIONS.meshDetail, 'simulation',

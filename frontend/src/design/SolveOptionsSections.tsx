@@ -2,7 +2,13 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { useCapabilities } from '../jobs/useCapabilities';
-import { activeBackendCapability, backendLimitation, plannedBackendCapabilities } from './backendSupport';
+import {
+  activeBackendCapability,
+  backendLimitation,
+  declaresImportedGeometry,
+  importedSolveEngine,
+  plannedBackendCapabilities,
+} from './backendSupport';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { widenPolarToDerivation } from '../jobs/importedSubmission';
 import { HelpTipRow, useHelpTip } from './HelpTip';
@@ -70,11 +76,11 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   ingestRecord?: CadReturnIngestRecord | null;
 } = {}) {
   const store = useSolveOptionsStore();
-  const { engines, error } = useCapabilities();
+  const { engines, engineSelection, error } = useCapabilities();
   const backendEngines = engines.filter((engine) => !['axisym', 'circsym'].includes(engine.name.toLowerCase()));
   const axisymEngine = engines.find((engine) => engine.name.toLowerCase() === 'axisym');
   const meridianAvailable = axisymEngine?.available === true;
-  const metalAvailable = engines.some((engine) => engine.name.toLowerCase() === 'metal' && engine.available);
+  const importedChoice = importedSolveEngine(store.engine, engines, engineSelection);
   return <>
     {mode === 'parametric' ? <>
       <HelpTipRow className="select-row" text="Which BEM engine runs Full 3D. AUTO takes the first full-3D backend that is actually available on this machine. Axisymmetric uses the portable meridian runner independently of this choice."><label htmlFor="solve-engine">Full 3D backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
@@ -89,11 +95,20 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
         {(meridianAvailable || store.solverMode === 'circsym') && <option value="circsym" disabled={!meridianAvailable}>{solverModeLabels.circsym}{meridianAvailable ? '' : ' · unavailable'}</option>}
       </select></HelpTipRow>
     </> : <>
-      {/* Imported submissions force both values. Static facts keep the rail
-          honest without creating a second control that the submit path drops.
-          "Metal" is a requirement, not an observation, so where there is no
-          Metal engine the rail has to report that rather than assert it. */}
-      <p className={`cad-solve-fact${metalAvailable ? '' : ' cad-solve-fact-unavailable'}`}><b>Solver</b><span>Metal · full 3-D · free space{metalAvailable ? '' : ' · unavailable on this machine'}</span></p>
+      {/* The engine is the same choice as the parametric workspace's: the
+          imported submission sends it as it is. The formulation and domain are
+          not choices here, so they stay facts. An engine that cannot solve
+          imported geometry is listed, disabled, with that reason. */}
+      <HelpTipRow className="select-row" text="Which BEM engine solves the imported model: the same choice as the parametric workspace's Full 3D backend. AUTO takes the first available engine that solves imported CAD geometry."><label htmlFor="cad-solve-engine">Solver</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+        <option value="auto">AUTO — first available</option>
+        {backendEngines.map((engine) => {
+          const imported = declaresImportedGeometry(engine);
+          return <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available || !imported}>{engine.label || engine.name}{!imported ? ' · does not solve imported CAD geometry' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>;
+        })}
+      </select></HelpTipRow>
+      <p className={`cad-solve-fact${importedChoice.engine ? '' : ' cad-solve-fact-unavailable'}`}><b>Runs on</b><span>{importedChoice.engine
+        ? `${importedChoice.engine.label || importedChoice.engine.name} · full 3-D · free space`
+        : importedChoice.reason}</span></p>
       <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
     <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>

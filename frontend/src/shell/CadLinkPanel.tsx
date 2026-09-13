@@ -11,6 +11,7 @@ import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions'
 import { useDocumentStore } from '../stores/document';
 import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
 import { useCapabilities } from '../jobs/useCapabilities';
+import { declaresImportedGeometry } from '../design/backendSupport';
 import {
   cadLinkCoordinatorBridge,
   returnBelongsToProject,
@@ -506,14 +507,15 @@ export function CadLinkPanel() {
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
   // Imported geometry is solved only by an engine that declares it (runtime.py
-  // `resolve_imported_submission`), and today that is Metal alone. Without
-  // Metal the whole round trip still works as a CAD workflow and only the
-  // solve is out of reach, so this states the boundary up front instead of
-  // hiding the panel or letting someone discover it after exporting and
-  // preparing the model.
+  // `resolve_imported_submission`): Metal, and BEAT's CPU backend, which every
+  // desktop platform provisions. Where none of them is available the whole
+  // round trip still works as a CAD workflow and only the solve is out of
+  // reach, so this states the boundary up front instead of hiding the panel or
+  // letting someone discover it after exporting and preparing the model.
   const { engines: solverEngines, isLoading: capabilitiesLoading } = useCapabilities();
-  const metalUnavailable = !capabilitiesLoading
-    && !solverEngines.some((engine) => engine.name.toLowerCase() === 'metal' && engine.available);
+  const importedEngines = solverEngines.filter(declaresImportedGeometry);
+  const importedSolverUnavailable = !capabilitiesLoading
+    && !importedEngines.some((engine) => engine.available);
   const designName = designNameSlug(documentName);
   const shownName = designName === UNTITLED_SLUG ? 'this design' : designName;
   const canRequestFusionReturn = Boolean(
@@ -662,11 +664,13 @@ export function CadLinkPanel() {
         >{freshnessSummary(record)}</span>}
         <time dateTime={record?.created_at || bundle.modifiedAt} title={fullTime(record?.created_at || bundle.modifiedAt)}>{relativeTime(record?.created_at || bundle.modifiedAt)}</time>
       </div>}
-      {metalUnavailable && <div className="cad-alert cad-alert-notice cad-solver-unavailable" role="status">
-        <b>Imported CAD geometry cannot be solved on this machine.</b> Solving an
-        ingested model needs the Metal backend, which is macOS-only; this host has
-        no Metal engine available. The round trip still works for building and
-        exporting geometry, and the parametric workspace still solves here.
+      {importedSolverUnavailable && <div className="cad-alert cad-alert-notice cad-solver-unavailable" role="status">
+        <b>Imported CAD geometry cannot be solved on this machine right now.</b>{' '}
+        {importedEngines.length
+          ? `No engine that solves ingested models is available: ${importedEngines.map((engine) => `${engine.label || engine.name}: ${engine.reason ?? 'unavailable'}`).join('; ')}.`
+          : 'No engine here solves ingested models.'}{' '}
+        The round trip still works for building and exporting geometry, and the
+        parametric workspace still solves here.
       </div>}
       {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Prepare the model again before solving.</div>}
       {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}

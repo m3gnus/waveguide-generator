@@ -110,6 +110,11 @@ class EngineInfo:
     # must not present them as interchangeable once a ground plane is on.
     ground_plane_composes_with_symmetry: bool = False
     geometry_sources: tuple[str, ...] = ("parametric",)
+    # Imported-geometry features beyond solving the returned mesh. Only
+    # "passive-cardioid" exists: Metal's radiation-matrix campaign
+    # (``server/solver/metal.py``). A return that enables one is offered only
+    # to an engine that names it here.
+    imported_features: tuple[str, ...] = ()
     symmetry_domains: tuple[str, ...] = ()
     field_traces: bool = False
     di_sphere: bool = True
@@ -229,6 +234,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     from server.solver.beat import (
         BEAT_BACKENDS,
         BEAT_BACKEND_LABELS,
+        BEAT_CPU_BACKEND,
         beat_backend_statuses,
         beat_engine_name,
     )
@@ -320,6 +326,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                     if name == "metal"
                     else ("parametric",)
                 ),
+                imported_features=("passive-cardioid",) if name == "metal" else (),
                 symmetry_domains=_symmetry_domains(name),
                 field_traces=True,
                 di_sphere=True,
@@ -363,7 +370,16 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 # No "ground-plane": see _ground_plane_axes. The gap is in this
                 # application, not in hornlab-beat-bem.
                 mountings=("free-standing",),
-                geometry_sources=("parametric",),
+                # Imported CAD geometry on the CPU backend only. That is the
+                # backend ``server/solver/beat_imported.py`` was qualified on,
+                # and the one every desktop platform provisions. The
+                # accelerators run the same Julia solver and would take the
+                # same adapter, but none has been qualified on a return.
+                geometry_sources=(
+                    ("parametric", "imported")
+                    if backend == BEAT_CPU_BACKEND
+                    else ("parametric",)
+                ),
                 symmetry_domains=_symmetry_domains(name),
                 field_traces=bool(status.get("surface_traces")),
                 di_sphere=True,

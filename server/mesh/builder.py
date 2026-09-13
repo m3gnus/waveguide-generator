@@ -498,6 +498,11 @@ def _enforce_artifact_triangle_ceiling(triangle_count: int) -> None:
         )
 
 
+#: BEAT's fused exterior system in single precision: one complex64 N x N
+#: matrix, plus one factorisation copy.
+BEAT_BYTES_PER_VERTEX_SQUARED = 2 * 8
+
+
 def _dense_solver_memory_requirements(
     triangles: np.ndarray,
     quadrants: int,
@@ -505,14 +510,19 @@ def _dense_solver_memory_requirements(
     mode: str = "",
     tags: np.ndarray | None = None,
 ) -> dict[str, int]:
-    """Return conservative Metal and symmetry-expanded BEMPP storage.
+    """Return conservative Metal, symmetry-expanded BEMPP and BEAT storage.
 
     Dense-system dimensions follow used P1 vertices, not triangle count. The
     11 complex64 dense systems cover the concurrent Metal workload. Coupled
     infinite-baffle Metal adds one P0 velocity unknown per aperture triangle.
     A BEMPP symmetry solve additionally operates on mirrored full geometry and
-    keeps three reduced-row by full-trial arrays. Taking the larger backend
-    estimate prevents symmetry or aperture coupling from understating memory.
+    keeps three reduced-row by full-trial arrays. BEAT's exterior CPU path is
+    the fused Burton-Miller assembly: it allocates only the reduced N x N
+    complex64 system (hornlab-beat-bem ``docs/beat-engine-CPU.md``), with image
+    contributions folded into it, and the dense factorisation may hold one
+    copy more. Taking the largest backend estimate prevents symmetry or
+    aperture coupling from understating memory; the admission runs before an
+    engine is chosen, so it cannot use the smaller one.
     """
 
     used_vertex_count = int(np.unique(triangles).size)
@@ -531,6 +541,7 @@ def _dense_solver_memory_requirements(
     metal_dof_count = used_vertex_count + aperture_triangle_count
     metal_bytes = 11 * 8 * metal_dof_count**2
     bempp_bytes = 3 * 8 * multiplier * used_vertex_count**2
+    beat_bytes = BEAT_BYTES_PER_VERTEX_SQUARED * used_vertex_count**2
     return {
         "used_vertex_count": used_vertex_count,
         "aperture_triangle_count": aperture_triangle_count,
@@ -538,9 +549,11 @@ def _dense_solver_memory_requirements(
         "domain_multiplier": multiplier,
         "metal_bytes_per_dof_squared": 11 * 8,
         "bempp_bytes_per_vertex_squared": 3 * 8 * multiplier,
+        "beat_bytes_per_vertex_squared": BEAT_BYTES_PER_VERTEX_SQUARED,
         "metal_bytes": metal_bytes,
         "bempp_bytes": bempp_bytes,
-        "estimated_bytes": max(metal_bytes, bempp_bytes),
+        "beat_bytes": beat_bytes,
+        "estimated_bytes": max(metal_bytes, bempp_bytes, beat_bytes),
     }
 
 
@@ -1024,6 +1037,7 @@ def _build_sync(
             "meshDenseMemoryEstimateBytes": dense_memory["estimated_bytes"],
             "meshDenseMetalEstimateBytes": dense_memory["metal_bytes"],
             "meshDenseBemppEstimateBytes": dense_memory["bempp_bytes"],
+            "meshDenseBeatEstimateBytes": dense_memory["beat_bytes"],
             "meshAllowLarge": bool(
                 _strict_scalar(
                     design.root.mesh.allow_large_mesh,
@@ -1108,6 +1122,7 @@ def _build_sync(
         "dense_solver_metal_dof_count": dense_memory["metal_dof_count"],
         "dense_solver_metal_estimate_bytes": dense_memory["metal_bytes"],
         "dense_solver_bempp_estimate_bytes": dense_memory["bempp_bytes"],
+        "dense_solver_beat_estimate_bytes": dense_memory["beat_bytes"],
         "dense_solver_domain_multiplier": dense_memory["domain_multiplier"],
         "dense_solver_metal_bytes_per_dof_squared": dense_memory[
             "metal_bytes_per_dof_squared"

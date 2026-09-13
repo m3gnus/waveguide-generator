@@ -77,6 +77,10 @@ describe('StatusBar workspace modes', () => {
       workspaceModeStore.setMode('cad');
     });
 
+    // The selected BEMPP does not solve imported geometry, and the bar says so
+    // instead of naming an engine the CAD solve would not run on.
+    expect(host.textContent).toContain('BEMPP · NO CAD SOLVE');
+    act(() => { useSolveOptionsStore.getState().setEngine('auto'); });
     expect(host.textContent).toContain('METAL · 1.0');
     // Grouped in the runner's locale, not en-US — see summary.test.ts.
     expect(host.textContent).toContain(`CAD mesh ${(12_345).toLocaleString()} solved tri`);

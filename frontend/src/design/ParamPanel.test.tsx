@@ -308,7 +308,8 @@ describe('ParamPanel inventory UX', () => {
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
-    expect(host.textContent).toContain('Metal · full 3-D · free space');
+    expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
+    expect(host.textContent).toContain('Runs on');
     expect(host.textContent).toContain('Ingested cut planesx0');
     expect(host.textContent).toContain('Effective grid −180° … 180°');
   });

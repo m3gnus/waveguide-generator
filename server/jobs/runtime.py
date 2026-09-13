@@ -32,8 +32,10 @@ from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import parse
 from server.engines.registry import (
     SELECTABLE_ENGINE_NAMES,
+    EngineInfo,
     EngineRegistry,
     create_engine as get_engine,
+    engine_supports_symmetry,
     full3d_engine_order,
     resolve_legacy_beat_engine,
 )
@@ -938,12 +940,68 @@ async def resolve_submission(
 #: The geometry source an engine must declare to be offered imported geometry.
 _IMPORTED_GEOMETRY = "imported"
 
+#: The ingestion-resolved domains, as a refusal names them.
+_IMPORTED_DOMAIN_LABELS = {
+    1234: "full domain",
+    14: "x0 half (mirrored on x = 0)",
+    12: "y-only half (mirrored on y = 0)",
+    1: "x0+y0 quarter (mirrored on x = 0 and y = 0)",
+}
+
+#: Imported features a request can use, as a refusal names them.
+_IMPORTED_FEATURE_LABELS = {"passive-cardioid": "the passive-cardioid radiation campaign"}
+
+
+def _imported_features_needed(geometry: ImportedGeometrySource) -> set[str]:
+    return {"passive-cardioid"} if geometry.passive_cardioid_enabled else set()
+
+
+def _imported_capability_blocker(
+    info: EngineInfo, resolved_quadrants: Any, needed_features: set[str]
+) -> tuple[str, str] | None:
+    """Why a declaring engine still cannot take this return, from its declaration."""
+
+    if resolved_quadrants is not None and not engine_supports_symmetry(
+        info, int(resolved_quadrants)
+    ):
+        domain = _IMPORTED_DOMAIN_LABELS.get(
+            int(resolved_quadrants), f"quadrants {resolved_quadrants}"
+        )
+        return (
+            "imported_symmetry_unsupported_by_engine",
+            f"it cannot mirror this return's {domain}; it solves "
+            f"{', '.join(info.symmetry_domains) or 'no reduced domain'}",
+        )
+    missing = sorted(needed_features - set(info.imported_features))
+    if missing:
+        return (
+            "imported_feature_unsupported_by_engine",
+            "it does not implement "
+            + ", ".join(_IMPORTED_FEATURE_LABELS.get(item, item) for item in missing)
+            + " for imported geometry",
+        )
+    return None
+
+
+async def _imported_preflight_refusal(
+    adapter: Any, record: Mapping[str, Any] | None, msh_text: str | None
+) -> str | None:
+    """An adapter's own verdict on the record and mesh, when it has one."""
+
+    preflight = getattr(adapter, "imported_preflight", None)
+    if not callable(preflight) or record is None or msh_text is None:
+        return None
+    refusal = await asyncio.to_thread(preflight, record, msh_text)
+    return refusal if isinstance(refusal, str) and refusal else None
+
 
 async def resolve_imported_submission(
     request: SolveRequest,
     engine_registry: EngineRegistry,
     *,
     symmetry_metadata: Mapping[str, Any] | None = None,
+    imported_record: Mapping[str, Any] | None = None,
+    imported_msh_text: str | None = None,
 ) -> SubmissionResolution:
     """Choose the engine for an imported-geometry submission from capability data.
 
@@ -951,32 +1009,42 @@ async def resolve_imported_submission(
     shape. An engine is offered imported geometry because its ``EngineInfo``
     declares ``"imported"`` among its ``geometry_sources`` -- the declaration is
     the contract, as ``mountings`` is for a ground plane -- never because of its
-    name. Only Metal declares it today, so AUTO still resolves to Metal.
+    name. Metal and BEAT's CPU backend declare it, so AUTO takes Metal where
+    Metal runs and otherwise walks the same order ``resolve_auto_engine`` walks
+    for a parametric design.
 
-    Selection does not yet test the ingestion-resolved domain against an
-    engine's ``symmetry_domains``, nor a ground plane against its
-    ``mountings``. With Metal the only engine that declares imported geometry,
-    that changes nothing today. The next engine to declare it must add both
-    gates here: a full-3-D solver handed a cut mesh it cannot mirror returns a
-    wrong answer rather than an error.
+    Declaring imported geometry is not the whole test, because a return can ask
+    for something a declaring engine still cannot do. A candidate must also:
+
+    * mirror the ingestion-resolved domain (``symmetry_domains``). A full-3-D
+      solver handed a cut mesh it cannot mirror returns a wrong answer rather
+      than an error, so BEAT's missing y-only half is refused here, by name;
+    * declare every imported feature the request uses (``imported_features``);
+    * pass its adapter's own ``imported_preflight`` on the record and mesh,
+      when it has one: the checks only the geometry can answer, such as
+      whether BEAT's frame rotation keeps a mirror plane where it is.
 
     * ``auto`` takes the first available engine, in ``full3d_engine_order()``,
-      that declares imported geometry.
+      that declares imported geometry and passes those checks.
     * The legacy family name ``beat`` takes the best such BEAT backend.
     * Any other engine must declare imported geometry itself; otherwise the
       request is refused with ``imported_engine_unsupported``, naming the
-      engines that do.
-    * Axisymmetric solving of imported geometry stays refused.
+      engines that do. An explicit engine that fails one of the checks above is
+      refused with the reason that check names.
+    * Axisymmetric solving of imported geometry stays refused, and so does a
+      rigid ground plane, on every engine.
 
     An engine that declares imported geometry but is unavailable on this host
     raises ``EngineUnavailableError``: the host lacks a capability, the request
-    is not wrong. The decision, and every engine passed over on the way to it,
-    is recorded in ``solver_plan``.
+    is not wrong. When every candidate AUTO could use was refused by one of the
+    checks, the refusal names each reason instead. The decision, and every
+    engine passed over on the way to it, is recorded in ``solver_plan``.
 
     ``symmetry_metadata`` is the domain ``JobRuntime._prepare_imported_submission``
-    resolved from the ingestion record. Preparation reads the CAD store and the
-    mesh artifact, so it stays in the runtime. This function reads only the
-    capability snapshot, and never allocates or persists a job.
+    resolved from the ingestion record, and ``imported_record`` and
+    ``imported_msh_text`` are the record and verified mesh it read. Preparation
+    reads the CAD store and the mesh artifact, so it stays in the runtime. This
+    function never allocates or persists a job.
     """
 
     if not isinstance(request.geometry, ImportedGeometrySource):
@@ -993,6 +1061,14 @@ async def resolve_imported_submission(
             "imported_circsym_unsupported",
             "imported geometry supports full 3-D solves only; "
             "axisymmetric mode is unavailable",
+        )
+    if request.options.ground_plane.enabled:
+        raise ImportedSolveRefusal(
+            "imported_ground_plane_unsupported",
+            "A rigid ground plane is not available for imported CAD geometry on "
+            "any engine: the returned mesh is solved as it arrived, and no engine "
+            "here stands it above a floor. Turn the ground plane off to solve "
+            "this return.",
         )
     if requested not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {requested}")
@@ -1028,8 +1104,12 @@ async def resolve_imported_submission(
             details={"engine": requested, "capable_engines": capable},
         )
 
+    explicit = requested not in {"auto", "beat"}
+    resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
+    needed_features = _imported_features_needed(request.geometry)
     selected: str | None = None
     passed_over: list[str] = []
+    refused: list[str] = []
     for name in candidates:
         info = declared.get(name)
         if info is None:
@@ -1038,13 +1118,47 @@ async def resolve_imported_submission(
         if _IMPORTED_GEOMETRY not in info.geometry_sources:
             passed_over.append(f"{name}: does not declare imported geometry")
             continue
+        blocker = _imported_capability_blocker(info, resolved_quadrants, needed_features)
+        if blocker is not None:
+            code, reason = blocker
+            if explicit:
+                raise ImportedSolveRefusal(
+                    code,
+                    f"engine {name!r} cannot solve this CAD return: {reason}",
+                    details={"engine": name, "capable_engines": capable},
+                )
+            passed_over.append(f"{name}: {reason}")
+            refused.append(f"{info.display_label()}: {reason}.")
+            continue
         if not info.available:
             passed_over.append(f"{name}: unavailable ({info.reason})")
+            continue
+        # The snapshot said available; the adapter is the final word, exactly
+        # as on the parametric path.
+        adapter = await engine_registry.get_engine(name)
+        if adapter is None:
+            unavailable_reason = await engine_registry.unavailable_reason(name)
+            raise EngineUnavailableError(
+                f"Solve engine '{name}' is unavailable. "
+                f"{unavailable_reason or 'No capability reason was reported.'}"
+            )
+        refusal = await _imported_preflight_refusal(
+            adapter, imported_record, imported_msh_text
+        )
+        if refusal is not None:
+            if explicit:
+                raise ImportedSolveRefusal(
+                    "imported_return_unsupported_by_engine",
+                    f"engine {name!r} cannot solve this CAD return: {refusal}",
+                    details={"engine": name, "capable_engines": capable},
+                )
+            passed_over.append(f"{name}: {refusal}")
+            refused.append(f"{info.display_label()}: {refusal}")
             continue
         selected = name
         break
     if selected is None:
-        if requested not in {"auto", "beat"}:
+        if explicit:
             unavailable_reason = await engine_registry.unavailable_reason(requested)
             raise EngineUnavailableError(
                 f"Solve engine '{requested}' is unavailable. "
@@ -1053,20 +1167,21 @@ async def resolve_imported_submission(
         unavailable = [
             f"Solve engine '{name}' is unavailable. {declared[name].reason}"
             for name in candidates
-            if name in capable
+            if name in capable and not declared[name].available
         ]
+        if refused:
+            # A return no present engine could take is not a missing
+            # capability that may yet arrive: it is refused, with every reason.
+            raise ImportedSolveRefusal(
+                "imported_no_engine_solves_return",
+                "No solve engine on this host can solve this CAD return. "
+                + " ".join(refused + unavailable),
+                details={"passed_over": passed_over, "capable_engines": capable},
+            )
         raise EngineUnavailableError(
             "No solve engine on this host that can solve imported geometry is "
             "available. "
             + (" ".join(unavailable) or "No engine here declares imported geometry.")
-        )
-    # The snapshot said available; the adapter is the final word, exactly as on
-    # the parametric path.
-    if await engine_registry.get_engine(selected) is None:
-        unavailable_reason = await engine_registry.unavailable_reason(selected)
-        raise EngineUnavailableError(
-            f"Solve engine '{selected}' is unavailable. "
-            f"{unavailable_reason or 'No capability reason was reported.'}"
         )
     if selected != requested:
         request = request.model_copy(deep=True)
@@ -1856,6 +1971,8 @@ class JobRuntime:
                 request,
                 self.engine_registry,
                 symmetry_metadata=imported.symmetry_metadata,
+                imported_record=imported.record,
+                imported_msh_text=imported.msh_text,
             )
         else:
             resolved = await resolve_submission(request, self.engine_registry)

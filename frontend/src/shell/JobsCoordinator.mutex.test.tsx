@@ -505,28 +505,33 @@ describe('solve invocation mutex', () => {
     });
   });
 
-  // Which engine solves imported geometry is the server's decision, made from
-  // what each engine declares it can do. A Metal check and a forced engine
-  // here pre-empted it and left no room for any other engine.
-  it('sends an imported solve as AUTO and leaves the engine to the server', async () => {
+  // Imported geometry takes the same engine choice as a parametric design: the
+  // user's choice goes to the server as it is, and the server resolves AUTO or
+  // refuses an engine that cannot, with the reason. Neither a Metal check nor a
+  // forced engine may stand in for that choice here. The formulation is not a
+  // choice for imported geometry, so it is always full 3-D.
+  it("sends an imported solve with the user's engine choice, in full 3-D", async () => {
     mocks.submitImported.mockResolvedValue('job-cad');
     await act(async () => {
       await expect(jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_metal'))).resolves.toBe('job-cad');
     });
 
-    // No Metal at all on this machine: the request still goes to the server.
+    // No Metal at all on this machine: the request still goes to the server,
+    // with the engine the user chose.
     mocks.capabilities.engines = [
       { name: 'bempp', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] },
     ];
     await act(async () => { root.render(<JobsCoordinator now={() => new Date(2026, 7, 12, 12)}><span>ready</span></JobsCoordinator>); });
+    const cpu = importedSubmission('wgi_no_metal');
+    cpu.options = { ...cpu.options, engine: 'beat-cpu', solver_mode: 'circsym' };
     await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_no_metal'))).resolves.toBe('job-cad');
+      await expect(jobsCoordinatorBridge.getSnapshot().runImported(cpu)).resolves.toBe('job-cad');
     });
 
     expect(mocks.submitImported).toHaveBeenCalledTimes(2);
-    for (const [submission] of mocks.submitImported.mock.calls) {
-      expect((submission as ImportedSolveSubmission).options).toMatchObject({ engine: 'auto', symmetry: 'auto' });
-    }
+    const sent = mocks.submitImported.mock.calls.map(([submission]) => (submission as ImportedSolveSubmission).options);
+    expect(sent[0]).toMatchObject({ engine: 'metal', solver_mode: 'full_3d', symmetry: 'auto' });
+    expect(sent[1]).toMatchObject({ engine: 'beat-cpu', solver_mode: 'full_3d', symmetry: 'auto' });
   });
 
   // "No engine here can take this geometry" is a capability this machine

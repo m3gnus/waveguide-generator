@@ -207,12 +207,18 @@ off the surface removes the matching mirror plane, so Auto symmetry drops to
 the reduction that survives -- a floor costs the horizontal cut but keeps the
 left/right one. The ground plane needs BEMPP full 3D on this build; asking any
 other engine for one is refused rather than solved without the surface, and it
-is not available for imported CAD geometry at all, which solves on Metal. It
+is not available for imported CAD geometry on any engine; an imported solve
+with the ground plane on is refused when it is submitted. It
 cannot be combined with an infinite baffle -- the two are different half-space
 boundaries, each claiming the whole exterior, and the pair is refused when the
 solve is submitted whichever engine you choose.
 
-Imported CAD geometry still requires Metal. Field-plane traces are available
+Imported CAD geometry takes the same engine choice as a design: the CAD solve
+options list the engines, and AUTO takes the first available one that solves
+imported geometry. Metal does, and so does BEAT · CPU, which runs on every
+platform without a GPU. BEAT · CPU mirrors an x0 half and an x0+y0 quarter
+natively; a return cut on y0 alone is refused on BEAT with the reason, and
+solves on Metal. The passive-cardioid campaign is Metal-only. Field-plane traces are available
 from free-standing Metal and BEMPP full-3D solves; Axisymmetric, coupled-IB and
 ground-plane solves report that traces are unavailable. A grounded solve keeps
 none because the field evaluation carries no ground image: it would draw the
@@ -316,7 +322,7 @@ reopen its current head from **CAD-linked designs** and send that.
 Each completed job has its own export menu. Current result formats include chart PNGs,
 on-axis FRD, a horizontal/vertical FRD polar set for VituixCAD, frequency CSV, full
 JSON, per-channel derived-acoustics CSV/JSON, a self-contained HTML run report, polar
-and impedance CSV, and a summary report. Imported Metal runs also expose their retained
+and impedance CSV, and a summary report. Imported CAD runs also expose their retained
 complex pressure basis per drive channel. Geometry/design formats use the job's stored
 snapshot, never the current editor. Passive-cardioid jobs add a long-form
 radiation-matrix CSV and the lossless NPZ. The CSV uses Pa·s/m³ and engineering
@@ -356,7 +362,7 @@ When a run owns a radiation matrix, both its CSV presentation and lossless NPZ a
 archived beside the ordinary result JSON and frequency CSV.
 
 Every archive includes full JSON, frequency CSV, derived-acoustics sidecars, a
-self-contained HTML report, and the exact retained solve mesh. Imported Metal archives
+self-contained HTML report, and the exact retained solve mesh. Imported CAD archives
 also keep each retained drive channel's complex pressure basis. WG copies the results,
 mesh, pressure bases, and radiation matrix from one database snapshot before it starts
 building files, so result retention cannot leave a mixed or half-pruned archive.
@@ -463,9 +469,10 @@ waiting on, an action that acknowledges the findings and starts it, and a
 Dismiss. Solving that return — from the parked banner or with the ordinary
 Solve command — consumes the request and records the run against it, so it
 cannot later replay into a duplicate solve; dismissing it retires it just as
-finally. A machine with no Metal engine cannot run an imported solve at all, so
-a request that lands there is refused outright instead of being offered again on
-every reopen.
+finally. A request that arrives while no engine that solves imported geometry
+is available -- BEAT · CPU still preparing its runtime, say -- stays parked with
+that reason until one is. A request for a return no engine here can solve, or
+for an engine you chose that cannot solve it, is refused with the reason.
 
 A newly arriving return — and a return you manually select from the History
 list — is prepared automatically. On startup, WG selects the newest existing

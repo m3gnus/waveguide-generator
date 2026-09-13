@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from io import BytesIO
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -769,9 +770,10 @@ async def _runtime_fixture(
     tmp_path: Path,
     record_changes: dict[str, Any] | None = None,
     lineage_cad_names: dict[str, str | None] | None = None,
+    mesh_text: str = "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
 ) -> tuple[JobRuntime, str, dict[str, Any]]:
     mesh_path = tmp_path / "imported.msh"
-    mesh_path.write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
+    mesh_path.write_text(mesh_text, encoding="utf-8")
     record = _record(mesh_path)
     record.update(record_changes or {})
     cad_store = CadLinkStore(tmp_path / "cadlink.db")
@@ -2685,3 +2687,213 @@ def test_resolve_imported_submission_is_one_named_function_beside_resolve_submis
         asyncio.run(
             resolve_imported_submission(parametric, _DeclaredRegistry(_metal()))
         )
+
+
+# BEAT's CPU backend declares imported geometry too. Declaring it is not the
+# whole test: selection also reads the engine's symmetry domains, its imported
+# features and its adapter's preflight, and refuses a ground plane everywhere.
+
+
+def _beat_cpu(*, available: bool = True, reason: str = "test beat") -> EngineInfo:
+    return EngineInfo(
+        "beat-cpu",
+        available,
+        reason,
+        "test",
+        geometry_sources=("parametric", "imported"),
+        symmetry_domains=("full", "half-yz", "quarter"),
+    )
+
+
+def _y_only_half() -> dict[str, Any]:
+    symmetry = {
+        "cut_planes": ["y0"],
+        "planes": {
+            "x0": {"accepted": False},
+            "y0": {"accepted": True},
+            "z0": {"accepted": False},
+        },
+    }
+    return {"symmetry": symmetry, "polar_grid_derivation": polar_grid_from_symmetry(symmetry)}
+
+
+async def _submit_record(
+    tmp_path: Path,
+    registry: Any,
+    engine: str,
+    record_changes: dict[str, Any] | None = None,
+    *,
+    mesh_text: str | None = None,
+    ground_plane: bool = False,
+) -> dict[str, Any]:
+    kwargs = {} if mesh_text is None else {"mesh_text": mesh_text}
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    runtime, ingest_id, _ = await _runtime_fixture(tmp_path, record_changes, **kwargs)
+    runtime.engine_registry = registry  # type: ignore[assignment]
+    request = _request(ingest_id)
+    request.options.engine = engine
+    request.options.ground_plane.enabled = ground_plane
+    try:
+        job_id = await runtime.submit(request)
+        return runtime.store.get_job_row(job_id)
+    finally:
+        await runtime.shutdown()
+
+
+def test_imported_auto_takes_beat_cpu_where_no_metal_runs(tmp_path: Path) -> None:
+    registry = _DeclaredRegistry(
+        _metal(available=False, reason="no Apple GPU"), _bempp(), _beat_cpu()
+    )
+
+    row = asyncio.run(_submit_with(tmp_path, registry, "auto"))
+
+    assert row["config_json"]["options"]["engine"] == "beat-cpu"
+    plan = row["config_summary_json"]["symmetry"]["solver_plan"]
+    assert plan["engine"] == "beat-cpu"
+    assert plan["eligibility_reasons"] == [
+        "metal: unavailable (no Apple GPU)",
+        "bempp: does not declare imported geometry",
+    ]
+
+
+def test_imported_explicit_beat_cpu_refuses_a_y_only_half_by_name(tmp_path: Path) -> None:
+    registry = _DeclaredRegistry(_metal(), _beat_cpu())
+
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(_submit_record(tmp_path, registry, "beat-cpu", _y_only_half()))
+
+    assert caught.value.reason_code == "imported_symmetry_unsupported_by_engine"
+    assert "y-only half" in str(caught.value)
+    assert caught.value.details["engine"] == "beat-cpu"
+
+
+def test_imported_auto_passes_beat_cpu_over_for_a_y_only_half(tmp_path: Path) -> None:
+    # Where Metal runs, AUTO still takes it: it mirrors every imported cut set.
+    with_metal = _DeclaredRegistry(_metal(), _beat_cpu())
+    row = asyncio.run(_submit_record(tmp_path / "metal", with_metal, "auto", _y_only_half()))
+    assert row["config_json"]["options"]["engine"] == "metal"
+
+    # Where it does not, no present engine can mirror the return. That is a
+    # refusal naming both reasons, not a capability that may yet arrive.
+    without_metal = _DeclaredRegistry(_metal(available=False, reason="no Apple GPU"), _beat_cpu())
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(_submit_record(tmp_path / "cpu", without_metal, "auto", _y_only_half()))
+    assert caught.value.reason_code == "imported_no_engine_solves_return"
+    assert "y-only half" in str(caught.value)
+    assert "no Apple GPU" in str(caught.value)
+
+
+@pytest.mark.parametrize("engine", ["auto", "metal", "beat-cpu"])
+def test_an_imported_ground_plane_is_refused_at_submission_on_every_engine(
+    tmp_path: Path, engine: str
+) -> None:
+    registry = _DeclaredRegistry(_metal(), _beat_cpu())
+    full = {"symmetry": _symmetry_full(), "polar_grid_derivation": polar_grid_from_symmetry(_symmetry_full())}
+
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(_submit_record(tmp_path, registry, engine, full, ground_plane=True))
+
+    assert caught.value.reason_code == "imported_ground_plane_unsupported"
+    assert "on any engine" in str(caught.value)
+
+
+def _symmetry_full() -> dict[str, Any]:
+    return {
+        "cut_planes": [],
+        "planes": {name: {"accepted": False} for name in ("x0", "y0", "z0")},
+    }
+
+
+def test_a_passive_cardioid_return_goes_only_to_an_engine_that_declares_it() -> None:
+    from server.jobs.runtime import resolve_imported_submission
+
+    request = _request(
+        "wgi_" + "0" * 26,
+        passive_cardioid_rear_volume_l=6.0,
+        passive_cardioid_port_length_mm=25.0,
+        model_port_area_m2=0.05,
+        bem_port_area_m2=0.009471859930646809,
+        port_area_source="user",
+        passive_cardioid_foam_resistance_pa_s_m3=10_000.0,
+    )
+    metal_with_campaign = EngineInfo(
+        "metal",
+        True,
+        "test",
+        "test",
+        geometry_sources=("parametric", "imported"),
+        imported_features=("passive-cardioid",),
+    )
+
+    request.options.engine = "beat-cpu"
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(
+            resolve_imported_submission(
+                request, _DeclaredRegistry(metal_with_campaign, _beat_cpu())
+            )
+        )
+    assert caught.value.reason_code == "imported_feature_unsupported_by_engine"
+    assert "passive-cardioid" in str(caught.value)
+
+    request.options.engine = "auto"
+    resolution = asyncio.run(
+        resolve_imported_submission(
+            request, _DeclaredRegistry(metal_with_campaign, _beat_cpu())
+        )
+    )
+    assert resolution.engine_name == "metal"
+
+
+class _AdapterRegistry(_DeclaredRegistry):
+    """A declared registry whose adapters are the real ones."""
+
+    async def get_engine(self, name: str) -> Any:
+        from server.engines.registry import create_engine
+
+        info = next((item for item in self.engines if item.name == name), None)
+        return create_engine(name) if info is not None and info.available else None
+
+
+_TILTED_HALF_MESH = """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+3
+1 0.01 0 0
+2 0 0.02 0
+3 0 0 0.03
+$EndNodes
+$Elements
+1
+1 2 2 101 1 1 2 3
+$EndElements
+"""
+
+
+def test_the_beat_adapter_preflight_refuses_a_return_at_submission(tmp_path: Path) -> None:
+    """A frame BEAT would have to move its mirror for is refused before a job exists."""
+
+    angle = math.radians(30.0)
+    tilted = {
+        "axis": [math.sin(angle), 0.0, math.cos(angle)],
+        "u": [math.cos(angle), 0.0, -math.sin(angle)],
+        "v": [0.0, 1.0, 0.0],
+        "origin_m": [0.0, 0.0, 0.0],
+        "mouth_center_m": [0.0, 0.0, 0.0],
+        "source_center_m": [0.0, 0.0, 0.0],
+    }
+    changes = {"anchor": {"instance_id": "i", "design_id": None, "throat_frame": tilted}}
+
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(
+            _submit_record(
+                tmp_path,
+                _AdapterRegistry(_metal(available=False), _beat_cpu()),
+                "beat-cpu",
+                changes,
+                mesh_text=_TILTED_HALF_MESH,
+            )
+        )
+
+    assert caught.value.reason_code == "imported_return_unsupported_by_engine"
+    assert "would move that plane" in str(caught.value)

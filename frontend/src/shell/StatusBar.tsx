@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
+import { importedSolveEngine } from '../design/backendSupport';
 import { compactFrequency } from '../design/lambdaLimit';
 import {
   resolveEngine,
@@ -107,7 +108,17 @@ export function StatusBar() {
   const frequencyMode = useSolveOptionsStore((state) => state.frequencyMode);
   const frequencyListText = useSolveOptionsStore((state) => state.frequencyListText);
   const preferences = usePreferences();
-  const engineLabel = engineStatusLabel(engines, engineSelection, mode === 'cad' ? 'metal' : selectedEngine, mode === 'cad' ? 'full_3d' : solverMode, isLoading);
+  // A CAD solve runs on the engine the user's choice lands on for imported
+  // geometry, always in full 3-D -- or on nothing, which the bar says rather
+  // than naming an engine that would refuse the model.
+  const cadEngine = importedSolveEngine(selectedEngine, engines, engineSelection).engine;
+  const engineLabel = mode !== 'cad'
+    ? engineStatusLabel(engines, engineSelection, selectedEngine, solverMode, isLoading)
+    : cadEngine
+      ? engineStatusLabel(engines, engineSelection, cadEngine.name, 'full_3d', isLoading)
+      : isLoading
+        ? `${selectedEngine.toUpperCase()}…`
+        : `${selectedEngine.toUpperCase()} · NO CAD SOLVE`;
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
   const meshMetrics = previewMeshMetrics(preview.frame);
   const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;

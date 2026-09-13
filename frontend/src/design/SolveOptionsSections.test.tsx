@@ -115,7 +115,10 @@ describe('solve and directivity control help', () => {
     render(<SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/>);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
-    expect(host.textContent).toContain('Metal · full 3-D · free space');
+    // The engine is the same user choice as the parametric workspace's; the
+    // formulation and domain stay facts.
+    expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
+    expect(host.textContent).toContain('Runs on');
     expect(host.textContent).toContain('x0, y0');
     expect(host.querySelector('#mesh-validation-mode')).not.toBeNull();
     expect(host.querySelector('#cad-solve-frequency-mode')).not.toBeNull();

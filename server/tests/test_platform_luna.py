@@ -593,6 +593,7 @@ def test_capability_probe_runs_off_thread_and_is_cached(
                     "ground_plane_axes": (),
                     "ground_plane_composes_with_symmetry": False,
                     "geometry_sources": ("parametric",),
+                    "imported_features": (),
                     "symmetry_domains": (),
                     "field_traces": False,
                     "di_sphere": True,

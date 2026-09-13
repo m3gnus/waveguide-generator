@@ -211,6 +211,7 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
             "ground_plane_axes",
             "ground_plane_composes_with_symmetry",
             "geometry_sources",
+            "imported_features",
             "symmetry_domains",
             "field_traces",
             "di_sphere",
