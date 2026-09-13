@@ -84,6 +84,40 @@ print(json.dumps({
 """
 
 
+#: The next start's sweep, run in the packaged interpreter against the app layer.
+_SWEEP = r"""
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from server.platform.temp_session import sweep_stale_temporary_directories
+print(json.dumps([path.name for path in sweep_stale_temporary_directories(Path(sys.argv[2]))]))
+"""
+
+
+def sweep_in_runtime(
+    interpreter: Path, app: Path, environment: dict[str, str], temporary: Path
+) -> list[str]:
+    """Run the product's startup sweep over ``temporary``; return what it removed."""
+
+    completed = subprocess.run(  # noqa: S603 - packaged interpreter, fixed program
+        [str(interpreter), "-c", _SWEEP, str(app), str(temporary)],
+        env=environment,
+        cwd=str(app),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise QualificationError(
+            f"the sweep exited {completed.returncode}: {completed.stderr[-1500:]}"
+        )
+    try:
+        return list(json.loads(completed.stdout.strip().splitlines()[-1]))
+    except (IndexError, ValueError) as exc:
+        raise QualificationError(f"unreadable sweep output: {exc}") from exc
+
+
 def launcher_grace(app: Path) -> float:
     """The status window's ``shutdown_timeout``, read from the installed launcher."""
 
@@ -454,8 +488,22 @@ def run_gate(
 
         report["clean_stop_seconds"] = round(second.stop_and_time(grace), 2)
         remaining = _temporary_leftovers(temporary)
+        report["left_by_clean_stop"] = remaining
+        own = f"wg2-run-{second.pid}-"
+        others = [name for name in remaining if not name.startswith(own)]
+        if others:
+            raise QualificationError(f"a clean stop left temporary directories: {others}")
         if remaining:
-            raise QualificationError(f"a clean stop left temporary directories: {remaining}")
+            # A thread was still busy when its cleanup finished, so the stop
+            # ended without waiting for it and left its own session to the
+            # next start, as designed (the log names the thread). Prove that
+            # start's sweep, run in the packaged runtime, removes it.
+            report["swept_after_clean_stop"] = sweep_in_runtime(
+                interpreter, app, environment, temporary
+            )
+            unswept = _temporary_leftovers(temporary)
+            if unswept:
+                raise QualificationError(f"the sweep left temporary directories: {unswept}")
     finally:
         for run in runs:
             run.kill_if_alive()

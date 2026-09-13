@@ -86,7 +86,43 @@ def test_the_gate_passes_against_this_checkout(tmp_path: Path) -> None:
     assert quit_["seconds"] < grace
     assert report["next_start_job"]["stage_message"] == "Interrupted by Quit"  # type: ignore[index]
     assert report["left_behind_after_restart"] == []
+    # However the clean stop ended, nothing of either run is left once swept.
+    assert [
+        path.name for path in (tmp_path / "work" / "tmp").iterdir() if path.name.startswith("wg2-")
+    ] == []
     memory = report["memory_ceiling"]
     assert isinstance(memory, dict)
     assert memory["physical"]["known"] is True
     assert (tmp_path / "out" / "server.log").is_file()
+
+
+def test_the_sweep_the_gate_runs_removes_a_dead_session(tmp_path: Path) -> None:
+    """The branch the gate takes when a clean stop leaves its own session behind."""
+
+    import subprocess
+
+    gate = _gate()
+    temporary = tmp_path / "tmp"
+    temporary.mkdir()
+    holder = (
+        "import os, sys\n"
+        f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
+        "from pathlib import Path\n"
+        "from server.platform.temp_session import TemporarySession\n"
+        # Flushed: os._exit discards whatever stdout still buffers.
+        f"print(TemporarySession.create(Path({str(temporary)!r})).path.name, flush=True)\n"
+        "os._exit(0)\n"
+    )
+    left = subprocess.run(
+        [sys.executable, "-c", holder], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert left.startswith("wg2-run-"), left
+    assert (temporary / left).is_dir()
+    environment = {
+        name: value for name, value in os.environ.items() if not name.startswith("WG2_")
+    }
+
+    removed = gate.sweep_in_runtime(Path(sys.executable), REPO_ROOT, environment, temporary)
+
+    assert removed == [left]
+    assert list(temporary.iterdir()) == []

@@ -75,7 +75,8 @@ skips is crash-safe by construction:
   directory, and holds an OS lock inside it for as long as it lives. Each start
   removes every such directory whose lock is free -- its owner is gone, however
   it ended -- and never one whose owner is alive, whichever build or checkout
-  that is. A clean exit removes its own. The system temporary directory itself
+  that is. A clean exit removes its own, unless a thread was still busy when
+  cleanup finished; then the next start does. The system temporary directory itself
   is not redirected: BEAT keeps the registry of its persistent host there, and
   the mesher its publish lock, and both must outlive the process. Directories
   with no session to belong to (`wg2-solver-mesh-*`, `wg2-imported-mesh-*`,

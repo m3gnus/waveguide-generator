@@ -154,10 +154,13 @@ def test_a_packaged_quit_on_windows_terminates_the_beat_persistent_host() -> Non
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
 def test_without_the_launchers_job_the_detached_host_survives() -> None:
-    """The control: the same host, no job, outlives its parent.
+    """The control: the same host, with no launcher job closed, outlives its parent.
 
-    Without it a pass above could be the CI runner's own job tearing trees
-    down, not the launcher's.
+    Without it a pass above could be the environment tearing trees down, not
+    the launcher's job. The stand-in stays in whatever job the test runs in --
+    a windows-latest runner's job refuses ``CREATE_BREAKAWAY_FROM_JOB`` with
+    ERROR_ACCESS_DENIED -- and that job stays open for the whole test, so the
+    only difference from the test above is the launcher's job and its close.
     """
 
     server = subprocess.Popen(
@@ -165,7 +168,6 @@ def test_without_the_launchers_job_the_detached_host_survives() -> None:
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
-        creationflags=CREATE_BREAKAWAY_FROM_JOB,
     )
     host_pid: int | None = None
     try:
