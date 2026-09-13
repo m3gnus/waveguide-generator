@@ -1539,6 +1539,9 @@ class JobRuntime:
         self._restart_interrupted: set[str] = set()
         #: The loop the scheduler runs on, for a latch released from a thread.
         self._loop: asyncio.AbstractEventLoop | None = None
+        #: When a held queue reads the latch again, so the approval's expiry
+        #: (§4.2) starts it even if nothing else reads the latch.
+        self._expiry_timer: asyncio.TimerHandle | None = None
         if restart_approval is not None:
             restart_approval.add_release_listener(self._restart_called_off)
         self.cadlink_store = cadlink_store
@@ -1599,6 +1602,41 @@ class JobRuntime:
         except RuntimeError:  # the loop closed in between
             pass
 
+    def _check_again_when_the_approval_expires(self) -> None:
+        # The latch expires only when something reads it (§4.2). A held queue
+        # reads it again when it is due, so the expiry starts the queue even if
+        # no route or status read comes. On the loop thread.
+        approval = self.restart_approval
+        remaining = approval.remaining() if approval is not None else None
+        loop = self._loop
+        if remaining is None or loop is None or loop.is_closed():
+            return
+        if self._expiry_timer is not None:
+            self._expiry_timer.cancel()
+        self._expiry_timer = loop.call_later(remaining + 0.05, self._ensure_scheduler)
+
+    def _mark_running(
+        self, job_id: str, fields: Mapping[str, Any], payload: Mapping[str, Any]
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Mark a queued job running, unless an update restart is approved (§4.3).
+
+        The mark is written under the lock that approving a restart takes, so
+        the two are ordered. Either the job was marked running before the
+        approval, and the restart ends it with its own reason, or it is not
+        marked at all and goes back to the front of the queue. Returns
+        whether it was admitted, and the store's event.
+        """
+
+        approval = self.restart_approval
+        if approval is None:
+            return True, self.store.start_job(job_id, fields, payload)
+        admitted, event = approval.admit(
+            lambda: self.store.start_job(job_id, fields, payload)
+        )
+        if not admitted:
+            self._queue.appendleft(job_id)
+        return admitted, event
+
     async def start(self) -> None:
         """Initialize storage, fail running orphans, and requeue queued rows."""
 
@@ -1646,6 +1684,9 @@ class JobRuntime:
         """
 
         self._shutting_down = True
+        if self._expiry_timer is not None:
+            self._expiry_timer.cancel()
+            self._expiry_timer = None
         # A shutdown with a restart approved is the update restart: the
         # launcher consumed the handoff request and is stopping this server to
         # replace it (contract §4.3). It marks its jobs as ended by the update
@@ -2643,14 +2684,12 @@ class JobRuntime:
         return await asyncio.to_thread(self.resume, cursor)
 
     def _ensure_scheduler(self) -> None:
-        # Not while a restart is approved: its release starts the scheduler
-        # again (``_restart_called_off``).
-        if (
-            self._shutting_down
-            or not self._started
-            or not self._queue
-            or self._restart_pending()
-        ):
+        if self._shutting_down or not self._started or not self._queue:
+            return
+        if self._restart_pending():
+            # Not while a restart is approved: its release starts the
+            # scheduler again (``_restart_called_off``), and so does its expiry.
+            self._check_again_when_the_approval_expires()
             return
         if self._scheduler_task is not None and not self._scheduler_task.done():
             return
@@ -2781,22 +2820,15 @@ class JobRuntime:
                 # Shutdown began while this job was being prepared. It has not
                 # started, so its row stays queued for the next start.
                 return
-            if self._restart_pending():
-                # An update restart was approved while this job was being
-                # prepared (contract §4.3). This is the last check before the
-                # job is marked running, with no await between the two, and the
-                # latch reads under the lock the approval takes: the approval
-                # either lands before this check, and the job stays queued, or
-                # after it, and the job is running work the restart ends with
-                # its own reason. It goes back to the front of the queue.
-                self._queue.appendleft(job_id)
-                return
+            # An update restart may have been approved while this job was being
+            # prepared (contract §4.3). ``_mark_running`` refuses to start it
+            # then, and puts it back at the front of the queue.
             # Batch Q extends only this established engine-call seam.  FIFO
             # scheduling/recovery remains untouched; real adapters own their
             # gmsh-worker + asyncio.to_thread orchestration, following v1
             # ``simulation_runner.py:397-427,430-527``.
             if request.options.engine != "dryrun":
-                event = self.store.start_job(
+                admitted, event = self._mark_running(
                     job_id,
                     {
                         "status": "running",
@@ -2811,7 +2843,7 @@ class JobRuntime:
                         "progress": 0.05,
                     },
                 )
-                if event is None:
+                if not admitted or event is None:
                     return
                 self.events.publish(event)
                 await self._run_real_engine(
@@ -2824,7 +2856,7 @@ class JobRuntime:
                     cad_identity=cad_identity,
                 )
                 return
-            event = self.store.start_job(
+            admitted, event = self._mark_running(
                 job_id,
                 {
                     "status": "running",
@@ -2835,7 +2867,7 @@ class JobRuntime:
                 },
                 {"status": "running", "stage": "mesh", "progress": 0.05},
             )
-            if event is None:
+            if not admitted or event is None:
                 return
             self.events.publish(event)
 

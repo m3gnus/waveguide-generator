@@ -869,6 +869,21 @@ def _recorded_text(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _without_home(text: str) -> str:
+    """``text`` with the home folder written as ``~``, as a problem report writes it.
+
+    A recorded detail is often an exception's message, and some of those name
+    a layer or a staging folder. Without this, the user's name would travel in
+    "Copy update diagnostics".
+    """
+
+    # Imported here, not at the top: the diagnostics package reads the state
+    # of every service, this one included, when a report is built.
+    from server.diagnostics.scrub import scrub_rules, scrub_text
+
+    return scrub_text(text, scrub_rules())
+
+
 def _build_identity(value: Any) -> dict[str, str | None] | None:
     """A recorded build identity, normalized to its three fields; None when it names nothing."""
 
@@ -883,7 +898,8 @@ def last_outcome(record: Any) -> dict[str, Any] | None:
 
     Every field is normalized, so a record from any helper reads the same way.
     The staging roots and the installation key stay out: the roots are folders
-    on this machine, and neither says anything about how the update ended.
+    on this machine, and neither says anything about how the update ended. The
+    detail keeps its text with the home folder written as ``~``.
     """
 
     if not isinstance(record, dict) or record.get("outcome") not in _RECORDED_OUTCOMES:
@@ -902,7 +918,7 @@ def last_outcome(record: Any) -> dict[str, Any] | None:
         "transaction": _recorded_text(record.get("transaction")),
         "operation": operation if operation in _RECORDED_OPERATIONS else None,
         "outcome": record["outcome"],
-        "detail": detail if isinstance(detail, str) else "",
+        "detail": _without_home(detail) if isinstance(detail, str) else "",
         "recordedAt": _recorded_text(record.get("recordedAt")),
         "from": _build_identity(record.get("from")),
         "to": _build_identity(record.get("to")),

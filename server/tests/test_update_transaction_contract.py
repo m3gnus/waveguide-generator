@@ -2840,3 +2840,159 @@ def test_the_job_runtime_reads_the_servers_restart_latch(tmp_path: Path) -> None
     app = create_app(data_dir=tmp_path / "data")
 
     assert app.state.jobs_runtime.restart_approval is app.state.update_restart
+
+
+def test_queued_jobs_start_when_an_approval_nobody_reads_expires(tmp_path: Path) -> None:
+    """Contract §4.2 and §4.3: the expiry does not wait for something else to read the latch.
+
+    It is the backstop for a launcher that never said it discarded the
+    request, so the queue the approval held must start without a status read.
+    """
+
+    engine = _GatedSolve()
+    engine.release.set()
+    approval = RestartApproval(ttl=0.3)
+
+    async def scenario() -> str | None:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "jobs.db"),
+            engine_registry=_registry_for(engine),
+            restart_approval=approval,
+        )
+        approval.approve("v2.0.1")
+        job_id = await runtime.submit(_solve_request())
+        # From here on only the runtime itself reads the latch.
+        await _until(lambda: _status(runtime, job_id) in FINISHED, timeout=5.0)
+        finished = _status(runtime, job_id)
+        await runtime.shutdown()
+        return finished
+
+    assert asyncio.run(scenario()) == "complete"
+
+
+def test_an_approval_waits_for_a_job_that_is_being_marked_running() -> None:
+    """Contract §4.3: marking a job running and approving a restart take one lock.
+
+    So no job is marked running once an approval is set: it was running
+    before, and the restart ends it with its own reason, or it stays queued.
+    """
+
+    approval = RestartApproval()
+    order: list[str] = []
+
+    def mark_running() -> threading.Thread:
+        def approve() -> None:
+            approval.approve("v2.0.1")
+            order.append("approved")
+
+        approver = threading.Thread(target=approve)
+        approver.start()
+        approver.join(0.2)  # held off while the job is marked running
+        order.append("marked running")
+        return approver
+
+    admitted, approver = approval.admit(mark_running)
+    approver.join(5.0)
+    late, started = approval.admit(lambda: "started")
+
+    assert admitted is True
+    assert order == ["marked running", "approved"]
+    assert (late, started) == (False, None)
+
+
+def test_a_retry_made_while_healthy_start_cleanup_runs_is_not_undone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §2.3 and §2.5: cleanup rewrites the record, and keeps a retry made meanwhile.
+
+    Cleanup reads the record, deletes the staging, which can take seconds for a
+    runtime layer, then records ``reclaimed``. A retry the user made in those
+    seconds must survive that rewrite.
+    """
+
+    installation = _installation(tmp_path)
+    held = {"version": "9.9.7", "commit": "c" * 40, "runtimeId": SERVICE_RUNTIME}
+    if not apply_update_module.write_completion_record(
+        installation.data_dir,
+        installation.resources,
+        {
+            "transaction": "an-earlier-transaction",
+            "operation": "update",
+            "toVersion": "9.9.7",
+            "toCommit": "c" * 40,
+            "toRuntimeId": SERVICE_RUNTIME,
+        },
+        outcome="rolled-back",
+        detail="an earlier build that did not start",
+    ):
+        pytest.fail("set-up: could not record an earlier failed build")
+    _stamp_build(installation.resources / "app", "9.9.8", "a" * 40, SERVICE_RUNTIME)
+    _stamp_build(installation.staged_app, "9.9.9", "b" * 40, SERVICE_RUNTIME)
+    _decided_update(installation)
+    allowed, detail = commit_transaction(installation.data_dir, resources=installation.resources)
+    committed = _completion_record(installation.data_dir, installation.resources) or {}
+    if not allowed or committed.get("suppressedBuilds") != [held]:
+        pytest.fail(f"set-up: the commit did not carry the suppression: {detail} {committed!r}")
+
+    real_rmtree = apply_update_module.shutil.rmtree
+    retried: list[bool | None] = []
+
+    def rmtree_while_the_user_retries(path: Any, *args: Any, **kwargs: Any) -> None:
+        if not retried:
+            retried.append(
+                apply_update_module.lift_suppressed_build(
+                    installation.data_dir, installation.resources, held
+                )
+            )
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(apply_update_module.shutil, "rmtree", rmtree_while_the_user_retries)
+    removed = apply_update_module.reclaim_committed_staging(
+        installation.data_dir, installation.resources
+    )
+    monkeypatch.undo()
+    record = _completion_record(installation.data_dir, installation.resources) or {}
+
+    if retried != [True]:
+        pytest.fail(f"set-up: the retry during cleanup did not lift the entry: {retried!r}")
+    assert removed == [installation.data_dir / "updates" / "9.9.9"]
+    assert record["rollbackMaterial"] == "reclaimed"
+    assert record["suppressedBuilds"] == [], "cleanup put back a suppression the user lifted"
+
+
+def test_an_outcome_detail_names_the_home_folder_as_a_problem_report_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §2.2 "Readers": a recorded detail can name a folder, and the status scrubs it.
+
+    An abandoned update records its exception's message, and "The installed
+    layer is missing" names the layer. What "Copy update diagnostics" copies
+    must not carry the user's home folder, and so the user's name.
+    """
+
+    install = _released_client_install(tmp_path)
+    home = tmp_path / "home" / "ada"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    missing = home / "Applications" / "Waveguide Generator.app" / "Contents" / "Resources" / "app"
+    if not apply_update_module.write_completion_record(
+        install.data_dir,
+        install.resources,
+        {"transaction": "a-transaction", "operation": "update", "toVersion": "2.0.1"},
+        outcome="aborted",
+        detail=f"The installed layer is missing: {missing}",
+    ):
+        pytest.fail("set-up: could not record the abandoned update")
+    update = _bundle_update_service(
+        install.resources,
+        install.data_dir,
+        _PublishedReleases("2.0.1", "b" * 40),
+        installed_version="2.0.0",
+        platform_name="darwin",
+        tmp_path=tmp_path,
+    )
+
+    detail = update.get_status()["lastOutcome"]["detail"]
+
+    assert str(home) not in detail
+    assert detail.startswith("The installed layer is missing: ~")
+    assert detail.endswith("app")

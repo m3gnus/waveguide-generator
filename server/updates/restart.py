@@ -29,6 +29,7 @@ from collections.abc import Callable
 import logging
 import threading
 import time
+from typing import TypeVar
 
 
 #: The error code a refused submission carries (``error.code``).
@@ -48,6 +49,8 @@ RESTART_APPROVAL_TTL = 300.0
 
 #: Told ``(target, reason)`` when an approved restart is called off.
 ReleaseListener = Callable[[str, str], object]
+
+_Started = TypeVar("_Started")
 
 log = logging.getLogger("wg.updates")
 
@@ -96,6 +99,29 @@ class RestartApproval:
             "Restart approved to install %s; new solves are refused until it happens",
             target,
         )
+
+    def remaining(self) -> float | None:
+        """Seconds until the approved restart expires, or ``None`` when none is pending."""
+
+        with self._lock:
+            if self._target is None:
+                return None
+            return max(0.0, self._ttl - (self._clock() - self._approved_at))
+
+    def admit(self, start: Callable[[], _Started]) -> tuple[bool, _Started | None]:
+        """Run ``start`` unless a restart is approved, under the lock ``approve`` takes.
+
+        The job runtime marks a job running through this (contract §4.3), so a
+        job start and an approval are ordered: once ``approve`` has returned, no
+        job is marked running. ``start`` must be short and must not read this
+        latch. Returns ``(False, None)`` when a restart is pending.
+        """
+
+        self.expire_if_due()
+        with self._lock:
+            if self._target is not None:
+                return False, None
+            return True, start()
 
     def expire_if_due(self) -> bool:
         """Release a latch older than ``RESTART_APPROVAL_TTL``. Returns whether it did."""

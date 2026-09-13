@@ -63,14 +63,16 @@ the update restart, and no queued job starts under an approved restart: `JobRunt
 Still to do:
 
 - carrying the channel into the record, which stays `null` until the handoff carries it
-  (§2.2 `channel`). Neither half of today's handoff carries it without a change to an
-  interface this contract freezes. The schema-1 request is read with exactly its five
-  keys (§3.4). A new helper flag is not safe either, although §3.2 says new behaviour
-  arrives that way: the helper parses its command line strictly, and this launcher also
-  runs an *older* candidate's helper, on a Return to Stable, which would refuse the flag
-  and stop that update. Carrying it needs a decision on the route (an optional request key
-  plus an environment variable the helper reads, or a flag the launcher passes only to a
-  helper that accepts it).
+  (§2.2 `channel`). Carrying it changes both halves of the handoff:
+  - a key in the request, which is same-version (§3.4), so the release that reads the key
+    can add it;
+  - a new optional helper flag (§3.2), with the helper recording its value in the journal.
+
+  That widens the handoff, so it is left to a change of its own. One constraint on that
+  change: the helper parses its command line strictly, so no launcher may pass the flag to
+  a helper older than the flag. Today every candidate is newer than the launcher that hands
+  off to it. That stops being true once anything installs an older version, such as a
+  Return to Stable (§2.6).
 
 ---
 
@@ -137,6 +139,9 @@ completion record only remembers what the journal decided.
   - The status carries `lastOutcome`: the record with every field normalized, less
     `installation` and `stagingRoots`, which are an installation hash and folders on this
     machine. It also carries `suppressed` (§2.3).
+  - The record's `detail` is often an exception's message, which can name a folder. In
+    `lastOutcome` the home folder in it reads `~`, as it does in a problem report
+    (`server/diagnostics/scrub.py`).
   - The dialog shows the outcome as a "Last update" fact, and explains one that did not
     install. "Copy update diagnostics", in the same dialog, copies the update state
     with both fields. It leaves out the install command, which names a local folder.
@@ -168,6 +173,9 @@ reclaimed with it. All of these are optional keys under schema `1` (§3.3).
     entry's identity as its body. It removes the one equal entry and installs nothing.
     It answers 409 when the record holds no such entry. The record is rewritten by
     `lift_suppressed_build`, beside the writer in `launchers/apply_update.py`.
+  - The retry rewrites the record while the app runs, as healthy-start cleanup does when
+    it records `reclaimed` after removing the staging. Each reads the record again just
+    before it writes and changes only its own field, so neither undoes the other.
   - A release's identity is its version and the `commit` and `runtimeId` of its
     published app manifest, which is the build's own `APP-MANIFEST.json`. The version
     must match. A commit or runtime id that either side does not know is not evidence of
@@ -374,7 +382,8 @@ process (`application.state.update_restart`):
     running minutes after approval therefore has no handoff pending. Five minutes rather
     than one leaves room for a machine that is paging or suspended.
   - Expiry is checked whenever the latch is read: by a refusing route, the update status,
-    and the install status.
+    and the install status. The job runtime also reads it when an approval that holds its
+    queue is due to expire (§4.3).
   - The update dialog shows an expiry as a failed attempt, as it shows a discard.
 - A called-off restart is a failed attempt the update dialog shows, through the existing
   `installState` and `error` fields: "The update to `<version>` did not start: `<reason>`.
@@ -399,18 +408,20 @@ which `mount_jobs` passes it:
 - **The mark sits beside the Quit mark.** A start that knows only Quit reads the job as
   interrupted by Quit, a stop and not a crash. That start is a release older than this
   one, which an automatic rollback reopens.
-- **No queued job starts while the latch is set.** The scheduler takes no job from the
-  queue. A job it had already taken is checked once more, just before it is marked
-  running, with no await between the check and the mark. Reading the latch takes the lock
-  that approving it takes, so the approval lands either before that check or after it:
-  - before it, and the job goes back to the front of the queue;
-  - after it, and the job is running work that the restart ends with its own reason.
+- **No job is marked running once a restart is approved.** The scheduler takes no job
+  from the queue while the latch is set. A job it had already taken is marked running
+  through `RestartApproval.admit`, which writes the mark under the lock `approve` takes.
+  The two are therefore ordered:
+  - the approval came first, and the job goes back to the front of the queue;
+  - or the job was marked running first, and it is running work that the restart ends
+    with its own reason.
 - **A queued job stays queued in the job store**, and the next start runs it: the new
-  build, or the old one after a rollback. If the latch comes down without a restart
-  (§4.2), this process runs it.
+  build, or the old one after a rollback. If the latch comes down without a restart,
+  this process runs it. That includes the latch's expiry (§4.2). A held queue reads the
+  latch again when the approval is due to expire, so it does not wait for another read.
 - **The narrow race of §4.2 is closed where a job starts.** A solve that passes its
-  route's check just before the latch goes up is accepted and queued. It is never
-  started under the approval.
+  route's check just before the latch goes up is accepted and queued. It is not marked
+  running after the approval.
 
 ### 4.4 Scoped shutdown
 
@@ -630,7 +641,7 @@ that implements it removes the marker.
 | `test_a_no_gui_start_with_no_free_port_reports_the_transaction` | §4.5 | So does a port failure |
 | `test_healthy_start_writes_nothing_when_there_is_nothing_to_settle` | §4.5 | An ordinary start that cannot confirm writes nothing about updates |
 | `test_a_failed_build_is_held_back_until_an_explicit_retry_lifts_only_it` | §2.2, §2.3, D6 | End to end: the rollback records the failed build, the next check holds it back and install refuses it, another commit or version stays eligible, and the retry lifts that entry only |
-| `test_the_update_status_explains_the_last_outcome_without_local_paths` | §2.2 | The status carries the normalized outcome and names no folder on this machine |
+| `test_the_update_status_explains_the_last_outcome_without_local_paths` | §2.2 | The status carries the normalized outcome, without the record's staging folders |
 | `test_a_build_field_nobody_recorded_is_not_evidence_of_a_different_build` | §2.3 | Suppression fails closed on a commit the record does not know |
 | `test_a_retry_needs_its_confirmation_and_lifts_nothing_it_does_not_name` | §2.3 | The retry needs its header, and naming a build that is not held back changes nothing |
 | `test_a_job_the_update_restart_ends_reads_as_ended_by_the_update_restart` | §4.3 | A running job the restart stops at a checkpoint names the update restart, not Quit |
@@ -638,6 +649,10 @@ that implements it removes the marker.
 | `test_a_job_queued_before_restart_approval_does_not_start_after_it` | §4.3 | A queued job waits under the approval, and runs when the approval is called off |
 | `test_a_solve_the_restart_approval_overtakes_is_queued_not_started` | §4.2, §4.3 | The narrow race: a solve accepted just before the approval, and one overtaken while its engine is looked up, both stay queued |
 | `test_the_job_runtime_reads_the_servers_restart_latch` | §4.3 | `create_app` gives the runtime the latch the update routes set |
+| `test_queued_jobs_start_when_an_approval_nobody_reads_expires` | §4.2, §4.3 | A queue an approval holds starts when the approval expires, with no other read of the latch |
+| `test_an_approval_waits_for_a_job_that_is_being_marked_running` | §4.3 | Marking a job running and approving a restart are ordered by one lock |
+| `test_a_retry_made_while_healthy_start_cleanup_runs_is_not_undone` | §2.3, §2.5 | Cleanup's rewrite of the record keeps a suppression lifted while it ran |
+| `test_an_outcome_detail_names_the_home_folder_as_a_problem_report_does` | §2.2 | A detail that names a folder under home reads `~` in the status |
 
 The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateControl.test.tsx`
 ("a held-back build and the last outcome") and `frontend/src/api/updates.test.ts`.

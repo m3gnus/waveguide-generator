@@ -869,38 +869,36 @@ def lift_suppressed_build(
     rewritten, which ``log`` is told.
 
     The update service is the one caller, and it runs while the app is up.
-    The only other writer then is healthy-start cleanup, which rewrites the
-    record once, early in that start, to say ``reclaimed``. That field is read
-    again just before the retry writes, so a cleanup that finished first is
-    not undone. The two are separate processes with no shared lock: a cleanup
-    that rewrites the record in the instant between that read and the rename
-    can still drop the lift, which leaves the build held back, and the retry
-    can be made again.
+    The other writers then are healthy-start commit and cleanup, which rewrite
+    the record early in that start. The record is read again just before the
+    retry writes, and the retry starts again from what another writer left,
+    so neither is undone. With no lock shared between the processes, a write
+    in the instant between that read and the rename can still drop the lift.
+    That leaves the build held back, which is safe, and the retry can be made
+    again.
     """
 
     wanted = {field: _text_or_none(build.get(field)) for field, _suffix in _BUILD_FIELDS}
-    record = read_completion_record(data_dir, resources)
-    entries = record.get("suppressedBuilds") if record is not None else None
-    if not isinstance(entries, list):
-        return False
-    for index, entry in enumerate(entries):
-        if isinstance(entry, Mapping) and {
-            field: _text_or_none(entry.get(field)) for field, _suffix in _BUILD_FIELDS
-        } == wanted:
-            break
-    else:
-        return False
-    payload = {**record, "suppressedBuilds": entries[:index] + entries[index + 1 :]}
-    latest = read_completion_record(data_dir, resources)
-    if (
-        latest is not None
-        and latest.get("transaction") == record.get("transaction")
-        and latest.get("rollbackMaterial") == ROLLBACK_MATERIAL_RECLAIMED
-    ):
-        payload["rollbackMaterial"] = ROLLBACK_MATERIAL_RECLAIMED
-    if not _publish_completion_record(data_dir, resources, payload, log=log):
-        return None
-    return True
+    for _attempt in range(3):
+        record = read_completion_record(data_dir, resources)
+        entries = record.get("suppressedBuilds") if record is not None else None
+        if not isinstance(entries, list):
+            return False
+        for index, entry in enumerate(entries):
+            if isinstance(entry, Mapping) and {
+                field: _text_or_none(entry.get(field)) for field, _suffix in _BUILD_FIELDS
+            } == wanted:
+                break
+        else:
+            return False
+        if read_completion_record(data_dir, resources) != record:
+            continue  # another writer got in: start again from what it wrote
+        payload = {**record, "suppressedBuilds": entries[:index] + entries[index + 1 :]}
+        if not _publish_completion_record(data_dir, resources, payload, log=log):
+            return None
+        return True
+    _emit_log(log, "Could not lift the suppression: the update record kept changing.")
+    return None
 
 
 def _publish_completion_record(
@@ -991,12 +989,18 @@ def reclaim_committed_staging(
             continue
         removed.append(root)
         _emit_log(log, f"Removed the update downloads: {root}")
-    _publish_completion_record(
-        directory,
-        resources,
-        {**record, "rollbackMaterial": ROLLBACK_MATERIAL_RECLAIMED},
-        log=log,
-    )
+    # Read again before recording it. Removing a runtime layer's staging can
+    # take seconds, and the update service may have lifted a suppression
+    # meanwhile (§2.3). Only ``rollbackMaterial`` changes here, and a record
+    # that now describes another transaction is left as it is.
+    latest = read_completion_record(directory, resources)
+    if latest is None or latest.get("transaction") == record.get("transaction"):
+        _publish_completion_record(
+            directory,
+            resources,
+            {**(latest or record), "rollbackMaterial": ROLLBACK_MATERIAL_RECLAIMED},
+            log=log,
+        )
     return removed
 
 
