@@ -557,7 +557,7 @@ def test_an_interrupted_import_reruns_cleanly_without_duplicates(
     with closing(sqlite3.connect(_db(tmp_path))) as conn:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "cad_operations" not in tables
-        assert conn.execute("PRAGMA user_version").fetchone()[0] != 12
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
     assert ledger.exists()
 
     monkeypatch.setattr(store_module, "_legacy_solve_row", real)
@@ -756,7 +756,7 @@ def test_a_v11_registry_upgrades_to_v12_and_keeps_every_row(tmp_path: Path) -> N
     upgraded.close()
 
     with closing(sqlite3.connect(db_path)) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == store_module.STORE_FORMAT_VERSION
         after = {
             table: conn.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
             for table in tables
@@ -789,7 +789,7 @@ def test_a_v11_registry_and_its_ledger_upgrade_in_one_step(tmp_path: Path) -> No
     finally:
         upgraded.close()
     with closing(sqlite3.connect(_db(tmp_path))) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == store_module.STORE_FORMAT_VERSION
     assert not ledger.exists()
 
 

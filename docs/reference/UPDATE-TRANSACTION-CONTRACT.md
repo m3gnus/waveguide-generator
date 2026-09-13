@@ -368,24 +368,34 @@ The updater review lists seven open decisions. None is assumed here.
 
 These are recorded, not designed.
 
-1. **`cadlink.db` schema 12 is one-way.**
-   - The CAD operation store (`fff039fc`) moves `cadlink.db` from schema 11 to 12
-     (`server/cadlink/store.py:49`).
-   - Every older WG refuses a newer database: "unsupported cadlink.db schema version"
-     (`store.py:451-453`; `v0.3.2:server/cadlink/store.py:249-251`, where the schema is
-     11 at `:326`).
-   - The store initializes lazily, at each operation. So an older WG still starts, but
-     every CAD Link store operation in it fails. This is a static reading.
-   - `cadlink.db` lives in the data directory. Neither automatic rollback nor Return to
-     Stable restores it.
-   - A build carrying schema 12 that is rolled back, or left through Return to Stable,
-     therefore leaves CAD Link unusable in the older version. For an automatic rollback,
-     this happens once the new build has touched the store, which may come before its
-     healthy-start confirmation.
-   - Under this contract, a migration that could prevent rollback needs a compatible
-     strategy or a restorable snapshot, and a later Return to Stable never silently
-     restores an old snapshot over newer work. Which of these applies to schema 12 has
-     to be decided before a build carrying it reaches users who may roll back.
+1. **`cadlink.db` stays readable by the release a rollback returns to.** Resolved
+   with a compatible strategy; no snapshot is needed.
+   - The CAD operation store (`fff039fc`) adds schema 12 to `cadlink.db`: one table,
+     `cad_operations`, and the import of the solve-command JSON ledger.
+   - Every older WG refuses a `user_version` above its own:
+     `v0.3.2:server/cadlink/store.py:249-251` opens 0–11 only. `cadlink.db` lives in
+     the data directory, and neither automatic rollback nor Return to Stable restores
+     it. Builds from `fff039fc` wrote 12, which left CAD Link unusable in v0.3.2 after
+     a rollback.
+   - The store now writes `user_version` 11 (`STORE_FORMAT_VERSION` in
+     `server/cadlink/store.py`) and recognises schema 12 by its table. v0.3.2 opens
+     the file, never touches the table, and keeps working. The next update finds
+     everything the store held. A file a build since `fff039fc` wrote as 12 is
+     accepted and written back as 11.
+   - Test: `server/tests/test_cadlink_store_rollback.py`. It runs v0.3.2's own store
+     against a file this build upgraded, where the tag is reachable, and checks the
+     written format against v0.3.2's frozen acceptance everywhere.
+   - What the older release does not see: outcomes recorded in `cad_operations`, and
+     its own JSON ledger, which the import renamed. A solve command redelivered to it
+     under an ID the newer build already answered is treated as new. On the next
+     update, whatever it wrote to a new ledger is imported again, and a row the store
+     already holds wins. A solve command still unfinished at the rollback gets no
+     answer from the older release, which reads only the legacy slot the newer build
+     already emptied; the next update hands it out again.
+   - A later change an older reader would misread must raise `STORE_FORMAT_VERSION`
+     above 12 (`HIGHEST_READABLE_FORMAT`, the highest value this build opens) and
+     needs a restorable snapshot. A later Return to Stable never silently
+     restores an old snapshot over newer work.
 2. **When the gate starts in the one-step flow:** at the Install click, or when the
    request is written (§4.1).
 3. **A rollback to v0.3.1 or v0.3.2** does not apply suppression, and v0.3.1 ignores

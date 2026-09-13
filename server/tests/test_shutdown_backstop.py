@@ -9,6 +9,7 @@ real server that really exits, is ``test_bounded_server_shutdown.py``.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 import signal
@@ -130,6 +131,47 @@ def test_a_wedged_log_flush_does_not_hold_the_exit() -> None:
         assert exit_process.at is not None and exit_process.at - started < 1.5
     finally:
         wedged.set()
+
+
+@pytest.mark.parametrize("ending", ["deadline", "exit_now"])
+def test_a_blocked_log_handler_does_not_hold_the_exit(ending: str) -> None:
+    """The watchdog's own log lines go through the same handlers as the flush.
+
+    A handler wedged on a dead disk or console must not stop the thread that
+    enforces the deadline before it ever reaches the exit.
+    """
+
+    release = threading.Event()
+
+    class _Blocked(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            release.wait(30)
+
+    handler = _Blocked(logging.INFO)
+    logger = logging.getLogger("wg.launch")
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    exit_process = _RecordedExit()
+    backstop = ShutdownBackstop(
+        0.05 if ending == "deadline" else 60.0,
+        exit_process=exit_process,
+        flush=_quiet,
+        flush_timeout_seconds=0.2,
+    )
+    started = time.monotonic()
+    try:
+        if ending == "deadline":
+            backstop.begin("a stop request")
+        else:
+            backstop.exit_now("a second Ctrl+C")
+        assert exit_process.called.wait(5.0), "the exit waited on a blocked log handler"
+        assert exit_process.at is not None and exit_process.at - started < 1.5
+        assert exit_process.codes == [BACKSTOP_EXIT_CODE]
+    finally:
+        release.set()
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
 
 
 def test_waits_keep_their_own_bounds_until_a_stop_begins() -> None:

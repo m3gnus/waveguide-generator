@@ -17,9 +17,10 @@ So every stop path in ``launch/serve.py`` begins a budget here, below the
 launcher's grace. The shutdown steps that wait (the job runtime's checkpoint
 wait, the gmsh join) ask :func:`shutdown_wait_limit` how long they may. A
 watchdog thread ends the process with ``os._exit`` when the budget runs out,
-or at once when asked to. It flushes the logs first, and all of its logging and
-flushing happen on its own thread, never inside the signal handler that may
-have asked for the exit.
+or at once when asked to. It logs and flushes first, on helper threads it
+waits for at most ``FLUSH_TIMEOUT_SECONDS``, so a wedged log handler can delay
+the exit by that much but never hold it. None of that runs inside the signal
+handler that may have asked for the exit.
 
 ``os._exit`` skips ``atexit`` handlers and every Python finalizer. Everything it
 can skip is crash-safe already:
@@ -54,7 +55,8 @@ DEFAULT_SHUTDOWN_BUDGET_SECONDS = 5.0
 #: instance lock and flushing the logs.
 CLEANUP_RESERVE_SECONDS = 1.5
 
-#: How long the watchdog waits for the log flush before exiting regardless.
+#: How long the watchdog waits for its last log line and the log flush before
+#: exiting regardless.
 FLUSH_TIMEOUT_SECONDS = 1.0
 
 #: A stop was requested and the process stopped. The Windows launcher script
@@ -176,7 +178,7 @@ class ShutdownBackstop:
 
         Safe from a signal handler, a watchdog thread or a Win32 console
         callback: it records the deadline and starts the thread, and leaves all
-        logging to that thread.
+        logging to that thread's helpers.
         """
 
         with self._lock:
@@ -203,37 +205,52 @@ class ShutdownBackstop:
         self._exit_now.set()
 
     def _watch(self) -> None:
-        log.info(
-            "Shutdown requested (%s); this process will exit within %.1f s",
-            self._reason,
-            self.budget_seconds,
+        # This thread never logs itself. A handler wedged on a dead disk or
+        # console blocks whichever thread calls it, and this is the one that
+        # has to reach the exit.
+        announcement = threading.Thread(
+            target=log.info,
+            args=(
+                "Shutdown requested (%s); this process will exit within %.1f s",
+                self._reason,
+                self.budget_seconds,
+            ),
+            name="wg2-shutdown-log",
+            daemon=True,
         )
+        announcement.start()
         remaining = self.remaining()
         if self._exit_now.wait(remaining if remaining is not None else 0.0):
-            log.warning("Exiting now: %s", self._exit_reason)
+            last: tuple[object, ...] = ("Exiting now: %s", self._exit_reason)
         else:
-            log.warning(
+            last = (
                 "Shutdown did not finish within its %.1f s budget; exiting without "
                 "waiting for the rest of it",
                 self.budget_seconds,
             )
-        self._flush_within_timeout()
+        self._log_and_flush_within_timeout(announcement, last)
         self._fired.set()
         exit_process = self._exit_process if self._exit_process is not None else _process_exit
         exit_process(self.exit_code)
 
-    def _flush_within_timeout(self) -> None:
-        def flush() -> None:
+    def _log_and_flush_within_timeout(
+        self, announcement: threading.Thread, last: tuple[object, ...]
+    ) -> None:
+        def finish() -> None:
+            # After the announcement, so the log keeps its order even when a
+            # slow handler held it.
+            announcement.join()
             try:
+                log.warning(*last)
                 self._flush()
             except Exception:  # noqa: BLE001 - the exit must not depend on the logs
                 pass
 
         # A handler wedged on a dead disk or console must not hold the exit it
         # is only meant to precede.
-        flusher = threading.Thread(target=flush, name="wg2-shutdown-flush", daemon=True)
-        flusher.start()
-        flusher.join(self.flush_timeout_seconds)
+        finisher = threading.Thread(target=finish, name="wg2-shutdown-flush", daemon=True)
+        finisher.start()
+        finisher.join(self.flush_timeout_seconds)
 
 
 def shutdown_wait_limit(default: float | None) -> float | None:

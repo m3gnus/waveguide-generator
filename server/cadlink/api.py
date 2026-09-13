@@ -901,7 +901,9 @@ def _pending_solve_command(
     A command is only actionable when it names a bundle inside this workspace
     whose manifest still hashes to what the add-in recorded when it wrote the
     command. Anything else is refused with its reason rather than silently
-    ignored, because CAD is waiting on an answer either way.
+    ignored, because CAD is waiting on an answer either way. A later return,
+    from this document or another, is not such a reason: explicit solve
+    requests stay separate (docs/architecture/CAD-OPERATIONS.md, "Ordering").
     """
 
     answer = collect_solve_deliveries(data_dir, store)
@@ -921,14 +923,6 @@ def _pending_solve_command(
         manifest = (bundle_path / "wgreturn.json").read_bytes()
     except (ValueError, OSError) as exc:
         outcome = _refuse_solve_command(store, command, str(exc))
-        return {
-            "command": command.payload(),
-            "outcome": outcome,
-        }
-    listing = _return_listing(workspace_root)
-    if listing and listing[0]["bundlePath"] != command.bundle_path:
-        reason = "Superseded by a newer return from Fusion."
-        outcome = _refuse_solve_command(store, command, reason)
         return {
             "command": command.payload(),
             "outcome": outcome,

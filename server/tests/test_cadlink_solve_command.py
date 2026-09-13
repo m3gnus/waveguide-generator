@@ -100,22 +100,59 @@ def test_a_bundle_that_changed_after_the_command_is_refused(tmp_path, data_dir, 
     assert read_solve_command(data_dir) is None
 
 
-def test_a_command_for_an_older_return_is_refused_and_cleared(tmp_path, data_dir, store) -> None:
+def test_a_newer_return_does_not_cancel_a_command_for_an_older_one(
+    tmp_path, data_dir, store
+) -> None:
+    """Explicit solve requests stay separate (CAD-OPERATIONS.md, "Ordering").
+
+    The command names its bundle and that bundle's digest; both still match,
+    so a return that arrived later -- from this document or another -- is no
+    reason to refuse it.
+    """
+
     workspace = tmp_path / "workspace"
     digest = _write_bundle(workspace, name="older.wgreturn")
     older = workspace / "wgreturn" / "older.wgreturn"
     newer = workspace / "wgreturn" / "newer.wgreturn"
-    _write_bundle(workspace, name="newer.wgreturn")
+    _write_bundle(workspace, name="newer.wgreturn", body=b'{"document": {"name": "B"}}')
     os.utime(older, (1, 1))
     os.utime(newer, (2, 2))
     _write_command(data_dir, "wgreturn/older.wgreturn", digest)
 
     result = _pending_solve_command(data_dir, workspace.resolve(), store)
 
-    assert result["outcome"]["state"] == "refused"
-    assert result["outcome"]["reason"] == "Superseded by a newer return from Fusion."
-    assert ledger_entry(store, "cmd-1")["state"] == "refused"
-    assert read_solve_command(data_dir) is None
+    assert result["outcome"] is None
+    assert result["command"]["bundlePath"] == "wgreturn/older.wgreturn"
+    assert ledger_entry(store, "cmd-1") is None
+
+
+def test_queued_commands_for_two_returns_are_each_handed_out_in_turn(
+    tmp_path, data_dir, store
+) -> None:
+    workspace = tmp_path / "workspace"
+    first = _write_bundle(workspace, name="project-a.wgreturn")
+    second = _write_bundle(
+        workspace, name="project-b.wgreturn", body=b'{"document": {"name": "B"}}'
+    )
+    os.utime(workspace / "wgreturn" / "project-a.wgreturn", (1, 1))
+    os.utime(workspace / "wgreturn" / "project-b.wgreturn", (2, 2))
+    _write_command(data_dir, "wgreturn/project-a.wgreturn", first, command_id="cmd-a")
+    assert _pending_solve_command(data_dir, workspace.resolve(), store)["command"][
+        "commandId"
+    ] == "cmd-a"
+    _write_command(data_dir, "wgreturn/project-b.wgreturn", second, command_id="cmd-b")
+
+    # The oldest unfinished command is still owed its answer, and B's newer
+    # return does not take it away.
+    result = _pending_solve_command(data_dir, workspace.resolve(), store)
+    assert result["outcome"] is None
+    assert result["command"]["commandId"] == "cmd-a"
+
+    record_outcome(store, "cmd-a", state="accepted", job_id="job-a")
+    result = _pending_solve_command(data_dir, workspace.resolve(), store)
+    assert result["outcome"] is None
+    assert result["command"]["commandId"] == "cmd-b"
+    assert ledger_entry(store, "cmd-a")["state"] == "accepted"
 
 
 def test_a_command_pointing_outside_the_workspace_is_refused(tmp_path, data_dir, store) -> None:

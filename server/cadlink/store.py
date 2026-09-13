@@ -48,6 +48,22 @@ logger = logging.getLogger(__name__)
 # 12 adds cad_operations and folds the solve-command JSON ledger into it.
 SCHEMA_VERSION = 12
 
+# What this build writes to ``PRAGMA user_version``: the oldest reader format
+# the file still satisfies, not the schema above. Every release refuses a
+# user_version above the highest it knows (v0.3.2 reads 0-11), and neither an
+# automatic rollback nor Return to Stable restores cadlink.db. So a change an
+# older release can ignore -- such as schema 12's table, which it never opens --
+# keeps this value and is recognised by what the file holds. Raise it only for
+# a change an older reader would misread, above every value an older build
+# accepts (this one accepts up to HIGHEST_READABLE_FORMAT), and only with a
+# restorable snapshot (docs/reference/UPDATE-TRANSACTION-CONTRACT.md, section 6).
+STORE_FORMAT_VERSION = 11
+
+# The highest user_version this build opens. Builds from the operation store
+# until STORE_FORMAT_VERSION existed wrote 12; nothing else ever did. A
+# literal, not SCHEMA_VERSION, so a later additive schema cannot widen it.
+HIGHEST_READABLE_FORMAT = 12
+
 
 _SCHEMA = (
     """
@@ -449,7 +465,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version < 0 or version > SCHEMA_VERSION:
+            if version < 0 or version > HIGHEST_READABLE_FORMAT:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -530,8 +546,10 @@ class CadLinkStore:
             # folds the solve-command JSON ledger into it in this same
             # transaction, so an interruption rolls both back and the next
             # open reruns both. The file is renamed only after the commit.
+            # The table is additive, so the file keeps the format an older
+            # release reads (STORE_FORMAT_VERSION).
             imported_ledger = _import_legacy_solve_ledger(conn, self.legacy_solve_ledger)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            conn.execute(f"PRAGMA user_version = {STORE_FORMAT_VERSION}")
         self._initialized = True
         if imported_ledger and self.legacy_solve_ledger is not None:
             _retire_legacy_solve_ledger(self.legacy_solve_ledger)

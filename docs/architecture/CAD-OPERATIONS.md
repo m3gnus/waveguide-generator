@@ -6,7 +6,8 @@ how a repeated or conflicting delivery is recognised, which attempt may record a
 result, and what a recorded outcome means.
 
 - The durable half is the `cad_operations` table in `cadlink.db`
-  (`server/cadlink/store.py`, schema version 12).
+  (`server/cadlink/store.py`, schema 12). The file keeps the format older releases
+  open; see "Existing installations".
 - The executable half, meaning the kinds, shapes, digest and vocabulary, is
   `server/cadlink/operations.py`.
 
@@ -212,7 +213,23 @@ These rules bind every adapter that mutates a CAD document for WG.
   its ID alone, whatever its digest, and its recorded outcome is replayed. This applies
   to outcome-only rows too. The row is never executed again and never rewritten. A
   delivery of a different kind under that ID is a conflict.
-- **The upgrade is one-way.** An older WG refuses a schema-12 `cadlink.db`.
+- **A rollback keeps CAD Link working.** Every release refuses a `user_version` above
+  the highest it knows (v0.3.2 opens 0–11), and a rollback leaves `cadlink.db` in
+  place. Schema 12 only adds a table, so the store writes `user_version` 11
+  (`STORE_FORMAT_VERSION`) and recognises schema 12 by the table. An older release
+  opens the file and never touches `cad_operations`; the next update finds it intact.
+  - The older release does not see outcomes recorded there, nor its JSON ledger,
+    which the import renamed. When the newer build opens the store again, it imports
+    any ledger the older release wrote meanwhile, and a row it already holds wins.
+  - A solve command still unfinished at the rollback gets no answer from the older
+    release: the newer build already moved it out of the legacy slot, the only place
+    that release reads. The next update hands it out again, and refuses it then if
+    its return changed.
+  - A file written as 12 by an earlier build of this store is accepted and written
+    back as 11.
+  - A later change an older reader would misread raises `STORE_FORMAT_VERSION` above
+    12 (`HIGHEST_READABLE_FORMAT`), and needs a restorable snapshot
+    (`docs/reference/UPDATE-TRANSACTION-CONTRACT.md` §6).
 
 ## Solve-command delivery
 

@@ -13,7 +13,7 @@ import sqlite3
 import pytest
 
 from server.cadlink.identity import SaveIdentity
-from server.cadlink.store import CadLinkStore
+from server.cadlink.store import STORE_FORMAT_VERSION, CadLinkStore
 
 
 def _save(
@@ -55,7 +55,7 @@ def test_registry_schema_is_separate_versioned_and_snapshot_preserving(tmp_path:
     assert db_path.exists()
     assert not (tmp_path / "db" / "simulations.db").exists()
     conn = sqlite3.connect(db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == STORE_FORMAT_VERSION
     assert {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= {
         "designs",
         "exports",
@@ -97,7 +97,7 @@ def test_v2_registry_with_rows_migrates_to_current_without_data_loss(tmp_path: P
     migrated.close()
 
     connection = sqlite3.connect(db_path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == STORE_FORMAT_VERSION
     assert connection.execute("SELECT COUNT(*) FROM designs").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM exports").fetchone()[0] == 1
     connection.close()
@@ -526,7 +526,7 @@ def test_v9_archive_stem_migration_resolves_portable_collisions_stably(
     restarted.close()
 
     connection = sqlite3.connect(db_path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == STORE_FORMAT_VERSION
     assert connection.execute(
         "SELECT COUNT(*) FROM sqlite_master "
         "WHERE type = 'index' AND name = 'lineage_cad_names_by_archive_stem'"
