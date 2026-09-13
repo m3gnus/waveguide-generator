@@ -56,6 +56,8 @@ button:disabled { cursor: default; }
 .update-indicator.publishing .update-dot { display: block; opacity: .72; }
 .update-indicator.reload { color: var(--acc); }
 .update-indicator.reload .update-dot { display: block; }
+.update-indicator.held { color: var(--fg2); }
+.update-indicator.held .update-dot { display: block; background: transparent; box-shadow: inset 0 0 0 1px var(--amber); }
 /* A failed check is a state, not an alarm: it says so with a hollow dot and
    carries its reason on the title, rather than shouting in the accent or --
    as it did before -- resolving to a permanent "status unknown". */
@@ -793,6 +795,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .update-state.available,
 .update-state.publishing { color: var(--amber); }
 .update-state.failed { color: var(--red); }
+.update-state.held { color: var(--amber); }
 /* The accent is a 4.27:1 foreground on this surface in Console, below the body
    floor, so reload tints only its dot -- an indicator, held to 3:1 -- and
    leaves the word itself on --fg. */

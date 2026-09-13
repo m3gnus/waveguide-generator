@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import functools
@@ -39,6 +39,16 @@ from server.updates.bundle import (
     updates_api_base,
 )
 from server.updates.restart import RestartApproval
+# The completion record's own reader and writer (contract §2.2), so the file
+# has one implementation. The app layer carries ``launchers``, and the helper
+# that writes the record is this same module.
+from launchers.apply_update import (
+    ApplyUpdateError,
+    bundle_from_app_layer,
+    lift_suppressed_build,
+    read_completion_record,
+    resources_directory,
+)
 
 
 REPOSITORY = GITHUB_REPOSITORY
@@ -129,6 +139,9 @@ _CACHE_FIELDS = frozenset(
 )
 _RELEASE_CACHE_FIELDS = frozenset({"version", "tag", "url", "publishedAt", "assetsReady"})
 _BUNDLE_RELEASE_CACHE_FIELDS = frozenset({"runtimeId", "bundleAssets"})
+#: Optional in a cached bundle release: the build's commit, which a cache
+#: written before suppression existed does not carry.
+_BUNDLE_RELEASE_OPTIONAL_FIELDS = frozenset({"commit"})
 _AVAILABILITY_VALUES = frozenset({"unknown", "incomplete", "available", "current", "ahead"})
 
 log = logging.getLogger("wg.updates")
@@ -162,6 +175,10 @@ class UpdateRateLimitError(RuntimeError):
 
 class UpdateInstallUnavailable(RuntimeError):
     """The current process cannot safely hand a release to the installer."""
+
+
+class UpdateBuildNotHeldBack(RuntimeError):
+    """An explicit retry named a build the completion record does not hold back."""
 
 
 class UpdateChannelUnavailable(RuntimeError):
@@ -386,6 +403,7 @@ def _validated_cached_release(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) not in {
         _RELEASE_CACHE_FIELDS,
         _RELEASE_CACHE_FIELDS | _BUNDLE_RELEASE_CACHE_FIELDS,
+        _RELEASE_CACHE_FIELDS | _BUNDLE_RELEASE_CACHE_FIELDS | _BUNDLE_RELEASE_OPTIONAL_FIELDS,
     }:
         raise ValueError("update-cache release has invalid fields")
     version = value.get("version")
@@ -426,6 +444,11 @@ def _validated_cached_release(value: Any) -> dict[str, Any]:
         ):
             raise ValueError("update-cache bundle release is invalid")
         normalized["runtimeId"] = runtime_id
+        if "commit" in value:
+            commit = value.get("commit")
+            if commit is not None and (not isinstance(commit, str) or not commit):
+                raise ValueError("update-cache bundle release commit is invalid")
+            normalized["commit"] = commit
         normalized["bundleAssets"] = [
             _validated_bundle_asset(asset, release_tag=tag) for asset in bundle_assets
         ]
@@ -836,6 +859,89 @@ def update_action(
     return {"kind": "copy_command", "shell": "Terminal", "command": command}
 
 
+#: The interim build identity of contract §2.3, as the completion record writes it.
+BUILD_IDENTITY_FIELDS = ("version", "commit", "runtimeId")
+_RECORDED_OUTCOMES = frozenset({"installed", "rolled-back", "aborted", "unverified"})
+_RECORDED_OPERATIONS = frozenset({"update", "rollback"})
+
+
+def _recorded_text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _build_identity(value: Any) -> dict[str, str | None] | None:
+    """A recorded build identity, normalized to its three fields; None when it names nothing."""
+
+    if not isinstance(value, dict):
+        return None
+    identity = {field: _recorded_text(value.get(field)) for field in BUILD_IDENTITY_FIELDS}
+    return identity if any(identity.values()) else None
+
+
+def last_outcome(record: Any) -> dict[str, Any] | None:
+    """What the update dialog and its diagnostics show of the completion record (§2.2).
+
+    Every field is normalized, so a record from any helper reads the same way.
+    The staging roots and the installation key stay out: the roots are folders
+    on this machine, and neither says anything about how the update ended.
+    """
+
+    if not isinstance(record, dict) or record.get("outcome") not in _RECORDED_OUTCOMES:
+        return None
+    entries = record.get("suppressedBuilds")
+    suppressed = [
+        identity
+        for identity in (
+            _build_identity(entry) for entry in (entries if isinstance(entries, list) else [])
+        )
+        if identity is not None and identity["version"] is not None
+    ]
+    operation = record.get("operation")
+    detail = record.get("detail")
+    return {
+        "transaction": _recorded_text(record.get("transaction")),
+        "operation": operation if operation in _RECORDED_OPERATIONS else None,
+        "outcome": record["outcome"],
+        "detail": detail if isinstance(detail, str) else "",
+        "recordedAt": _recorded_text(record.get("recordedAt")),
+        "from": _build_identity(record.get("from")),
+        "to": _build_identity(record.get("to")),
+        "channel": _recorded_text(record.get("channel")),
+        "verificationBasis": _recorded_text(record.get("verificationBasis")),
+        "rollbackMaterial": _recorded_text(record.get("rollbackMaterial")),
+        "suppressedBuilds": suppressed,
+    }
+
+
+def held_back_entry(
+    release: Any, suppressed: list[dict[str, str | None]]
+) -> dict[str, str | None] | None:
+    """The suppressed build this release may be, or None (contract §2.3).
+
+    The key is the interim ``(version, commit, runtimeId)``, and the version
+    must match. A commit or runtime id that either side does not know is not
+    evidence of a different build, so it does not set the two apart:
+    suppression fails closed, and the explicit retry is what lifts it. A build
+    whose identity is known to differ -- another commit of the same version, or
+    another version -- is never held back by the entry.
+    """
+
+    if not isinstance(release, dict):
+        return None
+    offered = {field: _recorded_text(release.get(field)) for field in BUILD_IDENTITY_FIELDS}
+    if offered["version"] is None:
+        return None
+    for entry in suppressed:
+        if entry["version"] != offered["version"]:
+            continue
+        if all(
+            entry[field] is None or offered[field] is None or entry[field] == offered[field]
+            for field in ("commit", "runtimeId")
+        ):
+            return entry
+    return None
+
+
 class UpdateService:
     """Serialize remote checks and expose cached observations to every tab."""
 
@@ -916,6 +1022,54 @@ class UpdateService:
         # A checkout handoff that did not happen (contract §4.2). The bundle
         # installer reports its own; ``get_status`` shows this one otherwise.
         self._called_off = f"The update to {target} did not start: {reason}. Try again."
+
+    def _installed_resources(self, checkout: dict[str, Any]) -> Path | None:
+        """The installed copy the helper names this app layer's records by.
+
+        Only a standalone app has one: the helper never installs a source
+        checkout, so a checkout has no completion record.
+        """
+
+        if checkout.get("kind") != "bundle":
+            return None
+        try:
+            return resources_directory(
+                bundle_from_app_layer(self.repo_root, self.platform_name), self.platform_name
+            )
+        except (ApplyUpdateError, OSError, RuntimeError, ValueError):
+            return None
+
+    def _completion_record(self, checkout: dict[str, Any]) -> dict[str, Any] | None:
+        resources = self._installed_resources(checkout)
+        return read_completion_record(self.data_dir, resources) if resources is not None else None
+
+    def lift_suppression(self, build: Mapping[str, Any]) -> dict[str, str | None]:
+        """The explicit retry of contract §2.3: lift the one held-back entry ``build`` names.
+
+        No other entry is lifted, nothing else in the record changes, and
+        nothing is installed. Raises ``UpdateBuildNotHeldBack`` when the record
+        holds no such entry, and ``OSError`` when it could not be rewritten.
+        """
+
+        identity = {field: _recorded_text(build.get(field)) for field in BUILD_IDENTITY_FIELDS}
+        resources = self._installed_resources(
+            self.checkout_probe(self.repo_root, self.running_version)
+        )
+        if identity["version"] is None or resources is None:
+            raise UpdateBuildNotHeldBack("That build is not held back.")
+        with self._lock:
+            lifted = lift_suppressed_build(
+                self.data_dir,
+                resources,
+                identity,
+                log=lambda message: log.warning("%s", message),
+            )
+        if lifted is None:
+            raise OSError("the update record could not be rewritten")
+        if not lifted:
+            raise UpdateBuildNotHeldBack("That build is not held back.")
+        log.info("Lifted the suppression of build %s at the user's request", identity)
+        return identity
 
     def channel(self) -> str:
         """Which release channel this installation follows.
@@ -1102,11 +1256,19 @@ class UpdateService:
         # name the file someone would actually be sent to.
         return release_assets.user_download_name(self._bundle_platform(), version)
 
-    def _manifest_runtime_id(
+    def _manifest_identity(
         self,
         manifest_asset: dict[str, Any],
         version: str,
-    ) -> str:
+    ) -> tuple[str, str | None]:
+        """The release's ``(runtimeId, commit)``, from its verified app manifest.
+
+        The manifest is the build's own ``APP-MANIFEST.json``, so these are the
+        fields the helper records for a build that fails (contract §2.3). A
+        manifest with no commit gives ``None``, which suppression treats as
+        unknown rather than different.
+        """
+
         if int(manifest_asset["bytes"]) > MAX_MANIFEST_BYTES:
             raise RuntimeError("The release app manifest exceeds the size limit")
         manifest_bytes = self.asset_fetcher(str(manifest_asset["url"]), MAX_MANIFEST_BYTES)
@@ -1142,7 +1304,8 @@ class UpdateService:
             or RUNTIME_ID_RE.fullmatch(runtime_id) is None
         ):
             raise RuntimeError("The release app manifest has invalid bundle identity")
-        return runtime_id
+        commit = manifest.get("commit")
+        return runtime_id, commit if isinstance(commit, str) and commit else None
 
     def _releases_page(self, page: int) -> list[dict[str, Any]]:
         """One page of the release list, read at most once per check.
@@ -1359,7 +1522,7 @@ class UpdateService:
             }
             if manifest_asset is None:
                 return base_release, False
-            runtime_id = self._manifest_runtime_id(manifest_asset, version)
+            runtime_id, commit = self._manifest_identity(manifest_asset, version)
             runtime_name = release_assets.runtime_layer_name(
                 self._bundle_platform(), runtime_id
             )
@@ -1394,6 +1557,9 @@ class UpdateService:
                 | {
                     "assetsReady": ready,
                     "runtimeId": runtime_id,
+                    # With the version and runtime id, the build identity a
+                    # failed install is held back by (contract §2.3).
+                    "commit": commit,
                     "bundleAssets": bundle_assets,
                 },
                 ready,
@@ -1573,12 +1739,23 @@ class UpdateService:
             checked_at = cache.get("checkedAtEpoch")
             last_error = cache.get("lastError") if isinstance(cache.get("lastError"), str) else None
             freshness = "unknown" if checked_at is None else "stale" if last_error else "fresh"
+            # How the last update ended, and whether the offered release is a
+            # build that rolled back (contract §2.2, §2.3). Read at every status
+            # rather than cached, so an explicit retry takes effect at once and
+            # a cached release is never offered past its suppression.
+            outcome = last_outcome(self._completion_record(checkout))
+            suppressed = (
+                held_back_entry(release, outcome["suppressedBuilds"])
+                if outcome is not None and availability == "available"
+                else None
+            )
             action = None
             if (
                 availability == "available"
                 and release is not None
                 and release.get("assetsReady") is True
                 and checkout.get("updateSupported") is True
+                and suppressed is None
             ):
                 action = update_action(
                     self.repo_root,
@@ -1616,6 +1793,8 @@ class UpdateService:
                 "action": action,
                 "canInstall": action is not None and self.update_request_path is not None,
                 "lastError": last_error,
+                "lastOutcome": outcome,
+                "suppressed": suppressed,
                 **install_status,
             }
 
@@ -1636,6 +1815,13 @@ class UpdateService:
         status = self.get_status()
         release = status.get("release")
         action = status.get("action")
+        held = status.get("suppressed")
+        if isinstance(held, dict):
+            # Never installed on its own, whatever asks (contract §2.3).
+            raise UpdateInstallUnavailable(
+                f"WG rolled back {held.get('version')} after it did not start, so it will not "
+                "install that build again on its own. Choose Try again in the update dialog first."
+            )
         if (
             status.get("availability") != "available"
             or not isinstance(release, dict)

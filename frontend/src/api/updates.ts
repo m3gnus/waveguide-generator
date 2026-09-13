@@ -61,6 +61,8 @@ export interface CheckoutUpdateRelease {
 
 export interface BundleUpdateRelease extends CheckoutUpdateRelease {
   runtimeId: string;
+  /** The build's commit, from its app manifest; absent from an older cached release. */
+  commit?: string | null;
   bundleAssets: BundleReleaseAsset[];
 }
 
@@ -103,6 +105,39 @@ export interface BundleDownloadUpdateAction {
 
 export type UpdateAction = CopyCommandUpdateAction | BundleDownloadUpdateAction;
 
+/**
+ * A build as the update records name it: the interim identity of
+ * `docs/reference/UPDATE-TRANSACTION-CONTRACT.md` §2.3. A field the build's
+ * manifest did not carry is `null`.
+ */
+export interface UpdateBuildIdentity {
+  version: string | null;
+  commit: string | null;
+  runtimeId: string | null;
+}
+
+export type UpdateOutcomeKind = 'installed' | 'rolled-back' | 'aborted' | 'unverified';
+
+/**
+ * How the last update of this installation ended, from its completion record
+ * (contract §2.2). The server normalizes every field; its counterpart is
+ * `last_outcome` in `server/updates/service.py`.
+ */
+export interface UpdateOutcome {
+  transaction: string | null;
+  operation: 'update' | 'rollback' | null;
+  outcome: UpdateOutcomeKind;
+  detail: string;
+  recordedAt: string | null;
+  from: UpdateBuildIdentity | null;
+  to: UpdateBuildIdentity | null;
+  channel: string | null;
+  verificationBasis: string | null;
+  rollbackMaterial: string | null;
+  /** Builds that rolled back, which WG does not offer until a retry lifts one. */
+  suppressedBuilds: UpdateBuildIdentity[];
+}
+
 export interface UpdateStatus {
   schemaVersion: 1;
   runningVersion: string;
@@ -117,6 +152,13 @@ export interface UpdateStatus {
   action: UpdateAction | null;
   canInstall: boolean;
   lastError: string | null;
+  /** How the last update ended; `null` when no record exists. Absent from an older server. */
+  lastOutcome?: UpdateOutcome | null;
+  /**
+   * The offered release, when it is a build that rolled back (contract §2.3).
+   * It then has no action and cannot be installed until a retry lifts it.
+   */
+  suppressed?: UpdateBuildIdentity | null;
   installState: UpdateInstallState;
   activeVersion: string | null;
   downloadedBytes: number;
@@ -228,11 +270,44 @@ function isUpdateRelease(value: unknown): value is UpdateRelease {
   const hasRuntimeId = Object.hasOwn(value, 'runtimeId');
   const hasBundleAssets = Object.hasOwn(value, 'bundleAssets');
   if (hasRuntimeId !== hasBundleAssets) return false;
+  if (Object.hasOwn(value, 'commit') && (!hasRuntimeId || !isNullableString(value.commit))) return false;
   return !hasRuntimeId || (
     isRuntimeId(value.runtimeId)
     && Array.isArray(value.bundleAssets)
     && value.bundleAssets.every(isBundleReleaseAsset)
   );
+}
+
+const BUILD_IDENTITY_FIELDS = ['version', 'commit', 'runtimeId'] as const;
+
+function isBuildIdentity(value: unknown): value is UpdateBuildIdentity {
+  return isRecord(value)
+    && Object.keys(value).length === BUILD_IDENTITY_FIELDS.length
+    && BUILD_IDENTITY_FIELDS.every((field) => Object.hasOwn(value, field) && isNullableString(value[field]));
+}
+
+function isHeldBackBuild(value: unknown): value is UpdateBuildIdentity & { version: string } {
+  return isBuildIdentity(value) && typeof value.version === 'string';
+}
+
+function isOutcomeKind(value: unknown): value is UpdateOutcomeKind {
+  return value === 'installed' || value === 'rolled-back' || value === 'aborted' || value === 'unverified';
+}
+
+function isUpdateOutcome(value: unknown): value is UpdateOutcome {
+  return isRecord(value)
+    && isNullableString(value.transaction)
+    && (value.operation === null || value.operation === 'update' || value.operation === 'rollback')
+    && isOutcomeKind(value.outcome)
+    && typeof value.detail === 'string'
+    && isNullableString(value.recordedAt)
+    && (value.from === null || isBuildIdentity(value.from))
+    && (value.to === null || isBuildIdentity(value.to))
+    && isNullableString(value.channel)
+    && isNullableString(value.verificationBasis)
+    && isNullableString(value.rollbackMaterial)
+    && Array.isArray(value.suppressedBuilds)
+    && value.suppressedBuilds.every(isHeldBackBuild);
 }
 
 function isCheckoutStatus(value: unknown): value is CheckoutStatus {
@@ -293,6 +368,8 @@ function isUpdateStatus(value: unknown): value is UpdateStatus {
     && isUpdateAction(value.action)
     && typeof value.canInstall === 'boolean'
     && isNullableString(value.lastError)
+    && (!Object.hasOwn(value, 'lastOutcome') || value.lastOutcome === null || isUpdateOutcome(value.lastOutcome))
+    && (!Object.hasOwn(value, 'suppressed') || value.suppressed === null || isHeldBackBuild(value.suppressed))
     && isInstallState(value.installState)
     && (value.installState === 'idle' ? value.activeVersion === null : isVersion(value.activeVersion))
     && isNonNegativeNumber(value.downloadedBytes)
@@ -375,4 +452,33 @@ export async function installApplicationUpdate(): Promise<UpdateInstallAccepted>
     throw new Error('Update installation response is invalid');
   }
   return payload as unknown as UpdateInstallAccepted;
+}
+
+/**
+ * The explicit retry of a build that rolled back (contract §2.3).
+ *
+ * It lifts exactly that one suppression and installs nothing: the next status
+ * offers the build again, and installing it is the usual separate step.
+ */
+export async function retrySuppressedUpdate(build: UpdateBuildIdentity): Promise<UpdateBuildIdentity> {
+  const response = await fetch('/api/updates/retry', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-WG-Update': 'retry' },
+    body: JSON.stringify({ version: build.version, commit: build.commit, runtimeId: build.runtimeId }),
+  });
+  if (!response.ok) {
+    let detail = `Update retry request failed (${response.status})`;
+    try {
+      const payload: unknown = await response.json();
+      if (isRecord(payload) && typeof payload.detail === 'string') detail = payload.detail;
+    } catch {
+      // Keep the status-based fallback when the response is not JSON.
+    }
+    throw new Error(detail);
+  }
+  const payload: unknown = await response.json();
+  if (!isRecord(payload) || !isBuildIdentity(payload.lifted)) {
+    throw new Error('Update retry response is invalid');
+  }
+  return payload.lifted;
 }

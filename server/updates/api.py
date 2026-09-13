@@ -7,12 +7,28 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
 from server.integration.contracts import error_envelope
 from server.settings.store import SettingsStore
 
 from .restart import UPDATE_RESTART_PENDING, RestartApproval
-from .service import UpdateChannelUnavailable, UpdateInstallUnavailable, UpdateService
+from .service import (
+    UpdateBuildNotHeldBack,
+    UpdateChannelUnavailable,
+    UpdateInstallUnavailable,
+    UpdateService,
+)
+
+
+class HeldBackBuild(BaseModel):
+    """A build the completion record holds back, by contract §2.3's interim identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: str
+    commit: str | None = None
+    runtimeId: str | None = None
 
 
 def mount_updates(
@@ -113,5 +129,29 @@ def mount_updates(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(exc),
             ) from exc
+
+    @application.post("/api/updates/retry")
+    async def retry_held_back_build(
+        build: HeldBackBuild,
+        confirmation: str | None = Header(default=None, alias="X-WG-Update"),
+    ) -> dict[str, object]:
+        # The explicit retry of contract §2.3. It lifts the one suppression it
+        # names and installs nothing; the dialog then offers the build again.
+        # Guarded by a custom header for the same reason install is.
+        if confirmation != "retry":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="The update confirmation header is missing.",
+            )
+        try:
+            lifted = await asyncio.to_thread(update_service.lift_suppression, build.model_dump())
+        except UpdateBuildNotHeldBack as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Could not retry that build: {exc}",
+            ) from exc
+        return {"lifted": lifted}
 
     return update_service

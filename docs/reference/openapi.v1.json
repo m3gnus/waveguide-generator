@@ -3297,6 +3297,43 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HeldBackBuild": {
+        "additionalProperties": false,
+        "description": "A build the completion record holds back, by contract \u00a72.3's interim identity.",
+        "properties": {
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "runtimeId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtimeid"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "HeldBackBuild",
+        "type": "object"
+      },
       "ICWConfig": {
         "additionalProperties": false,
         "properties": {
@@ -10519,6 +10556,64 @@
           }
         },
         "summary": "Install Update"
+      }
+    },
+    "/api/updates/retry": {
+      "post": {
+        "operationId": "retry_held_back_build_api_updates_retry_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-WG-Update",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Wg-Update"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeldBackBuild"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retry Held Back Build Api Updates Retry Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Held Back Build"
       }
     },
     "/api/updates/status": {

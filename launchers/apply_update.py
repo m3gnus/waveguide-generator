@@ -852,6 +852,57 @@ def write_completion_record(
     return _publish_completion_record(data_dir, resources, payload, log=log)
 
 
+def lift_suppressed_build(
+    data_dir: Path,
+    resources: Path,
+    build: Mapping[str, Any],
+    *,
+    log: LogCallable | None = None,
+) -> bool | None:
+    """Remove one ``suppressedBuilds`` entry: the explicit retry of contract §2.3.
+
+    ``build`` names the entry exactly, by the interim identity ``version``,
+    ``commit`` and ``runtimeId``, each a string or ``None``. Only an entry equal
+    to it is removed. Every other entry, and every other field of the record,
+    is kept. Returns ``True`` when the entry was removed, ``False`` when the
+    record holds no such entry, and ``None`` when the record could not be
+    rewritten, which ``log`` is told.
+
+    The update service is the one caller, and it runs while the app is up.
+    The only other writer then is healthy-start cleanup, which rewrites the
+    record once, early in that start, to say ``reclaimed``. That field is read
+    again just before the retry writes, so a cleanup that finished first is
+    not undone. The two are separate processes with no shared lock: a cleanup
+    that rewrites the record in the instant between that read and the rename
+    can still drop the lift, which leaves the build held back, and the retry
+    can be made again.
+    """
+
+    wanted = {field: _text_or_none(build.get(field)) for field, _suffix in _BUILD_FIELDS}
+    record = read_completion_record(data_dir, resources)
+    entries = record.get("suppressedBuilds") if record is not None else None
+    if not isinstance(entries, list):
+        return False
+    for index, entry in enumerate(entries):
+        if isinstance(entry, Mapping) and {
+            field: _text_or_none(entry.get(field)) for field, _suffix in _BUILD_FIELDS
+        } == wanted:
+            break
+    else:
+        return False
+    payload = {**record, "suppressedBuilds": entries[:index] + entries[index + 1 :]}
+    latest = read_completion_record(data_dir, resources)
+    if (
+        latest is not None
+        and latest.get("transaction") == record.get("transaction")
+        and latest.get("rollbackMaterial") == ROLLBACK_MATERIAL_RECLAIMED
+    ):
+        payload["rollbackMaterial"] = ROLLBACK_MATERIAL_RECLAIMED
+    if not _publish_completion_record(data_dir, resources, payload, log=log):
+        return None
+    return True
+
+
 def _publish_completion_record(
     data_dir: Path,
     resources: Path,

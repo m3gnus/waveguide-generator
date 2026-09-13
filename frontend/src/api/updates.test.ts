@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getUpdateChannel, getUpdateStatus, installApplicationUpdate, setUpdateChannel } from './updates';
+import {
+  getUpdateChannel,
+  getUpdateStatus,
+  installApplicationUpdate,
+  retrySuppressedUpdate,
+  setUpdateChannel,
+} from './updates';
 
 const payload = {
   schemaVersion: 1,
@@ -140,6 +146,64 @@ function jsonResponse(value: unknown, status = 200): Response {
     json: async () => value,
   } as Response;
 }
+
+const heldBuild = { version: '2.0.1', commit: 'b'.repeat(40), runtimeId: '222222222222' };
+const lastOutcome = {
+  transaction: '5f0c',
+  operation: 'update',
+  outcome: 'rolled-back',
+  detail: 'The relaunched application exited at once with status 1',
+  recordedAt: '2026-09-13T12:00:00',
+  from: { version: '2.0.0', commit: 'a'.repeat(40), runtimeId: '111111111111' },
+  to: heldBuild,
+  channel: null,
+  verificationBasis: 'release-digest',
+  rollbackMaterial: 'retained',
+  suppressedBuilds: [heldBuild],
+};
+
+describe('the last update outcome and a held-back build', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('accepts the last outcome and the build it holds back', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      ...bundlePayload,
+      action: null,
+      canInstall: false,
+      lastOutcome,
+      suppressed: heldBuild,
+    })));
+    const result = await getUpdateStatus();
+    expect(result.suppressed).toEqual(heldBuild);
+    expect(result.lastOutcome).toEqual(lastOutcome);
+  });
+
+  it.each([
+    ['an unknown outcome', { lastOutcome: { ...lastOutcome, outcome: 'exploded' } }],
+    ['a held-back build with no version', { suppressed: { ...heldBuild, version: 7 } }],
+    ['a suppression list that is not a list', { lastOutcome: { ...lastOutcome, suppressedBuilds: heldBuild } }],
+    ['a build identity with a stray field', { suppressed: { ...heldBuild, path: '/somewhere' } }],
+  ] as [string, Record<string, unknown>][])('rejects %s', async (_label, fields) => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...bundlePayload, ...fields })));
+    await expect(getUpdateStatus()).rejects.toThrow('Update status response is invalid');
+  });
+
+  it('asks to retry exactly the held-back build, with a non-simple confirmation header', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ lifted: heldBuild }));
+    vi.stubGlobal('fetch', fetchMock);
+    await retrySuppressedUpdate(heldBuild);
+    expect(fetchMock).toHaveBeenCalledWith('/api/updates/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-WG-Update': 'retry' },
+      body: JSON.stringify(heldBuild),
+    });
+  });
+
+  it('surfaces the reason a retry was refused', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: 'That build is not held back.' }, 409)));
+    await expect(retrySuppressedUpdate(heldBuild)).rejects.toThrow('That build is not held back.');
+  });
+});
 
 describe('getUpdateStatus', () => {
   afterEach(() => vi.unstubAllGlobals());

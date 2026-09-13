@@ -2,7 +2,7 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { defaultScheduler, notifyManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { UpdateStatus } from '../api/updates';
+import type { UpdateOutcome, UpdateStatus } from '../api/updates';
 import { UpdateButton, UpdateDialog, updatePresentation, useUpdateStatus } from './UpdateControl';
 
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
@@ -234,6 +234,96 @@ describe('UpdateControl', () => {
     if (installState === 'downloading' || installState === 'verifying' || installState === 'ready') {
       expect(installButtons[0].disabled).toBe(true);
     }
+  });
+
+  describe('a held-back build and the last outcome', () => {
+    const held = { version: '2.0.1', commit: 'b'.repeat(40), runtimeId: '222222222222' };
+    const rolledBack: UpdateOutcome = {
+      transaction: '5f0c',
+      operation: 'update',
+      outcome: 'rolled-back',
+      detail: 'The relaunched application exited at once with status 1',
+      recordedAt: '2026-09-13T12:00:00',
+      from: { version: '2.0.0', commit: 'a'.repeat(40), runtimeId: '111111111111' },
+      to: held,
+      channel: null,
+      verificationBasis: 'release-digest',
+      rollbackMaterial: 'retained',
+      suppressedBuilds: [held],
+    };
+    const heldStatus = () => bundleStatus({
+      action: null,
+      canInstall: false,
+      suppressed: held,
+      lastOutcome: rolledBack,
+    });
+
+    beforeEach(() => {
+      notifyManager.setScheduler((callback) => callback());
+    });
+
+    afterEach(() => {
+      notifyManager.setScheduler(defaultScheduler);
+    });
+
+    it('does not offer a build WG rolled back, and says why', async () => {
+      act(() => root.render(<Harness value={heldStatus()}/>));
+      const opener = host.querySelector<HTMLButtonElement>('.update-indicator')!;
+      expect(opener.classList.contains('available')).toBe(false);
+      expect(opener.textContent).toContain('update held back');
+
+      await act(async () => opener.click());
+      const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+      expect(dialog.textContent).toContain('WG rolled back 2.0.1');
+      expect(dialog.textContent).toContain(rolledBack.detail);
+      expect(dialog.textContent).not.toContain('Install update');
+      expect(dialog.textContent).not.toContain('No update command');
+      expect(facts()['Last update']).toBe('2.0.1 rolled back');
+    });
+
+    it('retries only the held-back build, then offers it again', async () => {
+      let lifted = false;
+      const calls: [string, RequestInit | undefined][] = [];
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        calls.push([path, init]);
+        if (path === '/api/updates/retry') {
+          lifted = true;
+          return new Response(JSON.stringify({ lifted: held }), { status: 200 });
+        }
+        const served = lifted ? bundleStatus({ lastOutcome: rolledBack }) : heldStatus();
+        return new Response(JSON.stringify(served), { status: 200 });
+      }));
+      act(() => root.render(<LiveHarness/>));
+      await act(async () => { for (let index = 0; index < 4; index += 1) await Promise.resolve(); });
+      const retry = [...host.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'Try 2.0.1 again');
+      expect(retry).toBeDefined();
+
+      await act(async () => {
+        retry!.click();
+        for (let index = 0; index < 12; index += 1) await Promise.resolve();
+      });
+
+      const retries = calls.filter(([path]) => path === '/api/updates/retry');
+      expect(retries).toHaveLength(1);
+      expect(retries[0][1]).toMatchObject({ method: 'POST', body: JSON.stringify(held) });
+      expect(host.querySelector('footer button.primary')?.textContent).toBe('Install update');
+    });
+
+    it('copies update diagnostics that carry the last outcome', async () => {
+      act(() => root.render(<Harness value={heldStatus()}/>));
+      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+      const copy = [...host.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'Copy update diagnostics');
+      expect(copy).toBeDefined();
+      await act(async () => copy!.click());
+      const copied = JSON.parse(String((writeText.mock.calls[0] as unknown[])[0]));
+      expect(copied.lastOutcome).toEqual(rolledBack);
+      expect(copied.suppressed).toEqual(held);
+      expect(copied.runningVersion).toBe(__WG2_VERSION__);
+      expect(host.textContent).toContain('Update diagnostics copied');
+    });
   });
 
   it('reports download progress in the run-progress idiom', async () => {

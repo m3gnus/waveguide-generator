@@ -49,12 +49,24 @@ otherwise describe `8bccff0c`.
 The restart latch (§4.2) and launch-mode settling (§4.5) were implemented after that. The
 three rows that describe them name files and functions, not line numbers.
 
+The update service then became the record's reader (§2.2 "Readers", §2.3). It explains
+the last outcome, holds back a build that rolled back, and lifts one suppression on an
+explicit retry: `last_outcome`, `held_back_entry` and `UpdateService.lift_suppression` in
+`server/updates/service.py`, `POST /api/updates/retry` in `server/updates/api.py`,
+`lift_suppressed_build` in `launchers/apply_update.py`, and the update dialog in
+`frontend/src/shell/UpdateControl.tsx`.
+
 Still to do:
 
-- the update service reading the record: explaining the last outcome, applying
-  suppression and the explicit retry (§2.2 "Readers", §2.3);
 - carrying the channel into the record, which stays `null` until the handoff carries it
-  (§2.2 `channel`);
+  (§2.2 `channel`). Neither half of today's handoff carries it without a change to an
+  interface this contract freezes. The schema-1 request is read with exactly its five
+  keys (§3.4). A new helper flag is not safe either, although §3.2 says new behaviour
+  arrives that way: the helper parses its command line strictly, and this launcher also
+  runs an *older* candidate's helper, on a Return to Stable, which would refuse the flag
+  and stop that update. Carrying it needs a decision on the route (an optional request key
+  plus an environment variable the helper reads, or a flag the launcher passes only to a
+  helper that accepts it);
 - recording a job ended by the restart as ended by the update restart (§4.3).
 
 ---
@@ -116,6 +128,15 @@ completion record only remembers what the journal decided.
   - `suppressedBuilds` (§2.3).
 - **Readers.** The update service reads it to explain the last outcome in the update
   dialog, and to apply suppression. It is also part of "Copy update diagnostics".
+  - It is read on every update status (`UpdateService.get_status`), not cached, so a
+    retry takes effect at once. Only a standalone app reads one: the helper never
+    installs a source checkout.
+  - The status carries `lastOutcome`: the record with every field normalized, less
+    `installation` and `stagingRoots`, which are an installation hash and folders on this
+    machine. It also carries `suppressed` (§2.3).
+  - The dialog shows the outcome as a "Last update" fact, and explains one that did not
+    install. "Copy update diagnostics", in the same dialog, copies the update state
+    with both fields. It leaves out the install command, which names a local folder.
 
 To give the record its build identities, the helper adds `fromVersion`, `fromCommit` and
 `fromRuntimeId`, and the matching `to` keys, to the journal. `begin_update_transaction`
@@ -135,6 +156,19 @@ reclaimed with it. All of these are optional keys under schema `1` (§3.3).
   the entry either way.
 - The update service never offers or auto-installs a suppressed build. The dialog says
   why, and offers an explicit retry, which removes that one entry.
+  - A release that matches an entry is reported with `suppressed` set to that entry,
+    no `action` and `canInstall: false`, and `POST /api/updates/install` refuses it.
+    Its `availability` stays `available`, because the release exists. The top bar reads
+    "update held back" rather than "update available". Nothing installs an update except
+    through that route.
+  - The retry is `POST /api/updates/retry`, with the header `X-WG-Update: retry` and the
+    entry's identity as its body. It removes the one equal entry and installs nothing.
+    It answers 409 when the record holds no such entry. The record is rewritten by
+    `lift_suppressed_build`, beside the writer in `launchers/apply_update.py`.
+  - A release's identity is its version and the `commit` and `runtimeId` of its
+    published app manifest, which is the build's own `APP-MANIFEST.json`. The version
+    must match. A commit or runtime id that either side does not know is not evidence of
+    a different build, so suppression fails closed, and the retry lifts it.
 - A different build identity is never suppressed by this entry.
 - **Build identity** depends on decision D2 (§5). Until D2 is taken, the identity is
   `(version, commit, runtimeId)` from the build's own `APP-MANIFEST.json`, whose fields
@@ -573,6 +607,13 @@ that implements it removes the marker.
 | `test_a_no_gui_start_that_refuses_its_interface_reports_the_transaction` | §4.5 | An exit before the server exists still names the open transaction |
 | `test_a_no_gui_start_with_no_free_port_reports_the_transaction` | §4.5 | So does a port failure |
 | `test_healthy_start_writes_nothing_when_there_is_nothing_to_settle` | §4.5 | An ordinary start that cannot confirm writes nothing about updates |
+| `test_a_failed_build_is_held_back_until_an_explicit_retry_lifts_only_it` | §2.2, §2.3, D6 | End to end: the rollback records the failed build, the next check holds it back and install refuses it, another commit or version stays eligible, and the retry lifts that entry only |
+| `test_the_update_status_explains_the_last_outcome_without_local_paths` | §2.2 | The status carries the normalized outcome and names no folder on this machine |
+| `test_a_build_field_nobody_recorded_is_not_evidence_of_a_different_build` | §2.3 | Suppression fails closed on a commit the record does not know |
+| `test_a_retry_needs_its_confirmation_and_lifts_nothing_it_does_not_name` | §2.3 | The retry needs its header, and naming a build that is not held back changes nothing |
+
+The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateControl.test.tsx`
+("a held-back build and the last outcome") and `frontend/src/api/updates.test.ts`.
 
 Outside this file: `server/tests/test_updates.py`
 `test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it` (§4.2,

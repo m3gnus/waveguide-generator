@@ -4,8 +4,11 @@ import {
   getUpdateChannel,
   getUpdateStatus,
   installApplicationUpdate,
+  retrySuppressedUpdate,
   setUpdateChannel,
+  type UpdateBuildIdentity,
   type UpdateChannel,
+  type UpdateOutcome,
   type UpdateStatus,
 } from '../api/updates';
 import { Icon } from './icons';
@@ -47,7 +50,7 @@ export function useUpdateStatus(): UpdateSnapshot {
 }
 
 export type UpdatePresentation =
-  | 'available' | 'current' | 'development' | 'checking' | 'publishing' | 'reload' | 'failed';
+  | 'available' | 'held' | 'current' | 'development' | 'checking' | 'publishing' | 'reload' | 'failed';
 
 export interface UpdatePresentationResult {
   state: UpdatePresentation;
@@ -96,6 +99,18 @@ export function updatePresentation(
       wide: `${version} · reload`,
       compact: 'Reload',
       announcement: 'Waveguide Generator was updated. Reload this page.',
+    });
+  }
+  if (data?.availability === 'available' && data.suppressed) {
+    // The release exists, but it is a build that rolled back here, so it is not
+    // offered (contract §2.3). Not the amber "available": nothing is on offer.
+    const held = data.suppressed.version ?? data.release?.version;
+    return carry({
+      state: 'held',
+      label: 'Update held back',
+      wide: `${version} · update held back`,
+      compact: version,
+      announcement: `Waveguide Generator ${held ?? 'an update'} was rolled back after it did not start, so WG is not offering it again.`,
     });
   }
   if (data?.availability === 'available') {
@@ -324,6 +339,75 @@ function UpdateChannelChoice({ status, disabled }: {
   </section>;
 }
 
+/** The build an outcome is about: the one that rolled back, or the one installed. */
+function outcomeBuild(outcome: UpdateOutcome): UpdateBuildIdentity | null {
+  return outcome.outcome === 'rolled-back' && outcome.operation === 'rollback' ? outcome.from : outcome.to;
+}
+
+/** The last outcome in a few words, for the dialog's fact list. */
+export function outcomeFact(outcome: UpdateOutcome): string {
+  const version = outcomeBuild(outcome)?.version ?? 'The update';
+  if (outcome.outcome === 'installed') return `${version} installed`;
+  if (outcome.outcome === 'rolled-back') return `${version} rolled back`;
+  if (outcome.outcome === 'aborted') return `${version} not installed`;
+  return 'Not confirmed';
+}
+
+function withDetail(sentence: string, detail: string): string {
+  return detail ? `${sentence} ${detail}` : sentence;
+}
+
+/** Why the last update did not simply install (contract §2.2 "Readers"). */
+function outcomeExplanation(outcome: UpdateOutcome): string {
+  const version = outcomeBuild(outcome)?.version ?? 'the update';
+  if (outcome.outcome === 'rolled-back') {
+    return withDetail(`WG rolled back ${version} and restored the version before it.`, outcome.detail);
+  }
+  if (outcome.outcome === 'aborted') {
+    return withDetail(`The update to ${version} stopped before anything was replaced.`, outcome.detail);
+  }
+  return withDetail('WG could not confirm how the last update ended.', outcome.detail);
+}
+
+/**
+ * What "Copy update diagnostics" copies: the update state as the server
+ * reported it, with the last outcome from the completion record. The install
+ * command is left out because it names a folder on this machine; the server
+ * already leaves the record's staging folders out.
+ */
+export function updateDiagnostics(status: UpdateStatus | undefined): string {
+  const checkout = status?.checkout;
+  const release = status?.release;
+  return JSON.stringify({
+    tabVersion: __WG2_VERSION__,
+    runningVersion: status?.runningVersion ?? null,
+    channel: status?.channel ?? null,
+    availability: status?.availability ?? null,
+    freshness: status?.freshness ?? null,
+    checkedAt: status?.checkedAt ?? null,
+    lastError: status?.lastError ?? null,
+    checkout: checkout ? {
+      kind: checkout.kind,
+      updateSupported: checkout.updateSupported,
+      reason: checkout.reason,
+      ...(checkout.kind === 'bundle'
+        ? { installedVersion: checkout.installedVersion, runtimeId: checkout.runtimeId }
+        : { head: checkout.head }),
+    } : null,
+    release: release ? {
+      version: release.version,
+      assetsReady: release.assetsReady,
+      ...('runtimeId' in release ? { runtimeId: release.runtimeId, commit: release.commit ?? null } : {}),
+    } : null,
+    canInstall: status?.canInstall ?? null,
+    installState: status?.installState ?? null,
+    activeVersion: status?.activeVersion ?? null,
+    error: status?.error ?? null,
+    lastOutcome: status?.lastOutcome ?? null,
+    suppressed: status?.suppressed ?? null,
+  }, null, 2);
+}
+
 export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
   open: boolean;
   snapshot: Pick<UpdateSnapshot, 'data' | 'error' | 'isPending'>;
@@ -347,6 +431,10 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
     error: data.error,
   } : undefined);
   const installActive = installProgress?.installState === 'downloading' || installProgress?.installState === 'verifying';
+  // The offered release is a build that rolled back here (contract §2.3).
+  const held = !mismatch && data?.availability === 'available' ? data.suppressed ?? null : null;
+  const heldVersion = held ? held.version ?? data?.release?.version ?? 'this build' : undefined;
+  const lastOutcome = data?.lastOutcome ?? null;
 
   const close = useCallback(() => {
     operationGeneration.current += 1;
@@ -464,6 +552,33 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
     }
   };
 
+  const retry = async () => {
+    if (!held) return;
+    const operation = ++operationGeneration.current;
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      await retrySuppressedUpdate(held);
+      // The suppression is applied when the status is read, so the next read
+      // offers the build again with no new check of GitHub.
+      await client.invalidateQueries({ queryKey: UPDATE_QUERY_KEY });
+      if (operation === operationGeneration.current) setFeedback(`WG offers ${heldVersion} again. Install it when you are ready.`);
+    } catch (reason) {
+      if (operation === operationGeneration.current) setFeedback(`Could not retry ${heldVersion}: ${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      if (operation === operationGeneration.current) setBusy(false);
+    }
+  };
+  const copyDiagnostics = async () => {
+    const operation = ++operationGeneration.current;
+    try {
+      await navigator.clipboard.writeText(updateDiagnostics(data));
+      if (operation === operationGeneration.current) setFeedback('Update diagnostics copied.');
+    } catch {
+      if (operation === operationGeneration.current) setFeedback('Clipboard access failed, so the update diagnostics were not copied.');
+    }
+  };
+
   const latest = data?.release?.version;
   const checked = checkedAt(data?.checkedAt);
   const channelName = data?.channel === 'beta' ? 'Beta' : 'Stable';
@@ -479,6 +594,9 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
   if (mismatch) {
     title = 'Waveguide Generator was updated';
     summary = `This tab is ${__WG2_VERSION__}; the running application is ${data?.runningVersion}. Reload before continuing.`;
+  } else if (held) {
+    title = `Waveguide Generator ${heldVersion} is held back`;
+    summary = `WG rolled back ${heldVersion} after it did not start, so it will not install that build again on its own.`;
   } else if (presentation.state === 'available' && latest) {
     title = `Waveguide Generator ${latest} is available`;
     summary = bundleAction
@@ -551,6 +669,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
           <Fact label="Latest" value={latest ?? (presentation.state === 'failed' ? 'Unknown' : '—')}/>
           <Fact label="Channel" value={channelName}/>
           {bundleAction && <Fact label="Download" value={`${megabytes(bundleAction.downloadBytes)} MB`}/>}
+          {lastOutcome && <Fact label="Last update" value={outcomeFact(lastOutcome)}/>}
         </dl>
 
         {/* Not while an install is downloading or verifying: the bytes on disk
@@ -575,6 +694,22 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
         {data?.channel === 'beta' && <p className="update-note">
           <b>Beta channel</b>
           WG is offered the newest release published on GitHub, pre-releases included. Betas are published per release candidate, not per commit on <code>main</code>.
+        </p>}
+
+        {held && <section className="update-install" aria-labelledby="update-held-title">
+          <h3 id="update-held-title">Why WG is not offering {heldVersion}</h3>
+          <p>{lastOutcome && lastOutcome.outcome === 'rolled-back' && outcomeBuild(lastOutcome)?.version === held.version
+            ? outcomeExplanation(lastOutcome)
+            : `WG rolled back ${heldVersion} after it did not start.`}</p>
+          <p>A build from another commit, or a later version, is still offered. Try this build again only if you expect it to start this time.</p>
+          <div className="update-install-actions">
+            <button disabled={busy} onClick={() => void retry()}>Try {heldVersion} again</button>
+          </div>
+        </section>}
+
+        {lastOutcome && lastOutcome.outcome !== 'installed' && !held && <p className="update-note warn">
+          <b>Last update</b>
+          {outcomeExplanation(lastOutcome)}
         </p>}
 
         {commandAction && <section className="update-install" aria-labelledby="update-install-title">
@@ -614,7 +749,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
           </p>}
         </section>}
 
-        {data?.availability === 'available' && !data.action && <p className="update-note error">
+        {data?.availability === 'available' && !data.action && !held && <p className="update-note error">
           <b>No update command</b>
           This release is available, but WG will not suggest an update command until the checkout issue above is resolved.
         </p>}
@@ -626,6 +761,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
         {data?.release && <a className="update-release-link" href={data.release.url} target="_blank" rel="noreferrer">
           Release notes for {data.release.tag}
         </a>}
+        <button disabled={!data} onClick={() => void copyDiagnostics()}><Icon name="copy"/>Copy update diagnostics</button>
         <span className="spacer"/>
         {installable && <button disabled={busy || installActive} onClick={() => void refresh()}>Check again</button>}
         <button className="primary" data-autofocus disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</button>

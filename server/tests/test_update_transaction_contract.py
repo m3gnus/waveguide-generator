@@ -57,9 +57,18 @@ from launchers.statusapp.controller import (
     StatusController,
     StatusSnapshot,
 )
+from fastapi import FastAPI
+
 from server.app import create_app
 from server.platform.paths import ensure_data_layout
+from server.updates.api import mount_updates
 from server.updates.restart import RestartApproval
+from server.updates.service import (
+    AVAILABLE_TTL_SECONDS,
+    ReleaseResponse,
+    UpdateInstallUnavailable,
+    UpdateService,
+)
 
 from _release_tags import RELEASE_TAGS, skip_or_fail_missing_tag
 
@@ -324,15 +333,17 @@ CLEANUP_PATHS = pytest.mark.parametrize(
 )
 
 
-def _roll_back_an_update(install: ReleasedClientInstall) -> tuple[dict[str, Any], dict[str, str]]:
+def _roll_back_an_update(
+    install: ReleasedClientInstall, runtime_id: str = "rt"
+) -> tuple[dict[str, Any], dict[str, str]]:
     """Install 2.0.0 -> 2.0.1 with this helper, and have the relaunch fail.
 
     The helper then rolls back on its own. Returns the journal it leaves and
     the identity of the build that failed.
     """
 
-    _stamp_build(install.resources / "app", "2.0.0", "a" * 40, "rt")
-    failed = _stamp_build(install.staged_app, "2.0.1", "b" * 40, "rt")
+    _stamp_build(install.resources / "app", "2.0.0", "a" * 40, runtime_id)
+    failed = _stamp_build(install.staged_app, "2.0.1", "b" * 40, runtime_id)
     confirmations = iter(["exited at once with status 1", None])
     reported: list[str] = []
 
@@ -2158,3 +2169,356 @@ def test_the_v032_reader_accepts_this_helpers_journal_and_its_commit_keeps_the_r
     assert record is not None, "the record did not survive v0.3.2's commit"
     assert record["transaction"] == journal["transaction"]
     assert record["outcome"] == "rolled-back"
+
+
+# ---------------------------------------------------------------------------
+# Contract §2.2 "Readers" and §2.3: the update service reads the record
+# ---------------------------------------------------------------------------
+
+#: A runtime id in the shape a published app manifest must carry.
+SERVICE_RUNTIME = "3a3a3a3a3a3a"
+
+#: The header the retry route requires, as the install route requires its own.
+RETRY_CONFIRMATION = ((b"x-wg-update", b"retry"),)
+
+
+def _published_bundle(
+    version: str, commit: str, runtime_id: str = SERVICE_RUNTIME
+) -> tuple[dict[str, Any], dict[str, bytes], dict[str, Any]]:
+    """A published bundle: the release, the bytes the service fetches, its companion.
+
+    The app manifest is the build's own ``APP-MANIFEST.json``, so its
+    ``commit`` is the one the helper records when that build fails (§2.3).
+    """
+
+    tag = f"v{version}"
+    layers_tag = f"{tag}-updates"
+    app_name = f"update-app-{version}.zip"
+    manifest_name = f"update-app-{version}.manifest.json"
+    manifest = json.dumps(
+        {"schemaVersion": 1, "version": version, "commit": commit, "runtimeId": runtime_id}
+    ).encode()
+    checksum = f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n".encode()
+
+    def asset(name: str, size: int) -> dict[str, Any]:
+        return {
+            "name": name,
+            "state": "uploaded",
+            "size": size,
+            "browser_download_url": (
+                "https://github.com/m3gnus/waveguide-generator/releases/download/"
+                f"{layers_tag}/{name}"
+            ),
+        }
+
+    companion = {
+        "tag_name": layers_tag,
+        "prerelease": True,
+        "published_at": "2026-09-13T12:00:00Z",
+        "assets": [
+            asset(app_name, 1_500),
+            asset(f"{app_name}.sha256", 96),
+            asset(manifest_name, len(manifest)),
+            asset(f"{manifest_name}.sha256", len(checksum)),
+        ],
+    }
+    release = {"tag_name": tag, "published_at": "2026-09-13T12:00:00Z", "assets": []}
+    return release, {manifest_name: manifest, f"{manifest_name}.sha256": checksum}, companion
+
+
+class _PublishedReleases:
+    """What GitHub answers, switched between checks, on a clock that makes each one due."""
+
+    def __init__(self, version: str, commit: str) -> None:
+        self.now = 1_800_000_000.0
+        self.publish(version, commit)
+
+    def publish(self, version: str, commit: str) -> None:
+        self.release, self.fetched, self.companion = _published_bundle(version, commit)
+        # Past every cache lifetime, so the next status check asks again.
+        self.now += 2 * AVAILABLE_TTL_SECONDS
+
+    def fetch_asset(self, url: str, _limit: int) -> bytes:
+        return self.fetched[Path(url).name]
+
+
+class _InstallerThatNeverDownloads:
+    """Records what it is asked to install. A refused install asks it nothing."""
+
+    def __init__(self) -> None:
+        self.restart_approval = RestartApproval()
+        self.started: list[str] = []
+
+    def status(self) -> dict[str, object]:
+        return {
+            "installState": "idle",
+            "activeVersion": None,
+            "downloadedBytes": 0,
+            "totalBytes": 0,
+            "error": None,
+        }
+
+    def start(self, version: str, _assets: Any, **_runtime_ids: str) -> dict[str, object]:
+        self.started.append(version)
+        return self.status()
+
+
+def _bundle_update_service(
+    resources: Path,
+    data_dir: Path,
+    published: _PublishedReleases,
+    *,
+    installed_version: str,
+    platform_name: str,
+    tmp_path: Path,
+    installer: _InstallerThatNeverDownloads | None = None,
+) -> UpdateService:
+    """The update service of the standalone app installed at ``resources``."""
+
+    checkout = {
+        "kind": "bundle",
+        "branch": None,
+        "head": None,
+        "atDeclaredTag": False,
+        "trackedChanges": False,
+        "aheadCount": None,
+        "behindCount": None,
+        "updateSupported": True,
+        "installedVersion": installed_version,
+        "runtimeId": SERVICE_RUNTIME,
+        "reason": None,
+    }
+    return UpdateService(
+        running_version=installed_version,
+        data_dir=data_dir,
+        repo_root=resources / "app",
+        fetcher=lambda _etag: ReleaseResponse(published.release, None),
+        recent_releases_fetcher=lambda: [published.companion],
+        asset_fetcher=published.fetch_asset,
+        clock=lambda: published.now,
+        platform_name=platform_name,
+        checkout_probe=lambda _root, _version: dict(checkout),
+        update_request_path=tmp_path / "control" / "update.json",
+        bundle_installer=installer or _InstallerThatNeverDownloads(),  # type: ignore[arg-type]
+    )
+
+
+def _updates_app(update: UpdateService, data_dir: Path) -> FastAPI:
+    application = FastAPI()
+    mount_updates(
+        application,
+        running_version=update.running_version,
+        data_dir=data_dir,
+        repo_root=update.repo_root,
+        service=update,
+    )
+    return application
+
+
+def test_a_failed_build_is_held_back_until_an_explicit_retry_lifts_only_it(
+    tmp_path: Path,
+) -> None:
+    """Contract §2.2 "Readers", §2.3 and D6, end to end.
+
+    The candidate fails, and the helper rolls it back and records its identity.
+    The next update check neither offers nor installs it. A different build
+    stays eligible. An explicit retry lifts that one entry and nothing else.
+    """
+
+    install = _released_client_install(tmp_path)
+    earlier = {"version": "1.9.9", "commit": "c" * 40, "runtimeId": SERVICE_RUNTIME}
+    if not apply_update_module.write_completion_record(
+        install.data_dir,
+        install.resources,
+        {
+            "transaction": "an-earlier-transaction",
+            "operation": "update",
+            "toVersion": "1.9.9",
+            "toCommit": "c" * 40,
+            "toRuntimeId": SERVICE_RUNTIME,
+        },
+        outcome="rolled-back",
+        detail="an earlier build that did not start",
+    ):
+        pytest.fail("set-up: could not record an earlier failed build")
+    journal, failed = _roll_back_an_update(install, runtime_id=SERVICE_RUNTIME)
+    recorded = _completion_record(install.data_dir, install.resources) or {}
+    if recorded.get("suppressedBuilds") != [earlier, failed]:
+        pytest.fail(f"set-up: the rollback did not suppress its build: {recorded!r}")
+
+    published = _PublishedReleases("2.0.1", "b" * 40)
+    installer = _InstallerThatNeverDownloads()
+    update = _bundle_update_service(
+        install.resources,
+        install.data_dir,
+        published,
+        installed_version="2.0.0",
+        platform_name="darwin",
+        tmp_path=tmp_path,
+        installer=installer,
+    )
+
+    held = update.get_status()
+    assert held["availability"] == "available"  # the release exists; it is not offered
+    assert held["suppressed"] == failed
+    assert held["action"] is None
+    assert held["canInstall"] is False
+    outcome = held["lastOutcome"]
+    assert outcome["transaction"] == journal["transaction"]
+    assert outcome["outcome"] == "rolled-back"
+    assert outcome["to"] == failed
+    assert outcome["suppressedBuilds"] == [earlier, failed]
+    with pytest.raises(UpdateInstallUnavailable, match="2.0.1"):
+        update.request_install()
+    assert installer.started == [], "a held-back build was handed to the installer"
+
+    # A rebuild of the same version from another commit is another build (D6).
+    published.publish("2.0.1", "d" * 40)
+    rebuilt = update.get_status()
+    assert rebuilt["suppressed"] is None
+    assert rebuilt["canInstall"] is True
+    # So is the next version.
+    published.publish("2.0.2", "e" * 40)
+    newer = update.get_status()
+    assert newer["suppressed"] is None
+    assert newer["canInstall"] is True
+
+    # The failed build itself stays held back.
+    published.publish("2.0.1", "b" * 40)
+    assert update.get_status()["suppressed"] == failed
+
+    status_code, raw = asyncio.run(
+        _post(
+            _updates_app(update, install.data_dir),
+            "/api/updates/retry",
+            failed,
+            headers=RETRY_CONFIRMATION,
+        )
+    )
+    assert status_code == 200, raw[:300]
+
+    after = _completion_record(install.data_dir, install.resources) or {}
+    assert after["suppressedBuilds"] == [earlier], "the retry lifted more, or less, than it named"
+    assert {key: value for key, value in after.items() if key != "suppressedBuilds"} == {
+        key: value for key, value in recorded.items() if key != "suppressedBuilds"
+    }
+    retried = update.get_status()
+    assert retried["suppressed"] is None
+    assert retried["canInstall"] is True
+
+
+def test_the_update_status_explains_the_last_outcome_without_local_paths(
+    tmp_path: Path,
+) -> None:
+    """Contract §2.2 "Readers": the dialog and "Copy update diagnostics" read it here."""
+
+    installation = _installation(tmp_path)
+    before = _stamp_build(installation.resources / "app", "9.9.8", "a" * 40, SERVICE_RUNTIME)
+    after = _stamp_build(installation.staged_app, "9.9.9", "b" * 40, SERVICE_RUNTIME)
+    transaction = _decided_update(installation)
+    allowed, detail = commit_transaction(installation.data_dir, resources=installation.resources)
+    if not allowed:
+        pytest.fail(f"set-up: the healthy-start commit refused: {detail}")
+
+    update = _bundle_update_service(
+        installation.resources,
+        installation.data_dir,
+        _PublishedReleases("9.9.9", "b" * 40),
+        installed_version="9.9.9",
+        platform_name="linux",
+        tmp_path=tmp_path,
+    )
+    status = update.get_status()
+
+    assert status["availability"] == "current"
+    assert status["suppressed"] is None
+    outcome = status["lastOutcome"]
+    assert isinstance(outcome["detail"], str) and isinstance(outcome["recordedAt"], str)
+    assert outcome == {
+        "transaction": transaction,
+        "operation": "update",
+        "outcome": "installed",
+        "detail": outcome["detail"],
+        "recordedAt": outcome["recordedAt"],
+        "from": before,
+        "to": after,
+        "channel": None,
+        "verificationBasis": "release-digest",
+        "rollbackMaterial": "retained",
+        "suppressedBuilds": [],
+    }
+    # What "Copy update diagnostics" copies names no folder on this machine.
+    assert str(tmp_path.resolve()) not in json.dumps(outcome)
+
+
+def test_a_build_field_nobody_recorded_is_not_evidence_of_a_different_build(
+    tmp_path: Path,
+) -> None:
+    """Contract §2.3: suppression fails closed.
+
+    A failed build whose manifest named no commit is held back against every
+    build of its version and runtime. The explicit retry is what lifts it.
+    """
+
+    install = _released_client_install(tmp_path)
+    if not apply_update_module.write_completion_record(
+        install.data_dir,
+        install.resources,
+        {
+            "transaction": "a-transaction",
+            "operation": "update",
+            "toVersion": "2.0.1",
+            "toRuntimeId": SERVICE_RUNTIME,
+        },
+        outcome="rolled-back",
+        detail="a build whose manifest named no commit",
+    ):
+        pytest.fail("set-up: could not record the failed build")
+    update = _bundle_update_service(
+        install.resources,
+        install.data_dir,
+        _PublishedReleases("2.0.1", "b" * 40),
+        installed_version="2.0.0",
+        platform_name="darwin",
+        tmp_path=tmp_path,
+    )
+
+    status = update.get_status()
+
+    assert status["suppressed"] == {"version": "2.0.1", "commit": None, "runtimeId": SERVICE_RUNTIME}
+    assert status["canInstall"] is False
+
+
+def test_a_retry_needs_its_confirmation_and_lifts_nothing_it_does_not_name(
+    tmp_path: Path,
+) -> None:
+    """Contract §2.3: only the explicit retry of a held-back build lifts it."""
+
+    install = _released_client_install(tmp_path)
+    _journal, failed = _roll_back_an_update(install, runtime_id=SERVICE_RUNTIME)
+    update = _bundle_update_service(
+        install.resources,
+        install.data_dir,
+        _PublishedReleases("2.0.1", "b" * 40),
+        installed_version="2.0.0",
+        platform_name="darwin",
+        tmp_path=tmp_path,
+    )
+    app = _updates_app(update, install.data_dir)
+    before = _completion_record(install.data_dir, install.resources)
+
+    unconfirmed, _raw = asyncio.run(_post(app, "/api/updates/retry", failed))
+    unnamed, raw = asyncio.run(
+        _post(
+            app,
+            "/api/updates/retry",
+            {**failed, "commit": "f" * 40},
+            headers=RETRY_CONFIRMATION,
+        )
+    )
+
+    assert unconfirmed == 403
+    assert unnamed == 409, raw[:300]
+    assert "not held back" in json.loads(raw)["detail"]
+    assert _completion_record(install.data_dir, install.resources) == before
+    assert update.get_status()["suppressed"] == failed
