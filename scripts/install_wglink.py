@@ -80,6 +80,13 @@ def _platform_name(value: str = "auto") -> str:
     return "linux"
 
 
+#: Names Fusion's AddIns directory outright, on any platform. The test suite
+#: points it at a sandbox (the repository's root ``conftest.py``) so that no
+#: test run reaches the add-in installed on the machine running it; an operator
+#: with a relocated Fusion can use it the same way. ``--addins-dir`` still wins.
+ADDINS_DIR_ENV = "WG2_FUSION_ADDINS_DIR"
+
+
 def default_addins_dir(
     platform: str,
     *,
@@ -88,6 +95,9 @@ def default_addins_dir(
 ) -> Path | None:
     home = Path.home() if home is None else home
     environ = dict(os.environ) if environ is None else environ
+    override = environ.get(ADDINS_DIR_ENV)
+    if override:
+        return Path(override)
     if platform == "macos":
         base = home / "Library" / "Application Support" / "Autodesk"
         legacy = base / "Autodesk Fusion 360" / "API" / "AddIns"

@@ -1590,3 +1590,80 @@ def test_recombine_serialises_overlapping_edits_for_one_job(
             await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_a_quit_marks_every_running_job_the_moment_it_begins(tmp_path: Path) -> None:
+    """The reason is recorded before any shutdown wait, not when the runtime's
+    own shutdown handler finally runs.
+
+    Uvicorn drains connections for up to 3 s and other handlers run first, so
+    a process that ends inside its budget -- the backstop, the launcher's kill,
+    a force quit -- used to leave its running jobs unmarked, and the next start
+    read them as "Server restarted during execution".
+    """
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    request_dump = _request(delay_ms=1).model_dump(mode="json")
+    now = datetime.now().isoformat()
+
+    def row(job_id: str, status: str, **extra: Any) -> dict[str, Any]:
+        return {
+            "id": job_id,
+            "status": status,
+            "created_at": now,
+            "updated_at": now,
+            "queued_at": now,
+            "started_at": now,
+            "progress": 0.3,
+            "stage": "solve",
+            "config_json": request_dump,
+            "config_summary_json": {"formula_type": "OSSE"},
+            "task_metadata": {"kept": "yes"},
+            **extra,
+        }
+
+    store.create_job(row("running-a", "running"))
+    store.create_job(row("running-b", "running"))
+    store.create_job(row("user-cancelled", "running", cancellation_requested=True))
+    store.create_job(row("queued", "queued"))
+    store.create_job(row("done", "complete"))
+
+    runtime = JobRuntime(store)
+    marked = runtime.mark_running_interrupted_by_quit("status window requested quit")
+
+    assert sorted(marked) == ["running-a", "running-b"]
+    # Nothing a user sees moves until the runtime's own shutdown does it.
+    assert store.get_job_row("running-a")["status"] == "running"
+    assert store.get_job_row("running-a")["cancellation_requested"] in (0, False)
+    store.close()
+
+    reopened = JobStore(tmp_path / "jobs.db")
+    reopened.initialize()
+
+    async def scenario() -> None:
+        next_start = JobRuntime(reopened)
+        await next_start.start()
+        await next_start.wait_idle()
+        for job_id in ("running-a", "running-b"):
+            job = await next_start.get_job(job_id)
+            assert job["status"] == "cancelled", job
+            assert job["stage_message"] == QUIT_INTERRUPTED_STAGE_MESSAGE
+            assert job["error_message"] == QUIT_INTERRUPTED_MESSAGE
+        # A job the user had already asked to stop keeps its own story.
+        cancelled = await next_start.get_job("user-cancelled")
+        assert cancelled["error_message"] != QUIT_INTERRUPTED_MESSAGE
+        await next_start.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_marking_at_quit_never_raises(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    runtime = JobRuntime(store)
+    store.close()
+    (tmp_path / "jobs.db").unlink()
+    (tmp_path / "jobs.db").mkdir()
+
+    assert runtime.mark_running_interrupted_by_quit("a stop request") == []

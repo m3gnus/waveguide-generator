@@ -281,9 +281,10 @@ def dense_solver_memory_limit() -> DenseSolverMemoryLimit:
 
     limit = resolve_dense_solver_memory_limit()
     logger.info(
-        "Dense-solver memory ceiling: %s (%s)",
+        "Dense-solver memory ceiling: %s (%s; physical memory probe: %s)",
         _format_memory_size(limit.bytes),
         limit.describe(),
+        limit.physical.source,
     )
     return limit
 

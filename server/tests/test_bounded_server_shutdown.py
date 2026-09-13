@@ -27,6 +27,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Callable
 import urllib.error
@@ -93,7 +94,10 @@ class _Server:
     control_path: Path
     output: Path
     marker: Path | None
+    tmp_dir: Path
+    addins_dir: Path
     port: int = 0
+    preview_marker: Path | None = None
 
     def request_stop(self) -> float:
         """Ask for a stop exactly as the status window does, and when."""
@@ -163,7 +167,13 @@ def _server_log_contains(server: _Server, text: str) -> bool:
 
 
 def _child_environment(
-    data_dir: Path, marker: Path | None, *, prewarm: bool
+    data_dir: Path,
+    marker: Path | None,
+    *,
+    prewarm: bool,
+    tmp_dir: Path,
+    addins_dir: Path,
+    preview_marker: Path | None = None,
 ) -> dict[str, str]:
     # The suite's own WG2_* settings describe the test process, not this
     # server; start from none of them and say exactly what the server gets.
@@ -173,11 +183,20 @@ def _child_environment(
     environment["WG2_DATA_DIR"] = str(data_dir)
     environment["WG2_NO_BROWSER"] = "1"
     environment["WG2_SKIP_BEAT_CPU_PROVISION"] = "1"
+    # The add-in reconciliation every start runs must find a sandbox, never
+    # the add-in installed on this machine (the root conftest's guard).
+    environment["WG2_FUSION_ADDINS_DIR"] = str(addins_dir)
+    # A private temporary directory: what the server leaves there, and what
+    # its next start sweeps, is then this test's alone to inspect.
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        environment[name] = str(tmp_dir)
     environment["PYTHONUNBUFFERED"] = "1"
     if not prewarm:
         environment["WG2_SOLVER_WARMUP"] = "0"
     if marker is not None:
         environment["WG2_TEST_GMSH_BLOCK_FILE"] = str(marker)
+    if preview_marker is not None:
+        environment["WG2_TEST_PREVIEW_BLOCK_FILE"] = str(preview_marker)
     return environment
 
 
@@ -206,15 +225,22 @@ def _launch(
     block: bool,
     prewarm_bempp: bool = False,
     parent_pid: int | None = None,
+    tmp_dir: Path | None = None,
+    block_preview: bool = False,
 ) -> _Server:
     root.mkdir(parents=True, exist_ok=True)
     data = data_dir or (root / "data")
     data.mkdir(parents=True, exist_ok=True)
     if prewarm_bempp:
         _prefer_bempp(data)
+    temporary = tmp_dir or (root / "tmp")
+    temporary.mkdir(parents=True, exist_ok=True)
+    addins = root / "fusion-addins"
+    addins.mkdir(parents=True, exist_ok=True)
     control_dir = root / "control"
     control_dir.mkdir()
     marker = root / "gmsh-parked" if block else None
+    preview_marker = root / "preview-parked" if block_preview else None
     output = root / "server.out"
     command = [
         sys.executable,
@@ -238,14 +264,30 @@ def _launch(
         process = subprocess.Popen(
             command,
             cwd=REPO_ROOT,
-            env=_child_environment(data, marker, prewarm=prewarm_bempp),
+            env=_child_environment(
+                data,
+                marker,
+                prewarm=prewarm_bempp,
+                tmp_dir=temporary,
+                addins_dir=addins,
+                preview_marker=preview_marker,
+            ),
             stdin=subprocess.DEVNULL,
             stdout=sink,
             stderr=subprocess.STDOUT,
             **options,
         )
     started.append(process)
-    server = _Server(process, data, control_dir / "stop", output, marker)
+    server = _Server(
+        process,
+        data,
+        control_dir / "stop",
+        output,
+        marker,
+        temporary,
+        addins,
+        preview_marker=preview_marker,
+    )
     ready = control_dir / "ready.json"
     _wait_for(ready.is_file, START_TIMEOUT_SECONDS, "the reserved port", server)
     server.port = int(json.loads(ready.read_text(encoding="utf-8"))["port"])
@@ -461,3 +503,225 @@ def test_an_orphaned_server_exits_within_its_own_deadline(
         f"exited {elapsed:.2f} s after the parent died; the server's own budget is "
         f"{DEFAULT_SHUTDOWN_BUDGET_SECONDS:.1f} s"
     )
+
+
+def _sessions(temporary: Path) -> set[Path]:
+    """The per-process temporary directories in ``temporary`` (``server/platform/temp_session.py``)."""
+
+    return {path for path in temporary.iterdir() if path.name.startswith("wg2-run-")}
+
+
+#: A live process of any build or checkout holding a temporary session open
+#: until its stdin closes, then leaving without cleanup.
+_SESSION_HOLDER = r"""
+import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+from server.platform.temp_session import TemporarySession
+session = TemporarySession.create(Path(sys.argv[1]))
+print(session.path, flush=True)
+sys.stdin.read()
+os._exit(0)
+"""
+
+
+def _age(path: Path, seconds: float) -> None:
+    then = time.time() - seconds
+    os.utime(path, (then, then))
+
+
+def test_a_started_server_reconciles_the_add_in_in_its_sandbox(
+    tmp_path: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    """The positive proof that a real server never resolves the real AddIns directory.
+
+    The reconciliation takes the installer's operation lock in whatever
+    directory it resolved, so the lock appearing in the sandbox is the child
+    saying where it looked.
+    """
+
+    server = _launch(tmp_path, started, block=False)
+    lock = server.addins_dir / ".WGLink-install.lock"
+    _wait_for(lock.is_file, 60.0, "the add-in reconciliation to lock its sandbox", server)
+
+    stopped_at = server.request_stop()
+    _wait_for_exit(server, stopped_at, LAUNCHER_GRACE_SECONDS, "a stop request")
+
+
+def test_a_quit_cut_short_mid_budget_still_reads_as_interrupted_by_quit(
+    tmp_path: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    """The reason is on disk the moment the stop begins, before any wait.
+
+    An export queued behind the parked build keeps a request in flight, so
+    Uvicorn's graceful drain holds the lifespan shutdown -- and with it the job
+    runtime's own shutdown handler -- for its full 3 s. The process is then
+    ended well inside that window, as the backstop, the launcher's kill or a
+    force quit would end it. The next start must still read the job as
+    interrupted by Quit, not as "Server restarted during execution".
+    """
+
+    server = _launch(tmp_path / "first", started, block=True)
+    job_id = _submit_parked_job(server)
+
+    def export_behind_the_build() -> None:
+        with contextlib.suppress(Exception):
+            _http(
+                server.port,
+                "POST",
+                "/api/export/stl",
+                {"design": _SOLVE_BODY["design"], "designRevision": 1},
+            )
+
+    threading.Thread(target=export_behind_the_build, daemon=True).start()
+    # Accepted before the stop: an accepted request stays in flight however
+    # far it has got, and closing the listener does not end it.
+    time.sleep(1.0)
+
+    server.request_stop()
+    _wait_for(
+        lambda: _server_log_contains(server, "Shutdown requested"),
+        30.0,
+        "the stop to begin",
+        server,
+    )
+    time.sleep(0.5)
+    assert server.process.poll() is None, "the server ended before the test could cut it short"
+    server.process.kill()
+    server.process.wait(timeout=30)
+
+    relaunch = _launch(tmp_path / "second", started, data_dir=server.data_dir, block=False)
+    status, body = _http(relaunch.port, "GET", f"/api/status/{job_id}")
+    assert status == 200, body.decode(errors="replace")
+    job = json.loads(body)
+    assert job["status"] == "cancelled", job
+    assert job["stage_message"] == "Interrupted by Quit", job
+    assert job["has_results"] is False, job
+
+    stopped_at = relaunch.request_stop()
+    _wait_for_exit(relaunch, stopped_at, LAUNCHER_GRACE_SECONDS, "a stop request")
+
+
+def test_the_next_start_sweeps_what_a_stopped_build_left_behind(
+    tmp_path: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    """A Quit during a build ends without cleanup; the next start removes what it left.
+
+    Also held: nothing a live process owns is touched, whichever build it is,
+    and an earlier release's leftovers go only once they are too old to be in
+    use.
+    """
+
+    temporary = tmp_path / "tmp"
+    temporary.mkdir()
+    earlier_stale = temporary / "wg2-solver-mesh-earlier-release"
+    earlier_stale.mkdir()
+    (earlier_stale / "waveguide.msh").write_text("x", encoding="utf-8")
+    _age(earlier_stale, 3 * 24 * 3600)
+    earlier_recent = temporary / "wg2-solver-mesh-in-use-by-an-older-build"
+    earlier_recent.mkdir()
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _SESSION_HOLDER, str(temporary), str(REPO_ROOT)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None and holder.stdin is not None
+        held = Path(holder.stdout.readline().strip())
+        assert held.is_dir()
+
+        server = _launch(tmp_path / "first", started, block=True, tmp_dir=temporary)
+        _submit_parked_job(server)
+        own = _sessions(temporary) - {held}
+        assert len(own) == 1, f"expected one session for the server, found {sorted(own)}"
+        (killed_session,) = own
+
+        stopped_at = server.request_stop()
+        _wait_for_exit(server, stopped_at, LAUNCHER_GRACE_SECONDS, "a stop request")
+        # The exit ran no cleanup: that is what the sweep exists for.
+        assert killed_session.is_dir()
+
+        relaunch = _launch(
+            tmp_path / "second",
+            started,
+            data_dir=server.data_dir,
+            block=False,
+            tmp_dir=temporary,
+        )
+        assert not killed_session.exists(), "the next start left the stopped build's directory"
+        assert not earlier_stale.exists(), "the next start left an earlier release's leftover"
+        assert earlier_recent.is_dir(), "the sweep removed a directory that may be in use"
+        assert held.is_dir(), "the sweep removed a live process's directory"
+        (relaunch_session,) = _sessions(temporary) - {held}
+
+        stopped_at = relaunch.request_stop()
+        _wait_for_exit(relaunch, stopped_at, LAUNCHER_GRACE_SECONDS, "a stop request")
+        assert relaunch.process.returncode == 0, relaunch.evidence()
+        # A clean exit removes its own directory rather than leaving it to a sweep.
+        assert not relaunch_session.exists()
+        assert held.is_dir()
+    finally:
+        if holder.stdin is not None:
+            holder.stdin.close()
+        holder.wait(timeout=30)
+
+
+def test_a_stop_request_with_a_blocked_preview_ends_the_process_in_time(
+    tmp_path: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    """The preview executor's threads hold interpreter exit exactly as gmsh's does.
+
+    A process-wide claim needs this case too (``WG-ARCHITECTURE-PLAN.md``
+    Phase 0.2). The preview build is parked through the test-only hook in
+    ``server/preview/core.py`` over a real ``/ws/preview`` socket, the way the
+    viewport asks for one. The server must exit on its own, before the
+    launcher's kill, and once its cleanup is done rather than when the budget
+    runs out.
+    """
+
+    from websockets.sync.client import connect
+
+    server = _launch(tmp_path, started, block=False, block_preview=True)
+    marker = server.preview_marker
+    assert marker is not None
+    origin = f"http://127.0.0.1:{server.port}"
+    socket_ = connect(
+        f"ws://127.0.0.1:{server.port}/ws/preview",
+        origin=origin,  # type: ignore[arg-type]
+        proxy=None,
+        open_timeout=30,
+    )
+    try:
+        hello = json.loads(socket_.recv(timeout=30))
+        assert hello["kind"] == "hello", hello
+        socket_.send(
+            json.dumps(
+                {
+                    "v": 1,
+                    "kind": "preview",
+                    "epoch": hello["epoch"],
+                    "seq": 1,
+                    "designRevision": 1,
+                    "design": _SOLVE_BODY["design"],
+                    "lod": "coarse",
+                }
+            )
+        )
+        _wait_for(marker.is_file, BLOCK_TIMEOUT_SECONDS, "the preview build to be parked", server)
+
+        stopped_at = server.request_stop()
+        elapsed = _wait_for_exit(server, stopped_at, LAUNCHER_GRACE_SECONDS, "a stop request")
+    finally:
+        with contextlib.suppress(Exception):
+            socket_.close()
+    assert server.process.returncode == 0, server.evidence()
+
+    from server.platform.shutdown_backstop import DEFAULT_SHUTDOWN_BUDGET_SECONDS
+
+    log = (server.data_dir / "logs" / "server.log").read_text(encoding="utf-8", errors="replace")
+    assert "did not finish within its" not in log, (
+        "the process waited out its whole budget for a thread its cleanup had already "
+        f"let go of\n{server.evidence()}"
+    )
+    assert elapsed < DEFAULT_SHUTDOWN_BUDGET_SECONDS, server.evidence()

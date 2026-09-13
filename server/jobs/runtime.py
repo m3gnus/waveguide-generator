@@ -1710,6 +1710,31 @@ class JobRuntime:
                 self.events.publish(event)
             self._ensure_scheduler()
 
+    def mark_running_interrupted_by_quit(self, reason: str = "") -> list[str]:
+        """Record, the moment a stop begins, that Quit interrupted every running job.
+
+        Called from the shutdown backstop's own thread (``launch/serve.py``),
+        not the event loop, and ahead of ``shutdown``, which runs only after
+        Uvicorn's drain and the handlers registered before it. If the process
+        ends in between, the next start still reads these jobs as interrupted
+        by Quit rather than as a crash. Thread-safe through the store's lock;
+        never raises. Returns the ids it marked.
+        """
+
+        try:
+            marked = self.store.mark_running_interrupted_by_quit()
+        except Exception:  # noqa: BLE001 - a stop must proceed whatever the store does
+            logger.exception("Could not mark running jobs as interrupted by Quit")
+            return []
+        if marked:
+            logger.info(
+                "Stop began (%s) with %d running job(s); marked interrupted by Quit: %s",
+                reason or "no reason given",
+                len(marked),
+                ", ".join(marked),
+            )
+        return marked
+
     async def shutdown(self) -> None:
         """Cooperatively stop jobs, leaving timeout leftovers to startup recovery.
 

@@ -231,6 +231,41 @@ jobs:
             --pins-json pins.json \
             --build-manifest "$manifest"
 
+      - name: Qualify Quit during a blocked mesh build on the same candidate
+        # The packaged half of the shutdown gate
+        # (docs/reference/SHUTDOWN-AND-RECOVERY.md): the installed server,
+        # stopped the way the status window stops it while its mesh build is
+        # parked, must exit on its own inside the window's grace, leave no
+        # child process and, after the next start, no stale temporary
+        # directory; the next start must read the job as interrupted by Quit;
+        # and the memory ceiling is reported with the probe that measured it.
+        # Runs even when the CPU gate failed, so both verdicts are on record.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_quit.py \
+            --payload "$root/Waveguide Generator.app" \
+            --payload-kind dmg-ditto \
+            --work "$root/quit-work" \
+            --output "$root/quit-qualification"
+
+      - name: Preserve the Quit qualification logs
+        if: always()
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/quit-qualification" ]; then
+            echo "No Quit qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/quit-qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
+
       - name: Preserve the CPU qualification logs
         if: always()
         # Into the job log rather than a new artifact: this workflow's artifact
@@ -391,6 +426,42 @@ jobs:
             throw "The CPU qualification exited $LASTEXITCODE"
           }
 
+      - name: Qualify Quit during a blocked mesh build on the installed candidate
+        # See the macOS job. On Windows the stopped server also has to end its
+        # own BEMPP child through its kill-on-close Job Object, since the gate
+        # starts it without the status window's.
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = $env:WG2_CPU_GATE_ROOT
+          if (-not $root) {
+            throw "The CPU gate did not prepare the installed candidate."
+          }
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_quit.py `
+            --payload (Join-Path $root "app") `
+            --payload-kind windows-installer `
+            --work (Join-Path $root "quit-work") `
+            --output (Join-Path $root "quit-qualification")
+          if ($LASTEXITCODE -ne 0) {
+            throw "The Quit qualification exited $LASTEXITCODE"
+          }
+
+      - name: Preserve the Quit qualification logs
+        if: always()
+        shell: pwsh
+        run: |
+          $root = $env:WG2_CPU_GATE_ROOT
+          if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "quit-qualification"))) {
+            Write-Host "No Quit qualification output was produced."
+            exit 0
+          }
+          Get-ChildItem -File (Join-Path $root "quit-qualification") | ForEach-Object {
+            Write-Host "===== $($_.Name) ====="
+            Get-Content -Tail 4000 -LiteralPath $_.FullName
+            Write-Host ""
+          }
+
       - name: Preserve the CPU qualification logs
         if: always()
         shell: pwsh
@@ -510,6 +581,34 @@ jobs:
             --output "$root/qualification" \
             --pins-json pins.json \
             --build-manifest "$manifest"
+
+      - name: Qualify Quit during a blocked mesh build on the same candidate
+        # See the macOS job.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_quit.py \
+            --payload "$root/prefix/waveguide-generator" \
+            --payload-kind linux-install-sh \
+            --work "$root/quit-work" \
+            --output "$root/quit-qualification"
+
+      - name: Preserve the Quit qualification logs
+        if: always()
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/quit-qualification" ]; then
+            echo "No Quit qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/quit-qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
 
       - name: Preserve the CPU qualification logs
         if: always()

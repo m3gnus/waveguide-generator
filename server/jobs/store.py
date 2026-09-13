@@ -880,6 +880,39 @@ class JobStore:
                 return None
             return self._append_event(conn, job_id, "stage", payload)
 
+    def mark_running_interrupted_by_quit(self) -> list[str]:
+        """Mark every running job, in one write, as interrupted by a Quit just begun.
+
+        The shutdown backstop runs this the moment a stop begins
+        (``launch/serve.py``), before Uvicorn's drain and every shutdown
+        handler, so a process that ends anywhere inside its budget still leaves
+        the reason for ``recover_on_startup``. It sets the same metadata flag
+        as ``request_cancellation(..., interrupted_by_quit=True)`` and nothing
+        else: status, stage and events move only when the runtime's own
+        shutdown requests the cancellation. A job the user had already asked
+        to stop is left to that request. Returns the ids it marked.
+        """
+
+        with self._lock, self._transaction() as conn:
+            ids = [
+                str(row["id"])
+                for row in conn.execute(
+                    """SELECT id FROM simulation_jobs
+                       WHERE status = 'running' AND cancellation_requested = 0
+                       ORDER BY created_at ASC"""
+                ).fetchall()
+            ]
+            if ids:
+                conn.execute(
+                    f"""UPDATE simulation_jobs
+                        SET task_metadata_json = json_set(
+                            COALESCE(task_metadata_json, '{{}}'),
+                            '$.{QUIT_INTERRUPTION_KEY}', json('true'))
+                        WHERE id IN ({",".join("?" for _ in ids)})""",
+                    ids,
+                )
+        return ids
+
     def get_job_row(self, job_id: str) -> dict[str, Any] | None:
         with self._lock, self._connection() as conn:
             row = conn.execute(

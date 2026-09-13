@@ -37,7 +37,7 @@ keeps the waits it always had.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 import logging
 import os
 import sys
@@ -136,6 +136,7 @@ class ShutdownBackstop:
         self._exit_now = threading.Event()
         self._fired = threading.Event()
         self._thread: threading.Thread | None = None
+        self._begin_hooks: list[Callable[[str], object]] = []
 
     @property
     def begun(self) -> bool:
@@ -204,7 +205,43 @@ class ShutdownBackstop:
         self.begin(reason)
         self._exit_now.set()
 
+    def on_begin(self, hook: Callable[[str], object]) -> None:
+        """Run ``hook(reason)`` as soon as a stop begins, on a thread of its own.
+
+        For what must be on disk before any shutdown wait, because the budget,
+        the launcher's kill or a force quit may end the process during one:
+        the job runtime records here that Quit interrupted its running jobs.
+        Hooks run once, in the order added, one after another. They never run
+        in the signal handler or console callback that began the stop, which
+        may have interrupted a thread holding the very lock a hook needs, and
+        a hook that fails or hangs holds neither the others' turn before it nor
+        the exit. One added after the stop began runs at once.
+        """
+
+        with self._lock:
+            if self._deadline is None:
+                self._begin_hooks.append(hook)
+                return
+            reason = self._reason
+        self._run_begin_hooks((hook,), reason)
+
+    def _run_begin_hooks(self, hooks: tuple[Callable[[str], object], ...], reason: str) -> None:
+        def run() -> None:
+            for hook in hooks:
+                try:
+                    hook(reason)
+                except Exception:  # noqa: BLE001 - one failed hook must not stop the rest
+                    log.exception("A shutdown step that runs when a stop begins failed")
+
+        threading.Thread(target=run, name="wg2-shutdown-begin", daemon=True).start()
+
     def _watch(self) -> None:
+        # Before anything else, and on their own thread: the hooks record what
+        # the next start must know, and this thread must not wait for them.
+        with self._lock:
+            hooks = tuple(self._begin_hooks)
+        if hooks:
+            self._run_begin_hooks(hooks, self._reason)
         # This thread never logs itself. A handler wedged on a dead disk or
         # console blocks whichever thread calls it, and this is the one that
         # has to reach the exit.
@@ -270,11 +307,38 @@ def shutdown_wait_limit(default: float | None) -> float | None:
     return limit if default is None else min(default, limit)
 
 
+def lingering_threads(
+    timeout: float, *, ignore: Collection[int | None] = ()
+) -> list[threading.Thread]:
+    """The non-daemon threads still running after up to ``timeout`` seconds.
+
+    Interpreter exit joins every one of them without a bound, so one still
+    inside a native call -- the gmsh worker in an OCC build, a preview worker
+    in the mesher -- keeps a stopped process alive until the budget runs out.
+    The threads get ``timeout`` between them to finish on their own; idle
+    executor workers told to stop need only moments. ``ignore`` names thread
+    idents to leave out: ``launch/serve.py`` passes those that existed before
+    it started, which matters only to a caller that is not a fresh process.
+    """
+
+    deadline = time.monotonic() + max(0.0, timeout)
+    current = threading.current_thread()
+    candidates = [
+        thread
+        for thread in threading.enumerate()
+        if thread is not current and not thread.daemon and thread.ident not in ignore
+    ]
+    for thread in candidates:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    return [thread for thread in candidates if thread.is_alive()]
+
+
 __all__ = [
     "BACKSTOP_EXIT_CODE",
     "CLEANUP_RESERVE_SECONDS",
     "DEFAULT_SHUTDOWN_BUDGET_SECONDS",
     "FLUSH_TIMEOUT_SECONDS",
     "ShutdownBackstop",
+    "lingering_threads",
     "shutdown_wait_limit",
 ]

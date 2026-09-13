@@ -151,6 +151,14 @@ _WINDOWS_PASSTHROUGH = (
     "NUMBER_OF_PROCESSORS",
     "PROCESSOR_ARCHITECTURE",
 )
+#: The dense-solver memory ceiling's two settings (``server/mesh/builder.py``).
+#: An imported mesh is built, and held to that ceiling, in this child, so an
+#: operator's override has to reach it exactly as it reaches a parametric
+#: build. A byte count and a flag; neither carries any authority.
+_MEMORY_PASSTHROUGH = (
+    "WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES",
+    "WG2_DENSE_SOLVER_MEMORY_LIMIT_UNSAFE",
+)
 
 
 def child_environment(
@@ -170,7 +178,7 @@ def child_environment(
         _WINDOWS_PASSTHROUGH
         if resolved == "Windows"
         else _POSIX_PASSTHROUGH + _LINKER_PASSTHROUGH
-    )
+    ) + _MEMORY_PASSTHROUGH
     env = {name: source[name] for name in names if source.get(name)}
 
     scratch = str(staging / "tmp")

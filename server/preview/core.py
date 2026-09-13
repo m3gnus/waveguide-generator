@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from itertools import count
 import json
 import math
+import os
+from pathlib import Path
 import threading
 import time
 from typing import Any, Literal, Protocol
@@ -32,6 +34,30 @@ CLOSE_RESTARTING = 1012
 
 _EPOCHS = count(1)
 _INJECTED_BUILDER_NAMESPACES = count(1)
+
+#: Test-only switch read by ``_run_unless_parked``.
+BLOCK_FOR_TEST_ENV = "WG2_TEST_PREVIEW_BLOCK_FILE"
+
+
+def _run_unless_parked(function: Callable[..., bytes], *args: Any) -> bytes:
+    """Run one preview computation, or stand in for one that never returns.
+
+    Test-only, and inert unless ``WG2_TEST_PREVIEW_BLOCK_FILE`` names a file.
+    The shutdown harness (``server/tests/test_bounded_server_shutdown.py``)
+    needs a preview worker held in a call Python cannot interrupt, because a
+    mesher call is exactly that, and a held executor thread is what keeps a
+    stopped process alive: interpreter exit joins it. The same hook exists for
+    the gmsh worker (``server/mesh/gmsh_worker.py``). Nothing in the
+    application sets the variable.
+    """
+
+    marker = os.environ.get(BLOCK_FOR_TEST_ENV)
+    if marker:
+        staged = Path(f"{marker}.tmp")
+        staged.write_text(f"{getattr(function, '__qualname__', repr(function))}\n", encoding="utf-8")
+        staged.replace(marker)
+        threading.Event().wait()
+    return function(*args)
 
 
 class PreviewComputeService:
@@ -62,7 +88,7 @@ class PreviewComputeService:
         if self._closed:
             raise RuntimeError("preview service is shutting down")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, function, *args)
+        return await loop.run_in_executor(self._executor, _run_unless_parked, function, *args)
 
     def get_or_build(
         self,

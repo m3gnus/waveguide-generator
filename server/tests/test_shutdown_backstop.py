@@ -361,3 +361,92 @@ def test_a_stop_budget_still_joins_a_gmsh_call_that_finishes_in_time(
 
     assert asyncio.run(scenario()) is False
     assert exit_process.called.wait(5.0)
+
+
+def test_begin_hooks_run_at_once_on_their_own_thread() -> None:
+    """A Quit's first act is recorded before any wait, and never in a signal handler.
+
+    ``begin`` can be called from a signal handler that interrupted the main
+    thread while it held the job store's lock, so a hook must not run there.
+    """
+
+    exit_process = _RecordedExit()
+    backstop = ShutdownBackstop(60.0, exit_process=exit_process, flush=_quiet)
+    ran: list[tuple[str, str]] = []
+    done = threading.Event()
+
+    def hook(reason: str) -> None:
+        ran.append((reason, threading.current_thread().name))
+        done.set()
+
+    backstop.on_begin(hook)
+    caller = threading.current_thread().name
+    started = time.monotonic()
+    backstop.begin("status window requested quit")
+
+    assert done.wait(5.0)
+    assert time.monotonic() - started < 1.0
+    assert ran == [("status window requested quit", ran[0][1])]
+    assert ran[0][1] != caller
+    backstop.exit_now("test finished")
+    assert exit_process.called.wait(5.0)
+
+
+def test_a_hook_that_raises_or_hangs_does_not_hold_the_exit() -> None:
+    exit_process = _RecordedExit()
+    hang = threading.Event()
+    second = threading.Event()
+    backstop = ShutdownBackstop(0.2, exit_process=exit_process, flush=_quiet)
+
+    def raises(_reason: str) -> None:
+        raise RuntimeError("the store is gone")
+
+    backstop.on_begin(raises)
+    backstop.on_begin(lambda _reason: second.set())
+    backstop.on_begin(lambda _reason: hang.wait(30))
+    started = time.monotonic()
+    try:
+        backstop.begin("a stop request")
+        assert second.wait(5.0), "a failing hook stopped the next one from running"
+        assert exit_process.called.wait(5.0)
+        assert exit_process.at is not None and exit_process.at - started < 2.0
+    finally:
+        hang.set()
+
+
+def test_a_hook_added_after_the_stop_began_still_runs() -> None:
+    exit_process = _RecordedExit()
+    backstop = ShutdownBackstop(60.0, exit_process=exit_process, flush=_quiet)
+    backstop.begin("a stop request")
+    ran = threading.Event()
+
+    backstop.on_begin(lambda _reason: ran.set())
+
+    assert ran.wait(5.0)
+    backstop.exit_now("test finished")
+    assert exit_process.called.wait(5.0)
+
+
+def test_lingering_threads_names_only_live_non_daemon_threads() -> None:
+    from server.platform.shutdown_backstop import lingering_threads
+
+    # Whatever earlier tests left running belongs to them, not to this check.
+    baseline = {thread.ident for thread in threading.enumerate()}
+    release = threading.Event()
+    stuck = threading.Thread(target=release.wait, args=(30,), name="stuck-native-call")
+    finishing = threading.Thread(target=time.sleep, args=(0.1,), name="finishing")
+    daemon = threading.Thread(target=release.wait, args=(30,), name="a-daemon", daemon=True)
+    for thread in (stuck, finishing, daemon):
+        thread.start()
+    try:
+        started = time.monotonic()
+        lingering = lingering_threads(0.5, ignore=baseline)
+        elapsed = time.monotonic() - started
+        assert [thread.name for thread in lingering] == ["stuck-native-call"]
+        assert elapsed < 2.0
+    finally:
+        release.set()
+        for thread in (stuck, finishing, daemon):
+            thread.join(5)
+
+    assert lingering_threads(0.5, ignore=baseline) == []

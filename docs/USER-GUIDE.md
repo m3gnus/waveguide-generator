@@ -233,12 +233,12 @@ computer's physical memory, at most 64 GiB. When the physical memory cannot be
 determined it is a conservative 4 GiB instead. The refusal message names the
 ceiling and where it came from, and the mesh statistics in the API response
 record it (`dense_solver_memory_limit_source`, for example
-`unknown-memory-default`). `WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES` sets it to an
-exact byte count for parametric designs. A value above physical memory, or
-above 4 GiB when physical memory is unknown, is refused unless
-`WG2_DENSE_SOLVER_MEMORY_LIMIT_UNSAFE=1` is also set. Imported CAD geometry is
-meshed in an isolated process that does not receive these variables, so it
-always uses the ceiling derived from physical memory.
+`unknown-memory-default`) and the probe that measured physical memory
+(`dense_solver_physical_memory_source`). `WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES`
+sets it to an exact byte count. A value above physical memory, or above 4 GiB
+when physical memory is unknown, is refused unless
+`WG2_DENSE_SOLVER_MEMORY_LIMIT_UNSAFE=1` is also set. Both variables apply to
+imported CAD geometry too: the isolated process that meshes it receives them.
 
 ## Files and exports
 

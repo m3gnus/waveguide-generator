@@ -14,6 +14,7 @@ import signal
 import socket
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -33,7 +34,6 @@ from launch.serve_options import (  # noqa: E402
     add_server_arguments,
 )
 from server.app import BUILD, create_app  # noqa: E402
-from server.mesh.gmsh_worker import gmsh_call_abandoned  # noqa: E402
 from server.platform.console import harden_console  # noqa: E402
 from server.platform.instance import (  # noqa: E402
     DEFAULT_PID_POLL_INTERVAL,
@@ -51,7 +51,11 @@ from server.platform.instance import (  # noqa: E402
 )
 from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
 from server.platform.paths import app_root, default_runs_dir, ensure_data_layout  # noqa: E402
-from server.platform.shutdown_backstop import ShutdownBackstop  # noqa: E402
+from server.platform.shutdown_backstop import ShutdownBackstop, lingering_threads  # noqa: E402
+from server.platform.temp_session import (  # noqa: E402
+    TemporarySession,
+    sweep_stale_temporary_directories,
+)
 from server.platform.signal_rearm import (  # noqa: E402
     register_signal_rearm,
     unregister_signal_rearm,
@@ -61,6 +65,10 @@ from scripts.migrate_v1 import MigrationError, auto_migrate_v1  # noqa: E402
 
 
 HOST = "127.0.0.1"
+#: After a stop's cleanup, how long the process's own threads get to finish
+#: before it ends without them. Idle executor workers told to stop need
+#: moments; one inside a native call would hold interpreter exit forever.
+LINGERING_JOIN_SECONDS = 0.5
 REPO_ROOT = app_root()
 SPA_STAMP = REPO_ROOT / "frontend" / "dist" / ".wg2-spa.json"
 VERSION_MANIFEST = REPO_ROOT / "shared" / "version.json"
@@ -591,6 +599,43 @@ def _capture_shutdown_signals(
             signal.signal(signum, handler)  # type: ignore[arg-type]
 
 
+def _start_temporary_session() -> TemporarySession | None:
+    """Give this process a temporary directory of its own, and sweep dead ones.
+
+    A stop during a build ends without cleanup, so whatever its
+    ``TemporaryDirectory`` held stays behind (``server/platform/temp_session.py``).
+    This start removes what dead processes left, and nothing a live one owns.
+    A failure here never stops the start: the process then writes where it
+    always did.
+    """
+
+    log = logging.getLogger("wg.launch")
+    base = Path(tempfile.gettempdir())
+    session: TemporarySession | None
+    try:
+        session = TemporarySession.create(base)
+    except OSError as exc:
+        log.warning(
+            "Could not create this process's own temporary directory in %s (%s); "
+            "writing there directly",
+            base,
+            exc,
+        )
+        session = None
+    else:
+        session.activate()
+    removed = sweep_stale_temporary_directories(
+        base, keep=session.path if session is not None else None
+    )
+    if removed:
+        log.info(
+            "Removed %d temporary director%s left by processes that did not exit cleanly",
+            len(removed),
+            "y" if len(removed) == 1 else "ies",
+        )
+    return session
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.data_dir is not None:
@@ -701,6 +746,12 @@ def main(argv: list[str] | None = None) -> int:
     # if cleanup outlives it (server/platform/shutdown_backstop.py). Only a stop
     # request arms it; building and serving are untouched.
     backstop = ShutdownBackstop()
+    # Threads that exist before this start serves are not its own. Only an
+    # in-process caller (a test) has any; see ``lingering_threads``.
+    preexisting_threads = {thread.ident for thread in threading.enumerate()}
+    # Before anything writes a temporary file, so all this process leaves
+    # behind is in one directory a later start can prove is dead.
+    temporary = _start_temporary_session()
     # Before the app, so the capability probe this start runs can already report
     # "provisioning" rather than "not provisioned". It only starts a thread.
     _start_beat_cpu_provisioning()
@@ -717,6 +768,14 @@ def main(argv: list[str] | None = None) -> int:
                 else None
             ),
         )
+        # ``getattr`` twice: an embedder's or a test's stand-in app need not
+        # carry Starlette's ``state`` at all.
+        jobs_runtime = getattr(getattr(app, "state", None), "jobs_runtime", None)
+        if jobs_runtime is not None:
+            # The first thing a stop does, on the backstop's thread: whatever
+            # ends this process during the budget, the next start reads its
+            # running jobs as interrupted by Quit, not as a crash.
+            backstop.on_begin(jobs_runtime.mark_running_interrupted_by_quit)
         config = uvicorn.Config(
             app,
             host=HOST,
@@ -824,12 +883,22 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             shutdown_complete.set()
             backstop.deactivate()
-            if backstop.begun and gmsh_call_abandoned():
+            lingering = (
+                lingering_threads(LINGERING_JOIN_SECONDS, ignore=preexisting_threads)
+                if backstop.begun
+                else []
+            )
+            if lingering:
                 # Cleanup is done. What remains is interpreter exit, which would
-                # join the gmsh thread still inside its OCC call and so wait out
-                # the budget for nothing. Everything it would still run is
-                # crash-safe.
-                backstop.exit_now("cleanup finished with a gmsh call still running")
+                # join these threads -- the gmsh worker inside an OCC call, a
+                # preview worker inside the mesher -- and so wait out the budget
+                # for nothing. Everything it would still run is crash-safe, and
+                # the temporary directory they may be writing in is left for the
+                # next start's sweep.
+                names = ", ".join(sorted(thread.name for thread in lingering))
+                backstop.exit_now(f"cleanup finished with {names} still running")
+            elif temporary is not None:
+                temporary.close(remove=True)
 
 
 if __name__ == "__main__":
