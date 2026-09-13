@@ -1228,7 +1228,7 @@ export function CadLinkCoordinator() {
         selectedFusionInstanceId,
       );
       if (request === fusionStatusRequest.current
-        && ['closed', 'addin_offline', 'no_document', 'not_linked', 'instance_selection_required', 'current', 'stale'].includes(next.state)) {
+        && ['closed', 'addin_offline', 'addin_outdated', 'no_document', 'not_linked', 'instance_selection_required', 'current', 'stale'].includes(next.state)) {
         setFusionStatus(next);
         fusionProcessLive.current = next.processRunning === true;
         // A heartbeat that keeps saying `closed` is the evidence for backing
@@ -1632,8 +1632,13 @@ export function CadLinkCoordinator() {
         }
         if (polarConfigStillCommitted(polarConfig)) recordCommittedAthPolars(polarConfig);
         if (result.identity) setCadLink(result.identity, 'current');
+        // Supersession is recorded where the user looks: an earlier update of
+        // this link that Fusion had not started was replaced by this one.
+        const superseded = result.cadHandoffSuperseded?.length
+          ? ' It replaced an earlier update Fusion had not started yet.'
+          : '';
         setStatus(target
-          ? `Update sent to Fusion 360 · sequence ${result.sequence}`
+          ? `Update sent to Fusion 360 · sequence ${result.sequence}.${superseded}`
           : `Opening in Fusion 360 · sequence ${result.sequence}`);
         await refresh();
       }

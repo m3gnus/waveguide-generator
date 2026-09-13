@@ -6,12 +6,14 @@ remounts or a listing revision arrives. A flag inside the evidence would be
 re-observed and re-solved. A separate request carrying its own command id can
 be recorded as spent exactly once, which is what makes the automatic path safe.
 
-Delivery. Fusion writes a command either into the legacy single slot
-(``.wg-solve-request.json``) or into its own file,
-``.wg-solve-requests/<commandId>.json``. Both resolve to one operation
-identity, the command id. Each delivered file is claimed by renaming it, read,
-persisted as a ``prepare_and_solve`` operation in the CAD operation store
-(``cad_operations`` in ``cadlink.db``), and only then deleted. From then on the
+Delivery. Fusion writes each command as its own file,
+``.wg-solve-requests/<commandId>.json``, with ``schemaVersion`` 3 (delivery
+version 3; docs/architecture/CAD-OPERATIONS.md). Each delivered file is claimed
+by renaming it, read, persisted as a ``prepare_and_solve`` operation in the CAD
+operation store (``cad_operations`` in ``cadlink.db``), and only then deleted.
+What a WGLink older than version 3 writes -- the single slot
+``.wg-solve-request.json``, or a version-2 file -- is refused visibly, with the
+remedy: WG installs the add-in it ships, and Fusion has to load it. From then on the
 store, not the file, is what WG hands out and records outcomes against. The
 ledger helpers below are the store's view, in the shape these routes have
 always returned. A command whose gates block is not terminal: it stays
@@ -44,14 +46,25 @@ if TYPE_CHECKING:
     from .store import CadLinkStore
 
 
-# The legacy single slot. A producer that predates per-command files replaces
-# it wholesale, so an unconsumed older command there can still be overwritten.
+# What a WGLink older than delivery version 3 writes: the single slot, and
+# version-2 files in the folder below. WG takes them only to refuse them.
 SOLVE_REQUEST_FILENAME = ".wg-solve-request.json"
 LEGACY_SCHEMA_VERSION = 1
+OLDER_SCHEMA_VERSION = 2
+_SLOT_SCHEMAS = frozenset({LEGACY_SCHEMA_VERSION})
+_FILE_SCHEMAS = frozenset({OLDER_SCHEMA_VERSION, 3})
 # One file per command, named <commandId>.json. A producer stages a file under
 # a name starting with "." (or not ending in .json) and renames it into place.
 SOLVE_REQUESTS_DIRECTORY = ".wg-solve-requests"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+OUTDATED_ADDIN_REASON = (
+    "This solve request came from a WGLink add-in older than this Waveguide "
+    "Generator, which it no longer accepts. Restart Fusion so it loads the WGLink "
+    "that WG installed, then use Solve in WG again."
+)
+# The submission key the browser gives a solve command's job. A job created
+# under it is that command's outcome, whatever request it carried.
+CAD_SOLVE_SUBMISSION_PREFIX = "cad-solve:"
 # A delivery is claimed by renaming it to this prefix in its own folder before
 # it is read, so a producer writing the same path afterwards writes a new file
 # rather than one the consumer is about to delete.
@@ -125,12 +138,12 @@ def legacy_ledger_path(data_dir: Path) -> Path:
 
 
 def _command_from_payload(
-    payload: object, path: Path, *, schema_version: int
+    payload: object, path: Path, *, schema_versions: frozenset[int]
 ) -> PendingSolveCommand | None:
     if not isinstance(payload, Mapping):
         return None
     if (
-        payload.get("schemaVersion") != schema_version
+        payload.get("schemaVersion") not in schema_versions
         or payload.get("target") != "waveguide-generator"
     ):
         return None
@@ -153,30 +166,18 @@ def _command_from_payload(
     )
 
 
-def _read_command(path: Path, *, schema_version: int) -> PendingSolveCommand | None:
+def _read_payload(path: Path) -> object:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return None
-    return _command_from_payload(payload, path, schema_version=schema_version)
-
-
-def read_solve_command(data_dir: Path) -> PendingSolveCommand | None:
-    """The command in the legacy single slot, left where it is.
-
-    None when there is none or it is malformed.
-    """
-
-    return _read_command(
-        ipc_folder(data_dir) / SOLVE_REQUEST_FILENAME, schema_version=LEGACY_SCHEMA_VERSION
-    )
 
 
 @dataclass(frozen=True)
 class _Delivery:
     path: Path
     claimed: bool
-    schema_version: int
+    schema_versions: frozenset[int]
     command: PendingSolveCommand
     age: tuple[str, int, str]
 
@@ -188,8 +189,10 @@ def _files(directory: Path) -> list[Path]:
         return []
 
 
-def _delivery(path: Path, *, claimed: bool, schema_version: int) -> _Delivery | None:
-    command = _read_command(path, schema_version=schema_version)
+def _delivery(
+    path: Path, *, claimed: bool, schema_versions: frozenset[int]
+) -> _Delivery | None:
+    command = _command_from_payload(_read_payload(path), path, schema_versions=schema_versions)
     if command is None:
         return None
     try:
@@ -197,34 +200,33 @@ def _delivery(path: Path, *, claimed: bool, schema_version: int) -> _Delivery | 
     except OSError:
         return None
     return _Delivery(
-        path, claimed, schema_version, command, (command.requested_at, modified, path.name)
+        path, claimed, schema_versions, command, (command.requested_at, modified, path.name)
     )
 
 
 def _deliveries(data_dir: Path) -> list[_Delivery]:
     """Every solve command waiting on disk, oldest first.
 
-    That is the legacy slot, the per-command files and any claim an
-    interrupted poll left behind. A file WG cannot read as a solve command --
-    malformed, a newer schema, or a producer's staging file -- is left where it
-    is. Age is the requested time, then the file's modification time.
+    That is the per-command files, what an older WGLink wrote (taken only to be
+    refused), and any claim an interrupted poll left behind. A file WG cannot
+    read as a solve command -- malformed, a newer schema, or a producer's
+    staging file -- is left where it is. Age is the requested time, then the
+    file's modification time.
     """
 
     folder = ipc_folder(data_dir)
     requests = folder / SOLVE_REQUESTS_DIRECTORY
     found: list[_Delivery | None] = []
-    for directory, version in ((folder, LEGACY_SCHEMA_VERSION), (requests, SCHEMA_VERSION)):
+    for directory, versions in ((folder, _SLOT_SCHEMAS), (requests, _FILE_SCHEMAS)):
         for path in _files(directory):
             if path.name.startswith(CLAIM_PREFIX) and path.suffix == ".json":
-                found.append(_delivery(path, claimed=True, schema_version=version))
+                found.append(_delivery(path, claimed=True, schema_versions=versions))
     found.append(
-        _delivery(
-            folder / SOLVE_REQUEST_FILENAME, claimed=False, schema_version=LEGACY_SCHEMA_VERSION
-        )
+        _delivery(folder / SOLVE_REQUEST_FILENAME, claimed=False, schema_versions=_SLOT_SCHEMAS)
     )
     for path in _files(requests):
         if not path.name.startswith(".") and path.suffix == ".json":
-            found.append(_delivery(path, claimed=False, schema_version=SCHEMA_VERSION))
+            found.append(_delivery(path, claimed=False, schema_versions=_FILE_SCHEMAS))
     return sorted((item for item in found if item is not None), key=lambda item: item.age)
 
 
@@ -333,6 +335,23 @@ def _persist(store: CadLinkStore, command: PendingSolveCommand) -> dict[str, Any
     return None
 
 
+def _refuse_outdated(store: CadLinkStore, command: PendingSolveCommand) -> dict[str, Any]:
+    """Refuse a command an older WGLink wrote, with the remedy, as its outcome."""
+
+    logger.warning(
+        "Refused solve command %r: it came from a WGLink older than delivery version %d.",
+        command.command_id,
+        SCHEMA_VERSION,
+    )
+    try:
+        return record_outcome(
+            store, command.command_id, state="refused", reason=OUTDATED_ADDIN_REASON,
+            command=command,
+        )
+    except SolveOutcomeConflict as exc:
+        return exc.existing
+
+
 def collect_solve_deliveries(data_dir: Path, store: CadLinkStore) -> dict[str, Any] | None:
     """Move delivered solve commands into the operation store, oldest first.
 
@@ -354,10 +373,20 @@ def collect_solve_deliveries(data_dir: Path, store: CadLinkStore) -> dict[str, A
             if claim is None:
                 continue
             # What the rename took is the request, not what was read before.
-            command = _read_command(claim, schema_version=delivery.schema_version)
+            payload = _read_payload(claim)
+            command = _command_from_payload(
+                payload, claim, schema_versions=delivery.schema_versions
+            )
             if command is None:
                 continue
-            answer = _persist(store, command)
+            outdated = isinstance(payload, Mapping) and payload.get("schemaVersion") != SCHEMA_VERSION
+            if outdated and store.get_operation(command.command_id) is None:
+                # An older add-in's command WG has never seen: refused, with
+                # the remedy. One the store already holds is a repeat delivery
+                # and is recovered or refused as any other.
+                answer = _refuse_outdated(store, command)
+            else:
+                answer = _persist(store, command)
             # A delete that fails leaves the claim for the next poll, which
             # recovers the same operation and answers it then.
             if _acknowledge(claim) and answer is not None:

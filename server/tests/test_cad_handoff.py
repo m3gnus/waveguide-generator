@@ -1,4 +1,4 @@
-"""The browser-to-Fusion delivery marker is scoped, complete, and atomic."""
+"""The browser-to-Fusion handoff is scoped, complete, atomic, and exact."""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from server.exports.cad_handoff import HANDOFF_FILENAME, publish_fusion_handoff
+from server.exports.cad_handoff import (
+    HANDOFFS_DIRECTORY,
+    UPDATE_TARGET_REQUIRED,
+    publish_fusion_handoff,
+)
 
 
 def _result(bundle: Path) -> dict[str, object]:
@@ -26,7 +30,7 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
     bundle = workspace / "wglink" / "horn.wglink"
     bundle.mkdir(parents=True)
 
-    marker = publish_fusion_handoff(
+    published = publish_fusion_handoff(
         data_dir,
         workspace,
         _result(bundle),
@@ -35,13 +39,14 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
         expected_return_state_hash="sha256:return-state",
     )
 
-    assert marker == data_dir / "ipc" / "wglink" / HANDOFF_FILENAME
-    payload = json.loads(marker.read_text())
-    assert payload["requestId"] and payload["operationId"] == payload["requestId"]
+    folder = data_dir / "ipc" / "wglink" / HANDOFFS_DIRECTORY
+    assert published.path == folder / f"{published.request_id}.json"
+    assert published.withdrawn == ()
+    payload = json.loads(published.path.read_text())
     assert payload == {
-        "schemaVersion": 1,
-        "requestId": payload["requestId"],
-        "operationId": payload["requestId"],
+        "schemaVersion": 3,
+        "requestId": published.request_id,
+        "operationId": published.request_id,
         "deliverySequence": 1,
         "target": "fusion360",
         "bundlePath": str(bundle),
@@ -55,23 +60,42 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
         "requestedAt": payload["requestedAt"],
     }
     assert payload["requestedAt"].endswith("Z")
-    assert list(marker.parent.glob(f"{HANDOFF_FILENAME}.*")) == []
+    # Staged under a hidden .tmp name and renamed: nothing else is left.
+    assert [path.name for path in folder.iterdir()] == [published.path.name]
+    assert not (data_dir / "ipc" / "wglink" / ".fusion-handoff.json").exists()
 
 
-def test_a_new_send_atomically_replaces_the_previous_marker(tmp_path: Path) -> None:
+def test_two_inserts_are_two_requests(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     workspace = tmp_path / "workspace"
     bundle = workspace / "wglink" / "horn.wglink"
     bundle.mkdir(parents=True)
     first = _result(bundle)
-    publish_fusion_handoff(data_dir, workspace, first)
+    earlier = publish_fusion_handoff(data_dir, workspace, first)
 
-    second = {**first, "exportId": "wge_new", "sequence": 5}
-    marker = publish_fusion_handoff(data_dir, workspace, second)
+    later = publish_fusion_handoff(data_dir, workspace, {**first, "exportId": "wge_new", "sequence": 5})
 
-    payload = json.loads(marker.read_text())
-    assert payload["exportId"] == "wge_new"
-    assert payload["sequence"] == 5
+    assert earlier.path.exists() and later.path.exists()
+    assert json.loads(later.path.read_text())["deliverySequence"] == 2
+
+
+def test_an_update_without_its_document_or_baseline_is_refused(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    bundle = workspace / "wglink" / "horn.wglink"
+    bundle.mkdir(parents=True)
+
+    for document_id, state in (("fusion:doc-a", None), (None, "sha256:state")):
+        with pytest.raises(ValueError) as refused:
+            publish_fusion_handoff(
+                tmp_path / "data",
+                workspace,
+                _result(bundle),
+                expected_document_id=document_id,
+                expected_instance_id="instance-b",
+                expected_return_state_hash=state,
+            )
+        assert str(refused.value) == UPDATE_TARGET_REQUIRED
+    assert not (tmp_path / "data" / "ipc" / "wglink" / HANDOFFS_DIRECTORY).exists()
 
 
 def test_handoff_refuses_a_bundle_outside_the_selected_workspace(
@@ -84,4 +108,4 @@ def test_handoff_refuses_a_bundle_outside_the_selected_workspace(
 
     with pytest.raises(ValueError, match="outside the selected workspace"):
         publish_fusion_handoff(tmp_path / "data", workspace, _result(outside))
-    assert not (tmp_path / "data" / "ipc" / "wglink" / HANDOFF_FILENAME).exists()
+    assert not (tmp_path / "data" / "ipc" / "wglink" / HANDOFFS_DIRECTORY).exists()

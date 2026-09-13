@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import threading
-from typing import Any, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -43,10 +43,12 @@ from server.workspace.archive import (
     reclaim_captured_documents,
 )
 
-from .fusion_status import fusion_process_running, read_fusion_status
+from .addin_update import last_refresh
+from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
 from .fusion_delivery import advertise_fusion_delivery
 from .fusion_return import publish_return_request
 from .solve_command import (
+    CAD_SOLVE_SUBMISSION_PREFIX,
     PendingSolveCommand,
     SolveOutcomeConflict,
     collect_solve_deliveries,
@@ -809,6 +811,11 @@ async def fusion_status(
         returned_bundle=returned_bundle,
         returned_manifest=returned_manifest,
     )
+    if status.get("state") == "addin_outdated":
+        # What startup did about it: installed or updated WG's own add-in (so a
+        # Fusion restart is the remedy), left another installation's alone, or
+        # failed -- the UI's prompt says which.
+        status["addinRefresh"] = last_refresh()
     status["cadFolderConfigured"] = selected is not None
     status["cadFolderPath"] = str(selected) if selected is not None else None
     status["cadConnectionIssue"] = None
@@ -855,6 +862,8 @@ async def request_fusion_return(
             status_code=409,
             detail="Fusion is running, but WGLink is offline. Restart WGLink in Fusion first.",
         )
+    if status.get("state") == "addin_outdated":
+        raise HTTPException(status_code=409, detail=ADDIN_OUTDATED_MESSAGE)
     link = status.get("link")
     if (
         status.get("documentId") != payload.document_id
@@ -865,6 +874,16 @@ async def request_fusion_return(
         raise HTTPException(
             status_code=409,
             detail="The active Fusion document changed. Refresh CAD Link and try again.",
+        )
+    if not payload.expected_return_state_hash:
+        # The add-in exports only the exact model WG displayed, which it proves
+        # against this token; without it there is nothing to prove.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Fusion has not reported the model's state yet. Refresh CAD Link, "
+                "wait for Fusion to report the model, and try again."
+            ),
         )
     _marker, request_id = await asyncio.to_thread(
         publish_return_request,
@@ -896,8 +915,22 @@ def _refuse_solve_command(
         return exc.existing
 
 
+def _accept_recovered_job(
+    store: CadLinkStore, command: PendingSolveCommand, job_id: str
+) -> dict[str, Any]:
+    """Record the job a command's submission key already created as its outcome."""
+
+    try:
+        return record_outcome(store, command.command_id, state="accepted", job_id=job_id)
+    except SolveOutcomeConflict as exc:
+        return exc.existing
+
+
 def _pending_solve_command(
-    data_dir: Path, workspace_root: Path, store: CadLinkStore
+    data_dir: Path,
+    workspace_root: Path,
+    store: CadLinkStore,
+    job_for_submission: Callable[[str], str | None] | None = None,
 ) -> dict[str, Any]:
     """The oldest CAD-authored solve command still owed an answer.
 
@@ -921,6 +954,19 @@ def _pending_solve_command(
     command = oldest_pending_solve_command(store)
     if command is None:
         return {"command": None}
+    if job_for_submission is not None:
+        job_id = job_for_submission(f"{CAD_SOLVE_SUBMISSION_PREFIX}{command.command_id}")
+        if job_id:
+            # Reconciliation through the submission key: the browser created
+            # this job and its report never arrived -- a lost acknowledgement, a
+            # reload, an upgrade. The job is the outcome. Handing the command
+            # out again would submit it twice, or, from a client that builds the
+            # request differently, meet a submission-key conflict and stay
+            # parked behind it.
+            return {
+                "command": command.payload(),
+                "outcome": _accept_recovered_job(store, command, job_id),
+            }
     try:
         segments = _path_segments(command.bundle_path, "bundlePath")
         if not segments or segments[0].casefold() != "wgreturn":
@@ -960,11 +1006,13 @@ async def get_solve_command(request: Request) -> dict[str, Any]:
     if selected is None:
         return {"command": None}
     store: CadLinkStore = request.app.state.cadlink_store
+    job_store = getattr(getattr(request.app.state, "jobs_runtime", None), "store", None)
     return await asyncio.to_thread(
         _pending_solve_command,
         Path(request.app.state.data_dir),
         selected.resolve(),
         store,
+        getattr(job_store, "job_for_submission_key", None),
     )
 
 

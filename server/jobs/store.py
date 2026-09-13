@@ -417,6 +417,21 @@ class JobStore:
             )
         return str(row["job_id"])
 
+    def job_for_submission_key(self, submission_key: str) -> str | None:
+        """The job a submission key created, whatever request it carried.
+
+        For a caller that owns the key's meaning and recovers by it: a CAD solve
+        command recovers its job through ``cad-solve:<commandId>`` even when a
+        newer client would build that command's request differently.
+        """
+
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                "SELECT job_id FROM job_submissions WHERE submission_key = ?",
+                (submission_key,),
+            ).fetchone()
+        return None if row is None else str(row["job_id"])
+
     def create_job_idempotent(
         self,
         job: Mapping[str, Any],

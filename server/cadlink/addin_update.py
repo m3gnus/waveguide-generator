@@ -11,15 +11,22 @@ does not move commit to commit, so it could not have noticed either.
 This closes that at startup, where the answer is cheap: compare the commit
 recorded in the installed add-in's marker with the pin, and update when they
 differ. A release ships the pinned package inside the app layer, so the update
-is a local file copy and needs no network. An absent add-in remains untouched
-on startup; the explicit platform-installer consent path can opt into a first
-install from that same verified package.
+is a local file copy and needs no network.
 
-Three installs are deliberately left alone, each for its own reason. One synced
-by ``dev_sync_wglink.py`` belongs to whoever is editing it. One with no WG
-marker was installed by something else. One whose marker names a different
-Waveguide Generator root is managed by that installation, and two WG copies
-fighting over a single add-in is the failure the marker exists to prevent.
+WG always uses the add-in it ships: WG and WGLink speak one delivery version
+and WG refuses an older add-in (docs/architecture/CAD-OPERATIONS.md, "Delivery
+version"). So startup also installs the shipped package where Fusion has no
+WGLink yet, and replaces a WGLink that no Waveguide Generator manages -- one
+copied in by hand, from before WG managed it. Both happen only where Fusion is
+installed for this user, and only from the verified package this build ships.
+
+Two installs are deliberately left alone, each for its own reason. One synced
+by ``dev_sync_wglink.py`` belongs to whoever is editing it. One whose marker
+names a different Waveguide Generator root is managed by that installation, and
+two WG copies fighting over a single add-in is the failure the marker exists to
+prevent. WG still refuses either while it is too old, and says why.
+
+``WG2_WGLINK_REFRESH=0`` turns the startup refresh off; the test suite sets it.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ from collections.abc import Mapping
 import importlib.util
 import json
 import logging
+import os
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -44,6 +52,11 @@ log = logging.getLogger("wg.cadlink.addin")
 #: repository. Its presence means a person is editing this install.
 DEV_MARKER = "wglink_dev.json"
 INSTALL_MARKER = "wglink_install.json"
+#: ``0`` turns the startup refresh off.
+REFRESH_ENV = "WG2_WGLINK_REFRESH"
+# The verdict of this process's startup refresh, for the status the UI shows
+# when Fusion is still running an older add-in.
+_last_refresh: tuple[str, str] | None = None
 
 
 def _installer(root: Path) -> ModuleType:
@@ -78,6 +91,25 @@ def installed_commit(target: Path) -> str | None:
         return None
     commit = payload.get("sourceCommit")
     return str(commit) if isinstance(commit, str) and commit else None
+
+
+def _other_manager(target: Path) -> str | None:
+    """The Waveguide Generator root another installation's marker names, if any."""
+
+    try:
+        payload = json.loads((target / INSTALL_MARKER).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if not isinstance(payload, Mapping) or payload.get("managedBy") != "waveguide-generator":
+        return None
+    other = payload.get("waveguideGeneratorRoot")
+    return str(other) if isinstance(other, str) and other else None
+
+
+def _fusion_installed(addins_dir: Path) -> bool:
+    """Whether Fusion is installed for this user: its API folder, or a process."""
+
+    return Path(addins_dir).expanduser().parent.is_dir() or fusion_process_running()
 
 
 def _verified_shipped_package(
@@ -119,16 +151,15 @@ def refresh_wglink(
     root: Path | None = None,
     addins_dir: Path | None = None,
     data_dir: Path | None = None,
-    install_absent: bool = False,
+    install_absent: bool = True,
 ) -> tuple[str, str]:
-    """Bring WG's managed add-in up to its pin. Never raises.
+    """Bring Fusion's WGLink up to the add-in this build ships. Never raises.
 
-    Returns ``(verdict, detail)``. The verdict is for tests and for the log
-    line; the detail is what a person reading that line needs. An absent
-    add-in is never installed on the ordinary startup path. Callers that own
-    the install consent may pass ``install_absent=True``; an implicit path
-    then requires Fusion to be running, while an explicit ``addins_dir`` is
-    treated as a test/setup override.
+    Returns ``(verdict, detail)``. The verdict is for tests, the log line and
+    the status the UI shows; the detail is what a person reading it needs. An
+    absent add-in is installed from the verified shipped package where Fusion
+    is installed for this user; ``install_absent=False`` leaves it absent. An
+    explicit ``addins_dir`` is treated as a test/setup override of that check.
     """
 
     root = (root or app_root()).resolve()
@@ -162,8 +193,8 @@ def refresh_wglink(
     if not target_present:
         if not install_absent:
             return "absent", "no WGLink is installed for Fusion; installation was not requested"
-        if not explicit_addins_dir and not fusion_process_running():
-            return "not-detected", "Fusion 360 is not running; WGLink was not installed"
+        if not explicit_addins_dir and not _fusion_installed(Path(directory)):
+            return "not-detected", "Fusion 360 is not installed for this user; WGLink was not installed"
         archive, package_error = _verified_shipped_package(root, installer, pin)
         if package_error is not None or archive is None:
             return "unavailable", package_error or "the bundled WGLink package is unavailable"
@@ -185,19 +216,26 @@ def refresh_wglink(
         return "external", f"{target} is an external WGLink target; left alone"
     if (target / DEV_MARKER).is_file():
         return "developer", f"{target} is a developer sync; left alone"
-    if not (target / "WGLink.py").is_file():
-        return "external", f"{target} is not a complete WGLink install; left alone"
-    if not installer.is_managed_target(target, root):
-        return "external", f"{target} is not managed by this Waveguide Generator"
-
-    current = installed_commit(target)
-    if current == pin:
-        return "current", f"WGLink is at the pinned {pin[:12]}"
+    replace_external = not installer.is_managed_target(target, root)
+    if replace_external:
+        other = _other_manager(target)
+        if other is not None:
+            return (
+                "external",
+                f"{target} is managed by another Waveguide Generator at {other}; left alone",
+            )
+        current = None
+    else:
+        current = installed_commit(target)
+        if current == pin:
+            return "current", f"WGLink is at the pinned {pin[:12]}"
 
     try:
         status, _installed = installer.install(
             root=root, addins_dir=Path(directory), data_dir=data_dir,
             python=Path(sys.executable),
+            # A WGLink no WG manages is replaced by the one this build ships.
+            replace_external=replace_external,
             # A packaged app must never turn startup reconciliation into a
             # network fetch. Source checkouts retain the existing fetch path.
             offline_only=bool(getattr(installer, "_bundled", lambda: False)()),
@@ -206,18 +244,37 @@ def refresh_wglink(
         return "failed", f"could not update WGLink to {pin[:12]}: {exc}"
     if status != "installed":
         return "failed", f"the WGLink installer returned {status!r}"
+    if replace_external:
+        return (
+            "replaced",
+            f"replaced a WGLink no Waveguide Generator managed with {pin[:12]}; restart Fusion",
+        )
     was = current[:12] if current else "an unrecorded commit"
     return "updated", f"updated WGLink from {was} to {pin[:12]}; restart Fusion"
 
 
 def refresh_and_log() -> tuple[str, str]:
-    verdict, detail = refresh_wglink()
-    # An update is news; everything else is the ordinary state of a machine and
+    global _last_refresh
+    if os.environ.get(REFRESH_ENV, "").strip() == "0":
+        verdict, detail = "disabled", f"{REFRESH_ENV}=0"
+    else:
+        verdict, detail = refresh_wglink()
+    _last_refresh = (verdict, detail)
+    # A change is news; everything else is the ordinary state of a machine and
     # belongs at debug so a normal start stays quiet.
-    (log.info if verdict in {"updated", "failed"} else log.debug)(
+    (log.info if verdict in {"updated", "installed", "replaced", "failed"} else log.debug)(
         "WGLink refresh: %s -- %s", verdict, detail
     )
     return verdict, detail
+
+
+def last_refresh() -> dict[str, str] | None:
+    """What this process's startup refresh did, or None before it finished."""
+
+    if _last_refresh is None:
+        return None
+    verdict, detail = _last_refresh
+    return {"verdict": verdict, "detail": detail}
 
 
 async def _refresh_off_thread() -> None:
@@ -249,6 +306,7 @@ async def shutdown_addin_refresh() -> None:
 __all__ = [
     "addin_refresh",
     "installed_commit",
+    "last_refresh",
     "pinned_commit",
     "refresh_and_log",
     "refresh_wglink",

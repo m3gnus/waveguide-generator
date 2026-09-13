@@ -40,6 +40,11 @@ from server.platform.paths import DATA_DIR_ENV
 # two apart.
 SANDBOX_DATA_DIR = Path(tempfile.mkdtemp(prefix="wg-test-data-"))
 os.environ[DATA_DIR_ENV] = str(SANDBOX_DATA_DIR)
+# Server startup brings Fusion's WGLink up to this build and installs it where
+# it is missing (server/cadlink/addin_update.py). A test run must never touch
+# the add-in of the person running it, so the startup refresh is off here;
+# tests of the refresh call it with an explicit add-ins folder.
+os.environ["WG2_WGLINK_REFRESH"] = "0"
 
 
 @pytest.fixture(scope="session", autouse=True)

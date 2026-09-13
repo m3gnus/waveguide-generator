@@ -17,6 +17,7 @@ import shutil
 import subprocess
 from typing import Any, Mapping
 
+from server.cadlink.fusion_delivery import DELIVERY_VERSION, addin_delivery_version
 from server.platform.process import background_process_kwargs
 
 
@@ -27,6 +28,10 @@ _MAX_STATUS_BYTES = 256 * 1024
 _LEGACY_SIGNATURE_EXPLANATION = (
     "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
     "and carries no document signature"
+)
+ADDIN_OUTDATED_MESSAGE = (
+    "Fusion is running a WGLink add-in older than this Waveguide Generator. Restart "
+    "Fusion so it loads the WGLink that WG installed, then try again."
 )
 _SCOPED_SELECTION_EXPLANATION = (
     "stale detection unavailable: this return covers a selected assembly "
@@ -194,6 +199,27 @@ def _returned_document_summary(
     return body_count, _fingerprint_hash(sources)
 
 
+def _recovery_required(value: object) -> dict[str, Any] | None:
+    """The WG operation the document is marked as applying, if any.
+
+    The add-in marks an operation before its first write and clears the mark
+    after the operation's evidence. The heartbeat is not published while an
+    operation runs, so a mark seen here began and did not finish.
+    """
+
+    if not isinstance(value, Mapping):
+        return None
+    operation_id = _string(value.get("operationId"))
+    if operation_id is None:
+        return None
+    return {
+        "operationId": operation_id,
+        "kind": _string(value.get("kind")),
+        "instanceId": _string(value.get("instanceId")),
+        "exportId": _string(value.get("exportId")),
+    }
+
+
 def _link_payload(value: object) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
@@ -287,6 +313,8 @@ def read_fusion_status(
         "documentChanged": False,
         "documentChangeDetectable": False,
         "staleDetectionExplanation": None,
+        "addinDeliveryVersion": None,
+        "recoveryRequired": None,
     }
     try:
         if marker.is_symlink() or not marker.is_file():
@@ -319,6 +347,12 @@ def read_fusion_status(
         "workspaceRoot": _string(payload.get("workspaceRoot")),
         "updatedAt": updated_at.isoformat().replace("+00:00", "Z"),
     }
+    delivery = addin_delivery_version(payload)
+    base["addinDeliveryVersion"] = delivery
+    if delivery is None or delivery < DELIVERY_VERSION:
+        # There is no route to an older add-in: WG installs the one it ships,
+        # and until Fusion loads that one nothing is exchanged with this one.
+        return {**base, "state": "addin_outdated"}
     document = payload.get("document")
     if document is None:
         return {**base, "state": "no_document"}
@@ -338,6 +372,7 @@ def read_fusion_status(
     )
     base["documentName"] = document_name
     base["documentId"] = document_id
+    base["recoveryRequired"] = _recovery_required(document.get("applyingOperation"))
 
     matching = [link for link in links if design_id and link.get("designId") == design_id]
     if not matching and design_id is None:
@@ -449,6 +484,7 @@ def read_fusion_status(
 
 
 __all__ = [
+    "ADDIN_OUTDATED_MESSAGE",
     "FUSION_STATUS_FILENAME",
     "FUSION_STATUS_TTL",
     "fusion_process_running",

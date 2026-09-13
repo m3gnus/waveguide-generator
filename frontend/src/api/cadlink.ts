@@ -87,7 +87,7 @@ export interface CadLinkedDesignSnapshot {
   text: string;
 }
 
-export type FusionCadState = 'closed' | 'addin_offline' | 'no_document' | 'not_linked' | 'instance_selection_required' | 'current' | 'stale';
+export type FusionCadState = 'closed' | 'addin_offline' | 'addin_outdated' | 'no_document' | 'not_linked' | 'instance_selection_required' | 'current' | 'stale';
 
 export interface FusionCadLink {
   instanceId: string;
@@ -110,6 +110,21 @@ export interface FusionCadLink {
   sourceStateHash: string | null;
   exportId: string | null;
   exportSequence: string | null;
+}
+
+/** A WG operation the linked document is marked as applying: it began changing
+ * the model and did not finish, so the add-in will not repeat it. */
+export interface FusionRecoveryRequired {
+  operationId: string;
+  kind: string | null;
+  instanceId: string | null;
+  exportId: string | null;
+}
+
+/** What WG's startup did about Fusion's WGLink (server/cadlink/addin_update.py). */
+export interface WgLinkRefreshReport {
+  verdict: string;
+  detail: string;
 }
 
 export type CadRealizedDimensionsState = 'no_link' | 'link_unavailable' | 'export_missing' | 'not_captured' | 'unavailable' | 'current' | 'stale';
@@ -155,6 +170,11 @@ export interface FusionCadStatus {
   documentChanged: boolean;
   documentChangeDetectable: boolean;
   staleDetectionExplanation: string | null;
+  /** The delivery version the add-in reports; below WG's, the state is `addin_outdated`. */
+  addinDeliveryVersion?: number | null;
+  recoveryRequired?: FusionRecoveryRequired | null;
+  /** Present with `addin_outdated`: what startup did, so the prompt names the remedy. */
+  addinRefresh?: WgLinkRefreshReport | null;
   realizedDimensions: CadRealizedDimensions;
 }
 

@@ -207,6 +207,7 @@ def test_subtree_return_disables_root_document_stale_comparisons(tmp_path: Path)
             {
                 "schemaVersion": 1,
                 "cadApplication": "fusion360",
+                "deliveryVersion": 3,
                 "updatedAt": now.isoformat().replace("+00:00", "Z"),
                 "document": {
                     "name": "Scoped assembly",

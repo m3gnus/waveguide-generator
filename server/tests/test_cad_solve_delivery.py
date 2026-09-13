@@ -1,8 +1,9 @@
 """Solve-command delivery through the CAD operation store.
 
-Fusion delivers a solve command either as the legacy single-slot marker or as a
-per-command file. Both resolve to one operation identity, the command id, and a
-consumer deletes only the file it consumed, after the store holds the operation.
+Fusion delivers each solve command as its own file (delivery version 3). The
+command id is the operation identity, and a consumer deletes only the file it
+consumed, after the store holds the operation. What an older WGLink writes --
+the single slot, or a version-2 file -- is refused with the remedy.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from server.cadlink.store import CadLinkStore
 
 LEGACY = ".wg-solve-request.json"
 V2_DIR = ".wg-solve-requests"
+OLDER_ADDIN = "older than this Waveguide Generator"
 
 
 @pytest.fixture
@@ -63,7 +65,7 @@ def _bundle(workspace, name="speaker.wgreturn", body=b'{"document": {}}') -> tup
 
 
 def _payload(
-    command_id, bundle_path, manifest, *, schema=1, requested_at="2026-09-13T01:00:00Z", **extra
+    command_id, bundle_path, manifest, *, schema=3, requested_at="2026-09-13T01:00:00Z", **extra
 ):
     payload = {
         "schemaVersion": schema,
@@ -86,16 +88,18 @@ def _atomic_write(path: Path, payload) -> None:
 
 
 def _legacy(data_dir, command_id, bundle_path, manifest, **kwargs) -> Path:
+    """The single slot a WGLink older than delivery version 3 wrote."""
+
     path = _ipc(data_dir) / LEGACY
-    _atomic_write(path, _payload(command_id, bundle_path, manifest, **kwargs))
+    _atomic_write(path, _payload(command_id, bundle_path, manifest, schema=1, **kwargs))
     return path
 
 
-def _v2(data_dir, command_id, bundle_path, manifest, **kwargs) -> Path:
+def _file(data_dir, command_id, bundle_path, manifest, *, schema=3, **kwargs) -> Path:
     folder = _ipc(data_dir) / V2_DIR
     folder.mkdir(exist_ok=True)
     path = folder / f"{command_id}.json"
-    _atomic_write(path, _payload(command_id, bundle_path, manifest, schema=2, **kwargs))
+    _atomic_write(path, _payload(command_id, bundle_path, manifest, schema=schema, **kwargs))
     return path
 
 
@@ -142,7 +146,7 @@ def test_a_newer_marker_written_during_the_acknowledgement_survives(
     data_dir, workspace, store, monkeypatch
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    _legacy(data_dir, "cmd-1", bundle_path, manifest)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
     folder = _ipc(data_dir).resolve()
     original_unlink = Path.unlink
     injected: list[str] = []
@@ -152,7 +156,7 @@ def test_a_newer_marker_written_during_the_acknowledgement_survives(
         # of cmd-1 and its delete.
         if not injected and folder in Path(self).resolve().parents:
             injected.append(str(self))
-            _legacy(data_dir, "cmd-2", bundle_path, manifest, requested_at="2026-09-13T01:00:05Z")
+            _file(data_dir, "cmd-2", bundle_path, manifest, requested_at="2026-09-13T01:00:05Z")
         return original_unlink(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", unlink_after_a_newer_marker_lands)
@@ -170,12 +174,14 @@ def test_a_newer_marker_written_during_the_acknowledgement_survives(
     assert store.get_operation("cmd-2")["state"] == "received"
 
 
-def test_one_command_delivered_in_both_formats_is_one_operation(
+def test_one_command_delivered_twice_is_one_operation(
     data_dir, workspace, store
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    _legacy(data_dir, "cmd-1", bundle_path, manifest)
-    _v2(data_dir, "cmd-1", bundle_path, manifest, operationId="cmd-1")
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+    first = _poll(data_dir, workspace, store)
+    assert (first["command"]["commandId"], first["outcome"]) == ("cmd-1", None)
+    _file(data_dir, "cmd-1", bundle_path, manifest, operationId="cmd-1")
 
     result = _poll(data_dir, workspace, store)
 
@@ -195,11 +201,11 @@ def test_a_duplicate_after_the_outcome_replays_it_instead_of_running_again(
     data_dir, workspace, store
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    _v2(data_dir, "cmd-1", bundle_path, manifest)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
     assert _poll(data_dir, workspace, store)["command"]["commandId"] == "cmd-1"
     _report(data_dir, store, "cmd-1", "accepted", jobId="job-1")
     before = _raw(data_dir, "cmd-1")
-    _legacy(data_dir, "cmd-1", bundle_path, manifest)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
 
     result = _poll(data_dir, workspace, store)
 
@@ -213,10 +219,10 @@ def test_a_different_request_under_a_held_id_is_refused_and_leaves_the_operation
     data_dir, workspace, store, caplog
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    _v2(data_dir, "cmd-1", bundle_path, manifest)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
     assert _poll(data_dir, workspace, store)["command"]["commandId"] == "cmd-1"
     before = _raw(data_dir, "cmd-1")
-    conflicting = _v2(data_dir, "cmd-1", bundle_path, "sha256:" + "b" * 64)
+    conflicting = _file(data_dir, "cmd-1", bundle_path, "sha256:" + "b" * 64)
 
     with caplog.at_level(logging.WARNING):
         result = _poll(data_dir, workspace, store)
@@ -237,7 +243,7 @@ def test_a_refused_conflict_never_ends_the_held_command_for_the_client(
     data_dir, workspace, store
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    _v2(data_dir, "cmd-1", bundle_path, manifest)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
     # The client's rule: an outcome under a command id ends that command, and
     # an ended command handed out again is ignored.
     ended: set[str] = set()
@@ -249,8 +255,8 @@ def test_a_refused_conflict_never_ends_the_held_command_for_the_client(
         return result
 
     assert client_poll()["command"]["commandId"] == "cmd-1"
-    _v2(data_dir, "cmd-1", bundle_path, "sha256:" + "b" * 64)
-    _legacy(data_dir, "cmd-2", bundle_path, manifest, requested_at="2026-09-13T01:00:05Z")
+    _file(data_dir, "cmd-1", bundle_path, "sha256:" + "b" * 64)
+    _file(data_dir, "cmd-2", bundle_path, manifest, requested_at="2026-09-13T01:00:05Z")
 
     assert client_poll()["command"]["commandId"] == "cmd-1"
     assert "cmd-1" not in ended
@@ -265,7 +271,7 @@ def test_a_crash_between_claim_and_persist_is_recovered_on_the_next_poll(
     data_dir, workspace, store, monkeypatch
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    marker = _legacy(data_dir, "cmd-1", bundle_path, manifest)
+    marker = _file(data_dir, "cmd-1", bundle_path, manifest)
     real_accept = CadLinkStore.accept_operation
 
     def backend_stops(self, *args, **kwargs):
@@ -292,7 +298,7 @@ def test_a_failed_delete_after_persisting_recovers_the_same_operation(
     data_dir, workspace, store, monkeypatch
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    _v2(data_dir, "cmd-1", bundle_path, manifest)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
     original_unlink = Path.unlink
     refused: list[str] = []
 
@@ -317,7 +323,7 @@ def test_a_marker_the_writer_still_holds_is_retried_on_the_next_poll(
     data_dir, workspace, store, monkeypatch
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    marker = _legacy(data_dir, "cmd-1", bundle_path, manifest)
+    marker = _file(data_dir, "cmd-1", bundle_path, manifest)
     real_rename = os.rename
     held: list[str] = []
 
@@ -346,9 +352,9 @@ def test_two_per_command_files_are_surfaced_oldest_first_and_neither_is_lost(
     bundle_path, manifest = _bundle(workspace)
     # The age order is cmd-2, cmd-1, cmd-3: neither name order, nor the write
     # order, nor newest first.
-    _v2(data_dir, "cmd-3", bundle_path, manifest, requested_at="2026-09-13T01:00:10Z")
-    _v2(data_dir, "cmd-1", bundle_path, manifest, requested_at="2026-09-13T01:00:05Z")
-    _v2(data_dir, "cmd-2", bundle_path, manifest, requested_at="2026-09-13T01:00:00Z")
+    _file(data_dir, "cmd-3", bundle_path, manifest, requested_at="2026-09-13T01:00:10Z")
+    _file(data_dir, "cmd-1", bundle_path, manifest, requested_at="2026-09-13T01:00:05Z")
+    _file(data_dir, "cmd-2", bundle_path, manifest, requested_at="2026-09-13T01:00:00Z")
 
     first = _poll(data_dir, workspace, store)
     assert (first["command"]["commandId"], first["outcome"]) == ("cmd-2", None)
@@ -373,10 +379,10 @@ def test_an_operation_accepted_earlier_stays_ahead_of_a_later_delivery(
     data_dir, workspace, store
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    _v2(data_dir, "cmd-1", bundle_path, manifest, requested_at="2026-09-13T02:00:00Z")
+    _file(data_dir, "cmd-1", bundle_path, manifest, requested_at="2026-09-13T02:00:00Z")
     assert _poll(data_dir, workspace, store)["command"]["commandId"] == "cmd-1"
     # Delivered afterwards, even though its producer stamped an older time.
-    _legacy(data_dir, "cmd-2", bundle_path, manifest, requested_at="2026-09-13T01:00:00Z")
+    _file(data_dir, "cmd-2", bundle_path, manifest, requested_at="2026-09-13T01:00:00Z")
 
     assert _poll(data_dir, workspace, store)["command"]["commandId"] == "cmd-1"
     assert _operation_ids(data_dir) == ["cmd-1", "cmd-2"]
@@ -389,13 +395,13 @@ def test_files_wg_cannot_read_are_left_in_place_and_block_nothing(
     folder = _ipc(data_dir) / V2_DIR
     folder.mkdir()
     future = folder / "cmd-9.json"
-    future.write_text(json.dumps(_payload("cmd-9", bundle_path, manifest, schema=3)))
+    future.write_text(json.dumps(_payload("cmd-9", bundle_path, manifest, schema=4)))
     torn = folder / "cmd-8.json"
     torn.write_text("{", encoding="utf-8")
-    mismatched = _v2(data_dir, "cmd-7", bundle_path, manifest, operationId="cmd-other")
+    mismatched = _file(data_dir, "cmd-7", bundle_path, manifest, operationId="cmd-other")
     staging = folder / ".cmd-6.json.tmp"
     staging.write_text(json.dumps(_payload("cmd-6", bundle_path, manifest, schema=2)))
-    _v2(data_dir, "cmd-1", bundle_path, manifest)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
 
     result = _poll(data_dir, workspace, store)
 
@@ -408,10 +414,10 @@ def test_an_outcome_for_a_held_operation_ignores_a_conflicting_file_still_waitin
     data_dir, workspace, store
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
-    _v2(data_dir, "cmd-1", bundle_path, manifest)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
     assert _poll(data_dir, workspace, store)["command"]["commandId"] == "cmd-1"
     # A conflicting redelivery lands before the browser reports its result.
-    _v2(data_dir, "cmd-1", bundle_path, "sha256:" + "c" * 64)
+    _file(data_dir, "cmd-1", bundle_path, "sha256:" + "c" * 64)
 
     entry = _report(data_dir, store, "cmd-1", "accepted", jobId="job-1")
 
@@ -444,3 +450,88 @@ def test_operations_can_be_listed_oldest_first(store) -> None:
     listed = store.list_operations(oldest_first=True)
 
     assert [row["operation_id"] for row in listed] == ["cmd-z", "cmd-y", "cmd-x"]
+
+
+@pytest.mark.parametrize("writer", ["single-slot", "version-2-file"])
+def test_a_command_from_an_older_addin_is_refused_with_the_remedy(
+    data_dir, workspace, store, writer
+) -> None:
+    """Decision 4: the legacy route is gone, and nothing is silently dropped.
+
+    A WGLink older than delivery version 3 writes the single slot, or a
+    version-2 file. WG answers it with a refusal that names the remedy, which
+    the browser shows, and records it; it is never run.
+    """
+
+    bundle_path, manifest = _bundle(workspace)
+    if writer == "single-slot":
+        delivered = _legacy(data_dir, "cmd-old", bundle_path, manifest)
+    else:
+        delivered = _file(data_dir, "cmd-old", bundle_path, manifest, schema=2)
+
+    result = _poll(data_dir, workspace, store)
+
+    assert result["command"]["commandId"] == "cmd-old"
+    assert result["outcome"]["state"] == "refused"
+    assert OLDER_ADDIN in result["outcome"]["reason"]
+    assert "Restart Fusion" in result["outcome"]["reason"]
+    assert not delivered.exists() and _delivery_files(data_dir) == []
+    assert store.get_operation("cmd-old")["state"] == "rejected"
+    assert _poll(data_dir, workspace, store) == {"command": None}
+
+
+def test_an_older_addins_repeat_of_a_held_command_does_not_end_it(
+    data_dir, workspace, store
+) -> None:
+    """Refusing the old format must not refuse an operation WG already holds."""
+
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+    assert _poll(data_dir, workspace, store)["command"]["commandId"] == "cmd-1"
+    _legacy(data_dir, "cmd-1", bundle_path, manifest)
+
+    result = _poll(data_dir, workspace, store)
+
+    assert (result["command"]["commandId"], result["outcome"]) == ("cmd-1", None)
+    assert store.get_operation("cmd-1")["state"] == "received"
+
+
+def test_a_command_whose_job_already_exists_is_reconciled_not_handed_out_again(
+    data_dir, workspace, store
+) -> None:
+    """The parked-command 409 (WP-14's compatibility edge), closed at the source.
+
+    The browser created the job under ``cad-solve:<commandId>`` and its report
+    never arrived -- a lost acknowledgement, a reload, an upgrade. Handing the
+    command out again made the browser submit it again; a client that builds
+    the request differently (``engine: 'auto'`` where an older one sent
+    ``'metal'``) then met ``submission_key_conflict`` and stayed parked. The job
+    is the command's outcome: WG records it and answers with it.
+    """
+
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+    assert _poll(data_dir, workspace, store)["command"]["commandId"] == "cmd-1"
+    jobs = {"cad-solve:cmd-1": "job-7"}
+
+    result = _pending_solve_command(data_dir, workspace.resolve(), store, jobs.get)
+
+    assert result["command"]["commandId"] == "cmd-1"
+    assert (result["outcome"]["state"], result["outcome"]["jobId"]) == ("accepted", "job-7")
+    assert store.get_operation("cmd-1")["job_id"] == "job-7"
+    # Nothing is handed out again, and a later report of the same job agrees.
+    assert _pending_solve_command(data_dir, workspace.resolve(), store, jobs.get) == {
+        "command": None
+    }
+    assert _report(data_dir, store, "cmd-1", "accepted", jobId="job-7")["state"] == "accepted"
+
+
+def test_a_command_with_no_job_under_its_key_is_handed_out_as_before(
+    data_dir, workspace, store
+) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+
+    result = _pending_solve_command(data_dir, workspace.resolve(), store, {}.get)
+
+    assert (result["command"]["commandId"], result["outcome"]) == ("cmd-1", None)

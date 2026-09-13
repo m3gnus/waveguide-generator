@@ -1,4 +1,4 @@
-"""WGLink is reconciled with this build's pin, and three installs are not."""
+"""WGLink is always the add-in this build ships, except two installs that are not WG's to change."""
 
 from __future__ import annotations
 
@@ -91,19 +91,90 @@ def test_an_add_in_managed_by_another_wg_installation_is_left_alone(tmp_path: Pa
     assert addin_update.refresh_wglink(root=root, addins_dir=addins)[0] == "external"
 
 
-def test_an_add_in_with_no_marker_is_left_alone(tmp_path: Path) -> None:
+def _recording_installer(monkeypatch, addins: Path, calls: list[dict[str, object]]) -> None:
+    real = addin_update._installer
+
+    def recording(root_path: Path):
+        module = real(root_path)
+        module.default_addins_dir = lambda _platform: addins
+
+        def install(**kwargs):
+            calls.append(kwargs)
+            target = addins / "WGLink"
+            target.mkdir(parents=True, exist_ok=True)
+            return "installed", target
+
+        module.install = install
+        return module
+
+    monkeypatch.setattr(addin_update, "_installer", recording)
+
+
+def test_an_add_in_no_waveguide_generator_manages_is_replaced(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Decision 4: WG always uses the add-in it ships.
+
+    A WGLink with no WG marker was copied in by hand, before WG managed it; it
+    is too old for this WG to talk to. Leaving it would leave the user with a
+    refusal and no way out, so it is replaced from this build's package.
+    """
+
     root = _wg_root(tmp_path, "a" * 40)
     addins = tmp_path / "AddIns"
     _installed(addins, commit=None, root=None)
+    calls: list[dict[str, object]] = []
+    _recording_installer(monkeypatch, addins, calls)
 
-    assert addin_update.refresh_wglink(root=root, addins_dir=addins)[0] == "external"
+    verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
+
+    assert verdict == "replaced"
+    assert "restart Fusion" in detail
+    assert calls and calls[0]["replace_external"] is True
 
 
-def test_nothing_is_installed_when_fusion_has_no_add_in(tmp_path: Path) -> None:
-    """Startup does not silently cross the install-consent boundary."""
+def test_an_absent_add_in_stays_absent_only_when_asked(tmp_path: Path) -> None:
+    root = _wg_root(tmp_path, "a" * 40)
+
+    assert addin_update.refresh_wglink(
+        root=root, addins_dir=tmp_path / "AddIns", install_absent=False
+    )[0] == "absent"
+
+
+def test_startup_installs_an_absent_add_in_where_fusion_is_installed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Fusion need not be running: its API folder says it is installed."""
 
     root = _wg_root(tmp_path, "a" * 40)
-    assert addin_update.refresh_wglink(root=root, addins_dir=tmp_path / "AddIns")[0] == "absent"
+    addins = tmp_path / "Autodesk Fusion" / "API" / "AddIns"
+    addins.parent.mkdir(parents=True)
+    archive = tmp_path / "wglink.zip"
+    calls: list[dict[str, object]] = []
+    _recording_installer(monkeypatch, addins, calls)
+    monkeypatch.setattr(addin_update, "fusion_process_running", lambda: False)
+    monkeypatch.setattr(addin_update, "_verified_shipped_package", lambda *_args: (archive, None))
+
+    verdict, _detail = addin_update.refresh_wglink(root=root)
+
+    assert verdict == "installed"
+    assert calls and calls[0]["archive_path"] == archive
+
+
+def test_the_startup_refresh_can_be_turned_off_and_reports_what_it_did(
+    tmp_path: Path, monkeypatch
+) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(addin_update, "refresh_wglink", lambda: seen.append("ran") or ("updated", "x"))
+
+    monkeypatch.setenv("WG2_WGLINK_REFRESH", "0")
+    assert addin_update.refresh_and_log()[0] == "disabled"
+    assert seen == []
+    assert addin_update.last_refresh() == {"verdict": "disabled", "detail": "WG2_WGLINK_REFRESH=0"}
+
+    monkeypatch.setenv("WG2_WGLINK_REFRESH", "1")
+    assert addin_update.refresh_and_log() == ("updated", "x")
+    assert addin_update.last_refresh() == {"verdict": "updated", "detail": "x"}
 
 
 def test_startup_recovers_a_managed_target_after_a_crash_moved_it_to_backup(
@@ -188,9 +259,10 @@ def test_an_explicit_first_install_uses_only_the_verified_shipped_package(
     assert calls and calls[0]["archive_path"] == archive
 
 
-def test_an_implicit_first_install_requires_a_running_fusion(tmp_path: Path, monkeypatch) -> None:
+def test_an_implicit_first_install_requires_fusion_to_be_installed(tmp_path: Path, monkeypatch) -> None:
     root = _wg_root(tmp_path, "a" * 40)
-    addins = tmp_path / "AddIns"
+    # No Fusion folder for this user at all, and no Fusion process.
+    addins = tmp_path / "no-fusion" / "API" / "AddIns"
     real = addin_update._installer
 
     def recording(root_path: Path):
@@ -204,7 +276,7 @@ def test_an_implicit_first_install_requires_a_running_fusion(tmp_path: Path, mon
     verdict, detail = addin_update.refresh_wglink(root=root, install_absent=True)
 
     assert verdict == "not-detected"
-    assert "not running" in detail
+    assert "not installed" in detail
 
 
 def test_a_verified_package_failure_is_reported_without_installing(tmp_path: Path, monkeypatch) -> None:

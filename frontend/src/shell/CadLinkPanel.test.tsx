@@ -400,6 +400,38 @@ describe('CadLinkPanel', () => {
     }).detail).toContain(staleDetectionExplanation);
   });
 
+  it('refuses an add-in older than WG with the remedy startup left', () => {
+    // Nothing the older add-in reports about the document is acted on, and the
+    // prompt names what WG already did: installed its own, or could not.
+    const outdated = { ...currentFusion, state: 'addin_outdated' as const };
+    expect(fusionWorkflowView({
+      ...outdated, addinRefresh: { verdict: 'updated', detail: 'updated WGLink; restart Fusion' },
+    })).toMatchObject({
+      state: 'addin-outdated', headline: 'WGLink add-in is out of date', action: null,
+    });
+    expect(fusionWorkflowView({
+      ...outdated, addinRefresh: { verdict: 'updated', detail: '' },
+    }).detail).toContain('Restart Fusion 360 to load it');
+    expect(fusionWorkflowView({
+      ...outdated, addinRefresh: { verdict: 'failed', detail: 'the bundled WGLink package is missing' },
+    }).detail).toContain('the bundled WGLink package is missing');
+    expect(fusionWorkflowView({
+      ...outdated, addinRefresh: { verdict: 'external', detail: 'managed by another Waveguide Generator' },
+    }).detail).toContain('another Waveguide Generator installation');
+    expect(fusionWorkflowView({ ...outdated, addinRefresh: null }).detail).toContain('Restart Fusion 360');
+  });
+
+  it('says an interrupted update needs recovery before anything else about the link', () => {
+    expect(fusionWorkflowView({
+      ...currentFusion,
+      recoveryRequired: { operationId: 'req-9', kind: 'update', instanceId: 'instance-a', exportId: 'wge_4' },
+    })).toMatchObject({
+      state: 'recovery-required',
+      headline: expect.stringContaining('Update interrupted — recovery required'),
+      action: 'update',
+    });
+  });
+
   it('maps Onshape link state to one explicit action', () => {
     const credentials = { configured: true, credentialsPath: '/home/x/.config/hornlab/onshape.env', detail: null, insecureKeyFile: false };
     const link: OnshapeLink = {

@@ -4,7 +4,7 @@ import type { OnshapeStatus } from '../api/onshape';
 /** Shared by the CAD Link panel, the rail card, and the coordinator's send
  * path, so every surface derives the same outbound action from one status. */
 export interface CadWorkflowView {
-  state: 'checking' | 'closed' | 'addin-offline' | 'no-document' | 'not-linked' | 'instance-selection' | 'current' | 'stale' | 'not-configured';
+  state: 'checking' | 'closed' | 'addin-offline' | 'addin-outdated' | 'recovery-required' | 'no-document' | 'not-linked' | 'instance-selection' | 'current' | 'stale' | 'not-configured';
   headline: string;
   detail: string;
   action: 'open' | 'update' | null;
@@ -62,6 +62,25 @@ function explainedStaleDetail(status: FusionCadStatus, detail: string): string {
   return explanation ? `${detail} ${explanation}` : detail;
 }
 
+/** The remedy for an add-in older than WG, from what WG's startup did about it. */
+function outdatedAddinDetail(status: FusionCadStatus): string {
+  const refresh = status.addinRefresh;
+  const verdict = refresh?.verdict ?? null;
+  if (verdict === 'updated' || verdict === 'installed' || verdict === 'replaced' || verdict === 'current') {
+    return 'WG has installed the WGLink add-in that matches it. Restart Fusion 360 to load it; until then WG and Fusion exchange nothing.';
+  }
+  if (verdict === 'external') {
+    return `Fusion's WGLink belongs to another Waveguide Generator installation, which is older than this one. Update or remove that installation, then restart Fusion 360. (${refresh?.detail ?? ''})`;
+  }
+  if (verdict === 'developer') {
+    return 'Fusion is running a developer copy of WGLink that is older than this Waveguide Generator. Sync it again, then restart WGLink in Fusion.';
+  }
+  if (verdict === 'failed' || verdict === 'unavailable' || verdict === 'not-detected') {
+    return `WG could not install the WGLink add-in that matches it: ${refresh?.detail ?? 'no detail'}. Reinstall Waveguide Generator, then restart Fusion 360.`;
+  }
+  return 'Restart Fusion 360 so it loads the WGLink add-in that this Waveguide Generator installed. Until then WG and Fusion exchange nothing.';
+}
+
 export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowView {
   if (status === null) return {
     state: 'checking',
@@ -73,6 +92,14 @@ export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowV
     state: 'not-configured',
     headline: 'Fusion connection needs a WGLink folder',
     detail: 'Choose the shared exchange folder in Settings → CAD Link. WG and the WGLink add-in will then use it automatically.',
+    action: null,
+  };
+  // Before every other reading of the heartbeat: an older add-in is refused
+  // outright, so nothing it reports about the document is acted on.
+  if (status.state === 'addin_outdated') return {
+    state: 'addin-outdated',
+    headline: 'WGLink add-in is out of date',
+    detail: outdatedAddinDetail(status),
     action: null,
   };
   if (status.cadConnectionIssue === 'addin_upgrade_required') return {
@@ -92,6 +119,12 @@ export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowV
     headline: 'WG and Fusion are using different folders',
     detail: 'WGLink reloads this setting automatically; it should clear within a few seconds. If it remains, update the add-in and restart Fusion.',
     action: null,
+  };
+  if (status.recoveryRequired) return {
+    state: 'recovery-required',
+    headline: `Update interrupted — recovery required${status.documentName ? ` · ${status.documentName}` : ''}`,
+    detail: `A WG ${status.recoveryRequired.kind === 'insert' ? 'insert' : 'update'} started changing this Fusion model and did not finish, so WGLink will not repeat it. In Fusion, undo the partial change or repair the link${status.link ? ', then send the update from WG again' : ''}.`,
+    action: status.link ? 'update' : null,
   };
   if (status.state === 'closed') return {
     state: 'closed',

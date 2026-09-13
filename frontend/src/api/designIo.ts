@@ -73,6 +73,9 @@ export interface WgLinkExportResponse {
   geometryHash: string;
   artifactSha256: string;
   cadHandoff?: 'published' | 'failed';
+  cadHandoffRequestId?: string;
+  /** Unstarted updates of the same Fusion link that this one replaced. */
+  cadHandoffSuperseded?: string[];
   cadLaunch?: boolean;
   /** The committed identity; absent when the design has moved on since the export. */
   identity?: DesignIdentity;

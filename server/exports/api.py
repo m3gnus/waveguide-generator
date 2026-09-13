@@ -31,7 +31,7 @@ from server.preview.translate import design_to_mesher_config
 from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
 
 from .cad_launch import focus_cad
-from .cad_handoff import publish_fusion_handoff
+from .cad_handoff import UPDATE_TARGET_REQUIRED, publish_fusion_handoff
 from .core import build_profiles, build_step, build_step_solid, build_stl
 from .geometry_identity import geometry_hash as _geometry_hash
 from .geometry_identity import mesher_version as _mesher_version
@@ -777,6 +777,12 @@ async def export_wglink(
 ) -> dict[str, Any]:
     """Write an identity-bearing CAD-link bundle into the selected workspace."""
 
+    if payload.expected_fusion_instance_id and not (
+        payload.expected_fusion_document_id and payload.expected_fusion_return_state_hash
+    ):
+        # An update names its exact link and the model state WG measured, so the
+        # add-in can refuse a model that moved. Refused before anything is built.
+        raise HTTPException(status_code=422, detail=UPDATE_TARGET_REQUIRED)
     workspace: WorkspaceState = request.app.state.cad_workspace
     selected = workspace.selected_path()
     if selected is None:
@@ -797,7 +803,7 @@ async def export_wglink(
     # this is delivery metadata: a failure must not invalidate the completed,
     # durable bundle.
     try:
-        await asyncio.to_thread(
+        published = await asyncio.to_thread(
             publish_fusion_handoff,
             Path(request.app.state.data_dir),
             selected.resolve(),
@@ -807,6 +813,10 @@ async def export_wglink(
             expected_return_state_hash=payload.expected_fusion_return_state_hash,
         )
         result["cadHandoff"] = "published"
+        result["cadHandoffRequestId"] = published.request_id
+        if published.withdrawn:
+            # An unstarted update of the same link that this one replaced.
+            result["cadHandoffSuperseded"] = list(published.withdrawn)
     except (OSError, TypeError, ValueError) as exc:
         logger.warning("Could not publish the Fusion handoff: %s", exc)
         result["cadHandoff"] = "failed"

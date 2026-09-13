@@ -9,9 +9,7 @@ import uuid
 from .fusion_delivery import IPC_SUBDIRECTORY, RETURN_REQUESTS, publish_fusion_request
 
 
-# The legacy slot. Each request is also published as its own file in
-# RETURN_REQUESTS_DIRECTORY, under the same request id (see fusion_delivery).
-RETURN_REQUEST_FILENAME = RETURN_REQUESTS.legacy_filename
+# Each request is its own file here, under its request id (see fusion_delivery).
 RETURN_REQUESTS_DIRECTORY = RETURN_REQUESTS.directory
 
 
@@ -24,12 +22,21 @@ def publish_return_request(
     instance_id: str,
     expected_return_state_hash: str | None,
 ) -> tuple[Path, str]:
-    """Publish one return request; return the legacy slot's path and the request id."""
+    """Publish one return request; return its file and its request id.
+
+    It names an exact document and link, and the model state WG displayed,
+    which the add-in checks against the live document before exporting.
+    """
 
     if not session_id:
         raise ValueError("Fusion return request requires an active WGLink session.")
     if not design_id or not document_id or not instance_id:
         raise ValueError("Fusion return request requires an exact document and link target.")
+    if not expected_return_state_hash:
+        raise ValueError(
+            "Fusion has not reported the model's state yet, so WG cannot ask for the "
+            "exact model it displayed. Refresh CAD Link and try again."
+        )
     request_id = str(uuid.uuid4())
     payload = {
         "target": "fusion360",
@@ -42,7 +49,7 @@ def publish_return_request(
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
     }
-    marker = publish_fusion_request(
+    published = publish_fusion_request(
         data_dir,
         RETURN_REQUESTS,
         payload,
@@ -52,12 +59,11 @@ def publish_return_request(
         # other session can never run.
         withdraw=lambda existing: existing.get("sessionId") != session_id,
     )
-    return marker, request_id
+    return published.path, request_id
 
 
 __all__ = [
     "IPC_SUBDIRECTORY",
     "RETURN_REQUESTS_DIRECTORY",
-    "RETURN_REQUEST_FILENAME",
     "publish_return_request",
 ]
