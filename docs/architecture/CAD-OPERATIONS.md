@@ -15,9 +15,10 @@ This page and that module must agree. Change them together.
 **Status of this cut.** The store, the identity rules and the vocabulary below are in
 place. The solve-command outcome ledger lives in the store, and Fusion's solve commands
 are delivered through it in both of their formats (see "Solve-command delivery").
-WG-produced Fusion markers, WG advertising that it reads per-command files, and the
-adapter's reconciliation are later steps that build on this contract. A later step adds
-a field to a request only under a new digest version.
+WG advertises the delivery versions it reads (see "Capability file"), and publishes its
+own Fusion requests as per-request files, each with a legacy twin (see "WG-produced
+Fusion requests"). The adapter's reconciliation is a later step that builds on this
+contract. A later step adds a field to a request only under a new digest version.
 
 ## Operation kinds
 
@@ -281,8 +282,8 @@ into the store, oldest first, until one is owed an answer of its own. Then:
 
 - **WG accepts both formats.** An add-in that writes only the legacy slot keeps working.
   An add-in writes per-command files only when WG advertises that it reads them, and
-  otherwise keeps writing the legacy slot. WG does not advertise it yet; that is a
-  later step.
+  otherwise keeps writing the legacy slot. WG advertises it in its capability file
+  (see "Capability file").
 - **The legacy slot keeps its write-side race.** A producer that writes it replaces any
   older command WG has not consumed yet, and that older command is lost before WG sees
   it. Claiming by rename closes the race on WG's side only: a command written after
@@ -320,3 +321,158 @@ answer to that delivery.
 **Mixed versions.** An add-in that predates this contract checks the baseline before it
 looks for evidence. A lost acknowledgement from such an add-in can therefore still
 surface as a false conflict, until the add-in implements the order above.
+
+## Capability file
+
+WG tells the add-in which delivery versions it reads in
+`<data dir>/ipc/wglink/wg-capabilities.json`. WG writes it atomically at every start:
+
+```json
+{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 2, "fusionRequestDelivery": 2}
+```
+
+- **`solveCommandDelivery: 2`.** WG reads per-command solve files (see "Solve-command
+  delivery"). An add-in then writes `.wg-solve-requests/<commandId>.json` instead of
+  the legacy slot.
+- **`fusionRequestDelivery: 2`.** WG publishes return requests and handoffs as
+  per-request files, each with a legacy twin (next section).
+- **Reading it.** A reader ignores fields it does not know. Any of these means the
+  legacy route, never a refusal:
+  - a missing or unreadable file;
+  - a `schemaVersion` the reader does not know;
+  - a value that is not an integer of at least 2.
+
+  An add-in that predates the file ignores it.
+- **A stale file.** WG never deletes it. If an older WG later runs on the same data
+  folder, per-command files wait on disk until a WG that reads them starts. Nothing
+  else overwrites or consumes them, so a stale advertisement can delay a command but
+  never lose it. The delay has no bound when the newer add-in stays installed: after a
+  downgrade to a WG that does not reinstall the add-in it ships, or with an add-in WG
+  does not manage, such as a developer copy. How to bound it, for example by removing
+  the file when WG stops or by a fallback in the add-in, is not settled here.
+
+## WG-produced Fusion requests
+
+WG asks Fusion for two kinds of work:
+
+- a **return request**: export the active document back to WG (`request_return`);
+- a **handoff**: open or update a completed export (`insert_link` or `update_link`).
+
+Each request has a request ID that WG generates, and that ID is its operation ID.
+
+| Request | Per-request file, under `<data dir>/ipc/wglink/` | Legacy slot | Slot record |
+| --- | --- | --- | --- |
+| Return request | `.fusion-return-requests/<requestId>.json` | `.fusion-return-request.json` | `.fusion-return-requests/.legacy-slot.json` |
+| Handoff | `.fusion-handoffs/<requestId>.json` | `.fusion-handoff.json` | `.fusion-handoffs/.legacy-slot.json` |
+
+- **Two copies, one request.** The per-request file has `schemaVersion: 2`. The legacy
+  slot holds its **twin**: the same fields with `schemaVersion: 1`. Both carry the
+  fields the slot always carried, plus `operationId` (equal to `requestId`, which a
+  handoff now also carries) and `deliverySequence`. An add-in that predates per-request
+  files reads only the slot, ignores the extra fields, and runs the request once.
+- **`deliverySequence`** is a positive integer. WG sets it one higher than any request
+  of that kind still on disk or in the record. It orders the requests on disk without
+  a clock. It is not unique across failed publishes, so a reader identifies a request
+  by its `requestId`, never by its sequence.
+- **Order of writes.** WG writes the file, then the twin, then the slot record,
+  `{"operationId": ..., "deliverySequence": ...}`, naming the twin now in the slot. A
+  twin therefore never appears before its file.
+  - Every write retries a `PermissionError` briefly: on Windows a reader can hold the
+    file open. Any other error is not retried.
+  - If the twin still cannot be written, WG reports the publish as failed and removes
+    the file again, retrying a `PermissionError` briefly. A per-request reader may
+    already have taken the file, or may hold it open so that it stays. Such a request
+    can still run.
+  - If the record cannot be written, WG logs it; the request is delivered anyway. At its
+    next publish or start, WG first brings the record up to the twin in the slot.
+- **Staging.** Every file is written under a name that starts with `.` and ends in
+  `.tmp`, then renamed into place. A reader takes only `*.json` names that do not
+  start with `.`.
+
+**An add-in that reads per-request files** handles each kind in this order:
+
+1. **Discard what a legacy reader took.** This applies when all three hold, checked in
+   this order:
+   - the record names a request and its sequence;
+   - the legacy slot is absent;
+   - that request's file is still present.
+
+   Read the record first, then check the slot, then the file. WG writes the twin
+   before the record, so a record read first cannot be newer than the slot seen after
+   it. Checking the slot first can discard a request WG publishes in between.
+
+   A reader that follows this contract never deletes a twin (step 3). It deletes an
+   older WG's slot only while that slot still holds the request it ran (step 4). WG
+   empties a slot itself only once the record names that twin. So this state means an
+   add-in that reads the slot alone took the recorded request; the exceptions are under
+   "What can be lost".
+
+   Delete its file, and every request file whose `deliverySequence` is not above the
+   record's, and run none of them. The earlier files were replaced in the slot before
+   that reader looked. Keep files with a higher sequence: WG may be writing their
+   twins now.
+2. **Take each request file in `deliverySequence` order**, then by name.
+   - Leave a file without a valid sequence (a positive integer) where it is: WG did not
+     write it.
+   - Claim a file by renaming it to a name that starts with `.`. A failed claim is
+     retried on the next pass; on Windows that happens while WG reads the file.
+   - Run it at most once per request ID, then delete the claim.
+   - Whether an unstarted request may be superseded by a newer one for the same target
+     is a separate policy, and this contract does not settle it.
+3. **Never run, and never delete, a slot that names an `operationId`.** It is a twin,
+   and only a legacy reader takes it. WG retires a twin once its file is gone.
+4. **A slot without an `operationId`** comes from a WG that predates per-request files.
+   It is the only copy: run it once. Then delete the slot only if it still holds that
+   same request (the same `requestId`, or `exportId` for a handoff) and still names no
+   `operationId`, as the legacy acknowledgement does. Leave the slot record alone.
+5. **A return request runs only in the session it names** (`sessionId`), as before.
+
+**What WG removes:**
+
+- request files under step 1, before each publish and at every start;
+- at every start, a twin whose file is gone, once the record names that twin;
+- when it publishes a return request, earlier return requests that name a different
+  session, because no add-in will run them;
+- the file it has just written, when the twin cannot be written.
+
+WG removes nothing else.
+
+**Mixed versions.**
+
+- **New WG, old add-in.** The add-in runs each request once, from the slot. A newer
+  publish replaces a twin the add-in has not read, as before, and that request never
+  runs. WG discards the files such an add-in leaves behind at its next publish or
+  start, so an add-in upgraded later does not run them again.
+- **New WG, new add-in.** Each request runs once, from its own file. The add-in never
+  runs a twin.
+- **Old WG, new add-in.** The slot has no `operationId` and is the only copy. The
+  add-in runs it once.
+- **What is not closed.** In each case below, an upgraded add-in can see a request
+  again:
+  - an old add-in running a request from the slot while WG replaces the slot (WG keeps
+    that file until the old add-in takes a later request);
+  - WG stopping, or failing to write the record, between the twin and the record, when
+    an old add-in then takes the twin before WG repairs the record.
+
+  What that means depends on the kind:
+  - A return request does not run again, because an upgraded add-in starts a new
+    session.
+  - A handoff is compared first: the add-in compares the link's export identity before
+    it updates, as it always has, and does not update a link that already carries that
+    export. An insert handoff whose link is no longer in the active document is
+    inserted again.
+  - Reconciling against the document beyond that is the adapter's later step.
+- **A downgraded add-in** reads only the slot. If a per-request reader already took the
+  file of the twin still in the slot, the downgraded add-in may run that twin once more.
+  That lasts until a WG that publishes per-request files next publishes, or starts and
+  can both repair the record and remove the slot. The same limits apply.
+- **What can be lost.** Beyond the losses the single slot always had, three narrow cases
+  can discard a request that has not run:
+  - After a downgrade, a WG that predates per-request files writes the slot while one of
+    this WG's requests is still waiting, for example after a failed claim. Once a reader
+    takes that older slot, step 1 treats the waiting request as taken.
+  - A newer WG publishes in the moment between a reader's check and its delete in step
+    4, and the delete removes the new twin. The legacy acknowledgement has always had
+    the same window.
+  - A power loss keeps a later write but not an earlier one. WG does not flush the
+    folders themselves to disk.

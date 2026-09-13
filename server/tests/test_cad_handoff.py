@@ -37,8 +37,12 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
 
     assert marker == data_dir / "ipc" / "wglink" / HANDOFF_FILENAME
     payload = json.loads(marker.read_text())
+    assert payload["requestId"] and payload["operationId"] == payload["requestId"]
     assert payload == {
         "schemaVersion": 1,
+        "requestId": payload["requestId"],
+        "operationId": payload["requestId"],
+        "deliverySequence": 1,
         "target": "fusion360",
         "bundlePath": str(bundle),
         "bundleId": "wgb_01KZV700000000000000000000",

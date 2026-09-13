@@ -44,6 +44,7 @@ from server.workspace.archive import (
 )
 
 from .fusion_status import fusion_process_running, read_fusion_status
+from .fusion_delivery import advertise_fusion_delivery
 from .fusion_return import publish_return_request
 from .solve_command import (
     PendingSolveCommand,
@@ -1581,6 +1582,13 @@ async def _reclaim_captured_documents(request: Request, root: Path, stem: str) -
 
 def mount_cadlink(application: FastAPI) -> None:
     application.include_router(router)
+
+    async def advertise_fusion_delivery_on_startup() -> None:
+        # Tells the add-in that WG reads per-command solve files, and discards
+        # WG-produced requests an add-in without per-request files already ran.
+        await asyncio.to_thread(advertise_fusion_delivery, Path(application.state.data_dir))
+
+    application.router.add_event_handler("startup", advertise_fusion_delivery_on_startup)
 
 
 __all__ = [

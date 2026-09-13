@@ -4,20 +4,23 @@ The bundle is the durable CAD-link artifact.  This small marker is only the
 delivery notification: it tells a running (or newly launched) Fusion add-in
 which completed export the user just asked to open.  Keeping it beside the
 bundles makes the protocol work for custom workspaces without another setting.
+
+Each handoff is published as its own file and in the legacy single slot, under
+one request id (see ``server/cadlink/fusion_delivery.py``).
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
-import os
 from pathlib import Path
-import tempfile
 from typing import Mapping
+import uuid
+
+from server.cadlink.fusion_delivery import HANDOFFS, IPC_SUBDIRECTORY, publish_fusion_request
 
 
-HANDOFF_FILENAME = ".fusion-handoff.json"
-IPC_SUBDIRECTORY = Path("ipc") / "wglink"
+HANDOFF_FILENAME = HANDOFFS.legacy_filename
+HANDOFFS_DIRECTORY = HANDOFFS.directory
 
 
 def publish_fusion_handoff(
@@ -43,7 +46,6 @@ def publish_fusion_handoff(
     if not export_id or not bundle_id:
         raise ValueError("CAD handoff is missing its export identity.")
     payload = {
-        "schemaVersion": 1,
         "target": "fusion360",
         "bundlePath": str(bundle_path),
         "bundleId": bundle_id,
@@ -57,24 +59,7 @@ def publish_fusion_handoff(
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
     }
-
-    ipc_root = data_dir.resolve() / IPC_SUBDIRECTORY
-    ipc_root.mkdir(parents=True, exist_ok=True)
-    marker_path = ipc_root / HANDOFF_FILENAME
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f"{HANDOFF_FILENAME}.", dir=ipc_root
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, marker_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    return marker_path
+    return publish_fusion_request(data_dir, HANDOFFS, payload, str(uuid.uuid4()))
 
 
-__all__ = ["HANDOFF_FILENAME", "publish_fusion_handoff"]
+__all__ = ["HANDOFFS_DIRECTORY", "HANDOFF_FILENAME", "IPC_SUBDIRECTORY", "publish_fusion_handoff"]
