@@ -280,12 +280,6 @@ function asSentence(text: string): string {
   return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
-/** A Fusion request no engine on this machine can solve yet, and what to do
- * about it. The request is kept rather than refused, so it says both ways out. */
-function capabilityBlocker(message: string): string {
-  return `${asSentence(message)} WG is keeping this request: press Solve now once an engine that can solve CAD geometry is available here, or dismiss it.`;
-}
-
 /** Where one Fusion solve command stands, for the life of this coordinator.
  *
  * - `processing`: WG owns it and works on it at the first poll at or after
@@ -1972,9 +1966,7 @@ export function CadLinkCoordinator() {
       setStatus('Solving the model Fusion sent.');
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
-      parkedSolveCommandStore.setBlockers(parked.commandId, [
-        reason instanceof SolveEngineUnavailableError ? capabilityBlocker(message) : message,
-      ]);
+      parkedSolveCommandStore.setBlockers(parked.commandId, [message]);
       if (mounted.current) setError(message);
     }
   }, []);
@@ -2314,17 +2306,17 @@ export function CadLinkCoordinator() {
       }
       const message = reason instanceof Error ? reason.message : String(reason);
       if (mounted.current) setError(`Fusion asked WG to solve this model, but: ${message}`);
-      // Not terminal: a gate, a transient failure, or no engine here that can
-      // solve imported geometry keeps the request, and the panel offers it back
-      // once the user has dealt with the reason. A missing engine is a
-      // capability this machine lacks, not a verdict on the request, so it is
-      // never refused to Fusion; Dismiss is how the user gives it up.
-      const parked = parkedSolveCommandStore.getSnapshot().command;
-      if (parked) {
-        parkedSolveCommandStore.setBlockers(parked.commandId, [
-          reason instanceof SolveEngineUnavailableError ? capabilityBlocker(message) : message,
-        ]);
+      if (reason instanceof SolveEngineUnavailableError) {
+        // Imported geometry is solved on Metal by definition, so this command
+        // can never succeed here. Refusing it is the only terminal answer;
+        // parking it would replay the same failure on every page load.
+        await refuseParkedSolveCommand(message);
+        return;
       }
+      // Not terminal: a gate or a transient failure keeps the request, and the
+      // panel offers it back once the user has dealt with the reason.
+      const parked = parkedSolveCommandStore.getSnapshot().command;
+      if (parked) parkedSolveCommandStore.setBlockers(parked.commandId, [message]);
     } finally {
       solveCommandInFlight.current = false;
       const parked = parkedSolveCommandStore.getSnapshot().command;

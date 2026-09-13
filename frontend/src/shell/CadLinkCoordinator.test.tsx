@@ -2095,46 +2095,24 @@ describe('CadLinkCoordinator', () => {
     expect(harness.submitted).toEqual([]);
   });
 
-  // No engine here can solve imported geometry. That is a capability this
-  // machine lacks, not a verdict on the request, so the request is kept --
-  // blocked, with what would let it run -- and Dismiss still gives it up.
-  it('keeps a Fusion command blocked, not refused, when no engine here can solve imported geometry', async () => {
+  it('refuses a Fusion command outright when the machine has no Metal engine', async () => {
     vi.useFakeTimers();
-    const unavailable = 'No solve engine on this host that supports imported geometry is available.';
     const harness = solveCommandHarness({
       ingests: [ingestRecord],
-      solve: async () => { throw new SolveEngineUnavailableError(unavailable); },
+      solve: async () => { throw new SolveEngineUnavailableError('Metal engine is unavailable'); },
     });
     await renderCoordinator();
     harness.issue('cmd-1');
     await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
 
-    // Nothing reaches Fusion: a refusal there is permanent.
-    expect(harness.reported).toEqual([]);
-    const parked = parkedSolveCommandStore.getSnapshot().command;
-    expect(parked?.commandId).toBe('cmd-1');
-    expect(parked?.blockers).toHaveLength(1);
-    expect(parked?.blockers[0]).toContain(unavailable);
-    expect(parked?.blockers[0]).toMatch(/press Solve now/);
-    expect(parked?.blockers[0]).toMatch(/dismiss/);
-    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain(unavailable);
-
-    // Held, not replayed: the poll does not submit it again by itself.
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
-    expect(harness.solveCurrentCadImport).toHaveBeenCalledOnce();
-
-    // Solve now asks again and, still refused, keeps the same actionable blocker.
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand(); });
-    expect(harness.solveCurrentCadImport).toHaveBeenCalledTimes(2);
-    expect(harness.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command?.blockers).toEqual(parked?.blockers);
-
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().dismissSolveCommand(); });
     expect(harness.reported).toEqual([{
-      commandId: 'cmd-1', state: 'refused', jobId: null,
-      reason: 'Dismissed in Waveguide Generator without solving.',
+      commandId: 'cmd-1', state: 'refused', jobId: null, reason: 'Metal engine is unavailable',
     }]);
     expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('Metal engine is unavailable');
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
+    expect(harness.solveCurrentCadImport).toHaveBeenCalledOnce();
   });
 
   it('detects, selects, and automatically ingests a newly arrived return', async () => {

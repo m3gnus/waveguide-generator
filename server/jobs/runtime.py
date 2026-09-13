@@ -34,7 +34,6 @@ from server.engines.registry import (
     SELECTABLE_ENGINE_NAMES,
     EngineRegistry,
     create_engine as get_engine,
-    full3d_engine_order,
     resolve_legacy_beat_engine,
 )
 from server.jobs.legacy_design import resolve_job_design
@@ -438,12 +437,7 @@ class ImportedSolveRefusal(ValueError):
 
 @dataclass(frozen=True)
 class SubmissionResolution:
-    """Validated submission values ready for durable persistence.
-
-    ``resolve_submission`` produces it for parametric geometry and
-    ``resolve_imported_submission`` for imported geometry; both record their
-    engine decision in ``symmetry_metadata["solver_plan"]``.
-    """
+    """Validated parametric submission values ready for durable persistence."""
 
     request: SolveRequest
     engine_name: str
@@ -492,8 +486,7 @@ async def resolve_submission(
     non-HTTP callers can ask the runtime exactly the same questions as a real
     submission without creating a job. Imported geometry remains tied to its
     ingestion record and immutable mesh artifact, so JobRuntime.submit retains
-    that separate preparation and refusal path; its engine choice is
-    ``resolve_imported_submission``, below.
+    that separate preparation and refusal path.
     """
 
     if not isinstance(request.geometry, ParametricGeometrySource):
@@ -814,156 +807,6 @@ async def resolve_submission(
         request=request,
         engine_name=engine_name,
         symmetry_metadata=symmetry_metadata,
-    )
-
-
-#: The geometry source an engine must declare to be offered imported geometry.
-_IMPORTED_GEOMETRY = "imported"
-
-
-async def resolve_imported_submission(
-    request: SolveRequest,
-    engine_registry: EngineRegistry,
-    *,
-    symmetry_metadata: Mapping[str, Any] | None = None,
-) -> SubmissionResolution:
-    """Choose the engine for an imported-geometry submission from capability data.
-
-    The imported counterpart of ``resolve_submission``, returning the same
-    shape. An engine is offered imported geometry because its ``EngineInfo``
-    declares ``"imported"`` among its ``geometry_sources`` -- the declaration is
-    the contract, as ``mountings`` is for a ground plane -- never because of its
-    name. Only Metal declares it today, so AUTO still resolves to Metal.
-
-    Selection does not yet test the ingestion-resolved domain against an
-    engine's ``symmetry_domains``, nor a ground plane against its
-    ``mountings``. With Metal the only engine that declares imported geometry,
-    that changes nothing today. The next engine to declare it must add both
-    gates here: a full-3-D solver handed a cut mesh it cannot mirror returns a
-    wrong answer rather than an error.
-
-    * ``auto`` takes the first available engine, in ``full3d_engine_order()``,
-      that declares imported geometry.
-    * The legacy family name ``beat`` takes the best such BEAT backend.
-    * Any other engine must declare imported geometry itself; otherwise the
-      request is refused with ``imported_engine_unsupported``, naming the
-      engines that do.
-    * Axisymmetric solving of imported geometry stays refused.
-
-    An engine that declares imported geometry but is unavailable on this host
-    raises ``EngineUnavailableError``: the host lacks a capability, the request
-    is not wrong. The decision, and every engine passed over on the way to it,
-    is recorded in ``solver_plan``.
-
-    ``symmetry_metadata`` is the domain ``JobRuntime._prepare_imported_submission``
-    resolved from the ingestion record. Preparation reads the CAD store and the
-    mesh artifact, so it stays in the runtime. This function reads only the
-    capability snapshot, and never allocates or persists a job.
-    """
-
-    if not isinstance(request.geometry, ImportedGeometrySource):
-        raise ValueError(
-            "resolve_imported_submission resolves imported geometry only; "
-            "parametric submissions resolve through resolve_submission"
-        )
-    requested = request.options.engine
-    if (
-        requested in {"axisym", "circsym"}
-        or request.options.solver_mode == "circsym"
-    ):
-        raise ImportedSolveRefusal(
-            "imported_circsym_unsupported",
-            "imported geometry supports full 3-D solves only; "
-            "axisymmetric mode is unavailable",
-        )
-    if requested not in SELECTABLE_ENGINE_NAMES:
-        raise UnknownEngineError(f"Unknown solve engine: {requested}")
-
-    declared = {info.name: info for info in await engine_registry.capabilities()}
-    order = full3d_engine_order()
-    capable = [
-        name
-        for name in order
-        if name in declared and _IMPORTED_GEOMETRY in declared[name].geometry_sources
-    ]
-    if requested == "auto":
-        candidates = order
-        reason = (
-            "AUTO selected the first available engine, in AUTO order, that "
-            "declares imported geometry"
-        )
-    elif requested == "beat":
-        candidates = tuple(name for name in order if name.startswith("beat-"))
-        reason = (
-            "legacy engine='beat' selected the best available BEAT backend "
-            "that declares imported geometry"
-        )
-    else:
-        candidates = (requested,)
-        reason = f"explicit engine={requested!r} declares imported geometry"
-    if requested != "auto" and not any(name in capable for name in candidates):
-        offer = ", ".join(capable) if capable else "none on this host"
-        raise ImportedSolveRefusal(
-            "imported_engine_unsupported",
-            f"engine {requested!r} does not declare imported geometry; "
-            f"engines that do: {offer}",
-            details={"engine": requested, "capable_engines": capable},
-        )
-
-    selected: str | None = None
-    passed_over: list[str] = []
-    for name in candidates:
-        info = declared.get(name)
-        if info is None:
-            # Not detected on this host at all, so not a candidate here.
-            continue
-        if _IMPORTED_GEOMETRY not in info.geometry_sources:
-            passed_over.append(f"{name}: does not declare imported geometry")
-            continue
-        if not info.available:
-            passed_over.append(f"{name}: unavailable ({info.reason})")
-            continue
-        selected = name
-        break
-    if selected is None:
-        if requested not in {"auto", "beat"}:
-            unavailable_reason = await engine_registry.unavailable_reason(requested)
-            raise EngineUnavailableError(
-                f"Solve engine '{requested}' is unavailable. "
-                f"{unavailable_reason or 'No capability reason was reported.'}"
-            )
-        unavailable = [
-            f"Solve engine '{name}' is unavailable. {declared[name].reason}"
-            for name in candidates
-            if name in capable
-        ]
-        raise EngineUnavailableError(
-            "No solve engine on this host that can solve imported geometry is "
-            "available. "
-            + (" ".join(unavailable) or "No engine here declares imported geometry.")
-        )
-    # The snapshot said available; the adapter is the final word, exactly as on
-    # the parametric path.
-    if await engine_registry.get_engine(selected) is None:
-        unavailable_reason = await engine_registry.unavailable_reason(selected)
-        raise EngineUnavailableError(
-            f"Solve engine '{selected}' is unavailable. "
-            f"{unavailable_reason or 'No capability reason was reported.'}"
-        )
-    if selected != requested:
-        request = request.model_copy(deep=True)
-        request.options.engine = selected
-    metadata = dict(symmetry_metadata or {})
-    metadata["solver_plan"] = {
-        "formulation": "full-3d",
-        "engine": selected,
-        "reason": reason,
-        "eligibility_reasons": passed_over,
-    }
-    return SubmissionResolution(
-        request=request,
-        engine_name=selected,
-        symmetry_metadata=metadata,
     )
 
 
@@ -1591,15 +1434,42 @@ class JobRuntime:
         imported: _ImportedSubmission | None = None
         if isinstance(request.geometry, ImportedGeometrySource):
             imported = await self._prepare_imported_submission(request)
-            resolved = await resolve_imported_submission(
-                request,
-                self.engine_registry,
-                symmetry_metadata=imported.symmetry_metadata,
-            )
+        if imported is not None:
+            engine_name = request.options.engine
+            if (
+                engine_name in {"axisym", "circsym"}
+                or request.options.solver_mode == "circsym"
+            ):
+                raise ImportedSolveRefusal(
+                    "imported_circsym_unsupported",
+                    "imported geometry supports Metal full 3-D solves only; "
+                    "axisymmetric mode is unavailable",
+                )
+            if engine_name not in SELECTABLE_ENGINE_NAMES:
+                raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
+            symmetry_metadata = imported.symmetry_metadata
+            if engine_name in {"bempp", "dryrun"} or engine_name.startswith("beat"):
+                raise ImportedSolveRefusal(
+                    "imported_engine_unsupported",
+                    f"imported geometry supports Metal only; engine {engine_name!r} is unavailable",
+                    details={"engine": engine_name},
+                )
+            if engine_name == "auto":
+                engine_name = "metal"
+                request = request.model_copy(deep=True)
+                request.options.engine = engine_name
+            if await self.engine_registry.get_engine(engine_name) is None:
+                reason = await self.engine_registry.unavailable_reason(engine_name)
+                fallback_reason = "No capability reason was reported."
+                raise EngineUnavailableError(
+                    f"Solve engine '{engine_name}' is unavailable. "
+                    f"{reason or fallback_reason}"
+                )
         else:
             resolved = await resolve_submission(request, self.engine_registry)
-        request = resolved.request
-        symmetry_metadata = resolved.symmetry_metadata
+            request = resolved.request
+            engine_name = resolved.engine_name
+            symmetry_metadata = resolved.symmetry_metadata
 
         job_id = str(uuid.uuid4())
         now = _now_iso()
@@ -3832,6 +3702,5 @@ __all__ = [
     "SymmetryValidationError",
     "UnknownEngineError",
     "merge_provisional_results",
-    "resolve_imported_submission",
     "resolve_submission",
 ]

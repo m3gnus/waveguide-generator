@@ -5,7 +5,7 @@ import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { SolveSubmissionRefused, type ImportedSolveSubmission } from '../jobs/actions';
+import type { ImportedSolveSubmission } from '../jobs/actions';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resolveOuterBodyMode } from '../design/ParamPanel';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
@@ -20,7 +20,6 @@ import {
   JobsCoordinator,
   jobsCoordinatorBridge,
   refreshedArchiveJob,
-  SolveEngineUnavailableError,
   useSolveControl,
 } from './JobsCoordinator';
 import { SolveActions } from './TopBar';
@@ -503,62 +502,6 @@ describe('solve invocation mutex', () => {
       await expect(jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_refused')))
         .rejects.not.toThrow(/passive_cardioid_topology/);
     });
-  });
-
-  // Which engine solves imported geometry is the server's decision, made from
-  // what each engine declares it can do. A Metal check and a forced engine
-  // here pre-empted it and left no room for any other engine.
-  it('sends an imported solve as AUTO and leaves the engine to the server', async () => {
-    mocks.submitImported.mockResolvedValue('job-cad');
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_metal'))).resolves.toBe('job-cad');
-    });
-
-    // No Metal at all on this machine: the request still goes to the server.
-    mocks.capabilities.engines = [
-      { name: 'bempp', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] },
-    ];
-    await act(async () => { root.render(<JobsCoordinator now={() => new Date(2026, 7, 12, 12)}><span>ready</span></JobsCoordinator>); });
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_no_metal'))).resolves.toBe('job-cad');
-    });
-
-    expect(mocks.submitImported).toHaveBeenCalledTimes(2);
-    for (const [submission] of mocks.submitImported.mock.calls) {
-      expect((submission as ImportedSolveSubmission).options).toMatchObject({ engine: 'auto', symmetry: 'auto' });
-    }
-  });
-
-  // "No engine here can take this geometry" is a capability this machine
-  // lacks, which callers must handle differently from a refusal of the
-  // request itself -- so it arrives as its own type.
-  it('turns an engine_unavailable refusal into a typed capability error', async () => {
-    const message = 'No solve engine on this host that can solve imported geometry is available.';
-    mocks.submitImported.mockRejectedValue(new SolveSubmissionRefused(message, 503, 'engine_unavailable'));
-    let caught: unknown;
-    await act(async () => {
-      caught = await jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_capability'))
-        .catch((error: unknown) => error);
-    });
-    expect(caught).toBeInstanceOf(SolveEngineUnavailableError);
-    expect((caught as Error).message).toBe(message);
-  });
-
-  // An unsupported engine answers a request that named one -- a verdict on
-  // that request, not a missing capability -- so it stays an ordinary error.
-  it.each([
-    ['fem_required', 'fem_required: this return includes FEM air volumes'],
-    ['imported_engine_unsupported', "imported_engine_unsupported: engine 'bempp' does not declare imported geometry; engines that do: metal"],
-  ])('keeps a %s refusal an ordinary error', async (code, message) => {
-    mocks.submitImported.mockRejectedValue(new SolveSubmissionRefused(message, 422, code));
-    let caught: unknown;
-    await act(async () => {
-      caught = await jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_refused'))
-        .catch((error: unknown) => error);
-    });
-    expect(caught).toBeInstanceOf(Error);
-    expect(caught).not.toBeInstanceOf(SolveEngineUnavailableError);
-    expect((caught as Error).message).toBe(message);
   });
 
   it('names CAD solves from the same design name and numbers them in the same sequence', async () => {

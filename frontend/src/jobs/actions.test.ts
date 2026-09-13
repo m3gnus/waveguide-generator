@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, plannedEngineNames, planSolveDesign, postSymmetry, resolveEngine, SolveSubmissionRefused, submitDesign, submitImported, toSolveDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, plannedEngineNames, planSolveDesign, postSymmetry, resolveEngine, submitDesign, submitImported, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('formats structured FastAPI detail arrays with locations', async () => {
@@ -149,40 +149,6 @@ describe('solve submission', () => {
       client_request_id: 'cad-solve:cmd-1',
     });
     expect(body).not.toHaveProperty('design');
-  });
-
-  // Which engine solves imported geometry is the server's decision, and "no
-  // engine here can" is one answer a caller must tell apart from every other.
-  // The error envelope names it; the code has to survive the trip.
-  it('throws a typed refusal carrying the envelope code when an imported solve is refused', async () => {
-    const submission = {
-      geometry: {
-        type: 'imported' as const, ingest_id: 'wgi_example', manifest_sha256: 'sha256:m', artifact_sha256: 'sha256:a',
-        drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' as const }],
-        mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { 'source-hf': 4 } },
-        acknowledged_findings: [], skipped_source_ids: [],
-      },
-      options: {
-        engine: 'auto', symmetry: 'auto' as const, mesh_validation_mode: 'warn' as const, verbose: false, frequency_spacing: 'log' as const,
-        frequency_range: [200, 20_000] as [number, number], num_frequencies: 24,
-        polar_config: { angle_range: [0, 180, 37] as [number, number, number], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal' as const], observation_origin: 'mouth' as const, spherical_sampling: false, field_plane: true },
-      },
-    };
-    const message = 'No solve engine on this host that supports imported geometry is available.';
-    const refused = async () => new Response(JSON.stringify({
-      detail: message,
-      error: { code: 'engine_unavailable', stage: 'submission', message, retryable: false, details: {} },
-    }), { status: 503, headers: { 'Content-Type': 'application/json' } });
-
-    const caught = await submitImported(submission, refused as typeof fetch).catch((error: unknown) => error);
-    expect(caught).toBeInstanceOf(SolveSubmissionRefused);
-    expect(caught).toMatchObject({ message, status: 503, code: 'engine_unavailable' });
-
-    // No envelope, no code -- and the message is still the one detail() gave.
-    const opaque = async () => new Response('gateway down', { status: 502, statusText: 'Bad Gateway' });
-    const bare = await submitImported(submission, opaque as typeof fetch).catch((error: unknown) => error);
-    expect(bare).toBeInstanceOf(SolveSubmissionRefused);
-    expect(bare).toMatchObject({ message: '502 Bad Gateway', status: 502, code: null });
   });
 
   it('submits the sweep displayed for an imported design whose sweep controls were absent', async () => {

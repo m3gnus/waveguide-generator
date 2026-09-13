@@ -1672,8 +1672,6 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
                 available=True,
                 reason="test conformance engine",
                 version="test",
-                # Imported geometry goes only to an engine that declares it.
-                geometry_sources=("parametric", "imported"),
             )
         ],
         factory=lambda name: metal.MetalEngine() if name == "metal" else None,

@@ -14,7 +14,6 @@ from fastapi import FastAPI
 from pydantic import ValidationError
 
 from server.cadlink.store import CadLinkStore
-from server.engines.registry import EngineInfo
 from server.jobs.models import (
     ChannelCombineSpec,
     ImportedGeometrySource,
@@ -23,7 +22,6 @@ from server.jobs.models import (
 )
 from server.jobs.api import create_jobs_router
 from server.jobs.runtime import (
-    EngineUnavailableError,
     ImportedSolveRefusal,
     JobRuntime,
     _imported_symmetry_metadata,
@@ -703,21 +701,10 @@ def _identity_record_changes() -> dict[str, Any]:
     }
 
 
-#: Metal as the production detector declares it: today the one engine whose
-#: geometry sources include ``imported``. Imported selection reads this
-#: declaration, so a fake registry has to publish it too.
-_METAL_IMPORTED = EngineInfo(
-    "metal", True, "test", "test", geometry_sources=("parametric", "imported")
-)
-
-
 class _PausedRegistry:
     def __init__(self) -> None:
         self.calls = 0
         self.release = asyncio.Event()
-
-    async def capabilities(self) -> tuple[EngineInfo, ...]:
-        return (_METAL_IMPORTED,)
 
     async def get_engine(self, _name: str) -> Any:
         self.calls += 1
@@ -734,35 +721,11 @@ class _AlwaysRegistry:
     def __init__(self, engine: Any) -> None:
         self.engine = engine
 
-    async def capabilities(self) -> tuple[EngineInfo, ...]:
-        return (_METAL_IMPORTED,)
-
     async def get_engine(self, _name: str) -> Any:
         return self.engine
 
     async def unavailable_reason(self, _name: str) -> str | None:
         return None
-
-
-class _DeclaredRegistry(_PausedRegistry):
-    """A paused registry whose capability snapshot the test writes."""
-
-    def __init__(self, *engines: EngineInfo) -> None:
-        super().__init__()
-        self.engines = engines
-
-    async def capabilities(self) -> tuple[EngineInfo, ...]:
-        return self.engines
-
-    async def get_engine(self, name: str) -> Any:
-        info = next((item for item in self.engines if item.name == name), None)
-        if info is None or not info.available:
-            return None
-        return await super().get_engine(name)
-
-    async def unavailable_reason(self, name: str) -> str | None:
-        info = next((item for item in self.engines if item.name == name), None)
-        return info.reason if info is not None else None
 
 
 async def _runtime_fixture(
@@ -2537,151 +2500,3 @@ def test_a_reduced_domain_and_a_ground_plane_on_the_same_plane_are_refused(
     # A full domain has no mirror plane to collide with a floor.
     full = {"symmetry": {"cut_planes": [], "domain_planes": []}}
     assert _imported_symmetry_metadata(full, "auto", "y")["resolved"] == "full"
-
-
-# Imported engine selection reads each engine's declared geometry sources. It
-# used to be a hard-coded name test in JobRuntime.submit -- "bempp", "dryrun"
-# and every "beat*" refused, AUTO rewritten to "metal" -- so nothing an engine
-# declared could change which engine took a CAD return.
-
-
-def _metal(*, available: bool = True, reason: str = "test metal") -> EngineInfo:
-    return EngineInfo(
-        "metal",
-        available,
-        reason,
-        "test",
-        geometry_sources=("parametric", "imported"),
-    )
-
-
-def _bempp(*, sources: tuple[str, ...] = ("parametric",)) -> EngineInfo:
-    return EngineInfo("bempp", True, "test bempp", "test", geometry_sources=sources)
-
-
-async def _submit_with(
-    tmp_path: Path, registry: _DeclaredRegistry, engine: str
-) -> dict[str, Any]:
-    runtime, ingest_id, _ = await _runtime_fixture(tmp_path)
-    runtime.engine_registry = registry  # type: ignore[assignment]
-    request = _request(ingest_id)
-    request.options.engine = engine
-    try:
-        job_id = await runtime.submit(request)
-        return runtime.store.get_job_row(job_id)
-    finally:
-        await runtime.shutdown()
-
-
-def test_imported_explicit_engine_is_accepted_for_its_declared_capability(
-    tmp_path: Path,
-) -> None:
-    registry = _DeclaredRegistry(_metal(), _bempp(sources=("parametric", "imported")))
-
-    row = asyncio.run(_submit_with(tmp_path, registry, "bempp"))
-
-    assert row["config_json"]["options"]["engine"] == "bempp"
-    plan = row["config_summary_json"]["symmetry"]["solver_plan"]
-    assert plan["engine"] == "bempp"
-    assert plan["formulation"] == "full-3d"
-    assert plan["reason"] == "explicit engine='bempp' declares imported geometry"
-    assert plan["eligibility_reasons"] == []
-
-
-def test_imported_auto_selects_metal_while_it_is_the_first_capable_engine(
-    tmp_path: Path,
-) -> None:
-    row = asyncio.run(_submit_with(tmp_path, _DeclaredRegistry(_metal(), _bempp()), "auto"))
-
-    assert row["config_json"]["options"]["engine"] == "metal"
-    symmetry = row["config_summary_json"]["symmetry"]
-    # The domain the ingestion artifact describes is kept; the plan is added.
-    assert symmetry["source"] == "cad-ingestion-domain-planes"
-    assert symmetry["solver_plan"]["engine"] == "metal"
-    assert symmetry["solver_plan"]["reason"].startswith("AUTO selected")
-    assert symmetry["solver_plan"]["eligibility_reasons"] == []
-
-
-def test_imported_auto_walks_the_capability_order_past_an_unavailable_engine(
-    tmp_path: Path,
-) -> None:
-    registry = _DeclaredRegistry(
-        _metal(available=False, reason="no Apple GPU"),
-        _bempp(sources=("parametric", "imported")),
-    )
-
-    row = asyncio.run(_submit_with(tmp_path, registry, "auto"))
-
-    assert row["config_json"]["options"]["engine"] == "bempp"
-    plan = row["config_summary_json"]["symmetry"]["solver_plan"]
-    assert plan["engine"] == "bempp"
-    assert plan["eligibility_reasons"] == ["metal: unavailable (no Apple GPU)"]
-
-
-@pytest.mark.parametrize("engine", ["bempp", "beat-cpu", "beat", "dryrun"])
-def test_imported_explicit_engine_without_the_capability_is_refused_naming_capable_engines(
-    tmp_path: Path, engine: str
-) -> None:
-    registry = _DeclaredRegistry(
-        _metal(), _bempp(), EngineInfo("beat-cpu", True, "test beat", "test")
-    )
-
-    with pytest.raises(ImportedSolveRefusal) as caught:
-        asyncio.run(_submit_with(tmp_path, registry, engine))
-
-    assert caught.value.reason_code == "imported_engine_unsupported"
-    assert caught.value.details == {"engine": engine, "capable_engines": ["metal"]}
-
-
-def test_imported_auto_without_an_available_capable_engine_is_unavailable(
-    tmp_path: Path,
-) -> None:
-    registry = _DeclaredRegistry(_metal(available=False, reason="Metal needs an Apple GPU"), _bempp())
-
-    with pytest.raises(EngineUnavailableError) as caught:
-        asyncio.run(_submit_with(tmp_path, registry, "auto"))
-
-    assert "imported geometry" in str(caught.value)
-    assert "Metal needs an Apple GPU" in str(caught.value)
-
-
-def test_imported_explicit_capable_engine_that_is_unavailable_stays_unavailable(
-    tmp_path: Path,
-) -> None:
-    registry = _DeclaredRegistry(_metal(available=False, reason="Metal needs an Apple GPU"))
-
-    with pytest.raises(EngineUnavailableError) as caught:
-        asyncio.run(_submit_with(tmp_path, registry, "metal"))
-
-    assert str(caught.value) == "Solve engine 'metal' is unavailable. Metal needs an Apple GPU"
-
-
-def test_resolve_imported_submission_is_one_named_function_beside_resolve_submission() -> None:
-    from server.jobs.runtime import SubmissionResolution, resolve_imported_submission
-
-    request = _request("wgi_" + "0" * 26)
-    request.options.engine = "auto"
-    prepared = {"requested": "auto", "resolved": "full", "resolved_quadrants": 1234}
-
-    resolution = asyncio.run(
-        resolve_imported_submission(
-            request, _DeclaredRegistry(_metal(), _bempp()), symmetry_metadata=prepared
-        )
-    )
-
-    assert isinstance(resolution, SubmissionResolution)
-    assert resolution.engine_name == "metal"
-    assert resolution.request.options.engine == "metal"
-    assert resolution.symmetry_metadata["resolved_quadrants"] == 1234
-    assert resolution.symmetry_metadata["solver_plan"]["engine"] == "metal"
-    # Neither of the caller's inputs is edited in place.
-    assert request.options.engine == "auto"
-    assert "solver_plan" not in prepared
-
-    parametric = SolveRequest.model_validate(
-        {"design": {"formula": "OSSE", "L": 120, "a": 40}}
-    )
-    with pytest.raises(ValueError, match="imported geometry"):
-        asyncio.run(
-            resolve_imported_submission(parametric, _DeclaredRegistry(_metal()))
-        )
