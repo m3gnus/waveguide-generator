@@ -82,7 +82,13 @@ def test_the_installer_resolves_the_override_before_the_home_directory(tmp_path:
 
 
 def test_the_startup_reconciliation_works_in_the_sandbox(root_conftest: ModuleType) -> None:
-    """The positive proof: the lock appears in the sandbox, nothing reached home."""
+    """The positive proof: the lock appears in the sandbox, nothing reached home.
+
+    ``refresh_wglink`` directly, with no folder: the suite turns the startup
+    refresh off (``WG2_WGLINK_REFRESH=0``), and what is under test is where
+    the refresh looks when it does run -- in a child with its own
+    environment, or a test that calls it.
+    """
 
     sandbox = root_conftest.SANDBOX_FUSION_ADDINS_DIR
     sandbox.mkdir(parents=True, exist_ok=True)
@@ -90,7 +96,7 @@ def test_the_startup_reconciliation_works_in_the_sandbox(root_conftest: ModuleTy
     lock.unlink(missing_ok=True)
     touched_before = len(root_conftest.REAL_ADDINS_TOUCHES)
 
-    verdict, detail = addin_update.refresh_and_log()
+    verdict, detail = addin_update.refresh_wglink(install_absent=False)
 
     assert root_conftest.REAL_ADDINS_TOUCHES[touched_before:] == []
     assert verdict == "absent", detail

@@ -50,12 +50,12 @@ os.environ["WG2_WGLINK_REFRESH"] = "0"
 
 # -- The WGLink add-in installed on this machine ------------------------------
 #
-# Every application start runs the add-in reconciliation
-# (``server/cadlink/addin_update.py``), which resolves Fusion's AddIns directory
-# from the user's home and takes the installer's operation lock inside it. A
-# test that starts the app therefore reached the add-in installed on the
-# developer's machine, and one started from the checkout that manages that
-# add-in would have replaced it with the checkout's pin.
+# The add-in reconciliation (``server/cadlink/addin_update.py``) resolves
+# Fusion's AddIns directory from the user's home, takes the installer's
+# operation lock inside it, and updates or installs WGLink there. The switch
+# above turns it off for starts in this process, but not everything that runs
+# it inherits the switch: a test calls the refresh itself, and a harness that
+# starts a real server builds that child's environment from scratch.
 #
 # ``WG2_FUSION_ADDINS_DIR`` (``scripts/install_wglink.py``) moves that
 # directory into the sandbox for this process and every child that inherits
