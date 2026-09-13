@@ -379,7 +379,10 @@ def _probe_healthy_start(port: int, timeout: float) -> str | None:
     return None
 
 
-#: How long a stopping --no-gui start waits for a settle already under way.
+#: How long a stopping --no-gui start waits for a settle already under way. A
+#: stop that came from a signal or a closed console has also begun the shutdown
+#: backstop (``server/platform/shutdown_backstop.py``), which ends the process
+#: about 5 s later, so such a stop gives a settle about 5 s, not this.
 HEALTHY_START_SETTLE_WAIT = 60.0
 
 
@@ -481,8 +484,10 @@ class _NoGuiHealthyStart:
         ``HEALTHY_START_SETTLE_WAIT``, rather than abandoned: on macOS it moves
         ``.previous`` out of the bundle and re-seals it, and a process that
         exits between the two leaves the bundle unsealed and the rollback
-        material in the holding directory. A second Ctrl+C or the shutdown
-        backstop can still end the process sooner (contract §4.5).
+        material in the holding directory. A stop that came from a signal has
+        begun the shutdown backstop, which ends the process about 5 s later, so
+        that is what such a stop gives a settle; a second Ctrl+C ends it at once
+        (contract §4.5).
         """
 
         self._stop.set()

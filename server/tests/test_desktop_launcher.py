@@ -982,6 +982,38 @@ def test_the_cleanup_guard_is_never_stricter_than_the_loop_that_calls_it(
     assert not (bundle / "app.previous").exists()
 
 
+def test_a_window_start_that_cannot_confirm_the_update_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.5: the window's own failed start writes the line every mode writes.
+
+    It is written before the rollback that follows, while the transaction is
+    still open, so ``update.log`` says which transaction the start could not
+    confirm and why.
+    """
+
+    bundle = tmp_path / "Waveguide Generator"
+    data = tmp_path / "data"
+    for name in ("app", "runtime", "app.previous"):
+        (bundle / name).mkdir(parents=True)
+    (data / "logs").mkdir(parents=True)
+    (data / "updates" / "0.2.5").mkdir(parents=True)
+    _decided_journal(data, bundle, bundle, data / "updates" / "0.2.5")
+    journal = apply_update_module.read_journal(data, bundle) or {}
+    failed = _snapshot(ServiceState.ERROR)
+    window = desktop.DesktopWindow(StubController(poll_snapshot=failed), **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
+    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
+    rolled_back: list[str] = []
+    monkeypatch.setattr(window, "_report_bundle_window_failure", rolled_back.append)
+
+    window._report_bundle_startup_failure(failed, "did not start")
+
+    written = (data / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "This start did not confirm the build" in written
+    assert str(journal.get("transaction")) in written and "did not start" in written
+    assert rolled_back, "the rollback that follows a failed start no longer runs"
+
+
 def test_a_server_that_never_answers_is_reported_instead_of_waited_on_forever(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

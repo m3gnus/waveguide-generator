@@ -115,6 +115,8 @@ def unconfirmed_line(data_dir: Path, resources: Path, reason: str) -> str | None
         record = read_completion_record(data_dir, resources)
         if record is None or record.get("rollbackMaterial") != ROLLBACK_MATERIAL_RETAINED:
             return None
+    # A reason that is itself a sentence brings its own full stop.
+    reason = reason.rstrip().rstrip(".")
     return (
         f"This start did not confirm the build: {reason}. Not reclaiming the previous "
         "layers yet" + (f"; {transaction} stays open" if transaction else "") + "."

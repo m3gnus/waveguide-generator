@@ -327,9 +327,18 @@ process (`application.state.update_restart`):
   refuses a bundle request because an earlier update's rollback material is still present.
   The server's status watcher (`_watch_statusapp` in `launch/serve.py`) removes it and
   releases the latch.
-- If the notice still cannot be written after three tries, the launcher restarts the
-  server instead, as after a failed handoff: a new process starts unlatched.
-  `update.log` says so.
+- If the notice still cannot be written after three tries, `update.log` says so, and the
+  launcher does nothing more. It does not restart the server, which would end running
+  solves for a restart that installs nothing.
+- **The latch expires.** It comes down on its own `RESTART_APPROVAL_TTL` (300 s) after it
+  was set, if this process is still running, and logs one line to `server.log`.
+  - Why 300 s: after a real handoff the launcher consumes the request within about a
+    second, then stops the server within its shutdown timeout (8 s). A server still
+    running minutes after approval therefore has no handoff pending. Five minutes rather
+    than one leaves room for a machine that is paging or suspended.
+  - Expiry is checked whenever the latch is read: by a refusing route, the update status,
+    and the install status.
+  - The update dialog shows an expiry as a failed attempt, as it shows a discard.
 - A called-off restart is a failed attempt the update dialog shows, through the existing
   `installState` and `error` fields: "The update to `<version>` did not start: `<reason>`.
   Try again."
@@ -403,7 +412,8 @@ By mode:
 - **The desktop window** builds its controller with `settle_on_ready=False`. It delegates
   from its native event loop, as it always committed, because HTTP readiness alone is not
   enough to discard rollback material there. It passes the snapshot that ended its
-  frontend wait.
+  frontend wait. When its start fails, or does not answer within 120 s, it writes the
+  same line before the rollback that follows.
 - **The status window** polls until the interface is served, for up to 30 s after the
   backend answers. It reports once if the start fails (an error with no live server), or
   if 120 s pass without an answer it can confirm.
@@ -420,8 +430,10 @@ then re-seals the bundle, and it is not safe to interrupt between the two:
   holding directory.
 - The next update is then refused until that is resolved, and the refusal names the
   directory.
-- A stopping `--no-gui` start waits up to 60 s for a settle under way. A second Ctrl+C or
-  the shutdown backstop can still end it sooner, and so can killing the window's process.
+- A stopping `--no-gui` start waits for a settle under way. A stop that came from a
+  signal or a closed console has also begun the shutdown backstop, which ends the process
+  about 5 s later, so that is what such a stop gives a settle. A second Ctrl+C ends it at
+  once, and so does killing the window's process.
 
 Why this matters: an open `installed` transaction keeps `.previous`, and the next update
 is refused (`apply_update.py:948-950`). A Linux installation whose Qt cannot open a
@@ -552,10 +564,12 @@ that implements it removes the marker.
 | `test_a_retry_after_restart_approval_is_refused_while_reads_stay_open` | §4.2 | Retry and install refuse with the error envelope; a read route stays open |
 | `test_a_restart_approval_is_released_when_the_handoff_request_cannot_be_written` | §4.2 | A bundle request that cannot be written releases the latch, and solves are accepted again |
 | `test_a_request_the_launcher_discards_releases_the_servers_latch` | §4.2 | The launcher's discard reaches the server's watcher and clears the latch |
-| `test_a_release_notice_that_cannot_be_written_restarts_the_server_unlatched` | §4.2 | A notice that cannot be written is retried, then the latched server is replaced and `update.log` says why |
+| `test_a_release_notice_that_cannot_be_written_is_logged_and_the_server_kept` | §4.2 | A notice that cannot be written is retried, then logged, and the server is not restarted |
+| `test_an_approved_restart_expires_when_no_handoff_follows` | §4.2 | The latch comes down on its own after `RESTART_APPROVAL_TTL`, once, logs one line and tells its listeners |
 | `test_a_called_off_restart_shows_as_a_failed_install` | §4.2 | A discard shows in the install status as a failed attempt, with the reason |
 | `test_a_cad_return_ingested_after_restart_approval_is_refused` | §4.2 | `POST /api/cadlink/ingest` refuses with the envelope |
 | `test_an_adopted_server_does_not_settle_this_installations_transaction` | §4.5 | An exit-2 adoption is declined and reported, and nothing is reclaimed |
+| `test_the_window_declines_an_adopted_server_too` | §4.5 | So does the window's own delegation |
 | `test_a_no_gui_start_that_refuses_its_interface_reports_the_transaction` | §4.5 | An exit before the server exists still names the open transaction |
 | `test_a_no_gui_start_with_no_free_port_reports_the_transaction` | §4.5 | So does a port failure |
 | `test_healthy_start_writes_nothing_when_there_is_nothing_to_settle` | §4.5 | An ordinary start that cannot confirm writes nothing about updates |
@@ -567,7 +581,8 @@ checkout flow); `server/tests/test_statusapp_controller.py`
 `test_the_status_window_reports_a_start_that_cannot_confirm_the_update` (§4.5, browser
 mode); and in `server/tests/test_desktop_launcher.py`, the window's refusal of a second
 update while rollback material is pending now also checks that it releases the latch
-(§4.2).
+(§4.2), and `test_a_window_start_that_cannot_confirm_the_update_says_so` keeps the window's
+own report (§4.5).
 
 §4.3 and §4.4 need real processes. Their tests belong with the implementation.
 

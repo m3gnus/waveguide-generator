@@ -34,6 +34,7 @@ from launchers.statusapp.controller import (
 from launchers.statusapp.healthy_start import (
     cleanup_holding_directory,
     previous_generation_paths,
+    report_unconfirmed_start,
     resolve_bundle_paths,
 )
 from launchers.macoswindow import install_custom_frame as install_macos_frame
@@ -928,6 +929,14 @@ class DesktopWindow:
         return True
 
     def _report_bundle_startup_failure(self, snapshot: StatusSnapshot, cause: str) -> None:
+        # This start cannot confirm the build. Say so in update.log with the
+        # line every mode writes (contract §4.5), before the rollback that
+        # follows decides the transaction another way.
+        report_unconfirmed_start(
+            self._bundle_paths(),
+            f"the desktop window's local interface {cause} "
+            f"(backend: {snapshot.backend.reason})",
+        )
         self._report_bundle_window_failure(self._failure_message(snapshot, cause))
 
     @staticmethod

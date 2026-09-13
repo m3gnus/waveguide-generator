@@ -668,6 +668,9 @@ class BundleUpdateInstaller:
         }
 
     def status(self) -> dict[str, object]:
+        # Before the lock: an expired approval tells ``_restart_called_off``,
+        # which takes it, and shows as a failed attempt (contract §4.2).
+        self.restart_approval.expire_if_due()
         with self._lock:
             self._reset_consumed_locked()
             return dict(self._state)
@@ -993,12 +996,20 @@ class BundleUpdateInstaller:
                 temporary.write_text(
                     json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
                 )
-                temporary.replace(self.request_path)
+                # The request appears and the state reads "ready" under one
+                # lock. A launcher can consume and discard the request the
+                # moment it appears, and the release that follows must find
+                # "ready" to show the attempt as failed.
+                with self._lock:
+                    temporary.replace(self.request_path)
+                    self._state.update(
+                        installState="ready", downloadedBytes=completed, error=None
+                    )
             except BaseException as exc:
                 self.restart_approval.release(
-                    f"the handoff request could not be written: {exc or type(exc).__name__}"
+                    "the handoff request could not be written: "
+                    f"{str(exc) or type(exc).__name__}"
                 )
                 raise
-            self._set_state(installState="ready", downloadedBytes=completed, error=None)
         except Exception as exc:  # noqa: BLE001 - all worker failures become API state
             self._set_state(installState="failed", error=str(exc) or type(exc).__name__)

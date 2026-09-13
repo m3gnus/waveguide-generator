@@ -1522,6 +1522,9 @@ class UpdateService:
             log.warning("Update check failed: %s", exc)
 
     def get_status(self, *, force: bool = False) -> dict[str, Any]:
+        # An approval that outlived any handoff expires here, and shows below
+        # as a failed attempt (contract §4.2).
+        self.restart_approval.expire_if_due()
         checkout = self.checkout_probe(self.repo_root, self.running_version)
         channel = self.channel()
         refreshed = False
@@ -1698,7 +1701,7 @@ class UpdateService:
         except BaseException as exc:
             # Whatever stopped it, no request exists, so nothing will restart.
             self.restart_approval.release(
-                f"the handoff request could not be written: {exc or type(exc).__name__}"
+                f"the handoff request could not be written: {str(exc) or type(exc).__name__}"
             )
             try:
                 temporary.unlink()

@@ -373,8 +373,6 @@ class StatusController:
         # then, and so a caller can replace ``bundle_paths``.
         self._healthy_start = HealthyStartSettlement(lambda: self.bundle_paths())
         self._settle_attempted = False
-        #: The last loss callback, re-armed for a server this controller restarts.
-        self._on_lost: Callable[[StatusSnapshot], None] | None = None
 
         self._lock = threading.RLock()
         self._process: subprocess.Popen[str] | None = None
@@ -1013,7 +1011,6 @@ class StatusController:
         """
 
         with self._lock:
-            self._on_lost = on_lost
             if self._backend_lost or self._process is None:
                 return None
             if self._watcher is not None and self._watcher.is_alive():
@@ -1183,10 +1180,12 @@ class StatusController:
         Returns True once the server has been told, or when no owned server is
         running: nothing is latched then, and a server started later starts
         unlatched. A notice that still cannot be written after
-        ``RELEASE_NOTICE_ATTEMPTS`` tries is not left there: the server is
-        restarted instead, as after a failed handoff, because a new process
-        starts unlatched. ``update.log`` says so, and this returns False. Every
-        caller is covered by that, so none has to act on the answer.
+        ``RELEASE_NOTICE_ATTEMPTS`` tries is logged to ``update.log``, for every
+        caller, and this returns False. The server is not restarted for it --
+        that would end running solves for a restart that installs nothing --
+        and it does not stay latched: its latch expires on its own
+        (``RESTART_APPROVAL_TTL`` in ``server/updates/restart.py``). Callers
+        need do nothing more.
         """
 
         with self._lock:
@@ -1205,9 +1204,7 @@ class StatusController:
                 failure = exc
                 continue
             return True
-        self._restart_unlatched(
-            f"it could not be told that the update restart was called off ({failure})"
-        )
+        self._log_release_failure(reason, failure)
         return False
 
     def _write_release_notice(self, notice: Path, reason: str) -> None:
@@ -1215,24 +1212,16 @@ class StatusController:
         temporary.write_text(json.dumps({"reason": reason}) + "\n", encoding="utf-8")
         temporary.replace(notice)
 
-    def _restart_unlatched(self, why: str) -> None:
-        """Replace the owned server, so the one running holds no restart approval."""
-
+    def _log_release_failure(self, reason: str, failure: OSError | None) -> None:
         try:
             append_update_log(
                 self._data_dir(),
-                f"Restarting the server because {why}. A new server process starts with "
-                "no restart approved.",
+                "Could not tell the server that the update restart was called off "
+                f"({reason}): {failure}. It refuses new solves until its restart "
+                "approval expires on its own.",
             )
         except (OSError, RuntimeError, TypeError, ValueError):
             pass
-        with self._lock:
-            on_lost = self._on_lost
-        self.stop()
-        self.start()
-        if on_lost is not None:
-            # The watcher ended with the stop; the new server needs its own.
-            self.watch_backend(on_lost)
 
     def launch_update(self, request: UpdateRequest) -> None:
         """Start the independent updater before this status owner shuts down."""

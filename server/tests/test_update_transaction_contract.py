@@ -1573,7 +1573,7 @@ def test_a_no_gui_start_that_refuses_its_interface_reports_the_transaction(
         monkeypatch,
         installation,
         server_class=_ServerThatNeverServed,
-        interface=lambda: "the installed release interface is v9.9.8, but the backend is v9.9.9",
+        interface=lambda: "the installed release interface is v9.9.8, but the backend is v9.9.9.",
     )
 
     assert exit_code == 1
@@ -1582,6 +1582,7 @@ def test_a_no_gui_start_that_refuses_its_interface_reports_the_transaction(
     written = _update_log(installation)[len(before) :]
     assert transaction in written and "refused its interface" in written
     assert written.count("did not confirm") == 1, written
+    assert ".." not in written, "a reason that ends a sentence doubled the full stop"
 
 
 def test_a_no_gui_start_with_no_free_port_reports_the_transaction(
@@ -1623,13 +1624,14 @@ def test_healthy_start_writes_nothing_when_there_is_nothing_to_settle(tmp_path: 
     assert _update_log(installation) == ""
 
 
-def test_a_release_notice_that_cannot_be_written_restarts_the_server_unlatched(
+def test_a_release_notice_that_cannot_be_written_is_logged_and_the_server_kept(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Contract §4.2: a server must never stay latched with no handoff pending.
+    """Contract §4.2: a notice that cannot be written is retried, then logged.
 
-    When the notice cannot be written, a new server process replaces the
-    latched one, as after a failed handoff, and ``update.log`` says why.
+    The server is not restarted for it: that would end running solves for a
+    restart that installs nothing. Its latch expires on its own instead
+    (``test_an_approved_restart_expires_when_no_handoff_follows``).
     """
 
     app_layer = tmp_path / "app"
@@ -1661,16 +1663,91 @@ def test_a_release_notice_that_cannot_be_written_restarts_the_server_unlatched(
 
         assert controller.release_update_restart("Discarded an invalid update request.") is False
 
-        second = controller.process
-        assert second is not None and second is not first, "the latched server was kept"
-        assert second.poll() is None, "the replacement server is not running"
-        assert first.poll() is not None, "the latched server is still running"
+        assert controller.process is first, "the server was replaced"
+        assert first.poll() is None, "the server was stopped"
     finally:
         controller.close()
 
     assert len(attempts) == controller_module.RELEASE_NOTICE_ATTEMPTS
     written = (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
-    assert "Restarting the server" in written and "read-only file system" in written
+    assert "Could not tell the server" in written and "read-only file system" in written
+    assert "Discarded an invalid update request" in written
+
+
+def test_an_approved_restart_expires_when_no_handoff_follows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Contract §4.2: a server still running long after approval has no handoff pending.
+
+    The latch comes down on its own, once, tells its listeners -- the install
+    status shows the attempt as failed -- and logs one line.
+    """
+
+    from server.updates import restart as restart_module
+
+    warnings: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        restart_module,
+        "log",
+        SimpleNamespace(
+            info=lambda *_args: None,
+            warning=lambda *args: warnings.append(args),
+            exception=lambda *_args: None,
+        ),
+    )
+    now = [1000.0]
+    latch = RestartApproval(ttl=300.0, clock=lambda: now[0])
+    told: list[tuple[str, str]] = []
+    latch.add_release_listener(lambda target, reason: told.append((target, reason)))
+    latch.approve("v2.0.1")
+
+    now[0] += 299.0
+    assert latch.pending == "v2.0.1" and latch.refusal() is not None
+    now[0] += 1.0
+    assert latch.refusal() is None
+    assert latch.pending is None
+
+    assert [target for target, _reason in told] == ["v2.0.1"]
+    assert "no handoff followed" in told[0][1]
+    assert len(warnings) == 1, warnings
+
+
+def test_the_window_declines_an_adopted_server_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.5: the window's own delegation declines an adopted snapshot.
+
+    ``_wait_for_frontend`` accepts an adopted server as a served interface, and
+    the window then asks its controller to settle on that snapshot.
+    """
+
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
+    installation = _installation(tmp_path)
+    transaction = _decided_update(installation)
+    controller = StatusController(environ={**os.environ, "WG2_BUNDLE": "1"})
+    monkeypatch.setattr(
+        controller,
+        "bundle_paths",
+        lambda: (installation.bundle, installation.resources, installation.data_dir),
+    )
+    window = desktop.DesktopWindow(
+        controller, pythonnet_loader=lambda: object(), webview2_probe=lambda: True
+    )
+    adopted = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "Healthy — vtest — already-running instance"),
+        frontend=LampStatus(ServiceState.OK, "SPA is being served"),
+        url="http://127.0.0.1:3199/",
+        pid=None,
+        exit_code=2,
+    )
+
+    window._finish_healthy_bundle_update(adopted)
+
+    journal = read_journal(installation.data_dir, installation.resources)
+    assert journal is not None and journal.get("state") == "installed"
+    assert (installation.resources / "app.previous").is_dir()
+    written = _update_log(installation)
+    assert transaction in written and "another Waveguide Generator server" in written
 
 
 def test_a_called_off_restart_shows_as_a_failed_install(
