@@ -28,7 +28,7 @@ describe('FREEFORM editor workflows', () => {
     const design = designForFamily('OSSE');
     design.simulation.f1 = 250;
     const fallbackFetch = async () => new Response('', { status: 404 });
-    const fallback = await convertDesignToFreeform(design, fallbackFetch as typeof fetch);
+    const { design: fallback } = await convertDesignToFreeform(design, fallbackFetch as typeof fetch);
     expect(fallback.formula).toBe('FREEFORM');
     expect(fallback.length).toBe(design.L);
     expect(fallback.profile_h!.points).toEqual([{ t: 0, r: design.r0 }, { t: 1, r: 140 }]);
@@ -37,12 +37,12 @@ describe('FREEFORM editor workflows', () => {
     const converted = designForFamily('FREEFORM');
     converted.profile_h!.points[1].r = 222;
     const serverFetch = async () => new Response(JSON.stringify({ design: converted }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    expect((await convertDesignToFreeform(design, serverFetch as typeof fetch)).profile_h!.points.at(-1)!.r).toBe(222);
+    expect((await convertDesignToFreeform(design, serverFetch as typeof fetch)).design.profile_h!.points.at(-1)!.r).toBe(222);
   });
 
   it('converts the existing server profile export into distinct H/V editable meridians', () => {
     const csv = '# x_cm;y_cm;z_cm\n1;0;0\n2;0;5\n3;0;10\n\n0;1;0\n0;1.5;5\n0;2;10\n';
-    const converted = freeformFromProfileCsv(csv, designForFamily('OSSE'));
+    const { design: converted } = freeformFromProfileCsv(csv, designForFamily('OSSE'));
     expect(converted.length).toBe(100);
     expect(converted.profile_h!.points).toEqual([{ t: 0, r: 10 }, { t: .5, r: 20 }, { t: 1, r: 30 }]);
     expect(converted.profile_v!.points).toEqual([{ t: 0, r: 10 }, { t: .5, r: 15 }, { t: 1, r: 20 }]);
@@ -84,7 +84,7 @@ describe('FREEFORM editor workflows', () => {
         profileRequests.push(target);
         return new Response(target === 0 ? plainCsv : morphedExport, { status: 200 });
       };
-      return { converted: await convertDesignToFreeform(design, fetcher as typeof fetch), profileRequests };
+      return { converted: (await convertDesignToFreeform(design, fetcher as typeof fetch)).design, profileRequests };
     };
 
     it('reproduces a Rectangle morph with a rounded-rectangle mouth station and leaves morph off', async () => {

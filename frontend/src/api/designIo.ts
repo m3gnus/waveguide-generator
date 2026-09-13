@@ -239,6 +239,13 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
   return document;
 }
 
+/** A converted FREEFORM design, and what the conversion could not carry over. */
+export interface FreeformConversion {
+  design: DesignDocument;
+  /** Set when the converted shape differs from the source, for the user to read. */
+  notice?: string;
+}
+
 /**
  * Use a future server converter when present. Older servers convert from the
  * profile export instead, and failing that fall back to a two-anchor FREEFORM
@@ -247,7 +254,7 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
 export async function convertDesignToFreeform(
   design: DesignDocument,
   fetcher: typeof fetch = fetch,
-): Promise<DesignDocument> {
+): Promise<FreeformConversion> {
   const response = await fetcher('/api/design/convert?family=FREEFORM', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -255,17 +262,17 @@ export async function convertDesignToFreeform(
   });
   if (response.ok) {
     const body = await response.json() as { design?: Record<string, unknown> } | Record<string, unknown>;
-    return hydrateDesignDocument(('design' in body ? body.design : body) as Record<string, unknown>);
+    return { design: hydrateDesignDocument(('design' in body ? body.design : body) as Record<string, unknown>) };
   }
   if (response.status !== 404 && response.status !== 405) throw new Error(await errorMessage(response));
 
   const profileText = await exportProfileCsv(design, fetcher);
   if (profileText !== null) {
-    let converted: DesignDocument | null = null;
+    let converted: FreeformConversion | null = null;
     try { converted = freeformFromProfileCsv(profileText, design); } catch { /* use endpoint fallback */ }
     if (converted) {
-      const stations = await morphStations(design, converted, profileText, fetcher);
-      if (stations) converted.cross_sections = stations;
+      const stations = await morphStations(design, converted.design, profileText, fetcher);
+      if (stations) converted.design.cross_sections = stations;
       return converted;
     }
   }
@@ -281,7 +288,7 @@ export async function convertDesignToFreeform(
   fallback.profile_v!.throat_angle_deg = design.a0 ?? 15.5;
   fallback.profile_h!.mouth_angle_deg = design.a ?? 60;
   fallback.profile_v!.mouth_angle_deg = design.a ?? 60;
-  return fallback;
+  return { design: fallback };
 }
 
 async function exportProfileCsv(design: DesignDocument, fetcher: typeof fetch): Promise<string | null> {
@@ -523,44 +530,104 @@ function axisSection(sections: number[][][], axis: 'H' | 'V'): number[][] {
   }, { rows: [], ratio: Infinity, magnitude: -Infinity }).rows;
 }
 
-function sampleProfile(rows: number[][], scale: number): { z: number; r: number }[] {
-  const points = rows.map(([x, y, z]) => ({ z: z * 10 / scale, r: Math.hypot(x, y) * 10 / scale }));
-  if (points.length <= 64) return points;
-  return Array.from({ length: 64 }, (_unused, index) => points[Math.round(index * (points.length - 1) / 63)]);
+interface ProfileSample {
+  z: number;
+  r: number;
 }
 
-function tangentAngle(points: { z: number; r: number }[], mouth = false): number {
+function meridianSamples(rows: number[][], scale: number): ProfileSample[] {
+  return rows.map(([x, y, z]) => ({ z: z * 10 / scale, r: Math.hypot(x, y) * 10 / scale }));
+}
+
+/**
+ * The part of a meridian a FREEFORM profile can hold: its samples up to the
+ * first one that steps back toward the throat.
+ *
+ * A FREEFORM profile's z rises monotonically -- the mesher refuses one that
+ * folds -- but an R-OSSE mouth rolls back: at tmax 1 the profile turns past
+ * the vertical and curls toward the throat, so its mouth sits well short of
+ * its greatest z. Everything after the fold is the rolled-back lip. A sample
+ * that repeats the previous z is skipped rather than read as a fold.
+ */
+function unfoldedSamples(points: ProfileSample[]): { points: ProfileSample[]; folded: boolean } {
+  const kept = points.slice(0, 1);
+  for (const point of points.slice(1)) {
+    const step = point.z - kept.at(-1)!.z;
+    if (step < 0) return { points: kept, folded: true };
+    if (step > 0) kept.push(point);
+  }
+  return { points: kept, folded: false };
+}
+
+/**
+ * The anchors the FREEFORM editor accepts, both ends kept: at most 62 interior
+ * points, each at least 1 mm from either end. Samples crowd a fold, so without
+ * the margin a rolled-back conversion opens with an interior point the editor
+ * already reports as out of range.
+ */
+function anchorSamples(points: ProfileSample[]): ProfileSample[] {
+  const first = points[0];
+  const last = points.at(-1)!;
+  const interior = points.slice(1, -1).filter((point) => point.z >= first.z + 1 && point.z <= last.z - 1);
+  const anchors = [first, ...interior, last];
+  if (anchors.length <= 64) return anchors;
+  return Array.from({ length: 64 }, (_unused, index) => anchors[Math.round(index * (anchors.length - 1) / 63)]);
+}
+
+function tangentAngle(points: ProfileSample[], mouth = false): number {
   const left = mouth ? points.at(-2)! : points[0];
   const right = mouth ? points.at(-1)! : points[1];
   return Math.atan2(right.r - left.r, right.z - left.z) * 180 / Math.PI;
 }
 
-/** Convert the existing server profile-export format into editable H/V anchors. */
-export function freeformFromProfileCsv(text: string, source: DesignDocument): DesignDocument {
+/**
+ * Convert the existing server profile-export format into editable H/V anchors.
+ *
+ * A profile that rolls back is converted up to its fold, where it ends on a
+ * vertical tangent, and the notice says what was left out: FREEFORM has no
+ * way to hold the lip, and cropping the meridians at the source mouth's z
+ * instead reads each radius on the way out, far inside the real mouth.
+ */
+export function freeformFromProfileCsv(text: string, source: DesignDocument): FreeformConversion {
   const sections = profileSections(text);
   if (sections.length < 2) throw new Error('Profile export did not contain horizontal and vertical meridians.');
   const scale = Number.isFinite(source.scale) && source.scale > 0 ? source.scale : 1;
-  const horizontal = sampleProfile(axisSection(sections, 'H'), scale);
-  const vertical = sampleProfile(axisSection(sections, 'V'), scale);
-  if (horizontal.length < 2 || vertical.length < 2) throw new Error('Profile export did not contain usable meridians.');
-  const length = Math.min(horizontal.at(-1)!.z, vertical.at(-1)!.z);
-  const crop = (points: { z: number; r: number }[]) => {
+  const horizontal = meridianSamples(axisSection(sections, 'H'), scale);
+  const vertical = meridianSamples(axisSection(sections, 'V'), scale);
+  const unfoldedH = unfoldedSamples(horizontal);
+  const unfoldedV = unfoldedSamples(vertical);
+  if (unfoldedH.points.length < 2 || unfoldedV.points.length < 2) throw new Error('Profile export did not contain usable meridians.');
+  const length = Math.min(unfoldedH.points.at(-1)!.z, unfoldedV.points.at(-1)!.z);
+  const crop = (points: ProfileSample[]) => {
     const inside = points.filter((point) => point.z < length);
     const right = points.find((point) => point.z >= length) ?? points.at(-1)!;
     const left = inside.at(-1) ?? points[0];
     const ratio = right.z === left.z ? 0 : (length - left.z) / (right.z - left.z);
     return inside.concat({ z: length, r: left.r + ratio * (right.r - left.r) });
   };
-  const H = crop(horizontal); const V = crop(vertical);
+  const H = anchorSamples(crop(unfoldedH.points)); const V = anchorSamples(crop(unfoldedV.points));
+  // A meridian that ends at its own fold is vertical there. One cropped to the
+  // other plane's shorter length is still flaring, so keep its chord angle.
+  const mouthAngle = (unfolded: typeof unfoldedH, points: ProfileSample[]) => (
+    unfolded.folded && unfolded.points.at(-1)!.z === length ? 90 : tangentAngle(points, true)
+  );
   const converted = preserveSharedForFreeform(designForFamily('FREEFORM'), source);
   converted.length = length;
   converted.profile_h!.points = H.map(({ z, ...point }) => ({ t: z / length, ...point }));
   converted.profile_v!.points = V.map(({ z, ...point }) => ({ t: z / length, ...point }));
   converted.profile_h!.throat_angle_deg = tangentAngle(H);
   converted.profile_v!.throat_angle_deg = tangentAngle(V);
-  converted.profile_h!.mouth_angle_deg = tangentAngle(H, true);
-  converted.profile_v!.mouth_angle_deg = tangentAngle(V, true);
-  return converted;
+  converted.profile_h!.mouth_angle_deg = mouthAngle(unfoldedH, H);
+  converted.profile_v!.mouth_angle_deg = mouthAngle(unfoldedV, V);
+  if (!unfoldedH.folded && !unfoldedV.folded) return { design: converted };
+  const mm = (value: number) => `${value.toFixed(1)} mm`;
+  return {
+    design: converted,
+    notice: `The ${source.formula} profile rolls back: it reaches z = ${mm(length)}, then curls back toward the throat. `
+      + 'A FREEFORM profile cannot fold back, so the converted profile ends there and leaves out the rolled-back lip. '
+      + `Mouth radius: horizontal ${mm(H.at(-1)!.r)} (source ${mm(horizontal.at(-1)!.r)}), `
+      + `vertical ${mm(V.at(-1)!.r)} (source ${mm(vertical.at(-1)!.r)}).`,
+  };
 }
 
 function preserveSharedForFreeform(converted: DesignDocument, source: DesignDocument): DesignDocument {

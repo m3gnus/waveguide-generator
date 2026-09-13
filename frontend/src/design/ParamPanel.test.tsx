@@ -172,6 +172,34 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[aria-label="Switch to FREEFORM"]')).toBeNull();
   });
 
+  it('keeps a rolled-back conversion notice after the switch closes, until it is dismissed', async () => {
+    // One meridian per plane that rolls back after z = 137.52 mm to a 140 mm mouth.
+    const tail = [[0, 12.7], [60, 40], [120, 95], [137.15, 118.25], [137.52, 125.08], [132.43, 135.72], [119.71, 140]];
+    const meridian = (plane: 'H' | 'V') => tail.map(([z, r]) => (plane === 'H' ? `${r / 10};0;${z / 10}` : `0;${r / 10};${z / 10}`)).join('\n');
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => Promise.resolve(String(input).startsWith('/api/export/profiles')
+      ? new Response(`# x_cm;y_cm;z_cm\n${meridian('H')}\n\n${meridian('V')}\n`, { status: 200 })
+      : new Response('not found', { status: 404 }))));
+    const family = host.querySelector<HTMLSelectElement>('#family')!;
+    act(() => {
+      family.value = 'FREEFORM';
+      family.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const convert = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Switch to FREEFORM"] button')].find((button) => button.textContent === 'Convert current design')!;
+    await act(async () => {
+      convert.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(useDesignStore.getState().design.formula).toBe('FREEFORM');
+    expect(host.querySelector('[aria-label="Switch to FREEFORM"]')).toBeNull();
+    const notice = host.querySelector('.conversion-notice')!;
+    expect(notice.getAttribute('role')).toBe('status');
+    expect(notice.textContent).toContain('rolls back');
+    expect(notice.textContent).toContain('horizontal 125.1 mm (source 140.0 mm)');
+    act(() => notice.querySelector('button')!.click());
+    expect(host.querySelector('.conversion-notice')).toBeNull();
+  });
+
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {
     const input = host.querySelector<HTMLInputElement>('#parameter-filter-geometry')!;
     const setInputValue = (value: string) => Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);

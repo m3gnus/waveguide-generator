@@ -1077,6 +1077,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const [query, setQuery] = useState('');
   const [freeformChoice, setFreeformChoice] = useState(false);
   const [conversionError, setConversionError] = useState<string | null>(null);
+  const [conversionNotice, setConversionNotice] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const conversionGeneration = useRef(0);
   const searching = Boolean(query.trim());
@@ -1177,25 +1178,31 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       <label htmlFor="family">Family</label>
       <select id="family" value={design.formula} onChange={(event) => {
         const family = event.target.value as DesignFamily;
+        setConversionNotice(null);
         if (family === 'FREEFORM' && design.formula !== 'FREEFORM') setFreeformChoice(true);
         else setFamily(family);
       }}>
         <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
       </select>
     </div>
+    {conversionNotice && <div className="field-warning conversion-notice" role="status">
+      {conversionNotice} <button onClick={() => setConversionNotice(null)}>Dismiss</button>
+    </div>}
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Switch to FREEFORM">
       <b>Switch to FREEFORM</b><span>Choose how to initialize the editable profiles.</span>
       <div><button onClick={() => { setFamily('FREEFORM'); setFreeformChoice(false); }}>Start blank</button><button disabled={converting} onClick={() => {
         const conversion = ++conversionGeneration.current;
         const sourceRevision = useDesignStore.getState().designRevision;
         setConverting(true); setConversionError(null);
-        void convertDesignToFreeform(design).then((converted) => {
+        void convertDesignToFreeform(design).then(({ design: converted, notice }) => {
           if (conversion !== conversionGeneration.current) return;
           if (useDesignStore.getState().designRevision !== sourceRevision) {
             setConversionError('The design changed while it was being converted. Review the edits and try again.');
             return;
           }
           loadDesign(converted);
+          // The choice closes on success, so the notice lives outside it.
+          setConversionNotice(notice ?? null);
           setFreeformChoice(false);
         }).catch((error) => {
           if (conversion === conversionGeneration.current) setConversionError(error instanceof Error ? error.message : String(error));

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { exportGeometryToOutputFolder, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
-import { serializeDesign } from '../stores/design';
+import { convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProfileCsv, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
+import { designForFamily, serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
   it('decodes ATH quadrant digits and derives custom zmap sampling', () => {
@@ -47,6 +47,89 @@ describe('design hydration', () => {
     expect(design.a).toBe(25);
     expect(design._expressions).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
     expect(serializeDesign(design)).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
+  });
+});
+
+describe('FREEFORM conversion of a rolled-back profile', () => {
+  // The default R-OSSE meridian (R 140, tmax 1) as the pinned mesher exports
+  // it, thinned to its last rows: z peaks at 137.52 mm, then the lip rolls
+  // back to the 140 mm mouth at z = 119.71 mm.
+  const rolledBack: [number, number][] = [
+    [0, 12.7], [40, 31], [80, 58], [120, 92], [131.14, 102.93], [134.97, 110.79],
+    [137.15, 118.25], [137.52, 125.08], [135.96, 131], [132.43, 135.72], [126.97, 138.85], [119.71, 140],
+  ];
+  /** A profile export with one H and one V meridian, each given as [z, r] in mm. */
+  const exportCsv = (horizontal: [number, number][], vertical: [number, number][] = horizontal) => [
+    '# x_cm;y_cm;z_cm',
+    ...horizontal.map(([z, r]) => `${r / 10};0;${z / 10}`),
+    '',
+    ...vertical.map(([z, r]) => `0;${r / 10};${z / 10}`),
+    '',
+  ].join('\r\n');
+  const increasing = (values: number[]) => values.every((value, index) => index === 0 || value > values[index - 1]);
+
+  it('ends the profile at its fold on a vertical tangent and says what it left out', () => {
+    const { design, notice } = freeformFromProfileCsv(exportCsv(rolledBack), designForFamily('R-OSSE'));
+    expect(design.length).toBeCloseTo(137.52, 6);
+    for (const profile of [design.profile_h!, design.profile_v!]) {
+      // Cropping at the mouth's z read the radius on the way out, near 94 mm.
+      // The sample 0.37 mm short of the fold is dropped: the editor wants every
+      // interior point at least 1 mm from either end.
+      expect(profile.points).toHaveLength(7);
+      expect(profile.points.at(-2)!.t * design.length!).toBeCloseTo(134.97, 6);
+      expect(profile.points.at(-1)!.t).toBe(1);
+      expect(profile.points.at(-1)!.r).toBeCloseTo(125.08, 6);
+      expect(increasing(profile.points.map((point) => point.t))).toBe(true);
+      expect(profile.mouth_angle_deg).toBe(90);
+    }
+    expect(notice).toBe('The R-OSSE profile rolls back: it reaches z = 137.5 mm, then curls back toward the throat. '
+      + 'A FREEFORM profile cannot fold back, so the converted profile ends there and leaves out the rolled-back lip. '
+      + 'Mouth radius: horizontal 125.1 mm (source 140.0 mm), vertical 125.1 mm (source 140.0 mm).');
+  });
+
+  it('crops the other plane at a shorter fold and keeps its flaring mouth angle', () => {
+    const shorter = rolledBack.map(([z, r]): [number, number] => [.9 * z, r]);
+    const { design, notice } = freeformFromProfileCsv(exportCsv(rolledBack, shorter), designForFamily('R-OSSE'));
+    const length = .9 * 137.52;
+    expect(design.length).toBeCloseTo(length, 6);
+    expect(design.profile_v!.points.at(-1)!.r).toBeCloseTo(125.08, 6);
+    expect(design.profile_v!.mouth_angle_deg).toBe(90);
+    // H is cut on its way out, between the samples at z = 120 and 131.14 mm.
+    expect(design.profile_h!.points.at(-1)!.t).toBe(1);
+    expect(design.profile_h!.points.at(-1)!.r).toBeCloseTo(92 + (length - 120) / (131.14 - 120) * (102.93 - 92), 6);
+    expect(design.profile_h!.mouth_angle_deg).toBeCloseTo(Math.atan2(102.93 - 92, 131.14 - 120) * 180 / Math.PI, 6);
+    expect(notice).toContain('horizontal 95.7 mm (source 140.0 mm), vertical 125.1 mm (source 140.0 mm)');
+  });
+
+  it('converts a profile that never folds as before, without a notice, skipping a repeated z', () => {
+    const { design, notice } = freeformFromProfileCsv(exportCsv([[0, 12.7], [50, 30], [50, 30], [100, 80]]), designForFamily('OSSE'));
+    expect(notice).toBeUndefined();
+    expect(design.length).toBeCloseTo(100, 6);
+    expect(design.profile_h!.points.map((point) => point.t)).toEqual([0, expect.closeTo(.5, 6), 1]);
+    expect(design.profile_h!.mouth_angle_deg).toBeCloseTo(Math.atan2(50, 50) * 180 / Math.PI, 6);
+  });
+
+  it('keeps the fold as the last of at most 64 anchors', () => {
+    // 151 rows rise to z = 100 mm, and 50 more roll back.
+    const dense = Array.from({ length: 201 }, (_unused, row): [number, number] => [100 * Math.sin(Math.PI * row / 300), 10 + row / 2]);
+    const { design } = freeformFromProfileCsv(exportCsv(dense), designForFamily('R-OSSE'));
+    expect(design.length).toBeCloseTo(100, 6);
+    expect(design.profile_h!.points).toHaveLength(64);
+    expect(design.profile_h!.points.at(-1)!.r).toBeCloseTo(85, 6);
+    expect(increasing(design.profile_h!.points.map((point) => point.t))).toBe(true);
+  });
+
+  it('returns the notice from the whole conversion, with one export for an unmorphed design', async () => {
+    const requests: string[] = [];
+    const fetcher = async (url: string) => {
+      requests.push(url);
+      return url.startsWith('/api/export/profiles') ? new Response(exportCsv(rolledBack), { status: 200 }) : new Response('', { status: 404 });
+    };
+    const { design, notice } = await convertDesignToFreeform(designForFamily('R-OSSE'), fetcher as typeof fetch);
+    expect(requests).toEqual(['/api/design/convert?family=FREEFORM', '/api/export/profiles?kind=profiles']);
+    expect(design.formula).toBe('FREEFORM');
+    expect(design.profile_h!.points.at(-1)!.r).toBeCloseTo(125.08, 6);
+    expect(notice).toContain('rolls back');
   });
 });
 
