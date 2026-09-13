@@ -1598,6 +1598,9 @@ class JobRuntime:
         )
         self._started = False
         self._shutting_down = False
+        #: A stop has begun (``mark_running_interrupted_by_quit``), which can be
+        #: seconds before ``shutdown`` runs. Admission closes then, not later.
+        self._stopping = False
         #: Jobs this runtime's own shutdown asked to stop (``_cancel_job``).
         self._quit_interrupted: set[str] = set()
         self._start_lock = asyncio.Lock()
@@ -1667,12 +1670,18 @@ class JobRuntime:
 
         approval = self.restart_approval
         if approval is None:
-            return True, self.store.start_job(job_id, fields, payload)
-        admitted, event = approval.admit(
-            lambda: self.store.start_job(job_id, fields, payload)
-        )
-        if not admitted:
-            self._queue.appendleft(job_id)
+            admitted, event = True, self.store.start_job(job_id, fields, payload)
+        else:
+            admitted, event = approval.admit(
+                lambda: self.store.start_job(job_id, fields, payload)
+            )
+            if not admitted:
+                self._queue.appendleft(job_id)
+        if admitted and event is not None and self._stopping:
+            # A stop began between this job's last admission check and its
+            # start, after the stop's own marks were written. Mark it too, so
+            # the next start never reads it as a crash.
+            self.mark_running_interrupted_by_quit("a job started as the stop began")
         return admitted, event
 
     async def start(self) -> None:
@@ -1684,6 +1693,7 @@ class JobRuntime:
             if self._started:
                 return
             self._shutting_down = False
+            self._stopping = False
             self._loop = asyncio.get_running_loop()
             await asyncio.to_thread(self._ownership.acquire)
             try:
@@ -1717,20 +1727,30 @@ class JobRuntime:
         not the event loop, and ahead of ``shutdown``, which runs only after
         Uvicorn's drain and the handlers registered before it. If the process
         ends in between, the next start still reads these jobs as interrupted
-        by Quit rather than as a crash. Thread-safe through the store's lock;
-        never raises. Returns the ids it marked.
+        by Quit rather than as a crash -- or as ended by the update restart,
+        when one is approved (contract §4.3), as ``shutdown`` would mark them.
+        It closes admission first, so no queued job starts unmarked in the
+        seconds before ``shutdown`` runs; one that was already past its last
+        check marks itself (``_mark_running``). Only for a stop that ends this
+        runtime: admission stays closed until the next ``start``. Thread-safe
+        through the store's lock; never raises. Returns the ids it marked.
         """
 
+        self._stopping = True
         try:
-            marked = self.store.mark_running_interrupted_by_quit()
+            update_restart = self._restart_pending()
+            marked = self.store.mark_running_interrupted_by_quit(
+                interrupted_by_update_restart=update_restart
+            )
         except Exception:  # noqa: BLE001 - a stop must proceed whatever the store does
             logger.exception("Could not mark running jobs as interrupted by Quit")
             return []
         if marked:
             logger.info(
-                "Stop began (%s) with %d running job(s); marked interrupted by Quit: %s",
+                "Stop began (%s) with %d running job(s); marked %s: %s",
                 reason or "no reason given",
                 len(marked),
+                "ended by the update restart" if update_restart else "interrupted by Quit",
                 ", ".join(marked),
             )
         return marked
@@ -2747,7 +2767,7 @@ class JobRuntime:
         return await asyncio.to_thread(self.resume, cursor)
 
     def _ensure_scheduler(self) -> None:
-        if self._shutting_down or not self._started or not self._queue:
+        if self._shutting_down or self._stopping or not self._started or not self._queue:
             return
         if self._restart_pending():
             # Not while a restart is approved: its release starts the
@@ -2772,13 +2792,19 @@ class JobRuntime:
             # field work resume only after every queued solve, rather than in
             # the narrow hand-off between adjacent jobs.
             async with self.metal_permit.solve():
-                # Admission stops with shutdown: a queued job must not start in
-                # the gap a cancelled one leaves, where no Quit marks it and the
-                # budget cuts it off. It stays queued for the next start. It
-                # stops, too, while an update restart is approved (contract
-                # §4.3): the job stays queued for the new process, or for this
-                # one if the restart is called off.
-                while self._queue and not self._shutting_down and not self._restart_pending():
+                # Admission stops when a stop begins, not only at shutdown: a
+                # queued job must not start in the gap a finished or cancelled
+                # one leaves, where no Quit marks it and the budget cuts it off.
+                # It stays queued for the next start. It stops, too, while an
+                # update restart is approved (contract §4.3): the job stays
+                # queued for the new process, or for this one if the restart is
+                # called off.
+                while (
+                    self._queue
+                    and not self._shutting_down
+                    and not self._stopping
+                    and not self._restart_pending()
+                ):
                     job_id = self._queue.popleft()
                     row = self.store.get_job_row(job_id)
                     if row is None or row["status"] != "queued":
@@ -2800,7 +2826,7 @@ class JobRuntime:
                             logger.exception("Post-job retention pruning failed")
         finally:
             self._scheduler_task = None
-            if self._queue and not self._shutting_down:
+            if self._queue and not self._shutting_down and not self._stopping:
                 self._ensure_scheduler()
 
     async def _run_job(self, job_id: str, row: Mapping[str, Any]) -> None:
@@ -2879,8 +2905,8 @@ class JobRuntime:
                 raise EngineUnavailableError(
                     f"Solve engine '{request.options.engine}' became unavailable"
                 )
-            if self._shutting_down:
-                # Shutdown began while this job was being prepared. It has not
+            if self._shutting_down or self._stopping:
+                # A stop began while this job was being prepared. It has not
                 # started, so its row stays queued for the next start.
                 return
             # An update restart may have been approved while this job was being

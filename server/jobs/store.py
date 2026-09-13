@@ -880,19 +880,27 @@ class JobStore:
                 return None
             return self._append_event(conn, job_id, "stage", payload)
 
-    def mark_running_interrupted_by_quit(self) -> list[str]:
+    def mark_running_interrupted_by_quit(
+        self, *, interrupted_by_update_restart: bool = False
+    ) -> list[str]:
         """Mark every running job, in one write, as interrupted by a Quit just begun.
 
         The shutdown backstop runs this the moment a stop begins
         (``launch/serve.py``), before Uvicorn's drain and every shutdown
         handler, so a process that ends anywhere inside its budget still leaves
-        the reason for ``recover_on_startup``. It sets the same metadata flag
-        as ``request_cancellation(..., interrupted_by_quit=True)`` and nothing
-        else: status, stage and events move only when the runtime's own
-        shutdown requests the cancellation. A job the user had already asked
-        to stop is left to that request. Returns the ids it marked.
+        the reason for ``recover_on_startup``. It sets the same metadata flags
+        as ``request_cancellation`` and nothing else: status, stage and events
+        move only when the runtime's own shutdown requests the cancellation.
+        ``interrupted_by_update_restart`` adds the update restart's mark beside
+        the Quit one, as ``request_cancellation`` does (contract §4.3). A job
+        the user had already asked to stop is left to that request. Returns the
+        ids it marked.
         """
 
+        keys = [QUIT_INTERRUPTION_KEY]
+        if interrupted_by_update_restart:
+            keys.append(UPDATE_RESTART_INTERRUPTION_KEY)
+        marks = ", ".join(f"'$.{key}', json('true')" for key in keys)
         with self._lock, self._transaction() as conn:
             ids = [
                 str(row["id"])
@@ -906,8 +914,7 @@ class JobStore:
                 conn.execute(
                     f"""UPDATE simulation_jobs
                         SET task_metadata_json = json_set(
-                            COALESCE(task_metadata_json, '{{}}'),
-                            '$.{QUIT_INTERRUPTION_KEY}', json('true'))
+                            COALESCE(task_metadata_json, '{{}}'), {marks})
                         WHERE id IN ({",".join("?" for _ in ids)})""",
                     ids,
                 )

@@ -1667,3 +1667,180 @@ def test_marking_at_quit_never_raises(tmp_path: Path) -> None:
     (tmp_path / "jobs.db").mkdir()
 
     assert runtime.mark_running_interrupted_by_quit("a stop request") == []
+
+
+def test_a_stop_that_begins_during_an_approved_update_restart_is_marked_as_that(
+    tmp_path: Path,
+) -> None:
+    """The begin-time mark names the update restart when one is approved (contract §4.3).
+
+    A process cut off inside its budget before the runtime's own shutdown ran
+    has only this mark, so it alone decides what the next start reads.
+    """
+
+    from server.jobs.runtime import UPDATE_RESTART_MESSAGE, UPDATE_RESTART_STAGE_MESSAGE
+    from server.updates.restart import RestartApproval
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    now = datetime.now().isoformat()
+    store.create_job(
+        {
+            "id": "running",
+            "status": "running",
+            "created_at": now,
+            "updated_at": now,
+            "queued_at": now,
+            "started_at": now,
+            "progress": 0.3,
+            "stage": "solve",
+            "config_json": _request(delay_ms=1).model_dump(mode="json"),
+            "config_summary_json": {"formula_type": "OSSE"},
+            "task_metadata": {},
+        }
+    )
+    approval = RestartApproval()
+    approval.approve("v2.0.1")
+
+    runtime = JobRuntime(store, restart_approval=approval)
+    assert runtime.mark_running_interrupted_by_quit("status window requested quit") == ["running"]
+    store.close()
+
+    reopened = JobStore(tmp_path / "jobs.db")
+    reopened.initialize()
+
+    async def scenario() -> None:
+        next_start = JobRuntime(reopened)
+        await next_start.start()
+        await next_start.wait_idle()
+        job = await next_start.get_job("running")
+        assert job["status"] == "cancelled", job
+        assert job["stage_message"] == UPDATE_RESTART_STAGE_MESSAGE, job
+        assert job["error_message"] == UPDATE_RESTART_MESSAGE, job
+        await next_start.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_no_queued_job_starts_once_a_stop_has_begun(tmp_path: Path) -> None:
+    """A stop begins before the runtime's own shutdown -- up to Uvicorn's 3 s drain
+    earlier. A queued job that started in between would carry no mark, and if
+    the process were then cut off the next start would read it as a crash. So
+    the begin-time mark closes admission first: the job stays queued for the
+    next start.
+    """
+
+    async def scenario() -> tuple[int, str]:
+        database = tmp_path / "jobs.db"
+        solves_started: list[int] = []
+        first_started = threading.Event()
+        release = threading.Event()
+
+        class HeldEngine:
+            name = "held"
+
+            async def run(
+                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any
+            ) -> Any:
+                del stage_cb, cancel_cb
+
+                def solve() -> Any:
+                    solves_started.append(1)
+                    first_started.set()
+                    release.wait(30)
+                    return SimpleNamespace(
+                        results={"metadata": {}}, msh_text=None, mesh_stats=None
+                    )
+
+                return await asyncio.to_thread(solve)
+
+        runtime = JobRuntime(
+            JobStore(database),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _name: HeldEngine(),
+            ),
+        )
+        try:
+            await runtime.submit(_bare_request(engine="bempp"))
+            assert await asyncio.to_thread(first_started.wait, 5.0)
+            queued_id = await runtime.submit(_bare_request(engine="bempp"))
+
+            # The backstop's thread, the moment the stop begins.
+            await asyncio.to_thread(
+                runtime.mark_running_interrupted_by_quit, "status window requested quit"
+            )
+            # The running job finishes during the drain; nothing may take its place.
+            release.set()
+            deadline = time.monotonic() + 3.0
+            while len(solves_started) < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.05)
+            status = str(runtime.store.get_job_row(queued_id)["status"])
+            return len(solves_started), status
+        finally:
+            release.set()
+            await runtime.shutdown()
+
+    solves, queued_status = asyncio.run(scenario())
+    assert solves == 1, "a queued job started after the stop began"
+    assert queued_status == "queued"
+
+
+def test_a_job_that_starts_as_the_stop_begins_marks_itself(tmp_path: Path) -> None:
+    """The stop begins after a queued job's last admission check but before its
+    start: the stop's own marks miss it, so its start marks it.
+    """
+
+    database = tmp_path / "jobs.db"
+
+    async def scenario() -> object:
+        started = threading.Event()
+        release = threading.Event()
+
+        class HeldEngine:
+            name = "held"
+
+            async def run(
+                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any
+            ) -> Any:
+                del stage_cb, cancel_cb
+
+                def solve() -> Any:
+                    started.set()
+                    release.wait(30)
+                    return SimpleNamespace(
+                        results={"metadata": {}}, msh_text=None, mesh_stats=None
+                    )
+
+                return await asyncio.to_thread(solve)
+
+        store = JobStore(database)
+        runtime = JobRuntime(
+            store,
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _name: HeldEngine(),
+            ),
+        )
+        real_start = store.start_job
+
+        def start_as_the_stop_begins(*args: Any, **kwargs: Any) -> Any:
+            # Past the admission checks, before the row is marked running.
+            runtime.mark_running_interrupted_by_quit("status window requested quit")
+            return real_start(*args, **kwargs)
+
+        store.start_job = start_as_the_stop_begins  # type: ignore[method-assign]
+        try:
+            job_id = await runtime.submit(_bare_request(engine="bempp"))
+            assert await asyncio.to_thread(started.wait, 5.0)
+            with sqlite3.connect(database) as conn:
+                return conn.execute(
+                    "SELECT json_extract(task_metadata_json, '$.interrupted_by_quit') "
+                    "FROM simulation_jobs WHERE id = ?",
+                    (job_id,),
+                ).fetchone()[0]
+        finally:
+            release.set()
+            await runtime.shutdown()
+
+    assert asyncio.run(scenario()) == 1

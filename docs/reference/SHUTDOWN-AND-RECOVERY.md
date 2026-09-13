@@ -23,7 +23,8 @@ Every way a server is asked to stop starts one **5 s budget**
 Within the budget, in this order:
 
 1. **The moment the stop begins**, on a thread of its own, every running job is
-   marked *interrupted by Quit* (`JobRuntime.mark_running_interrupted_by_quit`).
+   marked *interrupted by Quit*, or *ended by the update restart* when one is
+   approved (`JobRuntime.mark_running_interrupted_by_quit`; update contract §4.3).
    This happens before Uvicorn's connection drain (up to 3 s) and before any
    shutdown handler, so the reason is on disk however early the process ends.
 2. Uvicorn stops accepting connections and drains the open ones.
