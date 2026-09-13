@@ -20,7 +20,9 @@ from server.mesh.imported import (
     resolve_instance_source,
     resolve_user_source,
     resolve_vertical_recentre,
+    apply_rigid_normalisation,
     rigid_inverse,
+    rigid_occ_motion,
     validate_imported_sizes,
     verify_symmetry_cut,
     _advanced_face_identifier_surfaces,
@@ -94,6 +96,95 @@ def test_rigid_transform_refuses_scale_and_mirror() -> None:
         rigid_inverse([[2, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
     with pytest.raises(ImportedMeshError, match="mirrored"):
         rigid_inverse([[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+
+
+def _rodrigues(axis: tuple[float, float, float], angle: float) -> np.ndarray:
+    k = np.asarray(axis, dtype=float) / np.linalg.norm(axis)
+    cross = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    return np.eye(3) + math.sin(angle) * cross + (1.0 - math.cos(angle)) * (cross @ cross)
+
+
+_RIGID_CASES = [
+    ((0.0, 0.0, 1.0), 0.0),
+    ((1.0, 0.0, 0.0), math.pi / 2.0),
+    ((0.0, 1.0, 0.0), -math.pi / 3.0),
+    ((1.0, 0.0, 0.0), math.pi),
+    ((0.0, 1.0, 0.0), math.pi),
+    ((0.0, 0.0, 1.0), math.pi),
+    ((1.0, -1.0, 2.0), math.pi),
+    ((1.0, 2.0, 3.0), math.pi - 1.0e-9),
+    ((1.0, 2.0, 3.0), 0.7),
+    ((-3.0, 0.5, 1.0), 1.0e-9),
+]
+
+
+@pytest.mark.parametrize(("axis", "angle"), _RIGID_CASES)
+def test_rigid_motion_decomposes_into_the_rotation_and_move_it_came_from(
+    axis: tuple[float, float, float], angle: float
+) -> None:
+    matrix = np.eye(4)
+    matrix[:3, :3] = _rodrigues(axis, angle)
+    matrix[:3, 3] = (120.0, -45.0, 30.0)
+
+    got_axis, got_angle, translation = rigid_occ_motion(matrix)
+
+    assert 0.0 <= got_angle <= math.pi
+    assert np.linalg.norm(got_axis) == pytest.approx(1.0, abs=1.0e-15)
+    assert _rodrigues(got_axis, got_angle) == pytest.approx(matrix[:3, :3], rel=0.0, abs=1.0e-12)
+    assert translation == (120.0, -45.0, 30.0)
+    # Pure: the viewport replay must issue the solve's calls to the bit.
+    assert rigid_occ_motion(np.asarray(matrix.tolist())) == (got_axis, got_angle, translation)
+
+
+def test_rigid_motion_refuses_scale_shear_and_mirror() -> None:
+    for bad in (
+        np.diag([2.0, 1.0, 1.0, 1.0]),
+        np.diag([-1.0, 1.0, 1.0, 1.0]),
+        np.array([[1.0, 0.1, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]),
+        np.array([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.1, 1.0]]),
+    ):
+        with pytest.raises(ImportedMeshError, match="rigid"):
+            rigid_occ_motion(bad)
+
+
+def test_rigid_normalisation_keeps_planes_planar_and_lands_where_the_matrix_says() -> None:
+    """A throat face must still be a Plane after its placement is undone.
+
+    ``affineTransform`` would rewrite every face of this box as a B-spline;
+    role resolution needs the planar throat as a ``Plane``.
+    """
+
+    pytest.importorskip("gmsh")
+    import gmsh
+
+    from server.mesh.gmsh_worker import _run_in_gmsh_session
+
+    matrix = np.eye(4)
+    matrix[:3, :3] = _rodrigues((1.0, 2.0, 3.0), 0.7)
+    matrix[:3, 3] = (120.0, -45.0, 30.0)
+
+    def run() -> tuple[set[str], np.ndarray, np.ndarray, np.ndarray]:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        box = gmsh.model.occ.addBox(0.0, 0.0, 0.0, 10.0, 20.0, 30.0)
+        gmsh.model.occ.synchronize()
+        before = np.asarray(
+            [gmsh.model.getValue(0, tag, []) for _dim, tag in gmsh.model.getEntities(0)]
+        )
+        applied = apply_rigid_normalisation(gmsh, [(3, box)], matrix)
+        after = np.asarray(
+            [gmsh.model.getValue(0, tag, []) for _dim, tag in gmsh.model.getEntities(0)]
+        )
+        types = {str(gmsh.model.getType(2, tag)) for _dim, tag in gmsh.model.getEntities(2)}
+        gmsh.clear()
+        return types, before, after, applied
+
+    types, before, after, applied = _run_in_gmsh_session(run)
+
+    assert types == {"Plane"}
+    assert applied == pytest.approx(matrix, rel=0.0, abs=1.0e-12)
+    expected = before @ matrix[:3, :3].T + matrix[:3, 3]
+    assert after == pytest.approx(expected, rel=0.0, abs=1.0e-9)
 
 
 def test_instance_role_resolution_five_rows() -> None:

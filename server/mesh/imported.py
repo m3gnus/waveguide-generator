@@ -469,6 +469,90 @@ def rigid_inverse(matrix: Any, *, tolerance: float = 1.0e-6) -> np.ndarray:
     return inverse
 
 
+def rigid_occ_motion(
+    matrix: Any, *, tolerance: float = 1.0e-6
+) -> tuple[tuple[float, float, float], float, tuple[float, float, float]]:
+    """Split a rigid 4x4 into the OCC rotation and translation that apply it.
+
+    Returns ``(axis, angle_rad, translation_mm)``: rotate right-handed about
+    ``axis`` through the origin by ``angle_rad`` in ``[0, pi]``, then
+    translate. A zero angle comes back with the +z axis.
+
+    ``gmsh.model.occ.affineTransform`` goes through OpenCASCADE's
+    ``BRepBuilderAPI_GTransform``, which rewrites every analytic surface as a
+    B-spline even for a proper rotation: a planar throat stays flat to 1e-12
+    mm but is no longer a ``Plane``, and role resolution refuses it.
+    ``rotate`` and ``translate`` are ``gp_Trsf`` moves that keep each surface
+    its type. This is a pure function of the matrix, so two callers holding
+    the same matrix issue bit-identical OCC calls.
+    """
+
+    value = np.asarray(matrix, dtype=float)
+    if value.shape != (4, 4) or not np.isfinite(value).all():
+        raise ImportedMeshError("normalisation: rigid transform must be a finite 4x4 matrix")
+    r = value[:3, :3]
+    if (
+        not np.allclose(value[3], [0.0, 0.0, 0.0, 1.0], atol=tolerance, rtol=0.0)
+        or not np.allclose(r.T @ r, np.eye(3), atol=tolerance, rtol=0.0)
+        or abs(float(np.linalg.det(r)) - 1.0) > tolerance
+    ):
+        raise ImportedMeshError("normalisation: transform is not a proper rigid motion within 1e-6")
+    # Shepperd's method: derive the largest quaternion component from the
+    # diagonal, so no branch divides by a small number, including near 180 deg.
+    trace = float(np.trace(r))
+    pick = int(np.argmax((trace, r[0, 0], r[1, 1], r[2, 2])))
+    if pick == 0:
+        s = 2.0 * math.sqrt(1.0 + trace)
+        w, x, y, z = 0.25 * s, (r[2, 1] - r[1, 2]) / s, (r[0, 2] - r[2, 0]) / s, (r[1, 0] - r[0, 1]) / s
+    elif pick == 1:
+        s = 2.0 * math.sqrt(1.0 + r[0, 0] - r[1, 1] - r[2, 2])
+        w, x, y, z = (r[2, 1] - r[1, 2]) / s, 0.25 * s, (r[0, 1] + r[1, 0]) / s, (r[0, 2] + r[2, 0]) / s
+    elif pick == 2:
+        s = 2.0 * math.sqrt(1.0 - r[0, 0] + r[1, 1] - r[2, 2])
+        w, x, y, z = (r[0, 2] - r[2, 0]) / s, (r[0, 1] + r[1, 0]) / s, 0.25 * s, (r[1, 2] + r[2, 1]) / s
+    else:
+        s = 2.0 * math.sqrt(1.0 - r[0, 0] - r[1, 1] + r[2, 2])
+        w, x, y, z = (r[1, 0] - r[0, 1]) / s, (r[0, 2] + r[2, 0]) / s, (r[1, 2] + r[2, 1]) / s, 0.25 * s
+    vector = np.asarray((x, y, z), dtype=float)
+    if w < 0.0:
+        w, vector = -w, -vector
+    sine = float(np.linalg.norm(vector))
+    translation = (float(value[0, 3]), float(value[1, 3]), float(value[2, 3]))
+    if sine == 0.0:
+        return (0.0, 0.0, 1.0), 0.0, translation
+    axis = vector / sine
+    return (float(axis[0]), float(axis[1]), float(axis[2])), 2.0 * math.atan2(sine, float(w)), translation
+
+
+def _axis_angle_matrix(axis: Iterable[float], angle: float) -> np.ndarray:
+    k = np.asarray(tuple(axis), dtype=float)
+    cross = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    return np.eye(3) + math.sin(angle) * cross + (1.0 - math.cos(angle)) * (cross @ cross)
+
+
+def apply_rigid_normalisation(gmsh: Any, dim_tags: Any, matrix: Any) -> np.ndarray:
+    """Move imported OCC bodies by a rigid matrix and return the move applied.
+
+    The solve and the viewport replay both call this with the same recorded
+    matrix, so their models agree bit for bit -- the viewport's geometry
+    fingerprint check depends on it. An identity is not applied at all.
+    """
+
+    value = np.asarray(matrix, dtype=float)
+    if np.allclose(value, np.eye(4)):
+        return np.eye(4)
+    axis, angle, translation = rigid_occ_motion(value)
+    if angle != 0.0:
+        gmsh.model.occ.rotate(dim_tags, 0.0, 0.0, 0.0, *axis, angle)
+    if any(translation):
+        gmsh.model.occ.translate(dim_tags, *translation)
+    gmsh.model.occ.synchronize()
+    applied = np.eye(4)
+    applied[:3, :3] = _axis_angle_matrix(axis, angle)
+    applied[:3, 3] = translation
+    return applied
+
+
 def _translation_matrix(dx: float, dy: float, dz: float) -> np.ndarray:
     matrix = np.eye(4)
     matrix[:3, 3] = (float(dx), float(dy), float(dz))
@@ -1694,9 +1778,9 @@ def build_imported_viewport_mesh(
         imported = _import_occ_root_bodies(gmsh, assembly_path)
         if not imported:
             raise ImportedMeshError("viewport meshing: assembly STEP contains no OCC geometry")
-        if not np.allclose(matrix, np.eye(4)):
-            gmsh.model.occ.affineTransform(imported, matrix.reshape(-1).tolist())
-            gmsh.model.occ.synchronize()
+        # The same call, on the same recorded matrix, as the solve: see
+        # :func:`apply_rigid_normalisation`.
+        apply_rigid_normalisation(gmsh, imported, matrix)
         if recentre.any():
             gmsh.model.occ.translate(imported, *(float(value) for value in recentre))
             gmsh.model.occ.synchronize()
@@ -2356,21 +2440,23 @@ def build_imported_mesh(
         imported = _import_occ_root_bodies(gmsh, assembly_path)
         if not imported:
             raise ImportedMeshError("STEP import + normalisation: assembly STEP contains no OCC geometry")
-        transform_values = normalization.reshape(-1).tolist()
-        if not np.allclose(normalization, np.eye(4)):
-            gmsh.model.occ.affineTransform(imported, transform_values)
-            gmsh.model.occ.synchronize()
-        # The two transforms stay two operations, here and in the viewport
-        # rebuild, because the viewport verifies the geometry fingerprint of
-        # this model bit for bit: composing them into one matrix on one side
-        # only would round differently and fail that check.
+        # Rigid moves, never ``affineTransform``: a general affine transform
+        # turns the throat plane into a B-spline that role resolution refuses
+        # (see :func:`rigid_occ_motion`). The datums below ride the matrix
+        # actually applied.
+        applied_normalization = apply_rigid_normalisation(gmsh, imported, normalization)
+        # The normalisation and the recentre stay separate operations, here
+        # and in the viewport rebuild, because the viewport verifies the
+        # geometry fingerprint of this model bit for bit: composing them into
+        # one move on one side only would round differently and fail that
+        # check. The recentre reads the bounds of the normalised model.
         recentre = resolve_vertical_recentre(
             recorded_offset_mm,
             bounds_mm=tuple(
                 float(value) for value in gmsh.model.getBoundingBox(-1, -1)
             ),
         )
-        solver_from_assembly = normalization
+        solver_from_assembly = applied_normalization
         if recentre["applied"]:
             gmsh.model.occ.translate(
                 imported, 0.0, -float(recentre["applied_offset_mm"]), 0.0
@@ -2378,7 +2464,7 @@ def build_imported_mesh(
             gmsh.model.occ.synchronize()
             solver_from_assembly = (
                 _translation_matrix(0.0, -float(recentre["applied_offset_mm"]), 0.0)
-                @ normalization
+                @ applied_normalization
             )
         normalisation_record["matrix"] = solver_from_assembly.tolist()
         normalisation_record["vertical_recentre"] = recentre
@@ -3309,6 +3395,7 @@ __all__ = [
     "RoleResolutionError",
     "TAG_NAMESPACE",
     "allocate_imported_tags",
+    "apply_rigid_normalisation",
     "build_imported_mesh",
     "build_imported_viewport_mesh",
     "geometry_candidate_matches",
@@ -3317,5 +3404,6 @@ __all__ = [
     "resolve_instance_source",
     "resolve_user_source",
     "rigid_inverse",
+    "rigid_occ_motion",
     "validate_imported_sizes",
 ]

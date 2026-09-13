@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from server.cadlink.ingest import ingest_bundle
+from server.cadlink.ingest import build_deferred_viewport, ingest_bundle
 from server.cadlink.isolated import _inject_mesh_child_fault
 from server.cadlink.store import CadLinkStore
 from server.mesh.gmsh_worker import _run_in_gmsh_session
@@ -99,18 +99,82 @@ _RETURN_IDS = {
     "offset": "wgr_01J5A8QK3M9T2XVBH0RD7NWEB0",
     "capped": "wgr_01J5A8QK3M9T2XVBH0RD7NWEC0",
     "full": "wgr_01J5A8QK3M9T2XVBH0RD7NWED0",
+    "placed": "wgr_01J5A8QK3M9T2XVBH0RD7NWEE0",
 }
 
 
+# Where a CAD user moved and turned the linked instance: a general axis and
+# angle, so no coordinate plane or axis survives the move by accident.
+_PLACEMENT_AXIS = tuple(float(value) for value in np.array([1.0, 2.0, 3.0]) / math.sqrt(14.0))
+_PLACEMENT_ANGLE_RAD = 0.7
+_PLACEMENT_TRANSLATION_MM = (120.0, -45.0, 30.0)
+
+
+def _placement_matrix() -> np.ndarray:
+    """``assembly_from_link`` for the placement: rotate about the origin, then move."""
+
+    k = np.asarray(_PLACEMENT_AXIS, dtype=float)
+    cross = np.array([[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]])
+    matrix = np.eye(4)
+    matrix[:3, :3] = (
+        np.eye(3)
+        + math.sin(_PLACEMENT_ANGLE_RAD) * cross
+        + (1.0 - math.cos(_PLACEMENT_ANGLE_RAD)) * (cross @ cross)
+    )
+    matrix[:3, 3] = _PLACEMENT_TRANSLATION_MM
+    return matrix
+
+
+def _place_step(path: Path) -> list[float]:
+    """Move the written body the way CAD moves a linked occurrence.
+
+    ``rotate`` and ``translate`` are rigid OCC moves, so the throat stays a
+    ``Plane`` -- a moved occurrence in a CAD STEP keeps its analytic faces.
+    Returns the placed bounding box.
+    """
+
+    import gmsh
+
+    def place() -> list[float]:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        gmsh.model.occ.importShapes(str(path), highestDimOnly=True)
+        gmsh.model.occ.synchronize()
+        bodies = gmsh.model.getEntities(3)
+        assert bodies, "the horn fixture is written as a solid"
+        gmsh.model.occ.rotate(bodies, 0.0, 0.0, 0.0, *_PLACEMENT_AXIS, _PLACEMENT_ANGLE_RAD)
+        gmsh.model.occ.translate(bodies, *_PLACEMENT_TRANSLATION_MM)
+        gmsh.model.occ.synchronize()
+        types = {str(gmsh.model.getType(2, tag)) for _dim, tag in gmsh.model.getEntities(2)}
+        assert "Plane" in types, types
+        box = [float(value) for value in gmsh.model.getBoundingBox(-1, -1)]
+        gmsh.write(str(path))
+        gmsh.clear()
+        return box
+
+    return _run_in_gmsh_session(place)
+
+
 def _horn_bundle(
-    tmp_path: Path, name: str, *, vertical_offset_mm: float = 0.0
+    tmp_path: Path,
+    name: str,
+    *,
+    vertical_offset_mm: float = 0.0,
+    placed: bool = False,
 ) -> Path:
     bundle = tmp_path / "workspace" / "wgreturn" / f"{name}.wgreturn"
     bundle.mkdir(parents=True)
     info = _write_horn_step(bundle / "assembly.step", vertical_offset_mm=vertical_offset_mm)
-    step = (bundle / "assembly.step").read_bytes()
+    # The contract is measured on the body as WG exported it: link coordinates.
     throat = _measure_throat(bundle / "assembly.step")
     area = float(throat["area_mm2"])
+    bbox_mm = [list(info.bounding_box_mm[0]), list(info.bounding_box_mm[1])]
+    assembly_from_link = np.eye(4)
+    if placed:
+        box = _place_step(bundle / "assembly.step")
+        bbox_mm = [box[:3], box[3:]]
+        assembly_from_link = _placement_matrix()
+    step = (bundle / "assembly.step").read_bytes()
     manifest = {
         "wgreturn_version": "1.0",
         "required_features": [
@@ -138,7 +202,7 @@ def _horn_bundle(
         "assembly": {
             "file": "assembly.step",
             "n_bodies_expected": 1,
-            "bbox_mm": [list(info.bounding_box_mm[0]), list(info.bounding_box_mm[1])],
+            "bbox_mm": bbox_mm,
         },
         "files": {
             "assembly.step": {
@@ -185,12 +249,7 @@ def _horn_bundle(
                 "build_mode": "freestanding",
                 "parameter_prefix": "wg_horn_",
                 "occurrence_path": name,
-                "assembly_from_link": [
-                    [1, 0, 0, 0],
-                    [0, 1, 0, 0],
-                    [0, 0, 1, 0],
-                    [0, 0, 0, 1],
-                ],
+                "assembly_from_link": assembly_from_link.tolist(),
                 "chirality": "original",
                 "body_evidence": {
                     "local_body_state": "unmodified",
@@ -253,6 +312,7 @@ def _ingest(
     bundle: Path,
     *,
     symmetry_mode: str = "auto",
+    defer_viewport: bool = False,
 ) -> dict[str, Any]:
     pytest.importorskip("gmsh")
     data_dir = tmp_path / "data"
@@ -270,6 +330,7 @@ def _ingest(
         # here instead of these symmetry tests silently exercising the
         # no-target path that let a return build into whatever was open.
         expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+        defer_viewport=defer_viewport,
     )
 
 
@@ -476,6 +537,121 @@ def test_vertically_offset_return_keeps_the_quarter_reduction(tmp_path: Path) ->
         / centred_stats["dense_solver_used_vertex_count"]
     )
     assert 0.95 <= vertex_ratio <= 1.05
+
+
+@pytest.mark.parametrize(
+    ("vertical_offset_mm", "defer_viewport"),
+    [
+        pytest.param(0.0, False, id="centred-inline-viewport"),
+        # The API ingests with a deferred viewport, which replays the recipe
+        # out of the sidecar JSON in its own child.
+        pytest.param(80.0, True, id="offset-deferred-viewport"),
+    ],
+)
+def test_a_return_moved_in_cad_is_normalised_back_with_its_throat_intact(
+    tmp_path: Path, vertical_offset_mm: float, defer_viewport: bool
+) -> None:
+    """A linked instance the user moved and turned in CAD must still ingest.
+
+    The body arrives rotated and translated, ``assembly_from_link`` records
+    that placement, and the throat contract stays in link coordinates. Ingest
+    undoes the placement. A general affine transform would rewrite the planar
+    throat as a B-spline -- flat to 1e-12 mm, but no longer a ``Plane`` -- and
+    the return was refused because the anchor throat did not resolve. Undone
+    rigidly, it must give the unplaced return's frame and domain, recentring
+    included, and the viewport replay must reproduce its geometry fingerprint.
+    """
+
+    pytest.importorskip("gmsh")
+    placed = _ingest(
+        tmp_path / "placed",
+        _horn_bundle(
+            tmp_path / "placed",
+            "placed",
+            vertical_offset_mm=vertical_offset_mm,
+            placed=True,
+        ),
+        defer_viewport=defer_viewport,
+    )
+    unplaced = _ingest(
+        tmp_path / "unplaced",
+        _horn_bundle(
+            tmp_path / "unplaced",
+            "offset" if vertical_offset_mm else "round",
+            vertical_offset_mm=vertical_offset_mm,
+        ),
+    )
+
+    expected = np.linalg.inv(_placement_matrix())
+    expected[1, 3] -= vertical_offset_mm
+    assert np.asarray(placed["normalisation"]["matrix"]) == pytest.approx(
+        expected, rel=0.0, abs=1.0e-9
+    )
+    placed_recentre = placed["normalisation"]["vertical_recentre"]
+    unplaced_recentre = unplaced["normalisation"]["vertical_recentre"]
+    assert placed_recentre["applied"] is unplaced_recentre["applied"] is bool(vertical_offset_mm)
+    assert placed_recentre["applied_offset_mm"] == unplaced_recentre["applied_offset_mm"]
+
+    # The same domain: the placement undone leaves the body on its mirrors.
+    for key in ("cut_planes", "candidate_planes"):
+        assert placed["symmetry"][key] == unplaced["symmetry"][key]
+    assert placed["symmetry"]["cut_planes"] == ["x0", "y0"]
+    # Per-plane diagnostics carry the rotation's round-off (~1e-11 mm), so
+    # the decision is compared exactly and the measurements to tolerance.
+    assert placed["symmetry"]["planes"].keys() == unplaced["symmetry"]["planes"].keys()
+    for plane, diagnostics in unplaced["symmetry"]["planes"].items():
+        moved = placed["symmetry"]["planes"][plane]
+        assert moved.keys() == diagnostics.keys()
+        for name, value in diagnostics.items():
+            if isinstance(value, float):
+                assert moved[name] == pytest.approx(value, rel=0.0, abs=1.0e-9), name
+            else:
+                assert moved[name] == value, name
+    for record in (placed, unplaced):
+        verification = record["symmetry_verification"]
+        assert verification["verified"] is True
+        assert verification["off_plane_free_edge_count"] == 0
+        assert "fallback" not in verification
+    placed_stats = placed["mesh"]["stats"]
+    unplaced_stats = unplaced["mesh"]["stats"]
+    assert placed_stats["domain_multiplier"] == unplaced_stats["domain_multiplier"] == 4.0
+    assert (
+        placed_stats["dense_solver_domain_multiplier"]
+        == unplaced_stats["dense_solver_domain_multiplier"]
+        == 4
+    )
+    assert placed_stats["bounds_m"] == pytest.approx(
+        unplaced_stats["bounds_m"], rel=0.0, abs=1.0e-9
+    )
+
+    # The same record frame: the throat resolved, and its datum rode the matrix.
+    unplaced_frame = unplaced["anchor"]["throat_frame"]
+    assert placed["anchor"]["throat_frame"].keys() == unplaced_frame.keys()
+    for name, vector in unplaced_frame.items():
+        assert placed["anchor"]["throat_frame"][name] == pytest.approx(
+            vector, rel=0.0, abs=1.0e-9
+        )
+    assert placed["post_cut_source_areas"].keys() == unplaced["post_cut_source_areas"].keys()
+    for source_id, provenance in unplaced["post_cut_source_areas"].items():
+        moved = placed["post_cut_source_areas"][source_id]
+        assert moved["parent_area_mm2"] == pytest.approx(
+            provenance["parent_area_mm2"], rel=1.0e-9
+        )
+        assert moved["retained_child_area_mm2"] == pytest.approx(
+            provenance["retained_child_area_mm2"], rel=1.0e-9
+        )
+
+    # The viewport replays the normalisation in a fresh model and refuses a
+    # fingerprint that differs from the solve's by a single bit.
+    if defer_viewport:
+        assert placed["viewport_mesh"]["pending"] is True
+        built = build_deferred_viewport(placed, tmp_path / "placed" / "data")
+        assert built is not None
+        assert built["transformed_geometry_hash"] == placed["transformed_geometry_hash"]
+    else:
+        viewport = placed["viewport_mesh"]
+        assert viewport["available"] is True, viewport
+        assert viewport["transformed_geometry_hash"] == placed["transformed_geometry_hash"]
 
 
 def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(tmp_path: Path) -> None:
