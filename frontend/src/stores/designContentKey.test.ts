@@ -14,7 +14,6 @@ import { designContentKey, DESIGN_CONTENT_KEY_VERSION, type DesignFileSettings }
 import { wgSolveSettingsFromStore } from './designWire';
 import { resetDocumentStore, useDocumentStore } from './document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
-import { unsavedChangesNow } from './unsavedChanges';
 
 function onScreenSettings(): DesignFileSettings {
   const state = useSolveOptionsStore.getState();
@@ -310,8 +309,9 @@ describe('would replacing the design on screen lose it', () => {
 
     expect(useDesignStore.getState().design.R).toBe(321);
     expect(useDocumentStore.getState()).toMatchObject({ designName: 'legacy', openedContentKey: null });
-    // The old baseline would call this clean; the draft is the only copy.
-    expect(unsavedChangesNow()).toBe(false);
+    // The old baseline would call this clean -- its revision is its saved
+    // revision -- yet the draft is the only copy.
+    expect(useDocumentStore.getState().savedRevision).toBe(useDesignStore.getState().designRevision);
     expect(replacingWouldLoseNow()).toBe(true);
   });
 

@@ -644,7 +644,6 @@ describe('design file export menu', () => {
     expect(String(request[0])).toBe('/api/design/serialize');
     expect(JSON.parse(String(request[1]?.body))).not.toHaveProperty('identity');
     expect(useDocumentStore.getState()).toMatchObject(before);
-    expect(container.querySelector('[aria-label="Unsaved changes"]')).not.toBeNull();
     // The copy is written into the output folder, never handed to the browser:
     // an `<a download>` reaches nobody in the desktop WebView2 window, which is
     // how a successful export could look like one that never happened.
@@ -662,14 +661,27 @@ describe('design file export menu', () => {
       .toBe('Exported a copy as copied-horn.cfg to C:/Output/copied-horn');
   });
 
-  // Not "Save": the copy deliberately leaves the design unsaved (see above),
-  // and not "Download" either -- it is written into the output folder, and
-  // the desktop window has no download for it to mean.
+  // Not "Save": the copy deliberately leaves the saved baseline alone (see
+  // above), and not "Download" either -- it is written into the output folder,
+  // and the desktop window has no download for it to mean.
   it('labels serialization as Export a copy, never Save', () => {
     const labels = open().map((item) => item.querySelector('span')?.textContent ?? '');
 
     expect(labels).toContain('Export a copy');
     expect(labels).not.toContain('Save');
+  });
+
+  // WG has no Save, so the file chip has no unsaved state to mark: whether a
+  // design would be lost is asked when something is about to replace it.
+  it('shows no unsaved indicator after an edit or a rename', () => {
+    useDocumentStore.getState().markSaved(useDesignStore.getState().designRevision);
+    act(() => root.render(<DesignFileMenu/>));
+    act(() => useDesignStore.getState().updateField('R', 321));
+    act(() => useDocumentStore.getState().setDesignName('renamed horn'));
+
+    expect(container.querySelector('button.file-chip')?.textContent).toContain('renamed horn');
+    expect(container.querySelector('.unsaved-dot')).toBeNull();
+    expect(container.querySelector('[aria-label="Unsaved changes"]')).toBeNull();
   });
 
   it('opens the current registry head from the CAD-linked design picker', async () => {
@@ -767,7 +779,6 @@ describe('design file export menu', () => {
       savedSettings: before.savedSettings,
       savedDesignName: before.savedDesignName,
     });
-    expect(container.querySelector('[aria-label="Unsaved changes"]')).not.toBeNull();
     expect(container.querySelector('[role="status"]')?.textContent).toBe('Could not serialize this design.');
   });
 

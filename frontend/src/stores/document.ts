@@ -28,19 +28,17 @@ export interface DocumentState {
    * a name and a filename unable to drift apart.
    */
   filename: string;
-  savedRevision: number | null;
-  /** The name at the opened-file baseline; a rename is unsaved work. */
-  savedDesignName: string;
   /**
-   * `documentSettingsSignature()` as of the last opened-file baseline, or null
-   * when no file has been opened yet.
+   * The opened-file baseline: the geometry revision, the name, and
+   * `documentSettingsSignature()` (null until a file has been opened) as the
+   * last open applied them. Autosave keeps them with the draft.
    *
-   * Directivity and solver settings are written into the `.cfg` but live in
-   * `useSolveOptionsStore`, so `savedRevision` alone cannot see a change to
-   * them. Null means there is no file to be unsaved against: a fresh window
-   * showing the default design must not light the unsaved dot merely because
-   * these settings carry the user's own measurement rig.
+   * Nothing on screen marks a difference from it: WG has no Save, so there is
+   * no unsaved state to show. A replacement asks whether the design exists
+   * anywhere else instead (`openedContentKey`).
    */
+  savedRevision: number | null;
+  savedDesignName: string;
   savedSettings: string | null;
   /**
    * The content key of the design as WG last opened it (captured once the open
@@ -67,27 +65,11 @@ export interface DocumentState {
   ) => void;
 }
 
-/** Whether the document on screen differs from the file it was saved as. */
-export function documentIsUnsaved(
-  revision: number,
-  savedRevision: number | null,
-  savedSettings: string | null,
-  settings: string,
-  designName = '',
-  savedDesignName = designName,
-): boolean {
-  return revision !== savedRevision
-    || (savedSettings !== null && savedSettings !== settings)
-    || designName !== savedDesignName;
-}
-
 export const useDocumentStore = create<DocumentState>((set) => ({
-  // Untitled, and clean. The name used to be a specific .cfg -- someone's test
-  // fixture -- so a fresh window claimed that document was open when what was
-  // on screen was the built-in default design. The saved revision still matches
-  // the design store's initial revision, because an untouched default is not
-  // unsaved work: making it null instead would light the unsaved dot, and arm
-  // the discard-changes prompt, on an app nobody has typed in yet.
+  // Untitled. The name used to be a specific .cfg -- someone's test fixture --
+  // so a fresh window claimed that document was open when what was on screen
+  // was the built-in default design. The saved revision starts at the design
+  // store's initial revision, so a fresh window begins at its own baseline.
   designName: '',
   filename: '',
   savedRevision: 1,

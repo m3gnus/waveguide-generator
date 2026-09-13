@@ -26,7 +26,6 @@ import {
   rememberWrittenCopy,
   replacingWouldLose,
 } from './replacementCheck';
-import { useUnsavedChanges } from '../stores/unsavedChanges';
 import { designNameSlug } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
@@ -118,7 +117,6 @@ export function DesignFileMenu() {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const designName = useDocumentStore((state) => state.designName);
-  const unsaved = useUnsavedChanges();
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
@@ -384,7 +382,6 @@ export function DesignFileMenu() {
         title={CLASSIFICATION_DISPLAY[classification].detail}
         style={{ color: 'var(--fg3)', fontSize: 'var(--text-micro)', fontWeight: 500, letterSpacing: '.02em' }}
       >{CLASSIFICATION_DISPLAY[classification].label}</small>}
-      {unsaved && <i className="unsaved-dot" aria-label="Unsaved changes"/>}
       <span className="chev">⌄</span>
     </button>
     <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>

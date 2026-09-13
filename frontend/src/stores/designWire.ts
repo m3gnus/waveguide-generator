@@ -85,10 +85,9 @@ export function wgSolveSettingsFromSolveOptions(options: unknown): WgSolveSettin
  * The design store's `designRevision` is a *geometry* revision: it drives the
  * preview rebuild, so directivity and solver edits deliberately do not bump it.
  * Those edits are still document changes -- they are written into the file and
- * sent to CAD -- which left the unsaved indicator and the CAD freshness check
- * blind to them. This signature is the thing those two compare instead, so a
- * measurement distance typed after the opened-file baseline reads as unsaved work without
- * pretending the mesh needs rebuilding.
+ * sent to CAD -- which left the CAD freshness check blind to them. This
+ * signature is what it compares instead, so a measurement distance typed after
+ * a send reads as a change without pretending the mesh needs rebuilding.
  */
 export function documentSettingsSignature(
   state = useSolveOptionsStore.getState(),

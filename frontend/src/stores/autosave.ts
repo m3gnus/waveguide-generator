@@ -129,10 +129,10 @@ export function writeAutosave(storage: DraftStorage | null = defaultStorage()): 
 
 /** Restore the most recent local draft before React mounts. Autosave is crash
  * recovery, not opening a new file baseline, so the stored savedRevision is
- * retained and the unsaved indicator remains accurate after restart.
+ * retained as it was.
  *
- * The same goes for the replacement check: the remembered-copy key is the one
- * the record stored beside the draft, so a draft still equal to what was last
+ * So is the replacement check's remembered-copy key: it is the one the record
+ * stored beside the draft, so a draft still equal to what was last
  * opened or written stays kept after a restart, and an edited one does not.
  * No key is ever derived from the draft itself. */
 export function restoreAutosave(storage: DraftStorage | null = defaultStorage()): boolean {

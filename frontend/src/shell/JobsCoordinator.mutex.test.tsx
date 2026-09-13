@@ -399,8 +399,8 @@ describe('solve invocation mutex', () => {
 
     expect(useDesignStore.getState().design.mesh.wall_thickness).toBe(0);
     expect(resolveOuterBodyMode(useDesignStore.getState().design)).toBe('bare');
-    // No revision bump means no unsaved-changes dot and no autosave rewrite
-    // for a solve that changed nothing.
+    // No revision bump means no autosave rewrite for a solve that changed
+    // nothing.
     expect(useDesignStore.getState().designRevision).toBe(revision);
     expect(mocks.submitDesign).toHaveBeenCalledOnce();
     expect(mocks.submitDesign.mock.calls[0][0].mesh.wall_thickness).toBe(0);

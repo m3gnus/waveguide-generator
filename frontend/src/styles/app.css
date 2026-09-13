@@ -69,7 +69,6 @@ button:disabled { cursor: default; }
 .file-chip svg { width: 12px; color: var(--fg3); }
 .file-chip em { color: var(--fg3); font-style: normal; font-weight: 400; }
 .file-chip .chev { color: var(--fg3); font-size: var(--text-micro); }
-.unsaved-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 2.5px rgba(var(--amber-rgb), .14), 0 0 8px rgba(var(--amber-rgb), .5); }
 .button-group { display: flex; gap: 1px; padding: 2px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
 .icon-button { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: var(--r2); background: transparent; color: var(--fg2); transition: background-color .12s, color .12s; }
 .icon-button:hover:not(:disabled) { background: var(--ov3); color: var(--fg); }

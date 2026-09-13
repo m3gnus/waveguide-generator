@@ -4,7 +4,7 @@ import { resetSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 
 /**
  * `documentSettingsSignature` runs as a Zustand selector on the render path
- * (the unsaved-changes hook and the CAD freshness check), so it must be total.
+ * (the CAD freshness check), so it must be total.
  * It used to throw for any directivity grid `polarConfigFromUi` refuses --
  * a 0..0 sweep typed into the panel unmounted the entire app.
  */
@@ -21,7 +21,7 @@ describe('documentSettingsSignature', () => {
     useSolveOptionsStore.getState().updatePolar({ angleStart: 0, angleEnd: 0 });
     const degenerate = documentSettingsSignature();
     // An edit to another rig field is still a document change while the pair
-    // is broken: the unsaved indicator must keep following the user's typing.
+    // is broken: the signature must keep following the user's typing.
     useSolveOptionsStore.getState().updatePolar({ distance: 3.5 });
     expect(documentSettingsSignature()).not.toBe(degenerate);
     // And repairing the sweep changes it again, back onto the resolved form.

@@ -201,8 +201,8 @@
   --acc-rgb: 165, 57, 27;
   --blue-rgb: 56, 93, 184;
   --violet-rgb: 124, 52, 167;
-  /* Amber is a state color -- the unsaved dot, the STALE preview badge,
-     geometry warnings -- so it is text a user must not miss. At 180,98,32 it
+  /* Amber is a state color -- the STALE preview badge, geometry
+     warnings -- so it is text a user must not miss. At 180,98,32 it
      measured 4.08:1 on the canvas and 3.66:1 on the status rail, below AA.
      152,80,21 holds 5.50:1 and 4.93:1 on the same two grounds. */
   --amber-rgb: 128, 80, 16;

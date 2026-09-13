@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { documentIsUnsaved, resetDocumentStore, useDocumentStore, type DesignIdentity } from './document';
+import { resetDocumentStore, useDocumentStore, type DesignIdentity } from './document';
 
 const opened: DesignIdentity = {
   designId: 'wgd_01K00000000000000000000000',
@@ -44,36 +44,17 @@ describe('the design name owns the filename', () => {
     expect(useDocumentStore.getState()).toMatchObject({ designName: '', filename: '' });
   });
 
-  it('counts a rename as unsaved work until a new file baseline is established', () => {
+  it('stamps the name into the opened-file baseline only when it is established', () => {
     useDocumentStore.getState().setDesignName('winner');
-    const { designName, savedDesignName, savedRevision } = useDocumentStore.getState();
-    expect(documentIsUnsaved(savedRevision!, savedRevision, null, '', designName, savedDesignName)).toBe(true);
+    expect(useDocumentStore.getState().savedDesignName).toBe('');
 
-    useDocumentStore.getState().markSaved(savedRevision!);
-    const saved = useDocumentStore.getState();
-    expect(saved.savedDesignName).toBe('winner');
-    expect(documentIsUnsaved(1, saved.savedRevision, null, '', saved.designName, saved.savedDesignName)).toBe(false);
+    useDocumentStore.getState().markSaved(1);
+    expect(useDocumentStore.getState().savedDesignName).toBe('winner');
   });
 });
 
-describe('unsaved-changes accounting', () => {
+describe('the opened-file baseline', () => {
   beforeEach(() => resetDocumentStore());
-
-  it('counts a settings change the geometry revision cannot see', () => {
-    // Opened-file baseline: same revision, same settings.
-    expect(documentIsUnsaved(4, 4, '{"distance":2}', '{"distance":2}')).toBe(false);
-    // Directivity typed after that baseline. The revision still matches, because
-    // these settings do not rebuild the mesh -- but the file is now stale.
-    expect(documentIsUnsaved(4, 4, '{"distance":2}', '{"distance":3}')).toBe(true);
-    expect(documentIsUnsaved(5, 4, '{"distance":2}', '{"distance":2}')).toBe(true);
-  });
-
-  it('leaves an app nobody has saved in alone', () => {
-    // No file to be unsaved against: these settings describe the user's own
-    // measurement rig and survive New deliberately, so they must not light the
-    // unsaved dot on a window that has never held a document.
-    expect(documentIsUnsaved(1, 1, null, '{"distance":3}')).toBe(false);
-  });
 
   it('stamps a settings baseline only when the caller supplies one', () => {
     useDocumentStore.getState().markSaved(7, '{"distance":2}');
