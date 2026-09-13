@@ -17,6 +17,13 @@ package change:
   (+x, +y, +z). Polar cuts and the DI sphere are frame-relative and the surface
   traces are per vertex, so every result maps back unchanged; the run records
   the record's own frame, not BEAT's.
+* **Axial drive.** Metal drives each axial source face at ``n . axis`` and flips
+  a whole tag whose area-weighted projection is negative, so a tag facing back
+  along the axis is pushed outward (``hornlab_metal_bem.bie``,
+  ``_build_axial_face_scale``). BEAT drives ``n . z`` and flips nothing, and
+  its one driven tag cannot carry a sign. An axial channel is therefore solved
+  as up to two groups -- its forward tags, and its backward-facing tags -- and
+  the channel is their difference, by linearity.
 * **Reduced domains.** BEAT mirrors across its own x = 0, or x = 0 and y = 0,
   with the mesh on the positive side. An x0 half and an x0+y0 quarter execute
   when the rotation leaves those planes, and that side, where they are. A
@@ -31,12 +38,13 @@ frame or the tag merge.
 
 from __future__ import annotations
 
+from copy import copy
 from dataclasses import dataclass
 import logging
 from pathlib import Path
 import tempfile
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -268,6 +276,33 @@ class _Gmsh22Mesh:
             if len(parts) > 3 and parts[1] == "2" and int(parts[2]) >= 1
         }
 
+    def axial_orientation(self) -> dict[int, tuple[float, float]]:
+        """Each physical tag's area-weighted ``n . z`` and its total area.
+
+        A triangle's raw cross product is twice its area times its unit normal,
+        so summing its z components gives Metal's area-weighted projection
+        (``_build_axial_face_scale``) up to the same positive factor as the
+        summed magnitudes -- the scale the projection's sign is judged on. The
+        mesh is already in BEAT's frame, where the axis is +z.
+        """
+
+        index = {node_id: row for row, node_id in enumerate(self.node_ids)}
+        sums: dict[int, tuple[float, float]] = {}
+        for parts in self.elements:
+            if len(parts) < 4 or parts[1] != "2":
+                continue
+            tag_count = int(parts[2])
+            if tag_count < 1 or len(parts) < 6 + tag_count:
+                continue
+            corners = self.coordinates[
+                [index[node] for node in parts[3 + tag_count : 6 + tag_count]]
+            ]
+            cross = np.cross(corners[1] - corners[0], corners[2] - corners[0])
+            tag = int(parts[3])
+            projected, area = sums.get(tag, (0.0, 0.0))
+            sums[tag] = (projected + float(cross[2]), area + float(np.linalg.norm(cross)))
+        return sums
+
     def text(self, velocity_tags: frozenset[int]) -> str:
         """The mesh with ``velocity_tags`` driven and every other tag rigid."""
 
@@ -293,6 +328,82 @@ class _Gmsh22Mesh:
             rows.append(" ".join(parts))
         rows.append("$EndElements")
         return "\n".join(rows) + "\n"
+
+
+#: How negative a tag's area-weighted ``n . axis`` must be, as a fraction of its
+#: area, before it counts as facing backwards. A closed tag projects to zero,
+#: and rounding alone must not decide its sign.
+AXIAL_ORIENTATION_TOLERANCE = 1.0e-9
+
+
+def _drive_groups(
+    tags: frozenset[int], motion: str, orientation: Mapping[int, tuple[float, float]]
+) -> list[tuple[float, frozenset[int]]]:
+    """The signed tag groups one channel is solved as.
+
+    A normal drive is one group. An axial drive is Metal's: a tag whose
+    area-weighted ``n . axis`` is negative is flipped whole so it drives
+    outward. BEAT's one driven tag cannot carry that sign, so the flipped tags
+    are solved as their own group and subtracted.
+
+    A tag whose projection is zero to rounding -- a closed body's, whose
+    faces cancel -- has no outward direction along the axis and is driven
+    ``n . axis`` unflipped. Metal decides that case by the sign of its rounding
+    residue, so the two engines can disagree only for a closed axial tag.
+    """
+
+    if motion != "axial":
+        return [(1.0, tags)]
+    backward = frozenset(
+        tag
+        for tag in tags
+        if orientation.get(tag, (0.0, 0.0))[0]
+        < -AXIAL_ORIENTATION_TOLERANCE * orientation.get(tag, (0.0, 0.0))[1]
+    )
+    return [
+        (sign, group)
+        for sign, group in ((1.0, tags - backward), (-1.0, backward))
+        if group
+    ]
+
+
+def _signed_sum(parts: Sequence[tuple[float, Any]]) -> Any:
+    """One channel's result from its signed group solves, by linearity."""
+
+    first_sign, first = parts[0]
+    if len(parts) == 1 and first_sign == 1.0:
+        return first
+    combined = copy(first)
+
+    def total(name: str) -> Any:
+        values = [getattr(result, name, None) for _, result in parts]
+        if any(value is None for value in values):
+            return None
+        return sum(
+            sign * np.asarray(value, dtype=np.complex128)
+            for (sign, _), value in zip(parts, values, strict=True)
+        )
+
+    for name in (
+        "pressure_complex",
+        "impedance",
+        "sphere_pressure_complex",
+        "surface_pressure_complex",
+        "surface_neumann_complex",
+    ):
+        if hasattr(first, name):
+            setattr(combined, name, total(name))
+    with np.errstate(divide="ignore"):
+        combined.spl_db = 20.0 * np.log10(
+            np.abs(np.asarray(combined.pressure_complex)) / 20.0e-6
+        )
+    timings: dict[str, float] = {}
+    for _, result in parts:
+        for key, value in dict(getattr(result, "timings", {}) or {}).items():
+            if isinstance(value, (int, float)):
+                timings[key] = timings.get(key, 0.0) + float(value)
+    combined.timings = timings
+    return combined
 
 
 def _check_kept_side(coordinates: np.ndarray, native_plane: str | None) -> None:
@@ -345,7 +456,12 @@ def _frame_basis(frame: BeatImportedFrame) -> dict[str, list[float]]:
 
 
 def _beat_section(
-    *, backend: str, native_plane: str | None, merged_tags: list[int] | None, result: Any
+    *,
+    backend: str,
+    native_plane: str | None,
+    merged_tags: list[int] | None,
+    result: Any,
+    reversed_tags: list[int] | None = None,
 ) -> dict[str, Any]:
     section: dict[str, Any] = {
         "native_symmetry_plane": native_plane,
@@ -360,6 +476,10 @@ def _beat_section(
     if merged_tags is not None:
         # The record's tags this channel drove as BEAT's one velocity tag.
         section["merged_source_tags"] = merged_tags
+    if reversed_tags:
+        # Axial tags facing back along the axis, driven outward as Metal
+        # drives them: solved as their own group and subtracted.
+        section["axially_reversed_source_tags"] = reversed_tags
     return section
 
 
@@ -587,9 +707,17 @@ def solve_imported_beat_from_msh_text(
         mouth_center=np.asarray(frame.mouth_center, dtype=float),
         source_center=np.asarray(frame.source_center, dtype=float),
     )
+    orientation = mesh.axial_orientation()
+    channel_groups = {
+        channel.id: _drive_groups(channel_tags[channel.id], channel.motion, orientation)
+        for channel in geometry.drive_channels
+    }
     frequency_count = len(frequencies)
     channel_count = len(geometry.drive_channels)
-    total_work = max(1, frequency_count * channel_count)
+    total_work = max(
+        1, frequency_count * sum(len(groups) for groups in channel_groups.values())
+    )
+    streamed_frame_count = frequency_count * channel_count
 
     def stage_status(message: str) -> None:
         if stage_callback and message:
@@ -597,137 +725,169 @@ def solve_imported_beat_from_msh_text(
 
     sorted_results: dict[str, Any] = {}
     configs: dict[str, Any] = {}
+    work_done = 0
+    # The runtime keeps one revision per streamed frame and drops any that
+    # does not advance it, so frames are numbered across channels.
+    next_revision = [0]
     for channel_index, channel in enumerate(geometry.drive_channels):
         channel_context = SolverContext.from_imported_request(
             request, quadrants=quadrants, source_motion=channel.motion
         )
-        # The runtime keeps one revision per streamed frame and drops any
-        # that does not advance it, so frames are numbered across channels.
-        offset = channel_index * frequency_count
+        groups = channel_groups[channel.id]
+        # A channel solved as two groups is streamed only while the last one
+        # solves, each frame the signed sum of both groups at that frequency.
+        earlier: dict[int, dict[str, Any]] = {}
+        parts: list[tuple[float, Any]] = []
         holder: dict[str, Any] = {}
+        for group_index, (sign, group_tags) in enumerate(groups):
+            last_group = group_index == len(groups) - 1
 
-        def progress(
-            index: int,
-            total: int,
-            frequency_hz: float,
-            *,
-            _offset: int = offset,
-            _channel_index: int = channel_index,
-            _channel_id: str = channel.id,
-        ) -> None:
-            del frequency_hz
-            if cancellation_callback:
-                cancellation_callback()
-            if stage_callback:
-                stage_callback(
-                    "frequency_solve",
-                    (_offset + index + 1) / total_work,
-                    f"Solving frequency {index + 1}/{total} of drive channel "
-                    f"{_channel_index + 1}/{channel_count} ({_channel_id}) "
-                    "with BEAT Engine",
+            def progress(
+                index: int,
+                total: int,
+                frequency_hz: float,
+                *,
+                _offset: int = work_done,
+                _channel_index: int = channel_index,
+                _channel_id: str = channel.id,
+            ) -> None:
+                del frequency_hz
+                if cancellation_callback:
+                    cancellation_callback()
+                if stage_callback:
+                    stage_callback(
+                        "frequency_solve",
+                        (_offset + index + 1) / total_work,
+                        f"Solving frequency {index + 1}/{total} of drive channel "
+                        f"{_channel_index + 1}/{channel_count} ({_channel_id}) "
+                        "with BEAT Engine",
+                    )
+
+            def on_frequency_result(
+                index: int,
+                frequency_hz: float,
+                entry: dict[str, Any],
+                *,
+                _sign: float = sign,
+                _last: bool = last_group,
+                _earlier: dict[int, dict[str, Any]] = earlier,
+                _channel: Any = channel,
+                _context: SolverContext = channel_context,
+                _holder: dict[str, Any] = holder,
+            ) -> bool:
+                if cancellation_callback:
+                    cancellation_callback()
+                if result_callback is None:
+                    return True
+                pressure = _sign * np.asarray(
+                    entry.get("observation_pressure_complex"), dtype=np.complex128
                 )
-
-        def on_frequency_result(
-            index: int,
-            frequency_hz: float,
-            entry: dict[str, Any],
-            *,
-            _offset: int = offset,
-            _channel: Any = channel,
-            _context: SolverContext = channel_context,
-            _holder: dict[str, Any] = holder,
-        ) -> bool:
-            if cancellation_callback:
-                cancellation_callback()
-            if result_callback is None:
-                return True
-            channel_response = build_provisional_frequency_response(
-                index=index,
-                frequency_hz=frequency_hz,
-                entry={
-                    "observation_angles_deg": entry.get("observation_angles_deg"),
-                    "observation_planes": entry.get("observation_planes"),
-                    "observation_spl_db": entry.get("observation_spl_db"),
-                    "observation_pressure_complex": entry.get(
-                        "observation_pressure_complex"
-                    ),
-                    "impedance": entry.get("impedance"),
-                },
-                config=_holder["config"],
-                context=_context,
-                backend="beat",
-                sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
-            )
-            if len(_channel.source_ids) > 1:
-                channel_response.pop("impedance", None)
-            channel_metadata = channel_response.setdefault("metadata", {})
-            channel_metadata.update(channel_identity[_channel.id])
-            channel_metadata["observation_frame_basis"] = dict(frame_basis)
-            result_callback(
-                _offset + index,
-                {
-                    "result_kind": "multi_channel",
-                    "result_contract_version": 2,
-                    "frequencies": [float(frequency_hz)],
-                    "channels": {_channel.id: channel_response},
-                    "channel_order": channel_order,
-                    "metadata": {
-                        "geometry_type": "imported",
-                        "provisional": {
-                            "completed_frequency_count": _offset + int(index) + 1,
-                            "expected_frequency_count": total_work,
+                impedance = entry.get("impedance")
+                impedance = None if impedance is None else _sign * complex(impedance)
+                prior = _earlier.get(index)
+                if prior is not None:
+                    pressure = prior["pressure"] + pressure
+                    impedance = (
+                        None
+                        if impedance is None or prior["impedance"] is None
+                        else prior["impedance"] + impedance
+                    )
+                if not _last:
+                    _earlier[index] = {"pressure": pressure, "impedance": impedance}
+                    return True
+                with np.errstate(divide="ignore"):
+                    spl = 20.0 * np.log10(np.abs(pressure) / 20.0e-6)
+                channel_response = build_provisional_frequency_response(
+                    index=index,
+                    frequency_hz=frequency_hz,
+                    entry={
+                        "observation_angles_deg": entry.get("observation_angles_deg"),
+                        "observation_planes": entry.get("observation_planes"),
+                        "observation_spl_db": spl,
+                        "observation_pressure_complex": pressure,
+                        "impedance": impedance,
+                    },
+                    config=_holder["config"],
+                    context=_context,
+                    backend="beat",
+                    sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
+                )
+                if len(_channel.source_ids) > 1:
+                    channel_response.pop("impedance", None)
+                channel_metadata = channel_response.setdefault("metadata", {})
+                channel_metadata.update(channel_identity[_channel.id])
+                channel_metadata["observation_frame_basis"] = dict(frame_basis)
+                revision = next_revision[0]
+                next_revision[0] += 1
+                result_callback(
+                    revision,
+                    {
+                        "result_kind": "multi_channel",
+                        "result_contract_version": 2,
+                        "frequencies": [float(frequency_hz)],
+                        "channels": {_channel.id: channel_response},
+                        "channel_order": channel_order,
+                        "metadata": {
+                            "geometry_type": "imported",
+                            "provisional": {
+                                "completed_frequency_count": revision + 1,
+                                "expected_frequency_count": streamed_frame_count,
+                            },
                         },
                     },
-                },
-            )
-            return True
-
-        try:
-            config = package.SolveConfig(
-                freq_min_hz=context.frequency_range[0],
-                freq_max_hz=context.frequency_range[1],
-                freq_count=context.num_frequencies,
-                freq_spacing=context.frequency_spacing,
-                velocity_sources={VELOCITY_TAG: 1.0},
-                source_motion=channel.motion,
-                observation=observation,
-                frame_override=beat_frame,
-                native_symmetry_plane=native_plane,
-                mesh_scale=1.0,
-                beat_backend=backend,
-                **({"surface_traces": True} if retain_traces else {}),
-                progress_callback=progress,
-                on_frequency_result=(
-                    on_frequency_result if result_callback is not None else None
-                ),
-            )
-            package.reject_unsupported_native_symmetry(config)
-        except NotImplementedError as exc:
-            raise BeatUnavailable(str(exc)) from exc
-        holder["config"] = config
-
-        path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".msh", delete=False, encoding="utf-8"
-            ) as handle:
-                path = Path(handle.name)
-                handle.write(mesh.text(channel_tags[channel.id]))
-            try:
-                result = package.solve_frequencies(
-                    str(path), frequencies, config, status_callback=stage_status
                 )
+                return True
+
+            try:
+                config = package.SolveConfig(
+                    freq_min_hz=context.frequency_range[0],
+                    freq_max_hz=context.frequency_range[1],
+                    freq_count=context.num_frequencies,
+                    freq_spacing=context.frequency_spacing,
+                    velocity_sources={VELOCITY_TAG: 1.0},
+                    source_motion=channel.motion,
+                    observation=observation,
+                    frame_override=beat_frame,
+                    native_symmetry_plane=native_plane,
+                    mesh_scale=1.0,
+                    beat_backend=backend,
+                    **({"surface_traces": True} if retain_traces else {}),
+                    progress_callback=progress,
+                    on_frequency_result=(
+                        on_frequency_result if result_callback is not None else None
+                    ),
+                )
+                package.reject_unsupported_native_symmetry(config)
             except NotImplementedError as exc:
                 raise BeatUnavailable(str(exc)) from exc
-        finally:
-            if path is not None:
+            holder["config"] = config
+
+            path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".msh", delete=False, encoding="utf-8"
+                ) as handle:
+                    path = Path(handle.name)
+                    handle.write(mesh.text(group_tags))
                 try:
-                    path.unlink(missing_ok=True)
-                except OSError as exc:
-                    logger.warning("Could not remove temporary BEAT mesh %s: %s", path, exc)
-        sort_native_result_frequencies(result)
-        sorted_results[channel.id] = result
-        configs[channel.id] = config
+                    result = package.solve_frequencies(
+                        str(path), frequencies, config, status_callback=stage_status
+                    )
+                except NotImplementedError as exc:
+                    raise BeatUnavailable(str(exc)) from exc
+            finally:
+                if path is not None:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError as exc:
+                        logger.warning(
+                            "Could not remove temporary BEAT mesh %s: %s", path, exc
+                        )
+            sort_native_result_frequencies(result)
+            parts.append((sign, result))
+            work_done += frequency_count
+        sorted_results[channel.id] = _signed_sum(parts)
+        configs[channel.id] = holder["config"]
 
     if cancellation_callback:
         cancellation_callback()
@@ -793,6 +953,12 @@ def solve_imported_beat_from_msh_text(
                 native_plane=native_plane,
                 merged_tags=sorted(channel_tags[channel.id]),
                 result=result,
+                reversed_tags=sorted(
+                    tag
+                    for sign, group in channel_groups[channel.id]
+                    if sign < 0.0
+                    for tag in group
+                ),
             ),
         }
         channel_response = build_solver_response(

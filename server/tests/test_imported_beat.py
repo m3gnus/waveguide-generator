@@ -340,12 +340,18 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
     )
     assert "impedance" in response["channels"]["right"]
 
-    # Each channel keeps its own complex basis for recombination.
+    # Each channel keeps its own complex basis for recombination. The stand-in
+    # returns 1x and 2x a unit field; tag 103 faces back along the sideways
+    # axis, so its axial channel is driven outward, as Metal drives it, and
+    # comes back negated.
     bases = deserialize_channel_bases(outcome.channel_bases)
     assert bases["channel_ids"] == ["left", "right"]
     left_basis = bases["results_by_id"]["left"].pressure_complex
     right_basis = bases["results_by_id"]["right"].pressure_complex
-    np.testing.assert_allclose(right_basis, 2.0 * left_basis)
+    np.testing.assert_allclose(right_basis, -2.0 * left_basis)
+    assert response["channels"]["right"]["metadata"]["beat"][
+        "axially_reversed_source_tags"
+    ] == [103]
 
     # Streamed frames are numbered across channels, so the runtime's
     # one-revision-per-frame rule keeps every one of them.
@@ -361,6 +367,67 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
     )
     # The job stores the mesh as ingested, not the rotated copy.
     assert outcome.msh_text == MESH
+
+
+def test_an_axial_tag_facing_backwards_is_driven_outward_as_metal_drives_it(
+    recording_beat: _RecordingBeat,
+) -> None:
+    """Metal orients each axial source tag outward, by its area-weighted normal.
+
+    hornlab-metal-bem scales each axial face by ``n . axis`` and flips a whole
+    tag whose area-weighted projection is negative (``bie.py``,
+    ``_build_axial_face_scale``), so a tag facing back along the axis is pushed
+    outward, not along +axis. BEAT drives ``n . z`` on its one tag and flips
+    nothing. The same excitation on both engines therefore needs the backward
+    tags solved as their own group and subtracted, by linearity.
+
+    In the identity frame MESH's tag 101 faces backwards (its normal has a
+    negative z), tag 102 forwards.
+    """
+
+    request = _request(
+        drive_channels=[
+            {"id": "left", "source_ids": ["source-a", "source-b"], "motion": "axial"},
+            {"id": "right", "source_ids": ["source-c"]},
+        ]
+    )
+
+    outcome = _run(request, _record())
+
+    # Two BEAT solves for the axial channel -- forward tags, then the
+    # backward-facing one -- and one for the normal channel.
+    assert len(recording_beat.solves) == 3
+    forward, backward, normal = recording_beat.solves
+    assert _elements(forward["text"]) == {1: 1, 2: 1, 3: 2, 4: 1}
+    assert _elements(backward["text"]) == {1: 1, 2: 2, 3: 1, 4: 1}
+    assert _elements(normal["text"]) == {1: 1, 2: 1, 3: 1, 4: 2}
+    assert normal["config"].source_motion == "normal"
+    # The stand-in returns 1x, 2x and 3x a unit field for the three solves:
+    # the channel is forward minus backward.
+    bases = deserialize_channel_bases(outcome.channel_bases)
+    left = bases["results_by_id"]["left"].pressure_complex
+    right = bases["results_by_id"]["right"].pressure_complex
+    np.testing.assert_allclose(left, -1.0 * right / 3.0)
+    assert outcome.results["channels"]["left"]["metadata"]["beat"]["axially_reversed_source_tags"] == [101]
+
+
+def test_a_closed_axial_tag_is_never_reversed_by_rounding() -> None:
+    """A closed tag's faces cancel, so its projection's sign is only rounding.
+
+    The whole sphere of the oscillating-sphere fixture is such a tag: rotating
+    its mesh moved the residue from +1e-18 to -1e-18 and flipped the entire
+    field. Below the tolerance a tag drives ``n . axis`` unflipped.
+    """
+
+    tags = frozenset({101, 102})
+    closed = {101: (-3.0e-19, 0.5), 102: (0.4, 0.5)}
+    assert beat_imported._drive_groups(tags, "axial", closed) == [(1.0, tags)]
+    facing_back = {101: (-0.1, 0.5), 102: (0.4, 0.5)}
+    assert beat_imported._drive_groups(tags, "axial", facing_back) == [
+        (1.0, frozenset({102})),
+        (-1.0, frozenset({101})),
+    ]
+    assert beat_imported._drive_groups(tags, "normal", facing_back) == [(1.0, tags)]
 
 
 @pytest.mark.parametrize(
