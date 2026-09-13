@@ -4,28 +4,19 @@ import { postSolvePlan, SolvePlanRefused, solvePlanRequestBody, type SolvePlan }
 import type { DesignDocument } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
 
-export const SOLVE_PLAN_DEBOUNCE_MS = 150;
-export const SOLVE_PLAN_GC_MS = 60_000;
+import {
+  SOLVE_PLAN_DEBOUNCE_MS,
+  SOLVE_PLAN_FAULT_RETRIES,
+  SOLVE_PLAN_GC_MS,
+  SOLVE_PLAN_RECOVERY_MS,
+} from './planQueryPolicy';
 
-/**
- * How often an unanswered plan asks again.
- *
- * Solve is disabled whenever this query has no plan, so a single unanswered
- * request used to disable it for the rest of the session: the key is the
- * request body, `staleTime` is Infinity, and nothing here refetched on a timer.
- * The socket reconnecting invalidates this query
- * (`useCapabilityRefreshOnReconnect`), but that only fires when the socket
- * comes *back*; a backend that stays down, or one that answers the socket while
- * failing this route, never produces the signal. So the query heals itself.
- *
- * Only faults are retried, never refusals -- see `SolvePlanRefused`. Polling a
- * 422 the server will keep giving would be noise, and it would hide the message
- * the user actually needs behind a pending state.
- */
-export const SOLVE_PLAN_RECOVERY_MS = 5_000;
-
-/** One immediate retry absorbs the blip; the interval above covers the rest. */
-export const SOLVE_PLAN_FAULT_RETRIES = 1;
+export {
+  SOLVE_PLAN_DEBOUNCE_MS,
+  SOLVE_PLAN_FAULT_RETRIES,
+  SOLVE_PLAN_GC_MS,
+  SOLVE_PLAN_RECOVERY_MS,
+};
 
 export interface SolvePlanSnapshot {
   plan: SolvePlan | null;

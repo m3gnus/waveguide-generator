@@ -27,6 +27,9 @@ vi.mock('../jobs/useCapabilities', () => ({
   useCapabilityRefreshOnReconnect: () => undefined,
   useLegacyBeatEngineMigration: () => undefined,
 }));
+vi.mock('../jobs/useImportedSolvePlan', () => ({
+  useImportedSolvePlan: () => ({ plan: null, error: null, isPending: false }),
+}));
 vi.mock('../jobs/useSolvePlan', () => ({
   useSolvePlan: () => ({ plan: null, error: null, isPending: true }),
 }));

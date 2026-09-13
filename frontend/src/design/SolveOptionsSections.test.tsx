@@ -110,6 +110,18 @@ describe('solve and directivity control help', () => {
     expect(options[2].textContent).toContain('unavailable: Needs an NVIDIA GPU');
   });
 
+  // CAD Link is a geometry source, not a solve mode: imported geometry is
+  // offered the same engine list as a design, and shows the same choice.
+  it('offers imported geometry the same engine selector as a design', () => {
+    render(<SolveOptionsControls />);
+    const parametric = [...host.querySelector<HTMLSelectElement>('#solve-engine')!.options]
+      .map((option) => option.value);
+    render(<SolveOptionsControls mode="cad" ingestRecord={null} />);
+    const control = host.querySelector<HTMLSelectElement>('#cad-solve-engine')!;
+    expect([...control.options].map((option) => option.value)).toEqual(parametric);
+    expect(control.value).toBe(useSolveOptionsStore.getState().engine);
+  });
+
   it('replaces forced imported backend and domain controls with ingest facts', () => {
     const ingestRecord = { symmetry: { cut_planes: ['x0', 'y0'] } } as CadReturnIngestRecord;
     render(<SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/>);

@@ -12,7 +12,7 @@ import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
-import { importedSolveEngine } from '../design/backendSupport';
+import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
@@ -189,8 +189,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const preferences = usePreferences();
   const automation = useRef(new JobAutomation()).current;
   const {
-    engines: capabilities,
-    engineSelection,
     error: capabilityError,
   } = useCapabilities();
   const [actionError, setActionError] = useState<string | null>(null);
@@ -215,12 +213,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     currentOptions,
     workspaceMode === 'parametric',
   );
-  // Imported geometry takes the same engine choice as a parametric design; this
-  // names where that choice lands, or why it cannot solve a CAD model here.
-  const importedChoice = importedSolveEngine(selectedEngine, capabilities, engineSelection);
-  const importedEngineLabel = importedChoice.engine
-    ? importedChoice.engine.label || importedChoice.engine.name
-    : null;
   const visibleImported = viewportGeometry.showing === 'cad'
     ? viewportGeometry.cad
     : viewportGeometry.showing === 'file'
@@ -243,6 +235,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       : null;
   const directivityError = polarValidationError(solveOptions.polar);
   const solveBlocker = cadSolveBlocker ?? directivityError;
+  // Imported geometry takes the same engine choice as a parametric design. The
+  // server says, per engine, which can take this return and where the user's
+  // choice resolves; Solve follows that one answer.
+  const importedPlan = useImportedSolvePlan(cadGeometryActive && cadSolveBlocker === null);
+  const importedEngine = importedPlan.plan?.engine ?? null;
+  const importedEngineLabel = importedEngine
+    ? importedPlan.plan?.engines.find((verdict) => verdict.name === importedEngine)?.label || importedEngine
+    : null;
+  const importedUnavailable = importedPlan.isPending
+    ? 'Checking which engines can solve this CAD model…'
+    : importedPlan.plan?.reason ?? importedPlan.error;
 
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision) => {
     if (submissionInFlight.current) return;
@@ -406,7 +409,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     ?? solvePlanError
     ?? (solvePlanPending ? 'Planning solve for the current design…' : 'Solve plan is unavailable');
   const solveAvailable = cadGeometryActive
-    ? importedChoice.engine !== null
+    ? importedEngine !== null
     : solvePlan !== null && !solvePlanPending && solvePlanError === null;
   const solve = useCallback(() => {
     const action = async () => {
@@ -459,9 +462,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
             : solvePlan
               ? solvePlanTitle(solvePlan, selectedEngine)
               : cadGeometryActive
-                ? capabilityError ?? importedChoice.reason ?? 'No engine can solve imported CAD geometry here'
+                ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable,
-  }), [cadGeometryActive, capabilityError, fileGeometryActive, importedChoice.reason, importedEngineLabel, notice, parametricUnavailable, selectedEngine, solve, solveAvailable, solveBlocker, solvePlan, submitting]);
+  }), [cadGeometryActive, capabilityError, fileGeometryActive, importedUnavailable, importedEngineLabel, notice, parametricUnavailable, selectedEngine, solve, solveAvailable, solveBlocker, solvePlan, submitting]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }

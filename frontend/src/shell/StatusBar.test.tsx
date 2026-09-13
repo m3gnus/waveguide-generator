@@ -25,6 +25,11 @@ vi.mock('../jobs/useCapabilities', () => ({
   }),
 }));
 
+// No return has been judged by the server here: the bar names the user's
+// own engine choice.
+vi.mock('../jobs/useImportedSolvePlan', () => ({
+  useImportedSolvePlan: () => ({ plan: null, error: null, isPending: false }),
+}));
 vi.mock('../api/previewSocket', () => ({
   previewSocket: {
     subscribe: () => () => undefined,
@@ -77,9 +82,9 @@ describe('StatusBar workspace modes', () => {
       workspaceModeStore.setMode('cad');
     });
 
-    // The selected BEMPP does not solve imported geometry, and the bar says so
-    // instead of naming an engine the CAD solve would not run on.
-    expect(host.textContent).toContain('BEMPP · NO CAD SOLVE');
+    // The CAD solve runs on the user's own choice, as a design's does. Until the
+    // server has judged this return, the bar names that choice.
+    expect(host.textContent).toContain('BEMPP · 2.0');
     act(() => { useSolveOptionsStore.getState().setEngine('auto'); });
     expect(host.textContent).toContain('METAL · 1.0');
     // Grouped in the runner's locale, not en-US — see summary.test.ts.

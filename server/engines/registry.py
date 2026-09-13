@@ -231,12 +231,14 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             )
         )
 
+    from server.solver import bempp as bempp_adapter
+    from server.solver import metal as metal_adapter
     from server.solver.beat import (
         BEAT_BACKENDS,
         BEAT_BACKEND_LABELS,
-        BEAT_CPU_BACKEND,
         beat_backend_statuses,
         beat_engine_name,
+        beat_geometry_sources,
     )
     from server.solver.bempp import bempp_status
     from server.solver.circsym import circsym_status
@@ -290,9 +292,11 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     # than silently mis-solved. The vocabulary here cannot say "half, one
     # orientation", and an honest runtime refusal is better than under-declaring
     # the half that does work.
-    for name, label, probe in (
-        ("metal", "Metal \u2014 Apple GPU", metal_status),
-        ("bempp", "BEMPP \u2014 CPU", bempp_status),
+    # Each adapter declares what it solves; the registry only publishes it, so
+    # an engine gains imported geometry by implementing it, never by name.
+    for name, label, probe, adapter in (
+        ("metal", "Metal \u2014 Apple GPU", metal_status, metal_adapter),
+        ("bempp", "BEMPP \u2014 CPU", bempp_status, bempp_adapter),
     ):
         try:
             status = probe()
@@ -321,12 +325,8 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                     name == "bempp"
                     and bool(status.get("ground_plane_composes_with_symmetry"))
                 ),
-                geometry_sources=(
-                    ("parametric", "imported")
-                    if name == "metal"
-                    else ("parametric",)
-                ),
-                imported_features=("passive-cardioid",) if name == "metal" else (),
+                geometry_sources=tuple(adapter.GEOMETRY_SOURCES),
+                imported_features=tuple(adapter.IMPORTED_FEATURES),
                 symmetry_domains=_symmetry_domains(name),
                 field_traces=True,
                 di_sphere=True,
@@ -370,16 +370,9 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 # No "ground-plane": see _ground_plane_axes. The gap is in this
                 # application, not in hornlab-beat-bem.
                 mountings=("free-standing",),
-                # Imported CAD geometry on the CPU backend only. That is the
-                # backend ``server/solver/beat_imported.py`` was qualified on,
-                # and the one every desktop platform provisions. The
-                # accelerators run the same Julia solver and would take the
-                # same adapter, but none has been qualified on a return.
-                geometry_sources=(
-                    ("parametric", "imported")
-                    if backend == BEAT_CPU_BACKEND
-                    else ("parametric",)
-                ),
+                # Declared by the adapter: imported geometry on the CPU
+                # backend only (``beat_geometry_sources``).
+                geometry_sources=beat_geometry_sources(backend),
                 symmetry_domains=_symmetry_domains(name),
                 field_traces=bool(status.get("surface_traces")),
                 di_sphere=True,

@@ -114,6 +114,20 @@ _BEAT_BACKEND_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 
+def beat_geometry_sources(backend: str) -> tuple[str, ...]:
+    """What one BEAT backend's adapter solves (``EngineInfo.geometry_sources``).
+
+    Imported CAD geometry on the CPU backend only: the backend
+    ``server/solver/beat_imported.py`` was qualified on, and the one every
+    desktop platform provisions. The accelerators run the same Julia solver
+    and would take the same adapter, but none has been qualified on a return.
+    The symmetry-domain, feature and preflight gates that make the declaration
+    safe live in ``resolve_imported_submission`` and ``BeatEngine``.
+    """
+
+    return ("parametric", "imported") if backend == BEAT_CPU_BACKEND else ("parametric",)
+
+
 def _probe_reason_is_about(backend: str, reason: str) -> bool:
     """Whether the probe's verdict is about this accelerator family alone.
 
@@ -942,6 +956,7 @@ __all__ = [
     "beat_backend_statuses",
     "beat_engine_backend",
     "beat_engine_name",
+    "beat_geometry_sources",
     "beat_status",
     "is_beat_engine",
     "resolve_beat_backend",

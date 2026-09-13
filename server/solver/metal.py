@@ -114,6 +114,15 @@ except (ImportError, OSError):  # clean capability absence or native loader fail
     discover_native_runtime = None  # type: ignore[assignment]
 
 
+#: What this adapter solves (``EngineInfo.geometry_sources``): a design's mesh,
+#: and a verified CAD-ingestion record (``solve_imported_metal_from_msh_text``).
+GEOMETRY_SOURCES: tuple[str, ...] = ("parametric", "imported")
+
+#: Imported features beyond the mesh (``EngineInfo.imported_features``): the
+#: passive-cardioid radiation-matrix campaign (``_run_passive_cardioid_campaign``).
+IMPORTED_FEATURES: tuple[str, ...] = ("passive-cardioid",)
+
+
 class MetalUnavailable(RuntimeError):
     """The package or loadable release helper required by Metal is absent."""
 

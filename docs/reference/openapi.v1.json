@@ -3609,6 +3609,63 @@
         "title": "ICWConfig",
         "type": "object"
       },
+      "ImportedEngineVerdictResponse": {
+        "description": "Whether one engine can solve one ingested CAD return here, and why not.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "solves": {
+            "title": "Solves",
+            "type": "boolean"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "solves"
+        ],
+        "title": "ImportedEngineVerdictResponse",
+        "type": "object"
+      },
       "ImportedGeometrySource": {
         "additionalProperties": false,
         "properties": {
@@ -3846,6 +3903,72 @@
           "source_size_mm"
         ],
         "title": "ImportedMeshSizes",
+        "type": "object"
+      },
+      "ImportedSolvePlanResponse": {
+        "description": "Every engine's verdict on one imported request, and where it resolves.\n\n``engine`` is what submitting this request would run on; it is null, with\n``code`` and ``reason``, when the request would be refused or no capable\nengine is available.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain"
+          },
+          "engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engine"
+          },
+          "engines": {
+            "items": {
+              "$ref": "#/components/schemas/ImportedEngineVerdictResponse"
+            },
+            "title": "Engines",
+            "type": "array"
+          },
+          "ingest_id": {
+            "title": "Ingest Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "requested": {
+            "title": "Requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ingest_id",
+          "requested",
+          "engine",
+          "reason",
+          "engines"
+        ],
+        "title": "ImportedSolvePlanResponse",
         "type": "object"
       },
       "JobItem": {
@@ -10629,6 +10752,45 @@
           }
         },
         "summary": "Submit Solve"
+      }
+    },
+    "/api/solve/imported-plan": {
+      "post": {
+        "description": "Every engine's verdict on one ingested CAD return, without a job.\n\nThe solver selector reads this for imported geometry: the same\nper-engine capability ``POST /api/solve`` resolves with, keyed by the\nrequest's ``ingest_id``. A request the ingestion record itself refuses\n(unknown ingest, mismatched hashes, an unsupported cut set) answers 422.",
+        "operationId": "plan_imported_solve_api_solve_imported_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportedSolvePlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Imported request refused"
+          }
+        },
+        "summary": "Plan Imported Solve"
       }
     },
     "/api/solve/plan": {

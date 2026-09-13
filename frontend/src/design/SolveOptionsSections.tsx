@@ -6,9 +6,9 @@ import {
   activeBackendCapability,
   backendLimitation,
   declaresImportedGeometry,
-  importedSolveEngine,
   plannedBackendCapabilities,
 } from './backendSupport';
+import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { widenPolarToDerivation } from '../jobs/importedSubmission';
 import { HelpTipRow, useHelpTip } from './HelpTip';
@@ -76,11 +76,24 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   ingestRecord?: CadReturnIngestRecord | null;
 } = {}) {
   const store = useSolveOptionsStore();
-  const { engines, engineSelection, error } = useCapabilities();
+  const { engines, error } = useCapabilities();
   const backendEngines = engines.filter((engine) => !['axisym', 'circsym'].includes(engine.name.toLowerCase()));
   const axisymEngine = engines.find((engine) => engine.name.toLowerCase() === 'axisym');
   const meridianAvailable = axisymEngine?.available === true;
-  const importedChoice = importedSolveEngine(store.engine, engines, engineSelection);
+  // For imported geometry the server says, per engine, whether it can take
+  // this return, and where the user's choice resolves. Before a return is
+  // prepared there is no record to ask about, and the list shows only what
+  // each engine declares.
+  const importedPlan = useImportedSolvePlan(mode === 'cad');
+  const verdicts = new Map((importedPlan.plan?.engines ?? []).map((verdict) => [verdict.name, verdict]));
+  const importedEngine = importedPlan.plan?.engine
+    ? verdicts.get(importedPlan.plan.engine)?.label || importedPlan.plan.engine
+    : null;
+  const runsOn = importedEngine
+    ? `${importedEngine} · full 3-D · free space`
+    : importedPlan.isPending
+      ? 'Checking which engines can solve this CAD model…'
+      : importedPlan.plan?.reason ?? importedPlan.error ?? 'Prepare the CAD return to see which engines can solve it.';
   return <>
     {mode === 'parametric' ? <>
       <HelpTipRow className="select-row" text="Which BEM engine runs Full 3D. AUTO takes the first full-3D backend that is actually available on this machine. Axisymmetric uses the portable meridian runner independently of this choice."><label htmlFor="solve-engine">Full 3D backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
@@ -102,13 +115,19 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
       <HelpTipRow className="select-row" text="Which BEM engine solves the imported model: the same choice as the parametric workspace's Full 3D backend. AUTO takes the first available engine that solves imported CAD geometry."><label htmlFor="cad-solve-engine">Solver</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">AUTO — first available</option>
         {backendEngines.map((engine) => {
+          const verdict = verdicts.get(engine.name.toLowerCase());
           const imported = declaresImportedGeometry(engine);
-          return <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available || !imported}>{engine.label || engine.name}{!imported ? ' · does not solve imported CAD geometry' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>;
+          const version = engine.version ? ` · ${engine.version}` : '';
+          const refused = verdict ? !verdict.solves : !engine.available || !imported;
+          const note = verdict
+            ? verdict.solves ? version : ` · ${verdict.reason ?? 'cannot solve this return'}`
+            : !imported
+              ? ' · does not solve imported CAD geometry'
+              : engine.available ? version : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`;
+          return <option key={engine.name} value={engine.name.toLowerCase()} disabled={refused}>{engine.label || engine.name}{note}</option>;
         })}
       </select></HelpTipRow>
-      <p className={`cad-solve-fact${importedChoice.engine ? '' : ' cad-solve-fact-unavailable'}`}><b>Runs on</b><span>{importedChoice.engine
-        ? `${importedChoice.engine.label || importedChoice.engine.name} · full 3-D · free space`
-        : importedChoice.reason}</span></p>
+      <p className={`cad-solve-fact${importedEngine ? '' : ' cad-solve-fact-unavailable'}`}><b>Runs on</b><span>{runsOn}</span></p>
       <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
     <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>

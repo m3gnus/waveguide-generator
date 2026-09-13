@@ -183,6 +183,34 @@ class SolvePlanResponse(BaseModel):
     adjustments: list[PlanAdjustment] = []
 
 
+class ImportedEngineVerdictResponse(BaseModel):
+    """Whether one engine can solve one ingested CAD return here, and why not."""
+
+    name: str
+    label: str
+    solves: bool
+    stage: str | None = None
+    code: str | None = None
+    reason: str | None = None
+
+
+class ImportedSolvePlanResponse(BaseModel):
+    """Every engine's verdict on one imported request, and where it resolves.
+
+    ``engine`` is what submitting this request would run on; it is null, with
+    ``code`` and ``reason``, when the request would be refused or no capable
+    engine is available.
+    """
+
+    ingest_id: str
+    requested: str
+    engine: str | None
+    code: str | None = None
+    reason: str
+    domain: str | None = None
+    engines: list[ImportedEngineVerdictResponse]
+
+
 class FieldPlaneUnavailableResponse(BaseModel):
     """Backward-compatible, versioned remedy for an unsupported field plane."""
 
@@ -279,7 +307,7 @@ class _JobsContractRoute(APIRoute):
 
     def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
         route_handler = super().get_route_handler()
-        if self.path not in {"/api/solve", "/api/solve/plan"}:
+        if self.path not in {"/api/solve", "/api/solve/plan", "/api/solve/imported-plan"}:
             return route_handler
 
         async def solve_contract_handler(request: Request) -> Response:
@@ -332,6 +360,45 @@ def create_jobs_router(
         )
     router.add_event_handler("startup", runtime.start)
     router.add_event_handler("shutdown", runtime.shutdown)
+
+    @router.post(
+        "/api/solve/imported-plan",
+        response_model=ImportedSolvePlanResponse,
+        responses={
+            422: {"model": ErrorEnvelope, "description": "Imported request refused"},
+        },
+    )
+    async def plan_imported_solve(
+        body: SolveRequest,
+    ) -> ImportedSolvePlanResponse | JSONResponse:
+        """Every engine's verdict on one ingested CAD return, without a job.
+
+        The solver selector reads this for imported geometry: the same
+        per-engine capability ``POST /api/solve`` resolves with, keyed by the
+        request's ``ingest_id``. A request the ingestion record itself refuses
+        (unknown ingest, mismatched hashes, an unsupported cut set) answers 422.
+        """
+
+        try:
+            plan = await runtime.plan_imported(body)
+        except ImportedSolveRefusal as exc:
+            return _error_response(
+                422,
+                code=exc.reason_code,
+                stage="planning",
+                message=str(exc),
+                details=exc.details,
+                client_request_id=body.client_request_id,
+            )
+        except ValueError as exc:
+            return _error_response(
+                422,
+                code="invalid_solve_plan",
+                stage="planning",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
+        return ImportedSolvePlanResponse.model_validate(plan)
 
     @router.post(
         "/api/solve/plan",

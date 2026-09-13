@@ -395,6 +395,66 @@ export async function postSolvePlan(
   return plan as SolvePlan;
 }
 
+/** One engine's verdict on one ingested CAD return, from `/api/solve/imported-plan`. */
+export interface ImportedEngineVerdict {
+  name: string;
+  label: string;
+  solves: boolean;
+  stage?: string | null;
+  code?: string | null;
+  reason?: string | null;
+}
+
+/**
+ * Every engine's verdict on one imported request, and where it resolves.
+ *
+ * The server answers it from the function its own submission resolves with
+ * (`resolve_imported_submission`), so the solver list and the Solve that
+ * follows cannot disagree. `engine` is null, with `code` and `reason`, when
+ * the request as set up would be refused.
+ */
+export interface ImportedSolvePlan {
+  ingest_id: string;
+  requested: string;
+  engine: string | null;
+  code?: string | null;
+  reason: string;
+  domain?: string | null;
+  engines: ImportedEngineVerdict[];
+}
+
+export function importedSolvePlanRequestBody(submission: ImportedSolveSubmission): string {
+  return JSON.stringify(submission);
+}
+
+export async function postImportedSolvePlan(
+  body: string,
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<ImportedSolvePlan> {
+  const response = await fetcher('/api/solve/imported-plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    signal,
+  });
+  if (!response.ok) throw new SolvePlanRefused(await detail(response), response.status);
+  const plan = await response.json() as Partial<ImportedSolvePlan>;
+  if (
+    typeof plan.ingest_id !== 'string'
+    || typeof plan.requested !== 'string'
+    || !(plan.engine === null || (typeof plan.engine === 'string' && Boolean(plan.engine.trim())))
+    || typeof plan.reason !== 'string'
+    || !Array.isArray(plan.engines)
+    || !plan.engines.every((entry) => typeof entry?.name === 'string'
+      && typeof entry.label === 'string'
+      && typeof entry.solves === 'boolean')
+  ) {
+    throw new Error('Imported solve plan response is invalid');
+  }
+  return plan as ImportedSolvePlan;
+}
+
 export async function planSolveDesign(
   design: DesignDocument,
   requestedOptions: SolveOptions = useSolveOptionsStore.getState().options(),

@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
-import { importedSolveEngine } from '../design/backendSupport';
 import { compactFrequency } from '../design/lambdaLimit';
 import {
   resolveEngine,
@@ -8,6 +7,7 @@ import {
   type EngineSelection,
 } from '../jobs/actions';
 import { useCapabilities } from '../jobs/useCapabilities';
+import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { usePreferences, type Preferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument } from '../stores/design';
@@ -108,17 +108,16 @@ export function StatusBar() {
   const frequencyMode = useSolveOptionsStore((state) => state.frequencyMode);
   const frequencyListText = useSolveOptionsStore((state) => state.frequencyListText);
   const preferences = usePreferences();
-  // A CAD solve runs on the engine the user's choice lands on for imported
-  // geometry, always in full 3-D -- or on nothing, which the bar says rather
-  // than naming an engine that would refuse the model.
-  const cadEngine = importedSolveEngine(selectedEngine, engines, engineSelection).engine;
+  // A CAD solve runs on the user's engine choice, always in full 3-D. Once the
+  // server has said where that choice lands for this return, the bar names
+  // that engine -- or says the return cannot be solved as set up, rather than
+  // naming an engine that would refuse it.
+  const cadPlan = useImportedSolvePlan(mode === 'cad').plan;
   const engineLabel = mode !== 'cad'
     ? engineStatusLabel(engines, engineSelection, selectedEngine, solverMode, isLoading)
-    : cadEngine
-      ? engineStatusLabel(engines, engineSelection, cadEngine.name, 'full_3d', isLoading)
-      : isLoading
-        ? `${selectedEngine.toUpperCase()}…`
-        : `${selectedEngine.toUpperCase()} · NO CAD SOLVE`;
+    : cadPlan && cadPlan.engine === null
+      ? `${selectedEngine.toUpperCase()} · NO CAD SOLVE`
+      : engineStatusLabel(engines, engineSelection, cadPlan?.engine ?? selectedEngine, 'full_3d', isLoading);
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
   const meshMetrics = previewMeshMetrics(preview.frame);
   const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;

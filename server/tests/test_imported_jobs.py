@@ -2897,3 +2897,323 @@ def test_the_beat_adapter_preflight_refuses_a_return_at_submission(tmp_path: Pat
 
     assert caught.value.reason_code == "imported_return_unsupported_by_engine"
     assert "would move that plane" in str(caught.value)
+
+
+# The imported plan: every engine's verdict on one ingested return, read by the
+# solver selector, from the same function a submission resolves with.
+
+
+_POSITIVE_MESH = _TILTED_HALF_MESH
+
+
+def _plan_request(ingest_id: str, engine: str, **geometry_changes: Any) -> SolveRequest:
+    request = _request(ingest_id, **geometry_changes)
+    request.options.engine = engine
+    return request
+
+
+async def _plan(
+    tmp_path: Path,
+    registry: Any,
+    engine: str,
+    record_changes: dict[str, Any] | None = None,
+    *,
+    ground_plane: bool = False,
+    **geometry_changes: Any,
+) -> dict[str, Any]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    runtime, ingest_id, _ = await _runtime_fixture(
+        tmp_path, record_changes, mesh_text=_POSITIVE_MESH
+    )
+    runtime.engine_registry = registry  # type: ignore[assignment]
+    request = _plan_request(ingest_id, engine, **geometry_changes)
+    request.options.ground_plane.enabled = ground_plane
+    try:
+        return await runtime.plan_imported(request)
+    finally:
+        await runtime.shutdown()
+
+
+def _verdicts(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {entry["name"]: entry for entry in plan["engines"]}
+
+
+def test_the_imported_plan_names_every_engines_verdict_and_the_resolved_engine(
+    tmp_path: Path,
+) -> None:
+    registry = _AdapterRegistry(
+        _metal(available=False, reason="no Apple GPU"), _bempp(), _beat_cpu()
+    )
+
+    plan = asyncio.run(_plan(tmp_path, registry, "auto"))
+
+    assert plan["engine"] == "beat-cpu"
+    assert plan["code"] is None
+    assert plan["domain"] == "half_yz"
+    verdicts = _verdicts(plan)
+    assert list(verdicts) == ["metal", "bempp", "beat-cpu"]
+    assert verdicts["metal"]["solves"] is False
+    assert verdicts["metal"]["stage"] == "availability"
+    assert verdicts["metal"]["reason"] == "unavailable (no Apple GPU)"
+    assert verdicts["bempp"]["solves"] is False
+    assert verdicts["bempp"]["reason"] == "does not solve imported CAD geometry"
+    assert verdicts["beat-cpu"]["solves"] is True
+
+
+def test_the_imported_plan_refuses_an_explicit_engine_without_swapping_it(
+    tmp_path: Path,
+) -> None:
+    registry = _AdapterRegistry(_metal(), _bempp(), _beat_cpu())
+
+    plan = asyncio.run(_plan(tmp_path, registry, "bempp"))
+
+    # The user's pick is refused with the engines that could, never swapped.
+    assert plan["engine"] is None
+    assert plan["requested"] == "bempp"
+    assert plan["code"] == "imported_engine_unsupported"
+    assert "metal" in plan["reason"] and "beat-cpu" in plan["reason"]
+    assert _verdicts(plan)["metal"]["solves"] is True
+
+
+def test_the_imported_plan_marks_every_engine_for_a_request_no_engine_takes(
+    tmp_path: Path,
+) -> None:
+    registry = _AdapterRegistry(_metal(), _beat_cpu())
+    full = {
+        "symmetry": _symmetry_full(),
+        "polar_grid_derivation": polar_grid_from_symmetry(_symmetry_full()),
+    }
+
+    plan = asyncio.run(_plan(tmp_path, registry, "auto", full, ground_plane=True))
+
+    assert plan["engine"] is None
+    assert plan["code"] == "imported_ground_plane_unsupported"
+    assert {entry["stage"] for entry in plan["engines"]} == {"request"}
+    assert not any(entry["solves"] for entry in plan["engines"])
+
+
+async def _asgi_post(app: FastAPI, path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """POST through the ASGI app, as the legacy-wire test above does."""
+
+    payload = json.dumps(body).encode("utf-8")
+    sent: list[dict[str, Any]] = []
+    delivered = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    await app(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("ascii"),
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"host", b"127.0.0.1"),
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(payload)).encode("ascii")),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("127.0.0.1", 80),
+        },
+        receive,
+        send,
+    )
+    start = next(item for item in sent if item["type"] == "http.response.start")
+    raw = b"".join(item.get("body", b"") for item in sent if item["type"] == "http.response.body")
+    return int(start["status"]), json.loads(raw)
+
+
+def test_the_imported_plan_route_answers_and_refuses_through_http(tmp_path: Path) -> None:
+    async def scenario() -> tuple[tuple[int, dict[str, Any]], tuple[int, dict[str, Any]]]:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, mesh_text=_POSITIVE_MESH)
+        runtime.engine_registry = _AdapterRegistry(_metal(), _beat_cpu())  # type: ignore[assignment]
+        app = FastAPI()
+        app.include_router(create_jobs_router(runtime))
+        try:
+            answered = await _asgi_post(
+                app,
+                "/api/solve/imported-plan",
+                _plan_request(ingest_id, "beat-cpu").model_dump(mode="json"),
+            )
+            missing = await _asgi_post(
+                app,
+                "/api/solve/imported-plan",
+                _plan_request("wgi_" + "9" * 26, "auto").model_dump(mode="json"),
+            )
+        finally:
+            await runtime.shutdown()
+        return answered, missing
+
+    (status, answered), (missing_status, missing) = asyncio.run(scenario())
+
+    assert status == 200
+    assert answered["engine"] == "beat-cpu"
+    assert {entry["name"] for entry in answered["engines"]} == {"metal", "beat-cpu"}
+    assert missing_status == 422
+    assert "ingest_not_found" in json.dumps(missing)
+
+
+# The guard the solver-choice structure asks for: for every engine the real
+# detector registers, and each kind of return, the selector's verdict and the
+# explicit submission's outcome follow from that engine's declaration alone.
+
+
+def _y_only_changes() -> dict[str, Any]:
+    return _y_only_half()
+
+
+def _domain_changes(planes: list[str]) -> dict[str, Any]:
+    symmetry = {
+        "cut_planes": list(planes),
+        "planes": {name: {"accepted": name in planes} for name in ("x0", "y0", "z0")},
+    }
+    # The throat on both mirror planes, as a symmetric return's is; the shared
+    # fixture's sits 80 mm up, which an engine's own preflight may refuse.
+    on_planes = {
+        "axis": [0.0, 0.0, 1.0],
+        "origin_m": [0.0, 0.0, 0.0],
+        "u": [1.0, 0.0, 0.0],
+        "v": [0.0, 1.0, 0.0],
+        "mouth_center_m": [0.0, 0.0, 0.0],
+        "source_center_m": [0.0, 0.0, 0.0],
+    }
+    return {
+        "symmetry": symmetry,
+        "polar_grid_derivation": polar_grid_from_symmetry(symmetry),
+        "anchor": {"instance_id": "i", "design_id": None, "throat_frame": on_planes},
+    }
+
+
+_CARDIOID = {
+    "passive_cardioid_rear_volume_l": 6.0,
+    "passive_cardioid_port_length_mm": 25.0,
+    "model_port_area_m2": 0.05,
+    "bem_port_area_m2": 0.009471859930646809,
+    "port_area_source": "user",
+    "passive_cardioid_foam_resistance_pa_s_m3": 10_000.0,
+}
+
+_GUARD_FIXTURES = {
+    "full": (["full"], {}, False),
+    "x0-half": (["half-yz"], {}, False),
+    "y0-half": (["half-xz"], {}, False),
+    "quarter": (["quarter"], {}, False),
+    "ground-plane": (["full"], {}, True),
+    "passive-cardioid": (["full"], _CARDIOID, False),
+}
+
+_GUARD_PLANES = {"full": [], "x0-half": ["x0"], "y0-half": ["y0"], "quarter": ["x0", "y0"]}
+
+
+class _DetectedRegistry:
+    """The production detector's declarations, every probe available, real adapters."""
+
+    def __init__(self, engines: list[EngineInfo]) -> None:
+        self.engines = tuple(engines)
+
+    async def capabilities(self) -> tuple[EngineInfo, ...]:
+        return self.engines
+
+    async def get_engine(self, name: str) -> Any:
+        from server.engines.registry import create_engine
+
+        return create_engine(name)
+
+    async def unavailable_reason(self, name: str) -> str | None:
+        return None
+
+
+@pytest.mark.parametrize("fixture", sorted(_GUARD_FIXTURES))
+def test_imported_outcomes_follow_from_each_engines_declared_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixture: str
+) -> None:
+    from server.engines.registry import detect_engines, engine_supports_symmetry
+    from server.jobs.runtime import resolve_imported_submission
+    from server.solver import beat, bempp, circsym
+
+    available = {"available": True, "reason": "ok", "version": "t"}
+    monkeypatch.setattr(circsym, "circsym_status", lambda: dict(available))
+    monkeypatch.setattr(metal, "metal_status", lambda: dict(available))
+    monkeypatch.setattr(bempp, "bempp_status", lambda: dict(available))
+    monkeypatch.setattr(
+        beat,
+        "beat_backend_statuses",
+        lambda: {name: dict(available, backend=name) for name in beat.BEAT_BACKENDS},
+    )
+    engines = detect_engines(environ={})
+    registry = _DetectedRegistry(engines)
+    domain_key = {"ground-plane": "full", "passive-cardioid": "full"}.get(fixture, fixture)
+    _domains, geometry_changes, ground_plane = _GUARD_FIXTURES[fixture]
+    quadrants = {"full": 1234, "x0-half": 14, "y0-half": 12, "quarter": 1}[domain_key]
+    needed = {"passive-cardioid"} if geometry_changes else set()
+
+    async def scenario() -> dict[str, tuple[bool, bool, bool]]:
+        runtime, ingest_id, record = await _runtime_fixture(
+            tmp_path, _domain_changes(_GUARD_PLANES[domain_key]), mesh_text=_POSITIVE_MESH
+        )
+        runtime.engine_registry = registry  # type: ignore[assignment]
+        outcomes: dict[str, tuple[bool, bool, bool]] = {}
+        try:
+            for info in engines:
+                request = _plan_request(ingest_id, info.name, **geometry_changes)
+                request.options.ground_plane.enabled = ground_plane
+                predicted = (
+                    info.name != "axisym"
+                    and "imported" in info.geometry_sources
+                    and engine_supports_symmetry(info, quadrants)
+                    and needed <= set(info.imported_features)
+                    and not ground_plane
+                )
+                plan = await runtime.plan_imported(request)
+                listed = {entry["name"]: entry["solves"] for entry in plan["engines"]}
+                try:
+                    resolution = await resolve_imported_submission(
+                        request,
+                        registry,
+                        symmetry_metadata=_imported_symmetry_metadata(
+                            {**record, **_domain_changes(_GUARD_PLANES[domain_key])}, "auto"
+                        ),
+                        imported_record=record,
+                        imported_msh_text=_POSITIVE_MESH,
+                    )
+                    submitted = resolution.engine_name == info.name
+                except (ImportedSolveRefusal, EngineUnavailableError):
+                    submitted = False
+                outcomes[info.name] = (
+                    predicted,
+                    listed.get(info.name, False),
+                    submitted,
+                )
+        finally:
+            await runtime.shutdown()
+        return outcomes
+
+    outcomes = asyncio.run(scenario())
+
+    assert outcomes, "the detector registered no engine"
+    for name, (predicted, listed, submitted) in outcomes.items():
+        assert listed == predicted, f"{fixture}: selector verdict for {name}"
+        assert submitted == predicted, f"{fixture}: submission outcome for {name}"
+    # The fixtures are not vacuous: at least one engine is capable and at
+    # least one is refused wherever a gate exists.
+    capable = {name for name, (predicted, _, _) in outcomes.items() if predicted}
+    assert capable == (
+        set()
+        if fixture == "ground-plane"
+        else {"metal"}
+        if fixture in {"y0-half", "passive-cardioid"}
+        else {"metal", "beat-cpu"}
+    )

@@ -79,6 +79,14 @@ except (ImportError, OSError):
     bempp_solve_frequencies = None  # type: ignore[assignment]
 
 
+#: What this adapter solves (``EngineInfo.geometry_sources``). Imported CAD
+#: geometry is not among them yet: ``BemppEngine.run`` always meshes the design.
+GEOMETRY_SOURCES: tuple[str, ...] = ("parametric",)
+
+#: Imported features beyond the mesh (``EngineInfo.imported_features``).
+IMPORTED_FEATURES: tuple[str, ...] = ()
+
+
 class BemppUnavailable(RuntimeError):
     """The optional BEMPP fallback package is not importable."""
 

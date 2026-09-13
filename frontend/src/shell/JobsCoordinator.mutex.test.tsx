@@ -36,6 +36,16 @@ const mocks = vi.hoisted(() => ({
   } as { engine: string; formulation: 'axisymmetric' | 'full-3d'; reason: string; eligibility_reasons: string[] } | null,
   solvePlanError: null as string | null,
   solvePlanPending: false,
+  // The server's verdict on the CAD return (POST /api/solve/imported-plan).
+  importedPlan: {
+    plan: {
+      ingest_id: 'wgi_test', requested: 'auto', engine: 'metal' as string | null, code: null,
+      reason: 'AUTO selected the first available engine', domain: 'full',
+      engines: [{ name: 'metal', label: 'Metal', solves: true }],
+    },
+    error: null as string | null,
+    isPending: false,
+  },
   capabilities: {
     engines: [] as Array<{ name: string; available: boolean; reason: string | null; version: string | null; fast_paths: string[]; formulations?: string[]; mountings?: string[] }>,
     engineSelection: {
@@ -70,6 +80,11 @@ vi.mock('../jobs/useSolvePlan', () => ({
     error: mocks.solvePlanError,
     isPending: mocks.solvePlanPending,
   }),
+}));
+vi.mock('../jobs/useImportedSolvePlan', () => ({
+  useImportedSolvePlan: (enabled: boolean) => (
+    enabled ? mocks.importedPlan : { plan: null, error: null, isPending: false }
+  ),
 }));
 
 function deferred<T>() {
