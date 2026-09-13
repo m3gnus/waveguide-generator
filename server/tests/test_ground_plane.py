@@ -446,6 +446,16 @@ def test_auto_formulation_defaults_to_ground_capable_full_3d_backend():
         "engine": "bempp",
         "reason": "legacy solver_mode='auto' defaults to full-3d",
         "eligibility_reasons": [],
+        # The wall default does not exclude grounded solves; it is reported.
+        "adjustments": [
+            {
+                "kind": "bempp_wall_default",
+                "requested": "omitted",
+                "effective_mm": 5.0,
+                "reason_code": "bempp_free_standing_requires_closed_wall",
+                "policy_version": 1,
+            }
+        ],
     }
 
 

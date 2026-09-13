@@ -5995,6 +5995,45 @@
         "title": "ParametricResultEnvelope",
         "type": "object"
       },
+      "PlanAdjustment": {
+        "description": "A change the runtime makes to the submitted design before solving it.\n\n`bempp_wall_default` is the one kind today: a free-standing BEMPP solve\nwhose wall thickness was left unset (`omitted`) or set to 0 mm, a bare\nshell (`explicit_zero`), is solved with an `effective_mm` closed wall.\nThe explicit case is an override of what the user asked for, which is why\nthe two are reported apart. `policy_version` names the rule that applied,\nso a run stays attributable if that rule later changes.",
+        "properties": {
+          "effective_mm": {
+            "title": "Effective Mm",
+            "type": "number"
+          },
+          "kind": {
+            "const": "bempp_wall_default",
+            "title": "Kind",
+            "type": "string"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "integer"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "requested": {
+            "enum": [
+              "omitted",
+              "explicit_zero"
+            ],
+            "title": "Requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "requested",
+          "effective_mm",
+          "reason_code",
+          "policy_version"
+        ],
+        "title": "PlanAdjustment",
+        "type": "object"
+      },
       "PolarConfig": {
         "additionalProperties": false,
         "description": "Directivity observation contract shared by every solve engine.",
@@ -6924,6 +6963,14 @@
       "SolvePlanResponse": {
         "description": "The request-specific engine/formulation selected by the runtime.",
         "properties": {
+          "adjustments": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PlanAdjustment"
+            },
+            "title": "Adjustments",
+            "type": "array"
+          },
           "eligibility_reasons": {
             "items": {
               "type": "string"

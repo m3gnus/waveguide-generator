@@ -49,12 +49,28 @@ export interface EngineSubstitution {
   resolved: string;
   reason: string;
 }
+/**
+ * A change the server makes to the design before solving it.
+ *
+ * `bempp_wall_default`: a free-standing BEMPP solve whose wall thickness was
+ * unset (`omitted`) or an explicit 0 mm bare shell (`explicit_zero`) runs with
+ * an `effective_mm` closed wall instead. The explicit case overrides what the
+ * user asked for, so the two are reported apart.
+ */
+export interface PlanAdjustment {
+  kind: 'bempp_wall_default';
+  requested: 'omitted' | 'explicit_zero';
+  effective_mm: number;
+  reason_code: string;
+  policy_version: number;
+}
 export interface SolvePlan {
   engine: string;
   formulation: 'axisymmetric' | 'full-3d';
   reason: string;
   eligibility_reasons: string[];
   engine_substitution?: EngineSubstitution | null;
+  adjustments?: PlanAdjustment[];
 }
 export interface SolveSubmissionMetadata { label: string; designRevision: number }
 export interface ImportedGeometrySubmission {
@@ -329,6 +345,26 @@ function validSubstitution(value: SolvePlan['engine_substitution']): boolean {
     && typeof value.reason === 'string';
 }
 
+/**
+ * Absent means none. A kind this client does not know passes, so a newer
+ * server can report more; a known kind must be complete.
+ */
+function validAdjustments(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  return value.every((item: unknown) => {
+    if (typeof item !== 'object' || item === null) return false;
+    const adjustment = item as Record<string, unknown>;
+    if (typeof adjustment.kind !== 'string') return false;
+    if (adjustment.kind !== 'bempp_wall_default') return true;
+    return (adjustment.requested === 'omitted' || adjustment.requested === 'explicit_zero')
+      && typeof adjustment.effective_mm === 'number'
+      && Number.isFinite(adjustment.effective_mm)
+      && typeof adjustment.reason_code === 'string'
+      && Number.isInteger(adjustment.policy_version);
+  });
+}
+
 export async function postSolvePlan(
   body: string,
   fetcher: typeof fetch = fetch,
@@ -350,6 +386,7 @@ export async function postSolvePlan(
     || !Array.isArray(plan.eligibility_reasons)
     || !plan.eligibility_reasons.every((reason) => typeof reason === 'string')
     || !validSubstitution(plan.engine_substitution)
+    || !validAdjustments(plan.adjustments)
   ) {
     throw new Error('Solve plan response is invalid');
   }

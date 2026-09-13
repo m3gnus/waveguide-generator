@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import threading
+from typing import Any
 
 import numpy as np
 import pytest
@@ -776,6 +777,17 @@ def test_formulation_planner_falls_back_to_selected_full_3d_backend(
         "engine": "bempp",
         "reason": "explicit solver_mode='full_3d'",
         "eligibility_reasons": [],
+        # The planner request leaves the wall unset, so BEMPP's closed-wall
+        # default applies and is reported.
+        "adjustments": [
+            {
+                "kind": "bempp_wall_default",
+                "requested": "omitted",
+                "effective_mm": 5.0,
+                "reason_code": "bempp_free_standing_requires_closed_wall",
+                "policy_version": 1,
+            }
+        ],
     }
 
 
@@ -1692,3 +1704,104 @@ def test_an_available_engine_reports_no_substitution() -> None:
     )
 
     assert "engine_substitution" not in resolution.symmetry_metadata["solver_plan"]
+
+
+def _plan_endpoint(tmp_path: Path, *engines: str) -> Any:
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo(name, True, "CPU", "1") for name in engines
+        ],
+        factory=lambda name: object() if name in engines else None,
+    )
+    runtime = JobRuntime(
+        JobStore(tmp_path / "jobs.db"),
+        engine_registry=engine_registry,
+    )
+    return next(
+        route.endpoint
+        for route in create_jobs_router(runtime).routes
+        if getattr(route, "path", None) == "/api/solve/plan"
+    )
+
+
+def _wall_request(
+    *,
+    engine: str = "bempp",
+    wall: float | None = None,
+    sim_type: str = "freestanding",
+    enclosure_depth: float = 0.0,
+) -> SolveRequest:
+    design: dict[str, Any] = {
+        "formula": "OSSE",
+        "L": 120,
+        "a": 45,
+        "enclosure": {"depth": enclosure_depth},
+        "simulation": {
+            "f1": 500,
+            "f2": 8000,
+            "num_frequencies": 3,
+            "sim_type": sim_type,
+        },
+    }
+    if wall is not None:
+        design["mesh"] = {"wall_thickness": wall}
+    return SolveRequest.model_validate(
+        {
+            "design": design,
+            "options": {
+                "engine": engine,
+                "solver_mode": "full_3d",
+                "symmetry": "auto",
+            },
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("wall", "requested"), [(None, "omitted"), (0, "explicit_zero")]
+)
+def test_the_plan_endpoint_reports_the_bempp_wall_adjustment(
+    tmp_path: Path, wall: float | None, requested: str
+) -> None:
+    """The geometry change has to reach the client before the solve, not after."""
+
+    endpoint = _plan_endpoint(tmp_path, "bempp")
+
+    plan = asyncio.run(endpoint(_wall_request(wall=wall)))
+
+    assert plan.engine == "bempp"
+    assert [adjustment.model_dump() for adjustment in plan.adjustments] == [
+        {
+            "kind": "bempp_wall_default",
+            "requested": requested,
+            "effective_mm": 5.0,
+            "reason_code": "bempp_free_standing_requires_closed_wall",
+            "policy_version": 1,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("case", "engine"),
+    [
+        ("metal", "metal"),
+        ("infinite-baffle", "bempp"),
+        ("active-enclosure", "bempp"),
+        ("positive-wall", "bempp"),
+    ],
+)
+def test_the_plan_endpoint_reports_no_adjustment_when_the_wall_is_left_alone(
+    tmp_path: Path, case: str, engine: str
+) -> None:
+    request = {
+        "metal": _wall_request(engine="metal", wall=0),
+        "infinite-baffle": _wall_request(wall=0, sim_type="infinite-baffle"),
+        "active-enclosure": _wall_request(wall=0, enclosure_depth=200),
+        "positive-wall": _wall_request(wall=6),
+    }[case]
+    endpoint = _plan_endpoint(tmp_path, "bempp", "metal")
+
+    plan = asyncio.run(endpoint(request))
+
+    assert plan.engine == engine
+    assert plan.adjustments == []

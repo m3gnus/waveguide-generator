@@ -153,6 +153,24 @@ class EngineSubstitution(BaseModel):
     reason: str
 
 
+class PlanAdjustment(BaseModel):
+    """A change the runtime makes to the submitted design before solving it.
+
+    `bempp_wall_default` is the one kind today: a free-standing BEMPP solve
+    whose wall thickness was left unset (`omitted`) or set to 0 mm, a bare
+    shell (`explicit_zero`), is solved with an `effective_mm` closed wall.
+    The explicit case is an override of what the user asked for, which is why
+    the two are reported apart. `policy_version` names the rule that applied,
+    so a run stays attributable if that rule later changes.
+    """
+
+    kind: Literal["bempp_wall_default"]
+    requested: Literal["omitted", "explicit_zero"]
+    effective_mm: float
+    reason_code: str
+    policy_version: int
+
+
 class SolvePlanResponse(BaseModel):
     """The request-specific engine/formulation selected by the runtime."""
 
@@ -161,6 +179,7 @@ class SolvePlanResponse(BaseModel):
     reason: str
     eligibility_reasons: list[str]
     engine_substitution: EngineSubstitution | None = None
+    adjustments: list[PlanAdjustment] = []
 
 
 class FieldPlaneUnavailableResponse(BaseModel):
@@ -346,6 +365,10 @@ def create_jobs_router(
             engine_substitution=(
                 EngineSubstitution(**substitution) if substitution else None
             ),
+            adjustments=[
+                PlanAdjustment(**adjustment)
+                for adjustment in plan.get("adjustments") or []
+            ],
         )
 
     @router.post(

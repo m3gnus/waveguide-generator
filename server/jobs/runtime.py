@@ -88,9 +88,14 @@ RESTART_RECOVERY_MESSAGE = "Server restarted during execution"
 RUNTIME_PERSIST_INTERVAL_SECONDS = 0.15
 SHUTDOWN_TASK_TIMEOUT_SECONDS = 10.0
 BEMPP_DEFAULT_WALL_THICKNESS_MM = 5.0
+BEMPP_WALL_ADJUSTMENT_KIND = "bempp_wall_default"
+BEMPP_WALL_REASON_CODE = "bempp_free_standing_requires_closed_wall"
+BEMPP_WALL_POLICY_VERSION = 1
 
 
-def _apply_bempp_wall_default(request: SolveRequest, engine_name: str) -> SolveRequest:
+def _apply_bempp_wall_default(
+    request: SolveRequest, engine_name: str
+) -> tuple[SolveRequest, dict[str, Any] | None]:
     """Materialize ATH's closed-wall default for BEMPP free-standing solves.
 
     BEMPP full 3D and the axisymmetric formulation are separate paths. BEMPP's
@@ -99,25 +104,31 @@ def _apply_bempp_wall_default(request: SolveRequest, engine_name: str) -> SolveR
     inactive enclosure plus a missing/zero wall from silently entering that
     backend-specific topology. Revalidating the copied wire also keeps the
     authoritative design and its atomic snapshot identical.
+
+    Returns the request to solve and, when the wall was changed, the adjustment
+    that reports it (``None`` when the request is returned unchanged). The
+    adjustment keeps an omitted thickness apart from an explicit 0: an explicit
+    0 mm "bare shell" is a request the user made, and this policy still
+    overrides it. Reporting both as an applied default would hide that.
     """
 
     if engine_name != "bempp" or not isinstance(
         request.geometry, ParametricGeometrySource
     ):
-        return request
+        return request, None
     root = request.design.root
     if root.simulation.sim_type == "infinite-baffle":
-        return request
+        return request, None
 
     if root.enclosure is not None and root.enclosure.depth is not None:
         enclosure_depth = root.enclosure.depth.constant_value()
         if enclosure_depth is None or float(enclosure_depth) > 0.0:
-            return request
+            return request, None
 
     wall = root.mesh.wall_thickness
     wall_value = wall.constant_value() if wall is not None else None
     if wall is not None and (wall_value is None or float(wall_value) != 0.0):
-        return request
+        return request, None
 
     payload = request.model_dump(mode="json")
     geometry = payload["geometry"]
@@ -128,12 +139,54 @@ def _apply_bempp_wall_default(request: SolveRequest, engine_name: str) -> SolveR
         BEMPP_DEFAULT_WALL_THICKNESS_MM
     )
     corrected = SolveRequest.model_validate(payload)
-    logger.info(
-        "BEMPP selected for a free-standing bare horn; applying ATH's %.g mm "
-        "wall-thickness default",
-        BEMPP_DEFAULT_WALL_THICKNESS_MM,
+    adjustment: dict[str, Any] = {
+        "kind": BEMPP_WALL_ADJUSTMENT_KIND,
+        "requested": "omitted" if wall is None else "explicit_zero",
+        "effective_mm": BEMPP_DEFAULT_WALL_THICKNESS_MM,
+        "reason_code": BEMPP_WALL_REASON_CODE,
+        "policy_version": BEMPP_WALL_POLICY_VERSION,
+    }
+    logger.info("%s", _bempp_wall_adjustment_message(adjustment))
+    return corrected, adjustment
+
+
+def _bempp_wall_adjustment_message(adjustment: Mapping[str, Any]) -> str:
+    """One job-log line naming what was asked for and what is solved instead.
+
+    It reads stored rows, so a malformed entry falls back to the policy value
+    rather than failing the job over a log line.
+    """
+
+    try:
+        effective_mm = float(
+            adjustment.get("effective_mm", BEMPP_DEFAULT_WALL_THICKNESS_MM)
+        )
+    except (TypeError, ValueError):
+        effective_mm = BEMPP_DEFAULT_WALL_THICKNESS_MM
+    effective = f"{effective_mm:g} mm"
+    if adjustment.get("requested") == "explicit_zero":
+        return (
+            "BEMPP wall adjustment: the explicit 0 mm wall thickness (bare shell) "
+            f"was overridden with a {effective} closed wall, because free-standing "
+            "BEMPP solves run on a closed body."
+        )
+    return (
+        "BEMPP wall adjustment: no wall thickness was set, so ATH's "
+        f"{effective} closed-wall default was applied, because free-standing "
+        "BEMPP solves run on a closed body."
     )
-    return corrected
+
+
+def _solver_plan_adjustments(
+    symmetry_metadata: Mapping[str, Any] | None,
+) -> list[Mapping[str, Any]]:
+    """The adjustments recorded in a stored solve plan, tolerating older rows."""
+
+    plan = (symmetry_metadata or {}).get("solver_plan")
+    adjustments = plan.get("adjustments") if isinstance(plan, Mapping) else None
+    if not isinstance(adjustments, list):
+        return []
+    return [item for item in adjustments if isinstance(item, Mapping)]
 
 
 def _sort_provisional_frequencies(result: dict[str, Any]) -> None:
@@ -820,7 +873,11 @@ async def resolve_submission(
             f"Solve engine '{engine_name}' is unavailable. "
             f"{reason or fallback_reason}"
         )
-    request = _apply_bempp_wall_default(request, engine_name)
+    request, wall_adjustment = _apply_bempp_wall_default(request, engine_name)
+    if wall_adjustment is not None:
+        symmetry_metadata["solver_plan"].setdefault("adjustments", []).append(
+            wall_adjustment
+        )
     return SubmissionResolution(
         request=request,
         engine_name=engine_name,
@@ -2893,6 +2950,11 @@ class JobRuntime:
         effective_request = effective_request or request
 
         await self._append_log(job_id, f"Initializing {engine.name} solver")
+        for adjustment in _solver_plan_adjustments(symmetry_metadata):
+            if adjustment.get("kind") == BEMPP_WALL_ADJUSTMENT_KIND:
+                await self._append_log(
+                    job_id, _bempp_wall_adjustment_message(adjustment)
+                )
         if request.options.verbose:
             await self._append_log(
                 job_id,

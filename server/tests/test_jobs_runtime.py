@@ -25,10 +25,13 @@ from server.jobs.runtime import (
     QUIT_INTERRUPTED_STAGE_MESSAGE,
     RESTART_RECOVERY_MESSAGE,
     _apply_bempp_wall_default,
+    _bempp_wall_adjustment_message,
     merge_provisional_results,
+    resolve_submission,
 )
 from server.jobs.store import JobStore
 from server.platform.shutdown_backstop import CLEANUP_RESERVE_SECONDS, ShutdownBackstop
+from server.solver.base import EngineRunResult
 
 
 def _request(*, delay_ms: int = 2, count: int = 5) -> SolveRequest:
@@ -73,8 +76,10 @@ def test_bempp_materializes_ath_wall_default_without_mutating_input(
 ) -> None:
     request = _bare_request(wall=wall)
 
-    corrected = _apply_bempp_wall_default(request, "bempp")
+    corrected, adjustment = _apply_bempp_wall_default(request, "bempp")
 
+    assert adjustment is not None
+    assert adjustment["requested"] == ("omitted" if wall is None else "explicit_zero")
     assert corrected is not request
     assert corrected.design.root.mesh.wall_thickness is not None
     assert corrected.design.root.mesh.wall_thickness.constant_value() == 5
@@ -92,10 +97,11 @@ def test_bempp_wall_default_leaves_closed_and_non_bempp_designs_unchanged() -> N
     assert enclosed.design.root.enclosure is not None
     enclosed.design.root.enclosure.depth = Expr(value=200)
 
-    assert _apply_bempp_wall_default(thick, "bempp") is thick
-    assert _apply_bempp_wall_default(enclosed, "bempp") is enclosed
     bare = _bare_request(wall=0)
-    assert _apply_bempp_wall_default(bare, "metal") is bare
+    for request, engine in ((thick, "bempp"), (enclosed, "bempp"), (bare, "metal")):
+        unchanged, adjustment = _apply_bempp_wall_default(request, engine)
+        assert unchanged is request
+        assert adjustment is None
 
 
 def test_auto_resolving_to_bempp_stores_the_corrected_five_mm_design(
@@ -120,6 +126,130 @@ def test_auto_resolving_to_bempp_stores_the_corrected_five_mm_design(
             geometry["design_snapshot"]["design"]["mesh"]["wall_thickness"]["value"]
             == 5
         )
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+EXPECTED_WALL_ADJUSTMENT = {
+    "kind": "bempp_wall_default",
+    "effective_mm": 5.0,
+    "reason_code": "bempp_free_standing_requires_closed_wall",
+    "policy_version": 1,
+}
+
+
+def _bempp_registry() -> EngineRegistry:
+    return EngineRegistry(
+        detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+        factory=lambda _name: DryRunEngine(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("wall", "requested"), [(None, "omitted"), (0, "explicit_zero")]
+)
+def test_the_bempp_wall_default_is_reported_with_what_was_requested(
+    wall: float | None, requested: str
+) -> None:
+    """An explicit 0 ("bare shell") is overridden too; it must not read as a default.
+
+    The policy itself is unchanged: both requests still solve a 5 mm wall.
+    """
+
+    resolution = asyncio.run(
+        resolve_submission(_bare_request(wall=wall), _bempp_registry())
+    )
+
+    assert resolution.symmetry_metadata["solver_plan"]["adjustments"] == [
+        {**EXPECTED_WALL_ADJUSTMENT, "requested": requested}
+    ]
+    effective_wall = resolution.request.design.root.mesh.wall_thickness
+    assert effective_wall is not None
+    assert effective_wall.constant_value() == 5
+
+
+def test_a_kept_bempp_wall_reports_no_adjustment() -> None:
+    resolution = asyncio.run(
+        resolve_submission(_bare_request(wall=6), _bempp_registry())
+    )
+
+    assert "adjustments" not in resolution.symmetry_metadata["solver_plan"]
+
+
+@pytest.mark.parametrize(
+    "stored", [{"requested": "omitted"}, {"requested": "explicit_zero", "effective_mm": "x"}]
+)
+def test_a_malformed_stored_wall_adjustment_still_logs_the_policy_value(
+    stored: dict[str, Any],
+) -> None:
+    """The log line reads a stored row; a bad entry must not fail the job."""
+
+    message = _bempp_wall_adjustment_message(
+        {"kind": "bempp_wall_default", **stored}
+    )
+
+    assert message.startswith("BEMPP wall adjustment:")
+    assert "5 mm" in message
+
+
+class _CompletingBempp:
+    name = "bempp"
+
+    async def run(self, request: SolveRequest, *, cancel_cb: Any, stage_cb: Any) -> Any:
+        cancel_cb()
+        return EngineRunResult(
+            results={
+                "frequencies": [500.0],
+                "directivity": {},
+                "spl_on_axis": {
+                    "frequencies": [500.0],
+                    "spl": [90.0],
+                    "phase_degrees": [0.0],
+                },
+                "impedance": {"frequencies": [500.0], "real": [1.0], "imaginary": [0.0]},
+                "di": {"frequencies": [500.0], "di": {}},
+                "metadata": {"engine": "fake-bempp"},
+            },
+            msh_text="$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+            mesh_stats={"vertex_count": 3, "triangle_count": 1},
+        )
+
+
+def test_a_submitted_bempp_job_stores_and_logs_the_wall_adjustment(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "bempp-report.db"),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _name: _CompletingBempp(),
+            ),
+        )
+        job_id = await runtime.submit(_bare_request(engine="bempp", wall=0))
+        await runtime.wait_idle()
+        expected = [{**EXPECTED_WALL_ADJUSTMENT, "requested": "explicit_zero"}]
+        row = runtime.store.get_job_row(job_id)
+        assert row is not None
+        assert (
+            row["task_metadata"]["symmetry"]["solver_plan"]["adjustments"]
+            == expected
+        )
+        results = await runtime.get_results(job_id)
+        assert results is not None
+        assert (
+            results["metadata"]["symmetry"]["solver_plan"]["adjustments"]
+            == expected
+        )
+        reported = [
+            line
+            for line in runtime.store.get_job_log(job_id).splitlines()
+            if line.startswith("BEMPP wall adjustment:")
+        ]
+        assert len(reported) == 1
+        assert "explicit 0 mm wall thickness" in reported[0]
+        assert "5 mm" in reported[0]
         await runtime.shutdown()
 
     asyncio.run(scenario())
