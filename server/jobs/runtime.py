@@ -303,14 +303,52 @@ def _extend_provisional_results(
     return current
 
 
+def _unshare_provisional_rows(result: dict[str, Any]) -> None:
+    """Give every list the accumulator appends to an object of its own."""
+
+    if isinstance(result.get("frequencies"), list):
+        result["frequencies"] = list(result["frequencies"])
+    for block_name in ("directivity", "directivity_phase", "spl_on_axis", "impedance", "di"):
+        block = result.get(block_name)
+        if isinstance(block, dict):
+            result[block_name] = {
+                key: list(values) if isinstance(values, list) else values
+                for key, values in block.items()
+            }
+    channels = result.get("channels")
+    if isinstance(channels, dict):
+        unshared: dict[Any, Any] = {}
+        for channel_id, channel in channels.items():
+            if isinstance(channel, dict):
+                channel = dict(channel)
+                _unshare_provisional_rows(channel)
+            unshared[channel_id] = channel
+        result["channels"] = unshared
+
+
+def _copy_provisional_result(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Deep-copy a result into an accumulator whose appended lists share nothing.
+
+    ``build_solver_response`` hands one ``frequencies`` list to the top level
+    and to ``spl_on_axis``, ``impedance`` and ``di``. ``copy.deepcopy`` keeps
+    that sharing, so every later frequency was appended once per reference: a
+    streamed multi-channel Metal channel read seven frequencies against three
+    directivity rows after three frames.
+    """
+
+    snapshot = copy.deepcopy(dict(result))
+    _unshare_provisional_rows(snapshot)
+    return snapshot
+
+
 def merge_provisional_results(
     current: Mapping[str, Any] | None, delta: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Append one frequency-shaped result delta without mutating either input."""
 
     if current is None:
-        return copy.deepcopy(dict(delta))
-    return _extend_provisional_results(copy.deepcopy(dict(current)), delta)
+        return _copy_provisional_result(delta)
+    return _extend_provisional_results(_copy_provisional_result(current), delta)
 
 
 def _now_iso() -> str:
@@ -3349,7 +3387,7 @@ class JobRuntime:
         merged = (
             _extend_provisional_results(previous["result"], result)
             if previous is not None
-            else copy.deepcopy(dict(result))
+            else _copy_provisional_result(result)
         )
         self._partial_results[job_id] = {"revision": revision, "result": merged}
         self.events.publish(

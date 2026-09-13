@@ -360,6 +360,135 @@ def test_runtime_snapshot_sorts_progressive_frequency_deltas() -> None:
     ]
 
 
+def _streamed_response(
+    index: int, frequency_hz: float, spl: float, *, impedance: bool = True
+) -> dict[str, Any]:
+    """One streamed frequency, shaped as ``build_provisional_frequency_response``.
+
+    ``build_solver_response`` hands one ``frequencies`` list to the top level
+    and to ``spl_on_axis``, ``impedance`` and ``di``; an imported channel with
+    several sources then drops ``impedance``. The sharing is the point here.
+    """
+
+    frequency_values = [frequency_hz]
+    response: dict[str, Any] = {
+        "result_kind": "parametric",
+        "frequencies": frequency_values,
+        "directivity": {"horizontal": [[[0.0, spl]]]},
+        "directivity_phase": {"horizontal": [[[0.0, 0.0]]]},
+        "spl_on_axis": {
+            "frequencies": frequency_values,
+            "spl": [spl],
+            "phase_degrees": [0.0],
+        },
+        "impedance": {"frequencies": frequency_values, "real": [1.0], "imaginary": [0.0]},
+        "di": {"frequencies": frequency_values, "di": [3.0]},
+        "metadata": {"provisional": {"completed_frequency_count": index + 1}},
+    }
+    if not impedance:
+        response.pop("impedance")
+    return response
+
+
+def _metal_multi_channel_frame(index: int, frequency_hz: float) -> dict[str, Any]:
+    """One streamed imported Metal frame: every channel for one frequency."""
+
+    return {
+        "result_kind": "multi_channel",
+        "result_contract_version": 2,
+        "frequencies": [frequency_hz],
+        "channels": {
+            "hf": _streamed_response(index, frequency_hz, 90.0 + index, impedance=False),
+            "lf": _streamed_response(index, frequency_hz, 80.0 + index),
+        },
+        "channel_order": ["hf", "lf"],
+        "metadata": {"provisional": {"completed_frequency_count": index + 1}},
+    }
+
+
+_METAL_FRAME_FREQUENCIES = (200.0, 400.0, 800.0)
+
+
+def _assert_channel_rows_match_frames(channel: dict[str, Any], label: str) -> None:
+    count = len(_METAL_FRAME_FREQUENCIES)
+    assert channel["frequencies"] == list(_METAL_FRAME_FREQUENCIES), label
+    assert len(channel["directivity"]["horizontal"]) == count, label
+    assert len(channel["directivity_phase"]["horizontal"]) == count, label
+    for block_name in ("spl_on_axis", "impedance", "di"):
+        for key, values in channel.get(block_name, {}).items():
+            assert len(values) == count, (label, block_name, key)
+
+
+def _assert_rows_match_frames(result: dict[str, Any]) -> None:
+    assert result["frequencies"] == list(_METAL_FRAME_FREQUENCIES)
+    for channel_id in ("hf", "lf"):
+        _assert_channel_rows_match_frames(result["channels"][channel_id], channel_id)
+    assert "impedance" not in result["channels"]["hf"]
+    assert result["channels"]["lf"]["impedance"]["real"] == [1.0, 1.0, 1.0]
+
+
+def test_provisional_merge_keeps_shared_frequency_lists_in_step_per_channel() -> None:
+    frames = [
+        _metal_multi_channel_frame(index, frequency)
+        for index, frequency in enumerate(_METAL_FRAME_FREQUENCIES)
+    ]
+
+    merged: dict[str, Any] | None = None
+    for frame in frames:
+        merged = merge_provisional_results(merged, frame)
+
+    assert merged is not None
+    _assert_rows_match_frames(merged)
+    assert merged["result_kind"] == "multi_channel"
+    assert merged["channels"]["hf"]["result_kind"] == "parametric"
+    assert merged["metadata"]["provisional"]["completed_frequency_count"] == 3
+    assert frames[0]["channels"]["hf"]["frequencies"] == [200.0]
+    assert frames[0]["channels"]["hf"]["spl_on_axis"]["frequencies"] == [200.0]
+
+
+def test_runtime_reconnect_snapshot_keeps_multi_channel_rows_in_step(
+    tmp_path: Path,
+) -> None:
+    runtime = JobRuntime(JobStore(tmp_path / "jobs.db"))
+    runtime._running.add("live")
+    frames = [
+        _metal_multi_channel_frame(index, frequency)
+        for index, frequency in enumerate(_METAL_FRAME_FREQUENCIES)
+    ]
+
+    for index, frame in enumerate(frames):
+        runtime._accept_partial_result("live", index, frame)
+
+    [message] = runtime.partial_result_messages()
+    assert message["snapshot"] is True
+    assert message["revision"] == 3
+    _assert_rows_match_frames(message["result"])
+    assert frames[0]["channels"]["lf"]["frequencies"] == [200.0]
+
+
+def test_single_channel_provisional_rows_stay_in_step(tmp_path: Path) -> None:
+    # Every parametric streamed solve (Metal, BEAT, bempp, circsym) sends the
+    # builder's shape unwrapped, so its shared list sits at the top level.
+    frames = [
+        _streamed_response(index, frequency, 90.0 + index)
+        for index, frequency in enumerate(_METAL_FRAME_FREQUENCIES)
+    ]
+
+    merged: dict[str, Any] | None = None
+    for frame in frames:
+        merged = merge_provisional_results(merged, frame)
+    assert merged is not None
+    _assert_channel_rows_match_frames(merged, "merge")
+
+    runtime = JobRuntime(JobStore(tmp_path / "jobs.db"))
+    runtime._running.add("live")
+    for index, frame in enumerate(frames):
+        runtime._accept_partial_result("live", index, frame)
+    [message] = runtime.partial_result_messages()
+    _assert_channel_rows_match_frames(message["result"], "snapshot")
+    assert frames[0]["spl_on_axis"]["frequencies"] == [200.0]
+
+
 async def _wait_stage(store: JobStore, job_id: str, stage: str) -> None:
     async def wait_loop() -> None:
         while True:
