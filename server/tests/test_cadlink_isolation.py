@@ -111,6 +111,36 @@ def test_staging_is_destroyed_when_the_invocation_ends(step_file: Path) -> None:
     assert not staged.parent.exists()
 
 
+def test_the_sandbox_is_made_in_the_servers_temporary_session_and_removed_whole(
+    step_file: Path, tmp_path: Path
+) -> None:
+    """A forced exit skips the harness's cleanup, so the sandbox must be where
+    the next start's sweep looks. A normal end removes all of it -- the
+    read-only staged STEP too, which on Windows a plain ``rmtree`` cannot."""
+
+    from server.platform.temp_session import TemporarySession
+
+    session = TemporarySession.create(tmp_path)
+    session.activate()
+    try:
+        with isolated_step_task(
+            "mesh",
+            {"misbehaviour": "ok"},
+            step_path=step_file,
+            budget=_budget(),
+            allowed_artifacts=("mesh.msh",),
+            stage="stage 7 meshing",
+            entrypoint=DOUBLE,
+        ) as outcome:
+            root = outcome.artifacts["mesh.msh"].parents[2]
+            assert root.parent == session.path
+            assert root.name.startswith("wg-cad-child-")
+            assert (root / "input" / "source.step").is_file()
+        assert not root.exists()
+    finally:
+        session.close(remove=True)
+
+
 # -- deadline and process-tree termination -----------------------------------
 
 

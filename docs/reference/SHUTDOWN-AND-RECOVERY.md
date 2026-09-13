@@ -84,9 +84,10 @@ skips is crash-safe by construction:
   with no session to belong to (`wg2-solver-mesh-*`, `wg2-imported-mesh-*`,
   `wg2-imported-viewport-*`, `wg2-field-plane-*`, `wg2-stl-mesh-*` directly in
   the temporary directory, from an earlier release) have no owner to ask and
-  are removed once nothing has changed them for a day. One directory stays
-  outside the session on purpose: the isolated CAD child's `wg-cad-child-*`
-  sandbox, which a forced exit during an external-STEP import leaves behind.
+  are removed once nothing has changed them for a day. The isolated CAD
+  child's sandbox (`wg-cad-child-*`) is made in the session too, so an
+  external-STEP import cut short by a forced exit leaves nothing the next start
+  misses.
 
 ## BEAT's persistent host on Windows
 

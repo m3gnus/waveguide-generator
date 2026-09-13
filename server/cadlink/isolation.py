@@ -21,8 +21,11 @@ Layout of one invocation::
     <root>/staging/tmp/           child scratch: cwd, TMPDIR and HOME point here
 
 Everything under ``<root>`` is removed when the invocation ends, refusal or
-not.  The parent keeps the registry, the cache, and the final atomic moves;
-the child never learns where any of them are.
+not.  In a launched server ``<root>`` lives in the process's temporary
+session, so a forced exit that skips that removal leaves it where the next
+start sweeps it (``server/platform/temp_session.py``).  The parent keeps the
+registry, the cache, and the final atomic moves; the child never learns where
+any of them are.
 """
 
 from __future__ import annotations
@@ -34,7 +37,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import shutil
 import signal
 import stat
 import subprocess
@@ -56,6 +58,7 @@ from server.cadlink.limits import (
     MESH_TIMEOUT_S,
 )
 from server.platform.paths import app_root
+from server.platform.temp_session import remove_tree, temporary_directory_root
 
 
 CHILD_ENTRYPOINT = "server.cadlink.child_main"
@@ -639,11 +642,13 @@ def isolated_step_task(
             f"{MAX_CONCURRENT_STEP_CHILDREN} at a time",
         )
     # The one staging root that keeps `mkdtemp`: it is a sandbox for an
-    # untrusted child, it lives in the shared system temp directory rather than
-    # beside a destination, and nothing here is published anywhere a later run
-    # has to read. Its 0o700 is the point, not the hazard
-    # `server/platform/staging.py` describes.
-    root = Path(tempfile.mkdtemp(prefix="wg-cad-child-"))
+    # untrusted child, it lives in a temporary directory rather than beside a
+    # destination, and nothing here is published anywhere a later run has to
+    # read. Its 0o700 is the point, not the hazard `server/platform/staging.py`
+    # describes. In a launched server that directory is the process's own
+    # session: the `finally` below is skipped by a forced exit, and there the
+    # next start's sweep removes what it left.
+    root = Path(tempfile.mkdtemp(prefix="wg-cad-child-", dir=temporary_directory_root()))
     try:
         staged_input = root / "input"
         staging = root / "staging"
@@ -694,7 +699,8 @@ def isolated_step_task(
         )
         yield outcome
     finally:
-        shutil.rmtree(root, ignore_errors=True)
+        # Not a plain rmtree: on Windows it cannot delete the read-only STEP.
+        remove_tree(root)
         _CHILD_SLOT.release()
 
 

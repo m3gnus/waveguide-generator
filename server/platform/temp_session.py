@@ -32,10 +32,12 @@ changed them for a day.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 import os
 from pathlib import Path
 import shutil
+import stat
 import tempfile
 import time
 
@@ -150,7 +152,27 @@ class TemporarySession:
                 pass
             os.close(descriptor)
         if remove:
-            shutil.rmtree(self.path, ignore_errors=True)
+            remove_tree(self.path)
+
+
+def _retry_writable(function: Callable[..., object], path: str, error: BaseException) -> None:
+    # Windows refuses to delete a file carrying FILE_ATTRIBUTE_READONLY -- what
+    # ``chmod(0o400)`` sets there, and what the isolated CAD child's staged STEP
+    # carries -- and ``shutil.rmtree`` does not clear it.
+    # ``tempfile.TemporaryDirectory`` retries the same way for the same reason.
+    if function not in (os.unlink, os.rmdir) or not isinstance(error, PermissionError):
+        return
+    try:
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        function(path)
+    except OSError:
+        pass
+
+
+def remove_tree(path: str | os.PathLike[str]) -> None:
+    """``shutil.rmtree`` that never raises and removes read-only files on Windows too."""
+
+    shutil.rmtree(path, onexc=_retry_writable)
 
 
 def _owner_pid(name: str) -> int | None:
@@ -218,7 +240,7 @@ def sweep_stale_temporary_directories(
                 continue
         elif age < LEGACY_MIN_AGE_SECONDS:
             continue
-        shutil.rmtree(path, ignore_errors=True)
+        remove_tree(path)
         if not os.path.lexists(path):
             removed.append(path)
     return removed
@@ -231,6 +253,7 @@ __all__ = [
     "OWNER_LOCK_NAME",
     "SESSION_PREFIX",
     "TemporarySession",
+    "remove_tree",
     "sweep_stale_temporary_directories",
     "temporary_directory_root",
 ]

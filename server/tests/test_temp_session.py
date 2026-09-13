@@ -23,6 +23,7 @@ from server.platform.temp_session import (
     OWNER_LOCK_NAME,
     SESSION_PREFIX,
     TemporarySession,
+    remove_tree,
     sweep_stale_temporary_directories,
 )
 
@@ -107,6 +108,45 @@ def test_a_dead_processs_session_is_swept_at_once(tmp_path: Path) -> None:
 
     assert removed == [held]
     assert not held.exists()
+
+
+def test_a_dead_processs_cad_sandbox_is_swept_with_its_read_only_step(tmp_path: Path) -> None:
+    """A forced exit during an external-STEP import leaves the isolated CAD
+    child's sandbox in the session. Its staged STEP is read-only, which on
+    Windows a plain ``rmtree`` cannot delete."""
+
+    holder, held = _hold_session(tmp_path)
+    staged = held / "wg-cad-child-import" / "input" / "source.step"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"ISO-10303-21;")
+    staged.chmod(0o400)
+    _release(holder)
+
+    removed = sweep_stale_temporary_directories(tmp_path)
+
+    assert removed == [held]
+    assert not held.exists()
+
+
+def test_a_tree_that_cannot_be_removed_raises_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The isolated CAD child's cleanup runs in a ``finally``: a failure to
+    remove its sandbox must not replace the child's own outcome or refusal."""
+
+    tree = tmp_path / "wg-cad-child-stuck"
+    (tree / "input").mkdir(parents=True)
+    (tree / "input" / "source.step").write_bytes(b"ISO-10303-21;")
+
+    def refuse(path: object, *args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "held open by another process", str(path))
+
+    monkeypatch.setattr(os, "unlink", refuse)
+
+    remove_tree(tree)
+
+    monkeypatch.undo()
+    assert (tree / "input" / "source.step").is_file()
 
 
 def test_the_sweep_keeps_the_callers_own_session(tmp_path: Path) -> None:
@@ -295,21 +335,14 @@ def test_no_server_temporary_file_lands_loose_in_the_system_temporary_directory(
     carries a legacy ``wg2-`` directory prefix, and then only a day later. So
     every ``tempfile`` call in the server names its ``dir=``: the session's
     (``temporary_directory_root()``) for scratch space -- a mesh build, the mesh
-    a solver reads, a STEP round trip -- or the destination's own parent for a
-    file staged beside where it is published. A ``wg2-`` directory always goes
+    a solver reads, a STEP round trip, the isolated CAD child's sandbox -- or
+    the destination's own parent for a file staged beside where it is
+    published. A ``wg2-`` directory and a ``wg-cad-child-`` sandbox always go
     in the session.
-
-    The exemption is not WG's scratch space. It is the untrusted CAD child's
-    ``wg-cad-child-*`` sandbox, which CAD Link keeps in the system temporary
-    directory on purpose (``server/cadlink/isolation.py``). A forced exit during
-    an external-STEP import still leaves that sandbox behind.
     """
 
     import ast
 
-    exempt = {
-        "server/cadlink/isolation.py": "the CAD child's wg-cad-child-* sandbox; CAD Link's to place",
-    }
     #: Each call's positional slot for ``dir``: a ``dir`` passed there cannot be
     #: read by name, while an earlier positional (a ``mode``) is harmless.
     dir_slot = {"TemporaryDirectory": 2, "mkdtemp": 2, "mkstemp": 2, "NamedTemporaryFile": 6}
@@ -326,7 +359,6 @@ def test_no_server_temporary_file_lands_loose_in_the_system_temporary_directory(
 
     offenders: list[str] = []
     sites = 0
-    exempt_sites = dict.fromkeys(exempt, 0)
     for path in sorted((REPO_ROOT / "server").rglob("*.py")):
         relative = path.relative_to(REPO_ROOT).as_posix()
         if relative.startswith("server/tests/"):
@@ -337,9 +369,6 @@ def test_no_server_temporary_file_lands_loose_in_the_system_temporary_directory(
             if name not in dir_slot:
                 continue
             sites += 1
-            if relative in exempt:
-                exempt_sites[relative] += 1
-                continue
             where = f"{relative}:{node.lineno}"
             keywords = {keyword.arg: keyword.value for keyword in node.keywords}
             directory = keywords.get("dir")
@@ -358,14 +387,13 @@ def test_no_server_temporary_file_lands_loose_in_the_system_temporary_directory(
             elif (
                 isinstance(prefix, ast.Constant)
                 and isinstance(prefix.value, str)
-                and prefix.value.startswith("wg2-")
+                and prefix.value.startswith(("wg2-", "wg-cad-child-"))
                 and not calls(directory, "temporary_directory_root")
             ):
                 offenders.append(f"{where}: {prefix.value} outside the session")
 
     assert sites >= 15, f"the scan found only {sites} temporary-file calls in the server"
     assert offenders == []
-    assert all(exempt_sites.values()), f"stale exemption: {exempt_sites}"
 
 
 def _active_session(tmp_path: Path) -> TemporarySession:
