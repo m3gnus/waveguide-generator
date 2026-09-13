@@ -322,13 +322,19 @@ class Run:
 
         self.control.write_text("stop\n", encoding="utf-8")
         asked = time.monotonic()
-        try:
-            self.process.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            raise QualificationError(
-                f"the server was still running {grace:.1f} s after a stop request, "
-                "when the status window would have killed it"
-            ) from None
+        while self.process.poll() is None:
+            # Whatever the server starts while it stops is its child too. One
+            # failed listing is not a verdict about the server; the next try is.
+            try:
+                self.children |= descendants(self.pid)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            if time.monotonic() - asked >= grace:
+                raise QualificationError(
+                    f"the server was still running {grace:.1f} s after a stop request, "
+                    "when the status window would have killed it"
+                )
+            time.sleep(0.1)
         elapsed = time.monotonic() - asked
         if self.process.returncode != 0:
             raise QualificationError(
@@ -424,6 +430,7 @@ def run_gate(
 
         elapsed = first.stop_and_time(grace)
         report["quit"] = {"seconds": round(elapsed, 2), "exit_code": first.process.returncode}
+        report["children_seen_while_stopping"] = len(first.children)
         deadline = time.monotonic() + CHILD_REAP_S
         while still_running(first.children) and time.monotonic() < deadline:
             time.sleep(0.1)

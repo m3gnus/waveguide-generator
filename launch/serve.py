@@ -756,6 +756,8 @@ def main(argv: list[str] | None = None) -> int:
     # "provisioning" rather than "not provisioned". It only starts a thread.
     _start_beat_cpu_provisioning()
     stop_reason = "the --no-gui server stopped before it confirmed a healthy start"
+    # What ``main`` returns, for an exit that has to end the process itself.
+    exit_status = 1
     try:
         backstop.activate()
         app = create_app(
@@ -858,6 +860,7 @@ def main(argv: list[str] | None = None) -> int:
             os.getpid(),
         )
         server.run(sockets=[listener])
+        exit_status = 0
         return 0
     except Exception as exc:
         logging.getLogger("wg.launch").exception(
@@ -896,7 +899,9 @@ def main(argv: list[str] | None = None) -> int:
                 # the temporary directory they may be writing in is left for the
                 # next start's sweep.
                 names = ", ".join(sorted(thread.name for thread in lingering))
-                backstop.exit_now(f"cleanup finished with {names} still running")
+                backstop.exit_now(
+                    f"cleanup finished with {names} still running", code=exit_status
+                )
             elif temporary is not None:
                 temporary.close(remove=True)
 

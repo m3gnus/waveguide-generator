@@ -26,6 +26,7 @@ import numpy as np
 
 from server.design.schema import DesignConfig, Expr
 from server.platform.memory import PhysicalMemory, physical_memory
+from server.platform.temp_session import temporary_directory_root
 from server.preview.translate import design_to_mesher_config
 from server.solver.quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
 
@@ -862,7 +863,11 @@ def _build_sync(
         design, _solver_mesher_config(design)
     )
     _check_cancel(cancel_cb)
-    with tempfile.TemporaryDirectory(prefix="wg2-solver-mesh-") as temp_dir:
+    # Inside the process's session (server/platform/temp_session.py): a stop
+    # during this build ends without cleanup, and the next start sweeps it.
+    with tempfile.TemporaryDirectory(
+        prefix="wg2-solver-mesh-", dir=temporary_directory_root()
+    ) as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
         # The user budget is advice. _mesh_policy replaced it in this private
         # config with the independent artifact sanity cap. The mesher applies

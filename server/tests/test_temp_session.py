@@ -202,3 +202,148 @@ def test_the_sweep_never_follows_a_symlink(tmp_path: Path) -> None:
 
 def test_a_missing_base_sweeps_nothing(tmp_path: Path) -> None:
     assert sweep_stale_temporary_directories(tmp_path / "absent") == []
+
+
+def test_activating_a_session_moves_only_wgs_own_temporary_directories(tmp_path: Path) -> None:
+    import tempfile
+
+    from server.platform.temp_session import temporary_directory_root
+
+    system = tempfile.gettempdir()
+    session = TemporarySession.create(tmp_path)
+    try:
+        assert temporary_directory_root() is None
+        session.activate()
+        assert temporary_directory_root() == str(session.path)
+        # Nothing global moves: libraries keep cross-process state there.
+        assert tempfile.gettempdir() == system
+    finally:
+        session.close(remove=True)
+    assert temporary_directory_root() is None
+
+
+def test_beats_worker_registry_stays_where_the_next_launch_looks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The persistent BEAT host is adopted through a registry under the system
+    temporary directory. A session must not move it: a swept registry strands
+    a live host and makes every launch pay a cold start.
+    """
+
+    registry = pytest.importorskip("hornlab_beat_bem.worker_registry")
+    monkeypatch.delenv("HORNLAB_BEAT_WORKER_DIR", raising=False)
+    before = Path(registry.worker_dir())
+    session = TemporarySession.create(tmp_path)
+    session.activate()
+    try:
+        during = Path(registry.worker_dir())
+    finally:
+        session.close(remove=True)
+
+    assert during == before
+    assert not during.is_relative_to(session.path)
+
+
+def test_a_creator_waits_out_a_sweep_testing_its_new_lock(tmp_path: Path) -> None:
+    """Two starts at once: one's sweep may hold the other's fresh lock for an instant."""
+
+    from server.platform import temp_session as module
+
+    real_lock = module.lock_exclusive
+    attempts: list[int] = []
+
+    def held_by_a_sweep_twice(descriptor: int) -> None:
+        attempts.append(descriptor)
+        if len(attempts) <= 2:
+            raise BlockingIOError("held by another start's sweep")
+        real_lock(descriptor)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(module, "lock_exclusive", held_by_a_sweep_twice)
+    try:
+        session = TemporarySession.create(tmp_path)
+    finally:
+        monkeypatch.undo()
+    try:
+        assert len(attempts) == 3
+        assert session.path.is_dir()
+        assert (session.path / OWNER_LOCK_NAME).is_file()
+    finally:
+        session.close(remove=True)
+
+
+def test_a_lock_that_stays_held_is_a_failure_that_leaves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.platform import temp_session as module
+
+    def always_held(_descriptor: int) -> None:
+        raise BlockingIOError("held")
+
+    monkeypatch.setattr(module, "lock_exclusive", always_held)
+    monkeypatch.setattr(module, "LOCK_RETRY_SECONDS", 0.0)
+
+    with pytest.raises(BlockingIOError):
+        TemporarySession.create(tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_every_wg_temporary_directory_is_made_in_the_session() -> None:
+    """A ``wg2-*`` ``TemporaryDirectory`` outside the session is swept a day late.
+
+    Each call site that names a ``wg2-`` prefix must pass
+    ``dir=temporary_directory_root()``. The one exception is owned by the
+    solver work and is covered by the one-day rule instead.
+    """
+
+    import ast
+
+    exempt = {
+        "server/solver/field_plane.py": "solver-owned; its wg2-field-plane-* sweep after a day",
+    }
+
+    def callee(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Attribute):
+            return node.attr
+        if isinstance(node, ast.Name):
+            return node.id
+        return None
+
+    offenders: list[str] = []
+    sites = 0
+    for path in sorted((REPO_ROOT / "server").rglob("*.py")):
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        if relative.startswith("server/tests/"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or callee(node.func) not in {
+                "TemporaryDirectory",
+                "mkdtemp",
+            }:
+                continue
+            prefix = next(
+                (
+                    keyword.value.value
+                    for keyword in node.keywords
+                    if keyword.arg == "prefix" and isinstance(keyword.value, ast.Constant)
+                ),
+                None,
+            )
+            if not (isinstance(prefix, str) and prefix.startswith("wg2-")):
+                continue
+            sites += 1
+            if relative in exempt:
+                assert prefix.startswith(LEGACY_PREFIXES), f"{relative}: {prefix} is never swept"
+                continue
+            directory = next((k.value for k in node.keywords if k.arg == "dir"), None)
+            if not (
+                isinstance(directory, ast.Call)
+                and callee(directory.func) == "temporary_directory_root"
+            ):
+                offenders.append(f"{relative}:{node.lineno} ({prefix})")
+
+    assert sites >= 4, "the scan found none of WG's own temporary directories"
+    assert offenders == []
+    for relative in exempt:
+        assert (REPO_ROOT / relative).is_file(), f"stale exemption: {relative}"

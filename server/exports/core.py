@@ -32,6 +32,7 @@ from server.exports.sizing import (
 from server.exports.sizing import _point_grid
 from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
 from server.mesh.gmsh_worker import _preserve_native_windows_path, run_on_gmsh_worker
+from server.platform.temp_session import temporary_directory_root
 from server.preview.translate import design_to_mesher_config
 
 if TYPE_CHECKING:
@@ -973,7 +974,9 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
         "unmeasured" if plan.deviation_mm is None else f"{plan.deviation_mm:.5f}",
         STL_CHORD_TOLERANCE_MM,
     )
-    with tempfile.TemporaryDirectory(prefix="wg2-stl-mesh-") as temp_dir:
+    with tempfile.TemporaryDirectory(
+        prefix="wg2-stl-mesh-", dir=temporary_directory_root()
+    ) as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
         # Normally Gmsh is already open on the owner thread. Preserve the
         # native environment when this synchronous seam is exercised directly

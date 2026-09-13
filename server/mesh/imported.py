@@ -31,6 +31,7 @@ from server.mesh.integrity import (
     mesh_integrity_report,
     mesh_self_intersection_report,
 )
+from server.platform.temp_session import temporary_directory_root
 from server.solver.imported import imported_symmetry_from_cut_planes
 
 
@@ -1858,7 +1859,9 @@ def build_imported_viewport_mesh(
                 gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
                 gmsh.option.setNumber("Mesh.Binary", 0)
                 gmsh.model.mesh.generate(2)
-                with tempfile.TemporaryDirectory(prefix="wg2-imported-viewport-") as temporary:
+                with tempfile.TemporaryDirectory(
+                    prefix="wg2-imported-viewport-", dir=temporary_directory_root()
+                ) as temporary:
                     raw_path = Path(temporary) / "raw.msh"
                     gmsh.write(str(raw_path))
                     raw_mesh = meshio.read(raw_path)
@@ -3069,7 +3072,9 @@ def build_imported_mesh(
         if mesh_error is not None:
             return state
 
-        with tempfile.TemporaryDirectory(prefix="wg2-imported-mesh-") as temporary:
+        with tempfile.TemporaryDirectory(
+            prefix="wg2-imported-mesh-", dir=temporary_directory_root()
+        ) as temporary:
             raw_path = Path(temporary) / "raw.msh"
             gmsh.write(str(raw_path))
             raw_mesh = meshio.read(raw_path)

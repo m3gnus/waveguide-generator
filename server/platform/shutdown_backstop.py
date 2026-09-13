@@ -194,14 +194,17 @@ class ShutdownBackstop:
         thread.start()
         return True
 
-    def exit_now(self, reason: str) -> None:
+    def exit_now(self, reason: str, *, code: int | None = None) -> None:
         """Skip the rest of the budget: flush the logs and end the process now.
 
         The exit itself happens on the watchdog thread, so this returns at once
-        and is safe wherever ``begin`` is.
+        and is safe wherever ``begin`` is. ``code`` replaces the exit status,
+        for a process whose own outcome was a failure it must not hide.
         """
 
         self._exit_reason = reason
+        if code is not None:
+            self.exit_code = code
         self.begin(reason)
         self._exit_now.set()
 

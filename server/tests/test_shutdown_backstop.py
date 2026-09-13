@@ -450,3 +450,16 @@ def test_lingering_threads_names_only_live_non_daemon_threads() -> None:
             thread.join(5)
 
     assert lingering_threads(0.5, ignore=baseline) == []
+
+
+def test_exit_now_can_carry_the_processs_own_failure() -> None:
+    """A stop that ends the process itself must not report a failed run as a success."""
+
+    exit_process = _RecordedExit()
+    backstop = ShutdownBackstop(60.0, exit_process=exit_process, flush=_quiet)
+    backstop.begin("a stop request")
+
+    backstop.exit_now("cleanup finished with gmsh-worker_0 still running", code=1)
+
+    assert exit_process.called.wait(5.0)
+    assert exit_process.codes == [1]

@@ -7,20 +7,24 @@ an imported mesh's -- then stays in the system temporary directory for good,
 and a Quit during a build always ends that way.
 
 So ``launch/serve.py`` gives the process one directory of its own,
-``wg2-run-<pid>-<random>``, makes it the process's ``tempfile.tempdir``, and
-holds an OS lock on the ``.owner.lock`` inside it for as long as the process
-lives. The operating system releases that lock however the process ends, so a
-later start can tell a dead owner's directory from a live one exactly --
-whichever build, checkout or data directory the owner belonged to -- and it
-sweeps only the dead ones.
+``wg2-run-<pid>-<random>``, and holds an OS lock on the ``.owner.lock`` inside
+it for as long as the process lives. WG's own ``TemporaryDirectory`` call
+sites make their directories inside it (``dir=temporary_directory_root()``).
+The operating system releases that lock however the process ends, so a later
+start can tell a dead owner's directory from a live one exactly -- whichever
+build, checkout or data directory the owner belonged to -- and it sweeps only
+the dead ones.
 
-Directories an earlier release left directly in the temporary directory have
-no owner to ask, and one may belong to an older server that is running right
-now. They are removed only once nothing has changed them for a day.
+Nothing global moves: ``tempfile.gettempdir()`` still answers the system
+directory. Libraries keep state there that must outlive this process --
+``hornlab_beat_bem`` the registry through which the next launch adopts the
+persistent BEAT host, ``hornlab_mesher`` its publish lock -- and a swept
+registry would strand a live host.
 
-Only ``tempfile`` users inside the server process move. Child processes keep
-the temporary directory they inherit: the BEAT persistent host outlives this
-process on purpose, and must never find its files swept.
+Directories that have no session to belong to -- an earlier release's, or a
+call site outside WG's own code -- have no owner to ask, and one may belong to
+a server that is running right now. They are removed only once nothing has
+changed them for a day.
 """
 
 from __future__ import annotations
@@ -54,7 +58,26 @@ LEGACY_MIN_AGE_SECONDS = 24 * 3600.0
 #: reused pid. Only age tells those apart.
 CREATION_GRACE_SECONDS = 60.0
 
+#: A starting server's sweep tests another session's lock for an instant, so a
+#: creator that meets it held tries again rather than giving up its directory.
+LOCK_ATTEMPTS = 50
+LOCK_RETRY_SECONDS = 0.01
+
 log = logging.getLogger("wg.temp")
+
+#: The directory :func:`temporary_directory_root` answers, while a session is active.
+_active_root: str | None = None
+
+
+def temporary_directory_root() -> str | None:
+    """Where WG makes its own temporary directories: ``dir=`` for ``tempfile``.
+
+    The active session's directory in a launched server, so a directory a
+    stop leaves behind is swept by the next start; ``None`` (the system
+    temporary directory) everywhere else -- tests, the CLI, the CAD child.
+    """
+
+    return _active_root
 
 
 class TemporarySession:
@@ -63,7 +86,6 @@ class TemporarySession:
     def __init__(self, path: Path, descriptor: int) -> None:
         self.path = path
         self._descriptor: int | None = descriptor
-        self._previous_tempdir: str | None = None
         self._active = False
 
     @classmethod
@@ -79,33 +101,43 @@ class TemporarySession:
         except OSError:
             shutil.rmtree(path, ignore_errors=True)
             raise
-        try:
-            lock_exclusive(descriptor)
-        except OSError:
-            os.close(descriptor)
-            shutil.rmtree(path, ignore_errors=True)
-            raise
+        for attempt in range(LOCK_ATTEMPTS):
+            try:
+                lock_exclusive(descriptor)
+                break
+            except BlockingIOError:
+                # Another start's sweep testing this new lock; it lets go at once.
+                if attempt + 1 == LOCK_ATTEMPTS:
+                    os.close(descriptor)
+                    shutil.rmtree(path, ignore_errors=True)
+                    raise
+                time.sleep(LOCK_RETRY_SECONDS)
+            except OSError:
+                os.close(descriptor)
+                shutil.rmtree(path, ignore_errors=True)
+                raise
         return cls(path, descriptor)
 
     def activate(self) -> None:
-        """Make this directory where the process's ``tempfile`` users write."""
+        """Make this the directory :func:`temporary_directory_root` answers."""
 
-        if not self._active:
-            self._previous_tempdir = tempfile.tempdir
-            tempfile.tempdir = str(self.path)
-            self._active = True
+        global _active_root
+        _active_root = str(self.path)
+        self._active = True
 
     def close(self, *, remove: bool) -> None:
-        """Restore ``tempfile``, release the lock and, if asked, remove the directory.
+        """Stop answering for WG's temporary directories, release the lock and,
+        if asked, remove the directory.
 
         Remove only when nothing can still be writing there. A process that is
         about to end with a native call still running leaves it for the next
         start's sweep instead.
         """
 
+        global _active_root
         if self._active:
-            if tempfile.tempdir == str(self.path):
-                tempfile.tempdir = self._previous_tempdir
+            if _active_root == str(self.path):
+                _active_root = None
             self._active = False
         descriptor, self._descriptor = self._descriptor, None
         if descriptor is not None:
@@ -197,4 +229,5 @@ __all__ = [
     "SESSION_PREFIX",
     "TemporarySession",
     "sweep_stale_temporary_directories",
+    "temporary_directory_root",
 ]

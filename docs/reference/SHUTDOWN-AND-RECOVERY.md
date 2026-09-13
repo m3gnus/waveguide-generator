@@ -69,16 +69,20 @@ skips is crash-safe by construction:
   failed / Server restarted during execution". Interrupted jobs are not
   requeued, because the user quit on purpose. Jobs that were still queued are
   requeued.
-- **Temporary files.** Each server process writes its temporary files under
-  one directory of its own, `wg2-run-<pid>-<random>` in the system temporary
+- **Temporary files.** Each server process makes WG's own temporary
+  directories -- mesh builds, STL exports, imported meshes -- inside one
+  directory of its own, `wg2-run-<pid>-<random>` in the system temporary
   directory, and holds an OS lock inside it for as long as it lives. Each start
   removes every such directory whose lock is free -- its owner is gone, however
   it ended -- and never one whose owner is alive, whichever build or checkout
-  that is. A clean exit removes its own. Directories an earlier release left
-  directly in the temporary directory (`wg2-solver-mesh-*`,
-  `wg2-imported-mesh-*`, `wg2-imported-viewport-*`, `wg2-field-plane-*`,
-  `wg2-stl-mesh-*`) have no owner to ask and are removed once nothing has
-  changed them for a day.
+  that is. A clean exit removes its own. The system temporary directory itself
+  is not redirected: BEAT keeps the registry of its persistent host there, and
+  the mesher its publish lock, and both must outlive the process. Directories
+  with no session to belong to (`wg2-solver-mesh-*`, `wg2-imported-mesh-*`,
+  `wg2-imported-viewport-*`, `wg2-field-plane-*`, `wg2-stl-mesh-*` directly in
+  the temporary directory, from an earlier release or from the field-plane
+  solver) have no owner to ask and are removed once nothing has changed them
+  for a day.
 
 ## BEAT's persistent host on Windows
 
