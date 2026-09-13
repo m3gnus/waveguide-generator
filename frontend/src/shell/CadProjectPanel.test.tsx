@@ -5,7 +5,8 @@ import { compareSelection } from '../api/results';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
-import { resetDesignStore } from '../stores/design';
+import { resetDesignStore, useDesignStore } from '../stores/design';
+import { applyOpenedDesign } from '../design/openCadProject';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { cadProjectReference } from '../api/cadProjects';
 import { CadProjectHeader, CadProjectHistory, modelStateLabel, newestReturnForProject, projectName } from './CadProjectPanel';
@@ -423,6 +424,53 @@ describe('CAD project history', () => {
     expect(selectBundle).toHaveBeenCalledWith(newest, 'wgl_cad_first');
     expect(newestReturnForProject([older, newest], { documentName: '260627 - PartyMEH v10', archiveStem: null })).toBe(newest);
     expect(newestReturnForProject([older, newest], { documentName: 'Other', archiveStem: null })).toBeNull();
+  });
+
+  /** The design as it was opened, from the registry: what the switcher keeps. */
+  function openedProject(r: number) {
+    return {
+      dialect: 'ath', migrationsApplied: [],
+      passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+      design: { ...useDesignStore.getState().design, R: r },
+      cadlink: {
+        identity: { designId: 'wgd_project', lineageId: LINEAGE, baseEditVersion: 1 },
+        classification: 'current',
+      },
+    } as unknown as Parameters<typeof applyOpenedDesign>[0];
+  }
+
+  async function chooseSwitcherProject() {
+    const toggle = host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    await act(async () => { toggle.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    const item = host.querySelector<HTMLButtonElement>('.cad-project-menu [role="menuitem"]')!;
+    await act(async () => { item.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+  }
+
+  it('switches project without asking when an edit was undone back to the opened design', async () => {
+    setJobs([]);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => { applyOpenedDesign(openedProject(150), 'hans-rosse.cfg'); });
+    act(() => useDesignStore.getState().updateField('R', 321));
+    act(() => useDesignStore.getState().undo());
+    await render(<CadProjectHeader/>);
+
+    await chooseSwitcherProject();
+
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('asks before switching project over an edit that exists nowhere else, without mentioning Save', async () => {
+    setJobs([]);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => { applyOpenedDesign(openedProject(150), 'hans-rosse.cfg'); });
+    act(() => useDesignStore.getState().updateField('R', 321));
+    await render(<CadProjectHeader/>);
+
+    await chooseSwitcherProject();
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(String(confirm.mock.calls[0][0])).not.toMatch(/save/i);
+    expect(useDesignStore.getState().design.R).toBe(321);
   });
 });
 

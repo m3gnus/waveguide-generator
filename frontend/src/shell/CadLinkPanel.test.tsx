@@ -638,6 +638,32 @@ describe('CadLinkPanel', () => {
     expect(statusIdentities.at(-1)).toEqual(mintedIdentity);
   });
 
+  /** The registry is committed before the upload, and a Free account's first
+   * send is refused only at the upload: the copy the design was opened from
+   * may already be overwritten, so it no longer counts as kept. */
+  it('forgets the opened copy when an Onshape send is refused after the registry may have been written', async () => {
+    const { applyOpenedDesign } = await import('../design/openCadProject');
+    act(() => {
+      applyOpenedDesign({
+        dialect: 'ath', migrationsApplied: [],
+        passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+        design: { ...useDesignStore.getState().design, R: 150 },
+        cadlink: { identity: { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 1 }, classification: 'current' },
+      } as never, 'tritonia.cfg');
+    });
+    expect(useDocumentStore.getState().openedContentKey).not.toBeNull();
+    act(() => useDesignStore.getState().updateField('R', 321));
+    await renderOnshape(onshapeStatus(), () => json({ detail: 'This Onshape account can only create public documents.' }, 428));
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.cad-primary-action')!.click();
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(host.textContent).toContain('This document will be public');
+    expect(useDocumentStore.getState().openedContentKey).toBeNull();
+  });
+
   it('offers to update a linked document and links out to it', async () => {
     await renderOnshape(onshapeStatus({
       state: 'stale',

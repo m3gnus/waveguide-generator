@@ -3,7 +3,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
-import { resetDesignStore, useDesignStore } from '../stores/design';
+import { toSolveDesign } from '../jobs/actions';
+import { resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -13,6 +14,7 @@ import { CadLinkCoordinator } from '../shell/CadLinkCoordinator';
 import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
 import { ExportDestinationDialog } from '../shell/ExportDestinationDialog';
 import { DesignFileMenu } from './DesignFileMenu';
+import { discardConfirmation } from './replacementCheck';
 
 /**
  * The export menu is the whole point of the CAD path: someone who wants a
@@ -116,7 +118,7 @@ describe('design file export menu', () => {
     act(() => root.render(<DesignFileMenu/>));
 
     await chooseLocalDesign({ name: 'replacement.cfg', text: async () => 'R = 999' });
-    expect(confirm).toHaveBeenLastCalledWith('Discard unsaved changes and open replacement.cfg?');
+    expect(confirm).toHaveBeenLastCalledWith(discardConfirmation('open replacement.cfg'));
     expect(useDesignStore.getState().design.R).toBe(321);
     expect(useDesignStore.getState().designRevision).toBe(2);
 
@@ -146,11 +148,11 @@ describe('design file export menu', () => {
     act(() => useDesignStore.getState().updateField('R', 321));
     await act(async () => {
       resolveOpen(new Response(JSON.stringify(openedResponse(999)), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-      await Promise.resolve();
-      await Promise.resolve();
+      // The decision also reads the run list, which this stub cannot answer.
+      await new Promise((settle) => setTimeout(settle, 0));
     });
 
-    expect(confirm).toHaveBeenCalledWith('Discard unsaved changes and open delayed.cfg?');
+    expect(confirm).toHaveBeenCalledWith(discardConfirmation('open delayed.cfg'));
     expect(useDesignStore.getState().design.R).toBe(321);
     expect(useDocumentStore.getState().designName).toBe('');
   });
@@ -820,9 +822,9 @@ describe('design file export menu', () => {
     });
   });
 
-  it('starts New without carrying the previous file identity', () => {
+  it('starts New without carrying the previous file identity', async () => {
     useDocumentStore.getState().setDesignName('old');
-    // Renaming is unsaved work now, so New asks before discarding it.
+    // Answered yes should New ask; a rename alone is not a loss, so it need not.
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_01K00000000000000000000000',
@@ -833,7 +835,10 @@ describe('design file export menu', () => {
     act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
     const create = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
       .find((button) => button.textContent?.startsWith('New'))!;
-    act(() => create.click());
+    await act(async () => {
+      create.click();
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
     // A new design is untitled. This used to assert the filename came back as
     // a specific .cfg, which is the bug written down: New produced a document
     // named after someone's test fixture, and the tab, the file chip and the
@@ -841,5 +846,226 @@ describe('design file export menu', () => {
     expect(useDocumentStore.getState()).toMatchObject({
       designName: '', filename: '', identity: null, classification: null,
     });
+  });
+});
+
+/**
+ * WG has no Save, so "does this differ from its file?" is the wrong question
+ * before a replacement. What matters is whether the design on screen exists
+ * anywhere else: as the design it was opened as, or as a stored run.
+ */
+describe('replacing the design on screen', () => {
+  const OPENED_R = 150;
+
+  function openRoutes(extra: (path: string) => Response | null = () => null) {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      const answered = extra(path);
+      if (answered) return answered;
+      if (path === '/api/design/open') {
+        return new Response(JSON.stringify(openedResponse(OPENED_R)), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('not found', { status: 404 });
+    });
+  }
+
+  async function openLocalDesign(name = 'horn.cfg') {
+    await chooseLocalDesign({ name, text: async () => `R = ${OPENED_R}` });
+    expect(useDesignStore.getState().design.R).toBe(OPENED_R);
+  }
+
+  async function chooseMenuItem(label: string) {
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const item = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.querySelector('span')?.textContent === label)!;
+    await act(async () => {
+      item.click();
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+  }
+
+  function storedRun(design: DesignDocument, options: Record<string, unknown>) {
+    const polar = options.polar_config as Record<string, unknown>;
+    return {
+      id: 'job-kept', run_number: 7, label: 'kept', status: 'complete', config_summary: {},
+      script_snapshot: { version: 1, design: toSolveDesign(design) },
+      // What the jobs list sends back: the options as submitted, with the
+      // server's own defaults filled in.
+      solve_options: {
+        frequency_range: null, num_frequencies: null, frequencies_hz: null, stage_delay_ms: 30,
+        ...options,
+        polar_config: { spherical_theta_count: 37, spherical_phi_count: 72, ...polar },
+      },
+      design_availability: { reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: null },
+    };
+  }
+
+  it('does not ask before New when an edit was undone back to the opened design', async () => {
+    openRoutes();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    await openLocalDesign();
+    act(() => useDesignStore.getState().updateField('R', 321));
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.R).toBe(OPENED_R);
+
+    await chooseMenuItem('New');
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().designName).toBe('');
+    expect(useDesignStore.getState().design.R).toBe(140);
+  });
+
+  it('does not ask before opening another file when an edit was undone back to the opened design', async () => {
+    openRoutes();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    await openLocalDesign();
+    act(() => useDesignStore.getState().updateField('R', 321));
+    act(() => useDesignStore.getState().undo());
+
+    await chooseLocalDesign({ name: 'other.cfg', text: async () => 'R = 150' });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().designName).toBe('other');
+  });
+
+  it('does not ask before New when a value was dragged away and back', async () => {
+    openRoutes();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    await openLocalDesign();
+    act(() => useDesignStore.getState().updateField('R', 999));
+    act(() => useDesignStore.getState().updateField('R', OPENED_R));
+
+    await chooseMenuItem('New');
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().designName).toBe('');
+  });
+
+  it('does not ask before New when the design on screen is a stored run', async () => {
+    openRoutes();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => useDesignStore.getState().updateField('R', 321));
+    const options = JSON.parse(JSON.stringify(useSolveOptionsStore.getState().options())) as Record<string, unknown>;
+    vi.spyOn(jobsSocket, 'getSnapshot').mockReturnValue({
+      connection: 'connected', epoch: 1, cursor: 1, error: null,
+      jobs: [storedRun(useDesignStore.getState().design, options)],
+    } as unknown as JobsSnapshot);
+    act(() => root.render(<DesignFileMenu/>));
+
+    await chooseMenuItem('New');
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(useDesignStore.getState().design.R).toBe(140);
+  });
+
+  it('does not ask before New when only the name changed', async () => {
+    openRoutes();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    await openLocalDesign();
+    act(() => useDocumentStore.getState().setDesignName('Renamed horn'));
+
+    await chooseMenuItem('New');
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().designName).toBe('');
+  });
+
+  it('asks before New over an edit that exists nowhere else, and keeps it when declined', async () => {
+    openRoutes();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    await openLocalDesign();
+    act(() => useDesignStore.getState().updateField('R', 321));
+
+    await chooseMenuItem('New');
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    const message = String(confirm.mock.calls[0][0]);
+    // There is no Save to point at: the ways to keep it are to solve it or
+    // to export a copy.
+    expect(message).not.toMatch(/save/i);
+    expect(message).toMatch(/solve/i);
+    expect(message).toMatch(/export a copy/i);
+    expect(useDesignStore.getState().design.R).toBe(321);
+    expect(useDocumentStore.getState().designName).toBe('horn');
+  });
+
+  it('does not ask before New once the design was exported as a copy, and asks again after an edit', async () => {
+    openRoutes((path) => {
+      const body = (value: unknown) => new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (path === '/api/design/serialize') return body({ text: 'serialized copy', suggestedFilename: 'horn.cfg' });
+      if (path === '/api/workspace/write-export') return body({ directory: '/chosen', files: ['horn.cfg'] });
+      return null;
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    await openLocalDesign();
+    act(() => useDesignStore.getState().updateField('R', 321));
+
+    // Exporting is one of the two things the question tells the user to do.
+    await chooseMenuItem('Export a copy');
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Exported a copy as horn.cfg');
+    await chooseMenuItem('New');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().designName).toBe('');
+
+    // A new edit is not in that file.
+    act(() => useDesignStore.getState().updateField('R', 322));
+    await chooseMenuItem('New');
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(useDesignStore.getState().design.R).toBe(322);
+  });
+
+  it('asks, without throwing, before New over a half-typed directivity setting', async () => {
+    openRoutes();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    await openLocalDesign();
+    act(() => useSolveOptionsStore.setState((state) => ({ polar: { ...state.polar, angleStep: 0 } })));
+
+    await chooseMenuItem('New');
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(useDocumentStore.getState().designName).toBe('horn');
+  });
+
+  it('opens a CAD-linked design without asking when an edit was undone back to the opened design', async () => {
+    const designId = 'wgd_01K00000000000000000000000';
+    const linked = (path: string): Response | null => {
+      const body = (value: unknown) => new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (path === '/api/cadlink/designs') return body({ items: [{
+        designId, lineageId: 'wgl_01K00000000000000000000000', editVersion: 2,
+        designHash: 'sha256:full', filename: 'linked.cfg',
+        branchedFromDesignId: null, branchedFromEditVersion: null,
+        exportCount: 1, lastExportedAt: '2026-08-20T11:00:00Z',
+        createdAt: '2026-08-19T10:00:00Z', updatedAt: '2026-08-20T12:00:00Z',
+      }] });
+      if (path === `/api/cadlink/designs/${designId}`) return body({
+        designId, lineageId: 'wgl_01K00000000000000000000000', editVersion: 2,
+        filename: 'linked.cfg', updatedAt: '2026-08-20T12:00:00Z', text: 'registry snapshot',
+      });
+      return null;
+    };
+    openRoutes(linked);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    await openLocalDesign();
+    act(() => useDesignStore.getState().updateField('R', 321));
+    act(() => useDesignStore.getState().undo());
+
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const picker = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('CAD-linked designs'))!;
+    await act(async () => { picker.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    const project = container.querySelector<HTMLButtonElement>('[aria-label="CAD-linked designs"] button')!;
+    await act(async () => { project.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState().designName).toBe('linked');
   });
 });

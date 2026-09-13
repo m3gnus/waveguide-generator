@@ -22,7 +22,7 @@ import { selectJob } from './JobsPanel';
 import { runDisplayName } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDocumentStore } from '../stores/document';
-import { useUnsavedChanges } from '../stores/unsavedChanges';
+import { discardConfirmation, replacingWouldLose } from '../design/replacementCheck';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { Icon } from './icons';
 import { middleEllipsis } from './ResultsPanel';
@@ -132,7 +132,6 @@ function ProjectSwitcher({ current, label, onOpened, onError }: {
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState<CadProject[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const unsaved = useUnsavedChanges();
   const generation = useRef(0);
 
   const toggle = async () => {
@@ -152,7 +151,8 @@ function ProjectSwitcher({ current, label, onOpened, onError }: {
   useEffect(() => () => { generation.current += 1; }, []);
 
   const open_ = async (project: CadProject) => {
-    if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked project?')) return;
+    if (await replacingWouldLose()
+      && !window.confirm(discardConfirmation('open this CAD-linked project'))) return;
     setBusy(true);
     try {
       if (project.designId) {

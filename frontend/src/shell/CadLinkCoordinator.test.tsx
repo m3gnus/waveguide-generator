@@ -3,18 +3,20 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
 import { selectCadWorkspace } from '../api/cadWorkspace';
+import { applyOpenedDesign } from '../design/openCadProject';
+import { replacingWouldLoseNow } from '../design/replacementCheck';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { showJobModel } from '../jobs/showJobModel';
 import { preferencesStore } from '../prefs/preferences';
 import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { designForFamily, resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
+import { toSolveDesign } from '../jobs/actions';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { documentSettingsSignature } from '../stores/designWire';
-import { unsavedChangesNow } from '../stores/unsavedChanges';
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -949,16 +951,27 @@ describe('CadLinkCoordinator', () => {
     expect(reported.some((entry) => entry.state === 'refused')).toBe(false);
   });
 
+  /** The design on screen as it was opened from its own project. */
+  function openedCurrent(r = 150) {
+    return {
+      dialect: 'ath', migrationsApplied: [],
+      passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+      design: { ...useDesignStore.getState().design, R: r },
+      cadlink: {
+        identity: { designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2 },
+        classification: 'current',
+      },
+    } as unknown as Parameters<typeof applyOpenedDesign>[0];
+  }
+
   /** Opening a project replaces the working design. The manual switcher asks
    * before discarding, so the automatic one must not be the single path that
    * discards without asking -- there is nobody at the keyboard to ask. Nor may
-   * it throw the request away: unsaved work is a reason to wait, and once the
-   * work is saved the same request goes ahead. */
-  it('will not open over unsaved work, says which project it wanted, and opens it once saved', async () => {
+   * it throw the request away: a design that exists nowhere else is a reason
+   * to wait, and once nothing would be lost the same request goes ahead. */
+  it('will not open over work that exists nowhere else, says which project it wanted, and opens it once nothing would be lost', async () => {
     vi.useFakeTimers();
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
-    }, 'current');
+    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
     useDesignStore.getState().updateField('R', 321);
     const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
     const reported: Array<Record<string, unknown>> = [];
@@ -1005,14 +1018,20 @@ describe('CadLinkCoordinator', () => {
     // project through the switcher, which asks before discarding.
     expect(String(parkedSolveCommandStore.getSnapshot().command?.blockers[0]))
       .toContain('File → CAD-linked designs');
+    expect(String(parkedSolveCommandStore.getSnapshot().command?.blockers[0])).not.toMatch(/save/i);
 
-    // Once nothing would be lost -- here the open design is marked saved --
-    // the next poll carries on.
-    act(() => {
-      useDocumentStore.getState().markSaved(
-        useDesignStore.getState().designRevision, documentSettingsSignature(),
-      );
-    });
+    // Waiting is not a retry loop: while the design still exists nowhere
+    // else, later polls go back to neither the project list nor the open.
+    const listReads = () => vi.mocked(fetch).mock.calls
+      .filter(([input]) => String(input).endsWith('/cadlink/designs')).length;
+    const readsWhileHeld = listReads();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(listReads()).toBe(readsWhileHeld);
+    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-other');
+
+    // Once nothing would be lost -- here the edit is taken back to the design
+    // as it was opened -- the next poll carries on.
+    act(() => { useDesignStore.getState().updateField('R', 150); });
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
 
     expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
@@ -1032,19 +1051,13 @@ describe('CadLinkCoordinator', () => {
       useDesignStore.getState().updateField('R', 999);
     }, () => {
       expect(useDesignStore.getState().design.R).toBe(999);
-      expect(unsavedChangesNow()).toBe(true);
-    }],
-    ['the design is renamed while the project loads', () => {
-      useDocumentStore.getState().setDesignName('Renamed while loading');
-    }, () => {
-      expect(useDocumentStore.getState().designName).toBe('Renamed while loading');
-      expect(unsavedChangesNow()).toBe(true);
+      expect(replacingWouldLoseNow()).toBe(true);
     }],
     ['solver settings change while the project loads', () => {
       useSolveOptionsStore.setState({ symmetry: 'quarter' });
     }, () => {
       expect(useSolveOptionsStore.getState().symmetry).toBe('quarter');
-      expect(unsavedChangesNow()).toBe(true);
+      expect(replacingWouldLoseNow()).toBe(true);
     }],
     // Nothing is dirty here: a third design was opened, and it is clean. Only
     // an explicit document generation can see this — an unlinked document has
@@ -1058,17 +1071,12 @@ describe('CadLinkCoordinator', () => {
     }, () => {
       expect(useDesignStore.getState().design.formula).toBe('R-OSSE');
       expect(useDocumentStore.getState().identity).toBeNull();
-      expect(unsavedChangesNow()).toBe(false);
+      expect(replacingWouldLoseNow()).toBe(false);
     }],
   ] as const)('holds a Fusion solve command, replacing nothing, when %s', async (_label, intervene, verify) => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
-    }, 'current');
-    // A saved baseline, so a settings change is unsaved work rather than the
-    // untouched default a fresh window shows.
-    useDocumentStore.getState().markSaved(
-      useDesignStore.getState().designRevision, documentSettingsSignature(),
-    );
+    // Opened from its project, so a settings change is work that exists
+    // nowhere else rather than the untouched default a fresh window shows.
+    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
     const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
     const reported: Array<Record<string, unknown>> = [];
     const pending = deferred<Response>();
@@ -1114,6 +1122,147 @@ describe('CadLinkCoordinator', () => {
     expect(parked?.blockers).toEqual([expect.stringContaining('Tritonia')]);
     // The user is told that nothing was thrown away.
     expect(String(parked?.blockers[0])).toContain('Nothing was replaced');
+  });
+
+  /** An edit undone back to the design as it was opened loses nothing, so it
+   * is no reason to hold the switch Fusion asked for. */
+  it('switches to the project a Fusion solve command names when an edit was undone back to the opened design', async () => {
+    vi.useFakeTimers();
+    const command = foreignSolveCommand();
+    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
+    act(() => useDesignStore.getState().updateField('R', 321));
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.R).toBe(150);
+
+    await renderCoordinator();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
+    expect(command.counts.ingest).toBe(1);
+    expect(command.reported).toEqual([]);
+    expect(parkedSolveCommandStore.getSnapshot().command?.blockers ?? [])
+      .not.toContainEqual(expect.stringContaining('Tritonia'));
+  });
+
+  /** A run as the jobs list sends it: its snapshot, and the options it recorded. */
+  function storedRun(design: DesignDocument) {
+    const options = JSON.parse(JSON.stringify(useSolveOptionsStore.getState().options())) as Record<string, unknown>;
+    return {
+      id: 'job-kept', run_number: 4, label: 'kept', status: 'complete', config_summary: {},
+      script_snapshot: { version: 1, design: toSolveDesign(design) },
+      solve_options: { frequency_range: null, num_frequencies: null, frequencies_hz: null, stage_delay_ms: 30, ...options },
+      design_availability: { reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: null },
+    };
+  }
+
+  /** A send overwrites the registry copy the design was opened from. Once an
+   * edit has been sent, the design as opened exists nowhere any more, so
+   * taking the edit back does not make it safe to replace. */
+  it('holds a Fusion solve command over the design as opened once an edit to it was sent to Fusion', async () => {
+    vi.useFakeTimers();
+    let commandPending = false;
+    const command = foreignSolveCommand((path) => {
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') return sendResult();
+      if (path.endsWith('/solve-command') && !commandPending) return json({ command: null, outcome: null });
+      return null;
+    });
+    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
+    act(() => useDesignStore.getState().updateField('R', 321));
+
+    await renderCoordinator();
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_sent');
+    act(() => useDesignStore.getState().updateField('R', 150));
+    commandPending = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_sent');
+    expect(useDesignStore.getState().design.R).toBe(150);
+    expect(command.counts.ingest).toBe(0);
+    expect(command.reported).toEqual([]);
+    expect(parkedSolveCommandStore.getSnapshot().command?.blockers)
+      .toEqual([expect.stringContaining('Tritonia')]);
+  });
+
+  /** A send can fail after the server has already committed the design to
+   * the registry, so a failed send is no proof the opened copy survived. */
+  it('holds a Fusion solve command over the design as opened once a send of an edit to it failed', async () => {
+    vi.useFakeTimers();
+    let commandPending = false;
+    const command = foreignSolveCommand((path) => {
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') return json({ detail: 'Could not build the bundle.' }, 500);
+      if (path.endsWith('/solve-command') && !commandPending) return json({ command: null, outcome: null });
+      return null;
+    });
+    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
+    act(() => useDesignStore.getState().updateField('R', 321));
+
+    await renderCoordinator();
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion().catch(() => undefined);
+    });
+    act(() => useDesignStore.getState().updateField('R', 150));
+    commandPending = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
+    expect(useDesignStore.getState().design.R).toBe(150);
+    expect(command.counts.ingest).toBe(0);
+    expect(command.reported).toEqual([]);
+    expect(parkedSolveCommandStore.getSnapshot().command?.blockers)
+      .toEqual([expect.stringContaining('Tritonia')]);
+  });
+
+  /** With no jobs list from the socket, a wait on a design that exists
+   * nowhere else still clears once a run holds it: the poll re-reads the run
+   * list, at most every few seconds. */
+  it('carries on with a held Fusion solve command once a run holds the design, reading runs while the jobs socket has none', async () => {
+    vi.useFakeTimers();
+    let runs: unknown[] = [];
+    const command = foreignSolveCommand((path) => (
+      path.startsWith('/api/jobs?') ? json({ items: runs, total: runs.length }) : null
+    ));
+    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
+    act(() => useDesignStore.getState().updateField('R', 321));
+
+    await renderCoordinator();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(parkedSolveCommandStore.getSnapshot().command?.blockers)
+      .toEqual([expect.stringContaining('Tritonia')]);
+    expect(command.counts.ingest).toBe(0);
+
+    // Solved in the meantime: a run now holds exactly this design.
+    runs = [storedRun(useDesignStore.getState().design)];
+    await act(async () => { await vi.advanceTimersByTimeAsync(7_000); });
+
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
+    expect(command.counts.ingest).toBe(1);
+    expect(command.reported).toEqual([]);
+    const jobReads = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith('/api/jobs?')).length;
+    expect(jobReads).toBeLessThanOrEqual(4);
+  });
+
+  /** A rename alone is not a design that would be lost (the name is held
+   * constant in the comparison), so it does not hold the switch either. */
+  it('does not hold a Fusion solve command when only the name changed while the project loads', async () => {
+    const pending = deferred<Response>();
+    const command = foreignSolveCommand((path) => (path === '/api/design/open' ? pending.promise : null));
+    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
+
+    await renderCoordinator();
+    await act(async () => { await new Promise((settle) => setTimeout(settle, 0)); });
+    act(() => useDocumentStore.getState().setDesignName('Renamed while loading'));
+    await act(async () => {
+      pending.resolve(command.routes('/api/design/open')!);
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
+    expect(command.reported).toEqual([]);
+    expect(parkedSolveCommandStore.getSnapshot().command?.blockers ?? [])
+      .not.toContainEqual(expect.stringContaining('Tritonia'));
   });
 
   it('refuses a Fusion solve command for a design this copy of WG does not hold', async () => {

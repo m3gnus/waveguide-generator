@@ -18,8 +18,14 @@ import {
   EXPORT_CANCELLED_MESSAGE,
 } from '../shell/exportDestinationPrompt';
 import { resetDesignStore, useDesignStore } from '../stores/design';
-import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
-import { documentIsUnsaved, resetDocumentStore, useDocumentStore, type CadLinkClassification } from '../stores/document';
+import { wgSolveSettingsFromStore } from '../stores/designWire';
+import { resetDocumentStore, useDocumentStore, type CadLinkClassification } from '../stores/document';
+import {
+  discardConfirmation,
+  keptContentKeyOf,
+  rememberWrittenCopy,
+  replacingWouldLose,
+} from './replacementCheck';
 import { useUnsavedChanges } from '../stores/unsavedChanges';
 import { designNameSlug } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
@@ -150,19 +156,6 @@ export function DesignFileMenu() {
     };
   }, []);
 
-  function documentIsUnsavedNow(): boolean {
-    const designState = useDesignStore.getState();
-    const documentState = useDocumentStore.getState();
-    return documentIsUnsaved(
-      designState.designRevision,
-      documentState.savedRevision,
-      documentState.savedSettings,
-      documentSettingsSignature(),
-      documentState.designName,
-      documentState.savedDesignName,
-    );
-  }
-
   async function act(operation: () => Promise<void>) {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -194,9 +187,16 @@ export function DesignFileMenu() {
       // malformed file cannot prompt and an edit made while either await was
       // pending cannot be overwritten by a stale response.
       const opened = await openDesignText(text);
+      // Taken after every await, including the run-list read inside it, so
+      // what is decided is the design on screen at the moment it is replaced.
+      const wouldLose = await replacingWouldLose();
       const changedWhileOpening = openingGeneration !== documentMutationGeneration.current;
-      if ((changedWhileOpening || documentIsUnsavedNow())
-        && !window.confirm(`Discard unsaved changes and open ${file.name}?`)) return;
+      if (wouldLose || changedWhileOpening) {
+        const question = wouldLose
+          ? discardConfirmation(`open ${file.name}`)
+          : `The design on screen changed while ${file.name} was loading. Replace it with ${file.name}?`;
+        if (!window.confirm(question)) return;
+      }
       applyOpenedDesign(opened, file.name);
     });
   }
@@ -232,7 +232,8 @@ export function DesignFileMenu() {
   async function openProject(project: CadLinkedDesignSummary) {
     if (!project.designId) return;
     const designId = project.designId;
-    if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked design?')) return;
+    if (await replacingWouldLose()
+      && !window.confirm(discardConfirmation('open this CAD-linked design'))) return;
     await act(async () => {
       const opened = await openCadLinkedProject(designId, fetch, 'cad-project-switch');
       if (opened.adoptionCandidate) setAdoptionCandidate(opened.adoptionCandidate);
@@ -263,6 +264,8 @@ export function DesignFileMenu() {
       if (!destination) { setMessage(EXPORT_CANCELLED_MESSAGE); return; }
       const solveState = useSolveOptionsStore.getState();
       const polarConfig = polarConfigFromUi(solveState.polar);
+      // Taken before the awaits, so it describes exactly what is written.
+      const writtenKey = keptContentKeyOf(design);
       const response = await serializeDesignDocument(
         design, designName, fetch, polarConfig, wgSolveSettingsFromStore(solveState),
       );
@@ -270,6 +273,8 @@ export function DesignFileMenu() {
         filename: response.suggestedFilename,
         blob: new Blob([response.text], { type: 'text/plain;charset=utf-8' }),
       }], fetch, 'confirm', destination.token, askToReplaceExports);
+      // A file now holds this design, so replacing it later loses nothing.
+      rememberWrittenCopy(writtenKey);
       setMessage(
         `Exported a copy as ${response.suggestedFilename} to ${written.directory}`
         + replacedNotice(written.replaced),
@@ -277,8 +282,10 @@ export function DesignFileMenu() {
     });
   }
 
-  function newDesign() {
-    if (unsaved && !window.confirm('Discard unsaved changes and create a new design?')) return;
+  async function newDesign() {
+    if (busyRef.current) return;
+    if (await replacingWouldLose()
+      && !window.confirm(discardConfirmation('start a new design'))) return;
     resetDesignStore();
     // Directivity and solver settings deliberately survive New: they describe
     // how this user measures, not which horn is on screen, and resetting them
@@ -367,7 +374,7 @@ export function DesignFileMenu() {
     <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
     <input ref={meshInput} hidden tabIndex={-1} type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh file" onChange={(event) => void readMesh(event.currentTarget)}/>
     {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={newDesign}><span>New</span><kbd>cfg</kbd></button>
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void newDesign()}><span>New</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
       <button role="menuitem" aria-expanded={projectsOpen} className="design-menu-item" disabled={busy} onClick={() => void toggleProjects()}><span>CAD-linked designs</span><span>{projectsOpen ? '⌄' : '›'}</span></button>
       {projectsOpen && <div role="menu" aria-label="CAD-linked designs" className="design-menu-nested">

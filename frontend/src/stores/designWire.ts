@@ -116,6 +116,22 @@ export function designWireWithSolveSettings(
   solveSettings: WgSolveSettings | null,
   designName: string = useDocumentStore.getState().designName,
 ): Record<string, unknown> {
+  return composeDesignFileWire(design, polarValue, solveSettings, designName);
+}
+
+/**
+ * The same overlay with every input explicit: it reads no store.
+ *
+ * This is the file writer's projection, shared so the design content key
+ * compares exactly what a written `.cfg` would carry, and can key a stored
+ * run's design and settings as easily as the ones on screen.
+ */
+export function composeDesignFileWire(
+  design: Record<string, unknown>,
+  polarValue: unknown,
+  solveSettings: WgSolveSettings | null,
+  designName: string,
+): Record<string, unknown> {
   const withPolars = designWireWithAthPolars(design, polarValue);
   const existing = isRecord(withPolars.extra_blocks)
     ? withPolars.extra_blocks as Record<string, ConfigBlock>

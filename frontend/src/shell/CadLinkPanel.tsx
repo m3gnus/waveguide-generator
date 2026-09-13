@@ -5,7 +5,8 @@ import { OnshapePublicConsentRequired, sendDesignToOnshape } from '../api/onshap
 import { usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { parkedSolveCommandStore } from '../stores/solveCommand';
-import { recordCommittedAthPolars, useDesignStore } from '../stores/design';
+import { currentDocumentLoad, isCurrentDocumentLoad, recordCommittedAthPolars, useDesignStore } from '../stores/design';
+import { keptContentKeyOf, rememberSentCopy } from '../design/replacementCheck';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDocumentStore } from '../stores/document';
 import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
@@ -442,16 +443,24 @@ export function CadLinkPanel() {
   const sendToOnshape = async (allowPublic = false) => {
     const request = ++onshapeSendGeneration.current;
     const sourceRevision = designRevision;
+    const documentLoad = currentDocumentLoad();
     cadCoordinator.clearFeedback(); setSendingToOnshape(true);
     try {
       const wasLinked = onshapeStatus?.state === 'stale' || onshapeStatus?.state === 'current';
       const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
+      // What the registry holds once this commits, taken before the awaits.
+      const sentKey = keptContentKeyOf(design);
       const result = await sendDesignToOnshape(
         design, designRevision, designNameSlug(documentName), identity, {
           allowPublic,
           polarConfig,
           instanceId: onshapeStatus?.selectedInstanceId ?? null,
         },
+      );
+      rememberSentCopy(
+        sentKey,
+        result.identity?.designId,
+        request === onshapeSendGeneration.current && isCurrentDocumentLoad(documentLoad),
       );
       if (request !== onshapeSendGeneration.current) return;
       setConfirmPublicDocument(null);
@@ -469,6 +478,10 @@ export function CadLinkPanel() {
       // pre-send closure briefly reporting the new document as not linked.
       await cadCoordinator.refreshOnshapeStatus(result.identity);
     } catch (reason) {
+      // The registry is committed before the upload that can still fail (the
+      // public-document refusal among them), so a failed send may have
+      // overwritten the copy this design was opened from: forget it.
+      rememberSentCopy(null, identity?.designId, isCurrentDocumentLoad(documentLoad));
       if (request !== onshapeSendGeneration.current) return;
       // HTTP 428 is control flow, not a generic send error: this dialog is the
       // only path that can retry with allowPublic on an Onshape Free account.

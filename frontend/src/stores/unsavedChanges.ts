@@ -29,10 +29,10 @@ export function useUnsavedChanges(): boolean {
 /**
  * The same answer, for a caller that is not rendering.
  *
- * The auto-open path needs it: opening the project a return names replaces the
- * working design, so it has to know whether that would discard work -- and it
- * must reach the identical verdict the dot and the discard prompt reach, which
- * is the whole reason this module exists.
+ * No replacement asks this any more. WG has no Save, so New, Open, the
+ * CAD-linked opens and the Fusion auto-open ask whether the design exists
+ * anywhere else instead (`design/replacementCheck.ts`); this saved-file
+ * baseline now only mirrors the unsaved indicator.
  */
 export function unsavedChangesNow(): boolean {
   const document = useDocumentStore.getState();

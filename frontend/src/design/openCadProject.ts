@@ -5,6 +5,7 @@ import { documentSettingsSignature } from '../stores/designWire';
 import { designNameForOpenedFile } from '../stores/designName';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { restoreSolveSettingsFromBlocks } from '../stores/solveOptions';
+import { keptContentKeyNow } from './replacementCheck';
 
 /** Only the fields a later save may advance; the rest is derived state. */
 export function editableIdentity(identity: DesignIdentity | null | undefined): DesignIdentity | null {
@@ -44,6 +45,9 @@ export function applyOpenedDesign(
   document.setDesignName(designNameForOpenedFile(filename, openedDesign.extra_blocks));
   document.setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
   document.markSaved(useDesignStore.getState().designRevision, documentSettingsSignature());
+  // Last, once the design, its settings and its name have all applied: the
+  // design as opened is one a later replacement can count as kept.
+  document.setOpenedContentKey(keptContentKeyNow());
   return {
     filename,
     report: opened,

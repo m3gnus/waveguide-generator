@@ -41,10 +41,22 @@ export interface DocumentState {
    * these settings carry the user's own measurement rig.
    */
   savedSettings: string | null;
+  /**
+   * The content key of the design as WG last opened it (captured once the open
+   * had fully applied), or as WG itself last wrote it somewhere it can be
+   * opened from again: Export a copy, or the registry a Send to CAD commits
+   * to. Null when there is no such copy.
+   *
+   * One of the things a replacement check counts as "kept elsewhere" (see
+   * `design/replacementCheck.ts`). A restored autosave draft never gets one:
+   * the draft is the only copy of whatever it holds.
+   */
+  openedContentKey: string | null;
   identity: DesignIdentity | null;
   classification: CadLinkClassification | null;
   setDesignName: (name: string) => void;
   markSaved: (revision: number, settings?: string) => void;
+  setOpenedContentKey: (key: string | null) => void;
   setCadLink: (identity: DesignIdentity | null, classification: CadLinkClassification) => void;
   adoptSavedIdentity: (identity: DesignIdentity) => void;
   restoreDocumentState: (
@@ -79,6 +91,7 @@ export const useDocumentStore = create<DocumentState>((set) => ({
   savedRevision: 1,
   savedDesignName: '',
   savedSettings: null,
+  openedContentKey: null,
   identity: null,
   classification: null,
   setDesignName: (name) => {
@@ -90,6 +103,7 @@ export const useDocumentStore = create<DocumentState>((set) => ({
     savedDesignName: state.designName,
     ...(savedSettings === undefined ? {} : { savedSettings }),
   })),
+  setOpenedContentKey: (openedContentKey) => set({ openedContentKey }),
   setCadLink: (identity, classification) => set({ identity, classification }),
   adoptSavedIdentity: (identity) => set({ identity, classification: 'current' }),
   restoreDocumentState: ({ designName, savedRevision, savedSettings, savedDesignName, identity, classification }) => {
@@ -100,6 +114,9 @@ export const useDocumentStore = create<DocumentState>((set) => ({
       savedRevision,
       savedDesignName: normalizeDesignName(savedDesignName ?? name),
       savedSettings: savedSettings ?? null,
+      // Never derived from the draft being restored: a draft is the only copy
+      // of what it holds, so it counts as kept nowhere.
+      openedContentKey: null,
       identity,
       classification,
     });
@@ -113,6 +130,7 @@ export function resetDocumentStore(): void {
     savedRevision: 1,
     savedDesignName: '',
     savedSettings: null,
+    openedContentKey: null,
     identity: null,
     classification: null,
   });

@@ -56,7 +56,13 @@ import {
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
 import { cadProjectName, listCadProjects, newestReturnForProject, type CadProject } from '../api/cadProjects';
 import { DesignOpenSupersededError, openCadLinkedProject } from '../design/openCadProject';
-import { unsavedChangesNow } from '../stores/unsavedChanges';
+import {
+  keptContentKeyNow,
+  keptContentKeyOf,
+  rememberSentCopy,
+  replacingWouldLose,
+  replacingWouldLoseNow,
+} from '../design/replacementCheck';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
@@ -1533,6 +1539,8 @@ export function CadLinkCoordinator() {
     noteCadActivity();
     try {
       const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
+      // What the registry holds once this commits, taken before the awaits.
+      const sentKey = keptContentKeyOf(design);
       const result = await sendDesignToCad(
         design,
         designRevision,
@@ -1542,6 +1550,11 @@ export function CadLinkCoordinator() {
         undefined,
         target ?? null,
         polarConfig,
+      );
+      rememberSentCopy(
+        sentKey,
+        result.identity?.designId,
+        request === fusionSendRequest.current && mounted.current && isCurrentDocumentLoad(documentLoad),
       );
       if (request === fusionSendRequest.current && mounted.current) {
         if (!isCurrentDocumentLoad(documentLoad)) {
@@ -1559,6 +1572,10 @@ export function CadLinkCoordinator() {
       }
       return result;
     } catch (reason) {
+      // The server commits the design to the registry before steps that can
+      // still fail, so a failed send may have overwritten the copy this design
+      // was opened from. Nothing sent is known to be kept: forget both.
+      rememberSentCopy(null, identity?.designId, mounted.current && isCurrentDocumentLoad(documentLoad));
       if (request === fusionSendRequest.current && mounted.current) {
         setError(reason instanceof Error ? reason.message : String(reason));
       }
@@ -1961,11 +1978,13 @@ export function CadLinkCoordinator() {
    * and pressing Solve in Fusion three times to be told the same thing is not
    * a workflow.
    *
-   * Two things it still will not do. It will not open over unsaved work --
-   * opening a project replaces the working design, and the manual switcher asks
-   * before discarding, so an automatic switch must not be the one path that
-   * discards silently. Unsaved work makes the request wait for the user
-   * instead, and it goes ahead once nothing would be lost. And it will not guess:
+   * Two things it still will not do. It will not open over a design that
+   * exists nowhere else (no run and no opened file matches it; see
+   * `replacementCheck.ts`) -- opening a project replaces the working design,
+   * and the manual switcher asks before discarding, so an automatic switch
+   * must not be the one path that discards silently. Such a design makes the
+   * request wait for the user instead, and it goes ahead once nothing would
+   * be lost. And it will not guess:
    * a bundle naming two designs names no single target, and a design this copy
    * of WG does not hold cannot be opened at all. Those two are refused, and the
    * refusal says which project. A project list or an open that fails on its
@@ -2006,11 +2025,16 @@ export function CadLinkCoordinator() {
       // happens: the registry read and the parse in between are slow enough for
       // the user to have typed into the open design or opened another one.
       const documentLoad = currentDocumentLoad();
-      if (unsavedChangesNow()) {
+      // Decided before the open's own awaits, so it may read the run list;
+      // the guard below asks again, synchronously, from what this read.
+      if (await replacingWouldLose()) {
+        const remedy = `open ${name} from File → CAD-linked designs, which asks before discarding; or dismiss it.`;
         return {
           kind: 'needs_user_input',
           code: 'unsaved_changes',
-          message: `Fusion asked WG to solve a return from ${name}, but the open design has unsaved changes and WG will not replace them. Open ${name} from File → CAD-linked designs, which asks before discarding, and the request carries on; or dismiss it.`,
+          message: keptContentKeyNow() === null
+            ? `Fusion asked WG to solve a return from ${name}, but the directivity settings on screen are incomplete, so WG cannot tell whether opening ${name} would lose the design. Finish them, then solve it or export a copy, and the request carries on; or ${remedy}`
+            : `Fusion asked WG to solve a return from ${name}, but no run matches the design on screen, and neither does what WG last opened, exported or sent, so opening ${name} may lose it. Solve it or export a copy and the request carries on; or ${remedy}`,
         };
       }
       // Which half of the guard refused, so the wait can say what clears it.
@@ -2024,9 +2048,9 @@ export function CadLinkCoordinator() {
             refusedBy.code = 'superseded_by_open';
             return 'another design was opened while WG was loading it';
           }
-          if (unsavedChangesNow()) {
+          if (replacingWouldLoseNow()) {
             refusedBy.code = 'unsaved_changes';
-            return 'the open design had unsaved changes by then';
+            return 'the design on screen had changed by then, and neither a run nor what WG last opened, exported or sent matches it';
           }
           return null;
         });
@@ -2140,9 +2164,13 @@ export function CadLinkCoordinator() {
           settle(command.commandId, { state: 'finished' });
           return;
         }
-        // Unsaved work is the one blocker the poll can see clear by itself,
-        // and looking costs nothing. Everything else waits for the user.
-        if (entry.code !== 'unsaved_changes' || unsavedChangesNow()) return;
+        // A design that would be lost is the one blocker the poll can see
+        // clear by itself -- undone, solved, exported or reopened. Looking is
+        // cheap: the run list is read at most every few seconds, and only while
+        // the jobs socket has none; the open itself asks again before replacing.
+        // Everything else waits for the user.
+        if (entry.code !== 'unsaved_changes'
+          || await replacingWouldLose(fetch, { reuseRunsReadWithinMs: 5_000 })) return;
         parkedSolveCommandStore.clear();
       }
       working = command;
