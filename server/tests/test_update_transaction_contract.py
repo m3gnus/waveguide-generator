@@ -2,7 +2,7 @@
 
 Two kinds of test live here.
 
-**Strict expected failures** (contract §2 and §4). Each one encodes a
+**Strict expected failures** (contract §4). Each one encodes a
 requirement the updater does not meet yet, and is marked
 ``xfail(strict=True, raises=AssertionError)``:
 
@@ -16,9 +16,10 @@ requirement the updater does not meet yet, and is marked
   checks therefore use ``pytest.fail``, never ``assert``: a fixture that broke
   must not pass itself off as the behaviour that is missing.
 
-**Regression tests** (contract §3). An old release's launcher runs the
-candidate's helper with the old command line, and that already works. These
-keep it working.
+**Regression tests** (contract §2 and §3). The completion record and the
+scoped cleanup of §2 are implemented, and these keep them. An old release's
+launcher runs the candidate's helper with the old command line, and that
+already works; the §3 tests keep it working.
 """
 
 from __future__ import annotations
@@ -198,18 +199,13 @@ def _healthy_snapshot() -> StatusSnapshot:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="contract §2.2: commit_transaction deletes the journal and records no outcome",
-)
 def test_a_committed_update_leaves_a_completion_record_when_its_journal_goes(
     tmp_path: Path,
 ) -> None:
-    """The journal is the only record of an outcome, and a commit deletes it.
+    """A commit deletes the journal, so it records the outcome first.
 
-    ``commit_transaction`` removes the journal as soon as its state is terminal
-    (``apply_update.py:2049``). Nothing else holds the outcome, so WG can
+    ``commit_transaction`` removes the journal as soon as its state is terminal.
+    Without the completion record nothing would hold the outcome, and WG could
     neither explain it later nor suppress a build that failed.
     """
 
@@ -238,19 +234,14 @@ class _UnusedController:
     url = "http://127.0.0.1:3199/"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="contract §2.5: healthy-start cleanup removes the whole <data>/updates folder",
-)
 def test_healthy_start_cleanup_removes_only_the_committed_transactions_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``<data>/updates`` is shared, and healthy-start cleanup deletes all of it.
+    """``<data>/updates`` is shared, so healthy-start cleanup never deletes all of it.
 
-    Both paths do: ``desktop.py:705-713`` off macOS, ``desktop.py:822-836`` on
-    it. Whichever one this host takes, another transaction's download must
-    survive, and the committed transaction's own staging must not.
+    Both paths used to: off macOS and on it. Whichever one this host takes,
+    another transaction's download must survive, and the committed
+    transaction's own staging must not. ``CLEANUP_PATHS`` tests run both.
     """
 
     installation = _installation(tmp_path)
@@ -287,6 +278,536 @@ def test_healthy_start_cleanup_removes_only_the_committed_transactions_files(
     assert not (installation.data_dir / "updates" / "9.9.9").exists(), (
         "healthy-start cleanup kept the committed transaction's own staging"
     )
+
+
+# ---------------------------------------------------------------------------
+# Contract §2.2-§2.6 in detail: who writes the record, and what cleanup spares
+# ---------------------------------------------------------------------------
+
+
+def _stamp_build(layer: Path, version: str, commit: str, runtime_id: str) -> dict[str, str]:
+    """Give a layer the identity a real build's ``APP-MANIFEST.json`` carries (§2.3)."""
+
+    identity = {"version": version, "commit": commit, "runtimeId": runtime_id}
+    (layer / "APP-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, **identity}), encoding="utf-8"
+    )
+    return identity
+
+
+def _completion_record(data_dir: Path, resources: Path) -> dict[str, Any] | None:
+    path = data_dir / f"update-result-{installation_key(resources)}.json"
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _signed(command: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    """Stands in for codesign: every macOS-shaped reseal in these tests succeeds."""
+
+    return subprocess.CompletedProcess(command, 0, "", "")
+
+
+def _healthy_start(
+    installation: Installation, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """The desktop window's healthy-start commit and cleanup, on one platform's path."""
+
+    window = desktop.DesktopWindow(
+        _UnusedController(),  # type: ignore[arg-type]
+        pythonnet_loader=lambda: object(),
+        webview2_probe=lambda: True,
+    )
+    monkeypatch.setattr(
+        window,
+        "_bundle_paths",
+        lambda: (installation.bundle, installation.resources, installation.data_dir),
+    )
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(desktop.sys, "platform", platform_name)
+    window._finish_healthy_bundle_update(_healthy_snapshot())
+
+
+#: Healthy-start cleanup has two paths, ``desktop.py``'s macOS one and the
+#: other; the contract's cleanup rule holds on both.
+CLEANUP_PATHS = pytest.mark.parametrize(
+    "platform_name", ["darwin", "linux"], ids=["macos-path", "other-path"]
+)
+
+
+def _roll_back_an_update(install: ReleasedClientInstall) -> tuple[dict[str, Any], dict[str, str]]:
+    """Install 2.0.0 -> 2.0.1 with this helper, and have the relaunch fail.
+
+    The helper then rolls back on its own. Returns the journal it leaves and
+    the identity of the build that failed.
+    """
+
+    _stamp_build(install.resources / "app", "2.0.0", "a" * 40, "rt")
+    failed = _stamp_build(install.staged_app, "2.0.1", "b" * 40, "rt")
+    confirmations = iter(["exited at once with status 1", None])
+    reported: list[str] = []
+
+    exit_code = apply_update_module.apply_update(
+        bundle=install.bundle,
+        data_dir=install.data_dir,
+        staged_app=install.staged_app,
+        staged_runtime=None,
+        parent_pid=4321,
+        platform_name="darwin",
+        runner=_signed,
+        relauncher=lambda *_args, **_kwargs: object(),
+        confirm=lambda _process: next(confirmations),
+        waiter=lambda _pid: True,
+        failure_reporter=reported.append,
+    )
+
+    journal = read_journal(install.data_dir, install.resources)
+    if exit_code != 5 or journal is None or journal.get("state") != "rolled-back":
+        pytest.fail(
+            f"set-up: expected a rolled-back update (exit {exit_code}, journal {journal!r}, "
+            f"reported {reported!r})"
+        )
+    if (install.resources / "app" / "marker.txt").read_text(encoding="utf-8") != "old app":
+        pytest.fail("set-up: the rollback did not restore the old app layer")
+    return journal, failed
+
+
+def test_a_committed_record_names_both_builds_and_the_transactions_staging(
+    tmp_path: Path,
+) -> None:
+    """Contract §2.2: the fields, including the build identities the journal now carries."""
+
+    installation = _installation(tmp_path)
+    before = _stamp_build(installation.resources / "app", "9.9.8", "a" * 40, "old0")
+    after = _stamp_build(installation.staged_app, "9.9.9", "b" * 40, "new1")
+    transaction = _decided_update(installation)
+    journal = read_journal(installation.data_dir, installation.resources) or {}
+    assert (journal.get("fromVersion"), journal.get("toVersion")) == ("9.9.8", "9.9.9")
+
+    allowed, detail = commit_transaction(installation.data_dir, resources=installation.resources)
+    if not allowed:
+        pytest.fail(f"set-up: the healthy-start commit refused: {detail}")
+
+    record = _completion_record(installation.data_dir, installation.resources)
+    assert record is not None, "no completion record after a commit"
+    assert record["schema"] == 1
+    assert record["installation"] == installation_key(installation.resources)
+    assert record["transaction"] == transaction
+    assert record["operation"] == "update"
+    assert record["outcome"] == "installed"
+    assert isinstance(record["detail"], str) and isinstance(record["recordedAt"], str)
+    assert record["from"] == before
+    assert record["to"] == after
+    assert "channel" in record
+    assert record["verificationBasis"] == "release-digest"
+    assert record["stagingRoots"] == [str(installation.data_dir / "updates" / "9.9.9")]
+    assert record["rollbackMaterial"] == "retained"
+    assert record["suppressedBuilds"] == []
+
+
+def test_an_automatic_rollback_is_recorded_before_an_older_release_deletes_the_journal(
+    tmp_path: Path,
+) -> None:
+    """Contract §2.2 and §2.3: the version a rollback reopens may predate the record.
+
+    v0.3.2's healthy start deletes a decided journal and records nothing, so
+    the helper that rolls back writes the record at the moment it decides.
+    """
+
+    install = _released_client_install(tmp_path)
+    journal, failed = _roll_back_an_update(install)
+    # What v0.3.2's healthy start does with that journal.
+    apply_update_module.remove_journal(install.data_dir, install.resources)
+
+    record = _completion_record(install.data_dir, install.resources)
+    assert record is not None, "the rollback's outcome was lost with its journal"
+    assert record["transaction"] == journal["transaction"]
+    assert record["operation"] == "update"
+    assert record["outcome"] == "rolled-back"
+    assert record["to"] == failed
+    assert record["suppressedBuilds"] == [failed]
+    assert record["stagingRoots"] == [str(install.data_dir / "updates" / "2.0.1")]
+
+
+def test_an_abandoned_update_is_recorded_before_an_older_release_deletes_the_journal(
+    tmp_path: Path,
+) -> None:
+    """Contract §2.2: the helper records ``aborted`` as it decides it, too.
+
+    An update abandoned before any layer moved reopens the old version, which
+    may predate the record and delete the journal without one. Nothing ran, so
+    nothing is suppressed.
+    """
+
+    installation = _installation(tmp_path)
+    planned = plan_layer_swap(
+        installation.resources, installation.staged_app, installation.staged_runtime
+    )
+    journal = begin_update_transaction(
+        data_dir=installation.data_dir,
+        bundle=installation.bundle,
+        resources=installation.resources,
+        layers=planned,
+        platform_name="linux",
+    )
+    set_journal_state(
+        installation.data_dir, installation.resources, "aborted", detail="the first rename failed"
+    )
+    # What v0.3.2's healthy start does with that journal.
+    apply_update_module.remove_journal(installation.data_dir, installation.resources)
+
+    record = _completion_record(installation.data_dir, installation.resources)
+    assert record is not None, "the abandoned update's outcome was lost with its journal"
+    assert record["transaction"] == journal["transaction"]
+    assert record["outcome"] == "aborted"
+    assert record["suppressedBuilds"] == [], "an update that never ran suppressed its build"
+
+
+def test_rolling_back_a_start_that_failed_suppresses_the_build_it_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §2.3, for the rollback helper a failed start hands off to.
+
+    Its transaction is a rollback, so the failed build is the one it rolls back
+    *from*; and the update it undoes staged a root nothing else will name again.
+    """
+
+    install = _released_client_install(tmp_path)
+    _stamp_build(install.resources / "app", "2.0.0", "a" * 40, "rt")
+    failed = _stamp_build(install.staged_app, "2.0.1", "b" * 40, "rt")
+    arguments = _v03x_handoff_arguments(
+        bundle=install.bundle,
+        data_dir=install.data_dir,
+        staged_app=install.staged_app,
+        staged_runtime=None,
+        parent_pid=4321,
+        server_args=(),
+    )
+    exit_code, _calls, _relaunched, failures = _run_candidate_helper(arguments, monkeypatch)
+    if exit_code != 0 or failures:
+        pytest.fail(f"set-up: the update did not install (exit {exit_code}): {failures}")
+
+    result = apply_update_module.rollback_bundle(
+        bundle=install.bundle,
+        data_dir=install.data_dir,
+        parent_pid=4321,
+        platform_name="darwin",
+        runner=_signed,
+        relauncher=lambda *_args, **_kwargs: object(),
+        waiter=lambda _pid: True,
+        confirm=lambda _process: None,
+    )
+    journal = read_journal(install.data_dir, install.resources)
+    if result != 0 or journal is None or journal.get("operation") != "rollback":
+        pytest.fail(f"set-up: expected a completed rollback (exit {result}): {journal!r}")
+    if journal.get("state") != "rolled-back":
+        pytest.fail(f"set-up: the rollback did not finish: {journal!r}")
+
+    record = _completion_record(install.data_dir, install.resources)
+    assert record is not None, "a rollback of a failed start recorded nothing"
+    assert record["transaction"] == journal["transaction"]
+    assert record["operation"] == "rollback"
+    assert record["outcome"] == "rolled-back"
+    assert record["from"] == failed
+    assert record["suppressedBuilds"] == [failed]
+    assert record["stagingRoots"] == [str(install.data_dir / "updates" / "2.0.1")]
+
+
+def test_recovery_records_a_journal_it_cannot_read_as_unverified(tmp_path: Path) -> None:
+    """Contract §2.2: an untrusted journal that recovery removes is ``unverified``.
+
+    Nothing the unreadable record might say is repeated as fact, and no staging
+    root is taken from it.
+    """
+
+    installation = _installation(tmp_path)
+    planned = plan_layer_swap(
+        installation.resources, installation.staged_app, installation.staged_runtime
+    )
+    begin_update_transaction(
+        data_dir=installation.data_dir,
+        bundle=installation.bundle,
+        resources=installation.resources,
+        layers=planned,
+        platform_name="linux",
+    )
+    swap_staged_layers(
+        installation.resources,
+        installation.staged_app,
+        installation.staged_runtime,
+        journal_dir=installation.data_dir,
+    )
+    apply_update_module.journal_path(installation.data_dir, installation.resources).write_text(
+        "{ truncated", encoding="utf-8"
+    )
+
+    outcome = apply_update_module.recover_transaction(
+        data_dir=installation.data_dir, resources=installation.resources, platform_name="linux"
+    )
+    if outcome.action != "rolled-back":
+        pytest.fail(f"set-up: recovery did not restore: {outcome}")
+    if read_journal(installation.data_dir, installation.resources) is not None:
+        pytest.fail("set-up: recovery kept the unreadable journal")
+
+    record = _completion_record(installation.data_dir, installation.resources)
+    assert record is not None, "recovery removed a journal and recorded nothing about it"
+    assert record["outcome"] == "unverified"
+    assert record["transaction"] is None
+    assert record["from"] is None and record["to"] is None
+    assert record["stagingRoots"] == []
+    assert record["suppressedBuilds"] == []
+
+
+def test_a_commit_that_cannot_record_its_outcome_keeps_the_journal(tmp_path: Path) -> None:
+    """Contract §2.2, durability: no record, no reclaiming."""
+
+    installation = _installation(tmp_path)
+    transaction = _decided_update(installation)
+    blocked = (
+        installation.data_dir / f"update-result-{installation_key(installation.resources)}.json"
+    )
+    blocked.mkdir()
+    logged: list[str] = []
+
+    allowed, detail = commit_transaction(
+        installation.data_dir, resources=installation.resources, log=logged.append
+    )
+
+    assert allowed is False, f"the commit let the rollback material go with no record: {detail}"
+    journal = read_journal(installation.data_dir, installation.resources)
+    assert journal is not None and journal.get("transaction") == transaction
+    assert transaction in detail
+    assert any(blocked.name in line for line in logged), logged
+
+
+def test_a_later_transactions_record_carries_suppressed_builds_forward(tmp_path: Path) -> None:
+    """Contract §2.2: a new transaction replaces the outcome, not the suppression."""
+
+    installation = _installation(tmp_path)
+    key = installation_key(installation.resources)
+    earlier_failure = {"version": "9.9.7", "commit": "c" * 40, "runtimeId": "old0"}
+    (installation.data_dir / f"update-result-{key}.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "installation": key,
+                "transaction": "e" * 32,
+                "operation": "update",
+                "outcome": "rolled-back",
+                "rollbackMaterial": "reclaimed",
+                "suppressedBuilds": [earlier_failure],
+            }
+        ),
+        encoding="utf-8",
+    )
+    transaction = _decided_update(installation)
+
+    allowed, detail = commit_transaction(installation.data_dir, resources=installation.resources)
+    if not allowed:
+        pytest.fail(f"set-up: the healthy-start commit refused: {detail}")
+
+    record = _completion_record(installation.data_dir, installation.resources) or {}
+    assert record.get("transaction") == transaction
+    assert record.get("outcome") == "installed"
+    assert record.get("suppressedBuilds") == [earlier_failure]
+
+
+@CLEANUP_PATHS
+def test_cleanup_spares_what_another_installations_journal_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.5: a second copy sharing the data directory keeps its staging.
+
+    While staging is keyed by version, two copies updating to one version stage
+    into one folder. The committed transaction's root is then also a root the
+    other copy's open journal names, and it stays.
+    """
+
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    second = tmp_path.resolve() / "Second copy"
+    second_staged = installation.data_dir / "updates" / "9.9.9" / "staged" / "app"
+    second_staged.mkdir(parents=True)
+    (second_staged / "marker.txt").write_text("the second copy's staged app", encoding="utf-8")
+    apply_update_module.write_journal(
+        installation.data_dir,
+        second,
+        {
+            "schema": 1,
+            "transaction": "f" * 32,
+            "operation": "update",
+            "state": "planned",
+            "bundle": str(second),
+            "resources": str(second),
+            "layers": [{"name": "app", "staged": str(second_staged)}],
+        },
+    )
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    if (installation.resources / "app.previous").exists():
+        pytest.fail("set-up: the healthy start did not reclaim; " + _update_log(installation))
+    assert (second_staged / "marker.txt").is_file(), (
+        "cleanup removed staging another installation's open journal names"
+    )
+
+
+@CLEANUP_PATHS
+def test_cleanup_removes_nothing_under_updates_while_another_journal_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.5: what an unreadable journal names cannot be ruled out."""
+
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    unreadable = installation.data_dir / "update-transaction-0123456789abcdef.json"
+    unreadable.write_text("{ truncated", encoding="utf-8")
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    if (installation.resources / "app.previous").exists():
+        pytest.fail("set-up: the healthy start did not reclaim; " + _update_log(installation))
+    assert (installation.data_dir / "updates" / "9.9.9").is_dir(), (
+        "cleanup removed staging while another installation's journal could not be read"
+    )
+    assert unreadable.name in _update_log(installation)
+
+
+@CLEANUP_PATHS
+def test_a_journal_naming_another_installation_reclaims_nothing_under_updates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.5: a commit that finds another installation's journal.
+
+    This installation's last committed transaction still has staging to
+    reclaim, because the start that committed it stopped before its cleanup.
+    The record at this installation's name now describes another copy, so
+    nothing under ``<data>/updates`` is this cleanup's to remove.
+    """
+
+    installation = _installation(tmp_path)
+    transaction = _decided_update(installation)
+    journal = read_journal(installation.data_dir, installation.resources) or {}
+    allowed, detail = commit_transaction(installation.data_dir, resources=installation.resources)
+    if not allowed:
+        pytest.fail(f"set-up: the healthy-start commit refused: {detail}")
+    elsewhere = tmp_path.resolve() / "Another copy"
+    apply_update_module.write_journal(
+        installation.data_dir,
+        installation.resources,
+        {
+            **journal,
+            "transaction": "c" * 32,
+            "resources": str(elsewhere),
+            "bundle": str(elsewhere),
+        },
+    )
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    assert (installation.data_dir / "updates" / "9.9.9").is_dir()
+    assert read_journal(installation.data_dir, installation.resources) is not None, (
+        "the record was not left for the installation it describes"
+    )
+    record = _completion_record(installation.data_dir, installation.resources) or {}
+    assert record.get("transaction") == transaction, (
+        "another installation's transaction was recorded as this one's"
+    )
+    assert record.get("rollbackMaterial") == "retained"
+
+
+@CLEANUP_PATHS
+@pytest.mark.parametrize(
+    "layout", ["the-updates-folder", "outside-updates", "a-link-out", "a-link-to-a-sibling"]
+)
+def test_cleanup_never_removes_the_updates_folder_or_anything_outside_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str, layout: str
+) -> None:
+    """Contract §2.5: a root is removed only if it resolves strictly inside ``<data>/updates``.
+
+    And a link is never followed: one inside the folder that points at a
+    sibling resolves inside it too, and would take the sibling with it.
+    """
+
+    installation = _installation(tmp_path)
+    updates = installation.data_dir / "updates"
+    neighbour = updates / "9.9.10" / "downloads" / "app.zip"
+    neighbour.parent.mkdir(parents=True)
+    neighbour.write_bytes(b"another transaction's download")
+    outside = installation.data_dir / "outside"
+    outside.mkdir()
+    (outside / "kept.txt").write_text("not the updater's", encoding="utf-8")
+    if layout == "the-updates-folder":
+        staged = updates / "staged" / "app"
+    elif layout == "outside-updates":
+        staged = outside / "staged" / "app"
+    else:
+        link = updates / "9.9.11"
+        target = outside if layout == "a-link-out" else neighbour.parents[1]
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"this host cannot create a directory link: {exc}")
+        staged = link / "staged" / "app"
+    (installation.resources / "app.previous").mkdir()
+    apply_update_module.write_journal(
+        installation.data_dir,
+        installation.resources,
+        {
+            "schema": 1,
+            "transaction": "d" * 32,
+            "operation": "update",
+            "state": "installed",
+            "bundle": str(installation.bundle),
+            "resources": str(installation.resources),
+            "layers": [{"name": "app", "staged": str(staged)}],
+        },
+    )
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    if (installation.resources / "app.previous").exists():
+        pytest.fail("set-up: the healthy start did not reclaim; " + _update_log(installation))
+    assert updates.is_dir(), "cleanup removed <data>/updates itself"
+    assert neighbour.is_file(), "cleanup removed another transaction's download"
+    assert (outside / "kept.txt").is_file(), "cleanup reached outside <data>/updates"
+
+
+@CLEANUP_PATHS
+def test_cleanup_finishes_after_an_interrupted_start_and_never_runs_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.5 and §2.6: the record, not ``.previous``, says what is left to reclaim.
+
+    A start that committed and reclaimed ``.previous`` but stopped before the
+    staging leaves nothing on the bundle to show that anything is pending. Once
+    the cleanup has run, a later staging into the same version folder belongs
+    to a later transaction.
+    """
+
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    download = installation.data_dir / "updates" / "9.9.9" / "downloads" / "app.zip"
+    download.parent.mkdir(parents=True)
+    download.write_bytes(b"spent")
+    allowed, detail = commit_transaction(installation.data_dir, resources=installation.resources)
+    if not allowed:
+        pytest.fail(f"set-up: the healthy-start commit refused: {detail}")
+    apply_update_module.cleanup_previous_layers(installation.resources)
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    assert not (installation.data_dir / "updates" / "9.9.9").exists(), (
+        "the committed transaction's staging outlived an interrupted cleanup"
+    )
+    record = _completion_record(installation.data_dir, installation.resources) or {}
+    assert record.get("rollbackMaterial") == "reclaimed"
+
+    download.parent.mkdir(parents=True)
+    download.write_bytes(b"a later transaction's download")
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    assert download.is_file(), "a finished cleanup ran again over a later transaction's staging"
 
 
 # ---------------------------------------------------------------------------
@@ -935,3 +1456,68 @@ def test_a_released_launcher_hands_the_candidate_a_command_it_accepts(
     assert (installed / "app" / "marker.txt").read_text(encoding="utf-8") == "new app"
     assert (installed / "runtime" / "marker.txt").read_text(encoding="utf-8") == "new runtime"
     assert len(relaunched) == 1
+
+
+_RELEASED_COMMIT_DRIVER = textwrap.dedent(
+    '''
+    """Read and commit a journal with one release's own apply_update."""
+
+    import importlib.util
+    import json
+    from pathlib import Path
+    import sys
+
+    tree, data_dir, resources = (Path(argument) for argument in sys.argv[1:4])
+    sys.path.insert(0, str(tree))
+    spec = importlib.util.spec_from_file_location(
+        "released_apply_update", tree / "launchers" / "apply_update.py"
+    )
+    released = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = released
+    spec.loader.exec_module(released)
+
+    journal = released.read_journal(data_dir, resources)
+    allowed, detail = released.commit_transaction(data_dir, resources=resources)
+    state = None if journal is None else journal.get("state")
+    print(json.dumps({"state": state, "allowed": allowed, "detail": detail}))
+    '''
+)
+
+
+def test_the_v032_reader_accepts_this_helpers_journal_and_its_commit_keeps_the_record(
+    tmp_path: Path,
+) -> None:
+    """Contract §2.2 and §3.3, with v0.3.2's own code.
+
+    A rollback reopens the old version, and v0.3.2 is the oldest journal
+    reader. It must accept the optional keys this helper adds, and its commit,
+    which deletes the journal and knows nothing of the record, must leave the
+    record in place.
+    """
+
+    tree = _released_tree("v0.3.2", tmp_path / "released")
+    install = _released_client_install(tmp_path / "install")
+    journal, _failed = _roll_back_an_update(install)
+    driver = tmp_path / "released_commit_driver.py"
+    driver.write_text(_RELEASED_COMMIT_DRIVER, encoding="utf-8")
+
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter, fixed script
+        [sys.executable, str(driver), str(tree), str(install.data_dir), str(install.resources)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    result = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert result["state"] == "rolled-back", (
+        f"v0.3.2 did not accept this helper's journal: {result}"
+    )
+    assert result["allowed"] is True, result
+    assert read_journal(install.data_dir, install.resources) is None
+    record = _completion_record(install.data_dir, install.resources)
+    assert record is not None, "the record did not survive v0.3.2's commit"
+    assert record["transaction"] == journal["transaction"]
+    assert record["outcome"] == "rolled-back"

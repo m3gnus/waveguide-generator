@@ -651,7 +651,366 @@ def set_journal_state(
     except ApplyUpdateError as exc:
         _emit_log(log, f"Could not record update progress {state!r}: {exc}")
         return JOURNAL_STATE_FAILED
+    if state in RECORDED_WHEN_DECIDED:
+        # The version reopened after a rollback or an abandoned update may
+        # predate the completion record, and its healthy start deletes a decided
+        # journal without writing one. So the outcome is recorded now, by the
+        # helper that decided it. The journal still holds it as well, so a
+        # record that could not be written here is written by a later commit
+        # from a version that knows how.
+        write_completion_record(
+            data_dir,
+            resources,
+            payload,
+            outcome=state,
+            detail=str(payload.get("detail") or state),
+            log=log,
+        )
     return JOURNAL_STATE_RECORDED
+
+
+# ---------------------------------------------------------------------------
+# The completion record: how a decided transaction ended, kept after it goes
+# ---------------------------------------------------------------------------
+
+#: ``<data>/update-result-<installation key>.json``, beside the journal.
+#:
+#: The journal decides recovery and is deleted once its transaction commits, so
+#: it cannot also be what WG remembers about the outcome. This record only
+#: remembers what the journal decided; it never decides anything. It lives
+#: outside ``<data>/updates`` and outside the app layers, so no cleanup and no
+#: layer swap removes it. docs/reference/UPDATE-TRANSACTION-CONTRACT.md §2 is
+#: the contract.
+RESULT_PREFIX = "update-result"
+RESULT_SCHEMA = 1
+
+#: The outcome recorded for a journal that recovery removed unread.
+OUTCOME_UNVERIFIED = "unverified"
+
+#: How every release that stages a bundle verifies the archives before this
+#: helper sees them: the release's published SHA-256 (``server/updates/bundle.py``).
+RELEASE_DIGEST_BASIS = "release-digest"
+
+#: Healthy-start cleanup has not run yet for the recorded transaction, or has.
+ROLLBACK_MATERIAL_RETAINED = "retained"
+ROLLBACK_MATERIAL_RECLAIMED = "reclaimed"
+
+#: Terminal states the helper records as it decides them, because the version it
+#: then reopens may predate the record and delete the journal without one.
+RECORDED_WHEN_DECIDED = frozenset({"rolled-back", "aborted"})
+
+_BUILD_FIELDS = (("version", "Version"), ("commit", "Commit"), ("runtimeId", "RuntimeId"))
+
+
+def completion_record_path(data_dir: Path, resources: Path) -> Path:
+    return Path(data_dir) / f"{RESULT_PREFIX}-{installation_key(resources)}.json"
+
+
+def read_completion_record(data_dir: Path, resources: Path) -> dict[str, Any] | None:
+    """This installation's completion record, or None when there is none to trust."""
+
+    try:
+        payload = json.loads(
+            completion_record_path(data_dir, resources).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != RESULT_SCHEMA
+        or payload.get("installation") != installation_key(resources)
+    ):
+        return None
+    return payload
+
+
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def read_build_identity(layer: Path) -> dict[str, str | None]:
+    """The interim build identity ``(version, commit, runtimeId)`` of an app layer.
+
+    Read from the layer's own ``APP-MANIFEST.json``, which every release's build
+    writes, so the helper can read it whichever release's launcher started it.
+    A missing or unreadable manifest gives an identity of unknowns.
+    """
+
+    try:
+        payload = json.loads((Path(layer) / "APP-MANIFEST.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = None
+    if not isinstance(payload, dict):
+        payload = {}
+    return {field: _text_or_none(payload.get(field)) for field, _suffix in _BUILD_FIELDS}
+
+
+def _journal_build_fields(side: str, identity: Mapping[str, str | None]) -> dict[str, Any]:
+    """``fromVersion``, ``fromCommit``, ``fromRuntimeId``, or the ``to`` keys."""
+
+    return {f"{side}{suffix}": identity.get(field) for field, suffix in _BUILD_FIELDS}
+
+
+def _journal_build(journal: Mapping[str, Any], side: str) -> dict[str, str | None] | None:
+    identity = {
+        field: _text_or_none(journal.get(f"{side}{suffix}")) for field, suffix in _BUILD_FIELDS
+    }
+    return identity if any(identity.values()) else None
+
+
+def journal_staging_roots(journal: Mapping[str, Any]) -> list[str]:
+    """The staging roots a journal names.
+
+    A staging root is the directory that holds a staged layer: with today's
+    layout, the ``<data>/updates/<version>`` above ``staged/<layer>``. A rollback
+    journal stages nothing itself and carries the roots of the transaction it
+    supersedes. Naming a root here does not make it removable; that is
+    :func:`reclaim_committed_staging`'s decision.
+    """
+
+    roots: list[str] = []
+    layers = journal.get("layers")
+    for entry in layers if isinstance(layers, list) else []:
+        staged = _text_or_none(entry.get("staged")) if isinstance(entry, Mapping) else None
+        if staged is None:
+            continue
+        path = Path(staged)
+        root = str(path.parent.parent if path.parent.name == "staged" else path.parent)
+        if root not in roots:
+            roots.append(root)
+    inherited = journal.get("supersededStagingRoots")
+    for root in inherited if isinstance(inherited, list) else []:
+        if _text_or_none(root) is not None and root not in roots:
+            roots.append(root)
+    return roots
+
+
+def write_completion_record(
+    data_dir: Path,
+    resources: Path,
+    journal: Mapping[str, Any],
+    *,
+    outcome: str,
+    detail: str,
+    log: LogCallable | None = None,
+) -> bool:
+    """Record how the journal's transaction ended, before anything deletes the journal.
+
+    One record per installation. A later write for the same transaction
+    replaces it. A write for a new transaction replaces the outcome, but carries
+    ``suppressedBuilds`` forward unchanged, and an automatic rollback adds the
+    build it removed. Returns whether the record reached the disk; a caller
+    about to delete the journal must not delete it if it did not.
+    """
+
+    previous = read_completion_record(data_dir, resources)
+    transaction = _text_or_none(journal.get("transaction"))
+    operation = journal.get("operation")
+    if operation not in {"update", "rollback"}:
+        operation = None
+    builds = {side: _journal_build(journal, side) for side in ("from", "to")}
+    carried = previous.get("suppressedBuilds") if previous is not None else None
+    suppressed = (
+        [dict(entry) for entry in carried if isinstance(entry, dict)]
+        if isinstance(carried, list)
+        else []
+    )
+    if outcome == "rolled-back":
+        # An update that rolled back failed on its way *to* a build; a rollback
+        # transaction removes the build it rolls back *from*.
+        failed = {"update": builds["to"], "rollback": builds["from"]}.get(operation or "")
+        if failed is not None and failed.get("version") and failed not in suppressed:
+            suppressed.append(dict(failed))
+    # Rewriting the same transaction never undoes a cleanup that already ran:
+    # its roots may since hold a later transaction's staging.
+    already_reclaimed = (
+        previous is not None
+        and transaction is not None
+        and previous.get("transaction") == transaction
+        and previous.get("rollbackMaterial") == ROLLBACK_MATERIAL_RECLAIMED
+    )
+    payload: dict[str, Any] = {
+        "schema": RESULT_SCHEMA,
+        "installation": installation_key(resources),
+        "transaction": transaction,
+        "operation": operation,
+        "outcome": outcome,
+        "detail": detail,
+        "recordedAt": datetime.now().isoformat(timespec="seconds"),
+        "from": builds["from"],
+        "to": builds["to"],
+        # No release's handoff tells the helper which channel an update came
+        # from, and the helper never guesses it.
+        "channel": None,
+        "verificationBasis": RELEASE_DIGEST_BASIS if operation == "update" else None,
+        "stagingRoots": journal_staging_roots(journal),
+        "rollbackMaterial": (
+            ROLLBACK_MATERIAL_RECLAIMED if already_reclaimed else ROLLBACK_MATERIAL_RETAINED
+        ),
+        "suppressedBuilds": suppressed,
+    }
+    return _publish_completion_record(data_dir, resources, payload, log=log)
+
+
+def _publish_completion_record(
+    data_dir: Path,
+    resources: Path,
+    payload: Mapping[str, Any],
+    *,
+    log: LogCallable | None = None,
+) -> bool:
+    """Temporary name, contents flushed, renamed over the target: as the journal is."""
+
+    directory = Path(data_dir)
+    target = completion_record_path(directory, resources)
+    temporary = target.with_name(f"{target.name}.new")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            _fsync_descriptor(handle.fileno(), log=log)
+        os.replace(temporary, target)
+    except OSError as exc:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        _emit_log(log, f"Could not record the update outcome in {target}: {exc}")
+        return False
+    sync_directory(directory, log=log)
+    return True
+
+
+def reclaim_committed_staging(
+    data_dir: Path, resources: Path, *, log: LogCallable | None = None
+) -> list[Path]:
+    """Remove what the committed transaction staged under ``<data>/updates``, only that.
+
+    Healthy-start cleanup, scoped to one transaction. ``<data>/updates`` is
+    shared by every transaction and every installation using this data
+    directory, so it is never removed whole. The roots come from the completion
+    record the commit wrote before it deleted the journal. A root is removed only
+    if it resolves strictly inside ``<data>/updates`` and no other
+    installation's journal names it. The record then says ``reclaimed``, so the
+    cleanup runs once: a later staging into the same folder belongs to a later
+    transaction. Returns the roots removed.
+    """
+
+    directory = Path(data_dir)
+    if read_journal(directory, resources) is not None:
+        # Either still unresolved, which the commit refused, or a record at this
+        # installation's name that describes another installation. Neither says
+        # what under <data>/updates is this installation's to remove.
+        _emit_log(
+            log,
+            "Not removing any update downloads: an update transaction record is still "
+            "open at this installation's name.",
+        )
+        return []
+    record = read_completion_record(directory, resources)
+    if record is None or record.get("rollbackMaterial") != ROLLBACK_MATERIAL_RETAINED:
+        return []
+    protected, refusal = _staging_named_by_other_installations(directory, resources)
+    if refusal is not None:
+        _emit_log(log, f"Not removing any update downloads: {refusal}.")
+        return []
+    try:
+        updates: Path | None = (directory / "updates").resolve(strict=True)
+    except OSError:
+        updates = None
+    roots = record.get("stagingRoots")
+    removed: list[Path] = []
+    for text in roots if isinstance(roots, list) and updates is not None else []:
+        if _text_or_none(text) is None:
+            continue
+        root = Path(text)
+        target, reason = _removable_staging_root(root, updates, protected)
+        if reason is not None:
+            _emit_log(log, f"Left {root} in place: {reason}.")
+            continue
+        if target is None:
+            continue
+        try:
+            shutil.rmtree(target)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _emit_log(log, f"Could not remove the update downloads {root}: {exc}")
+            continue
+        removed.append(root)
+        _emit_log(log, f"Removed the update downloads: {root}")
+    _publish_completion_record(
+        directory,
+        resources,
+        {**record, "rollbackMaterial": ROLLBACK_MATERIAL_RECLAIMED},
+        log=log,
+    )
+    return removed
+
+
+def _removable_staging_root(
+    root: Path, updates: Path, protected: Sequence[Path]
+) -> tuple[Path | None, str | None]:
+    """``(path to remove, None)``, ``(None, None)`` when it is gone, or ``(None, why not)``."""
+
+    if not root.is_absolute():
+        return None, "a staging root must be an absolute path"
+    if root.is_symlink():
+        return None, "it is a link, and cleanup never follows one"
+    try:
+        resolved = root.resolve(strict=True)
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"it could not be resolved: {exc}"
+    if resolved == updates or updates not in resolved.parents:
+        return None, f"it is not inside {updates}"
+    for other in protected:
+        if other == resolved or other in resolved.parents or resolved in other.parents:
+            return None, "another installation's update transaction names it"
+    return resolved, None
+
+
+def _staging_named_by_other_installations(
+    data_dir: Path, resources: Path
+) -> tuple[list[Path], str | None]:
+    """Every staging root another installation's journal names, or why that is unknown.
+
+    Two copies of the application can share a data directory, and a journal is
+    attributed by its file name (see ``JOURNAL_PREFIX``). Another copy's journal
+    that cannot be read could name anything, so it stops this installation's
+    cleanup from removing anything under ``<data>/updates``.
+    """
+
+    own = {journal_path(data_dir, resources).name, journal_temp_path(data_dir, resources).name}
+    try:
+        candidates = sorted(Path(data_dir).glob(f"{JOURNAL_PREFIX}-*"))
+    except OSError as exc:
+        return [], f"the update transaction records could not be listed: {exc}"
+    named: list[Path] = []
+    for path in candidates:
+        if path.name in own:
+            continue
+        if path.name.endswith(".json.new"):
+            return [], f"another installation's update transaction was being recorded ({path.name})"
+        if not path.name.endswith(".json"):
+            continue
+        try:
+            payload = _validate_journal(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            payload = _invalid_journal(UNREADABLE_JOURNAL_STATE, path.name)
+        if str(payload.get("state")) in UNTRUSTED_JOURNAL_STATES:
+            return (
+                [],
+                f"another installation's update transaction record {path.name} cannot be read",
+            )
+        for root in journal_staging_roots(payload):
+            try:
+                named.append(Path(root).resolve())
+            except OSError as exc:
+                return [], f"{path.name} names a staging root that cannot be resolved: {exc}"
+    return named, None
 
 
 def layer_manifest_name(layer_name: str) -> str:
@@ -1051,6 +1410,12 @@ def begin_update_transaction(
             for target, staged in layers
         ],
     }
+    # Optional keys under schema 1: the build this replaces and the build that
+    # replaces it, for the completion record.
+    for target, staged in layers:
+        if target.name == "app":
+            payload.update(_journal_build_fields("from", read_build_identity(target)))
+            payload.update(_journal_build_fields("to", read_build_identity(staged)))
     if existing is not None:
         payload["supersedes"] = existing.get("transaction")
     write_journal(data_dir, resources, payload)
@@ -1094,6 +1459,22 @@ def begin_rollback_transaction(
             if (resources / f"{name}{PREVIOUS_SUFFIX}").is_dir()
         ],
     }
+    # Optional keys under schema 1. The live app is the build being rolled back
+    # from, and ``app.previous`` the one being restored. A rollback stages
+    # nothing, so it carries the staging of the update it undoes, which would
+    # otherwise never be named again.
+    payload.update(_journal_build_fields("from", read_build_identity(resources / "app")))
+    payload.update(
+        _journal_build_fields("to", read_build_identity(resources / f"app{PREVIOUS_SUFFIX}"))
+    )
+    if (
+        existing is not None
+        and str(existing.get("state")) not in UNTRUSTED_JOURNAL_STATES
+        and journal_describes(existing, resources)
+    ):
+        inherited = journal_staging_roots(existing)
+        if inherited:
+            payload["supersededStagingRoots"] = inherited
     if existing is not None:
         payload["supersedes"] = existing.get("transaction")
     write_journal(data_dir, resources, payload)
@@ -1812,6 +2193,25 @@ def recover_transaction(
         """
 
         if state in UNTRUSTED_JOURNAL_STATES:
+            # Recorded as unverified. The record could not say what was decided,
+            # so nothing it might say -- transaction, builds, staging -- is
+            # repeated as fact. And no record, no removal: the journal then stays
+            # and the next start decides it again.
+            if not write_completion_record(
+                data_dir,
+                resources,
+                {},
+                outcome=OUTCOME_UNVERIFIED,
+                detail=f"{state_name} after an update transaction record that could not "
+                f"be trusted: {detail}",
+                log=log,
+            ):
+                _emit_log(
+                    log,
+                    f"Kept the unreadable update transaction record after {state_name}, "
+                    f"because its outcome could not be recorded: {detail}.",
+                )
+                return
             remove_journal(data_dir, resources, log=log)
             _emit_log(
                 log,
@@ -2045,6 +2445,23 @@ def commit_transaction(
         return False, (
             f"update transaction {identifier} is unresolved (state {state!r}); "
             "the rollback material was kept"
+        )
+    # The journal is the only record of how this transaction ended, and it is
+    # about to go. Save the outcome first, and if that cannot be done keep the
+    # journal -- and with it the rollback material -- for the next start.
+    recorded_detail = _text_or_none(journal.get("detail"))
+    if not write_completion_record(
+        data_dir,
+        resources,
+        journal,
+        outcome=state,
+        detail=f"committed by a healthy start from state {state!r}"
+        + (f": {recorded_detail}" if recorded_detail else ""),
+        log=log,
+    ):
+        return False, (
+            f"update transaction {identifier} ended {state!r}, but its outcome could not be "
+            "recorded, so its journal was kept and the rollback material may not be reclaimed"
         )
     remove_journal(data_dir, resources, log=log)
     return True, f"update transaction {identifier} committed from state {state!r}"

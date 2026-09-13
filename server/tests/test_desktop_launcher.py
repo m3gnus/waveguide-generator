@@ -831,6 +831,31 @@ def test_a_stale_frontend_build_still_opens_the_window(
     assert created[0][0] == (desktop.WINDOW_TITLE, stale.url)
 
 
+def _decided_journal(
+    data: Path, resources: Path, bundle: Path, staging_root: Path, state: str = "installed"
+) -> None:
+    """Record the decided transaction a healthy start commits, staged under ``staging_root``.
+
+    Healthy-start cleanup removes only what the committed transaction staged
+    (docs/reference/UPDATE-TRANSACTION-CONTRACT.md §2.5), so a test that
+    expects its downloads to go needs the transaction that staged them.
+    """
+
+    apply_update_module.write_journal(
+        data,
+        resources,
+        {
+            "schema": 1,
+            "transaction": "0" * 32,
+            "operation": "update",
+            "state": state,
+            "bundle": str(bundle),
+            "resources": str(resources),
+            "layers": [{"name": "app", "staged": str(staging_root / "staged" / "app")}],
+        },
+    )
+
+
 def test_a_stale_frontend_still_counts_as_a_healthy_start_for_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -848,6 +873,7 @@ def test_a_stale_frontend_still_counts_as_a_healthy_start_for_cleanup(
         (bundle / name).mkdir(parents=True)
     (data / "updates" / "0.2.5").mkdir(parents=True)
     (data / "logs").mkdir(parents=True)
+    _decided_journal(data, bundle, bundle, data / "updates" / "0.2.5")
 
     stale_start = StatusSnapshot(
         backend=LampStatus(ServiceState.OK, "Healthy"),
@@ -864,7 +890,7 @@ def test_a_stale_frontend_still_counts_as_a_healthy_start_for_cleanup(
 
     assert not (bundle / "app.previous").exists()
     assert not (bundle / "runtime.previous").exists()
-    assert not (data / "updates").exists()
+    assert not (data / "updates" / "0.2.5").exists()
 
 
 def test_declining_to_clean_says_so_in_the_update_log(
@@ -1085,6 +1111,12 @@ def test_first_healthy_bundle_start_removes_previous_layers_and_resigns(
     downloads = tmp_path / "data" / "updates" / "1.2.3" / "downloads"
     downloads.mkdir(parents=True)
     (downloads / "update-app-1.2.3.zip").write_bytes(b"zip")
+    _decided_journal(
+        tmp_path / "data",
+        resources,
+        tmp_path / "Waveguide Generator.app",
+        downloads.parent,
+    )
     controller = BundleController(app, tmp_path / "data")
     webview, _created = _stub_webview()
     event_loop_started: list[bool] = []
@@ -1109,7 +1141,8 @@ def test_first_healthy_bundle_start_removes_previous_layers_and_resigns(
 
     assert not previous.exists()
     assert event_loop_started == [True]
-    assert not (tmp_path / "data" / "updates").exists()
+    assert not downloads.parent.exists()
+    assert (tmp_path / "data" / "updates").is_dir(), "the shared updates folder is never removed"
     assert repaired == [tmp_path / "Waveguide Generator.app"]
     log_text = (tmp_path / "data" / "logs" / "update.log").read_text(encoding="utf-8")
     assert "Removed healthy-start rollback layer" in log_text
@@ -1511,6 +1544,7 @@ def test_a_healthy_start_after_a_rollback_clears_what_windows_refused_to_delete(
     downloads = tmp_path / "data" / "updates" / "0.2.6" / "downloads"
     downloads.mkdir(parents=True)
     (downloads / "runtime.zip").write_bytes(b"zip")
+    _decided_journal(tmp_path / "data", bundle, bundle, downloads.parent, state="rolled-back")
     controller = BundleController(bundle / "app", tmp_path / "data")
     webview, _created = _stub_webview()
     monkeypatch.setitem(sys.modules, "webview", webview)
@@ -1526,7 +1560,7 @@ def test_a_healthy_start_after_a_rollback_clears_what_windows_refused_to_delete(
 
     assert not list(bundle.glob("*.failed*"))
     # The download that produced them is equally spent.
-    assert not (tmp_path / "data" / "updates").exists()
+    assert not downloads.parent.exists()
     assert "rolled-back failed update copy" in (
         tmp_path / "data" / "logs" / "update.log"
     ).read_text(encoding="utf-8")

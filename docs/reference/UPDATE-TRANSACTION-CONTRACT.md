@@ -40,6 +40,17 @@ the release owner that this contract records but does not design.
 | The launcher consumes the request **before** it stops the server. | `launchers/statusapp/controller.py:1013-1026`; `view.py:141`, `:191-201` |
 | Nothing refuses new work during an update: the install route has no job check, and neither has `/api/solve`. | `server/updates/api.py:70-87`; `server/jobs/api.py:351`, `:419` |
 
+After `8bccff0c`, the writing side of area 1 was implemented. `commit_transaction` writes
+the completion record (§2.2) before `remove_journal`, and healthy-start cleanup on both
+paths removes only the committed transaction's staging roots (§2.5), through
+`reclaim_committed_staging` in `launchers/apply_update.py`. The two rows above that say
+otherwise describe `8bccff0c`. Still to do:
+
+- the update service reading the record: explaining the last outcome, applying
+  suppression and the explicit retry (§2.2 "Readers", §2.3);
+- carrying the channel into the record, which stays `null` until the handoff carries it
+  (§2.2 `channel`).
+
 ---
 
 ## 2. Area 1: records and cleanup
@@ -66,9 +77,13 @@ completion record only remembers what the journal decided.
     commit, `apply_update.py:2049`.
   - The helper that performs an automatic rollback also writes it at the moment it
     records `rolled-back`. The version it rolls back to may predate this contract, and
-    that version would delete the journal without a record.
+    that version would delete the journal without a record. For the same reason the
+    helper writes it when it records `aborted`: the version it then reopens is the old
+    one.
   - An untrusted journal that recovery removes (`apply_update.py:1814-1819`) is recorded
-    as `unverified`, never as an invented outcome.
+    as `unverified`, never as an invented outcome. Nothing the untrusted journal says is
+    repeated as fact: the record's transaction, builds and staging roots are unknown
+    (`null`, `[]`).
 - **Durability.** It is written the way the journal is written: a temporary file,
   flushed, then renamed. If the record cannot be written, the journal is kept,
   `commit_transaction` reports that the rollback material may not be reclaimed, and
@@ -78,26 +93,40 @@ completion record only remembers what the journal decided.
   `suppressedBuilds` forward unchanged; only an explicit retry (§2.3) removes an entry.
 - **Fields.**
   - `schema` (`1`), `installation` and `transaction`.
-  - `operation`: `update` or `rollback`.
+  - `operation`: `update` or `rollback`; `null` when the outcome is `unverified`.
   - `outcome`: `installed`, `rolled-back`, `aborted` or `unverified`.
   - `detail` and `recordedAt`.
-  - `from` and `to` build identities (§2.3).
-  - `channel`: the channel the update was taken from (`stable` or `beta` today).
+  - `from` and `to` build identities (§2.3), or `null` where the journal named none.
+  - `channel`: the channel the update was taken from (`stable` or `beta` today). It is
+    `null` until the helper is told: no release's handoff carries the channel yet, and
+    the helper never guesses it.
   - `verificationBasis`: how the staged archives were verified; `release-digest` today
-    (`bundle.py:888-907`).
-  - `stagingRoots` (§2.5) and `rollbackMaterial` (§2.6).
+    (`bundle.py:888-907`), and `null` for a rollback, which stages nothing.
+  - `stagingRoots` (§2.5).
+  - `rollbackMaterial` (§2.6): `retained` until healthy-start cleanup has run for this
+    transaction, then `reclaimed`. Cleanup removes the staging roots only while the
+    record says `retained`, so it runs once, and a later staging into the same folder
+    belongs to a later transaction.
   - `suppressedBuilds` (§2.3).
 - **Readers.** The update service reads it to explain the last outcome in the update
   dialog, and to apply suppression. It is also part of "Copy update diagnostics".
 
-To give the record its build identities, the helper adds `fromVersion` and `toVersion`
-to the journal at `begin_update_transaction`, read from each layer's
-`APP-MANIFEST.json`. They are optional keys under schema `1` (§3.3).
+To give the record its build identities, the helper adds `fromVersion`, `fromCommit` and
+`fromRuntimeId`, and the matching `to` keys, to the journal. `begin_update_transaction`
+reads them from the installed and the staged app layer's `APP-MANIFEST.json`.
+`begin_rollback_transaction` reads them from the live app, which is the build being rolled
+back from, and from `app.previous`. A rollback stages nothing, so its journal also carries
+`supersededStagingRoots`: the staging roots of the transaction it supersedes, which are
+reclaimed with it. All of these are optional keys under schema `1` (§3.3).
 
 ### 2.3 Failed-build suppression
 
 - After an automatic rollback, the failed build's identity is added to
-  `suppressedBuilds`.
+  `suppressedBuilds`. For an update transaction that is its `to` build; for a rollback
+  transaction, its `from` build. Every automatic rollback counts, including recovery that
+  restores an install cut short before its build ever ran. A journal in `rolling-back`
+  does not say whether a failed start or recovery wrote it, and the explicit retry lifts
+  the entry either way.
 - The update service never offers or auto-installs a suppressed build. The dialog says
   why, and offers an explicit retry, which removes that one entry.
 - A different build identity is never suppressed by this entry.
@@ -153,6 +182,11 @@ has one staging root, and the root belongs to the transaction that last staged i
 Automatic rollback is possible until healthy-start cleanup runs. After that `.previous`
 is gone. The completion record then says `rollbackMaterial: "reclaimed"`, and a later
 Return to Stable installs a fresh target. It never assumes a rollback layer exists.
+
+A staging root that cannot be removed, such as a folder holding a file Windows has
+locked, is logged and left in place, and the record still says `reclaimed`. A later
+retry could remove a later transaction's staging in the same folder, which is worse than
+the leak.
 
 ---
 
@@ -357,6 +391,15 @@ These are recorded, not designed.
 3. **A rollback to v0.3.1 or v0.3.2** does not apply suppression, and v0.3.1 ignores
    the journal altogether (§2.3, §3.3). Those versions stay compatible readers only in
    the sense of §3.3.
+4. **Staging that no transaction names is never reclaimed.**
+   - A staging that failed or was abandoned before the helper wrote a journal leaves
+     `<data>/updates/<version>` behind. Examples: a download, digest or manifest check
+     that failed, or a staged update that was never applied.
+   - The whole-folder removal cleared it at the next healthy start after an update.
+     Scoped cleanup (§2.5) does not, and the folder can hold a runtime archive over
+     100 MB.
+   - A guarded sweep is not designed here. It would remove version folders that no
+     journal or record names and that no staging in progress is using.
 
 ---
 
@@ -367,8 +410,6 @@ section.
 
 | Test | Section | Fails today because |
 | --- | --- | --- |
-| `test_a_committed_update_leaves_a_completion_record_when_its_journal_goes` | §2.2 | `commit_transaction` deletes the journal, and no record exists |
-| `test_healthy_start_cleanup_removes_only_the_committed_transactions_files` | §2.5 | The cleanup deletes another transaction's download with the whole folder |
 | `test_a_browser_mode_start_settles_the_update_transaction` | §4.5 | The controller reaches a healthy start, and the journal stays `installed` |
 | `test_a_no_gui_start_confirms_or_reports_the_update_transaction` | §4.5 | The `--no-gui` start neither commits nor writes anything about the transaction |
 | `test_a_solve_submitted_after_restart_approval_is_refused` | §4.2 | `/api/solve` accepts a solve after the handoff request is written |
@@ -377,6 +418,21 @@ section.
 
 | Test | Section | What it keeps |
 | --- | --- | --- |
+| `test_a_committed_update_leaves_a_completion_record_when_its_journal_goes` | §2.2 | The healthy-start commit records the outcome before it deletes the journal |
+| `test_a_committed_record_names_both_builds_and_the_transactions_staging` | §2.2 | The field list, with the build identities the journal carries |
+| `test_an_automatic_rollback_is_recorded_before_an_older_release_deletes_the_journal` | §2.2, §2.3 | The helper records a rollback as it decides it, and suppresses the failed build |
+| `test_an_abandoned_update_is_recorded_before_an_older_release_deletes_the_journal` | §2.2 | The helper records `aborted` as it decides it, and suppresses nothing |
+| `test_rolling_back_a_start_that_failed_suppresses_the_build_it_removed` | §2.3, §2.5 | The rollback helper suppresses its `from` build and carries the undone update's staging |
+| `test_recovery_records_a_journal_it_cannot_read_as_unverified` | §2.2 | An untrusted journal is recorded as `unverified`, with nothing taken from it |
+| `test_a_commit_that_cannot_record_its_outcome_keeps_the_journal` | §2.2 | No record, no reclaiming |
+| `test_a_later_transactions_record_carries_suppressed_builds_forward` | §2.2 | A new transaction replaces the outcome, not the suppression |
+| `test_healthy_start_cleanup_removes_only_the_committed_transactions_files` | §2.5 | Another transaction's download survives this host's cleanup path |
+| `test_cleanup_spares_what_another_installations_journal_names` | §2.5 | A version folder shared with another copy's open transaction stays, on both paths |
+| `test_cleanup_removes_nothing_under_updates_while_another_journal_is_unreadable` | §2.5 | On both paths |
+| `test_a_journal_naming_another_installation_reclaims_nothing_under_updates` | §2.5 | Even with this installation's own staging still to reclaim, on both paths |
+| `test_cleanup_never_removes_the_updates_folder_or_anything_outside_it` | §2.5 | The folder itself, a root outside it, a link out of it and a link to a sibling, on both paths |
+| `test_cleanup_finishes_after_an_interrupted_start_and_never_runs_twice` | §2.5, §2.6 | `rollbackMaterial` drives the staging cleanup, once |
+| `test_the_v032_reader_accepts_this_helpers_journal_and_its_commit_keeps_the_record` | §2.2, §3.3 | v0.3.2's own reader accepts the new journal keys, and its commit leaves the record. Skipped where the tag is unreachable, as below. |
 | `test_the_candidate_helper_installs_from_a_v03x_launchers_command_line` | §3.2 | This checkout's helper installs from the v0.3.x command line and staging layout, app-only and with a runtime. The command line is frozen in the test, so this runs everywhere. |
 | `test_a_released_launcher_hands_the_candidate_a_command_it_accepts` | §3.1, §3.2 | The v0.3.1 and v0.3.2 launchers themselves, extracted from their tags, consume a schema-1 request and build exactly the frozen command line, and this checkout's helper installs from it. It is skipped where the tags are unreachable: CI checks out one commit with no tags. The frozen test above still runs there. |
 

@@ -37,6 +37,7 @@ from launchers.apply_update import (
     cleanup_previous_layers,
     commit_transaction,
     layer_runtime_ids,
+    reclaim_committed_staging,
     recover_transaction,
     repair_bundle,
     resources_directory,
@@ -679,6 +680,10 @@ class DesktopWindow:
         previous = self._previous_generation_paths(resources)
         if sys.platform == "darwin":
             if not previous:
+                # Nothing to reseal around. A start that stopped part-way
+                # through this cleanup may still have left the committed
+                # transaction's staging; its completion record says so.
+                reclaim_committed_staging(data_dir, resources, log=log)
                 return
             self._finish_healthy_macos_update(bundle, resources, data_dir, previous)
             return
@@ -699,18 +704,12 @@ class DesktopWindow:
         finally:
             if had_previous:
                 repair_bundle(bundle, platform_name=sys.platform, log=log)
-                # The staged layers moved into the bundle; what is left under
-                # updates/ is the downloaded archives (the runtime zip alone is
-                # well over 100 MB), which the healthy new version never needs.
-                downloads = data_dir / "updates"
-                try:
-                    shutil.rmtree(downloads)
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    log(f"Could not remove the update downloads {downloads}: {exc}")
-                else:
-                    log(f"Removed the update downloads: {downloads}")
+            # The staged layers moved into the bundle; what is left of the
+            # committed transaction's staging is its downloaded archives (the
+            # runtime zip alone is well over 100 MB). Only that transaction's
+            # own folders go: <data>/updates is shared with other transactions
+            # and other installations, so it is never removed whole.
+            reclaim_committed_staging(data_dir, resources, log=log)
 
     @staticmethod
     def _cleanup_holding_directory(bundle: Path) -> Path:
@@ -819,21 +818,8 @@ class DesktopWindow:
         for original in previous:
             kind = "layer" if original.name in {"app.previous", "runtime.previous"} else "launcher file"
             log(f"Removed healthy-start rollback {kind}: {original}")
-        self._remove_update_downloads(data_dir, log)
-
-    @staticmethod
-    def _remove_update_downloads(data_dir: Path, log: Callable[[str], None]) -> None:
-        # The staged layers moved into the bundle; only downloaded archives are
-        # left, including a runtime zip that can exceed 100 MB.
-        downloads = data_dir / "updates"
-        try:
-            shutil.rmtree(downloads)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            log(f"Could not remove the update downloads {downloads}: {exc}")
-        else:
-            log(f"Removed the update downloads: {downloads}")
+        # Only the committed transaction's own staging, as on the other path.
+        reclaim_committed_staging(data_dir, resources, log=log)
 
     @staticmethod
     def _report_bundle_failure(message: str, *, detail: str | None = None) -> None:
