@@ -481,13 +481,13 @@ class StatusController:
         )
         return command
 
-    def _collect_output(self, stream: IO[str]) -> None:
+    def _collect_output(self, stream: IO[str], output: deque[str]) -> None:
         try:
             for line in stream:
                 clean = line.strip()
                 if clean:
                     with self._output_lock:
-                        self._output.append(clean)
+                        output.append(clean)
         finally:
             stream.close()
 
@@ -615,11 +615,18 @@ class StatusController:
                 pid=process.pid,
                 exit_code=None,
             )
+            # Every child is diagnosed from its own lines alone. After close()
+            # and start() -- the restart that follows a failed update handoff --
+            # the previous child's last line would otherwise become this one's
+            # exit reason, and a URL it printed this one's "already running"
+            # instance. Its collector may also outlive stop()'s bounded join;
+            # it keeps writing to the old buffer, not this one.
+            self._output = deque(maxlen=self._output.maxlen)
             if process.stdout is not None:
                 self._output_drained = False
                 self._output_thread = threading.Thread(
                     target=self._collect_output,
-                    args=(process.stdout,),
+                    args=(process.stdout, self._output),
                     name="wg2-status-output",
                     daemon=True,
                 )
@@ -701,8 +708,9 @@ class StatusController:
         ``start()`` overwrites these fields, so without this a retry would
         strand the Job Object handle -- which is what guarantees the tree dies
         -- along with the temporary directory holding the stop and ready files.
-        The collected output goes too: the next attempt must not be diagnosed
-        from the previous attempt's lines.
+        The collected output needs nothing here: ``start()`` gives every child
+        a fresh buffer, so the next attempt is never diagnosed from the previous
+        attempt's lines.
         """
 
         job, self._windows_job = self._windows_job, None
@@ -714,8 +722,6 @@ class StatusController:
         process, self._process = self._process, None
         if process is not None and process.stdout is not None:
             process.stdout.close()
-        with self._output_lock:
-            self._output.clear()
         self._frontend_served = None
         self._cleanup_temporary_directory()
 
@@ -1057,6 +1063,8 @@ class StatusController:
         try:
             return consume_update_request(path, data_dir=self._data_dir())
         except UpdateHandoffError as exc:
+            # Recorded against the child running now, and only that one: a
+            # restarted child starts with its own buffer (see ``start()``).
             with self._output_lock:
                 self._output.append(str(exc))
             return None

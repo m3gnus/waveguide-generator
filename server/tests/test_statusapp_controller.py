@@ -1154,9 +1154,9 @@ class _LateCollector(StatusController):
         super().__init__(**kwargs)
         self.exit_seen = threading.Event()
 
-    def _collect_output(self, stream) -> None:
+    def _collect_output(self, stream, output) -> None:
         self.exit_seen.wait()
-        super()._collect_output(stream)
+        super()._collect_output(stream, output)
 
     def release_collector_on_exit(self) -> None:
         """Open the gate at the moment the controller reads the child's exit code."""
@@ -1249,3 +1249,77 @@ def test_a_serving_lock_holder_read_before_its_output_arrives_is_still_adopted(
     finally:
         controller.exit_seen.set()
         controller.close()
+
+
+#: Serves on its first attempt and names its URL on stdout, the way a real
+#: server's log does. Every later attempt exits with ``WG2_TEST_EXIT`` and
+#: prints nothing at all.
+RESTARTED_SERVER = r'''from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import time
+
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument("--status-control", type=Path, required=True)
+args, _unknown = parser.parse_known_args()
+
+counter = Path(os.environ["WG2_TEST_ATTEMPTS"])
+seen = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+counter.write_text(str(seen + 1), encoding="utf-8")
+if seen:
+    raise SystemExit(int(os.environ["WG2_TEST_EXIT"]))
+
+args.status_control.with_name("ready.json").write_text(
+    '{"host":"127.0.0.1","port":3199}\n', encoding="utf-8"
+)
+print("first child serving at http://127.0.0.1:3199/", flush=True)
+while not args.status_control.is_file():
+    time.sleep(0.02)
+'''
+
+
+@pytest.mark.parametrize("exit_code", [1, 2])
+def test_a_restarted_child_is_diagnosed_from_its_own_output_alone(
+    tmp_path: Path, exit_code: int
+) -> None:
+    """``close()`` then ``start()``: the restart after a failed update handoff.
+
+    Both launchers do exactly this on one controller. A second child that dies
+    without a word must not be reported with the first child's last line --
+    and on exit 2 must not adopt the URL the first child printed, which the
+    healthy probe here would happily confirm.
+    """
+
+    script = tmp_path / "restarted_server.py"
+    script.write_text(RESTARTED_SERVER, encoding="utf-8")
+    attempts = tmp_path / "attempts"
+    controller = _controller(
+        tmp_path,
+        server_command=(sys.executable, str(script)),
+        environ={
+            **os.environ,
+            "WG2_TEST_ATTEMPTS": str(attempts),
+            "WG2_TEST_EXIT": str(exit_code),
+        },
+    )
+    try:
+        controller.start()
+        _settled(controller)
+        # The premise: the first child's line really was collected, so the
+        # restart below has something stale to be misled by.
+        _wait_for(lambda: any("first child" in line for line in controller._output))
+        controller.close()
+
+        controller.start()
+        _await_attempt(controller)
+        snapshot = controller.poll()
+    finally:
+        controller.close()
+
+    assert attempts.read_text(encoding="utf-8") == "2"
+    assert snapshot.backend.state is ServiceState.ERROR
+    assert snapshot.exit_code == exit_code
+    assert "no diagnostic output" in snapshot.backend.reason
+    assert "first child" not in snapshot.backend.reason
