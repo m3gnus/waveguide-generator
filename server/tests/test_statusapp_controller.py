@@ -983,7 +983,10 @@ class _Attempts:
 
 
 def _conflicted_controller(
-    tmp_path: Path, attempts: _Attempts, **kwargs: object
+    tmp_path: Path,
+    attempts: _Attempts,
+    controller_class: type[StatusController] = StatusController,
+    **kwargs: object,
 ) -> StatusController:
     script = tmp_path / "lock_conflict.py"
     script.write_text(LOCK_CONFLICT_SERVER, encoding="utf-8")
@@ -999,7 +1002,7 @@ def _conflicted_controller(
         },
     }
     options.update(kwargs)
-    return StatusController(**options)
+    return controller_class(**options)
 
 
 def test_a_lock_holder_that_is_still_leaving_is_waited_out_not_adopted(
@@ -1131,4 +1134,118 @@ def test_the_wait_starts_one_server_per_interval_rather_than_one_per_poll(
         _await_attempt(controller)
         assert attempts.count() == 3
     finally:
+        controller.close()
+
+
+class _LateCollector(StatusController):
+    """An output collector that reads nothing until the controller has seen the exit.
+
+    ``test_a_lock_holder_that_never_serves_is_reported_in_the_end`` failed on
+    windows-latest twice on 2026-09-13 with "Server exited with code 2: no
+    diagnostic output", from a child whose only act is to print the conflict and
+    exit. The line was in the pipe; the thread that collects it had simply not
+    run yet when ``poll()`` read the exit code, which a loaded runner arranges
+    now and then and an idle one practically never. Holding the collector until
+    the exit code has been read is that interleaving on every run, on every
+    platform, with nothing timed.
+    """
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.exit_seen = threading.Event()
+
+    def _collect_output(self, stream) -> None:
+        self.exit_seen.wait()
+        super()._collect_output(stream)
+
+    def release_collector_on_exit(self) -> None:
+        """Open the gate at the moment the controller reads the child's exit code."""
+
+        process = self.process
+        assert process is not None, "no attempt is running"
+        read_exit_code = process.poll
+
+        def poll() -> int | None:
+            code = read_exit_code()
+            if code is not None:
+                self.exit_seen.set()
+            return code
+
+        process.poll = poll  # type: ignore[method-assign]
+
+
+def _drain_without_a_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the drain wait for the collector for as long as it takes.
+
+    The bound exists for a descendant holding the pipe, which these children
+    never have. Left in place it would make the pass condition "the collector
+    ran within two seconds" -- a duration again. Unbounded, the ordering is the
+    whole condition, and a regression is a hang that `pytest.ini`'s
+    faulthandler backstop names, as in `_await_attempt`.
+    """
+
+    monkeypatch.setattr("launchers.statusapp.controller.OUTPUT_DRAIN_TIMEOUT", None)
+
+
+def test_a_lock_conflict_read_before_its_output_arrives_is_still_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exit reason is read from output the collector has finished, not from what it has reached."""
+
+    _drain_without_a_bound(monkeypatch)
+    attempts = _Attempts(tmp_path / "attempts", conflicts=99)
+    controller = _conflicted_controller(
+        tmp_path, attempts, _LateCollector, lock_conflict_timeout=0.0
+    )
+    assert isinstance(controller, _LateCollector)
+    try:
+        controller.start()
+        controller.release_collector_on_exit()
+        _await_attempt(controller)
+        snapshot = controller.poll()
+        assert snapshot.backend.state is ServiceState.ERROR
+        assert "already running" in snapshot.backend.reason
+        assert "no diagnostic output" not in snapshot.backend.reason
+        assert snapshot.exit_code == 2
+    finally:
+        controller.exit_seen.set()
+        controller.close()
+
+
+def test_a_serving_lock_holder_read_before_its_output_arrives_is_still_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same race where it costs the user the application, not just a message.
+
+    The exit-2 message is the only place the running instance's address is
+    named, so adopting it is decided from the same collected output. Read
+    early, a second launch of a perfectly healthy application was reported as
+    a crash with no diagnostic instead of opening the one already running.
+    """
+
+    _drain_without_a_bound(monkeypatch)
+    attempts = _Attempts(tmp_path / "attempts", conflicts=99)
+    controller = _conflicted_controller(
+        tmp_path,
+        attempts,
+        _LateCollector,
+        request_probe=lambda url, _timeout: (
+            (200, b'{"version":"test"}')
+            if url.endswith("/health")
+            else (200, b"<!doctype html><html></html>")
+        ),
+    )
+    assert isinstance(controller, _LateCollector)
+    try:
+        controller.start()
+        controller.release_collector_on_exit()
+        _await_attempt(controller)
+        snapshot = controller.poll()
+        assert snapshot.backend.state is ServiceState.OK, snapshot.backend.reason
+        assert "already-running instance" in snapshot.backend.reason
+        assert snapshot.exit_code == 2
+        assert snapshot.url == "http://127.0.0.1:3199/"
+        assert attempts.count() == 1
+    finally:
+        controller.exit_seen.set()
         controller.close()

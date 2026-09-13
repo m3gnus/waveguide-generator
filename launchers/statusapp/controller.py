@@ -53,6 +53,12 @@ ADOPTED_PROBE_INTERVAL = 30.0
 #: in a way a process handle is not, so a single failure is treated as a
 #: question rather than an answer.
 ADOPTED_RETRY_DELAY = 2.0
+#: The longest ``poll()`` waits, once per exited child, for the output
+#: collector to read that child's last lines. An exited child's pipe is at
+#: end-of-file, so the wait normally ends the moment the collector thread gets
+#: to run. The bound is for a descendant that inherited the pipe and outlives
+#: the child, which would otherwise hold the pipe -- and this wait -- open.
+OUTPUT_DRAIN_TIMEOUT = 2.0
 
 
 class ServiceState(str, Enum):
@@ -341,7 +347,11 @@ class StatusController:
         self._lock = threading.RLock()
         self._process: subprocess.Popen[str] | None = None
         self._output: deque[str] = deque(maxlen=40)
+        # The collector thread appends under this lock alone, never under
+        # ``_lock``, so ``poll()`` can wait for it while holding ``_lock``.
+        self._output_lock = threading.Lock()
         self._output_thread: threading.Thread | None = None
+        self._output_drained = False
         self._temporary_directory: tempfile.TemporaryDirectory[str] | None = None
         self._control_path: Path | None = None
         self._ready_path: Path | None = None
@@ -476,10 +486,33 @@ class StatusController:
             for line in stream:
                 clean = line.strip()
                 if clean:
-                    with self._lock:
+                    with self._output_lock:
                         self._output.append(clean)
         finally:
             stream.close()
+
+    def _output_lines(self) -> list[str]:
+        with self._output_lock:
+            return list(self._output)
+
+    def _drain_output(self) -> None:
+        """Let the collector reach the end of an exited child's output, once.
+
+        Everything ``poll()`` decides about an exited child is read from what it
+        wrote: whether exit 2 names an instance to adopt or wait out, and the
+        reason on the lamps. But the exit and the last line arrive by two
+        routes -- the process handle, read by ``poll()``, and the pipe, read by
+        the collector thread -- and nothing orders them. On a loaded Windows
+        runner the handle won, so a lock conflict whose message was already in
+        the pipe was reported as "no diagnostic output", and a second launch of
+        a healthy application was reported the same way instead of adopted.
+        """
+
+        thread = self._output_thread
+        if thread is None or self._output_drained:
+            return
+        self._output_drained = True
+        thread.join(timeout=OUTPUT_DRAIN_TIMEOUT)
 
     def start(self) -> StatusSnapshot:
         """Run preflight checks and start the owned server process."""
@@ -583,6 +616,7 @@ class StatusController:
                 exit_code=None,
             )
             if process.stdout is not None:
+                self._output_drained = False
                 self._output_thread = threading.Thread(
                     target=self._collect_output,
                     args=(process.stdout,),
@@ -611,7 +645,7 @@ class StatusController:
         prints to stderr before logging exists.
         """
 
-        for line in reversed(self._output):
+        for line in reversed(self._output_lines()):
             if " ERROR " in line or " CRITICAL " in line:
                 return line
             if line.startswith("Waveguide Generator did not start"):
@@ -625,7 +659,8 @@ class StatusController:
             # would attribute the stop to whatever happened to be on stdout.
             detail = "the server shut down without reporting an error"
         elif detail is None:
-            detail = self._output[-1] if self._output else "no diagnostic output"
+            lines = self._output_lines()
+            detail = lines[-1] if lines else "no diagnostic output"
         return f"Server exited with code {return_code}: {detail}. {self._log_location()}"
 
     def _log_location(self) -> str:
@@ -644,7 +679,7 @@ class StatusController:
             return "The full log is in server.log in the Waveguide Generator log folder"
 
     def _already_running_url(self) -> str | None:
-        for line in reversed(self._output):
+        for line in reversed(self._output_lines()):
             match = re.search(r"http://127\.0\.0\.1:\d+/", line)
             if match is not None:
                 return match.group()
@@ -679,7 +714,8 @@ class StatusController:
         process, self._process = self._process, None
         if process is not None and process.stdout is not None:
             process.stdout.close()
-        self._output.clear()
+        with self._output_lock:
+            self._output.clear()
         self._frontend_served = None
         self._cleanup_temporary_directory()
 
@@ -754,6 +790,7 @@ class StatusController:
             return_code = process.poll()
             observing_existing = False
             if return_code is not None:
+                self._drain_output()
                 existing_url = self._already_running_url() if return_code == 2 else None
                 if existing_url is not None and not self._instance_answers(existing_url):
                     waiting = self._await_lock_release()
@@ -1020,7 +1057,7 @@ class StatusController:
         try:
             return consume_update_request(path, data_dir=self._data_dir())
         except UpdateHandoffError as exc:
-            with self._lock:
+            with self._output_lock:
                 self._output.append(str(exc))
             return None
 
