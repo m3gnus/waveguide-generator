@@ -25,6 +25,8 @@ import pytest
 from server.cadlink.operations import PREPARE_AND_SOLVE, request_digest
 from server.cadlink.store import CadLinkStore
 
+from _release_tags import LATEST_RELEASE_TAG, skip_or_fail_missing_tag
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -136,9 +138,11 @@ def _released_server(tag: str, destination: Path) -> Path:
             timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        pytest.skip(f"git could not read {tag} here ({exc}); the frozen reader is tested")
+        skip_or_fail_missing_tag(
+            f"git could not read {tag} here ({exc}); the frozen reader is tested"
+        )
     if archive.returncode != 0:
-        pytest.skip(
+        skip_or_fail_missing_tag(
             f"{tag} is not reachable from this checkout (a CI checkout has one commit and "
             "no tags); the frozen reader is still tested"
         )
@@ -166,7 +170,7 @@ def _run_released(tree: Path, driver: Path, *args: str) -> dict[str, object]:
 def test_v032_reopens_a_registry_this_build_upgraded_and_nothing_is_lost(
     tmp_path: Path,
 ) -> None:
-    tree = _released_server("v0.3.2", tmp_path / "released")
+    tree = _released_server(LATEST_RELEASE_TAG, tmp_path / "released")
     driver = tmp_path / "released_store_driver.py"
     driver.write_text(_RELEASED_STORE_DRIVER, encoding="utf-8")
     db_path = tmp_path / "data" / "db" / "cadlink.db"

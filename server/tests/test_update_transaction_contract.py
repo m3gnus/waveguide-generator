@@ -61,6 +61,8 @@ from server.app import create_app
 from server.platform.paths import ensure_data_layout
 from server.updates.restart import RestartApproval
 
+from _release_tags import RELEASE_TAGS, skip_or_fail_missing_tag
+
 
 REPOSITORY_ROOT = Path(apply_update_module.__file__).resolve().parents[1]
 
@@ -2008,9 +2010,11 @@ def _released_tree(tag: str, destination: Path) -> Path:
             timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        pytest.skip(f"git could not read {tag} here ({exc}); the frozen command line is tested")
+        skip_or_fail_missing_tag(
+            f"git could not read {tag} here ({exc}); the frozen command line is tested"
+        )
     if archive.returncode != 0:
-        pytest.skip(
+        skip_or_fail_missing_tag(
             f"{tag} is not reachable from this checkout (a CI checkout has one commit and "
             "no tags); the frozen command line is still tested"
         )
@@ -2019,7 +2023,7 @@ def _released_tree(tag: str, destination: Path) -> Path:
     return destination
 
 
-@pytest.mark.parametrize("tag", ["v0.3.1", "v0.3.2"])
+@pytest.mark.parametrize("tag", RELEASE_TAGS)
 def test_a_released_launcher_hands_the_candidate_a_command_it_accepts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tag: str
 ) -> None:

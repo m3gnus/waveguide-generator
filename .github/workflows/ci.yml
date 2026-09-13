@@ -200,6 +200,16 @@ jobs:
             paths: scripts/tests
             # macOS, the slowest, sits at ~11m including setup.
             budget: 25
+    # `test_update_transaction_contract.py` and `test_cadlink_store_rollback.py`
+    # (server/tests) run a previously *released* build's own code, extracted
+    # from its tag with `git archive`, against the code under test. The bare
+    # checkout above is shallow and fetches no tags, so without the step below
+    # those tests silently skip -- WG_REQUIRE_RELEASE_TAGS turns that miss into
+    # a failure instead, so a future checkout change cannot re-disable them
+    # unnoticed. server/tests/_release_tags.py is the one place that lists the
+    # tags; this step reads that same list rather than repeating it here.
+    env:
+      WG_REQUIRE_RELEASE_TAGS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -210,6 +220,20 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      - name: Fetch the release tags the frozen-release contract tests need
+        if: matrix.suite == 'server'
+        # git-bash on windows-latest, not the default pwsh, so this one script
+        # works identically on all three runners.
+        shell: bash
+        run: |
+          set -euo pipefail
+          tags=$(python -c "import sys; sys.path.insert(0, 'server/tests'); from _release_tags import RELEASE_TAGS; print(' '.join(RELEASE_TAGS))")
+          for tag in $tags; do
+            # --depth 1 on an explicit tag ref fetches only that commit and its
+            # tree, not its ancestor history -- `git archive` reads a single
+            # commit's tree, so that is already everything it needs.
+            git fetch --no-tags --depth 1 origin "refs/tags/${tag}:refs/tags/${tag}"
+          done
       - name: Committed macOS launcher icon is reproducible
         if: runner.os == 'macOS'
         run: python launchers/macos/generate_icon.py --check
