@@ -995,6 +995,31 @@ async def _imported_preflight_refusal(
     return refusal if isinstance(refusal, str) and refusal else None
 
 
+def _engines_able_to_take(
+    declared: Mapping[str, EngineInfo],
+    order: tuple[str, ...],
+    *,
+    exclude: str,
+    resolved_quadrants: Any,
+    needed_features: set[str],
+) -> list[str]:
+    """The engines, other than ``exclude``, whose declaration takes this return here.
+
+    Declaration, capability and availability only: no adapter is built and no
+    preflight run, so a refusal can name them without solving anything.
+    """
+
+    return [
+        name
+        for name in order
+        if name != exclude
+        and (info := declared.get(name)) is not None
+        and _IMPORTED_GEOMETRY in info.geometry_sources
+        and _imported_capability_blocker(info, resolved_quadrants, needed_features) is None
+        and info.available
+    ]
+
+
 def _imported_request_refusal(request: SolveRequest) -> tuple[str, str] | None:
     """A refusal no engine can lift: the request asks what imported geometry never does."""
 
@@ -1231,12 +1256,27 @@ async def resolve_imported_submission(
             # The snapshot said available; the adapter is the final word,
             # exactly as on the parametric path.
             raise EngineUnavailableError(f"Solve engine '{name}' is unavailable. {reason}")
-        # Capability or preflight: this engine cannot take this return.
+        # Capability or preflight: this engine cannot take this return. The
+        # user's pick is refused, never swapped, and the refusal names the
+        # engines that can take this record here.
         if explicit:
+            able = _engines_able_to_take(
+                declared,
+                order,
+                exclude=name,
+                resolved_quadrants=resolved_quadrants,
+                needed_features=needed_features,
+            )
             raise ImportedSolveRefusal(
-                str(verdict.code),
-                f"engine {name!r} cannot solve this CAD return: {reason}",
-                details={"engine": name, "capable_engines": capable},
+                "imported_engine_unsupported",
+                f"engine {name!r} cannot solve this CAD return: {reason}"
+                + ("" if reason.endswith(".") else ".")
+                + f" Engines that can: {', '.join(able) if able else 'none on this host'}.",
+                details={
+                    "engine": name,
+                    "reason_code": verdict.code,
+                    "capable_engines": able,
+                },
             )
         passed_over.append(f"{name}: {reason}")
         refused.append(f"{verdict.label}: {reason}" + ("" if reason.endswith(".") else "."))
@@ -1273,6 +1313,9 @@ async def resolve_imported_submission(
     metadata["solver_plan"] = {
         "formulation": "full-3d",
         "engine": selected,
+        # The user's own choice, kept beside what it resolved to: recalling a
+        # run must restore this, not the engine AUTO happened to pick.
+        "requested": requested,
         "reason": reason,
         "eligibility_reasons": passed_over,
     }

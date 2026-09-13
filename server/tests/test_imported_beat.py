@@ -359,6 +359,14 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
     assert [list(payload["channels"]) for _, payload in streamed] == [
         ["left"]
     ] * 3 + [["right"]] * 3
+    # Channels arrive one after another: the live count is the current
+    # channel's, out of the sweep, and the envelope's frequency axis comes
+    # from the first channel only, so each frequency appears once.
+    provisional = [payload["metadata"]["provisional"] for _, payload in streamed]
+    assert [item["completed_frequency_count"] for item in provisional] == [1, 2, 3, 1, 2, 3]
+    assert {item["expected_frequency_count"] for item in provisional} == {3}
+    assert [item["channel"]["index"] for item in provisional] == [1, 1, 1, 2, 2, 2]
+    assert ["frequencies" in payload for _, payload in streamed] == [True] * 3 + [False] * 3
     assert all(
         payload["channels"][channel]["metadata"]["observation_frame_basis"]["axis"]
         == [1.0, 0.0, 0.0]
@@ -484,6 +492,31 @@ def test_returns_beat_cannot_solve_are_refused_with_the_reason_named(
     refusal = beat.BeatEngine("cpu").imported_preflight(record, msh_text)
 
     assert refusal is not None and expected in refusal
+
+
+def test_an_unused_node_on_the_negative_side_does_not_refuse_a_half() -> None:
+    """Only the nodes a triangle uses are the surface BEAT mirrors."""
+
+    orphan = MESH.replace("$Nodes\n4\n", "$Nodes\n5\n").replace(
+        "$EndNodes", "5 -0.05 0 0\n$EndNodes"
+    )
+
+    assert beat.BeatEngine("cpu").imported_preflight(_record(planes=["x0"], msh_text=orphan), orphan) is None
+
+
+def test_a_one_tag_triangle_row_is_written_with_both_tags() -> None:
+    """BEAT reads a triangle's tag only from a row carrying two tags."""
+
+    one_tag = MESH.replace("1 2 2 1 1 1 2 3", "1 2 1 1 1 2 3").replace(
+        "2 2 2 101 2 1 2 4", "2 2 1 101 1 2 4"
+    )
+
+    rows = _elements(beat_imported._Gmsh22Mesh.parse(one_tag).text(frozenset({101})))
+    text = beat_imported._Gmsh22Mesh.parse(one_tag).text(frozenset({101}))
+
+    assert rows == {1: 1, 2: 2, 3: 1, 4: 1}
+    assert "\n1 2 2 1 1 1 2 3\n" in text
+    assert "\n2 2 2 2 2 1 2 4\n" in text
 
 
 def test_a_full_domain_accepts_any_right_handed_anchor_frame() -> None:

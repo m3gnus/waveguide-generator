@@ -2762,9 +2762,14 @@ def test_imported_explicit_beat_cpu_refuses_a_y_only_half_by_name(tmp_path: Path
     with pytest.raises(ImportedSolveRefusal) as caught:
         asyncio.run(_submit_record(tmp_path, registry, "beat-cpu", _y_only_half()))
 
-    assert caught.value.reason_code == "imported_symmetry_unsupported_by_engine"
+    # The user's pick is refused with the reason and the engines that can
+    # take this return here -- never swapped for one of them.
+    assert caught.value.reason_code == "imported_engine_unsupported"
     assert "y-only half" in str(caught.value)
     assert caught.value.details["engine"] == "beat-cpu"
+    assert caught.value.details["reason_code"] == "imported_symmetry_unsupported_by_engine"
+    assert caught.value.details["capable_engines"] == ["metal"]
+    assert "Engines that can: metal." in str(caught.value)
 
 
 def test_imported_auto_passes_beat_cpu_over_for_a_y_only_half(tmp_path: Path) -> None:
@@ -2832,7 +2837,9 @@ def test_a_passive_cardioid_return_goes_only_to_an_engine_that_declares_it() -> 
                 request, _DeclaredRegistry(metal_with_campaign, _beat_cpu())
             )
         )
-    assert caught.value.reason_code == "imported_feature_unsupported_by_engine"
+    assert caught.value.reason_code == "imported_engine_unsupported"
+    assert caught.value.details["reason_code"] == "imported_feature_unsupported_by_engine"
+    assert caught.value.details["capable_engines"] == ["metal"]
     assert "passive-cardioid" in str(caught.value)
 
     request.options.engine = "auto"
@@ -2895,8 +2902,12 @@ def test_the_beat_adapter_preflight_refuses_a_return_at_submission(tmp_path: Pat
             )
         )
 
-    assert caught.value.reason_code == "imported_return_unsupported_by_engine"
+    assert caught.value.reason_code == "imported_engine_unsupported"
+    assert caught.value.details["reason_code"] == "imported_return_unsupported_by_engine"
+    # Metal is unavailable in this fixture, so nothing here can take it.
+    assert caught.value.details["capable_engines"] == []
     assert "would move that plane" in str(caught.value)
+    assert "Engines that can: none on this host." in str(caught.value)
 
 
 # The imported plan: every engine's verdict on one ingested return, read by the

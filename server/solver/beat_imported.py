@@ -269,12 +269,27 @@ class _Gmsh22Mesh:
             elements=self.elements,
         )
 
+    def triangles(self) -> tuple[np.ndarray, np.ndarray]:
+        """Every triangle's node rows (into ``coordinates``) and physical tag."""
+
+        index = {node_id: row for row, node_id in enumerate(self.node_ids)}
+        corners: list[list[int]] = []
+        tags: list[int] = []
+        for parts in self.elements:
+            if len(parts) < 4 or parts[1] != "2":
+                continue
+            tag_count = int(parts[2])
+            if tag_count < 1 or len(parts) < 6 + tag_count:
+                continue
+            corners.append([index[node] for node in parts[3 + tag_count : 6 + tag_count]])
+            tags.append(int(parts[3]))
+        return (
+            np.asarray(corners, dtype=np.int64).reshape(-1, 3),
+            np.asarray(tags, dtype=np.int64),
+        )
+
     def triangle_tags(self) -> set[int]:
-        return {
-            int(parts[3])
-            for parts in self.elements
-            if len(parts) > 3 and parts[1] == "2" and int(parts[2]) >= 1
-        }
+        return {int(tag) for tag in self.triangles()[1]}
 
     def axial_orientation(self) -> dict[int, tuple[float, float]]:
         """Each physical tag's area-weighted ``n . z`` and its total area.
@@ -286,22 +301,16 @@ class _Gmsh22Mesh:
         mesh is already in BEAT's frame, where the axis is +z.
         """
 
-        index = {node_id: row for row, node_id in enumerate(self.node_ids)}
-        sums: dict[int, tuple[float, float]] = {}
-        for parts in self.elements:
-            if len(parts) < 4 or parts[1] != "2":
-                continue
-            tag_count = int(parts[2])
-            if tag_count < 1 or len(parts) < 6 + tag_count:
-                continue
-            corners = self.coordinates[
-                [index[node] for node in parts[3 + tag_count : 6 + tag_count]]
-            ]
-            cross = np.cross(corners[1] - corners[0], corners[2] - corners[0])
-            tag = int(parts[3])
-            projected, area = sums.get(tag, (0.0, 0.0))
-            sums[tag] = (projected + float(cross[2]), area + float(np.linalg.norm(cross)))
-        return sums
+        corners, tags = self.triangles()
+        if not len(tags):
+            return {}
+        points = self.coordinates[corners]
+        cross = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0])
+        areas = np.linalg.norm(cross, axis=1)
+        return {
+            int(tag): (float(cross[tags == tag, 2].sum()), float(areas[tags == tag].sum()))
+            for tag in np.unique(tags)
+        }
 
     def text(self, velocity_tags: frozenset[int]) -> str:
         """The mesh with ``velocity_tags`` driven and every other tag rigid."""
@@ -324,7 +333,12 @@ class _Gmsh22Mesh:
         for parts in self.elements:
             if len(parts) > 3 and int(parts[2]) >= 1:
                 tag = VELOCITY_TAG if int(parts[3]) in velocity_tags else RIGID_TAG
-                parts = (*parts[:3], str(tag), *parts[4:])
+                if parts[1] == "2" and parts[2] == "1":
+                    # BEAT reads a triangle's physical tag only from a row with
+                    # both tags; a one-tag row would be skipped as no triangle.
+                    parts = (parts[0], "2", "2", str(tag), str(tag), *parts[4:])
+                else:
+                    parts = (*parts[:3], str(tag), *parts[4:])
             rows.append(" ".join(parts))
         rows.append("$EndElements")
         return "\n".join(rows) + "\n"
@@ -406,9 +420,14 @@ def _signed_sum(parts: Sequence[tuple[float, Any]]) -> Any:
     return combined
 
 
-def _check_kept_side(coordinates: np.ndarray, native_plane: str | None) -> None:
-    """BEAT solves the positive side of every mirror; refuse the other side."""
+def _check_kept_side(mesh: _Gmsh22Mesh, native_plane: str | None) -> None:
+    """BEAT solves the positive side of every mirror; refuse the other side.
 
+    Only nodes a triangle uses are the surface; an orphan node is not.
+    """
+
+    corners, _tags = mesh.triangles()
+    coordinates = mesh.coordinates[np.unique(corners)] if len(corners) else mesh.coordinates[:0]
     for index in _MIRROR_AXES.get(native_plane, ()):
         minimum = float(np.min(coordinates[:, index])) if len(coordinates) else 0.0
         if minimum < -MIRROR_PLANE_TOLERANCE_M:
@@ -432,7 +451,7 @@ def imported_beat_preflight(record: Mapping[str, Any], msh_text: str) -> str | N
         symmetry = imported_symmetry_from_cut_planes(imported_domain_planes(record))
         frame = beat_imported_frame(record, symmetry.native_plane)
         mesh = _Gmsh22Mesh.parse(msh_text).rotated(frame.rotation)
-        _check_kept_side(mesh.coordinates, symmetry.native_plane)
+        _check_kept_side(mesh, symmetry.native_plane)
     except ImportedBeatRefusal as exc:
         return str(exc)
     except ValueError as exc:
@@ -639,7 +658,7 @@ def solve_imported_beat_from_msh_text(
     try:
         frame = beat_imported_frame(record, native_plane)
         mesh = _Gmsh22Mesh.parse(msh_text).rotated(frame.rotation)
-        _check_kept_side(mesh.coordinates, native_plane)
+        _check_kept_side(mesh, native_plane)
     except ImportedBeatRefusal as exc:
         raise BeatUnavailable(str(exc)) from exc
     present_tags = mesh.triangle_tags()
@@ -707,7 +726,11 @@ def solve_imported_beat_from_msh_text(
         mouth_center=np.asarray(frame.mouth_center, dtype=float),
         source_center=np.asarray(frame.source_center, dtype=float),
     )
-    orientation = mesh.axial_orientation()
+    orientation = (
+        mesh.axial_orientation()
+        if any(channel.motion == "axial" for channel in geometry.drive_channels)
+        else {}
+    )
     channel_groups = {
         channel.id: _drive_groups(channel_tags[channel.id], channel.motion, orientation)
         for channel in geometry.drive_channels
@@ -717,7 +740,6 @@ def solve_imported_beat_from_msh_text(
     total_work = max(
         1, frequency_count * sum(len(groups) for groups in channel_groups.values())
     )
-    streamed_frame_count = frequency_count * channel_count
 
     def stage_status(message: str) -> None:
         if stage_callback and message:
@@ -771,6 +793,7 @@ def solve_imported_beat_from_msh_text(
                 _sign: float = sign,
                 _last: bool = last_group,
                 _earlier: dict[int, dict[str, Any]] = earlier,
+                _channel_index: int = channel_index,
                 _channel: Any = channel,
                 _context: SolverContext = channel_context,
                 _holder: dict[str, Any] = holder,
@@ -819,23 +842,31 @@ def solve_imported_beat_from_msh_text(
                 channel_metadata["observation_frame_basis"] = dict(frame_basis)
                 revision = next_revision[0]
                 next_revision[0] += 1
-                result_callback(
-                    revision,
-                    {
-                        "result_kind": "multi_channel",
-                        "result_contract_version": 2,
-                        "frequencies": [float(frequency_hz)],
-                        "channels": {_channel.id: channel_response},
-                        "channel_order": channel_order,
-                        "metadata": {
-                            "geometry_type": "imported",
-                            "provisional": {
-                                "completed_frequency_count": revision + 1,
-                                "expected_frequency_count": streamed_frame_count,
+                frame: dict[str, Any] = {
+                    "result_kind": "multi_channel",
+                    "result_contract_version": 2,
+                    "channels": {_channel.id: channel_response},
+                    "channel_order": channel_order,
+                    "metadata": {
+                        "geometry_type": "imported",
+                        # Channels arrive one after another here, so the
+                        # count is the current channel's, out of the sweep.
+                        "provisional": {
+                            "completed_frequency_count": int(index) + 1,
+                            "expected_frequency_count": frequency_count,
+                            "channel": {
+                                "id": _channel.id,
+                                "index": _channel_index + 1,
+                                "count": channel_count,
                             },
                         },
                     },
-                )
+                }
+                if _channel_index == 0:
+                    # The envelope's frequency axis is the sweep's: each
+                    # frequency once, from the first channel's frames.
+                    frame["frequencies"] = [float(frequency_hz)]
+                result_callback(revision, frame)
                 return True
 
             try:
