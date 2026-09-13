@@ -13,10 +13,11 @@ result, and what a recorded outcome means.
 This page and that module must agree. Change them together.
 
 **Status of this cut.** The store, the identity rules and the vocabulary below are in
-place, and the solve-command outcome ledger already lives in the store. Per-command
-delivery files, WG-produced Fusion markers and the adapter's reconciliation are later
-steps that build on this contract. A later step adds a field to a request only under a
-new digest version.
+place. The solve-command outcome ledger lives in the store, and Fusion's solve commands
+are delivered through it in both of their formats (see "Solve-command delivery").
+WG-produced Fusion markers, WG advertising that it reads per-command files, and the
+adapter's reconciliation are later steps that build on this contract. A later step adds
+a field to a request only under a new digest version.
 
 ## Operation kinds
 
@@ -212,22 +213,109 @@ These rules bind every adapter that mutates a CAD document for WG.
   delivery of a different kind under that ID is a conflict.
 - **The upgrade is one-way.** An older WG refuses a schema-12 `cadlink.db`.
 
+## Solve-command delivery
+
+A Fusion solve command reaches WG in one of two formats. Both resolve to the same
+operation: kind `prepare_and_solve`, with the `commandId` as its operation ID.
+
+| Format | File, under `<data dir>/ipc/wglink/` | `schemaVersion` |
+| --- | --- | --- |
+| Per-command file | `.wg-solve-requests/<commandId>.json` | 2 |
+| Legacy single slot | `.wg-solve-request.json` | 1 |
+
+- **Fields.** Both formats carry `target: "waveguide-generator"`, `commandId`,
+  `returnId`, `bundlePath`, `manifestSha256` and `requestedAt`. A per-command file may
+  also carry `operationId`. When present it must equal `commandId`.
+- **Digest.** The `prepare_and_solve` digest above, over `return_id`, `bundle_path` and
+  `manifest_sha256`. `requestedAt` and the file's name and folder are transport. One
+  command delivered in both formats therefore has one digest, and is one operation.
+- **Writing a per-command file.** A producer stages it under a name that starts with `.`
+  or does not end in `.json`, then renames it into place. WG reads only `*.json` names
+  that do not start with `.`.
+- **The file name is the producer's convention.** WG identifies a command by the
+  `commandId` inside the file, not by the file's name.
+- **Files WG cannot read.** WG leaves a file where it is, and acts on nothing in it,
+  when it is malformed, lacks a required field, has a `schemaVersion` WG does not know,
+  or has an `operationId` that differs from its `commandId`. A claim WG cannot read is
+  left the same way. WG looks at such a file again on every poll, and a newer WG may
+  understand it.
+
+**Consuming a delivery.** WG takes each file in four steps:
+
+1. **Claim** it: rename it to a unique `.wg-solve-claim-<random>.json` in the same
+   folder. A producer that writes the same path afterwards writes a new file, which the
+   next poll takes. If the rename fails, WG tries again on the next poll. That happens
+   when the file is already gone, or on Windows while its writer still holds it open.
+2. **Read** the claim. What the rename took is the request.
+3. **Persist** it: accept the operation, or recover the one it repeats, as in the
+   delivery table above.
+4. **Delete** the claim. WG deletes only the file it consumed, and only after the store
+   holds the operation. If the delete fails, the next poll recovers the same operation
+   from the claim that is left.
+
+A claim left by an interrupted poll is finished by a later one. Within one poll,
+deliveries are taken oldest first: by `requestedAt` compared as text, then by the file's
+modification time, then by its name. `requestedAt` is optional, and a file without one
+is taken first.
+
+**What polling answers.** `GET /api/cadlink/solve-command` first moves delivered files
+into the store, oldest first, until one is owed an answer of its own. Then:
+
+- **A delivery owed its own answer is answered first**, one per poll; later files wait
+  for the next poll. A delivery of a command whose outcome already stands replays that
+  outcome.
+- **A different request under a held ID is refused.** The file is removed and the
+  refusal is logged. The refusal is also the answer when the operation holding the ID
+  is finished, or is not a solve. While that operation is an unfinished solve, it is
+  not: a client takes an answer under a command ID as the end of that command, so the
+  unfinished operation stays the one handed out.
+- **Otherwise the answer is the oldest unfinished solve operation**, in the order WG
+  accepted them. A command that waits on the user stays first in line, and a later
+  request never takes its place. This is not "latest wins".
+- **The command is rebuilt from the stored inputs.** Its `requestedAt` is when WG
+  accepted it, because the producer's timestamp is transport and is not stored.
+- **The checks against the workspace still apply** before a command is handed out. A
+  command that fails one is `rejected`, with its reason as the operation's outcome.
+
+**Mixed versions.** WG negotiates on its side:
+
+- **WG accepts both formats.** An add-in that writes only the legacy slot keeps working.
+  An add-in writes per-command files only when WG advertises that it reads them, and
+  otherwise keeps writing the legacy slot. WG does not advertise it yet; that is a
+  later step.
+- **The legacy slot keeps its write-side race.** A producer that writes it replaces any
+  older command WG has not consumed yet, and that older command is lost before WG sees
+  it. Claiming by rename closes the race on WG's side only: a command written after
+  WG's claim always survives. The race ends when the producer writes per-command files.
+- **WG never runs one command twice.** The same `commandId` in both formats, with the
+  same request, is one operation. With a different request it is a conflict, refused as
+  above.
+- **Refusing old add-ins instead** would mean refusing legacy-slot deliveries at the
+  consuming step. The rest of the contract is unchanged by that choice.
+
 ## Solve-command compatibility
 
 `GET /api/cadlink/solve-command` and `POST /api/cadlink/solve-command/outcome` keep
 their response shapes. The outcome route records the first terminal outcome, and
-repeating the same outcome is idempotent.
+repeating the same outcome is idempotent. Its `cleared` field is true once an outcome
+stands for the command, so WG no longer holds it as unfinished.
 
-A conflicting report is not recorded. That covers a different outcome, and a request
-file that names the same command id with a different request. The route answers with
-the outcome that stands, or with a refusal of the conflicting request, plus
-`"conflict": true`. A client then retires its copy instead of retrying a report that can
-never be recorded. The stored operation is left untouched.
+An outcome is recorded on the operation the store holds under its command ID. A
+per-command file or legacy slot still waiting under that ID does not change which
+request the outcome belongs to; the next poll refuses or recovers that file as a
+delivery in its own right. Only a command the store has never seen takes its request
+identity from a file WG still holds. With neither, the outcome is kept as a legacy row.
+
+A conflicting report is not recorded. That covers a different outcome from the one that
+stands. The route answers with the outcome that stands plus `"conflict": true`. A
+client then retires its copy instead of retrying a report that can never be recorded.
+The stored operation is left untouched.
 
 Polling applies the same rule before it replays an outcome or hands a command out. A
-request file whose id already names a different request, or a different kind of
-operation, is answered with a refusal and removed. The operation that holds the id is
-neither rewritten nor used as the answer.
+delivery whose ID already names a different request, or a different kind of operation,
+is refused and removed; "What polling answers" says when that refusal is also the
+answer. The operation that holds the ID is never rewritten, and its result is never the
+answer to that delivery.
 
 **Mixed versions.** An add-in that predates this contract checks the baseline before it
 looks for evidence. A lost acknowledgement from such an add-in can therefore still

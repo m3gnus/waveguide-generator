@@ -730,8 +730,12 @@ class CadLinkStore:
         kind: str | None = None,
         states: Iterable[str] | None = None,
         limit: int = 200,
+        oldest_first: bool = False,
     ) -> list[dict[str, Any]]:
-        """Operations, most recently changed first."""
+        """Operations, most recently changed first, or oldest accepted first.
+
+        ``oldest_first`` is acceptance order, the order solve commands wait in.
+        """
 
         self.initialize()
         clauses: list[str] = []
@@ -747,10 +751,17 @@ class CadLinkStore:
             parameters.extend(wanted)
         where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
         bounded_limit = max(1, min(int(limit), 1000))
+        # Acceptance order is insertion order. Rows are never deleted and the
+        # store never runs VACUUM, so rowid keeps it exactly; created_at has
+        # one-second resolution and follows the wall clock.
+        order = (
+            "ORDER BY rowid ASC "
+            if oldest_first
+            else "ORDER BY updated_at DESC, operation_id DESC "
+        )
         with self._lock:
             rows = self._connect().execute(
-                f"SELECT * FROM cad_operations {where}"
-                "ORDER BY updated_at DESC, operation_id DESC LIMIT ?",
+                f"SELECT * FROM cad_operations {where}{order}LIMIT ?",
                 (*parameters, bounded_limit),
             ).fetchall()
         return [dict(row) for row in rows]

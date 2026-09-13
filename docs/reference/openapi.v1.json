@@ -8245,7 +8245,7 @@
     },
     "/api/cadlink/solve-command/outcome": {
       "post": {
-        "description": "Record what happened to a CAD solve command and retire its marker.\n\nOnly terminal outcomes are recorded. A blocked command keeps its marker so\nthe user can satisfy the gate and run the same request.",
+        "description": "Record what happened to a CAD solve command.\n\nOnly terminal outcomes are recorded. A blocked command stays unfinished so\nthe user can satisfy the gate and run the same request.",
         "operationId": "post_solve_command_outcome_api_cadlink_solve_command_outcome_post",
         "requestBody": {
           "content": {

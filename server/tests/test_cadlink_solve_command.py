@@ -19,7 +19,6 @@ from server.cadlink.operations import request_digest
 from server.cadlink.solve_command import (
     SOLVE_REQUEST_FILENAME,
     SolveOutcomeConflict,
-    clear_solve_command,
     ledger_entry,
     read_solve_command,
     record_outcome,
@@ -145,16 +144,6 @@ def test_an_accepted_command_replays_its_job_instead_of_submitting_again(
     assert read_solve_command(data_dir) is None
 
 
-def test_clearing_only_removes_the_command_it_names(data_dir) -> None:
-    _write_command(data_dir, "wgreturn/speaker.wgreturn", "sha256:a", command_id="cmd-1")
-
-    # A newer command must survive an acknowledgement for the older one.
-    assert clear_solve_command(data_dir, "cmd-other") is False
-    assert read_solve_command(data_dir).command_id == "cmd-1"
-    assert clear_solve_command(data_dir, "cmd-1") is True
-    assert read_solve_command(data_dir) is None
-
-
 def test_a_blocked_command_is_not_written_to_the_ledger(store) -> None:
     # Only terminal outcomes are recordable; the route maps 'blocked' to a
     # no-op so the user can satisfy the gate and run the same request.
@@ -256,8 +245,10 @@ def test_polling_refuses_a_conflicting_delivery_and_leaves_the_operation(
 
     result = _pending_solve_command(data_dir, workspace.resolve(), store)
 
-    assert result["outcome"]["state"] == "refused"
-    assert "different request" in result["outcome"]["reason"]
+    # The delivery is refused and removed. The operation holding the id is
+    # unfinished, so it stays the one handed out: a refusal under its id would
+    # end it for the client.
+    assert (result["command"]["manifestSha256"], result["outcome"]) == (stored_manifest, None)
     assert read_solve_command(data_dir) is None
     assert _raw(data_dir, "cmd-1") == before
 
@@ -290,15 +281,17 @@ def test_polling_never_hands_out_a_different_request_under_a_held_id(
     # An unfinished operation holds cmd-1 for another manifest; the bundle on
     # disk is valid for the new request, which would otherwise be actionable.
     _accept_as_delivered(store, data_dir, "sha256:" + "a" * 64)
-    before = _raw(data_dir, "cmd-1")
+    held_digest = store.get_operation("cmd-1")["request_digest"]
     _write_command(data_dir, "wgreturn/speaker.wgreturn", _write_bundle(workspace))
 
     result = _pending_solve_command(data_dir, workspace.resolve(), store)
 
-    assert result["outcome"]["state"] == "refused"
-    assert "different request" in result["outcome"]["reason"]
+    # The different request is never handed out. The held one is, checked
+    # against the bundle on disk, and refused for its own mismatch.
+    assert result["command"]["manifestSha256"] == "sha256:" + "a" * 64
+    assert "changed after Fusion asked" in result["outcome"]["reason"]
     assert read_solve_command(data_dir) is None
-    assert _raw(data_dir, "cmd-1") == before
+    assert store.get_operation("cmd-1")["request_digest"] == held_digest
 
 
 def test_polling_refuses_a_command_id_that_names_another_kind(tmp_path, data_dir, store) -> None:
@@ -335,6 +328,9 @@ def test_a_long_command_id_still_round_trips(tmp_path, data_dir, store) -> None:
         store, long_id, state="accepted", job_id="job-1", command=read_solve_command(data_dir)
     )
     assert entry["jobId"] == "job-1"
+    # Polling consumed the marker; Fusion delivering the command again gets
+    # the recorded outcome back.
+    _write_command(data_dir, "wgreturn/speaker.wgreturn", digest, command_id=long_id)
     assert _pending_solve_command(data_dir, workspace.resolve(), store)["outcome"] == entry
 
 

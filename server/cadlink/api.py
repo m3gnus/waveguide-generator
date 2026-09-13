@@ -48,10 +48,10 @@ from .fusion_return import publish_return_request
 from .solve_command import (
     PendingSolveCommand,
     SolveOutcomeConflict,
-    clear_solve_command,
-    conflicting_delivery,
+    collect_solve_deliveries,
+    delivered_command,
     ledger_entry,
-    read_solve_command,
+    oldest_pending_solve_command,
     record_outcome,
 )
 from .ingest import (
@@ -889,30 +889,26 @@ def _refuse_solve_command(
 def _pending_solve_command(
     data_dir: Path, workspace_root: Path, store: CadLinkStore
 ) -> dict[str, Any]:
-    """The CAD-authored solve command, validated against what is on disk.
+    """The oldest CAD-authored solve command still owed an answer.
 
-    A marker is only actionable when it names a bundle inside this workspace
+    Delivered files are first moved into the operation store. A delivery owed
+    an answer of its own is answered first: a different request under a held
+    command id is refused, and a command whose outcome already stands replays
+    it, never a second submission. Otherwise the oldest unfinished operation is
+    handed out; a later request never takes its place.
+
+    A command is only actionable when it names a bundle inside this workspace
     whose manifest still hashes to what the add-in recorded when it wrote the
-    command. Anything else is reported as a refusal with its reason rather than
-    silently ignored, because CAD is waiting on an answer either way.
+    command. Anything else is refused with its reason rather than silently
+    ignored, because CAD is waiting on an answer either way.
     """
 
-    command = read_solve_command(data_dir)
+    answer = collect_solve_deliveries(data_dir, store)
+    if answer is not None:
+        return answer
+    command = oldest_pending_solve_command(store)
     if command is None:
         return {"command": None}
-    conflict = conflicting_delivery(store, command)
-    if conflict is not None:
-        # The id already names a different request: refuse this delivery and
-        # retire its file. The operation holding the id is neither rewritten
-        # nor used as the answer.
-        clear_solve_command(data_dir, command.command_id)
-        return {"command": command.payload(), "outcome": conflict}
-    recorded = ledger_entry(store, command.command_id)
-    if recorded is not None:
-        # Terminal already: replay must surface the same answer, never a
-        # second submission. Retire markers left by older server versions too.
-        clear_solve_command(data_dir, command.command_id)
-        return {"command": command.payload(), "outcome": recorded}
     try:
         segments = _path_segments(command.bundle_path, "bundlePath")
         if not segments or segments[0].casefold() != "wgreturn":
@@ -924,7 +920,6 @@ def _pending_solve_command(
         manifest = (bundle_path / "wgreturn.json").read_bytes()
     except (ValueError, OSError) as exc:
         outcome = _refuse_solve_command(store, command, str(exc))
-        clear_solve_command(data_dir, command.command_id)
         return {
             "command": command.payload(),
             "outcome": outcome,
@@ -933,7 +928,6 @@ def _pending_solve_command(
     if listing and listing[0]["bundlePath"] != command.bundle_path:
         reason = "Superseded by a newer return from Fusion."
         outcome = _refuse_solve_command(store, command, reason)
-        clear_solve_command(data_dir, command.command_id)
         return {
             "command": command.payload(),
             "outcome": outcome,
@@ -948,7 +942,6 @@ def _pending_solve_command(
             "Send it again from Fusion."
         )
         outcome = _refuse_solve_command(store, command, reason)
-        clear_solve_command(data_dir, command.command_id)
         return {
             "command": command.payload(),
             "outcome": outcome,
@@ -974,11 +967,16 @@ async def get_solve_command(request: Request) -> dict[str, Any]:
 def _report_solve_outcome(
     store: CadLinkStore, data_dir: Path, payload: SolveCommandOutcome
 ) -> dict[str, Any]:
-    marker = read_solve_command(data_dir)
-    # The request keeps its identity only while WG still holds its file.
-    command = marker if marker is not None and marker.command_id == payload.command_id else None
+    # A stored operation carries its own request identity, and a file still
+    # waiting under its id is a delivery in its own right, refused or
+    # recovered by the next poll. Only a command the store has never seen
+    # takes its identity from the request file WG still holds; with neither,
+    # the outcome is kept as a legacy row.
+    command = None
+    if store.get_operation(payload.command_id) is None:
+        command = delivered_command(data_dir, payload.command_id)
     try:
-        return record_outcome(
+        entry = record_outcome(
             store,
             payload.command_id,
             state=payload.state,
@@ -990,16 +988,18 @@ def _report_solve_outcome(
         # The first terminal outcome stands. Answering with it, rather than an
         # error, lets the client retire its copy instead of retrying a report
         # that can never be recorded.
-        return {**exc.existing, "conflict": True}
+        entry = {**exc.existing, "conflict": True}
+    # Cleared: WG no longer holds the command as unfinished.
+    return {**entry, "cleared": ledger_entry(store, payload.command_id) is not None}
 
 
 @router.post("/solve-command/outcome")
 async def post_solve_command_outcome(
     payload: SolveCommandOutcome, request: Request
 ) -> dict[str, Any]:
-    """Record what happened to a CAD solve command and retire its marker.
+    """Record what happened to a CAD solve command.
 
-    Only terminal outcomes are recorded. A blocked command keeps its marker so
+    Only terminal outcomes are recorded. A blocked command stays unfinished so
     the user can satisfy the gate and run the same request.
     """
 
@@ -1007,9 +1007,7 @@ async def post_solve_command_outcome(
     if payload.state == "blocked":
         return {"state": "blocked", "cleared": False}
     store: CadLinkStore = request.app.state.cadlink_store
-    entry = await asyncio.to_thread(_report_solve_outcome, store, data_dir, payload)
-    cleared = await asyncio.to_thread(clear_solve_command, data_dir, payload.command_id)
-    return {**entry, "cleared": cleared}
+    return await asyncio.to_thread(_report_solve_outcome, store, data_dir, payload)
 
 
 def _ingest_error(exc: Exception) -> HTTPException:

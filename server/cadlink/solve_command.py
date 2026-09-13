@@ -3,26 +3,36 @@
 The intent is deliberately not part of ``wgreturn.json``: that manifest is
 immutable geometry evidence, and WG re-reads returns whenever its coordinator
 remounts or a listing revision arrives. A flag inside the evidence would be
-re-observed and re-solved. A separate marker carrying its own command id can be
-recorded as spent exactly once, which is what makes the automatic path safe.
+re-observed and re-solved. A separate request carrying its own command id can
+be recorded as spent exactly once, which is what makes the automatic path safe.
 
-Terminal outcomes live in the CAD operation store: one ``prepare_and_solve``
-operation per command id (``cad_operations`` in ``cadlink.db``). The ledger
-helpers below are that store's view, in the shape these routes have always
-returned. A command whose gates block is not terminal: it stays available so
-the user can acknowledge findings and run it.
+Delivery. Fusion writes a command either into the legacy single slot
+(``.wg-solve-request.json``) or into its own file,
+``.wg-solve-requests/<commandId>.json``. Both resolve to one operation
+identity, the command id. Each delivered file is claimed by renaming it, read,
+persisted as a ``prepare_and_solve`` operation in the CAD operation store
+(``cad_operations`` in ``cadlink.db``), and only then deleted. From then on the
+store, not the file, is what WG hands out and records outcomes against. The
+ledger helpers below are the store's view, in the shape these routes have
+always returned. A command whose gates block is not terminal: it stays
+available so the user can acknowledge findings and run it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
+import os
 from pathlib import Path
+import threading
 from typing import TYPE_CHECKING, Any, Mapping
+import uuid
 
 from .identity import utc_now
 from .operations import (
     ACCEPTED,
+    CLAIMABLE_STATES,
     PREPARE_AND_SOLVE,
     REJECTED,
     TERMINAL_STATES,
@@ -34,22 +44,44 @@ if TYPE_CHECKING:
     from .store import CadLinkStore
 
 
+# The legacy single slot. A producer that predates per-command files replaces
+# it wholesale, so an unconsumed older command there can still be overwritten.
 SOLVE_REQUEST_FILENAME = ".wg-solve-request.json"
+LEGACY_SCHEMA_VERSION = 1
+# One file per command, named <commandId>.json. A producer stages a file under
+# a name starting with "." (or not ending in .json) and renames it into place.
+SOLVE_REQUESTS_DIRECTORY = ".wg-solve-requests"
+SCHEMA_VERSION = 2
+# A delivery is claimed by renaming it to this prefix in its own folder before
+# it is read, so a producer writing the same path afterwards writes a new file
+# rather than one the consumer is about to delete.
+CLAIM_PREFIX = ".wg-solve-claim-"
 # The JSON outcome ledger of earlier versions. The store imports it once and
 # renames it; nothing reads it after that.
 LEDGER_FILENAME = "solve-commands.json"
 IPC_SUBDIRECTORY = Path("ipc") / "wglink"
 # How many recent outcomes ``read_ledger`` returns.
 LEDGER_LIMIT = 200
+# How many unfinished operations one look for the oldest may skip over.
+_PENDING_SCAN = 50
 
 _LEDGER_STATES = {"accepted": ACCEPTED, "refused": REJECTED}
+
+logger = logging.getLogger(__name__)
+# One consumer per process at a time. Files are still claimed by rename,
+# because the producer writing them is another process.
+_DELIVERY_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
 class PendingSolveCommand:
-    """A CAD-authored request to prepare and solve one exact return bundle."""
+    """A CAD-authored request to prepare and solve one exact return bundle.
 
-    marker_path: Path
+    ``marker_path`` is the file it was read from, or None once it is rebuilt
+    from the operation store.
+    """
+
+    marker_path: Path | None
     command_id: str
     return_id: str
     bundle_path: str
@@ -92,25 +124,27 @@ def legacy_ledger_path(data_dir: Path) -> Path:
     return ipc_folder(Path(data_dir)) / LEDGER_FILENAME
 
 
-def read_solve_command(data_dir: Path) -> PendingSolveCommand | None:
-    """The pending command, or None when there is none or it is malformed."""
-
-    marker = ipc_folder(data_dir) / SOLVE_REQUEST_FILENAME
-    try:
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return None
+def _command_from_payload(
+    payload: object, path: Path, *, schema_version: int
+) -> PendingSolveCommand | None:
     if not isinstance(payload, Mapping):
         return None
-    if payload.get("schemaVersion") != 1 or payload.get("target") != "waveguide-generator":
+    if (
+        payload.get("schemaVersion") != schema_version
+        or payload.get("target") != "waveguide-generator"
+    ):
         return None
     command_id = payload.get("commandId")
     bundle_path = payload.get("bundlePath")
     manifest_sha256 = payload.get("manifestSha256")
     if not all(isinstance(value, str) and value for value in (command_id, bundle_path, manifest_sha256)):
         return None
+    # A request may name its operation, and then it must be the command id:
+    # otherwise WG cannot tell which identity the producer meant.
+    if payload.get("operationId", command_id) != command_id:
+        return None
     return PendingSolveCommand(
-        marker_path=marker,
+        marker_path=path,
         command_id=str(command_id),
         return_id=str(payload.get("returnId") or ""),
         bundle_path=str(bundle_path),
@@ -119,15 +153,108 @@ def read_solve_command(data_dir: Path) -> PendingSolveCommand | None:
     )
 
 
-def clear_solve_command(data_dir: Path, command_id: str) -> bool:
-    """Remove the marker only when it still names this exact command."""
-
-    current = read_solve_command(data_dir)
-    if current is None or current.command_id != command_id:
-        return False
+def _read_command(path: Path, *, schema_version: int) -> PendingSolveCommand | None:
     try:
-        current.marker_path.unlink()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return _command_from_payload(payload, path, schema_version=schema_version)
+
+
+def read_solve_command(data_dir: Path) -> PendingSolveCommand | None:
+    """The command in the legacy single slot, left where it is.
+
+    None when there is none or it is malformed.
+    """
+
+    return _read_command(
+        ipc_folder(data_dir) / SOLVE_REQUEST_FILENAME, schema_version=LEGACY_SCHEMA_VERSION
+    )
+
+
+@dataclass(frozen=True)
+class _Delivery:
+    path: Path
+    claimed: bool
+    schema_version: int
+    command: PendingSolveCommand
+    age: tuple[str, int, str]
+
+
+def _files(directory: Path) -> list[Path]:
+    try:
+        return [path for path in directory.iterdir() if path.is_file()]
     except OSError:
+        return []
+
+
+def _delivery(path: Path, *, claimed: bool, schema_version: int) -> _Delivery | None:
+    command = _read_command(path, schema_version=schema_version)
+    if command is None:
+        return None
+    try:
+        modified = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    return _Delivery(
+        path, claimed, schema_version, command, (command.requested_at, modified, path.name)
+    )
+
+
+def _deliveries(data_dir: Path) -> list[_Delivery]:
+    """Every solve command waiting on disk, oldest first.
+
+    That is the legacy slot, the per-command files and any claim an
+    interrupted poll left behind. A file WG cannot read as a solve command --
+    malformed, a newer schema, or a producer's staging file -- is left where it
+    is. Age is the requested time, then the file's modification time.
+    """
+
+    folder = ipc_folder(data_dir)
+    requests = folder / SOLVE_REQUESTS_DIRECTORY
+    found: list[_Delivery | None] = []
+    for directory, version in ((folder, LEGACY_SCHEMA_VERSION), (requests, SCHEMA_VERSION)):
+        for path in _files(directory):
+            if path.name.startswith(CLAIM_PREFIX) and path.suffix == ".json":
+                found.append(_delivery(path, claimed=True, schema_version=version))
+    found.append(
+        _delivery(
+            folder / SOLVE_REQUEST_FILENAME, claimed=False, schema_version=LEGACY_SCHEMA_VERSION
+        )
+    )
+    for path in _files(requests):
+        if not path.name.startswith(".") and path.suffix == ".json":
+            found.append(_delivery(path, claimed=False, schema_version=SCHEMA_VERSION))
+    return sorted((item for item in found if item is not None), key=lambda item: item.age)
+
+
+def _claim(path: Path) -> Path | None:
+    """Take a delivery by renaming it; None means try again on the next poll.
+
+    The rename fails when the file is already gone (another consumer took it)
+    or, on Windows, while its writer still holds it open.
+    """
+
+    claim = path.with_name(f"{CLAIM_PREFIX}{uuid.uuid4().hex}.json")
+    try:
+        os.rename(path, claim)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.debug("Solve command %s is not claimable yet: %s", path.name, exc)
+        return None
+    return claim
+
+
+def _acknowledge(path: Path) -> bool:
+    """Delete a consumed delivery. False leaves it for the next poll to recover."""
+
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        logger.warning("Could not delete the consumed solve command %s: %s", path.name, exc)
         return False
     return True
 
@@ -135,7 +262,7 @@ def clear_solve_command(data_dir: Path, command_id: str) -> bool:
 def solve_command_request(command: PendingSolveCommand) -> tuple[dict[str, Any], dict[str, Any]]:
     """The operation target and inputs a solve command names.
 
-    ``requestedAt`` and the marker's location are transport, not identity.
+    ``requestedAt`` and the file's location are transport, not identity.
     """
 
     return prepare_and_solve_request(
@@ -176,21 +303,102 @@ def _delivery_conflict(row: Mapping[str, Any], digest: str | None) -> dict[str, 
     return None
 
 
-def conflicting_delivery(
-    store: CadLinkStore, command: PendingSolveCommand
-) -> dict[str, Any] | None:
-    """Refuse a delivered command whose id already names a different request.
+def _persist(store: CadLinkStore, command: PendingSolveCommand) -> dict[str, Any] | None:
+    """Accept a delivered command, or recover the operation it repeats.
 
-    Returns the refusal to answer the delivery with, or None when the id is
-    free or names this same request. The stored operation is never touched,
-    and its own outcome is never the answer to a different request.
+    Returns the answer this delivery is owed on its own, or None when the
+    operation it names waits to be handed out: the outcome that already stands,
+    or a refusal when its id already names a different request that is finished
+    or is not a solve.
     """
 
-    row = store.get_operation(command.command_id)
-    if row is None:
-        return None
     target, inputs = solve_command_request(command)
-    return _delivery_conflict(row, request_digest(PREPARE_AND_SOLVE, target, inputs))
+    digest = request_digest(PREPARE_AND_SOLVE, target, inputs)
+    row, result = store.accept_operation(
+        command.command_id, PREPARE_AND_SOLVE, digest, target, inputs
+    )
+    refusal = _delivery_conflict(row, digest) if result == "conflict" else None
+    if refusal is not None:
+        # The stored operation is untouched and its result is not this
+        # delivery's answer. The refusal is logged whatever is answered.
+        logger.warning("Refused solve command %r: %s", command.command_id, refusal["reason"])
+        if row["kind"] == PREPARE_AND_SOLVE and row["state"] not in TERMINAL_STATES:
+            # A client takes an answer under a command id as that command's
+            # end. While the operation holding the id is an unfinished solve,
+            # a refusal answer would strand it; it stays the one handed out.
+            return None
+        return refusal
+    if row["state"] in TERMINAL_STATES:
+        return _entry(row)
+    return None
+
+
+def collect_solve_deliveries(data_dir: Path, store: CadLinkStore) -> dict[str, Any] | None:
+    """Move delivered solve commands into the operation store, oldest first.
+
+    Each file is claimed by rename, read, persisted and only then deleted. A
+    newer command written to the same slot meanwhile therefore survives, and a
+    poll interrupted after a claim leaves the claim for the next poll to finish.
+
+    Returns the answer owed to one delivery on its own -- the replay of an
+    outcome that already stands, or a refusal of a different request under an
+    id whose operation is finished or is not a solve -- in the solve-command
+    response shape, or None. It stops
+    at that answer, so later files wait for the next poll instead of losing
+    theirs.
+    """
+
+    with _DELIVERY_LOCK:
+        for delivery in _deliveries(data_dir):
+            claim = delivery.path if delivery.claimed else _claim(delivery.path)
+            if claim is None:
+                continue
+            # What the rename took is the request, not what was read before.
+            command = _read_command(claim, schema_version=delivery.schema_version)
+            if command is None:
+                continue
+            answer = _persist(store, command)
+            # A delete that fails leaves the claim for the next poll, which
+            # recovers the same operation and answers it then.
+            if _acknowledge(claim) and answer is not None:
+                return {"command": command.payload(), "outcome": answer}
+    return None
+
+
+def oldest_pending_solve_command(store: CadLinkStore) -> PendingSolveCommand | None:
+    """The oldest accepted solve command that has no outcome yet.
+
+    Solve requests stay separate and wait in acceptance order: a later request
+    never takes an earlier one's place. The command is rebuilt from the
+    operation's stored inputs. Its ``requestedAt`` is when WG accepted it,
+    because the producer's timestamp is transport and is not stored.
+    """
+
+    rows = store.list_operations(
+        kind=PREPARE_AND_SOLVE, states=CLAIMABLE_STATES, oldest_first=True, limit=_PENDING_SCAN
+    )
+    for row in rows:
+        if row["legacy"] or not row["inputs_json"]:
+            continue
+        inputs = json.loads(row["inputs_json"])
+        return PendingSolveCommand(
+            marker_path=None,
+            command_id=str(row["operation_id"]),
+            return_id=str(inputs["return_id"]),
+            bundle_path=str(inputs["bundle_path"]),
+            manifest_sha256=str(inputs["manifest_sha256"]),
+            requested_at=str(row["created_at"]),
+        )
+    return None
+
+
+def delivered_command(data_dir: Path, command_id: str) -> PendingSolveCommand | None:
+    """The oldest request on disk under this command id, left where it is."""
+
+    for delivery in _deliveries(data_dir):
+        if delivery.command.command_id == command_id:
+            return delivery.command
+    return None
 
 
 def _is_terminal_solve(row: Mapping[str, Any] | None) -> bool:
