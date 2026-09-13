@@ -46,7 +46,10 @@ from server.workspace.archive import (
 from .fusion_status import fusion_process_running, read_fusion_status
 from .fusion_return import publish_return_request
 from .solve_command import (
+    PendingSolveCommand,
+    SolveOutcomeConflict,
     clear_solve_command,
+    conflicting_delivery,
     ledger_entry,
     read_solve_command,
     record_outcome,
@@ -869,7 +872,23 @@ async def request_fusion_return(
     }
 
 
-def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, Any]:
+def _refuse_solve_command(
+    store: CadLinkStore, command: PendingSolveCommand, reason: str
+) -> dict[str, Any]:
+    """Refuse a command WG found unusable, or replay the outcome that stands."""
+
+    try:
+        return record_outcome(
+            store, command.command_id, state="refused", reason=reason, command=command,
+        )
+    except SolveOutcomeConflict as exc:
+        # Another poll recorded first; the first terminal outcome is the answer.
+        return exc.existing
+
+
+def _pending_solve_command(
+    data_dir: Path, workspace_root: Path, store: CadLinkStore
+) -> dict[str, Any]:
     """The CAD-authored solve command, validated against what is on disk.
 
     A marker is only actionable when it names a bundle inside this workspace
@@ -881,7 +900,14 @@ def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, An
     command = read_solve_command(data_dir)
     if command is None:
         return {"command": None}
-    recorded = ledger_entry(data_dir, command.command_id)
+    conflict = conflicting_delivery(store, command)
+    if conflict is not None:
+        # The id already names a different request: refuse this delivery and
+        # retire its file. The operation holding the id is neither rewritten
+        # nor used as the answer.
+        clear_solve_command(data_dir, command.command_id)
+        return {"command": command.payload(), "outcome": conflict}
+    recorded = ledger_entry(store, command.command_id)
     if recorded is not None:
         # Terminal already: replay must surface the same answer, never a
         # second submission. Retire markers left by older server versions too.
@@ -897,9 +923,7 @@ def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, An
         _strictly_inside(bundle_path, workspace_root, "bundlePath")
         manifest = (bundle_path / "wgreturn.json").read_bytes()
     except (ValueError, OSError) as exc:
-        outcome = record_outcome(
-            data_dir, command.command_id, state="refused", reason=str(exc),
-        )
+        outcome = _refuse_solve_command(store, command, str(exc))
         clear_solve_command(data_dir, command.command_id)
         return {
             "command": command.payload(),
@@ -908,9 +932,7 @@ def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, An
     listing = _return_listing(workspace_root)
     if listing and listing[0]["bundlePath"] != command.bundle_path:
         reason = "Superseded by a newer return from Fusion."
-        outcome = record_outcome(
-            data_dir, command.command_id, state="refused", reason=reason,
-        )
+        outcome = _refuse_solve_command(store, command, reason)
         clear_solve_command(data_dir, command.command_id)
         return {
             "command": command.payload(),
@@ -925,9 +947,7 @@ def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, An
             "The return bundle changed after Fusion asked WG to solve it. "
             "Send it again from Fusion."
         )
-        outcome = record_outcome(
-            data_dir, command.command_id, state="refused", reason=reason,
-        )
+        outcome = _refuse_solve_command(store, command, reason)
         clear_solve_command(data_dir, command.command_id)
         return {
             "command": command.payload(),
@@ -942,11 +962,35 @@ async def get_solve_command(request: Request) -> dict[str, Any]:
     selected = workspace.selected_path()
     if selected is None:
         return {"command": None}
+    store: CadLinkStore = request.app.state.cadlink_store
     return await asyncio.to_thread(
         _pending_solve_command,
         Path(request.app.state.data_dir),
         selected.resolve(),
+        store,
     )
+
+
+def _report_solve_outcome(
+    store: CadLinkStore, data_dir: Path, payload: SolveCommandOutcome
+) -> dict[str, Any]:
+    marker = read_solve_command(data_dir)
+    # The request keeps its identity only while WG still holds its file.
+    command = marker if marker is not None and marker.command_id == payload.command_id else None
+    try:
+        return record_outcome(
+            store,
+            payload.command_id,
+            state=payload.state,
+            job_id=payload.job_id,
+            reason=payload.reason,
+            command=command,
+        )
+    except SolveOutcomeConflict as exc:
+        # The first terminal outcome stands. Answering with it, rather than an
+        # error, lets the client retire its copy instead of retrying a report
+        # that can never be recorded.
+        return {**exc.existing, "conflict": True}
 
 
 @router.post("/solve-command/outcome")
@@ -962,14 +1006,8 @@ async def post_solve_command_outcome(
     data_dir = Path(request.app.state.data_dir)
     if payload.state == "blocked":
         return {"state": "blocked", "cleared": False}
-    entry = await asyncio.to_thread(
-        record_outcome,
-        data_dir,
-        payload.command_id,
-        state=payload.state,
-        job_id=payload.job_id,
-        reason=payload.reason,
-    )
+    store: CadLinkStore = request.app.state.cadlink_store
+    entry = await asyncio.to_thread(_report_solve_outcome, store, data_dir, payload)
     cleared = await asyncio.to_thread(clear_solve_command, data_dir, payload.command_id)
     return {**entry, "cleared": cleared}
 

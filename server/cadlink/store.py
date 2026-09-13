@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 import hashlib
+import json
+import logging
+import os
 from pathlib import Path
 import sqlite3
 import threading
@@ -21,6 +24,29 @@ from .identity import (
     truncated_design_hash,
     utc_now,
 )
+from .operations import (
+    ACCEPTED,
+    CLAIMABLE_STATES,
+    DIGEST_VERSION,
+    PREPARE_AND_SOLVE,
+    PROCESSING,
+    RECEIVED,
+    REJECTED,
+    TERMINAL_STATES,
+    canonical_json,
+    check_transition,
+    normalize_request,
+    request_digest,
+    require_kind,
+    validate_outcome,
+)
+from .solve_command import legacy_ledger_path
+
+
+logger = logging.getLogger(__name__)
+
+# 12 adds cad_operations and folds the solve-command JSON ledger into it.
+SCHEMA_VERSION = 12
 
 
 _SCHEMA = (
@@ -137,6 +163,38 @@ _SCHEMA = (
       updated_at TEXT NOT NULL
     )
     """,
+    # Schema 12: one row per CAD operation, the durable half of
+    # docs/architecture/CAD-OPERATIONS.md. The vocabulary (kind, state,
+    # reason) is validated in server/cadlink/operations.py rather than by
+    # CHECK, so later stages can extend it without rebuilding the table; the
+    # CHECKs hold structure only. A legacy row predates the contract: its
+    # digest, target and inputs stay NULL rather than being reconstructed.
+    """
+    CREATE TABLE IF NOT EXISTS cad_operations (
+      operation_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      request_digest TEXT,
+      digest_version INTEGER,
+      target_json TEXT,
+      inputs_json TEXT,
+      attempt_generation INTEGER NOT NULL DEFAULT 0 CHECK (attempt_generation >= 0),
+      state TEXT NOT NULL,
+      outcome_json TEXT,
+      job_id TEXT,
+      reason TEXT,
+      legacy INTEGER NOT NULL DEFAULT 0 CHECK (legacy IN (0, 1)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK (
+        legacy = 1 OR (
+          request_digest IS NOT NULL AND digest_version IS NOT NULL
+          AND target_json IS NOT NULL AND inputs_json IS NOT NULL
+        )
+      )
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS cad_operations_by_kind_state "
+    "ON cad_operations(kind, state, updated_at)",
 )
 
 
@@ -222,12 +280,152 @@ def _allocate_archive_stem(
 _EXPORT_BUILD_LOCKS_GUARD = threading.Lock()
 _EXPORT_BUILD_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 
+_LEGACY_SOLVE_STATES = {"accepted": ACCEPTED, "refused": REJECTED}
+
+
+def _require_operation_id(value: object) -> str:
+    # Opaque, producer-chosen and stored as TEXT: any non-empty string, so
+    # every command id earlier versions accepted still has a home.
+    if not isinstance(value, str) or not value:
+        raise ValueError("operation_id must be a non-empty string")
+    return value
+
+
+def _require_generation(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("attempt generation must be a non-negative integer")
+    return value
+
+
+def _read_legacy_solve_ledger(path: Path) -> Mapping[str, Any] | None:
+    """The commands in an earlier version's JSON ledger, or None to leave it."""
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        # Held open elsewhere, typically on Windows. The file stays the only
+        # copy until an import commits, so waiting for the next open is safe.
+        logger.warning(
+            "Could not read %s; its import waits for the next start: %s", path.name, exc
+        )
+        return None
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        logger.warning(
+            "%s is not valid JSON; it is left in place and nothing is imported", path.name
+        )
+        return None
+    commands = payload.get("commands") if isinstance(payload, Mapping) else None
+    if not isinstance(commands, Mapping) or payload.get("schemaVersion", 1) != 1:
+        logger.warning("%s is not a recognised ledger; it is left in place", path.name)
+        return None
+    return commands
+
+
+def _legacy_solve_row(
+    command_id: object, entry: object, now: str
+) -> tuple[object, ...] | None:
+    """One ledger entry as a legacy operation row, or None to skip it.
+
+    Only what the ledger recorded is kept. It never recorded a request digest,
+    target or inputs, so those stay NULL rather than being rebuilt from
+    today's data.
+    """
+
+    if not isinstance(command_id, str) or not command_id or not isinstance(entry, Mapping):
+        return None
+    raw_state = entry.get("state")
+    state = _LEGACY_SOLVE_STATES.get(raw_state) if isinstance(raw_state, str) else None
+    if state is None:
+        return None
+    job_id = entry.get("jobId")
+    reason = entry.get("reason")
+    at = entry.get("at")
+    recorded_at = at if isinstance(at, str) and at else now
+    return (
+        command_id,
+        PREPARE_AND_SOLVE,
+        state,
+        canonical_json({"message": reason}) if isinstance(reason, str) and reason else None,
+        job_id if isinstance(job_id, str) and job_id else None,
+        recorded_at,
+        recorded_at,
+    )
+
+
+def _import_legacy_solve_ledger(conn: sqlite3.Connection, path: Path | None) -> bool:
+    """Fold the JSON ledger into cad_operations inside the caller's transaction.
+
+    Returns True when the file was read and should be retired once that
+    transaction commits. A row the store already holds always wins, so a
+    rerun -- after an interruption, or of a ledger an older build wrote since
+    -- never duplicates or overwrites anything.
+    """
+
+    if path is None:
+        return False
+    commands = _read_legacy_solve_ledger(path)
+    if commands is None:
+        return False
+    now = utc_now()
+    imported = skipped = 0
+    for command_id, entry in commands.items():
+        row = _legacy_solve_row(command_id, entry, now)
+        if row is None:
+            skipped += 1
+            continue
+        cursor = conn.execute(
+            """
+            INSERT INTO cad_operations (
+              operation_id, kind, state, outcome_json, job_id,
+              created_at, updated_at, attempt_generation, legacy
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)
+            ON CONFLICT (operation_id) DO NOTHING
+            """,
+            row,
+        )
+        imported += cursor.rowcount
+    if skipped:
+        logger.warning("Skipped %d malformed entries in %s", skipped, path.name)
+    logger.info("Imported %d solve-command outcomes from %s", imported, path.name)
+    return True
+
+
+def _retire_legacy_solve_ledger(path: Path) -> None:
+    """Rename an imported ledger. Runs only after its import committed."""
+
+    target = path.with_name(path.name + ".migrated")
+    if target.exists():
+        # An earlier import already left its copy; keep it.
+        stamp = utc_now().replace("-", "").replace(":", "")
+        target = path.with_name(f"{path.name}.migrated-{stamp}")
+    try:
+        os.replace(path, target)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning(
+            "Imported %s but could not rename it; the next start retries: %s",
+            path.name,
+            exc,
+        )
+
 
 class CadLinkStore:
     """Thread-safe, transaction-per-write CAD-link registry."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(
+        self, db_path: str | Path, *, legacy_solve_ledger: str | Path | None = None
+    ) -> None:
         self.db_path = Path(db_path)
+        # An earlier version's JSON solve-command ledger, imported on open.
+        # Only ``for_data_dir`` knows where one lives.
+        self.legacy_solve_ledger = (
+            Path(legacy_solve_ledger) if legacy_solve_ledger is not None else None
+        )
         self._lock = threading.RLock()
         self._local = threading.local()
         self._connections: set[sqlite3.Connection] = set()
@@ -238,7 +436,11 @@ class CadLinkStore:
 
     @classmethod
     def for_data_dir(cls, data_dir: str | Path) -> CadLinkStore:
-        return cls(data_paths(data_dir).db / "cadlink.db")
+        paths = data_paths(data_dir)
+        return cls(
+            paths.db / "cadlink.db",
+            legacy_solve_ledger=legacy_ledger_path(paths.root),
+        )
 
     def initialize(self) -> None:
         if self._initialized:
@@ -247,7 +449,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
+            if version < 0 or version > SCHEMA_VERSION:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -323,8 +525,235 @@ class CadLinkStore:
             # Schema 11 also adds export_reservations (created by _SCHEMA
             # above): exports are reserved in a short transaction and finalised
             # after the bundle is built outside the registry lock.
-            conn.execute("PRAGMA user_version = 11")
+            #
+            # Schema 12 adds cad_operations (also created by _SCHEMA) and
+            # folds the solve-command JSON ledger into it in this same
+            # transaction, so an interruption rolls both back and the next
+            # open reruns both. The file is renamed only after the commit.
+            imported_ledger = _import_legacy_solve_ledger(conn, self.legacy_solve_ledger)
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._initialized = True
+        if imported_ledger and self.legacy_solve_ledger is not None:
+            _retire_legacy_solve_ledger(self.legacy_solve_ledger)
+
+    # -- CAD operations: docs/architecture/CAD-OPERATIONS.md -------------------
+    #
+    # Each method is one short transaction. None is held open across Fusion or
+    # mesher work.
+
+    def accept_operation(
+        self,
+        operation_id: str,
+        kind: str,
+        digest: str,
+        target: Mapping[str, Any] | None,
+        inputs: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        """Persist a delivered request, or recover the operation it repeats.
+
+        Returns the stored row and ``'created'``, ``'recovered'`` or
+        ``'conflict'``. A conflict -- the same id with a different digest or
+        kind -- leaves the stored operation untouched; the caller rejects the
+        delivery and must not answer it with that operation's result. A legacy
+        row has no digest to compare, so a delivery of its kind recovers it by
+        id alone, and the row is never rewritten.
+        """
+
+        _require_operation_id(operation_id)
+        normalized_target, normalized_inputs = normalize_request(kind, target, inputs)
+        if digest != request_digest(kind, normalized_target, normalized_inputs):
+            raise ValueError(
+                "request digest does not match the kind, target and inputs it names"
+            )
+        self.initialize()
+        now = utc_now()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO cad_operations (
+                      operation_id, kind, request_digest, digest_version,
+                      target_json, inputs_json, attempt_generation, state,
+                      legacy, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?)
+                    """,
+                    (
+                        operation_id,
+                        kind,
+                        digest,
+                        DIGEST_VERSION,
+                        canonical_json(normalized_target),
+                        canonical_json(normalized_inputs),
+                        RECEIVED,
+                        now,
+                        now,
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                ).fetchone()
+                result = "created"
+            elif str(row["kind"]) != kind:
+                result = "conflict"
+            elif int(row["legacy"]) == 1 or row["request_digest"] == digest:
+                result = "recovered"
+            else:
+                result = "conflict"
+        return dict(row), result
+
+    def claim(self, operation_id: str, expected_generation: int) -> int | None:
+        """Start an attempt: a conditional update on the current generation.
+
+        Returns the new generation, or None when another consumer claimed
+        first, the generation is stale, or the operation cannot be claimed
+        (terminal, ``recovery_required`` or unknown).
+        """
+
+        generation = _require_generation(expected_generation)
+        self.initialize()
+        claimable = sorted(CLAIMABLE_STATES)
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_operations SET attempt_generation = attempt_generation + 1, "
+                "state = ?, updated_at = ? "
+                "WHERE operation_id = ? AND attempt_generation = ? "
+                f"AND state IN ({', '.join('?' for _ in claimable)})",
+                (PROCESSING, utc_now(), operation_id, generation, *claimable),
+            )
+        return generation + 1 if cursor.rowcount == 1 else None
+
+    def record_outcome(
+        self,
+        operation_id: str,
+        generation: int,
+        state: str,
+        *,
+        job_id: str | None = None,
+        reason: str | None = None,
+        outcome: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Record what the attempt holding ``generation`` found.
+
+        Conditional on that generation and on the operation not being
+        terminal: an obsolete attempt, or a second terminal outcome, changes
+        nothing and gets None. A job id, once attached, is never cleared.
+        """
+
+        attempt = _require_generation(generation)
+        outcome_json = validate_outcome(operation_id, state, reason=reason, outcome=outcome)
+        if job_id is not None and (not isinstance(job_id, str) or not job_id):
+            raise ValueError("job_id must be a non-empty string")
+        self.initialize()
+        reconciled = outcome is not None and outcome.get("reconciled") is True
+        with self._lock, self._transaction() as conn:
+            current = conn.execute(
+                "SELECT kind, state, attempt_generation FROM cad_operations "
+                "WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if (
+                current is None
+                or int(current["attempt_generation"]) != attempt
+                or current["state"] in TERMINAL_STATES
+            ):
+                return None
+            # The read and the write share this IMMEDIATE transaction, so no
+            # other writer can move the row between the check and the update.
+            check_transition(
+                str(current["kind"]), str(current["state"]), state, reconciled=reconciled
+            )
+            conn.execute(
+                "UPDATE cad_operations SET state = ?, job_id = COALESCE(?, job_id), "
+                "reason = ?, outcome_json = ?, updated_at = ? WHERE operation_id = ?",
+                (state, job_id, reason, outcome_json, utc_now(), operation_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return self._row(row)
+
+    def record_legacy_outcome(
+        self,
+        operation_id: str,
+        *,
+        kind: str,
+        state: str,
+        job_id: str | None = None,
+        outcome: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Keep a terminal outcome whose request WG does not hold.
+
+        Without the request its digest, target and inputs are unknown, so the
+        row is legacy and they stay NULL. An existing row always wins; the
+        flag says whether this call created the row.
+        """
+
+        _require_operation_id(operation_id)
+        require_kind(kind)
+        if state not in TERMINAL_STATES:
+            raise ValueError(f"a legacy outcome is terminal, not {state!r}")
+        outcome_json = validate_outcome(operation_id, state, outcome=outcome)
+        if job_id is not None and (not isinstance(job_id, str) or not job_id):
+            raise ValueError("job_id must be a non-empty string")
+        self.initialize()
+        now = utc_now()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO cad_operations (
+                  operation_id, kind, state, outcome_json, job_id,
+                  created_at, updated_at, attempt_generation, legacy
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)
+                ON CONFLICT (operation_id) DO NOTHING
+                """,
+                (operation_id, kind, state, outcome_json, job_id, now, now),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return dict(row), cursor.rowcount == 1
+
+    def get_operation(self, operation_id: str) -> dict[str, Any] | None:
+        # Initializing first is what imports an earlier version's ledger
+        # before anyone asks it a question.
+        self.initialize()
+        return self._read_one(
+            "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+        )
+
+    def list_operations(
+        self,
+        *,
+        kind: str | None = None,
+        states: Iterable[str] | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Operations, most recently changed first."""
+
+        self.initialize()
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if kind is not None:
+            clauses.append("kind = ?")
+            parameters.append(kind)
+        if states is not None:
+            wanted = sorted(set(states))
+            if not wanted:
+                return []
+            clauses.append(f"state IN ({', '.join('?' for _ in wanted)})")
+            parameters.extend(wanted)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        bounded_limit = max(1, min(int(limit), 1000))
+        with self._lock:
+            rows = self._connect().execute(
+                f"SELECT * FROM cad_operations {where}"
+                "ORDER BY updated_at DESC, operation_id DESC LIMIT ?",
+                (*parameters, bounded_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
         return self._read_one(
