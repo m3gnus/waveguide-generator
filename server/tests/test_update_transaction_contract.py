@@ -15,6 +15,7 @@ pass itself off as the behaviour under test.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import hashlib
 from io import BytesIO
 import json
@@ -60,7 +61,17 @@ from launchers.statusapp.controller import (
 from fastapi import FastAPI
 
 from server.app import create_app
+from server.engines.registry import EngineInfo, EngineRegistry
+from server.jobs.models import SolveRequest
+from server.jobs.runtime import (
+    QUIT_INTERRUPTED_MESSAGE,
+    QUIT_INTERRUPTED_STAGE_MESSAGE,
+    RESTART_RECOVERY_MESSAGE,
+    JobRuntime,
+)
+from server.jobs.store import JobStore
 from server.platform.paths import ensure_data_layout
+from server.solver.base import EngineRunResult
 from server.updates.api import mount_updates
 from server.updates.restart import RestartApproval
 from server.updates.service import (
@@ -2522,3 +2533,310 @@ def test_a_retry_needs_its_confirmation_and_lifts_nothing_it_does_not_name(
     assert "not held back" in json.loads(raw)["detail"]
     assert _completion_record(install.data_dir, install.resources) == before
     assert update.get_status()["suppressed"] == failed
+
+
+# ---------------------------------------------------------------------------
+# Contract §4.3: a job the update restart ends
+# ---------------------------------------------------------------------------
+
+#: What a job the update restart ended reads as (``server/jobs/runtime.py``).
+UPDATE_RESTART_STAGE = "Ended by the update restart"
+
+
+def _solve_request() -> SolveRequest:
+    """A small solve for the engines below, built as ``test_jobs_runtime.py`` builds one."""
+
+    return SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "L": 120,
+                "a": 45,
+                "mesh": {"wall_thickness": 0},
+                "enclosure": {"depth": 0},
+                "simulation": {
+                    "f1": 250,
+                    "f2": 8000,
+                    "num_frequencies": 2,
+                    "sim_type": "freestanding",
+                },
+            },
+            "options": {"engine": "bempp", "stage_delay_ms": 0},
+        }
+    )
+
+
+class _GatedSolve:
+    """An engine whose solves wait for ``release``, checking for cancellation as they wait."""
+
+    name = "bempp"
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.solves = 0
+
+    async def run(self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any) -> Any:
+        del stage_cb
+
+        def solve() -> Any:
+            self.solves += 1
+            self.started.set()
+            while not self.release.wait(timeout=0.01):
+                cancel_cb()
+            return EngineRunResult(
+                results={
+                    "frequencies": [500.0],
+                    "directivity": {},
+                    "spl_on_axis": {
+                        "frequencies": [500.0],
+                        "spl": [90.0],
+                        "phase_degrees": [0.0],
+                    },
+                    "impedance": {"frequencies": [500.0], "real": [1.0], "imaginary": [0.0]},
+                    "di": {"frequencies": [500.0], "di": {}},
+                    "metadata": {"engine": "fake-bempp"},
+                },
+                msh_text="$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+                mesh_stats={"vertex_count": 3, "triangle_count": 1},
+            )
+
+        return await asyncio.to_thread(solve)
+
+
+def _registry_for(engine: Any) -> EngineRegistry:
+    return EngineRegistry(
+        detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+        factory=lambda _name: engine,
+    )
+
+
+def _status(runtime: JobRuntime, job_id: str) -> str | None:
+    row = runtime.store.get_job_row(job_id)
+    return None if row is None else str(row["status"])
+
+
+async def _until(predicate: Any, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out waiting for the job runtime")
+        await asyncio.sleep(0.01)
+
+
+FINISHED = {"complete", "error", "cancelled"}
+
+
+def test_a_job_the_update_restart_ends_reads_as_ended_by_the_update_restart(
+    tmp_path: Path,
+) -> None:
+    """Contract §4.3: stopped at a checkpoint by the restart, it names the restart, not Quit."""
+
+    engine = _GatedSolve()
+    approval = RestartApproval()
+    database = tmp_path / "jobs.db"
+
+    async def scenario() -> str:
+        runtime = JobRuntime(
+            JobStore(database),
+            engine_registry=_registry_for(engine),
+            restart_approval=approval,
+        )
+        job_id = await runtime.submit(_solve_request())
+        if not await asyncio.to_thread(engine.started.wait, 5.0):
+            pytest.fail("set-up: the solve never started")
+        approval.approve("v2.0.1")  # the handoff request is written
+        try:
+            await asyncio.wait_for(runtime.shutdown(), timeout=5.0)  # the launcher stops it
+        finally:
+            engine.release.set()
+        return job_id
+
+    job_id = asyncio.run(scenario())
+    inspection = JobStore(database)
+    inspection.initialize()
+    try:
+        row = inspection.get_job_row(job_id)
+    finally:
+        inspection.close()
+
+    assert row is not None
+    assert row["status"] == "cancelled"
+    assert row["stage_message"] == UPDATE_RESTART_STAGE
+    assert "update restart" in row["error_message"]
+    assert "Quit" not in row["error_message"]
+
+
+def test_a_job_the_restart_cut_off_reads_as_ended_by_it_and_as_quit_to_an_older_start(
+    tmp_path: Path,
+) -> None:
+    """Contract §4.3, when the shutdown budget ends a job before its next checkpoint.
+
+    The mark is written with the cancellation request, so the next start reads
+    the reason. A start that knows only the Quit reason -- a release that
+    predates this mark, which an automatic rollback reopens -- reads the Quit
+    mark written beside it: a stop, not a crash.
+    """
+
+    request = _solve_request().model_dump(mode="json")
+
+    def marked_store(name: str) -> JobStore:
+        store = JobStore(tmp_path / name)
+        store.initialize()
+        now = datetime.now().isoformat()
+        store.create_job(
+            {
+                "id": "cut-off",
+                "status": "running",
+                "created_at": now,
+                "updated_at": now,
+                "queued_at": now,
+                "started_at": now,
+                "progress": 0.3,
+                "stage": "solve",
+                "config_json": request,
+                "config_summary_json": {"formula_type": "OSSE"},
+                "task_metadata": {},
+            }
+        )
+        marked = store.request_cancellation(
+            "cut-off",
+            {"stage": "cancelling", "cancellation_requested": True},
+            {"stage": "cancelling", "message": "Update restart requested"},
+            interrupted_by_quit=True,
+            interrupted_by_update_restart=True,
+        )
+        if marked is None:
+            pytest.fail("set-up: the running job was not marked")
+        return store
+
+    async def next_start() -> dict[str, Any]:
+        runtime = JobRuntime(marked_store("jobs.db"))
+        await runtime.start()
+        row = await runtime.get_job("cut-off")
+        await runtime.shutdown()
+        return row
+
+    after_the_update = asyncio.run(next_start())
+    older = marked_store("older.db")
+    try:
+        older.recover_on_startup(
+            RESTART_RECOVERY_MESSAGE,
+            quit_stage_message=QUIT_INTERRUPTED_STAGE_MESSAGE,
+            quit_error_message=QUIT_INTERRUPTED_MESSAGE,
+        )
+        after_a_rollback = older.get_job_row("cut-off")
+    finally:
+        older.close()
+
+    assert after_the_update["status"] == "cancelled"
+    assert after_the_update["stage_message"] == UPDATE_RESTART_STAGE
+    assert "update restart" in after_the_update["error_message"]
+    assert after_a_rollback is not None
+    assert after_a_rollback["status"] == "cancelled"
+    assert after_a_rollback["error_message"] == QUIT_INTERRUPTED_MESSAGE
+
+
+def test_a_job_queued_before_restart_approval_does_not_start_after_it(tmp_path: Path) -> None:
+    """Contract §4.3: a queued job waits for the restart rather than starting under it.
+
+    It stays queued, so the new process runs it. If the restart is called off,
+    this process runs it.
+    """
+
+    engine = _GatedSolve()
+    approval = RestartApproval()
+
+    async def scenario() -> tuple[str | None, int, str | None, int]:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "jobs.db"),
+            engine_registry=_registry_for(engine),
+            restart_approval=approval,
+        )
+        running_id = await runtime.submit(_solve_request())
+        if not await asyncio.to_thread(engine.started.wait, 5.0):
+            pytest.fail("set-up: the first solve never started")
+        queued_id = await runtime.submit(_solve_request())
+        approval.approve("v2.0.1")
+        engine.release.set()  # the running job finishes, which frees the queue
+        await _until(lambda: _status(runtime, running_id) in FINISHED)
+        await asyncio.sleep(0.3)
+        while_approved = _status(runtime, queued_id)
+        solves_while_approved = engine.solves
+        approval.release("the launcher discarded the request")
+        await _until(lambda: _status(runtime, queued_id) in FINISHED)
+        after_release = _status(runtime, queued_id)
+        await runtime.shutdown()
+        return while_approved, solves_while_approved, after_release, engine.solves
+
+    while_approved, solves_while_approved, after_release, solves = asyncio.run(scenario())
+
+    assert while_approved == "queued"
+    assert solves_while_approved == 1
+    assert after_release == "complete"
+    assert solves == 2
+
+
+def test_a_solve_the_restart_approval_overtakes_is_queued_not_started(tmp_path: Path) -> None:
+    """Contract §4.2 and §4.3: the narrow race is closed where a job starts.
+
+    A solve that passed the route's check just before the approval is queued,
+    and one the scheduler had already taken is overtaken while its engine is
+    looked up. Neither starts under the approval: both stay queued for the new
+    process.
+    """
+
+    engine = _GatedSolve()
+    engine.release.set()
+    approval = RestartApproval()
+
+    class ApprovesDuringTheLookup(EngineRegistry):
+        armed = False
+
+        async def get_engine(self, name: str) -> Any | None:
+            if self.armed:
+                approval.approve("v2.0.1")  # the latch goes up while the job is prepared
+            return await super().get_engine(name)
+
+    registry = ApprovesDuringTheLookup(
+        detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+        factory=lambda _name: engine,
+    )
+
+    async def scenario() -> tuple[str | None, str | None, int]:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "jobs.db"),
+            engine_registry=registry,
+            restart_approval=approval,
+        )
+        # Accepted by the route an instant before the approval.
+        approval.approve("v2.0.1")
+        accepted = await runtime.submit(_solve_request())
+        await asyncio.sleep(0.3)
+        accepted_status = _status(runtime, accepted)
+        approval.release("called off")
+        await _until(lambda: _status(runtime, accepted) in FINISHED)
+
+        # Taken by the scheduler, then overtaken during its engine lookup.
+        taken = await runtime.submit(_solve_request())
+        registry.armed = True
+        await _until(lambda: approval.pending is not None)
+        await asyncio.sleep(0.3)
+        taken_status = _status(runtime, taken)
+        solves = engine.solves
+        await runtime.shutdown()
+        return accepted_status, taken_status, solves
+
+    accepted_status, taken_status, solves = asyncio.run(scenario())
+
+    assert accepted_status == "queued"
+    assert taken_status == "queued"
+    assert solves == 1, "a job started under an approved restart"
+
+
+def test_the_job_runtime_reads_the_servers_restart_latch(tmp_path: Path) -> None:
+    """Contract §4.3: the runtime holds the same latch the update routes set."""
+
+    app = create_app(data_dir=tmp_path / "data")
+
+    assert app.state.jobs_runtime.restart_approval is app.state.update_restart

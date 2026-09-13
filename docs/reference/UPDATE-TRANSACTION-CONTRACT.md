@@ -56,6 +56,10 @@ explicit retry: `last_outcome`, `held_back_entry` and `UpdateService.lift_suppre
 `lift_suppressed_build` in `launchers/apply_update.py`, and the update dialog in
 `frontend/src/shell/UpdateControl.tsx`.
 
+The job runtime then took the latch too (§4.3). A job the restart ends reads as ended by
+the update restart, and no queued job starts under an approved restart: `JobRuntime` in
+`server/jobs/runtime.py`, and the interruption marks in `server/jobs/store.py`.
+
 Still to do:
 
 - carrying the channel into the record, which stays `null` until the handoff carries it
@@ -66,8 +70,7 @@ Still to do:
   runs an *older* candidate's helper, on a Return to Stable, which would refuse the flag
   and stop that update. Carrying it needs a decision on the route (an optional request key
   plus an environment variable the helper reads, or a flag the launcher passes only to a
-  helper that accepts it);
-- recording a job ended by the restart as ended by the update restart (§4.3).
+  helper that accepts it).
 
 ---
 
@@ -385,10 +388,29 @@ Before files are replaced, every running job has either finished or been cancell
 a recorded reason, such as "cancelled for the update restart". A job ended by the
 restart is never left reading as running, or as failed for no stated reason.
 
-Not implemented. Today the restart stops the server the way Quit does, and
-`JobRuntime.shutdown` marks each running job interrupted by Quit before it waits. So a
-reason is recorded, but it names Quit, not the update restart. A job queued before
-approval can still start before the server stops. This is a static reading.
+In the code, `JobRuntime` (`server/jobs/runtime.py`) holds the server's latch (§4.2),
+which `mount_jobs` passes it:
+
+- **A shutdown while a restart is approved is the update restart.** It marks each running
+  job as ended by the update restart, in the same write that requests the job's
+  cancellation and before it waits. A job stopped at its checkpoint then reads "Ended by
+  the update restart". One that the shutdown budget cuts off reads the same on the next
+  start (`recover_on_startup`). A shutdown with no approval is Quit, as before.
+- **The mark sits beside the Quit mark.** A start that knows only Quit reads the job as
+  interrupted by Quit, a stop and not a crash. That start is a release older than this
+  one, which an automatic rollback reopens.
+- **No queued job starts while the latch is set.** The scheduler takes no job from the
+  queue. A job it had already taken is checked once more, just before it is marked
+  running, with no await between the check and the mark. Reading the latch takes the lock
+  that approving it takes, so the approval lands either before that check or after it:
+  - before it, and the job goes back to the front of the queue;
+  - after it, and the job is running work that the restart ends with its own reason.
+- **A queued job stays queued in the job store**, and the next start runs it: the new
+  build, or the old one after a rollback. If the latch comes down without a restart
+  (§4.2), this process runs it.
+- **The narrow race of §4.2 is closed where a job starts.** A solve that passes its
+  route's check just before the latch goes up is accepted and queued. It is never
+  started under the approval.
 
 ### 4.4 Scoped shutdown
 
@@ -611,6 +633,11 @@ that implements it removes the marker.
 | `test_the_update_status_explains_the_last_outcome_without_local_paths` | §2.2 | The status carries the normalized outcome and names no folder on this machine |
 | `test_a_build_field_nobody_recorded_is_not_evidence_of_a_different_build` | §2.3 | Suppression fails closed on a commit the record does not know |
 | `test_a_retry_needs_its_confirmation_and_lifts_nothing_it_does_not_name` | §2.3 | The retry needs its header, and naming a build that is not held back changes nothing |
+| `test_a_job_the_update_restart_ends_reads_as_ended_by_the_update_restart` | §4.3 | A running job the restart stops at a checkpoint names the update restart, not Quit |
+| `test_a_job_the_restart_cut_off_reads_as_ended_by_it_and_as_quit_to_an_older_start` | §4.3 | A job the budget cut off reads as ended by the update restart on the next start, and as Quit to a start that knows only that mark |
+| `test_a_job_queued_before_restart_approval_does_not_start_after_it` | §4.3 | A queued job waits under the approval, and runs when the approval is called off |
+| `test_a_solve_the_restart_approval_overtakes_is_queued_not_started` | §4.2, §4.3 | The narrow race: a solve accepted just before the approval, and one overtaken while its engine is looked up, both stay queued |
+| `test_the_job_runtime_reads_the_servers_restart_latch` | §4.3 | `create_app` gives the runtime the latch the update routes set |
 
 The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateControl.test.tsx`
 ("a held-back build and the last outcome") and `frontend/src/api/updates.test.ts`.
@@ -625,7 +652,9 @@ update while rollback material is pending now also checks that it releases the l
 (§4.2), and `test_a_window_start_that_cannot_confirm_the_update_says_so` keeps the window's
 own report (§4.5).
 
-§4.3 and §4.4 need real processes. Their tests belong with the implementation.
+§4.3's tests run the job runtime in one process, with an engine that stands in for a
+solver. The restart itself, through the launcher, is not run with real processes. §4.4
+needs real processes, and its tests belong with its implementation.
 
 The released-launcher test is the only one that runs real released code, and today it
 runs only where the tags exist. Fetching `v0.3.1` and `v0.3.2` in the server test job

@@ -859,6 +859,10 @@ def mount_jobs(
         JobStore.for_data_dir(data_dir),
         engine_registry=engine_registry,
         cadlink_store=application.state.cadlink_store,
+        # The same latch the refusing routes read: while it is set no queued
+        # job starts either, and a shutdown ends running jobs as ended by the
+        # update restart (contract §4.3).
+        restart_approval=restart_approval,
     )
     application.state.jobs_runtime = runtime
     application.include_router(

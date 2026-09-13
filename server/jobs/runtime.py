@@ -23,7 +23,7 @@ import math
 import os
 from pathlib import Path
 import time
-from typing import Any, AsyncIterator, Mapping
+from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping
 import uuid
 
 from server.cadlink.ingest import get_ingestion_record
@@ -69,6 +69,9 @@ from server.solver.field_plane import FieldPlaneEvaluation, FieldPlaneService
 from server.solver.metal_permit import MetalPermit, process_metal_permit
 from server.solver.base import is_full3d_solver_port, run_full3d_solver_port
 
+if TYPE_CHECKING:
+    from server.updates.restart import RestartApproval
+
 
 logger = logging.getLogger(__name__)
 MAX_LOG_LINES = 200
@@ -83,6 +86,15 @@ QUIT_INTERRUPTED_STAGE_MESSAGE = "Interrupted by Quit"
 QUIT_INTERRUPTED_MESSAGE = (
     "Interrupted by Quit: Waveguide Generator closed while this simulation was "
     "running. Run it again to get results."
+)
+#: What a job the update restart ended reads as
+#: (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.3): stopped at a
+#: checkpoint as WG restarted to install an update, or cut off by the shutdown
+#: budget and recovered on the next start. Like Quit, it is not a failure.
+UPDATE_RESTART_STAGE_MESSAGE = "Ended by the update restart"
+UPDATE_RESTART_MESSAGE = (
+    "Ended by the update restart: Waveguide Generator restarted to install an "
+    "update while this simulation was running. Run it again to get results."
 )
 RESTART_RECOVERY_MESSAGE = "Server restarted during execution"
 RUNTIME_PERSIST_INTERVAL_SECONDS = 0.15
@@ -1516,8 +1528,19 @@ class JobRuntime:
         cadlink_store: CadLinkStore | None = None,
         persistence_interval_seconds: float = RUNTIME_PERSIST_INTERVAL_SECONDS,
         metal_permit: MetalPermit | None = None,
+        restart_approval: RestartApproval | None = None,
     ) -> None:
         self.store = store
+        #: The server's restart-approved latch (contract §4.2, §4.3). While it
+        #: is set no queued job starts, and a shutdown ends running jobs as
+        #: ended by the update restart rather than by Quit.
+        self.restart_approval = restart_approval
+        #: Jobs this runtime's own shutdown stopped for the update restart.
+        self._restart_interrupted: set[str] = set()
+        #: The loop the scheduler runs on, for a latch released from a thread.
+        self._loop: asyncio.AbstractEventLoop | None = None
+        if restart_approval is not None:
+            restart_approval.add_release_listener(self._restart_called_off)
         self.cadlink_store = cadlink_store
         self.engine_registry = engine_registry or EngineRegistry(factory=get_engine)
         self.events = EventBroker()
@@ -1559,6 +1582,23 @@ class JobRuntime:
     def running_job_ids(self) -> frozenset[str]:
         return frozenset(self._running)
 
+    def _restart_pending(self) -> bool:
+        """Whether an update restart is approved, so no queued job may start."""
+
+        approval = self.restart_approval
+        return approval is not None and approval.pending is not None
+
+    def _restart_called_off(self, _target: str, _reason: str) -> None:
+        # The latch came down with no restart (contract §4.2): the jobs it held
+        # in the queue may start. Called from whichever thread released it.
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(self._ensure_scheduler)
+        except RuntimeError:  # the loop closed in between
+            pass
+
     async def start(self) -> None:
         """Initialize storage, fail running orphans, and requeue queued rows."""
 
@@ -1568,6 +1608,7 @@ class JobRuntime:
             if self._started:
                 return
             self._shutting_down = False
+            self._loop = asyncio.get_running_loop()
             await asyncio.to_thread(self._ownership.acquire)
             try:
                 await asyncio.to_thread(self.store.initialize)
@@ -1576,6 +1617,8 @@ class JobRuntime:
                     RESTART_RECOVERY_MESSAGE,
                     quit_stage_message=QUIT_INTERRUPTED_STAGE_MESSAGE,
                     quit_error_message=QUIT_INTERRUPTED_MESSAGE,
+                    update_restart_stage_message=UPDATE_RESTART_STAGE_MESSAGE,
+                    update_restart_error_message=UPDATE_RESTART_MESSAGE,
                 )
                 await asyncio.to_thread(
                     self.store.prune_terminal_jobs,
@@ -1603,6 +1646,12 @@ class JobRuntime:
         """
 
         self._shutting_down = True
+        # A shutdown with a restart approved is the update restart: the
+        # launcher consumed the handoff request and is stopping this server to
+        # replace it (contract §4.3). It marks its jobs as ended by the update
+        # restart, not by Quit.
+        update_restart = self._restart_pending()
+        requested = "Update restart requested" if update_restart else "Shutdown requested"
         # Stop accepting new buffered callbacks, then persist the last accepted
         # checkpoint before requesting cancellation. Cancelling first could
         # abandon an asyncio.to_thread file/SQLite write that is already running.
@@ -1616,13 +1665,12 @@ class JobRuntime:
                     job_id,
                     {
                         "stage": "cancelling",
-                        "stage_message": (
-                            "Shutdown requested; waiting for current stage checkpoint"
-                        ),
+                        "stage_message": f"{requested}; waiting for current stage checkpoint",
                         "cancellation_requested": True,
                     },
-                    {"stage": "cancelling", "message": "Shutdown requested"},
+                    {"stage": "cancelling", "message": requested},
                     interrupted_by_quit=True,
+                    interrupted_by_update_restart=update_restart,
                 )
             except Exception:
                 logger.exception(
@@ -1634,6 +1682,8 @@ class JobRuntime:
                     # None means the user had already asked to stop it; that
                     # job stays a user cancellation.
                     self._quit_interrupted.add(job_id)
+                    if update_restart:
+                        self._restart_interrupted.add(job_id)
                     self.events.publish(event)
                 state = self.store.cancellation_state(job_id)
                 cancellation_signalled = cancellation_signalled or bool(
@@ -1658,6 +1708,7 @@ class JobRuntime:
         await asyncio.to_thread(self._ownership.release)
         self._partial_results.clear()
         self._quit_interrupted.clear()
+        self._restart_interrupted.clear()
         self._started = False
 
     async def submit(self, request: SolveRequest) -> str:
@@ -2592,7 +2643,14 @@ class JobRuntime:
         return await asyncio.to_thread(self.resume, cursor)
 
     def _ensure_scheduler(self) -> None:
-        if self._shutting_down or not self._started or not self._queue:
+        # Not while a restart is approved: its release starts the scheduler
+        # again (``_restart_called_off``).
+        if (
+            self._shutting_down
+            or not self._started
+            or not self._queue
+            or self._restart_pending()
+        ):
             return
         if self._scheduler_task is not None and not self._scheduler_task.done():
             return
@@ -2614,8 +2672,11 @@ class JobRuntime:
             async with self.metal_permit.solve():
                 # Admission stops with shutdown: a queued job must not start in
                 # the gap a cancelled one leaves, where no Quit marks it and the
-                # budget cuts it off. It stays queued for the next start.
-                while self._queue and not self._shutting_down:
+                # budget cuts it off. It stays queued for the next start. It
+                # stops, too, while an update restart is approved (contract
+                # §4.3): the job stays queued for the new process, or for this
+                # one if the restart is called off.
+                while self._queue and not self._shutting_down and not self._restart_pending():
                     job_id = self._queue.popleft()
                     row = self.store.get_job_row(job_id)
                     if row is None or row["status"] != "queued":
@@ -2719,6 +2780,16 @@ class JobRuntime:
             if self._shutting_down:
                 # Shutdown began while this job was being prepared. It has not
                 # started, so its row stays queued for the next start.
+                return
+            if self._restart_pending():
+                # An update restart was approved while this job was being
+                # prepared (contract §4.3). This is the last check before the
+                # job is marked running, with no await between the two, and the
+                # latch reads under the lock the approval takes: the approval
+                # either lands before this check, and the job stays queued, or
+                # after it, and the job is running work the restart ends with
+                # its own reason. It goes back to the front of the queue.
+                self._queue.appendleft(job_id)
                 return
             # Batch Q extends only this established engine-call seam.  FIFO
             # scheduling/recovery remains untouched; real adapters own their
@@ -2895,12 +2966,14 @@ class JobRuntime:
 
     async def _cancel_job(self, job_id: str) -> None:
         # A job that this process's own shutdown stopped at a checkpoint ends
-        # just as recovery records one the budget cut off: interrupted by Quit.
-        quit_interrupted = job_id in self._quit_interrupted
-        message = QUIT_INTERRUPTED_MESSAGE if quit_interrupted else CANCELLED_MESSAGE
-        stage_message = (
-            QUIT_INTERRUPTED_STAGE_MESSAGE if quit_interrupted else CANCELLED_MESSAGE
-        )
+        # just as recovery records one the budget cut off: interrupted by Quit,
+        # or ended by the update restart when that was the shutdown.
+        if job_id in self._restart_interrupted:
+            message, stage_message = UPDATE_RESTART_MESSAGE, UPDATE_RESTART_STAGE_MESSAGE
+        elif job_id in self._quit_interrupted:
+            message, stage_message = QUIT_INTERRUPTED_MESSAGE, QUIT_INTERRUPTED_STAGE_MESSAGE
+        else:
+            message, stage_message = CANCELLED_MESSAGE, CANCELLED_MESSAGE
         self._partial_results.pop(job_id, None)
         await self._discard_channel_bases(job_id)
         await self._discard_radiation_impedance(job_id)

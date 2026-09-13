@@ -39,6 +39,9 @@ ALLOWED_STATUSES = frozenset({"queued", "running", "complete", "error", "cancell
 MESH_ARTIFACT_GRACE_MINUTES = 60
 #: ``task_metadata_json`` key a Quit's shutdown sets on a job it interrupts.
 QUIT_INTERRUPTION_KEY = "interrupted_by_quit"
+#: ``task_metadata_json`` key the update restart's shutdown sets beside the Quit
+#: one (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.3).
+UPDATE_RESTART_INTERRUPTION_KEY = "interrupted_by_update_restart"
 SUPPORTED_SCHEMA_VERSION = 5
 ALLOWED_JOB_UPDATE_FIELDS = frozenset(
     {
@@ -815,6 +818,7 @@ class JobStore:
         payload: Mapping[str, Any],
         *,
         interrupted_by_quit: bool = False,
+        interrupted_by_update_restart: bool = False,
     ) -> dict[str, Any] | None:
         """Atomically request cancellation only while a job remains running.
 
@@ -822,6 +826,12 @@ class JobStore:
         shutdown budget cuts off before its next checkpoint reads as
         interrupted by Quit on the next start (``recover_on_startup``) rather
         than as a server crash.
+
+        ``interrupted_by_update_restart`` marks it as ended by the update
+        restart instead (contract §4.3), and marks it as interrupted by Quit
+        too. A start that knows only the Quit mark -- a release older than
+        this one, which an automatic rollback reopens -- then still reads a
+        stop, not a crash.
         """
 
         values = dict(fields)
@@ -831,10 +841,19 @@ class JobStore:
         values["updated_at"] = _now_iso()
         assignments = [f"{key} = ?" for key in values]
         params = [self._db_value(key, value) for key, value in values.items()]
-        if interrupted_by_quit:
+        marks = [
+            key
+            for key, wanted in (
+                (QUIT_INTERRUPTION_KEY, interrupted_by_quit or interrupted_by_update_restart),
+                (UPDATE_RESTART_INTERRUPTION_KEY, interrupted_by_update_restart),
+            )
+            if wanted
+        ]
+        if marks:
             assignments.append(
                 "task_metadata_json = json_set(COALESCE(task_metadata_json, '{}'), "
-                f"'$.{QUIT_INTERRUPTION_KEY}', json('true'))"
+                + ", ".join(f"'$.{key}', json('true')" for key in marks)
+                + ")"
             )
         with self._lock, self._transaction() as conn:
             changed = conn.execute(
@@ -1511,6 +1530,8 @@ class JobStore:
         *,
         quit_stage_message: str | None = None,
         quit_error_message: str | None = None,
+        update_restart_stage_message: str | None = None,
+        update_restart_error_message: str | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Settle running orphans and return queued rows in FIFO order.
 
@@ -1519,7 +1540,9 @@ class JobStore:
         ``restart_error_message``. One marked by a Quit's shutdown
         (``request_cancellation(..., interrupted_by_quit=True)``) is not a
         failure: when ``quit_error_message`` is given it ends cancelled with
-        that reason instead. Neither kind is requeued.
+        that reason instead. One the update restart's shutdown marked ends
+        cancelled with ``update_restart_error_message`` when that is given, and
+        otherwise reads as Quit, whose mark it also carries. None is requeued.
         """
 
         now = _now_iso()
@@ -1528,15 +1551,29 @@ class JobStore:
         with self._lock, self._transaction() as conn:
             running = conn.execute(
                 f"""SELECT id, json_extract(task_metadata_json, '$.{QUIT_INTERRUPTION_KEY}')
-                          AS interrupted_by_quit
+                          AS interrupted_by_quit,
+                          json_extract(task_metadata_json, '$.{UPDATE_RESTART_INTERRUPTION_KEY}')
+                          AS interrupted_by_update_restart
                    FROM simulation_jobs WHERE status = 'running' ORDER BY created_at ASC"""
             ).fetchall()
+            update_restart_ids = {
+                str(row["id"])
+                for row in running
+                if update_restart_error_message is not None
+                and row["interrupted_by_update_restart"]
+            }
             quit_ids = {
                 str(row["id"])
                 for row in running
-                if quit_error_message is not None and row["interrupted_by_quit"]
+                if quit_error_message is not None
+                and row["interrupted_by_quit"]
+                and str(row["id"]) not in update_restart_ids
             }
-            restarted_ids = [str(row["id"]) for row in running if str(row["id"]) not in quit_ids]
+            restarted_ids = [
+                str(row["id"])
+                for row in running
+                if str(row["id"]) not in quit_ids and str(row["id"]) not in update_restart_ids
+            ]
             if restarted_ids:
                 conn.execute(
                     f"""
@@ -1562,6 +1599,23 @@ class JobStore:
                         now,
                         now,
                         *sorted(quit_ids),
+                    ),
+                )
+            if update_restart_ids:
+                conn.execute(
+                    f"""
+                    UPDATE simulation_jobs
+                    SET status = 'cancelled', stage = 'cancelled', stage_message = ?,
+                        error_message = ?, cancellation_requested = 0,
+                        completed_at = COALESCE(completed_at, ?), updated_at = ?
+                    WHERE id IN ({",".join("?" for _ in update_restart_ids)})
+                    """,
+                    (
+                        update_restart_stage_message or update_restart_error_message,
+                        update_restart_error_message,
+                        now,
+                        now,
+                        *sorted(update_restart_ids),
                     ),
                 )
             running_ids = [str(row["id"]) for row in running]
@@ -1604,13 +1658,20 @@ class JobStore:
                 )
             for row in running:
                 job_id = str(row["id"])
-                if job_id in quit_ids:
+                if job_id in quit_ids or job_id in update_restart_ids:
                     recovery_events.append(
                         self._append_event(
                             conn,
                             job_id,
                             "cancelled",
-                            {"message": quit_error_message, "recovered": True},
+                            {
+                                "message": (
+                                    update_restart_error_message
+                                    if job_id in update_restart_ids
+                                    else quit_error_message
+                                ),
+                                "recovered": True,
+                            },
                         )
                     )
                     continue
