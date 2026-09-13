@@ -5676,6 +5676,30 @@
         "title": "OnshapeUnlinkRequest",
         "type": "object"
       },
+      "OperationApprovalsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "findingIds": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Findingids",
+            "type": "array"
+          },
+          "preparationId": {
+            "minLength": 1,
+            "title": "Preparationid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preparationId",
+          "findingIds"
+        ],
+        "title": "OperationApprovalsRequest",
+        "type": "object"
+      },
       "OutputConfig": {
         "additionalProperties": false,
         "properties": {
@@ -6173,6 +6197,44 @@
           }
         },
         "title": "PolarConfig",
+        "type": "object"
+      },
+      "PrepareOperationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "approvals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperationApprovalsRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "setupRevisionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setuprevisionid"
+          },
+          "submit": {
+            "default": true,
+            "title": "Submit",
+            "type": "boolean"
+          },
+          "wait": {
+            "default": false,
+            "title": "Wait",
+            "type": "boolean"
+          }
+        },
+        "title": "PrepareOperationRequest",
         "type": "object"
       },
       "ROSSEConfig": {
@@ -6744,6 +6806,21 @@
           "path"
         ],
         "title": "SelectWorkspaceRequest",
+        "type": "object"
+      },
+      "SetupRevisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "setup": {
+            "additionalProperties": true,
+            "title": "Setup",
+            "type": "object"
+          }
+        },
+        "required": [
+          "setup"
+        ],
+        "title": "SetupRevisionRequest",
         "type": "object"
       },
       "SimulationConfig": {
@@ -8049,6 +8126,263 @@
         ]
       }
     },
+    "/api/cadlink/operations": {
+      "get": {
+        "description": "CAD operations, the unfinished ones by default: the authoritative state.",
+        "operationId": "list_cad_operations_api_cadlink_operations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pending",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Pending",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Cad Operations Api Cadlink Operations Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Cad Operations",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/operations/{operation_id}": {
+      "get": {
+        "operationId": "get_cad_operation_api_cadlink_operations__operation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Cad Operation Api Cadlink Operations  Operation Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Cad Operation",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/operations/{operation_id}/approvals": {
+      "post": {
+        "description": "Acknowledge blocking findings of one preparation. A new preparation needs its own.\n\nThe next preparation of the same snapshot and setup revision resumes that\npreparation, so these approvals apply to it.",
+        "operationId": "post_cad_operation_approvals_api_cadlink_operations__operation_id__approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationApprovalsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Cad Operation Approvals Api Cadlink Operations  Operation Id  Approvals Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Cad Operation Approvals",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/operations/{operation_id}/cancel": {
+      "post": {
+        "description": "Dismiss an operation: at once when idle, at the next step when running.",
+        "operationId": "post_cancel_cad_operation_api_cadlink_operations__operation_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Cancel Cad Operation Api Cadlink Operations  Operation Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Cancel Cad Operation",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/operations/{operation_id}/prepare": {
+      "post": {
+        "description": "Prepare a solve operation from its retained snapshot, and submit it when asked.\n\nA preparation already running for the operation is taken over: its next\nwrite is refused, and this one's result stands.",
+        "operationId": "post_prepare_cad_operation_api_cadlink_operations__operation_id__prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareOperationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Prepare Cad Operation Api Cadlink Operations  Operation Id  Prepare Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Prepare Cad Operation",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
     "/api/cadlink/projects/{lineage_id}/documents": {
       "get": {
         "description": "The captured CAD documents this project's runs were solved from.",
@@ -8299,6 +8633,94 @@
           }
         },
         "summary": "Archive Run Document",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/setup-revisions": {
+      "post": {
+        "description": "Store an immutable setup revision; identical content is one revision.",
+        "operationId": "post_setup_revision_api_cadlink_setup_revisions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Setup Revision Api Cadlink Setup Revisions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Setup Revision",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/setup-revisions/{revision_id}": {
+      "get": {
+        "operationId": "get_setup_revision_api_cadlink_setup_revisions__revision_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "title": "Revision Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Setup Revision Api Cadlink Setup Revisions  Revision Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Setup Revision",
         "tags": [
           "cadlink"
         ]

@@ -1,0 +1,731 @@
+"""Backend preparation of a CAD solve: the operation, not the browser, owns it.
+
+One ``prepare_and_solve`` operation is prepared in fenced stages
+(docs/architecture/CAD-OPERATIONS.md, "Preparation"):
+
+    received -> validating -> preparing-mesh -> ready -> submitted
+
+- **received**: the snapshot is retained in WG's own storage before the
+  delivery is acknowledged (``retain_operation_snapshot``). From then on
+  preparation reads the retained copy, so a return whose exchange folder was
+  removed still prepares.
+- **validating**: the retained copy is found, or made now for an operation
+  received before retention existed.
+- **preparing-mesh**: the retained snapshot is ingested and meshed with the
+  setup revision's options, under the attempt's fence.
+- **ready**: the preparation is recorded. Its blocking findings need approvals
+  bound to this preparation, never to another one. A preparation of the same
+  snapshot, setup revision and meshing semantics is resumed, not made again,
+  so approvals given on it still apply.
+- **submitted**: the exact solve request is bound -- the binding point, after
+  which it never changes -- and submitted to the jobs system under
+  ``cad-solve:<operationId>``. Solve execution stays in the jobs system.
+
+Every stage write, the ingestion record and the outcome are conditional on the
+attempt's generation. An attempt that lost its operation -- taken over,
+dismissed, finished elsewhere -- stops without committing anything. A request
+that may have been accepted by the jobs system is recovered by reconciling
+through its submission key, never by submitting a changed request.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from server.jobs.models import SolveRequest
+
+from .ingest import (
+    IngestRefusal,
+    ingest_bundle,
+    meshing_semantics_fingerprint,
+    retain_snapshot,
+    retained_snapshot_path,
+)
+from .isolation import ChildRefusal
+from .operations import (
+    ACCEPTED,
+    CANCEL_REQUESTED,
+    NEEDS_USER_INPUT,
+    PREPARE_AND_SOLVE,
+    PROCESSING,
+    RECEIVED,
+    RECOVERY_REQUIRED,
+    REJECTED,
+    STAGE_PREPARING_MESH,
+    STAGE_SUBMITTED,
+    STAGE_VALIDATING,
+    TERMINAL_STATES,
+    canonical_json,
+)
+from .setup import CadSolveSetup, solve_request_for, validate_setup
+from .solve_command import CAD_SOLVE_SUBMISSION_PREFIX, SolveOutcomeConflict, record_outcome
+from .store import BindingConflict, CadLinkStore, StaleAttempt
+from .wgreturn import WgReturnError
+
+
+logger = logging.getLogger(__name__)
+
+SubmitFn = Callable[[SolveRequest], Awaitable[str]]
+
+
+@dataclass(frozen=True)
+class PreparationInput:
+    """What the user asked of one preparation.
+
+    ``approve_preparation_id`` and ``approve_finding_ids`` are blocking
+    findings the user reviewed on that preparation. They are approved only
+    when this attempt resumes that same preparation, and never carry to a new
+    one.
+    """
+
+    setup_revision_id: str | None = None
+    submit: bool = True
+    approve_preparation_id: str | None = None
+    approve_finding_ids: tuple[str, ...] = ()
+
+
+@dataclass
+class PreparationContext:
+    """What a preparation needs from the application, injectable for tests."""
+
+    store: CadLinkStore
+    data_dir: Path
+    workspace_root: Path | None
+    #: Submits a solve request to the jobs system and returns its job id.
+    submit: SubmitFn | None = None
+    #: The job a submission key created, if any (``JobStore.job_for_submission_key``).
+    job_for_submission: Callable[[str], str | None] | None = None
+    #: Called with an operation's summary after each committed change.
+    publish: Callable[[Mapping[str, Any]], None] | None = None
+    #: The jobs system's own refusals of a request: a capability it lacks, a
+    #: request it cannot accept. They release the binding.
+    submission_refusals: tuple[type[BaseException], ...] = ()
+    #: A reason no solve may be submitted now (an update restart pending).
+    submission_blocked: Callable[[], str | None] | None = None
+    ingest: Callable[..., dict[str, Any]] = ingest_bundle
+
+
+class _Fenced(Exception):
+    """The attempt lost its operation; stop without writing."""
+
+
+class SnapshotUnavailable(OSError):
+    """The return cannot be read now; the operation waits instead of failing for good."""
+
+
+def submission_key(operation_id: str) -> str:
+    return f"{CAD_SOLVE_SUBMISSION_PREFIX}{operation_id}"
+
+
+def operation_summary(row: Mapping[str, Any]) -> dict[str, Any]:
+    """An operation as the UI and the events channel see it."""
+
+    outcome = json.loads(row["outcome_json"]) if row.get("outcome_json") else {}
+    snapshot = json.loads(row["snapshot_json"]) if row.get("snapshot_json") else None
+    state = str(row["state"])
+    stage = row.get("stage")
+    if stage is None:
+        # Written before stages existed, or by an older build.
+        stage = "submitted" if row.get("job_id") else ("received" if state == RECEIVED else None)
+    return {
+        "operationId": row["operation_id"],
+        "kind": row["kind"],
+        "state": state,
+        "stage": stage,
+        "reason": row.get("reason"),
+        "message": outcome.get("message") if isinstance(outcome, Mapping) else None,
+        "jobId": row.get("job_id"),
+        "attemptGeneration": int(row.get("attempt_generation") or 0),
+        "setupRevisionId": row.get("setup_revision_id"),
+        "preparationId": row.get("preparation_id"),
+        "snapshot": (
+            {"manifestSha256": snapshot.get("manifest_sha256")}
+            if isinstance(snapshot, Mapping)
+            else None
+        ),
+        "legacy": bool(row.get("legacy")),
+        "createdAt": row.get("created_at"),
+        "updatedAt": row.get("updated_at"),
+    }
+
+
+def _publish(ctx: PreparationContext, row: Mapping[str, Any] | None) -> None:
+    if row is None or ctx.publish is None:
+        return
+    try:
+        ctx.publish(operation_summary(row))
+    except Exception:  # noqa: BLE001 - a notification never fails the work
+        logger.debug("Could not publish a CAD operation update.", exc_info=True)
+
+
+def _inputs(row: Mapping[str, Any]) -> dict[str, Any]:
+    return json.loads(row["inputs_json"]) if row.get("inputs_json") else {}
+
+
+def exchange_bundle_path(workspace_root: Path | None, bundle_path: str) -> Path:
+    """The return a solve command names, inside the selected WGLink folder."""
+
+    from server.workspace.api import _path_segments, _strictly_inside
+
+    if workspace_root is None:
+        raise SnapshotUnavailable(
+            "No WGLink folder is selected, so WG cannot read the return Fusion sent. "
+            "Choose it in Settings → CAD Link, then press Solve now."
+        )
+    segments = _path_segments(bundle_path, "bundlePath")
+    if not segments or segments[0].casefold() != "wgreturn" or not segments[-1].endswith(".wgreturn"):
+        raise WgReturnError("bundlePath must name a .wgreturn bundle under the workspace's wgreturn/")
+    path = workspace_root.joinpath(*segments).resolve()
+    _strictly_inside(path, workspace_root, "bundlePath")
+    if not path.is_dir():
+        # The folder was switched, a drive is not mounted, or the return was
+        # removed before WG kept a copy: cannot proceed now, not never.
+        raise SnapshotUnavailable(
+            "The return Fusion sent is not in the WGLink folder, and WG has no copy of it. "
+            "Check the WGLink folder in Settings → CAD Link, or send it again from Fusion."
+        )
+    return path
+
+
+def _snapshot_record(retained: Mapping[str, Any]) -> dict[str, str]:
+    """What an operation stores of its snapshot: hashes, never a path.
+
+    The copy's place follows from the manifest hash (``retained_snapshot_path``),
+    so a moved data directory does not orphan it.
+    """
+
+    return {
+        "manifest_sha256": str(retained["manifest_sha256"]),
+        "artifact_sha256": str(retained["artifact_sha256"]),
+    }
+
+
+def _retained(data_dir: Path, row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The operation's retained snapshot, when WG still holds the copy."""
+
+    snapshot = json.loads(row["snapshot_json"]) if row.get("snapshot_json") else None
+    if not isinstance(snapshot, Mapping):
+        return None
+    try:
+        path = retained_snapshot_path(data_dir, str(snapshot.get("manifest_sha256") or ""))
+    except ValueError:
+        return None
+    return {**snapshot, "retained_path": str(path)} if path.is_dir() else None
+
+
+def retain_operation_snapshot(
+    store: CadLinkStore, data_dir: Path, workspace_root: Path | None, operation_id: str
+) -> dict[str, Any] | None:
+    """Receive-time retention: keep the snapshot an unfinished solve operation names.
+
+    Called before the delivery is acknowledged. A return that cannot be read
+    now is left to the operation's own handling, which refuses it or waits
+    with the reason. Nothing is raised here: a return the parser cannot take
+    must never hold up the deliveries behind it.
+    """
+
+    try:
+        row = store.get_operation(operation_id)
+        if row is None or row["kind"] != PREPARE_AND_SOLVE or row["state"] in TERMINAL_STATES:
+            return None
+        existing = _retained(data_dir, row)
+        if existing is not None:
+            return existing
+        inputs = _inputs(row)
+        retained = retain_snapshot(
+            exchange_bundle_path(workspace_root, str(inputs.get("bundle_path") or "")),
+            data_dir,
+            expected_manifest_sha256=str(inputs.get("manifest_sha256") or "") or None,
+        )
+        store.record_snapshot(operation_id, _snapshot_record(retained))
+    except Exception as exc:  # noqa: BLE001 - retention at receive is best effort
+        logger.info("Could not retain the snapshot of CAD operation %s: %s", operation_id, exc)
+        return None
+    return retained
+
+
+def reconcile_with_jobs(ctx: PreparationContext, operation_id: str) -> dict[str, Any] | None:
+    """Record ``accepted`` when the operation's submission key already made a job.
+
+    The job is the outcome: the browser or an earlier attempt created it and
+    its acknowledgement never arrived. Returns the row when it did so.
+    """
+
+    if ctx.job_for_submission is None:
+        return None
+    job_id = ctx.job_for_submission(submission_key(operation_id))
+    if not job_id:
+        return None
+    try:
+        record_outcome(ctx.store, operation_id, state="accepted", job_id=job_id)
+    except SolveOutcomeConflict:
+        pass
+    return ctx.store.get_operation(operation_id)
+
+
+def _finish(
+    ctx: PreparationContext,
+    operation_id: str,
+    generation: int,
+    state: str,
+    *,
+    reason: str | None = None,
+    message: str | None = None,
+    job_id: str | None = None,
+    stage: str | None = None,
+    release_binding: bool = False,
+) -> dict[str, Any]:
+    row = ctx.store.record_outcome(
+        operation_id,
+        generation,
+        state,
+        job_id=job_id,
+        reason=reason,
+        outcome={"message": message} if message else None,
+        stage=stage,
+        release_binding=release_binding,
+    )
+    if row is None:
+        raise _Fenced()
+    _publish(ctx, row)
+    return row
+
+
+def _advance(ctx: PreparationContext, operation_id: str, generation: int, **fields: Any) -> dict[str, Any]:
+    row = ctx.store.advance_operation(operation_id, generation, **fields)
+    if row is None:
+        raise _Fenced()
+    _publish(ctx, row)
+    return row
+
+
+def _load_setup(ctx: PreparationContext, revision_id: str | None) -> tuple[CadSolveSetup, str] | None:
+    if not revision_id:
+        return None
+    row = ctx.store.get_setup_revision(revision_id)
+    if row is None:
+        return None
+    return validate_setup(json.loads(row["setup_json"])), str(row["revision_id"])
+
+
+def _resumable(
+    store: CadLinkStore,
+    row: Mapping[str, Any],
+    revision_id: str,
+    manifest_sha256: str,
+    semantics: str,
+) -> dict[str, Any] | None:
+    """The operation's last preparation, when this attempt would make the same one.
+
+    The same snapshot, setup revision and meshing semantics: the attempt
+    resumes it instead of preparing anew, so the approvals given on it apply.
+    """
+
+    preparation_id = row.get("preparation_id")
+    if not preparation_id:
+        return None
+    preparation = store.get_preparation(str(preparation_id))
+    if (
+        preparation is None
+        or preparation["setup_revision_id"] != revision_id
+        or preparation["snapshot_sha256"] != manifest_sha256
+        or preparation["meshing_semantics"] != semantics
+    ):
+        return None
+    ingest = store.get_ingest(str(preparation["ingest_id"]))
+    return json.loads(ingest["record_json"]) if ingest is not None else None
+
+
+def _prepare_sync(
+    ctx: PreparationContext, operation_id: str, generation: int, request: PreparationInput
+) -> tuple[str, Any]:
+    """The blocking half: retain, mesh, record. Returns what happens next.
+
+    ``("done", row)`` when the operation already reached its outcome;
+    ``("submit", (solve_request, revision_id))`` when a request is ready.
+    """
+
+    store = ctx.store
+    row = store.get_operation(operation_id)
+    assert row is not None
+    if row.get("request_json"):
+        # Bound already: a crash or a lost answer, while a job may exist.
+        # Recovery submits exactly the bound request; a setup change made
+        # since does not alter it.
+        return "submit", (SolveRequest.model_validate_json(row["request_json"]), row.get("setup_revision_id"))
+
+    # validating: the retained copy, made now if the operation predates it.
+    _advance(ctx, operation_id, generation, stage=STAGE_VALIDATING)
+    retained = _retained(ctx.data_dir, row)
+    if retained is None:
+        inputs = _inputs(row)
+        try:
+            retained = retain_snapshot(
+                exchange_bundle_path(ctx.workspace_root, str(inputs.get("bundle_path") or "")),
+                ctx.data_dir,
+                expected_manifest_sha256=str(inputs.get("manifest_sha256") or "") or None,
+            )
+        except SnapshotUnavailable as exc:
+            return "done", _finish(
+                ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
+                message=str(exc),
+            )
+        except (WgReturnError, ValueError) as exc:
+            return "done", _finish(
+                ctx, operation_id, generation, REJECTED, reason="snapshot_invalid",
+                message=str(exc),
+            )
+        except OSError as exc:
+            return "done", _finish(
+                ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
+                message=f"WG could not read the return Fusion sent: {exc}",
+            )
+        _advance(ctx, operation_id, generation, snapshot=_snapshot_record(retained))
+
+    loaded = _load_setup(ctx, request.setup_revision_id)
+    if loaded is None:
+        # A first-time CAD-authored model never borrows settings from whatever
+        # project is open: it waits for the user to choose them.
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="setup_required",
+            message="Choose the solve settings for this model in WG, then press Solve now.",
+        )
+    setup, revision_id = loaded
+    manifest_sha256 = str(retained["manifest_sha256"])
+    semantics = meshing_semantics_fingerprint()
+
+    record = _resumable(store, row, revision_id, manifest_sha256, semantics)
+    if record is None:
+        # preparing-mesh: from the retained copy, under the attempt's fence.
+        _advance(ctx, operation_id, generation, stage=STAGE_PREPARING_MESH)
+        geometry = setup.geometry
+        try:
+            record = ctx.ingest(
+                retained["retained_path"],
+                dict(geometry.get("mesh") or {}),
+                list(geometry.get("skipped_source_ids") or []),
+                store,
+                ctx.data_dir,
+                prep_options={
+                    "area_drift_overrides": list(setup.preparation.area_drift_overrides),
+                    "symmetry_mode": setup.preparation.symmetry_mode,
+                    **(
+                        {"surface_deviation_mm": setup.preparation.surface_deviation_mm}
+                        if setup.preparation.surface_deviation_mm is not None
+                        else {}
+                    ),
+                },
+                commit_guard=lambda conn: store.attempt_is_current(conn, operation_id, generation),
+                retained_copy=True,
+            )
+        except StaleAttempt as exc:
+            raise _Fenced() from exc
+        except WgReturnError as exc:
+            return "done", _finish(
+                ctx, operation_id, generation, REJECTED, reason="snapshot_invalid", message=str(exc)
+            )
+        except IngestRefusal as exc:
+            if getattr(exc, "corruption", False):
+                return "done", _finish(
+                    ctx, operation_id, generation, REJECTED, reason="snapshot_invalid",
+                    message=str(exc),
+                )
+            return "done", _finish(
+                ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
+                message=str(exc),
+            )
+        except (ChildRefusal, RuntimeError, ValueError, OSError) as exc:
+            # A worker that crashed, ran out of time or memory: the app survives
+            # and the request is kept for another attempt.
+            return "done", _finish(
+                ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
+                message=f"Preparing the mesh failed: {exc}",
+            )
+
+    blocking = [
+        str(finding.get("id"))
+        for finding in record.get("findings") or []
+        if isinstance(finding, Mapping) and finding.get("blocking")
+    ]
+    preparation_id = str(record["ingest_id"])
+    prepared = store.record_preparation(
+        operation_id,
+        generation,
+        preparation_id=preparation_id,
+        snapshot_sha256=manifest_sha256,
+        setup_revision_id=revision_id,
+        ingest_id=preparation_id,
+        report_sha256=record.get("report_sha256"),
+        blocking_finding_ids=blocking,
+        meshing_semantics=semantics,
+    )
+    if prepared is None:
+        raise _Fenced()
+    _publish(ctx, prepared)
+
+    reviewed = (
+        [finding for finding in request.approve_finding_ids if finding in blocking]
+        if request.approve_preparation_id == preparation_id
+        else []
+    )
+    if reviewed:
+        prepared = store.add_approvals(operation_id, preparation_id, reviewed, generation=generation)
+        if prepared is None:
+            raise _Fenced()
+    approvals = json.loads(prepared["approvals_json"]) if prepared.get("approvals_json") else []
+    approved = {
+        str(item.get("finding_id"))
+        for item in approvals
+        if isinstance(item, Mapping) and item.get("preparation_id") == preparation_id
+    }
+    missing = [finding for finding in blocking if finding not in approved]
+    if missing:
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="findings_need_review",
+            message="Review the preparation's findings before solving: " + ", ".join(missing),
+        )
+    if not request.submit:
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="ready_to_solve",
+            message="Prepared. Press Solve to start it.",
+        )
+    try:
+        solve_request = solve_request_for(
+            setup,
+            ingest_id=preparation_id,
+            manifest_sha256=str(record["manifest_sha256"]),
+            artifact_sha256=str(record["artifact_sha256"]),
+            acknowledged_findings=[
+                f"{record.get('report_sha256')}:{finding}" for finding in blocking
+            ],
+            client_request_id=submission_key(operation_id),
+        )
+    except ValueError as exc:
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="submission_refused",
+            message=str(exc),
+        )
+    return "submit", (solve_request, revision_id)
+
+
+async def _submit(
+    ctx: PreparationContext,
+    operation_id: str,
+    generation: int,
+    solve_request: SolveRequest,
+    revision_id: str | None,
+) -> dict[str, Any]:
+    store = ctx.store
+    blocked = ctx.submission_blocked() if ctx.submission_blocked is not None else None
+    if blocked:
+        return await asyncio.to_thread(
+            _finish, ctx, operation_id, generation, NEEDS_USER_INPUT,
+            reason="submission_refused", message=blocked,
+        )
+    if ctx.submit is None:
+        return await asyncio.to_thread(
+            _finish, ctx, operation_id, generation, NEEDS_USER_INPUT,
+            reason="submission_refused", message="The jobs system is not running.",
+        )
+    request_json = canonical_json(solve_request.model_dump(mode="json"))
+    try:
+        bound = await asyncio.to_thread(
+            store.bind_request,
+            operation_id,
+            generation,
+            setup_revision_id=revision_id or "",
+            request_json=request_json,
+        )
+    except BindingConflict:
+        row = await asyncio.to_thread(store.get_operation, operation_id)
+        solve_request = SolveRequest.model_validate_json(row["request_json"])
+        bound = row
+    if bound is None:
+        raise _Fenced()
+    try:
+        job_id = await ctx.submit(solve_request)
+    except ctx.submission_refusals as exc:
+        # The jobs system refused this exact request -- nothing was created --
+        # so the binding is released and the user can change what they chose.
+        code = str(getattr(exc, "reason_code", "") or getattr(exc, "code", "") or "")
+        reason = (
+            "engine_unavailable"
+            if "engine" in code or type(exc).__name__ == "EngineUnavailableError"
+            else "submission_refused"
+        )
+        return await asyncio.to_thread(
+            _finish, ctx, operation_id, generation, NEEDS_USER_INPUT, reason=reason,
+            message=str(exc), release_binding=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - the job may or may not exist
+        logger.warning("Submitting CAD solve %s failed: %s", operation_id, exc)
+        # A submission-key conflict lands here too: that key already made a
+        # job, and the job is the outcome.
+        try:
+            reconciled = await asyncio.to_thread(reconcile_with_jobs, ctx, operation_id)
+            known = ctx.job_for_submission is not None
+        except Exception:  # noqa: BLE001 - unknown: keep the binding
+            logger.warning("Could not read the jobs for CAD solve %s.", operation_id, exc_info=True)
+            reconciled, known = None, False
+        if reconciled is not None:
+            _publish(ctx, reconciled)
+            return reconciled
+        if known:
+            # The jobs system writes the submission key with the job, and the
+            # key names none: nothing was created, so the binding goes.
+            return await asyncio.to_thread(
+                _finish, ctx, operation_id, generation, NEEDS_USER_INPUT,
+                reason="submission_refused",
+                message=f"Submitting the solve failed: {exc}. Press Solve now to try again.",
+                release_binding=True,
+            )
+        return await asyncio.to_thread(
+            _finish, ctx, operation_id, generation, NEEDS_USER_INPUT, reason="interrupted",
+            message=f"Submitting the solve failed: {exc}. Press Solve now to try again.",
+        )
+    return await asyncio.to_thread(
+        _finish, ctx, operation_id, generation, ACCEPTED, job_id=job_id, stage=STAGE_SUBMITTED,
+    )
+
+
+def _settle_fenced(ctx: PreparationContext, operation_id: str, generation: int) -> dict[str, Any]:
+    row = ctx.store.get_operation(operation_id)
+    if row is not None and row["state"] == CANCEL_REQUESTED:
+        settled = ctx.store.settle_cancel(operation_id, generation)
+        if settled is not None:
+            _publish(ctx, settled)
+            return settled
+    return ctx.store.get_operation(operation_id) or {}
+
+
+def _abandon(
+    ctx: PreparationContext, operation_id: str, generation: int, error: Exception
+) -> dict[str, Any]:
+    """An attempt that failed unexpectedly leaves its operation waiting, never stranded.
+
+    A pending dismissal then stands (``record_outcome`` records it); a bound
+    request stays bound, because a job may exist.
+    """
+
+    try:
+        return _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
+            message=f"Preparing this request failed unexpectedly: {error}. "
+            "Press Solve now to try again.",
+        )
+    except _Fenced:
+        return _settle_fenced(ctx, operation_id, generation)
+
+
+async def prepare_operation(
+    ctx: PreparationContext, operation_id: str, request: PreparationInput
+) -> dict[str, Any]:
+    """Prepare one solve operation, and submit it when asked. Returns its summary.
+
+    A new call takes over an attempt still holding the operation: the claim
+    moves the generation on, and the older attempt's next write is refused.
+    """
+
+    store = ctx.store
+    row = await asyncio.to_thread(store.get_operation, operation_id)
+    if row is None:
+        raise KeyError(operation_id)
+    if row["kind"] != PREPARE_AND_SOLVE:
+        raise ValueError(f"operation {operation_id!r} is not a solve")
+    if row["state"] in TERMINAL_STATES or row["state"] in {CANCEL_REQUESTED, RECOVERY_REQUIRED}:
+        return operation_summary(row)
+    reconciled = await asyncio.to_thread(reconcile_with_jobs, ctx, operation_id)
+    if reconciled is not None:
+        _publish(ctx, reconciled)
+        return operation_summary(reconciled)
+    generation = await asyncio.to_thread(
+        store.claim, operation_id, int(row["attempt_generation"])
+    )
+    if generation is None:
+        return operation_summary(await asyncio.to_thread(store.get_operation, operation_id))
+    _publish(ctx, await asyncio.to_thread(store.get_operation, operation_id))
+    try:
+        step, value = await asyncio.to_thread(_prepare_sync, ctx, operation_id, generation, request)
+        if step == "done":
+            return operation_summary(value)
+        solve_request, revision_id = value
+        return operation_summary(
+            await _submit(ctx, operation_id, generation, solve_request, revision_id)
+        )
+    except _Fenced:
+        return operation_summary(
+            await asyncio.to_thread(_settle_fenced, ctx, operation_id, generation)
+        )
+    except Exception as exc:  # noqa: BLE001 - never strand the operation
+        logger.exception("Preparing CAD operation %s failed unexpectedly.", operation_id)
+        return operation_summary(
+            await asyncio.to_thread(_abandon, ctx, operation_id, generation, exc)
+        )
+
+
+def recover_operations(ctx: PreparationContext) -> int:
+    """Startup: settle what a backend that stopped left of its solve operations.
+
+    An operation whose submission key made a job is ``accepted`` with it.
+    One an attempt still held when the backend stopped is taken over and waits
+    for the user (``interrupted``); a bound request is kept, so the next
+    preparation submits exactly it. Returns how many operations changed.
+    """
+
+    store = ctx.store
+    changed = 0
+    for row in store.list_operations(
+        kind=PREPARE_AND_SOLVE, states={RECEIVED, PROCESSING, NEEDS_USER_INPUT, CANCEL_REQUESTED},
+        oldest_first=True, limit=1000,
+    ):
+        operation_id = str(row["operation_id"])
+        reconciled = reconcile_with_jobs(ctx, operation_id)
+        if reconciled is not None and reconciled.get("state") == ACCEPTED:
+            changed += 1
+            _publish(ctx, reconciled)
+            continue
+        if row["state"] not in {PROCESSING, CANCEL_REQUESTED}:
+            continue
+        generation = store.claim(operation_id, int(row["attempt_generation"]))
+        if generation is None:
+            if row["state"] == CANCEL_REQUESTED:
+                # Nobody is working on it any more: the dismissal stands.
+                settled = store.settle_cancel(operation_id, int(row["attempt_generation"]))
+                if settled is not None:
+                    changed += 1
+                    _publish(ctx, settled)
+            continue
+        recorded = store.record_outcome(
+            operation_id,
+            generation,
+            NEEDS_USER_INPUT,
+            reason="interrupted",
+            outcome={
+                "message": "WG stopped while preparing this request. Press Solve now to "
+                "prepare it again."
+            },
+        )
+        if recorded is not None:
+            changed += 1
+            _publish(ctx, recorded)
+    return changed
+
+
+__all__ = [
+    "PreparationContext",
+    "PreparationInput",
+    "SnapshotUnavailable",
+    "exchange_bundle_path",
+    "operation_summary",
+    "prepare_operation",
+    "reconcile_with_jobs",
+    "recover_operations",
+    "retain_operation_snapshot",
+    "submission_key",
+]

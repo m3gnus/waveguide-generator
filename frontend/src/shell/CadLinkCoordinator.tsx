@@ -280,10 +280,12 @@ function asSentence(text: string): string {
   return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
-/** A Fusion request no engine on this machine can solve yet, and what to do
- * about it. The request is kept rather than refused, so it says both ways out. */
+/** A Fusion request the engine selected in WG cannot solve, and what to do
+ * about it. CAD Link never picks an engine: the server's refusal names the
+ * engines that can take this geometry, and the request is kept, parked, until
+ * the user picks one of them in the solver selector or dismisses it. */
 function capabilityBlocker(message: string): string {
-  return `${asSentence(message)} WG is keeping this request: press Solve now once an engine that can solve CAD geometry is available here, or dismiss it.`;
+  return `${asSentence(message)} WG is keeping this request: pick an engine that can solve it in the solver selector, then press Solve now, or dismiss it.`;
 }
 
 /** Where one Fusion solve command stands, for the life of this coordinator.
@@ -585,8 +587,10 @@ function restoreCadJobSolveOptions(job: JobItem): void {
     ? options.frequencies_hz
     : null;
   const polar = polarUiFromConfig(options.polar_config);
+  // The engine is the user's choice in the solver selector, never the run's:
+  // recalling a run must not change what the next solve uses. The run keeps
+  // its own engine on its record.
   useSolveOptionsStore.setState((state) => ({
-    engine: options.engine || state.engine,
     symmetry: ['auto', 'full', 'half_xz', 'half_yz', 'quarter'].includes(options.symmetry)
       ? options.symmetry as SymmetryMode
       : state.symmetry,

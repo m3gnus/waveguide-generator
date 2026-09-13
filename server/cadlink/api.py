@@ -10,11 +10,12 @@ import logging
 import math
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import threading
 from typing import Any, Callable, Literal, Mapping
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -70,6 +71,16 @@ from .ingest import (
 # that directory. Only the location constant is needed here; the Onshape
 # routes and their credentials stay in ``server/cadlink/onshape/``.
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
+from .operations import PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
+from .preparation import (
+    PreparationContext,
+    PreparationInput,
+    operation_summary,
+    prepare_operation,
+    recover_operations,
+    retain_operation_snapshot,
+)
+from .setup import setup_content, setup_digest, validate_setup
 from .roles import canonical_source_role
 from .store import CadLinkStore
 from .wgreturn import WgReturnError, declared_domain_planes
@@ -948,7 +959,13 @@ def _pending_solve_command(
     requests stay separate (docs/architecture/CAD-OPERATIONS.md, "Ordering").
     """
 
-    answer = collect_solve_deliveries(data_dir, store)
+    answer = collect_solve_deliveries(
+        data_dir,
+        store,
+        retain=lambda operation_id: retain_operation_snapshot(
+            store, data_dir, workspace_root, operation_id
+        ),
+    )
     if answer is not None:
         return answer
     command = oldest_pending_solve_command(store)
@@ -1193,25 +1210,59 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
     return record
 
 
-async def _retained_return_states(jobs: Any, stem: str) -> list[str]:
-    """Model states this project's unfinished runs have not released yet.
+def pending_operation_return_states(store: CadLinkStore | None) -> list[str]:
+    """Model states an unfinished CAD solve operation's preparation still names.
+
+    Cleanup never removes what a pending operation references
+    (CAD-OPERATIONS.md, "Retention"): its retained snapshot is never pruned,
+    and the captured document its preparation was made from is kept here.
+    """
+
+    if store is None:
+        return []
+    states: list[str] = []
+    for row in store.list_operations(kind="prepare_and_solve", states=_PENDING_STATES, limit=1000):
+        preparation = str(row.get("preparation_id") or "")
+        ingest = store.get_ingest(preparation) if preparation else None
+        if ingest is None:
+            continue
+        try:
+            document = json.loads(str(ingest["record_json"])).get("document") or {}
+        except (TypeError, ValueError, AttributeError):
+            continue
+        digest = str(document.get("return_state_hash") or "") if isinstance(document, Mapping) else ""
+        if digest:
+            states.append(digest)
+    return states
+
+
+async def _retained_return_states(
+    jobs: Any, stem: str, store: CadLinkStore | None = None
+) -> list[str]:
+    """Model states this project's unfinished runs and operations have not released.
 
     A queued or running run has not written its archive, and a complete run
     without ``archived_at`` has not either; both still have to be given the
-    exact document they were solved from. Advisory, like everything else on
-    this path: if the job registry cannot be read, the capture goes ahead and
-    keeps only the newest state, which is the behaviour that predates this.
+    exact document they were solved from. So does a pending CAD operation's
+    preparation. Advisory, like everything else on this path: if a registry
+    cannot be read, the capture goes ahead and keeps only the newest state,
+    which is the behaviour that predates this.
     """
 
+    pending: list[str] = []
+    try:
+        pending = await asyncio.to_thread(pending_operation_return_states, store)
+    except Exception:  # noqa: BLE001 - retention is advisory, like the rest
+        logger.warning("Could not read which CAD model states operations still need", exc_info=True)
     if jobs is None:
-        return []
+        return pending
     try:
         rows = await jobs.unreleased_cad_return_states()
     except Exception:  # noqa: BLE001
         logger.warning(
             "Could not read which CAD model states runs still need", exc_info=True
         )
-        return []
+        return pending
     folder = archive_folder_slug(stem, "design")
     retained: list[str] = []
     for row in rows:
@@ -1223,7 +1274,7 @@ async def _retained_return_states(jobs: Any, stem: str) -> list[str]:
         digest = str(row.get("return_state_hash") or "")
         if digest:
             retained.append(digest)
-    return retained
+    return [*retained, *pending]
 
 
 async def _archive_cad_document(
@@ -1272,7 +1323,7 @@ async def _archive_cad_document(
             ) or stem
     if not stem:
         return
-    retained = await _retained_return_states(jobs, stem)
+    retained = await _retained_return_states(jobs, stem, store)
     try:
         relative = await asyncio.to_thread(
             archive_cad_document, bundle_path, record, runs.path(), stem, retained
@@ -1622,7 +1673,8 @@ async def _reclaim_captured_documents(request: Request, root: Path, stem: str) -
     """
 
     jobs = getattr(request.app.state, "jobs_runtime", None)
-    retained = await _retained_return_states(jobs, stem)
+    store = getattr(request.app.state, "cadlink_store", None)
+    retained = await _retained_return_states(jobs, stem, store)
     try:
         await asyncio.to_thread(reclaim_captured_documents, root, stem, retained)
     except OSError as exc:
@@ -1631,15 +1683,321 @@ async def _reclaim_captured_documents(request: Request, root: Path, stem: str) -
         )
 
 
+# -- Backend-owned CAD solves ---------------------------------------------------
+#
+# docs/architecture/CAD-OPERATIONS.md, "Setup revisions" and "Preparation". The
+# operation, not the browser, owns a solve: its setup revision, its fenced
+# preparation stages, its approvals and its bound request. The UI issues and
+# observes; a reconnecting client reads these routes for the authoritative state.
+
+
+class SetupRevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    setup: dict[str, Any]
+
+
+class OperationApprovalsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    preparation_id: str = Field(alias="preparationId", min_length=1)
+    finding_ids: list[str] = Field(alias="findingIds", min_length=1)
+
+
+class PrepareOperationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    setup_revision_id: str | None = Field(default=None, alias="setupRevisionId")
+    submit: bool = True
+    #: Blocking findings the user reviewed on a preparation. They are approved
+    #: only if this preparation resumes that one: the same snapshot and setup.
+    approvals: OperationApprovalsRequest | None = None
+    #: Answer with the prepared or submitted state instead of at once.
+    wait: bool = False
+
+
+_PENDING_STATES = frozenset(STATES - TERMINAL_STATES)
+
+
+def _preparation_context(state: Any) -> PreparationContext:
+    """What a preparation needs from this application."""
+
+    from server.jobs.runtime import (
+        EngineUnavailableError,
+        ImportedSolveRefusal,
+        SymmetryValidationError,
+        UnknownEngineError,
+    )
+
+    workspace = getattr(state, "cad_workspace", None)
+    selected = workspace.selected_path() if workspace is not None else None
+    runtime = getattr(state, "jobs_runtime", None)
+    job_store = getattr(runtime, "store", None)
+    restart = getattr(state, "update_restart", None)
+    loop = asyncio.get_running_loop()
+
+    def publish(summary: Mapping[str, Any]) -> None:
+        # Called after the state change is committed, often from a worker
+        # thread: the broker's queues belong to the event loop.
+        events = getattr(runtime, "events", None)
+        if events is None:
+            return
+        message = {"v": 1, "kind": "cadOperation", "operation": dict(summary)}
+        loop.call_soon_threadsafe(events.publish, message)
+
+    def job_for_submission(key: str) -> str | None:
+        # A read of the jobs database; it never starts the jobs runtime.
+        try:
+            return job_store.job_for_submission_key(key)
+        except sqlite3.OperationalError as exc:
+            # A jobs database the runtime has not created yet holds no job.
+            if "no such table" in str(exc):
+                return None
+            raise
+
+    return PreparationContext(
+        store=state.cadlink_store,
+        data_dir=Path(state.data_dir),
+        workspace_root=selected.resolve() if selected is not None else None,
+        submit=runtime.submit if runtime is not None else None,
+        job_for_submission=job_for_submission if job_store is not None else None,
+        publish=publish,
+        # A submission-key conflict is not among them: that key already made
+        # a job, and preparation reconciles to it.
+        submission_refusals=(
+            UnknownEngineError,
+            SymmetryValidationError,
+            ImportedSolveRefusal,
+            EngineUnavailableError,
+        ),
+        submission_blocked=restart.refusal if restart is not None else None,
+    )
+
+
+def _operation_detail(store: CadLinkStore, row: Mapping[str, Any]) -> dict[str, Any]:
+    detail = operation_summary(row)
+    approvals = json.loads(row["approvals_json"]) if row.get("approvals_json") else []
+    detail["approvals"] = approvals
+    preparation = (
+        store.get_preparation(str(row["preparation_id"])) if row.get("preparation_id") else None
+    )
+    detail["preparation"] = (
+        {
+            "preparationId": preparation["preparation_id"],
+            "ingestId": preparation["ingest_id"],
+            "snapshotSha256": preparation["snapshot_sha256"],
+            "setupRevisionId": preparation["setup_revision_id"],
+            "reportSha256": preparation["report_sha256"],
+            "blockingFindingIds": json.loads(preparation["blocking_findings_json"]),
+            "attemptGeneration": preparation["attempt_generation"],
+        }
+        if preparation is not None
+        else None
+    )
+    return detail
+
+
+@router.post("/setup-revisions")
+async def post_setup_revision(payload: SetupRevisionRequest, request: Request) -> dict[str, Any]:
+    """Store an immutable setup revision; identical content is one revision."""
+
+    try:
+        setup = validate_setup(payload.setup)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    store: CadLinkStore = request.app.state.cadlink_store
+    row = await asyncio.to_thread(
+        store.create_setup_revision, setup_content(setup), setup_digest(setup)
+    )
+    return {
+        "revisionId": row["revision_id"],
+        "contentSha256": row["content_sha256"],
+        "createdAt": row["created_at"],
+    }
+
+
+@router.get("/setup-revisions/{revision_id}")
+async def get_setup_revision(revision_id: str, request: Request) -> dict[str, Any]:
+    store: CadLinkStore = request.app.state.cadlink_store
+    row = await asyncio.to_thread(store.get_setup_revision, revision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown setup revision {revision_id}")
+    return {
+        "revisionId": row["revision_id"],
+        "contentSha256": row["content_sha256"],
+        "setup": json.loads(row["setup_json"]),
+        "createdAt": row["created_at"],
+    }
+
+
+@router.get("/operations")
+async def list_cad_operations(
+    request: Request,
+    pending: bool = Query(default=True),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, Any]:
+    """CAD operations, the unfinished ones by default: the authoritative state."""
+
+    store: CadLinkStore = request.app.state.cadlink_store
+    rows = await asyncio.to_thread(
+        store.list_operations, states=_PENDING_STATES if pending else None, limit=limit
+    )
+    return {"operations": [operation_summary(row) for row in rows]}
+
+
+@router.get("/operations/{operation_id}")
+async def get_cad_operation(operation_id: str, request: Request) -> dict[str, Any]:
+    store: CadLinkStore = request.app.state.cadlink_store
+    row = await asyncio.to_thread(store.get_operation, operation_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
+    return await asyncio.to_thread(_operation_detail, store, row)
+
+
+def _track(state: Any, task: asyncio.Task[Any]) -> None:
+    running = getattr(state, "cad_preparations", None)
+    if running is None:
+        running = set()
+        state.cad_preparations = running
+    running.add(task)
+
+    def done(finished: asyncio.Task[Any]) -> None:
+        running.discard(finished)
+        if not finished.cancelled() and finished.exception() is not None:
+            logger.error(
+                "A CAD preparation failed unexpectedly.", exc_info=finished.exception()
+            )
+
+    task.add_done_callback(done)
+
+
+@router.post("/operations/{operation_id}/prepare")
+async def post_prepare_cad_operation(
+    operation_id: str, payload: PrepareOperationRequest, request: Request
+) -> dict[str, Any]:
+    """Prepare a solve operation from its retained snapshot, and submit it when asked.
+
+    A preparation already running for the operation is taken over: its next
+    write is refused, and this one's result stands.
+    """
+
+    store: CadLinkStore = request.app.state.cadlink_store
+    row = await asyncio.to_thread(store.get_operation, operation_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
+    if row["kind"] != PREPARE_AND_SOLVE:
+        raise HTTPException(status_code=409, detail=f"CAD operation {operation_id} is not a solve")
+    if payload.setup_revision_id is not None and (
+        await asyncio.to_thread(store.get_setup_revision, payload.setup_revision_id)
+    ) is None:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown setup revision {payload.setup_revision_id}"
+        )
+    approvals = payload.approvals
+    context = _preparation_context(request.app.state)
+    task = asyncio.create_task(
+        prepare_operation(
+            context,
+            operation_id,
+            PreparationInput(
+                setup_revision_id=payload.setup_revision_id,
+                submit=payload.submit,
+                approve_preparation_id=approvals.preparation_id if approvals else None,
+                approve_finding_ids=tuple(approvals.finding_ids) if approvals else (),
+            ),
+        )
+    )
+    _track(request.app.state, task)
+    if payload.wait:
+        try:
+            return {"operation": await asyncio.shield(task)}
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"operation": operation_summary(row)}
+
+
+@router.post("/operations/{operation_id}/approvals")
+async def post_cad_operation_approvals(
+    operation_id: str, payload: OperationApprovalsRequest, request: Request
+) -> dict[str, Any]:
+    """Acknowledge blocking findings of one preparation. A new preparation needs its own.
+
+    The next preparation of the same snapshot and setup revision resumes that
+    preparation, so these approvals apply to it.
+    """
+
+    store: CadLinkStore = request.app.state.cadlink_store
+    row = await asyncio.to_thread(store.get_operation, operation_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
+    try:
+        updated = await asyncio.to_thread(
+            store.add_approvals, operation_id, payload.preparation_id, payload.finding_ids
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if updated is None:
+        raise HTTPException(status_code=409, detail="This CAD operation is finished.")
+    return await asyncio.to_thread(_operation_detail, store, updated)
+
+
+@router.post("/operations/{operation_id}/cancel")
+async def post_cancel_cad_operation(operation_id: str, request: Request) -> dict[str, Any]:
+    """Dismiss an operation: at once when idle, at the next step when running."""
+
+    store: CadLinkStore = request.app.state.cadlink_store
+    row = await asyncio.to_thread(store.request_cancel, operation_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
+    context = _preparation_context(request.app.state)
+    if context.publish is not None:
+        context.publish(operation_summary(row))
+    return operation_summary(row)
+
+
+def _recover_on_startup(application: FastAPI):
+    async def recover_cad_operations_on_startup() -> None:
+        # Settles what a backend that stopped left: a job its submission key
+        # made is the outcome; an attempt it held waits for the user. It only
+        # reads the jobs database; starting the jobs runtime stays its own.
+        state = application.state
+        try:
+            changed = await asyncio.to_thread(recover_operations, _preparation_context(state))
+        except Exception:  # noqa: BLE001 - recovery must never stop the app starting
+            logger.warning("Could not recover CAD operations at startup.", exc_info=True)
+            return
+        if changed:
+            logger.info("Recovered %d CAD operation(s) at startup.", changed)
+
+    return recover_cad_operations_on_startup
+
+
+def _abandon_preparations_on_shutdown(application: FastAPI):
+    async def abandon_cad_preparations_on_shutdown() -> None:
+        # A preparation still running is abandoned, not waited for: the next
+        # start takes its operation over, and it waits as interrupted.
+        running = list(getattr(application.state, "cad_preparations", None) or ())
+        for task in running:
+            task.cancel()
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)
+
+    return abandon_cad_preparations_on_shutdown
+
+
 def mount_cadlink(application: FastAPI) -> None:
     application.include_router(router)
 
     async def advertise_fusion_delivery_on_startup() -> None:
-        # Tells the add-in that WG reads per-command solve files, and discards
-        # WG-produced requests an add-in without per-request files already ran.
+        # Removes what a WG older than delivery version 3 left for its add-in,
+        # then advertises version 3.
         await asyncio.to_thread(advertise_fusion_delivery, Path(application.state.data_dir))
 
     application.router.add_event_handler("startup", advertise_fusion_delivery_on_startup)
+    application.router.add_event_handler("startup", _recover_on_startup(application))
+    application.router.add_event_handler(
+        "shutdown", _abandon_preparations_on_shutdown(application)
+    )
 
 
 __all__ = [

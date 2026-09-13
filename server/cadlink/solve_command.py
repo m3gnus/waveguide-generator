@@ -28,7 +28,7 @@ import logging
 import os
 from pathlib import Path
 import threading
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 import uuid
 
 from .identity import utc_now
@@ -352,12 +352,19 @@ def _refuse_outdated(store: CadLinkStore, command: PendingSolveCommand) -> dict[
         return exc.existing
 
 
-def collect_solve_deliveries(data_dir: Path, store: CadLinkStore) -> dict[str, Any] | None:
+def collect_solve_deliveries(
+    data_dir: Path,
+    store: CadLinkStore,
+    *,
+    retain: Callable[[str], object] | None = None,
+) -> dict[str, Any] | None:
     """Move delivered solve commands into the operation store, oldest first.
 
     Each file is claimed by rename, read, persisted and only then deleted. A
     newer command written to the same slot meanwhile therefore survives, and a
     poll interrupted after a claim leaves the claim for the next poll to finish.
+    ``retain`` keeps the snapshot an operation names in WG's own storage before
+    its delivery is acknowledged (CAD-OPERATIONS.md, "Preparation").
 
     Returns the answer owed to one delivery on its own -- the replay of an
     outcome that already stands, or a refusal of a different request under an
@@ -387,6 +394,8 @@ def collect_solve_deliveries(data_dir: Path, store: CadLinkStore) -> dict[str, A
                 answer = _refuse_outdated(store, command)
             else:
                 answer = _persist(store, command)
+                if retain is not None:
+                    retain(command.command_id)
             # A delete that fails leaves the claim for the next poll, which
             # recovers the same operation and answers it then.
             if _acknowledge(claim) and answer is not None:

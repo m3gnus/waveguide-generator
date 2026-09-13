@@ -28,7 +28,7 @@ from server.mesh.artifact import mesh_text_sha256
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 
-from .wgreturn import WgReturnBundle, declared_domain_planes, read_wgreturn
+from .wgreturn import WgReturnBundle, WgReturnError, declared_domain_planes, read_wgreturn
 
 
 # v4 verifies the auto-cut against the meshed boundary and recentres a
@@ -55,6 +55,44 @@ from .wgreturn import WgReturnBundle, declared_domain_planes, read_wgreturn
 # Anything that changes a project's inputs re-keys it into the new rule anyway.
 IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v5"
 IMPORT_VIEWPORT_PIPELINE_CONTRACT = "wg-import-viewport-v1"
+# The semantics every v5 key so far was made under: the fingerprint of
+# ``meshing_semantics()`` as those constants stand. A mesh key names the
+# semantics only when they differ from these. So no existing key changes and no
+# project re-meshes (the 2026-08-27 decision above still holds), while any later
+# change of a WG-internal sizing constant, with every keyed input unchanged, is
+# a distinct preparation identity (docs/architecture/CAD-OPERATIONS.md,
+# "Preparation identity"). Retained runs keep the mesh their record names.
+_BASELINE_MESHING_SEMANTICS = "sha256:79aa14dff0812302be2bd64c494913fd39f370466ca80458ce285f6a63c173c8"
+
+
+def meshing_semantics() -> dict[str, Any]:
+    """The WG-internal constants that decide what a solver mesh is for given inputs."""
+
+    from server.mesh import imported as meshing
+
+    semantics = {
+        "surface_deviation_mm": meshing.IMPORTED_SURFACE_DEVIATION_MM,
+        "surface_deviation_min_mm": meshing.IMPORTED_SURFACE_DEVIATION_MIN_MM,
+        "surface_deviation_max_mm": meshing.IMPORTED_SURFACE_DEVIATION_MAX_MM,
+        "sagitta_flat_curvature": meshing._SAGITTA_FLAT_CURVATURE,
+        "sagitta_grid_samples": meshing._SAGITTA_GRID_SAMPLES,
+        "sagitta_quantise_log": meshing._SAGITTA_QUANTISE_LOG,
+    }
+    # Rounded: a constant computed at import (``math.log``) may differ in its
+    # last bit between platforms' maths libraries, and the fingerprint must not.
+    return {
+        name: round(value, 12) if isinstance(value, float) else value
+        for name, value in semantics.items()
+    }
+
+
+def meshing_semantics_fingerprint() -> str:
+    return "sha256:" + hashlib.sha256(_canonical(meshing_semantics())).hexdigest()
+
+
+def _semantics_key_entry() -> dict[str, str]:
+    fingerprint = meshing_semantics_fingerprint()
+    return {} if fingerprint == _BASELINE_MESHING_SEMANTICS else {"meshing_semantics": fingerprint}
 
 
 class IngestRefusal(ValueError):
@@ -376,6 +414,62 @@ def _stage_bundle_cas(
     return destination, staged, temporary
 
 
+def retained_snapshot_path(data_dir: str | Path, manifest_sha256: str) -> Path:
+    """Where WG keeps its copy of the return whose manifest hashes to this."""
+
+    digest = str(manifest_sha256).removeprefix("sha256:")
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise ValueError(f"not a manifest hash: {manifest_sha256!r}")
+    return data_paths(data_dir).root / "imports" / "bundles" / f"{digest}.wgreturn"
+
+
+def read_snapshot(bundle_path: str | Path, *, retained: bool = False) -> WgReturnBundle:
+    """Read a return, or WG's retained copy of one, which has no captured CAD document."""
+
+    if not retained:
+        return read_wgreturn(bundle_path)
+    return read_wgreturn(bundle_path, absent_purposes=frozenset({CAD_DOCUMENT_PURPOSE}))
+
+
+def retain_snapshot(
+    bundle_path: str | Path,
+    data_dir: str | Path,
+    *,
+    expected_manifest_sha256: str | None = None,
+) -> dict[str, str]:
+    """Verify a return bundle and keep its bytes in WG's own storage.
+
+    A snapshot is accepted only once this returns (CAD-OPERATIONS.md, "Artifact
+    acceptance"): the copy under ``<data>/imports/bundles`` is content-addressed
+    by the manifest, so the same snapshot is kept once, and preparation reads
+    the copy, never the exchange folder. A bundle whose manifest no longer
+    hashes to ``expected_manifest_sha256`` is refused.
+    """
+
+    bundle = read_wgreturn(bundle_path)
+    if expected_manifest_sha256 is not None:
+        expected = expected_manifest_sha256
+        if not expected.startswith("sha256:"):
+            expected = f"sha256:{expected}"
+        if bundle.manifest_sha256 != expected:
+            raise WgReturnError(
+                "The return bundle changed after Fusion asked WG to solve it. "
+                "Send it again from Fusion."
+            )
+    imports_root = data_paths(data_dir).root / "imports"
+    destination, staged, staged_root = _stage_bundle_cas(bundle, imports_root)
+    try:
+        _publish_staged_bundle(destination, staged)
+    finally:
+        if staged_root is not None:
+            shutil.rmtree(staged_root, ignore_errors=True)
+    return {
+        "manifest_sha256": bundle.manifest_sha256,
+        "artifact_sha256": bundle.artifact_sha256,
+        "retained_path": str(destination),
+    }
+
+
 def _publish_staged_bundle(destination: Path, staged: Path | None) -> None:
     if staged is None or destination.is_dir():
         return
@@ -422,6 +516,7 @@ def _cache_key(
         ),
         "mesher_version": _package_version("hornlab-waveguide-mesher"),
         "gmsh_version": _package_version("gmsh"),
+        **_semantics_key_entry(),
     }
     return hashlib.sha256(_canonical(payload)).hexdigest()
 
@@ -448,6 +543,7 @@ def _cache_lookup_key(
                 "options": options,
                 "mesher_version": _package_version("hornlab-waveguide-mesher"),
                 "gmsh_version": _package_version("gmsh"),
+                **_semantics_key_entry(),
             }
         )
     ).hexdigest()
@@ -709,8 +805,16 @@ def ingest_bundle(
     expected_instance_id: str | None = None,
     recompute_freshness: Callable[[Mapping[str, Any]], str] | None = None,
     defer_viewport: bool = False,
+    commit_guard: Callable[[Any], bool] | None = None,
+    retained_copy: bool = False,
 ) -> dict[str, Any]:
     """Run the nine ingestion stages and persist the immutable WG verdict.
+
+    ``commit_guard`` is a preparation attempt's fence
+    (``CadLinkStore.attempt_is_current``): it runs inside the transaction that
+    publishes the record, so an attempt that lost its operation commits nothing.
+    ``retained_copy`` says ``bundle_path`` is WG's retained copy of a return
+    (``retain_snapshot``), which carries no captured CAD document.
 
     ``defer_viewport`` publishes the record as soon as the solver mesh exists,
     leaving the display tessellation to :func:`build_deferred_viewport`. That
@@ -721,7 +825,7 @@ def ingest_bundle(
     """
 
     try:
-        bundle = read_wgreturn(bundle_path)
+        bundle = read_snapshot(bundle_path, retained=retained_copy)
     except Exception as exc:
         raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
     manifest = bundle.manifest
@@ -1267,6 +1371,7 @@ def ingest_bundle(
             manifest_sha256=bundle.manifest_sha256,
             artifact_sha256=bundle.artifact_sha256,
             record_builder=publish,
+            commit_guard=commit_guard,
         )
     finally:
         if staged_bundle_root is not None:

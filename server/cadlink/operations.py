@@ -33,6 +33,9 @@ CANCELLED = "cancelled"
 # Reserved: a Fusion mutation began and its completion evidence is missing.
 # Never retried automatically, and not a rejection.
 RECOVERY_REQUIRED = "recovery_required"
+# The user dismissed an operation an attempt is working on. The attempt stops
+# at its next step and records ``cancelled``; nothing claims it meanwhile.
+CANCEL_REQUESTED = "cancel_requested"
 STATES = frozenset(
     {
         RECEIVED,
@@ -42,19 +45,47 @@ STATES = frozenset(
         REJECTED,
         CANCELLED,
         RECOVERY_REQUIRED,
+        CANCEL_REQUESTED,
     }
+)
+# Where a CAD solve stands, independent of its state: how far its preparation
+# got. A stage only moves forward within one attempt; a new attempt starts again
+# from ``validating``.
+STAGE_RECEIVED = "received"
+STAGE_VALIDATING = "validating"
+STAGE_PREPARING_MESH = "preparing-mesh"
+STAGE_READY = "ready"
+STAGE_SUBMITTED = "submitted"
+STAGES = (
+    STAGE_RECEIVED,
+    STAGE_VALIDATING,
+    STAGE_PREPARING_MESH,
+    STAGE_READY,
+    STAGE_SUBMITTED,
 )
 TERMINAL_STATES = frozenset({ACCEPTED, REJECTED, CANCELLED})
 CLAIMABLE_STATES = frozenset({RECEIVED, PROCESSING, NEEDS_USER_INPUT})
-# ``received`` is where acceptance starts and ``processing`` is what a claim
-# sets; neither is an outcome.
-RECORDABLE_STATES = STATES - {RECEIVED, PROCESSING}
+# ``received`` is where acceptance starts, ``processing`` is what a claim sets
+# and ``cancel_requested`` is what a dismissal of a running attempt sets; none
+# is an outcome.
+RECORDABLE_STATES = STATES - {RECEIVED, PROCESSING, CANCEL_REQUESTED}
 
 # Reason code -> the only state it may accompany. Both are rejections because a
 # refreshed baseline or target is a new operation, never a retry of this one.
 REASON_CODES: Mapping[str, str] = {
     "baseline_conflict": REJECTED,
     "target_not_exact": REJECTED,
+    # A snapshot that fails verification, or contradicts the operation's inputs.
+    "snapshot_invalid": REJECTED,
+    # Cannot proceed now: each waits for the user, and the operation is kept.
+    "setup_required": NEEDS_USER_INPUT,
+    "findings_need_review": NEEDS_USER_INPUT,
+    "preparation_failed": NEEDS_USER_INPUT,
+    "engine_unavailable": NEEDS_USER_INPUT,
+    "submission_refused": NEEDS_USER_INPUT,
+    "interrupted": NEEDS_USER_INPUT,
+    # Prepared, and waiting for the user to start the solve.
+    "ready_to_solve": NEEDS_USER_INPUT,
 }
 BASELINE_KINDS = frozenset({"document_signature_hash"})
 OUTCOME_FIELDS = frozenset({"message", "reconciled", "evidence"})
@@ -289,6 +320,7 @@ __all__ = [
     "ACCEPTED",
     "BASELINE_KINDS",
     "CANCELLED",
+    "CANCEL_REQUESTED",
     "CLAIMABLE_STATES",
     "DIGEST_VERSION",
     "INSERT_LINK",
@@ -303,6 +335,12 @@ __all__ = [
     "RECORDABLE_STATES",
     "RECOVERY_REQUIRED",
     "REJECTED",
+    "STAGES",
+    "STAGE_PREPARING_MESH",
+    "STAGE_READY",
+    "STAGE_RECEIVED",
+    "STAGE_SUBMITTED",
+    "STAGE_VALIDATING",
     "REQUEST_RETURN",
     "STATES",
     "TERMINAL_STATES",

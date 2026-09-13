@@ -26,12 +26,18 @@ from .identity import (
 )
 from .operations import (
     ACCEPTED,
+    CANCELLED,
+    CANCEL_REQUESTED,
     CLAIMABLE_STATES,
     DIGEST_VERSION,
+    MUTATING_KINDS,
     PREPARE_AND_SOLVE,
     PROCESSING,
     RECEIVED,
     REJECTED,
+    STAGES,
+    STAGE_READY,
+    STAGE_RECEIVED,
     TERMINAL_STATES,
     canonical_json,
     check_transition,
@@ -211,7 +217,52 @@ _SCHEMA = (
     """,
     "CREATE INDEX IF NOT EXISTS cad_operations_by_kind_state "
     "ON cad_operations(kind, state, updated_at)",
+    # Setup revisions and preparations. Both are new tables, so the file stays
+    # one an older release opens: it neither reads nor writes them.
+    """
+    CREATE TABLE IF NOT EXISTS cad_setup_revisions (
+      revision_id TEXT PRIMARY KEY,
+      content_sha256 TEXT NOT NULL UNIQUE,
+      setup_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS cad_preparations (
+      preparation_id TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL,
+      attempt_generation INTEGER NOT NULL,
+      snapshot_sha256 TEXT NOT NULL,
+      setup_revision_id TEXT,
+      ingest_id TEXT NOT NULL,
+      report_sha256 TEXT,
+      blocking_findings_json TEXT NOT NULL,
+      meshing_semantics TEXT,
+      created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS cad_preparations_by_operation "
+    "ON cad_preparations(operation_id, created_at)",
 )
+# Columns later stages added to cad_operations: nullable (or defaulted), so a
+# row written before them -- by an earlier build, or by an older release, which
+# never touches this table -- stays valid, and reads its stage from its state.
+_OPERATION_COLUMNS = (
+    ("stage", "TEXT"),
+    ("setup_revision_id", "TEXT"),
+    ("request_json", "TEXT"),
+    ("snapshot_json", "TEXT"),
+    ("preparation_id", "TEXT"),
+    ("approvals_json", "TEXT"),
+)
+
+
+class StaleAttempt(RuntimeError):
+    """An attempt tried to commit after it lost its operation (the fence)."""
+
+
+class BindingConflict(ValueError):
+    """An operation is already bound to a different request."""
 
 
 def _archive_stem_candidate(value: object) -> str:
@@ -548,6 +599,12 @@ class CadLinkStore:
             # open reruns both. The file is renamed only after the commit.
             # The table is additive, so the file keeps the format an older
             # release reads (STORE_FORMAT_VERSION).
+            operation_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(cad_operations)")
+            }
+            for column, declaration in _OPERATION_COLUMNS:
+                if column not in operation_columns:
+                    conn.execute(f"ALTER TABLE cad_operations ADD COLUMN {column} {declaration}")
             imported_ledger = _import_legacy_solve_ledger(conn, self.legacy_solve_ledger)
             conn.execute(f"PRAGMA user_version = {STORE_FORMAT_VERSION}")
         self._initialized = True
@@ -595,8 +652,8 @@ class CadLinkStore:
                     INSERT INTO cad_operations (
                       operation_id, kind, request_digest, digest_version,
                       target_json, inputs_json, attempt_generation, state,
-                      legacy, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?)
+                      legacy, created_at, updated_at, stage
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?)
                     """,
                     (
                         operation_id,
@@ -608,6 +665,7 @@ class CadLinkStore:
                         RECEIVED,
                         now,
                         now,
+                        STAGE_RECEIVED,
                     ),
                 )
                 row = conn.execute(
@@ -652,13 +710,25 @@ class CadLinkStore:
         job_id: str | None = None,
         reason: str | None = None,
         outcome: Mapping[str, Any] | None = None,
+        stage: str | None = None,
+        release_binding: bool = False,
     ) -> dict[str, Any] | None:
         """Record what the attempt holding ``generation`` found.
 
         Conditional on that generation and on the operation not being
         terminal: an obsolete attempt, or a second terminal outcome, changes
         nothing and gets None. A job id, once attached, is never cleared.
+        ``stage``, when given, is where the attempt got to.
+
+        A dismissal stands: from ``cancel_requested`` the outcome recorded is
+        ``cancelled``, whatever the fenced attempt found, except ``accepted``
+        with a job -- the job exists, and the user cancels it in the jobs list.
+        ``release_binding`` unbinds the request in the same transaction, for a
+        submission that created nothing; a request with a job stays bound.
         """
+
+        if stage is not None and stage not in STAGES:
+            raise ValueError(f"unknown CAD operation stage {stage!r}")
 
         attempt = _require_generation(generation)
         outcome_json = validate_outcome(operation_id, state, reason=reason, outcome=outcome)
@@ -668,7 +738,7 @@ class CadLinkStore:
         reconciled = outcome is not None and outcome.get("reconciled") is True
         with self._lock, self._transaction() as conn:
             current = conn.execute(
-                "SELECT kind, state, attempt_generation FROM cad_operations "
+                "SELECT kind, state, attempt_generation, job_id FROM cad_operations "
                 "WHERE operation_id = ?",
                 (operation_id,),
             ).fetchone()
@@ -678,6 +748,10 @@ class CadLinkStore:
                 or current["state"] in TERMINAL_STATES
             ):
                 return None
+            if current["state"] == CANCEL_REQUESTED and not (
+                state == ACCEPTED and (job_id or current["job_id"])
+            ):
+                state, reason, outcome_json, stage = CANCELLED, None, None, None
             # The read and the write share this IMMEDIATE transaction, so no
             # other writer can move the row between the check and the update.
             check_transition(
@@ -685,13 +759,350 @@ class CadLinkStore:
             )
             conn.execute(
                 "UPDATE cad_operations SET state = ?, job_id = COALESCE(?, job_id), "
-                "reason = ?, outcome_json = ?, updated_at = ? WHERE operation_id = ?",
-                (state, job_id, reason, outcome_json, utc_now(), operation_id),
+                "reason = ?, outcome_json = ?, stage = COALESCE(?, stage), updated_at = ? "
+                "WHERE operation_id = ?",
+                (state, job_id, reason, outcome_json, stage, utc_now(), operation_id),
+            )
+            if release_binding and state not in TERMINAL_STATES:
+                conn.execute(
+                    "UPDATE cad_operations SET setup_revision_id = NULL, request_json = NULL "
+                    "WHERE operation_id = ? AND job_id IS NULL",
+                    (operation_id,),
+                )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return self._row(row)
+
+    def advance_operation(
+        self,
+        operation_id: str,
+        generation: int,
+        *,
+        stage: str | None = None,
+        snapshot: Mapping[str, Any] | None = None,
+        preparation_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Move the attempt holding ``generation`` on, recording what it made.
+
+        The fence: conditional on that generation being current and the
+        operation still ``processing``. A takeover, a cancellation or an
+        outcome changes one of those, and the obsolete attempt then gets None
+        and must stop without committing anything.
+        """
+
+        attempt = _require_generation(generation)
+        if stage is not None and stage not in STAGES:
+            raise ValueError(f"unknown CAD operation stage {stage!r}")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_operations SET stage = COALESCE(?, stage), "
+                "snapshot_json = COALESCE(?, snapshot_json), "
+                "preparation_id = COALESCE(?, preparation_id), updated_at = ? "
+                "WHERE operation_id = ? AND attempt_generation = ? AND state = ?",
+                (
+                    stage,
+                    canonical_json(dict(snapshot)) if snapshot is not None else None,
+                    preparation_id,
+                    utc_now(),
+                    operation_id,
+                    attempt,
+                    PROCESSING,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return self._row(row)
+
+    def attempt_is_current(
+        self, conn: sqlite3.Connection, operation_id: str, generation: int
+    ) -> bool:
+        """The fence, for use inside another write's transaction on this store."""
+
+        row = conn.execute(
+            "SELECT state, attempt_generation FROM cad_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+        return (
+            row is not None
+            and row["state"] == PROCESSING
+            and int(row["attempt_generation"]) == int(generation)
+        )
+
+    def record_snapshot(
+        self, operation_id: str, snapshot: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """Record the retained snapshot of an unfinished operation that has none yet.
+
+        Receive-time retention. It is not fenced: the copy is content-addressed
+        and verified against the operation's own manifest hash, so every
+        writer records the same thing, and the first one stands.
+        """
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_operations SET snapshot_json = ?, updated_at = ? "
+                "WHERE operation_id = ? AND snapshot_json IS NULL "
+                f"AND state NOT IN ({', '.join('?' for _ in TERMINAL_STATES)})",
+                (
+                    canonical_json(dict(snapshot)),
+                    utc_now(),
+                    operation_id,
+                    *sorted(TERMINAL_STATES),
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return self._row(row)
+
+    def bind_request(
+        self,
+        operation_id: str,
+        generation: int,
+        *,
+        setup_revision_id: str,
+        request_json: str,
+    ) -> dict[str, Any] | None:
+        """Bind the exact solve request, immediately before it is submitted.
+
+        This is the binding point: from here the request is immutable, and a
+        recovery resubmits exactly it. Binding again with the same request is
+        a no-op; a different one is a ``BindingConflict`` -- a changed setup
+        is a new operation. Fenced like ``advance_operation``.
+        """
+
+        attempt = _require_generation(generation)
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+            if (
+                row is None
+                or row["state"] != PROCESSING
+                or int(row["attempt_generation"]) != attempt
+            ):
+                return None
+            if row["request_json"] is not None:
+                if row["request_json"] != request_json:
+                    raise BindingConflict(
+                        f"operation {operation_id!r} is already bound to another request"
+                    )
+                return self._row(row)
+            conn.execute(
+                "UPDATE cad_operations SET setup_revision_id = ?, request_json = ?, "
+                "updated_at = ? WHERE operation_id = ?",
+                (setup_revision_id, request_json, utc_now(), operation_id),
             )
             row = conn.execute(
                 "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
             ).fetchone()
         return self._row(row)
+
+    def add_approvals(
+        self,
+        operation_id: str,
+        preparation_id: str,
+        finding_ids: Iterable[str],
+        *,
+        generation: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Approve blocking findings of one of this operation's preparations.
+
+        Merged into the stored approvals in one transaction, so two approvals
+        never drop each other. Each is bound to its preparation, and only a
+        finding that preparation reported as blocking can be approved
+        (``ValueError`` otherwise). An attempt passes its ``generation`` and is
+        fenced by it; the user's own approval is refused (None) only on a
+        finished operation.
+        """
+
+        wanted = list(dict.fromkeys(str(item) for item in finding_ids))
+        if not preparation_id or not all(wanted):
+            raise ValueError("an approval names a preparation and its finding ids")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+            if row is None or row["state"] in TERMINAL_STATES:
+                return None
+            if generation is not None and not self.attempt_is_current(
+                conn, operation_id, _require_generation(generation)
+            ):
+                return None
+            preparation = conn.execute(
+                "SELECT blocking_findings_json FROM cad_preparations "
+                "WHERE preparation_id = ? AND operation_id = ?",
+                (preparation_id, operation_id),
+            ).fetchone()
+            if preparation is None:
+                raise ValueError(
+                    f"preparation {preparation_id!r} is not one of this operation's"
+                )
+            unknown = sorted(set(wanted) - set(json.loads(preparation["blocking_findings_json"])))
+            if unknown:
+                raise ValueError(
+                    f"preparation {preparation_id!r} reported no blocking finding {unknown[0]!r}"
+                )
+            approvals = json.loads(row["approvals_json"]) if row["approvals_json"] else []
+            held = {(item["preparation_id"], item["finding_id"]) for item in approvals}
+            approvals += [
+                {"preparation_id": preparation_id, "finding_id": finding}
+                for finding in wanted
+                if (preparation_id, finding) not in held
+            ]
+            conn.execute(
+                "UPDATE cad_operations SET approvals_json = ?, updated_at = ? "
+                "WHERE operation_id = ?",
+                (canonical_json(approvals), utc_now(), operation_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return self._row(row)
+
+    def request_cancel(self, operation_id: str) -> dict[str, Any] | None:
+        """Dismiss an operation: at once when idle, at the attempt's next step when running.
+
+        An operation no attempt is working on becomes ``cancelled``. One an
+        attempt holds becomes ``cancel_requested``, which fences that attempt;
+        it then records ``cancelled``. A terminal operation is returned as it
+        is, and so is a CAD mutation under way: it may need recovery from the
+        document rather than cancellation.
+        """
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            state = str(row["state"])
+            if state in TERMINAL_STATES or state == CANCEL_REQUESTED:
+                return self._row(row)
+            if state == PROCESSING and row["kind"] in MUTATING_KINDS:
+                return self._row(row)
+            new_state = CANCEL_REQUESTED if state == PROCESSING else CANCELLED
+            conn.execute(
+                "UPDATE cad_operations SET state = ?, updated_at = ? WHERE operation_id = ?",
+                (new_state, utc_now(), operation_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return self._row(row)
+
+    def settle_cancel(self, operation_id: str, generation: int) -> dict[str, Any] | None:
+        """The attempt a dismissal fenced records the dismissal."""
+
+        attempt = _require_generation(generation)
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_operations SET state = ?, updated_at = ? "
+                "WHERE operation_id = ? AND attempt_generation = ? AND state = ?",
+                (CANCELLED, utc_now(), operation_id, attempt, CANCEL_REQUESTED),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return self._row(row) if cursor.rowcount == 1 else None
+
+    def create_setup_revision(self, setup_json: str, content_sha256: str) -> dict[str, Any]:
+        """Store an immutable setup revision; identical content is one revision."""
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM cad_setup_revisions WHERE content_sha256 = ?",
+                (content_sha256,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO cad_setup_revisions (revision_id, content_sha256, "
+                    "setup_json, created_at) VALUES (?, ?, ?, ?)",
+                    (mint_id("wgs_"), content_sha256, setup_json, utc_now()),
+                )
+                row = conn.execute(
+                    "SELECT * FROM cad_setup_revisions WHERE content_sha256 = ?",
+                    (content_sha256,),
+                ).fetchone()
+        return dict(row)
+
+    def get_setup_revision(self, revision_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        return self._read_one(
+            "SELECT * FROM cad_setup_revisions WHERE revision_id = ?", (revision_id,)
+        )
+
+    def record_preparation(
+        self,
+        operation_id: str,
+        generation: int,
+        *,
+        preparation_id: str,
+        snapshot_sha256: str,
+        setup_revision_id: str | None,
+        ingest_id: str,
+        report_sha256: str | None,
+        blocking_finding_ids: list[str],
+        meshing_semantics: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Record what the attempt prepared, and move it to ``ready``. Fenced.
+
+        A preparation the attempt resumed is already recorded, and keeps the
+        generation of the attempt that made it.
+        """
+
+        attempt = _require_generation(generation)
+        self.initialize()
+        now = utc_now()
+        with self._lock, self._transaction() as conn:
+            if not self.attempt_is_current(conn, operation_id, attempt):
+                return None
+            conn.execute(
+                "INSERT OR IGNORE INTO cad_preparations (preparation_id, operation_id, "
+                "attempt_generation, snapshot_sha256, setup_revision_id, ingest_id, "
+                "report_sha256, blocking_findings_json, meshing_semantics, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    preparation_id,
+                    operation_id,
+                    attempt,
+                    snapshot_sha256,
+                    setup_revision_id,
+                    ingest_id,
+                    report_sha256,
+                    canonical_json(list(blocking_finding_ids)),
+                    meshing_semantics,
+                    now,
+                ),
+            )
+            conn.execute(
+                "UPDATE cad_operations SET preparation_id = ?, stage = ?, updated_at = ? "
+                "WHERE operation_id = ?",
+                (preparation_id, STAGE_READY, now, operation_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return self._row(row)
+
+    def get_preparation(self, preparation_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        return self._read_one(
+            "SELECT * FROM cad_preparations WHERE preparation_id = ?", (preparation_id,)
+        )
 
     def record_legacy_outcome(
         self,
@@ -1158,13 +1569,21 @@ class CadLinkStore:
         artifact_sha256: str,
         record_builder: Callable[[str, str], str],
         created_at: str | None = None,
+        commit_guard: Callable[[sqlite3.Connection], bool] | None = None,
     ) -> dict[str, Any]:
-        """Atomically publish ingestion artifacts and their immutable record."""
+        """Atomically publish ingestion artifacts and their immutable record.
+
+        ``commit_guard`` runs inside the transaction, before anything is
+        published: a preparation passes its attempt's fence here, so an attempt
+        that lost its operation commits no record and publishes no bundle.
+        """
 
         self.initialize()
         now = created_at or utc_now()
         ingest_id = mint_id("wgi_")
         with self._lock, self._transaction() as conn:
+            if commit_guard is not None and not commit_guard(conn):
+                raise StaleAttempt("the preparation lost its operation before committing")
             record_json = record_builder(ingest_id, now)
             conn.execute(
                 """

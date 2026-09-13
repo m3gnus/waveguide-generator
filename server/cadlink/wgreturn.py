@@ -142,6 +142,9 @@ def _parse_manifest(raw: bytes) -> dict[str, Any]:
         raise WgReturnValidationError(
             f"wgreturn.json: invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
         ) from exc
+    except RecursionError as exc:
+        # Deep nesting fits well inside the size limit and exhausts the parser.
+        raise WgReturnValidationError("wgreturn.json: nested too deeply to read") from exc
     if not isinstance(value, dict):
         _fail("$", "must be an object")
     return value
@@ -667,8 +670,16 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     return manifest
 
 
-def read_wgreturn(path: str | Path) -> WgReturnBundle:
-    """Read and verify a directory-form ``.wgreturn`` bundle."""
+def read_wgreturn(
+    path: str | Path, *, absent_purposes: frozenset[str] = frozenset()
+) -> WgReturnBundle:
+    """Read and verify a directory-form ``.wgreturn`` bundle.
+
+    ``absent_purposes`` names member purposes that may be missing. WG's own
+    retained copy of a return leaves out the captured CAD document, which is
+    not geometry (``ingest._stage_bundle_cas``); every member that is present
+    is still verified against the manifest.
+    """
 
     bundle_path = Path(path)
     if bundle_path.is_symlink():
@@ -721,12 +732,19 @@ def read_wgreturn(path: str | Path) -> WgReturnBundle:
     undeclared = sorted(actual - set(declared))
     if undeclared:
         raise WgReturnIntegrityError(f"undeclared bundle member: {undeclared[0]}")
-    missing = sorted(set(declared) - actual)
+    absent = {
+        name
+        for name in set(declared) - actual
+        if declared[name][1].get("purpose") in absent_purposes
+    }
+    missing = sorted(set(declared) - actual - absent)
     if missing:
         raise WgReturnIntegrityError(f"declared bundle member is missing: {missing[0]}")
 
     members: dict[str, Path] = {}
     for name, (member_path, record) in declared.items():
+        if name in absent:
+            continue
         size = member_path.stat().st_size
         expected_size = int(record["size_bytes"])
         if size != expected_size:

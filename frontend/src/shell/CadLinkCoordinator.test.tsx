@@ -3200,6 +3200,8 @@ describe('CadLinkCoordinator', () => {
       return json({}, 404);
     }));
 
+    // The user's solver choice, which the run's own engine must not replace.
+    act(() => { useSolveOptionsStore.setState({ engine: 'bempp' }); });
     let shown = false;
     await act(async () => { shown = await showCadJobModel(job); });
 
@@ -3231,6 +3233,9 @@ describe('CadLinkCoordinator', () => {
       frequencyMode: 'list', frequencyListText: '400\n800\n1600',
       frequencySpacing: 'linear', meshValidationMode: 'strict', verbose: true,
     });
+    // Recalling a run never changes the user's solver choice: the run keeps
+    // its engine on its own record, and the next solve uses the selector's.
+    expect(useSolveOptionsStore.getState().engine).toBe('bempp');
 
     // A job submitted with the per-channel spec restores it verbatim, unlinked
     // pair and manual gain included — the shape drift compares against.

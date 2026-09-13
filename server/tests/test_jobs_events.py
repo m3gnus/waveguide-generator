@@ -211,3 +211,37 @@ def test_log_event_chunks_are_bounded(tmp_path: Path) -> None:
         assert len((store.get_job_row("log")["task_metadata"])["log_tail"][0]) == 2000
 
     asyncio.run(scenario())
+
+
+def test_protocol_forwards_a_cad_operation_update_without_a_cursor(tmp_path: Path) -> None:
+    """A CAD operation's new state is ephemeral on this channel.
+
+    It is stored before it is published (cadlink.db), so a client that misses
+    it reads GET /api/cadlink/operations; the jobs cursor is not involved.
+    """
+
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        runtime = JobRuntime(store)
+        runtime._started = True
+        transport = FakeTransport()
+        protocol = JobsProtocol(runtime, epoch=5, heartbeat_seconds=1)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: len(transport.json) >= 2)
+
+        runtime.events.publish(
+            {"v": 1, "kind": "cadOperation", "operation": {"operationId": "cmd-1", "stage": "ready"}}
+        )
+        await _wait_until(lambda: len(transport.json) >= 3)
+
+        assert transport.json[2] == {
+            "v": 1,
+            "kind": "cadOperation",
+            "operation": {"operationId": "cmd-1", "stage": "ready"},
+            "epoch": 5,
+        }
+        await transport.incoming.put(None)
+        await task
+
+    asyncio.run(scenario())

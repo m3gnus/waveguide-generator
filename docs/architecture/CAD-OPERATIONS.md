@@ -19,8 +19,10 @@ are delivered through it (see "Solve-command delivery"). WG and its add-in speak
 delivery version, 3, and nothing older (see "Delivery version"): every request is its
 own file, and there is no single-slot marker and no twin. The adapter follows the order
 in "Fusion-bound mutations", marks an operation as applying before it writes, and
-settles what an interrupted session left. A later step adds a field to a request only
-under a new digest version.
+settles what an interrupted session left. The backend owns a solve operation end to end
+(see "Setup revisions" and "Preparation"): its retained snapshot, its setup revision,
+its fenced preparation stages, its approvals and its bound request. A later step adds a
+field to a request only under a new digest version.
 
 ## Operation kinds
 
@@ -127,6 +129,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `rejected` | Can never proceed as requested | yes | no |
 | `cancelled` | The user dismissed it | yes | no |
 | `recovery_required` | Reserved. A CAD mutation began and its completion evidence is missing | no | no |
+| `cancel_requested` | The user dismissed it while an attempt holds it; the attempt records `cancelled` at its next step | no | no |
 
 - **Transient is not an outcome.** "Cannot proceed now" never means "can never
   proceed". A transient failure is retried inside the attempt.
@@ -144,8 +147,18 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | --- | --- | --- |
 | `baseline_conflict` | `rejected` | The document no longer matches the expected baseline, and there is no evidence that this operation already applied |
 | `target_not_exact` | `rejected` | The target does not resolve to exactly one instance |
+| `snapshot_invalid` | `rejected` | The snapshot fails verification, or no longer matches the operation's inputs |
+| `setup_required` | `needs_user_input` | No setup revision is bound yet; a CAD-authored model never borrows the open project's |
+| `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
+| `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout, a return that is not in the WGLink folder and has no retained copy |
+| `engine_unavailable` | `needs_user_input` | The engine the setup names cannot take this record; the message names the capable engines |
+| `submission_refused` | `needs_user_input` | The jobs system refused the request, submitting it failed without creating a job, or no solve may start now (an update restart is pending) |
+| `interrupted` | `needs_user_input` | The backend stopped, or the answer was lost, while an attempt held the operation |
+| `ready_to_solve` | `needs_user_input` | Prepared, and waiting for the user to start the solve |
 
-Both are rejections because a refreshed baseline or target is a new operation.
+The three rejections are final because a refreshed baseline, target or snapshot is a new
+operation. Every `needs_user_input` code keeps the operation, and another
+preparation can proceed.
 
 `outcome_json` is an object with at most these fields:
 
@@ -218,6 +231,100 @@ These rules bind every adapter that mutates a CAD document for WG.
   - The add-in drops the older of two such files it finds, which covers one WG could not
     remove, and names it in the heartbeat with the outcome `superseded`.
 
+## Setup revisions
+
+A setup revision is everything a solve of one snapshot needs except the snapshot itself:
+the drive channels with resolved driver numbers, the voltages, mesh sizes, skipped
+sources, exterior-only, the combine and passive-cardioid settings, the preparation
+options (`area_drift_overrides`, `symmetry_mode`, `surface_deviation_mm`) and the solve
+options, the engine included. Which library driver a channel's numbers came from is kept
+beside them (`driver_references`) for the record; the numbers are what a retry
+reproduces, because the driver library has no revisions.
+
+- **Immutable and content-named.** `cad_setup_revisions` holds each revision once; the
+  same content is the same revision (`POST /api/cadlink/setup-revisions`). A revision
+  names no snapshot, and is validated as a complete solve request before it is stored.
+- **The engine is the user's.** A setup carries the engine selected in WG's solver
+  selector, never one CAD Link chose. If that engine cannot take the record, the
+  operation waits (`engine_unavailable`) with the capable engines named, and nothing
+  switches engines silently. Recalling a run does not change the selector.
+
+## Preparation
+
+A solve operation is prepared by the backend, in stages. The UI issues
+`POST /api/cadlink/operations/{id}/prepare` (a setup revision; whether to submit; the
+blocking findings the user reviewed, and on which preparation) and observes.
+
+| Stage | What is done | Committed as |
+| --- | --- | --- |
+| `received` | Accepted. The snapshot was retained in WG's storage before the delivery was acknowledged, when the return could be read then | the operation row, `snapshot_json` |
+| `validating` | The retained copy is found, or made now for an operation received before retention | `snapshot_json` |
+| `preparing-mesh` | The retained snapshot is ingested and meshed with the setup's options | an ingestion record, published under the attempt's fence |
+| `ready` | The preparation is recorded, with its blocking findings | `cad_preparations`, `preparation_id` |
+| `submitted` | The request is bound, then submitted under `cad-solve:<id>` | `request_json`, then `accepted` with the job |
+
+- **One attempt at a time.** Each preparation claims the operation (a new generation).
+  Every stage write, the ingestion record's publication, the approvals an attempt
+  records and the outcome are conditional on that generation. A later preparation takes
+  the operation over; the earlier attempt's next write is refused and it stops without
+  committing a stage, a record or an outcome. (Ingestion claims a project lineage and an
+  archive name before it publishes; an obsolete attempt can leave such a claim, which
+  the next preparation of the same return reuses.)
+- **Dismissal.** `POST .../cancel` cancels an idle operation at once, and fences a
+  running attempt, which then records `cancelled` whatever it found. The one exception
+  is a job the attempt had already created: the job exists, the operation is `accepted`
+  with it, and the user cancels the job in the jobs list. A CAD mutation under way is
+  not dismissed; it may need recovery from the document instead. An attempt that fails
+  unexpectedly leaves its operation waiting (`preparation_failed`), never held.
+- **Retained snapshot.** The snapshot a solve command names is retained when the command
+  is received, before its delivery is acknowledged, under
+  `<data>/imports/bundles/<manifest hash>.wgreturn`. The operation stores the hashes, and
+  the copy's place follows from them. Preparation reads that copy, never the exchange
+  folder, so a return accepted before its folder was removed still prepares after a
+  restart. The copy leaves out the captured CAD document, which is not geometry. An
+  operation whose return has no copy and is not in the folder waits
+  (`preparation_failed`).
+- **Approvals.** A blocking finding is approved on one preparation
+  (`POST .../approvals`, `{preparationId, findingIds}`, or `approvals` on the prepare
+  request), and submitted as `<report_sha256>:<finding_id>`. Only findings that
+  preparation reported as blocking can be approved. A preparation of the same snapshot,
+  setup revision and meshing semantics is resumed, not made again, so approvals given on
+  it apply. Anything else is a new preparation, and a waiver never carries to it.
+- **The binding point.** The exact solve request is bound immediately before it is
+  submitted, and from then on never changes. A recovery submits exactly the bound
+  request, whatever setup was chosen since. Only a submission that created nothing
+  releases the binding, so the user can change the setup: a refusal by the jobs system,
+  or a failure after which the submission key names no job (the jobs system writes the
+  key with the job). A request that may have a job -- a crash, a jobs database that
+  cannot be read -- stays bound.
+- **Recovery.** At startup, and before every preparation, an operation whose submission
+  key already made a job is `accepted` with that job; a submission-key conflict is
+  settled the same way. An operation an attempt held when the backend stopped is taken
+  over and waits (`interrupted`). Startup recovery only reads the jobs database; the
+  jobs runtime starts on its own.
+- **Events.** Every committed change is published on the jobs channel as
+  `{"v": 1, "kind": "cadOperation", "operation": {...}}`, after it is stored. It carries
+  no cursor: a client that misses one reads `GET /api/cadlink/operations` (the unfinished
+  operations) or `GET /api/cadlink/operations/{id}` (one operation, with its preparation
+  and approvals), which are authoritative.
+
+## Preparation identity
+
+A preparation is identified by its ingestion record, whose mesh is keyed by every input
+that decides it. The key also names WG's own meshing semantics -- the sizing constants in
+`server/mesh/imported.py` -- whenever they differ from those every earlier key was made
+under. So no existing mesh is re-made, and a later change of those constants, with every
+keyed input unchanged, is a new preparation. The fingerprint rounds those constants to 12
+decimal places, so a last-bit difference between platforms' maths libraries is not a new
+identity. A retained run keeps the mesh its own record names; nothing deletes it.
+
+## Retention
+
+Cleanup never removes what a pending operation references. Retained snapshots and meshes
+under `<data>/imports` are never pruned, and the captured CAD documents a pending
+operation's preparation was made from are kept alongside those unfinished runs still
+need.
+
 ## Existing installations
 
 - **The import.** Before schema 12, terminal solve-command outcomes lived in
@@ -246,6 +353,12 @@ These rules bind every adapter that mutates a CAD document for WG.
   its ID alone, whatever its digest, and its recorded outcome is replayed. This applies
   to outcome-only rows too. The row is never executed again and never rewritten. A
   delivery of a different kind under that ID is a conflict.
+- **The later stages are additive too.** They add two tables (`cad_setup_revisions`,
+  `cad_preparations`) and nullable columns to `cad_operations` (`stage`,
+  `setup_revision_id`, `request_json`, `snapshot_json`, `preparation_id`,
+  `approvals_json`), in the same upgrade transaction. A row written before them reads its
+  stage from its state. An interrupted upgrade rolls back as a whole and completes at the
+  next start, and finished work is never handed out again.
 - **A rollback keeps CAD Link working.** Every release refuses a `user_version` above
   the highest it knows (v0.3.2 opens 0–11), and a rollback leaves `cadlink.db` in
   place. Schema 12 only adds a table, so the store writes `user_version` 11
