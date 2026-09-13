@@ -236,9 +236,10 @@ A design has one name, typed in the **Design name** field above the run list. It
 the only place a name is edited, and everything follows it: the title bar, the file
 chip, the viewport heading, the `.cfg` filename used by **Export a copy**, the
 `Report.Title` written at the top of that file, the label each solve is stored under,
-and every export stem. Renaming counts as unsaved work. **Export a copy as…** first
-renames the current design and then exports it, so the file follows the name rather
-than the other way round.
+and every export stem. Renaming alone never makes WG ask before replacing the design:
+the name is left out when WG checks whether a design exists anywhere else.
+**Export a copy as…** first renames the current design and then exports it, so the
+file follows the name rather than the other way round.
 
 Opening a `.cfg` takes its name from the file, so a design renamed on disk keeps the
 name you gave it there. The exception is a file whose own `Report.Title` is the same
@@ -283,9 +284,14 @@ under *Enter a folder path instead*.
 
 **Export a copy** in the design menu serializes the current parameters and solve
 settings to a `.cfg` and writes it to the folder you choose. It is a portable
-copy, not a durable editor save: it does not clear the
-unsaved indicator, create or advance a CAD-link identity, or update the CAD-link
-registry. Reopening that file is what makes it the editor's current baseline.
+copy: it does not create or advance a CAD-link identity or update the CAD-link
+registry.
+
+Nothing marks the design as changed. Instead, **New**, **Open…**, opening a CAD-linked design
+and a Fusion project switch ask before replacing the design on screen only when it
+exists nowhere else: no stored run matches it, and it is not what WG last opened,
+exported or sent to CAD. To keep a design, solve it or export a copy; either one
+stops the question.
 
 The same menu exports the current design. STEP solid is the normal CAD/production
 export; STEP inner surface is available when a bare acoustic surface is wanted. STL
