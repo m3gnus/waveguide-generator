@@ -38,6 +38,10 @@ STARTUP_POLL_INTERVAL = 0.55
 #: settles an update transaction only on a served interface
 #: (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5).
 FRONTEND_READY_GRACE = 30.0
+#: How long the status window waits for a start it can confirm before it says
+#: so in ``update.log`` (contract §4.5), unless the start has already failed.
+#: The desktop window gives its own start the same two minutes.
+STARTUP_REPORT_AFTER = 120.0
 
 
 class StatusView:
@@ -62,6 +66,9 @@ class StatusView:
         self._poll_running = False
         self._settled = False
         self._backend_ok_since: float | None = None
+        self._started_at = time.monotonic()
+        self._startup_report_after = STARTUP_REPORT_AFTER
+        self._unconfirmed_reported = False
         self._next_poll_at = 0.0
         self._updates: queue.SimpleQueue[tuple[str, StatusSnapshot]] = queue.SimpleQueue()
         self._update_errors: queue.SimpleQueue[str] = queue.SimpleQueue()
@@ -127,6 +134,8 @@ class StatusView:
             # polling until the replacement answers and settles this again.
             self._settled = False
             self._backend_ok_since = None
+            self._started_at = time.monotonic()
+            self._unconfirmed_reported = False
             self._next_poll_at = 0.0
             error = self._update_errors.get()
             self._backend_reason.set("Update could not start")
@@ -148,6 +157,8 @@ class StatusView:
                 self._render(snapshot)
                 if not self._settled and snapshot.backend.state is ServiceState.OK:
                     self._settle_when_served(snapshot)
+                elif not self._settled:
+                    self._report_if_unconfirmed(snapshot)
         if not self._closing:
             requested_update = self.controller.take_update_request()
             if requested_update is not None:
@@ -186,6 +197,25 @@ class StatusView:
             return
         self.controller.settle_update_transaction(snapshot)
         self._settle()
+
+    def _report_if_unconfirmed(self, snapshot: StatusSnapshot) -> None:
+        """Say once in ``update.log`` that this start could not confirm the build.
+
+        Contract §4.5: browser mode must not leave an update transaction open
+        silently. The start has failed when the backend reports an error with no
+        live process behind it -- a refused start or an exited server -- and it
+        is overdue once ``STARTUP_REPORT_AFTER`` seconds pass without an answer.
+        The controller writes the line, and only when there is something to
+        settle; a healthy answer that comes later still settles as usual.
+        """
+
+        if self._unconfirmed_reported:
+            return
+        failed = snapshot.backend.state is ServiceState.ERROR and not snapshot.running
+        if not failed and time.monotonic() - self._started_at < self._startup_report_after:
+            return
+        self._unconfirmed_reported = True
+        self.controller.settle_update_transaction(snapshot)
 
     def _settle(self) -> None:
         """Stop asking the server questions, and arrange to be told instead.

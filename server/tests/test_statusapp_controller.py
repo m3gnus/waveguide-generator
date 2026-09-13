@@ -698,6 +698,9 @@ def _headless_view(controller: _ViewController):
     view._settled = False
     view._frontend_ready_grace = view_module.FRONTEND_READY_GRACE
     view._backend_ok_since = None
+    view._started_at = time.monotonic()
+    view._startup_report_after = view_module.STARTUP_REPORT_AFTER
+    view._unconfirmed_reported = False
     view._poll_running = False
     view._next_poll_at = 0.0
     view._updates = queue.SimpleQueue()
@@ -802,6 +805,27 @@ def test_the_status_window_polls_on_until_the_interface_is_served(tmp_path: Path
     assert view._settled is True
     assert asked == [unserved]
     assert len(controller.watchers) == 1
+
+
+def test_the_status_window_reports_a_start_that_cannot_confirm_the_update(
+    tmp_path: Path,
+) -> None:
+    """Contract §4.5: a browser-mode start that failed says so, once."""
+
+    failed = _view_snapshot(ServiceState.ERROR, "Server exited with code 1: solver import failed")
+    controller = _ViewController(failed)
+    asked: list[StatusSnapshot] = []
+    controller.settle_update_transaction = (  # type: ignore[attr-defined]
+        lambda snapshot, **_kwargs: bool(asked.append(snapshot))
+    )
+    view = _headless_view(controller)
+    view._updates.put(("snapshot", failed))
+    view._tick()
+    view._updates.put(("snapshot", failed))
+    view._tick()
+
+    assert asked == [failed]
+    assert view._settled is False, "a failed start is reported, not settled"
 
 
 def test_existing_instance_exit_two_keeps_its_real_url_healthy(tmp_path: Path) -> None:

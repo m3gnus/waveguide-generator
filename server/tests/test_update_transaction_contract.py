@@ -49,6 +49,7 @@ from launchers.apply_update import (
     swap_staged_layers,
 )
 from launchers.statusapp import __main__ as statusapp_main
+from launchers.statusapp import controller as controller_module
 from launchers.statusapp import healthy_start
 from launchers.statusapp.controller import (
     LampStatus,
@@ -1330,6 +1331,7 @@ def _no_gui_start_in_this_process(
     server_class: type,
     create: Any = lambda **_kwargs: object(),
     reserve: Any = lambda *_args, **_kwargs: (_FakeListener(), 3100),
+    interface: Any = lambda: None,
 ) -> int:
     """``--no-gui`` in this process, with the host's lock, logs and port left alone."""
 
@@ -1344,7 +1346,7 @@ def _no_gui_start_in_this_process(
     monkeypatch.setattr(serve, "setup_logging", lambda _paths: None)
     monkeypatch.setattr(serve, "flush_logs", lambda: None)
     monkeypatch.setattr(serve, "InstanceLock", lambda _path: _FakeLock())
-    monkeypatch.setattr(serve, "_release_interface_error", lambda: None)
+    monkeypatch.setattr(serve, "_release_interface_error", interface)
     monkeypatch.setattr(serve, "auto_migrate_v1", lambda *_args: [])
     monkeypatch.setattr(serve, "reserve_port", reserve)
     monkeypatch.setattr(serve, "create_app", create)
@@ -1498,6 +1500,217 @@ def test_the_desktop_window_settles_from_its_event_loop_not_its_first_poll(
     (controller,) = built
     assert isinstance(controller, StatusController)
     assert controller.settle_on_ready is False
+
+
+def test_an_adopted_server_does_not_settle_this_installations_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.5: only the server this start launched is evidence about its build.
+
+    Exit 2 means another server holds the instance lock, and the controller
+    adopts it. Its interface is served, so the frontend-ready predicate holds,
+    but the new build never served: nothing may be committed or reclaimed.
+    """
+
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
+    installation = _installation(tmp_path, sys.platform)
+    transaction = _decided_update(installation, sys.platform)
+    app_layer = installation.resources / "app"
+    _with_interface(app_layer)
+    already_running = tmp_path / "already_running.py"
+    already_running.write_text(
+        "import sys\n"
+        "print('already running; use it at http://127.0.0.1:3199/.', file=sys.stderr)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    controller = StatusController(
+        repo_root=app_layer,
+        server_command=(sys.executable, str(already_running)),
+        server_args=("--data-dir", str(installation.data_dir)),
+        environ={**os.environ, "WG2_BUNDLE": "1", "WG2_APP_ROOT": str(app_layer)},
+        request_timeout=0.2,
+        shutdown_timeout=1.0,
+        request_probe=lambda url, _timeout: (
+            (200, b'{"version":"test"}')
+            if url.endswith("/health")
+            else (200, b"<!doctype html><html><body>fake SPA</body></html>")
+        ),
+    )
+    try:
+        controller.start()
+        deadline = time.monotonic() + 20.0
+        snapshot = controller.poll()
+        while not (snapshot.exit_code == 2 and snapshot.backend.state is ServiceState.OK):
+            if time.monotonic() > deadline:
+                pytest.fail(f"set-up: the controller never adopted the running server: {snapshot}")
+            time.sleep(0.05)
+            snapshot = controller.poll()
+        if snapshot.frontend.state not in {ServiceState.OK, ServiceState.WARNING}:
+            pytest.fail(f"set-up: the adopted server's interface was not served: {snapshot}")
+    finally:
+        controller.close()
+
+    journal = read_journal(installation.data_dir, installation.resources)
+    assert journal is not None and journal.get("state") == "installed", (
+        f"an adopted server settled this installation's update: {journal!r}"
+    )
+    assert (installation.resources / "app.previous").is_dir()
+    written = _update_log(installation)
+    assert transaction in written and "another Waveguide Generator server" in written
+
+
+def test_a_no_gui_start_that_refuses_its_interface_reports_the_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.5: a start that ends before its server exists still names the transaction."""
+
+    installation = _installation(tmp_path, sys.platform)
+    transaction = _decided_update(installation, sys.platform)
+    before = _update_log(installation)
+
+    exit_code = _no_gui_start_in_this_process(
+        monkeypatch,
+        installation,
+        server_class=_ServerThatNeverServed,
+        interface=lambda: "the installed release interface is v9.9.8, but the backend is v9.9.9",
+    )
+
+    assert exit_code == 1
+    journal = read_journal(installation.data_dir, installation.resources)
+    assert journal is not None and journal.get("state") == "installed"
+    written = _update_log(installation)[len(before) :]
+    assert transaction in written and "refused its interface" in written
+    assert written.count("did not confirm") == 1, written
+
+
+def test_a_no_gui_start_with_no_free_port_reports_the_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.5: the port failure is one more exit that must name the transaction."""
+
+    installation = _installation(tmp_path, sys.platform)
+    transaction = _decided_update(installation, sys.platform)
+    before = _update_log(installation)
+
+    def no_port(*_args: object, **_kwargs: object) -> tuple[object, int]:
+        raise OSError("no free port on 127.0.0.1")
+
+    exit_code = _no_gui_start_in_this_process(
+        monkeypatch, installation, server_class=_ServerThatNeverServed, reserve=no_port
+    )
+
+    assert exit_code == 1
+    journal = read_journal(installation.data_dir, installation.resources)
+    assert journal is not None and journal.get("state") == "installed"
+    written = _update_log(installation)[len(before) :]
+    assert transaction in written and "could not reserve a port" in written
+    assert "no free port" in written
+
+
+def test_healthy_start_writes_nothing_when_there_is_nothing_to_settle(tmp_path: Path) -> None:
+    """A start that cannot confirm, with no transaction or rollback material, stays quiet.
+
+    An ordinary start whose interface was slow must not write about updates.
+    """
+
+    installation = _installation(tmp_path)
+    settlement = healthy_start.HealthyStartSettlement(
+        lambda: (installation.bundle, installation.resources, installation.data_dir)
+    )
+
+    assert settlement.settle(ready=False, evidence="backend OK, frontend ERROR") is False
+    assert _update_log(installation) == ""
+
+
+def test_a_release_notice_that_cannot_be_written_restarts_the_server_unlatched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.2: a server must never stay latched with no handoff pending.
+
+    When the notice cannot be written, a new server process replaces the
+    latched one, as after a failed handoff, and ``update.log`` says why.
+    """
+
+    app_layer = tmp_path / "app"
+    _with_interface(app_layer)
+    fake_server = tmp_path / "fake_server.py"
+    fake_server.write_text(_FAKE_SERVER, encoding="utf-8")
+    data_dir = tmp_path / "data"
+    controller = StatusController(
+        repo_root=app_layer,
+        server_command=(sys.executable, str(fake_server)),
+        server_args=("--data-dir", str(data_dir)),
+        environ=dict(os.environ),
+        request_timeout=0.2,
+        shutdown_timeout=1.0,
+    )
+    attempts: list[Path] = []
+
+    def refuse(notice: Path, _reason: str) -> None:
+        attempts.append(notice)
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(controller_module, "RELEASE_NOTICE_RETRY_DELAY", 0.0)
+    monkeypatch.setattr(controller, "_write_release_notice", refuse)
+    try:
+        controller.start()
+        first = controller.process
+        if first is None:
+            pytest.fail("set-up: the controller started no server")
+
+        assert controller.release_update_restart("Discarded an invalid update request.") is False
+
+        second = controller.process
+        assert second is not None and second is not first, "the latched server was kept"
+        assert second.poll() is None, "the replacement server is not running"
+        assert first.poll() is not None, "the latched server is still running"
+    finally:
+        controller.close()
+
+    assert len(attempts) == controller_module.RELEASE_NOTICE_ATTEMPTS
+    written = (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "Restarting the server" in written and "read-only file system" in written
+
+
+def test_a_called_off_restart_shows_as_a_failed_install(
+    tmp_path: Path,
+) -> None:
+    """Contract §4.2: a launcher discard is a failed attempt the update dialog can show."""
+
+    request_path = tmp_path / "control" / "update.json"
+    app = create_app(data_dir=tmp_path / "data", update_request_path=request_path)
+    state = _stage_through_the_app(app)
+    if state["installState"] != "ready" or not request_path.is_file():
+        pytest.fail(f"set-up: the restart was never approved: {state}")
+
+    request_path.unlink()  # what the launcher does as it discards the request
+    serve._release_update_restart(app, "Discarded an invalid update request.")
+
+    shown = app.state.update_service.bundle_installer.status()
+    assert shown["installState"] == "failed", shown
+    assert "Discarded an invalid update request" in str(shown["error"])
+    assert app.state.update_restart.pending is None
+
+
+def test_a_cad_return_ingested_after_restart_approval_is_refused(tmp_path: Path) -> None:
+    """Contract §4.2: ingest starts work that outlives its request, so it refuses too.
+
+    It is refused before its handler runs, so the return is not read, copied
+    or changed, and it stays listed for after the restart.
+    """
+
+    async def scenario() -> tuple[int, bytes]:
+        app = create_app(data_dir=tmp_path / "data")
+        app.state.update_restart.approve("v2.0.1")
+        return await _post(app, "/api/cadlink/ingest", {"bundlePath": "returns/x.wgreturn"})
+
+    status, raw = asyncio.run(scenario())
+
+    assert status == 409, raw[:200]
+    error = json.loads(raw)["error"]
+    assert error["code"] == "update_restart_pending"
+    assert error["retryable"] is True
 
 
 # ---------------------------------------------------------------------------

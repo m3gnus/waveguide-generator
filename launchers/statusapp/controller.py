@@ -30,6 +30,7 @@ from scripts.frontend_freshness import (
     refresh_hint,
 )
 from launch.serve_options import UPDATE_RELEASED_FILENAME
+from launchers.apply_update import append_update_log
 from server.platform.instance import requested_port
 from server.platform.paths import app_root, resolve_data_dir
 from .healthy_start import BundlePaths, HealthyStartSettlement, Report, resolve_bundle_paths
@@ -55,6 +56,10 @@ ADOPTED_PROBE_INTERVAL = 30.0
 #: in a way a process handle is not, so a single failure is treated as a
 #: question rather than an answer.
 ADOPTED_RETRY_DELAY = 2.0
+#: How often, and how far apart, the release notice is tried before the server
+#: is restarted instead (contract §4.2).
+RELEASE_NOTICE_ATTEMPTS = 3
+RELEASE_NOTICE_RETRY_DELAY = 0.1
 #: The longest ``poll()`` waits, once per exited child, for the output
 #: collector to read that child's last lines. An exited child's pipe is at
 #: end-of-file, so the wait normally ends the moment the collector thread gets
@@ -368,6 +373,8 @@ class StatusController:
         # then, and so a caller can replace ``bundle_paths``.
         self._healthy_start = HealthyStartSettlement(lambda: self.bundle_paths())
         self._settle_attempted = False
+        #: The last loss callback, re-armed for a server this controller restarts.
+        self._on_lost: Callable[[StatusSnapshot], None] | None = None
 
         self._lock = threading.RLock()
         self._process: subprocess.Popen[str] | None = None
@@ -438,19 +445,37 @@ class StatusController:
 
         ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5, for the window
         and browser modes: ``commit_transaction`` and the healthy-start cleanup
-        scoped to the committed transaction, on a snapshot that satisfies
-        :func:`frontend_ready`. A snapshot that does not is declined, and
-        ``update.log`` says which lamps it showed and which transaction stays
-        open. ``report`` puts a failed macOS re-seal in front of the user; the
+        scoped to the committed transaction, on a snapshot of this controller's
+        own server that satisfies :func:`frontend_ready`. Anything else is
+        declined, and ``update.log`` says why and which transaction stays open.
+
+        An adopted server is declined however healthy it looks. Exit 2 means
+        another server holds the instance lock -- another installation on the
+        same data directory, one a crashed launcher left behind, or this
+        installation's first launch -- so the build this start launched never
+        served, and nothing it answers is evidence about this update.
+
+        ``report`` puts a failed macOS re-seal in front of the user; the
         desktop window passes its own bundle reporter. Returns whether the
         transaction is settled.
         """
 
-        return self._healthy_start.settle(
-            ready=frontend_ready(snapshot),
-            evidence=(
+        own = snapshot.running
+        if snapshot.exit_code == 2 and not own:
+            evidence = (
+                "the interface that answered belongs to another Waveguide Generator "
+                "server, which holds the instance lock, so the build this start "
+                "launched never served"
+            )
+        else:
+            evidence = (
                 f"backend {snapshot.backend.state.name}, frontend {snapshot.frontend.state.name}"
-            ),
+            )
+            if snapshot.backend.state is ServiceState.ERROR:
+                evidence += f" ({snapshot.backend.reason})"
+        return self._healthy_start.settle(
+            ready=own and frontend_ready(snapshot),
+            evidence=evidence,
             report=report,
         )
 
@@ -988,6 +1013,7 @@ class StatusController:
         """
 
         with self._lock:
+            self._on_lost = on_lost
             if self._backend_lost or self._process is None:
                 return None
             if self._watcher is not None and self._watcher.is_alive():
@@ -1152,24 +1178,61 @@ class StatusController:
         ``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.2: a server must
         never stay latched with no handoff pending. The notice is a file in the
         status control directory, beside the stop file the server already
-        watches (``UPDATE_RELEASED_FILENAME``). Returns whether it was written.
-        With no owned server running there is nobody to tell, and a server that
-        is started again starts unlatched.
+        watches (``UPDATE_RELEASED_FILENAME``).
+
+        Returns True once the server has been told, or when no owned server is
+        running: nothing is latched then, and a server started later starts
+        unlatched. A notice that still cannot be written after
+        ``RELEASE_NOTICE_ATTEMPTS`` tries is not left there: the server is
+        restarted instead, as after a failed handoff, because a new process
+        starts unlatched. ``update.log`` says so, and this returns False. Every
+        caller is covered by that, so none has to act on the answer.
         """
 
         with self._lock:
             control_path = self._control_path
             process = self._process
         if control_path is None or process is None or process.poll() is not None:
-            return False
+            return True
         notice = control_path.with_name(UPDATE_RELEASED_FILENAME)
+        failure: OSError | None = None
+        for attempt in range(RELEASE_NOTICE_ATTEMPTS):
+            if attempt:
+                time.sleep(RELEASE_NOTICE_RETRY_DELAY)
+            try:
+                self._write_release_notice(notice, reason)
+            except OSError as exc:
+                failure = exc
+                continue
+            return True
+        self._restart_unlatched(
+            f"it could not be told that the update restart was called off ({failure})"
+        )
+        return False
+
+    def _write_release_notice(self, notice: Path, reason: str) -> None:
         temporary = notice.with_name(f".{notice.name}.tmp")
+        temporary.write_text(json.dumps({"reason": reason}) + "\n", encoding="utf-8")
+        temporary.replace(notice)
+
+    def _restart_unlatched(self, why: str) -> None:
+        """Replace the owned server, so the one running holds no restart approval."""
+
         try:
-            temporary.write_text(json.dumps({"reason": reason}) + "\n", encoding="utf-8")
-            temporary.replace(notice)
-        except OSError:
-            return False
-        return True
+            append_update_log(
+                self._data_dir(),
+                f"Restarting the server because {why}. A new server process starts with "
+                "no restart approved.",
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+        with self._lock:
+            on_lost = self._on_lost
+        self.stop()
+        self.start()
+        if on_lost is not None:
+            # The watcher ended with the stop; the new server needs its own.
+            self.watch_backend(on_lost)
 
     def launch_update(self, request: UpdateRequest) -> None:
         """Start the independent updater before this status owner shuts down."""

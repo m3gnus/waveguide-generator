@@ -379,6 +379,10 @@ def _probe_healthy_start(port: int, timeout: float) -> str | None:
     return None
 
 
+#: How long a stopping --no-gui start waits for a settle already under way.
+HEALTHY_START_SETTLE_WAIT = 60.0
+
+
 class _NoGuiHealthyStart:
     """Settle, or report, the update transaction of a start no controller owns.
 
@@ -387,28 +391,36 @@ class _NoGuiHealthyStart:
     itself. It settles -- ``commit_transaction`` and the scoped healthy-start
     cleanup, the same code and the same ``update.log`` lines as the window --
     only after uvicorn reports that it started and a self-probe of ``/health``
-    and the interface route succeeds. If the probe keeps failing, or the server
-    stops first, it writes the transaction id and the reason to ``update.log``
-    instead, and settles nothing.
+    and the interface route succeeds. Otherwise it writes the transaction id and
+    the reason to ``update.log``, and settles nothing.
+
+    It exists from the moment the data directory is known, so every way the
+    start can end reports: a refused interface, a failed migration, no free
+    port, ``create_app`` raising, the server stopping before it answered.
+    Only :meth:`start` needs the server.
 
     It is never started from ``create_app``. The servers the window and browser
     modes start run that too, and their controllers settle on their own
     evidence; only this launcher knows no controller owns the server.
     """
 
-    def __init__(self, server: uvicorn.Server, port: int, paths: tuple[Path, Path, Path]) -> None:
-        self._server = server
-        self._port = port
+    def __init__(self, paths: tuple[Path, Path, Path]) -> None:
         self._paths = paths
+        self._server: uvicorn.Server | None = None
+        self._port = 0
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._decided = False
+        self._settling = False
         self._last_problem: str | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self, server: uvicorn.Server, port: int) -> None:
+        self._server = server
+        self._port = port
         self._thread = threading.Thread(
             target=self._run, name="wg2-healthy-start", daemon=True
         )
-
-    def start(self) -> None:
         self._thread.start()
 
     def _run(self) -> None:
@@ -433,6 +445,7 @@ class _NoGuiHealthyStart:
             if self._decided:
                 return
             self._decided = True
+            self._settling = True
         log = logging.getLogger("wg.launch")
         try:
             from launchers.statusapp.healthy_start import HealthyStartSettlement
@@ -445,6 +458,9 @@ class _NoGuiHealthyStart:
             )
         except Exception:  # noqa: BLE001 - a running server outlives a failed cleanup
             log.exception("Could not settle the update transaction after a healthy start")
+        finally:
+            with self._lock:
+                self._settling = False
 
     def _report(self, reason: str) -> None:
         with self._lock:
@@ -459,24 +475,30 @@ class _NoGuiHealthyStart:
             logging.getLogger("wg.launch").exception("Could not report the update transaction")
 
     def finish(self, reason: str) -> None:
-        """The server has stopped: report the transaction unless it was already decided.
+        """This start is over: report the transaction unless something decided it.
 
-        A settle already under way is waited for, briefly, and then left to
-        finish; its steps are each safe to interrupt, and the completion record
-        says what is left for the next start.
+        A settle already under way is waited for, up to
+        ``HEALTHY_START_SETTLE_WAIT``, rather than abandoned: on macOS it moves
+        ``.previous`` out of the bundle and re-seals it, and a process that
+        exits between the two leaves the bundle unsealed and the rollback
+        material in the holding directory. A second Ctrl+C or the shutdown
+        backstop can still end the process sooner (contract §4.5).
         """
 
         self._stop.set()
-        self._thread.join(timeout=HEALTHY_START_PROBE_TIMEOUT + 3.0)
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=HEALTHY_START_PROBE_TIMEOUT + 3.0)
+            deadline = time.monotonic() + HEALTHY_START_SETTLE_WAIT
+            while thread.is_alive() and self._settling and time.monotonic() < deadline:
+                thread.join(timeout=0.5)
         if self._last_problem is not None:
             reason = f"{reason} (the last self-probe said: {self._last_problem})"
         self._report(reason)
 
 
-def _no_gui_healthy_start(
-    server: uvicorn.Server, port: int, data_dir: Path
-) -> _NoGuiHealthyStart | None:
-    """Start the healthy-start check of a bundle that no status controller owns."""
+def _no_gui_healthy_start(data_dir: Path) -> _NoGuiHealthyStart | None:
+    """The healthy-start check of a bundle that no status controller owns, or None."""
 
     if os.environ.get("WG2_BUNDLE") != "1":
         return None
@@ -489,9 +511,14 @@ def _no_gui_healthy_start(
         return None
     if paths is None:
         return None
-    check = _NoGuiHealthyStart(server, port, paths)
-    check.start()
-    return check
+    return _NoGuiHealthyStart(paths)
+
+
+def _not_confirmed(check: _NoGuiHealthyStart | None, reason: str) -> None:
+    """A --no-gui start is ending: report an open update transaction, and why (§4.5)."""
+
+    if check is not None:
+        check.finish(reason)
 
 
 def _shutdown_signals() -> tuple[int, ...]:
@@ -566,15 +593,24 @@ def main(argv: list[str] | None = None) -> int:
 
     lock: InstanceLock | None = None
     listener: socket.socket | None = None
+    # Only a start that no status controller owns settles its own update
+    # transaction (contract §4.5). It is set up as soon as the data directory
+    # is known, so every exit below can report a transaction it left open.
+    no_gui_start: _NoGuiHealthyStart | None = None
     try:
         paths = ensure_data_layout()
         setup_logging(paths)
+        if args.status_control is None:
+            no_gui_start = _no_gui_healthy_start(paths.root)
         preferred_port = requested_port(args.port)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
         # setup_logging runs before requested_port so this path can already own
         # a QueueListener (for example, when WG2_PORT is invalid). Treat early
         # configuration failures like every later exit and drain it explicitly.
+        _not_confirmed(
+            no_gui_start, f"the --no-gui start stopped before its server started: {exc}"
+        )
         flush_logs()
         return 1
 
@@ -600,10 +636,16 @@ def main(argv: list[str] | None = None) -> int:
                 pass
             else:
                 print(f"Opened the running instance at {url}", file=sys.stderr)
+        _not_confirmed(
+            no_gui_start,
+            "another Waveguide Generator server holds the instance lock, so the build "
+            "this --no-gui start launched never served",
+        )
         flush_logs()
         return 2
     except InstanceLockError as exc:
         print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
+        _not_confirmed(no_gui_start, f"the --no-gui start could not take the instance lock: {exc}")
         flush_logs()
         return 1
 
@@ -611,6 +653,7 @@ def main(argv: list[str] | None = None) -> int:
     if interface_error is not None:
         print(interface_error, file=sys.stderr)
         logging.getLogger("wg.launch").error(interface_error)
+        _not_confirmed(no_gui_start, f"the --no-gui start refused its interface: {interface_error}")
         lock.release()
         flush_logs()
         return 1
@@ -620,6 +663,7 @@ def main(argv: list[str] | None = None) -> int:
     except (MigrationError, OSError, sqlite3.Error) as exc:
         print(f"Waveguide Generator could not migrate v1 runs: {exc}", file=sys.stderr)
         logging.getLogger("wg.launch").exception("Automatic v1 run migration failed")
+        _not_confirmed(no_gui_start, f"the --no-gui start could not migrate v1 runs: {exc}")
         lock.release()
         flush_logs()
         return 1
@@ -632,6 +676,7 @@ def main(argv: list[str] | None = None) -> int:
         _publish_status_ready(args.status_control, port)
     except (OSError, InstanceLockError) as exc:
         print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
+        _not_confirmed(no_gui_start, f"the --no-gui start could not reserve a port: {exc}")
         lock.release()
         flush_logs()
         return 1
@@ -654,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
     # Before the app, so the capability probe this start runs can already report
     # "provisioning" rather than "not provisioned". It only starts a thread.
     _start_beat_cpu_provisioning()
-    no_gui_start: _NoGuiHealthyStart | None = None
+    stop_reason = "the --no-gui server stopped before it confirmed a healthy start"
     try:
         backstop.activate()
         app = create_app(
@@ -726,10 +771,10 @@ def main(argv: list[str] | None = None) -> int:
                 name="wg2-status-control",
                 daemon=True,
             ).start()
-        else:
+        elif no_gui_start is not None:
             # No status controller owns this server, so nothing else will settle
             # an update transaction for it (contract §4.5).
-            no_gui_start = _no_gui_healthy_start(server, port, paths.root)
+            no_gui_start.start(server, port)
 
         if open_browser:
             threading.Thread(
@@ -750,20 +795,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         server.run(sockets=[listener])
         return 0
-    except Exception:
+    except Exception as exc:
         logging.getLogger("wg.launch").exception(
             "The server stopped unexpectedly. Review the traceback and logs/server.log, "
             "then start again."
+        )
+        stop_reason = (
+            "the --no-gui server stopped with an error before it confirmed a healthy "
+            f"start: {type(exc).__name__}: {exc}"
         )
         return 1
     finally:
         try:
             stop_browser.set()
             stop_status_watch.set()
-            if no_gui_start is not None:
-                no_gui_start.finish(
-                    "the --no-gui server stopped before it confirmed a healthy start"
-                )
+            _not_confirmed(no_gui_start, stop_reason)
             if listener is not None:
                 listener.close()
             if lock is not None:

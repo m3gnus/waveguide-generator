@@ -9,11 +9,12 @@ and never again.
 
 This module is the one code path. The window and browser modes reach it through
 ``StatusController.settle_update_transaction`` -- the controller settles on the
-first snapshot that satisfies the frontend-ready predicate, and the desktop
-window delegates to it at the moment it has always used, once its native event
-loop is running. ``--no-gui`` reaches it from ``launch/serve.py`` after a
-self-probe of ``/health`` and the interface route. Every mode therefore writes
-the same ``update.log`` lines.
+first snapshot from its own server that satisfies the frontend-ready
+predicate, and the desktop window delegates to it at the moment it has always
+used, once its native event loop is running. ``--no-gui`` reaches it from
+``launch/serve.py`` after a self-probe of ``/health`` and the interface route.
+Every mode therefore writes the same ``update.log`` lines: the commit's and the
+cleanup's when it settles, and :func:`unconfirmed_line` when it cannot.
 
 It is never reached from ``create_app``: every mode's server runs that, and a
 commit there would pre-empt the evidence the controller waits for.
@@ -21,7 +22,7 @@ commit there would pre-empt the evidence the controller waits for.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 import os
 from pathlib import Path
 import shutil
@@ -29,12 +30,14 @@ import sys
 import threading
 
 from launchers.apply_update import (
+    ROLLBACK_MATERIAL_RETAINED,
     ApplyUpdateError,
     append_update_log,
     bundle_from_app_layer,
     cleanup_previous_layers,
     commit_transaction,
     journal_describes,
+    read_completion_record,
     read_journal,
     reclaim_committed_staging,
     repair_bundle,
@@ -98,26 +101,69 @@ def open_transaction(data_dir: Path, resources: Path) -> str | None:
     return f"update transaction {identifier} (state {str(journal.get('state') or '')!r})"
 
 
+def unconfirmed_line(data_dir: Path, resources: Path, reason: str) -> str | None:
+    """The ``update.log`` line of a start that cannot confirm the build, or ``None``.
+
+    ``None`` when a confirmed start would have nothing to settle -- no open
+    transaction, no ``.previous``, no staging the completion record still
+    retains -- because then there is nothing for a reader to act on, and an
+    ordinary start whose interface was slow must not write about updates.
+    """
+
+    transaction = open_transaction(data_dir, resources)
+    if transaction is None and not previous_generation_paths(resources):
+        record = read_completion_record(data_dir, resources)
+        if record is None or record.get("rollbackMaterial") != ROLLBACK_MATERIAL_RETAINED:
+            return None
+    return (
+        f"This start did not confirm the build: {reason}. Not reclaiming the previous "
+        "layers yet" + (f"; {transaction} stays open" if transaction else "") + "."
+    )
+
+
 def report_unconfirmed_start(paths: BundlePaths | None, reason: str) -> bool:
     """Say in ``update.log`` that this start could not confirm the build, and why.
 
     Contract §4.5: a mode that cannot confirm the build never leaves the
     transaction open silently. Nothing is committed or removed. Returns whether
-    there was an open transaction to report.
+    a line was written.
     """
 
     if paths is None:
         return False
     _bundle, resources, data_dir = paths
-    transaction = open_transaction(data_dir, resources)
-    if transaction is None:
+    line = unconfirmed_line(data_dir, resources, reason)
+    if line is None:
         return False
-    append_update_log(
-        data_dir,
-        f"This start did not confirm {transaction}: {reason}. The transaction stays open "
-        "and its rollback material is kept until a start confirms the build.",
-    )
+    append_update_log(data_dir, line)
     return True
+
+
+def report_unconfirmed_for_arguments(
+    server_args: Sequence[str], reason: str, *, environ: Mapping[str, str] | None = None
+) -> bool:
+    """:func:`report_unconfirmed_start` for a start that ends before it has a server.
+
+    The data directory comes from the server's own command line, as the
+    interrupted-update recovery reads it.
+    """
+
+    environment = os.environ if environ is None else environ
+    if environment.get("WG2_BUNDLE") != "1":
+        return False
+    try:
+        from server.platform.paths import app_root, resolve_data_dir
+
+        from .updater import _data_dir_override
+
+        paths = resolve_bundle_paths(
+            environment,
+            app_root(environ=environment),
+            resolve_data_dir(_data_dir_override(server_args), environ=environment),
+        )
+    except Exception:  # noqa: BLE001 - reporting must not replace the refusal itself
+        return False
+    return report_unconfirmed_start(paths, reason)
 
 
 def _report_to_the_user(message: str) -> None:
@@ -152,10 +198,11 @@ class HealthyStartSettlement:
     def settle(self, *, ready: bool, evidence: str, report: Report | None = None) -> bool:
         """Settle when ``ready``; otherwise say why not. Returns whether it is settled.
 
-        ``evidence`` names what was observed, for the line that declines. It is
-        what made the two earlier breakages findable: both times the whole
-        symptom was a gigabyte that never came back and an ``update.log`` that
-        stopped after "Relaunched", with nothing to search for.
+        ``evidence`` names what was observed, for the line that declines
+        (:func:`unconfirmed_line`). That line is what made the two earlier
+        breakages findable: both times the whole symptom was a gigabyte that
+        never came back and an ``update.log`` that stopped after "Relaunched",
+        with nothing to search for.
         """
 
         with self._lock:
@@ -170,11 +217,9 @@ class HealthyStartSettlement:
                 append_update_log(data_dir, message)
 
             if not ready:
-                transaction = open_transaction(data_dir, resources)
-                log(
-                    f"Not reclaiming the previous layers yet: {evidence}."
-                    + (f" {transaction[0].upper()}{transaction[1:]} stays open." if transaction else "")
-                )
+                line = unconfirmed_line(data_dir, resources, evidence)
+                if line is not None:
+                    log(line)
                 return False
             # A healthy interface is the only evidence that an update worked.
             # Close the transaction here, and refuse to reclaim anything while
@@ -258,7 +303,14 @@ def _reclaim_macos(
     log: Report,
     report: Report,
 ) -> None:
-    """Remove sealed rollback content only around a required sign/verify."""
+    """Remove sealed rollback content only around a required sign/verify.
+
+    Not safe to interrupt between moving ``.previous`` out and the re-seal: a
+    process that dies there leaves the bundle unsealed and the rollback
+    material in the holding directory, and the next update is refused, naming
+    it, until that is resolved. Callers wait for it rather than abandon it
+    (contract §4.5).
+    """
 
     holding = cleanup_holding_directory(bundle)
     if holding.exists() or holding.is_symlink():
@@ -338,6 +390,8 @@ __all__ = [
     "cleanup_holding_directory",
     "open_transaction",
     "previous_generation_paths",
+    "report_unconfirmed_for_arguments",
     "report_unconfirmed_start",
     "resolve_bundle_paths",
+    "unconfirmed_line",
 ]

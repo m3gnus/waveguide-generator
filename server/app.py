@@ -50,7 +50,8 @@ from server.solver.symmetry import resolve_symmetry
 from server.workspace import mount_workspace
 from server.workspace.api import MAX_EXPORT_REQUEST_BODY_BYTES
 from server.updates import mount_updates
-from server.updates.restart import RestartApproval
+from server.updates.restart import UPDATE_RESTART_PENDING, RestartApproval
+from server.integration.contracts import error_envelope
 
 
 APP_ROOT = app_root()
@@ -403,6 +404,14 @@ class _HashedAssetStaticFiles(StaticFiles):
         return response
 
 
+#: Routes refused while an update restart is approved (contract §4.2) that are
+#: not in a router with the latch of its own. ``POST /api/cadlink/ingest`` starts
+#: work that outlives its request -- a deferred viewport, and a capture of the
+#: CAD document that copies tens of megabytes -- and it is refused before its
+#: handler runs, so the return stays on disk exactly as it was.
+RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest"})
+
+
 def create_app(
     *,
     data_dir: str | Path | None = None,
@@ -663,6 +672,25 @@ def create_app(
             (time.monotonic() - began) * 1000,
         )
         return response
+
+    @application.middleware("http")
+    async def refuse_during_update_restart(request: Request, call_next):
+        # The solve and retry routes refuse in their own router; see
+        # ``RESTART_GATED_POSTS`` for the rest.
+        if request.method == "POST" and request.url.path in RESTART_GATED_POSTS:
+            approval = getattr(application.state, "update_restart", None)
+            refusal = approval.refusal() if approval is not None else None
+            if refusal is not None:
+                return JSONResponse(
+                    status_code=409,
+                    content=error_envelope(
+                        code=UPDATE_RESTART_PENDING,
+                        stage="submission",
+                        message=refusal,
+                        retryable=True,
+                    ),
+                )
+        return await call_next(request)
 
     @application.get("/health")
     async def health() -> dict[str, object]:

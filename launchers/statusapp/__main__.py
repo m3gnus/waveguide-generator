@@ -511,6 +511,13 @@ def main(argv: list[str] | None = None) -> int:
                 "Waveguide Generator did not start because the interface is "
                 f"missing: {missing_frontend_reason()}"
             )
+            # A transaction this start leaves open is named, not left silent
+            # (contract §4.5).
+            from .healthy_start import report_unconfirmed_for_arguments
+
+            report_unconfirmed_for_arguments(
+                arguments, "the --no-gui start refused to run without its interface"
+            )
             return 1
 
         from launch.serve import main as serve

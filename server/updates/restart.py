@@ -22,12 +22,16 @@ the new process starts unlatched. A process that exits takes the latch with it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import logging
 import threading
 
 
 #: The error code a refused submission carries (``error.code``).
 UPDATE_RESTART_PENDING = "update_restart_pending"
+
+#: Told ``(target, reason)`` when an approved restart is called off.
+ReleaseListener = Callable[[str, str], object]
 
 log = logging.getLogger("wg.updates")
 
@@ -38,6 +42,7 @@ class RestartApproval:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._target: str | None = None
+        self._listeners: list[ReleaseListener] = []
 
     @property
     def pending(self) -> str | None:
@@ -45,6 +50,12 @@ class RestartApproval:
 
         with self._lock:
             return self._target
+
+    def add_release_listener(self, listener: ReleaseListener) -> None:
+        """Be told when a restart is called off, so the update dialog can say why."""
+
+        with self._lock:
+            self._listeners.append(listener)
 
     def approve(self, target: str) -> None:
         """Latch: ``target`` names what the restart installs, for the refusal message."""
@@ -60,11 +71,13 @@ class RestartApproval:
         """Clear the latch because no handoff is pending any more.
 
         Returns whether it was set. Releasing an unset latch is harmless, so
-        every failure path may call this without first asking.
+        every failure path may call this without first asking. Listeners are
+        told only when a set latch comes down.
         """
 
         with self._lock:
             target, self._target = self._target, None
+            listeners = list(self._listeners)
         if target is None:
             return False
         log.warning(
@@ -72,6 +85,11 @@ class RestartApproval:
             target,
             reason,
         )
+        for listener in listeners:
+            try:
+                listener(target, reason)
+            except Exception:  # noqa: BLE001 - the latch is down whatever a listener does
+                log.exception("A restart release listener failed")
         return True
 
     def refusal(self) -> str | None:
@@ -86,4 +104,4 @@ class RestartApproval:
         )
 
 
-__all__ = ["UPDATE_RESTART_PENDING", "RestartApproval"]
+__all__ = ["UPDATE_RESTART_PENDING", "ReleaseListener", "RestartApproval"]

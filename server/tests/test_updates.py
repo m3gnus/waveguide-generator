@@ -210,6 +210,9 @@ def test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it
 
     assert approved == ["v2.0.1"]
     assert failing.restart_approval.pending is None
+    shown = failing.get_status()
+    assert shown["installState"] == "failed"
+    assert "did not start" in str(shown["error"])
 
 
 def test_incomplete_release_rechecks_quickly_and_never_offers_an_action(tmp_path: Path):

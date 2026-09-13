@@ -649,6 +649,9 @@ class BundleUpdateInstaller:
         self.restart_approval = (
             restart_approval if restart_approval is not None else RestartApproval()
         )
+        #: What this installer's own handoff request would install, once written.
+        self._handoff_target: str | None = None
+        self.restart_approval.add_release_listener(self._restart_called_off)
         self.downloader = downloader
         self.small_fetcher = small_fetcher
         self.volume_probe = volume_probe
@@ -753,6 +756,32 @@ class BundleUpdateInstaller:
                 "downloadedBytes": 0,
                 "totalBytes": 0,
                 "error": None,
+            }
+
+    def _restart_called_off(self, target: str, reason: str) -> None:
+        """The launcher did not hand off (contract §4.2): show a failed install.
+
+        The launcher deleted the request as it discarded it, and ``status``
+        reads a missing request as consumed, so without this the dialog would
+        drop back to idle with nothing to say. A write that failed inside
+        ``_run`` reports its own error instead, which is why only ``ready`` and
+        a consumed ``idle`` are replaced.
+        """
+
+        with self._lock:
+            if target != self._handoff_target or self._state["installState"] not in {
+                "ready",
+                "idle",
+            }:
+                return
+            self._handoff_target = None
+            self._active_job_key = None
+            self._state = {
+                "installState": "failed",
+                "activeVersion": target.removeprefix("v"),
+                "downloadedBytes": 0,
+                "totalBytes": 0,
+                "error": f"The update to {target} did not start: {reason}. Try again.",
             }
 
     @staticmethod
@@ -958,7 +987,8 @@ class BundleUpdateInstaller:
             # latch goes up first: no solve may slip in between the file
             # appearing and the latch being set. If the request is never
             # written, nothing will restart, and the latch comes down again.
-            self.restart_approval.approve(f"v{version}")
+            self._handoff_target = f"v{version}"
+            self.restart_approval.approve(self._handoff_target)
             try:
                 temporary.write_text(
                     json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"

@@ -901,6 +901,9 @@ class UpdateService:
             if restart_approval is not None
             else getattr(bundle_installer, "restart_approval", None) or RestartApproval()
         )
+        #: Why the last approved checkout restart was called off, for the dialog.
+        self._called_off: str | None = None
+        self.restart_approval.add_release_listener(self._restart_called_off)
         if self.bundle_installer is None and self.update_request_path is not None:
             self.bundle_installer = BundleUpdateInstaller(
                 data_dir=self.data_dir,
@@ -908,6 +911,11 @@ class UpdateService:
                 request_path=self.update_request_path,
                 restart_approval=self.restart_approval,
             )
+
+    def _restart_called_off(self, target: str, reason: str) -> None:
+        # A checkout handoff that did not happen (contract §4.2). The bundle
+        # installer reports its own; ``get_status`` shows this one otherwise.
+        self._called_off = f"The update to {target} did not start: {reason}. Try again."
 
     def channel(self) -> str:
         """Which release channel this installation follows.
@@ -1581,11 +1589,11 @@ class UpdateService:
                 self.bundle_installer.status()
                 if checkout.get("kind") == "bundle" and self.bundle_installer is not None
                 else {
-                    "installState": "idle",
+                    "installState": "failed" if self._called_off else "idle",
                     "activeVersion": None,
                     "downloadedBytes": 0,
                     "totalBytes": 0,
-                    "error": None,
+                    "error": self._called_off,
                 }
             )
 
@@ -1620,6 +1628,7 @@ class UpdateService:
         if pending is not None:
             # A restart is already approved (contract §4.2).
             raise UpdateInstallUnavailable(pending)
+        self._called_off = None
 
         status = self.get_status()
         release = status.get("release")
@@ -1686,13 +1695,18 @@ class UpdateService:
         try:
             temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
             temporary.replace(request_path)
-        except OSError as exc:
-            self.restart_approval.release(f"the handoff request could not be written: {exc}")
+        except BaseException as exc:
+            # Whatever stopped it, no request exists, so nothing will restart.
+            self.restart_approval.release(
+                f"the handoff request could not be written: {exc or type(exc).__name__}"
+            )
             try:
                 temporary.unlink()
             except OSError:
                 pass
-            raise UpdateInstallUnavailable(
-                f"WG could not create the update handoff: {exc}"
-            ) from exc
+            if isinstance(exc, OSError):
+                raise UpdateInstallUnavailable(
+                    f"WG could not create the update handoff: {exc}"
+                ) from exc
+            raise
         return {"accepted": True, "tag": tag}

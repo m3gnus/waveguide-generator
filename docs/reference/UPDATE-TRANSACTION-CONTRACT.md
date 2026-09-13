@@ -31,14 +31,14 @@ the release owner that this contract records but does not design.
 | **Healthy-start cleanup deletes the whole `<data>/updates` folder**, on both paths. | Off macOS `desktop.py:705-713`; macOS `desktop.py:822`, `:825-836` |
 | An uncommitted transaction keeps `.previous`, and the next update then refuses to start. | `apply_update.py:948-950` ("A previous update has not completed its healthy-start check") |
 | `--browser` and `--no-gui` run through `status_main`. Linux falls back to browser mode when Qt cannot open a window. | `desktop.py:1778-1780`, `:1812-1818` |
-| Browser mode settles on the controller's first poll whose interface is served. The status window polls until then, for up to 30 s after the backend answers. `--no-gui` runs the server in-process with no controller, and settles after a self-probe. | `launchers/statusapp/controller.py` `poll`; `launchers/statusapp/view.py` `_settle_when_served`; `launch/serve.py` `_NoGuiHealthyStart` |
+| Browser mode settles on the controller's first poll of its own server whose interface is served, and reports a start it cannot confirm. `--no-gui` runs the server in-process with no controller, settles after a self-probe, and reports every exit that leaves a transaction open. | `launchers/statusapp/controller.py` `poll`, `settle_update_transaction`; `launchers/statusapp/view.py`; `launch/serve.py` `_NoGuiHealthyStart` |
 | Staging is keyed by version: `<data>/updates/<version>/{downloads,staged}`. | `server/updates/bundle.py:866-869` |
 | The installer refuses when staging and the app are on different volumes, and v0.3.2 does the same. | `bundle.py:774-786` |
 | The server writes the schema-1 handoff request at the end of staging, then reports `ready`. | `bundle.py:940-953` |
 | The launcher accepts the request only with exactly its five keys and staged paths inside the data directory. It deletes the request as it consumes it. | `launchers/statusapp/updater.py:108-175` |
 | The launcher runs the **staged** helper, `<staged app>/launchers/apply_update.py`, with `cwd` at the data directory. It checks containment again. | `updater.py:562-566`, `:571`, `:587-604`, `:611-616` |
 | The launcher consumes the request **before** it stops the server. | `launchers/statusapp/controller.py:1013-1026`; `view.py:141`, `:191-201` |
-| Writing the handoff request latches "restart approved" in the server (§4.2). While it is latched, `POST /api/solve`, `POST /api/jobs/{job_id}/retry` and `POST /api/updates/install` answer 409 `update_restart_pending`. | `server/updates/restart.py`; writers in `server/updates/bundle.py` and `server/updates/service.py`; routes in `server/jobs/api.py` and `server/updates/api.py` |
+| Writing the handoff request latches "restart approved" in the server (§4.2). While it is latched, `POST /api/solve`, `POST /api/jobs/{job_id}/retry`, `POST /api/updates/install` and `POST /api/cadlink/ingest` answer 409 `update_restart_pending`. | `server/updates/restart.py`; writers in `server/updates/bundle.py` and `server/updates/service.py`; refusals in `server/jobs/api.py`, `server/updates/api.py` and `server/app.py` |
 
 After `8bccff0c`, the writing side of area 1 was implemented. `commit_transaction` writes
 the completion record (§2.2) before `remove_journal`, and healthy-start cleanup on both
@@ -304,19 +304,37 @@ In the code, the latch is `RestartApproval` in `server/updates/restart.py`, one 
 process (`application.state.update_restart`):
 
 - The bundle installer and the checkout install set it just before they write the
-  request, and release it if the write fails.
-- Three routes refuse while it is set: `POST /api/solve`, `POST /api/jobs/{job_id}/retry`
-  and `POST /api/updates/install`. The other job routes act on a job that already exists,
-  and finish within their own request. The CAD Link solve command reaches `/api/solve`
-  through the interface, so it is refused there, and the interface keeps it parked.
+  request, and release it if the write fails for any reason.
+- Four routes refuse while it is set: `POST /api/solve`, `POST /api/jobs/{job_id}/retry`,
+  `POST /api/updates/install` and `POST /api/cadlink/ingest`. The ingest is refused by a
+  middleware in `server/app.py` (`RESTART_GATED_POSTS`) before its handler runs. It
+  schedules a deferred viewport and a capture of the CAD document, which copies tens of
+  megabytes, and both outlive the request.
+- **What stays open.** A route that does bounded work inside its request and persists no
+  job stays open: every read, `POST /api/solve/plan`, the field plane,
+  `/api/solver-mesh`, the STEP, STL and WGLink exports, and the job routes that act on a
+  job that already exists (stop, delete, metadata, recombine). The graceful stop gives
+  them time to finish.
+- The CAD Link solve command reaches `/api/solve` through the interface, so it is refused
+  there, and the interface keeps it parked.
+- A refused ingest leaves the return unread on disk and still listed. The interface shows
+  the message as a failed CAD preparation and offers to prepare it again. Nothing is
+  reported to Fusion. After the restart the return is ingested again when the user
+  prepares it, or when a Fusion solve command asks for it again.
 - The launcher's notice is `update-released.json` in the status control directory
   (`UPDATE_RELEASED_FILENAME` in `launch/serve_options.py`). It is written when the
   launcher discards a request, when a checkout handoff cannot start, and when the window
   refuses a bundle request because an earlier update's rollback material is still present.
   The server's status watcher (`_watch_statusapp` in `launch/serve.py`) removes it and
   releases the latch.
-- The interface shows the refusal's message where it shows any refused solve, retry or
-  install.
+- If the notice still cannot be written after three tries, the launcher restarts the
+  server instead, as after a failed handoff: a new process starts unlatched.
+  `update.log` says so.
+- A called-off restart is a failed attempt the update dialog shows, through the existing
+  `installState` and `error` fields: "The update to `<version>` did not start: `<reason>`.
+  Try again."
+- The interface shows the refusal's message where it shows any refused solve, retry,
+  install or CAD preparation.
 
 ### 4.3 Existing work
 
@@ -359,19 +377,51 @@ reason. It never leaves the transaction open silently. The evidence differs by m
     modes start run `create_app` too, and a commit there would pre-empt the controller's
     frontend evidence.
 
-In the code, `launchers/statusapp/healthy_start.py` is the one path, and it writes the
-same `update.log` lines in every mode:
+In the code, `launchers/statusapp/healthy_start.py` is the one path, and every mode writes
+the same `update.log` lines through it.
 
-- The controller settles on its first ready poll (`settle_on_ready`).
-- The desktop window builds its controller with `settle_on_ready=False`. It delegates from
-  its native event loop, as it always committed, because HTTP readiness alone is not
+A start that settles writes `Healthy start: update transaction <id> committed from state
+'<state>'.`, then the cleanup's own lines, such as `Removed healthy-start rollback layer:
+<path>` and `Removed the update downloads: <path>`.
+
+A start that cannot confirm the build writes this, and settles nothing:
+
+```
+This start did not confirm the build: <reason>. Not reclaiming the previous layers yet; update transaction <id> (state '<state>') stays open.
+```
+
+The part after the semicolon appears only when a transaction is open. The line is written
+only when a settle would have had something to do: an open transaction, `.previous`, or
+staging that the completion record still retains. An ordinary start writes nothing.
+
+By mode:
+
+- **The controller** settles on its first ready poll (`settle_on_ready`), and only on a
+  snapshot of its own server. An adopted server is declined with that reason: exit 2
+  means another server holds the instance lock, so the new build never served. This
+  applies to the window as well.
+- **The desktop window** builds its controller with `settle_on_ready=False`. It delegates
+  from its native event loop, as it always committed, because HTTP readiness alone is not
   enough to discard rollback material there. It passes the snapshot that ended its
   frontend wait.
-- `--no-gui` probes `/health`, which must name this build, and `/` for up to 20 s after
-  uvicorn reports started.
-- A mode that cannot confirm writes
-  `This start did not confirm update transaction <id> (state '<state>'): <reason>.`, and
-  settles nothing.
+- **The status window** polls until the interface is served, for up to 30 s after the
+  backend answers. It reports once if the start fails (an error with no live server), or
+  if 120 s pass without an answer it can confirm.
+- **`--no-gui`** probes `/health`, which must name this build, and `/` for up to 20 s
+  after uvicorn reports started. Its check exists as soon as the data directory is known,
+  so every exit reports. That covers a refused or missing interface, a failed migration,
+  no free port, the instance lock held elsewhere, `create_app` raising, and the server
+  stopping before it answered.
+
+**Interrupting a settle.** On macOS the cleanup moves `.previous` out of the bundle and
+then re-seals the bundle, and it is not safe to interrupt between the two:
+
+- A process that dies there leaves the bundle unsealed and the rollback material in the
+  holding directory.
+- The next update is then refused until that is resolved, and the refusal names the
+  directory.
+- A stopping `--no-gui` start waits up to 60 s for a settle under way. A second Ctrl+C or
+  the shutdown backstop can still end it sooner, and so can killing the window's process.
 
 Why this matters: an open `installed` transaction keeps `.previous`, and the next update
 is refused (`apply_update.py:948-950`). A Linux installation whose Qt cannot open a
@@ -396,6 +446,8 @@ The evidence each mode has for these:
 - `--no-gui` also checks that `/health` names this process's build.
 - The last two are implied rather than checked. uvicorn serves, and reports started, only
   after the application's startup handlers have run, and the job store opens there.
+- None of this counts when the interface that answered belongs to a server this start did
+  not launch (§4.5).
 
 ---
 
@@ -500,12 +552,20 @@ that implements it removes the marker.
 | `test_a_retry_after_restart_approval_is_refused_while_reads_stay_open` | §4.2 | Retry and install refuse with the error envelope; a read route stays open |
 | `test_a_restart_approval_is_released_when_the_handoff_request_cannot_be_written` | §4.2 | A bundle request that cannot be written releases the latch, and solves are accepted again |
 | `test_a_request_the_launcher_discards_releases_the_servers_latch` | §4.2 | The launcher's discard reaches the server's watcher and clears the latch |
+| `test_a_release_notice_that_cannot_be_written_restarts_the_server_unlatched` | §4.2 | A notice that cannot be written is retried, then the latched server is replaced and `update.log` says why |
+| `test_a_called_off_restart_shows_as_a_failed_install` | §4.2 | A discard shows in the install status as a failed attempt, with the reason |
+| `test_a_cad_return_ingested_after_restart_approval_is_refused` | §4.2 | `POST /api/cadlink/ingest` refuses with the envelope |
+| `test_an_adopted_server_does_not_settle_this_installations_transaction` | §4.5 | An exit-2 adoption is declined and reported, and nothing is reclaimed |
+| `test_a_no_gui_start_that_refuses_its_interface_reports_the_transaction` | §4.5 | An exit before the server exists still names the open transaction |
+| `test_a_no_gui_start_with_no_free_port_reports_the_transaction` | §4.5 | So does a port failure |
+| `test_healthy_start_writes_nothing_when_there_is_nothing_to_settle` | §4.5 | An ordinary start that cannot confirm writes nothing about updates |
 
 Outside this file: `server/tests/test_updates.py`
 `test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it` (§4.2,
 checkout flow); `server/tests/test_statusapp_controller.py`
-`test_the_status_window_polls_on_until_the_interface_is_served` (§4.5, browser mode's
-polling); and in `server/tests/test_desktop_launcher.py`, the window's refusal of a second
+`test_the_status_window_polls_on_until_the_interface_is_served` and
+`test_the_status_window_reports_a_start_that_cannot_confirm_the_update` (§4.5, browser
+mode); and in `server/tests/test_desktop_launcher.py`, the window's refusal of a second
 update while rollback material is pending now also checks that it releases the latch
 (§4.2).
 
