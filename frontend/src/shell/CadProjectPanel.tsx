@@ -17,7 +17,12 @@ import { listReturns } from '../api/cadlink';
 import { compareSelection } from '../api/results';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { openCadLinkedProject } from '../design/openCadProject';
+import {
+  assertDesignOpenCurrent,
+  openCadLinkedProject,
+  takeDesignOpenTicket,
+  type DesignOpenTicket,
+} from '../design/openCadProject';
 import { selectJob } from './JobsPanel';
 import { runDisplayName } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -105,7 +110,7 @@ function documentReason(document: CadProjectDocument | null, hash: string | null
   return '';
 }
 
-async function openCadOnlyProject(project: CadProject): Promise<string> {
+async function openCadOnlyProject(project: CadProject, ticket: DesignOpenTicket): Promise<string> {
   // Asked of the server, not the coordinator's snapshot: that snapshot is
   // React state and may still be the pre-reload empty list while a poll is
   // in flight.
@@ -114,6 +119,9 @@ async function openCadOnlyProject(project: CadProject): Promise<string> {
   if (!bundle) {
     throw new Error(`No return from ${projectName(project)} is available to open. Send the document from Fusion again.`);
   }
+  // After the last await, immediately before the switch: a design opened, or
+  // a newer open asked for, while the list was read is the one that stays.
+  assertDesignOpenCurrent(ticket, projectName(project));
   // Naming the project is what files this session's settings -- the drivers
   // above all -- under the project being opened rather than under whichever
   // one the workspace was on.
@@ -150,25 +158,34 @@ function ProjectSwitcher({ current, label, onOpened, onError }: {
   };
   useEffect(() => () => { generation.current += 1; }, []);
 
+  // Held from the first click, before the question: a second click while the
+  // run list is read must not put a second question on screen.
+  const busyRef = useRef(false);
   const open_ = async (project: CadProject) => {
-    if (await replacingWouldLose()
-      && !window.confirm(discardConfirmation('open this CAD-linked project'))) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
+      if (await replacingWouldLose()
+        && !window.confirm(discardConfirmation('open this CAD-linked project'))) return;
+      // Taken as soon as the switch is decided, before its first await: the
+      // switch applies only if nothing newer happened in between. A CAD-only
+      // project replaces no design, so an edit to the design cannot overtake
+      // it; a newer open or another design put on screen still can.
+      const ticket = takeDesignOpenTicket({ checkEdits: Boolean(project.designId) });
       if (project.designId) {
-        const opened = await openCadLinkedProject(
-          project.designId, fetch, 'cad-project-switch',
-        );
+        const opened = await openCadLinkedProject(project.designId, ticket, { loadSource: 'cad-project-switch' });
         setOpen(false);
         onOpened(opened.filename);
       } else {
-        const name = await openCadOnlyProject(project);
+        const name = await openCadOnlyProject(project, ticket);
         setOpen(false);
         onOpened(name);
       }
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };

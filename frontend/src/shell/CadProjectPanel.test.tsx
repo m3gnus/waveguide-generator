@@ -7,6 +7,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { applyOpenedDesign } from '../design/openCadProject';
+import { DesignFileMenu } from '../design/DesignFileMenu';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { cadProjectReference } from '../api/cadProjects';
 import { CadProjectHeader, CadProjectHistory, modelStateLabel, newestReturnForProject, projectName } from './CadProjectPanel';
@@ -471,6 +472,229 @@ describe('CAD project history', () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(String(confirm.mock.calls[0][0])).not.toMatch(/save/i);
     expect(useDesignStore.getState().design.R).toBe(321);
+  });
+
+  it('asks once when a project is clicked twice while the first click is still deciding', async () => {
+    setJobs([]);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => { applyOpenedDesign(openedProject(150), 'hans-rosse.cfg'); });
+    act(() => useDesignStore.getState().updateField('R', 321));
+    await render(<CadProjectHeader/>);
+    const toggle = host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    await act(async () => { toggle.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    const item = host.querySelector<HTMLButtonElement>('.cad-project-menu [role="menuitem"]')!;
+
+    await act(async () => {
+      item.click();
+      item.click();
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(useDesignStore.getState().design.R).toBe(321);
+  });
+
+  /** Two registry projects, each with a snapshot the server parses into its
+   * own geometry. `open` answers each design-text request in turn. */
+  function twoProjectRoutes(open: (call: number) => Response | Promise<Response>) {
+    const listed = (id: string, lineage: string, name: string) => ({
+      designId: id, lineageId: lineage, filename: `${name}.cfg`, documentName: name, archiveStem: name,
+      editVersion: 1, designHash: `sha256:${name}`, branchedFromDesignId: null, branchedFromEditVersion: null,
+      exportCount: 1, lastExportedAt: '2026-08-21T08:00:00Z',
+      createdAt: '2026-08-20T08:00:00Z', updatedAt: '2026-08-21T08:00:00Z',
+    });
+    let openCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/documents')) return json(documents);
+      if (path.endsWith('/designs/wgd_a')) return json({ designId: 'wgd_a', lineageId: 'wgl_a', editVersion: 1, filename: 'alpha.cfg', text: 'A' });
+      if (path.endsWith('/designs/wgd_b')) return json({ designId: 'wgd_b', lineageId: 'wgl_b', editVersion: 1, filename: 'beta.cfg', text: 'B' });
+      if (path.endsWith('/api/cadlink/designs')) return json({ items: [listed('wgd_a', 'wgl_a', 'alpha'), listed('wgd_b', 'wgl_b', 'beta')] });
+      if (path === '/api/design/open') { openCalls += 1; return open(openCalls); }
+      return json({});
+    }));
+  }
+
+  function openedAs(designId: string, lineageId: string, r: number) {
+    return {
+      dialect: 'ath', migrationsApplied: [],
+      passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+      design: { ...useDesignStore.getState().design, R: r },
+      cadlink: { identity: { designId, lineageId, baseEditVersion: 1 }, classification: 'current' },
+    };
+  }
+
+  it('keeps a rename made while the switcher loads a project, and says the open was overtaken', async () => {
+    setJobs([]);
+    const pending = deferred<Response>();
+    twoProjectRoutes(() => pending.promise);
+    await render(<CadProjectHeader/>);
+    const toggle = host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    await act(async () => { toggle.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    const alpha = [...host.querySelectorAll<HTMLButtonElement>('.cad-project-menu [role="menuitem"]')]
+      .find((button) => button.textContent?.includes('alpha'))!;
+    await act(async () => { alpha.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+
+    act(() => useDocumentStore.getState().setDesignName('Renamed while loading'));
+    await act(async () => {
+      pending.resolve(json(openedAs('wgd_a', 'wgl_a', 160)));
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(useDocumentStore.getState().designName).toBe('Renamed while loading');
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_project');
+    expect(useDesignStore.getState().design.R).not.toBe(160);
+    const alert = host.querySelector('[role="alert"]')?.textContent ?? '';
+    expect(alert).toContain('alpha.cfg');
+    expect(alert).toContain('changed while alpha.cfg was loading');
+  });
+
+  /** The most recent open request wins, whichever surface made it and
+   * whichever answer arrives last. */
+  it('keeps the design opened second when the one opened first finishes loading last', async () => {
+    setJobs([]);
+    const first = deferred<Response>();
+    twoProjectRoutes((call) => (call === 1 ? first.promise : json(openedAs('wgd_b', 'wgl_b', 222))));
+    await render(<><DesignFileMenu/><CadProjectHeader/></>);
+
+    // Alpha from the File menu; its design text is still loading.
+    act(() => host.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const picker = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('CAD-linked designs'))!;
+    await act(async () => { picker.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    const alphaInMenu = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="CAD-linked designs"] button')]
+      .find((button) => button.textContent?.includes('alpha'))!;
+    await act(async () => { alphaInMenu.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+
+    // Then beta from the project switcher, which finishes first.
+    const toggle = host.querySelector<HTMLButtonElement>('.cad-project-trigger')!;
+    await act(async () => { toggle.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    const beta = [...host.querySelectorAll<HTMLButtonElement>('.cad-project-menu [role="menuitem"]')]
+      .find((button) => button.textContent?.includes('beta'))!;
+    await act(async () => { beta.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_b');
+
+    await act(async () => {
+      first.resolve(json(openedAs('wgd_a', 'wgl_a', 111)));
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_b');
+    expect(useDocumentStore.getState().designName).toBe('beta');
+    expect(useDesignStore.getState().design.R).toBe(222);
+  });
+
+  /** The request order, not only the document generation: the design asked
+   * for first finishes loading while the one asked for second is still
+   * loading, and nothing has been put on screen yet. It must not apply. */
+  it('does not apply the design opened first when it finishes loading while the one opened second is still loading', async () => {
+    setJobs([]);
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    twoProjectRoutes((call) => (call === 1 ? first.promise : second.promise));
+    await render(<><DesignFileMenu/><CadProjectHeader/></>);
+
+    act(() => host.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const picker = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('CAD-linked designs'))!;
+    await act(async () => { picker.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    const alphaInMenu = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="CAD-linked designs"] button')]
+      .find((button) => button.textContent?.includes('alpha'))!;
+    await act(async () => { alphaInMenu.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    const toggle = host.querySelector<HTMLButtonElement>('.cad-project-trigger')!;
+    await act(async () => { toggle.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    const beta = [...host.querySelectorAll<HTMLButtonElement>('.cad-project-menu [role="menuitem"]')]
+      .find((button) => button.textContent?.includes('beta'))!;
+    await act(async () => { beta.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+
+    await act(async () => {
+      first.resolve(json(openedAs('wgd_a', 'wgl_a', 111)));
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_project');
+    expect(useDesignStore.getState().design.R).not.toBe(111);
+    expect(host.querySelector('.design-file-menu [role="status"]')?.textContent ?? '')
+      .toContain('Did not open alpha.cfg: another design was asked for after it.');
+
+    await act(async () => {
+      second.resolve(json(openedAs('wgd_b', 'wgl_b', 222)));
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_b');
+    expect(useDesignStore.getState().design.R).toBe(222);
+  });
+
+  /** A CAD-only project replaces no design, so renaming the design while its
+   * returns are read is no reason to refuse the switch. */
+  it('switches to a CAD-only project although the design was renamed while its returns were read', async () => {
+    setJobs([]);
+    const returns = deferred<Response>();
+    const selectBundle = vi.fn();
+    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...cadLinkCoordinatorBridge.getSnapshot(), bundles: [], selectBundle,
+    });
+    const bundle: CadReturnBundle = {
+      name: 'cad-only.wgreturn', bundlePath: 'wgreturn/cad-only.wgreturn', modifiedAt: '2026-08-23T19:14:58Z', readable: true,
+      documentName: 'CAD only', requestId: null, sourceCount: 1, instanceCount: 1, designIds: [], sources: [],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/cadlink/returns')) return returns.promise;
+      if (String(input).includes('/documents')) return json(documents);
+      if (String(input).includes('/api/cadlink/designs')) {
+        return json({ items: [{
+          designId: null, lineageId: 'wgl_cad_only', filename: null, documentName: 'CAD only',
+          archiveStem: 'CAD only', exportCount: 0, createdAt: '2026-08-23T14:34:20Z', updatedAt: '2026-08-23T19:15:10Z',
+        }] });
+      }
+      return json({});
+    }));
+    await render(<CadProjectHeader/>);
+    await chooseSwitcherProject();
+
+    act(() => useDocumentStore.getState().setDesignName('Renamed while reading'));
+    await act(async () => {
+      returns.resolve(json({ items: [bundle], cadFolderConfigured: true }));
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(selectBundle).toHaveBeenCalledWith(bundle, 'wgl_cad_only');
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('does not select a CAD-only project whose returns arrive after another design was opened', async () => {
+    setJobs([]);
+    const returns = deferred<Response>();
+    const selectBundle = vi.fn();
+    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...cadLinkCoordinatorBridge.getSnapshot(), bundles: [], selectBundle,
+    });
+    const bundle: CadReturnBundle = {
+      name: 'cad-only.wgreturn', bundlePath: 'wgreturn/cad-only.wgreturn', modifiedAt: '2026-08-23T19:14:58Z', readable: true,
+      documentName: 'CAD only', requestId: null, sourceCount: 1, instanceCount: 1, designIds: [], sources: [],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/cadlink/returns')) return returns.promise;
+      if (String(input).includes('/documents')) return json(documents);
+      if (String(input).includes('/api/cadlink/designs')) {
+        return json({ items: [{
+          designId: null, lineageId: 'wgl_cad_only', filename: null, documentName: 'CAD only',
+          archiveStem: 'CAD only', exportCount: 0, createdAt: '2026-08-23T14:34:20Z', updatedAt: '2026-08-23T19:15:10Z',
+        }] });
+      }
+      return json({});
+    }));
+    await render(<CadProjectHeader/>);
+    await chooseSwitcherProject();
+
+    act(() => { applyOpenedDesign(openedProject(333), 'elsewhere.cfg'); });
+    await act(async () => {
+      returns.resolve(json({ items: [bundle], cadFolderConfigured: true }));
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(selectBundle).not.toHaveBeenCalled();
+    expect(useDesignStore.getState().design.R).toBe(333);
+    expect(host.querySelector('[role="alert"]')?.textContent ?? '').toContain('CAD only');
   });
 });
 

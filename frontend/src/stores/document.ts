@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { designFilename, normalizeDesignName } from './designName';
+import { advanceEditorMutation } from './editorMutation';
 
 export interface DesignIdentity {
   designId: string;
@@ -122,6 +123,12 @@ export const useDocumentStore = create<DocumentState>((set) => ({
     });
   },
 }));
+
+// The name is part of the document a file records, so a rename is newer than
+// any open decided before it (see `editorMutation.ts`) -- however it was written.
+useDocumentStore.subscribe((state, previous) => {
+  if (state.designName !== previous.designName) advanceEditorMutation();
+});
 
 export function resetDocumentStore(): void {
   useDocumentStore.setState({

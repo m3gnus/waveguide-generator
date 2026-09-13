@@ -55,7 +55,7 @@ import {
 } from '../stores/solveOptions';
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
 import { cadProjectName, listCadProjects, newestReturnForProject, type CadProject } from '../api/cadProjects';
-import { DesignOpenSupersededError, openCadLinkedProject } from '../design/openCadProject';
+import { DesignOpenSupersededError, openCadLinkedProject, takeDesignOpenTicket } from '../design/openCadProject';
 import {
   keptContentKeyNow,
   keptContentKeyOf,
@@ -1029,6 +1029,10 @@ export function CadLinkCoordinator() {
   const bundlesRef = useRef<CadReturnBundle[]>([]);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
   const projectOpenPending = useRef(false);
+  // Set when a Fusion solve request that opened a project selects the return
+  // it names. That project's own listing, queued by the open, then leaves the
+  // selection alone (see `refresh`). Reset by every project switch.
+  const selectionClaimedAfterSwitch = useRef(false);
   // A return was refused because it names a design other than the open one.
   // Until the user acts on that, WG must not put some third project's geometry
   // on screen in its place: entering CAD Link is how a refusal is shown, and
@@ -1163,6 +1167,7 @@ export function CadLinkCoordinator() {
       // return. Drop the previous project's geometry and make the latest
       // positively-linked return eligible for selection on the next listing.
       projectOpenPending.current = true;
+      selectionClaimedAfterSwitch.current = false;
       // Opening a project is exactly what a foreign-return refusal asks for,
       // so it is what lifts the restore hold.
       refusedForeignReturn.current = false;
@@ -1384,8 +1389,15 @@ export function CadLinkCoordinator() {
       const destination = projectOpenPending.current
         ? useDocumentStore.getState().identity?.lineageId ?? null
         : undefined;
+      // A selection the Fusion request that opened this project has made since
+      // -- the return that request names -- is newer than this listing's pick.
+      // Replacing it would supersede the preparation it started, and the
+      // request would never be solved.
+      const selected = useCadReturnStore.getState().selectedBundle;
+      const claimedSinceSwitch = projectOpenPending.current && selectionClaimedAfterSwitch.current
+        && selected !== null && (!arrived || arrived.bundlePath === selected.bundlePath);
       let continuity: 'initial' | 'carried' | 'reset' = 'initial';
-      if (opened && !projectMismatch) {
+      if (opened && !projectMismatch && !claimedSinceSwitch) {
         // A compatible current or saved source inventory keeps the user's solve
         // setup; a genuinely first listing starts clean without being a reset.
         continuity = arrived
@@ -1400,7 +1412,9 @@ export function CadLinkCoordinator() {
       }
       if (projectOpenPending.current) {
         projectOpenPending.current = false;
-        setStatus(initial
+        selectionClaimedAfterSwitch.current = false;
+        // The request that claimed the selection reports its own progress.
+        if (!claimedSinceSwitch) setStatus(initial
           ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; prepare it to restore Simulation geometry.`
           : 'Project design loaded. No matching CAD return is available yet; return the project from Fusion or Onshape to prepare Simulation geometry.');
       }
@@ -2020,11 +2034,10 @@ export function CadLinkCoordinator() {
         };
       }
       const name = cadProjectName(project);
-      // Both halves of "it is safe to replace what is open" are captured here,
-      // and both are asked again at the last instant before the replacement
-      // happens: the registry read and the parse in between are slow enough for
-      // the user to have typed into the open design or opened another one.
-      const documentLoad = currentDocumentLoad();
+      // The document the switch is decided against, captured before the
+      // decision's own await: a design opened while the run list is read is
+      // newer than the decision, even one that would be kept, and it stays.
+      const decidedAgainstLoad = currentDocumentLoad();
       // Decided before the open's own awaits, so it may read the run list;
       // the guard below asks again, synchronously, from what this read.
       if (await replacingWouldLose()) {
@@ -2037,32 +2050,40 @@ export function CadLinkCoordinator() {
             : `Fusion asked WG to solve a return from ${name}, but no run matches the design on screen, and neither does what WG last opened, exported or sent, so opening ${name} may lose it. Solve it or export a copy and the request carries on; or ${remedy}`,
         };
       }
-      // Which half of the guard refused, so the wait can say what clears it.
-      const refusedBy: { code: 'unsaved_changes' | 'superseded_by_open' } = { code: 'superseded_by_open' };
+      // The open ticket every open takes, taken once the switch is decided. An
+      // open asked for after it, or anything else put on screen while the
+      // registry read and the parse are in flight, is newer and stays. The
+      // document generation is what sees that, not the design identity: two
+      // unrelated unlinked documents both have none. An edit is judged by the
+      // guard instead, at the same instant, by whether it would be lost:
+      // nobody at the keyboard decided against it, and a rename alone loses
+      // nothing.
+      const ticket = takeDesignOpenTicket({ checkEdits: false, decidedAgainstLoad });
       try {
-        await openCadLinkedProject(designId, fetch, 'cad-project-switch', () => {
-          // The document generation, not the design identity: two unrelated
-          // unlinked documents both have no identity at all, so identity
-          // cannot see one being replaced by the other.
-          if (!isCurrentDocumentLoad(documentLoad)) {
-            refusedBy.code = 'superseded_by_open';
-            return 'another design was opened while WG was loading it';
-          }
-          if (replacingWouldLoseNow()) {
-            refusedBy.code = 'unsaved_changes';
-            return 'the design on screen had changed by then, and neither a run nor what WG last opened, exported or sent matches it';
-          }
-          return null;
+        await openCadLinkedProject(designId, ticket, {
+          loadSource: 'cad-project-switch',
+          guard: () => (replacingWouldLoseNow()
+            ? 'the design on screen had changed by then, and neither a run nor what WG last opened, exported or sent matches it'
+            : null),
         });
       } catch (reason) {
         if (reason instanceof DesignOpenSupersededError) {
-          const remedy = refusedBy.code === 'unsaved_changes'
+          // Which check refused, so the wait can say what clears it.
+          const code: ReturnOpenCode = reason.code === 'refused_by_caller' ? 'unsaved_changes' : 'superseded_by_open';
+          const why = reason.code === 'refused_by_caller'
+            ? reason.message
+            : reason.code === 'superseded_by_newer_open'
+              ? 'another design was asked for while WG was loading it'
+              : reason.code === 'superseded_by_edit'
+                ? 'the design on screen changed while WG was loading it'
+                : 'another design was opened while WG was loading it';
+          const remedy = code === 'unsaved_changes'
             ? `open ${name} from File → CAD-linked designs, which asks before discarding, and the request carries on; or dismiss it`
             : `press Solve now to open ${name}, or dismiss the request`;
           return {
             kind: 'needs_user_input',
-            code: refusedBy.code,
-            message: `Fusion asked WG to solve a return from ${name}, but ${reason.message}. Nothing was replaced — ${remedy}.`,
+            code,
+            message: `Fusion asked WG to solve a return from ${name}, but ${why}. Nothing was replaced — ${remedy}.`,
           };
         }
         return classifyOpenFailure(reason, name);
@@ -2125,6 +2146,8 @@ export function CadLinkCoordinator() {
     // being parked: a failure before that point is retried, never lost.
     let working: PendingSolveCommand | null = null;
     let parkedThisRound = false;
+    // Whether this round opened the project its return belongs to.
+    let openedProject = false;
     try {
       // Reading the marker is advisory, like the status heartbeat: an older
       // server or a transient failure must not raise an error banner over a
@@ -2212,6 +2235,7 @@ export function CadLinkCoordinator() {
         // one this return belongs to, so a standing refusal is spent and the
         // remembered-project restore must not undo what was just opened.
         refusedForeignReturn.current = false;
+        openedProject = true;
       }
       // Parked from here on. Everything below is either terminal or a gate the
       // user can satisfy, and the marker survives a gate — so WG has to keep
@@ -2227,7 +2251,20 @@ export function CadLinkCoordinator() {
       // consumes it or the user refuses it, both of which report the outcome.
       settle(command.commandId, { state: 'waiting-for-user', resumeFromStart: false, code: null });
       autoIngestPending.current = false;
-      const continuity = useCadReturnStore.getState().selectArrivedBundle(bundle);
+      // Opening the project queued that project's own return listing. This
+      // request's selection is the newer one, so the listing leaves it alone
+      // (see `refresh`), and it is filed under the project just opened, as the
+      // listing would have filed it.
+      if (openedProject) selectionClaimedAfterSwitch.current = true;
+      const continuity = useCadReturnStore.getState().selectArrivedBundle(
+        bundle,
+        openedProject ? useDocumentStore.getState().identity?.lineageId ?? null : undefined,
+      );
+      // Also as the listing would have: the drivers just restored for the
+      // opened project are re-read from the library, quietly. Awaited, as a
+      // run recall awaits it: the solve below reads the drivers when it is
+      // sent, and must send the numbers the panel is about to show.
+      if (openedProject) await refreshChannelDriverBases().catch(() => undefined);
       await ingestSelected();
       if (continuity === 'reset') {
         const blocker = 'Review the new source inventory and solve settings before solving.';
@@ -2253,7 +2290,20 @@ export function CadLinkCoordinator() {
         retryLater(working, `Fusion asked WG to solve this model, but: ${message}`);
         return;
       }
-      if (reason instanceof SupersededError) return;
+      if (reason instanceof SupersededError) {
+        // Newer intent replaced the return this request was preparing, and
+        // said so where it happened. The request must not then sit parked with
+        // nothing to show -- the panel offers one only with a blocker -- and
+        // Solve now takes it from the top: selects its return, prepares it,
+        // and solves it.
+        if (working && parkedSolveCommandStore.getSnapshot().command?.commandId === working.commandId) {
+          settle(working.commandId, { state: 'waiting-for-user', resumeFromStart: true, code: null });
+          parkedSolveCommandStore.setBlockers(working.commandId, [
+            'The model Fusion sent was replaced before WG had prepared it. Press Solve now to prepare and solve it, or dismiss the request.',
+          ]);
+        }
+        return;
+      }
       const message = reason instanceof Error ? reason.message : String(reason);
       if (mounted.current) setError(`Fusion asked WG to solve this model, but: ${message}`);
       if (reason instanceof SolveEngineUnavailableError) {

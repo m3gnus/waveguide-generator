@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { temporal } from 'zundo';
 import { findParameterByPath } from '../design/parameterRegistry';
 import { replaceAthPolarBlocks } from './athPolars';
+import { advanceEditorMutation } from './editorMutation';
 
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM';
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
@@ -648,6 +649,9 @@ export function isCurrentDocumentLoad(generation: number): boolean {
 
 function bump(reason: MutationReason, immediate: boolean, loadSource?: DesignLoadSource): void {
   if (reason === 'load') documentLoads += 1;
+  // Every design mutation, a load included, is newer than any open decided
+  // before it (see `editorMutation.ts`).
+  advanceEditorMutation();
   if (reason === 'load' && loadSource) currentLoadSource = loadSource;
   const revision = useDesignStore.getState().designRevision;
   announce({ revision, reason, immediate, ...(loadSource ? { loadSource } : {}) });

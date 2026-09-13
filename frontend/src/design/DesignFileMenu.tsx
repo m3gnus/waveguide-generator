@@ -42,6 +42,7 @@ import {
   applyOpenedDesign as applyOpenedDocument,
   editableIdentity,
   openCadLinkedProject,
+  takeDesignOpenTicket,
 } from './openCadProject';
 import { sentToCadMessage } from './useSendToCad';
 
@@ -229,13 +230,31 @@ export function DesignFileMenu() {
     }
   }
 
+  /**
+   * Whether the design on screen may be replaced: nothing would be lost, or
+   * the user said so. The menu is held busy while it asks, so a second click
+   * during the run-list read cannot put a second question on screen.
+   */
+  async function mayReplace(replacement: string): Promise<boolean> {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    try {
+      return !(await replacingWouldLose()) || window.confirm(discardConfirmation(replacement));
+    } finally {
+      busyRef.current = false;
+    }
+  }
+
   async function openProject(project: CadLinkedDesignSummary) {
     if (!project.designId) return;
     const designId = project.designId;
-    if (await replacingWouldLose()
-      && !window.confirm(discardConfirmation('open this CAD-linked design'))) return;
+    if (!await mayReplace('open this CAD-linked design')) return;
+    // Taken as soon as the replacement is decided, before the open's first
+    // await: the open applies only if nothing newer happened in between, and
+    // says what did if something had.
+    const ticket = takeDesignOpenTicket();
     await act(async () => {
-      const opened = await openCadLinkedProject(designId, fetch, 'cad-project-switch');
+      const opened = await openCadLinkedProject(designId, ticket, { loadSource: 'cad-project-switch' });
       if (opened.adoptionCandidate) setAdoptionCandidate(opened.adoptionCandidate);
       setMessage(`Opened CAD-linked design ${opened.filename}`);
     });
@@ -283,9 +302,7 @@ export function DesignFileMenu() {
   }
 
   async function newDesign() {
-    if (busyRef.current) return;
-    if (await replacingWouldLose()
-      && !window.confirm(discardConfirmation('start a new design'))) return;
+    if (!await mayReplace('start a new design')) return;
     resetDesignStore();
     // Directivity and solver settings deliberately survive New: they describe
     // how this user measures, not which horn is on screen, and resetting them

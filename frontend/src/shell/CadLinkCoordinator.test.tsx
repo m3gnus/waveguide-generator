@@ -10,11 +10,12 @@ import { showJobModel } from '../jobs/showJobModel';
 import { preferencesStore } from '../prefs/preferences';
 import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
-import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { resetCadReturnStore, useCadReturnStore, type DriverPreset } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
 import { toSolveDesign } from '../jobs/actions';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
+import { durableSettings } from '../stores/durableSettings';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { documentSettingsSignature } from '../stores/designWire';
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
@@ -951,6 +952,142 @@ describe('CadLinkCoordinator', () => {
     expect(reported.some((entry) => entry.state === 'refused')).toBe(false);
   });
 
+  /** Opening the project is a load, and a load queues that project's own
+   * return listing. The listing used to select its latest return over the one
+   * the request had just selected, which superseded the request's preparation:
+   * the request then sat parked with nothing on screen, and was never solved. */
+  it('solves the model a Fusion solve command names once it has opened its project', async () => {
+    const command = foreignSolveCommand();
+
+    await renderCoordinator();
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
+    // Filed under the project just opened, as that project's own listing
+    // would have filed it: its saved solve settings are the ones restored.
+    expect(useCadReturnStore.getState().projectLineageId).toBe('wgl_other');
+    expect(command.counts.ingest).toBe(1);
+    expect(command.solveCurrentCadImport).toHaveBeenCalledOnce();
+    expect(command.reported).toEqual([expect.objectContaining({
+      commandId: 'cmd-other', state: 'accepted', jobId: 'job-9',
+    })]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+  });
+
+  /** A project's drivers are restored with its solve settings and re-read
+   * from the library, as that project's own listing would. The solve Fusion
+   * asked for must send the re-read numbers: the ones the panel then shows. */
+  it('re-reads the opened project’s drivers before solving the model a Fusion solve command names', async () => {
+    const preset: DriverPreset = {
+      id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database', kind: 'cd', z_ohm: 8, xo_min_hz: 1_600,
+      base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, le_mh: 0.12, mms_g: 2.4, fs_hz: 620, vas_l: 0.35, qms: 3.1 },
+    };
+    const driverRead = deferred<Response>();
+    const command = foreignSolveCommand((path) => (path.startsWith('/api/drivers/') ? driverRead.promise : null));
+    // The opened project's saved solve settings name that driver, with the
+    // numbers it had when it was picked.
+    useCadReturnStore.getState().selectBundle(command.otherProject, 'wgl_other');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', preset);
+    resetCadReturnStore();
+    const solvedWith: Array<number | undefined> = [];
+    command.solveCurrentCadImport.mockImplementation(async () => {
+      solvedWith.push(useCadReturnStore.getState().channelDrivers['drive-hf']?.preset?.base.re_ohm);
+      await consumeParkedSolveCommand('job-9');
+      return 'submitted' as const;
+    });
+    try {
+      await renderCoordinator();
+      await act(async () => {
+        for (let i = 0; i < 3; i += 1) await new Promise((settle) => setTimeout(settle, 0));
+      });
+      expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
+      expect(solvedWith).toEqual([]);
+
+      await act(async () => {
+        driverRead.resolve(json({ spec: { ...preset.base, re_ohm: 5.4 }, xo_min_hz: 1_600 }));
+        for (let i = 0; i < 5; i += 1) await new Promise((settle) => setTimeout(settle, 0));
+      });
+      expect(solvedWith).toEqual([5.4]);
+      expectSolvedOnce(command.reported);
+    } finally {
+      // The saved profile must not reach later tests.
+      durableSettings.set('cadSolveProfiles', null);
+    }
+  });
+
+  /** Newer intent can still replace the return a taken-on request is
+   * preparing: here the user picks another return while it is prepared. The
+   * request must not then sit parked with nothing to show. It says what
+   * happened, and Solve now prepares and solves the model Fusion sent. */
+  it('keeps a taken-on Fusion solve command visible when its preparation is superseded, and Solve now prepares it again', async () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
+    }, 'current');
+    const commandBundle = { ...initialBundle, designIds: ['wgd_current'] };
+    const otherBundle = {
+      ...initialBundle, name: 'other.wgreturn', bundlePath: 'wgreturn/other.wgreturn', designIds: ['wgd_current'],
+    };
+    const firstIngest = deferred<Response>();
+    const reported: Array<Record<string, unknown>> = [];
+    let ingestCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [commandBundle, otherBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)));
+        return json({ state: 'recorded', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command: {
+        commandId: 'cmd-here', returnId: 'wgr_here', bundlePath: commandBundle.bundlePath,
+        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
+      }, outcome: null });
+      if (path.endsWith('/ingest')) {
+        ingestCalls += 1;
+        return ingestCalls === 1 ? firstIngest.promise : json(ingestRecord);
+      }
+      return json({}, 404);
+    }));
+    const solveCurrentCadImport = vi.fn(async () => {
+      await consumeParkedSolveCommand('job-7');
+      return 'submitted' as const;
+    });
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
+    });
+
+    await renderCoordinator();
+    await act(async () => { await new Promise((settle) => setTimeout(settle, 0)); });
+    expect(ingestCalls).toBe(1);
+    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-here');
+
+    act(() => cadLinkCoordinatorBridge.getSnapshot().selectBundle(otherBundle));
+    await act(async () => {
+      firstIngest.resolve(json(ingestRecord));
+      for (let i = 0; i < 3; i += 1) await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    const parked = parkedSolveCommandStore.getSnapshot().command;
+    expect(parked?.commandId).toBe('cmd-here');
+    // Shown in the panel, which renders a parked request only with a blocker.
+    expect(parked?.blockers).toEqual([expect.stringContaining('Solve now')]);
+    expect(String(parked?.blockers[0])).not.toMatch(/save/i);
+    expect(solveCurrentCadImport).not.toHaveBeenCalled();
+    expect(reported).toEqual([]);
+
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand();
+      for (let i = 0; i < 3; i += 1) await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(commandBundle.bundlePath);
+    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
+    expect(reported).toEqual([expect.objectContaining({ commandId: 'cmd-here', state: 'accepted', jobId: 'job-7' })]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+  });
+
   /** The design on screen as it was opened from its own project. */
   function openedCurrent(r = 150) {
     return {
@@ -1036,8 +1173,7 @@ describe('CadLinkCoordinator', () => {
 
     expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
     expect(ingestCalls).toBe(1);
-    expect(reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-other');
+    expectSolvedOnce(reported);
   });
 
   /** The unsaved-work check is made before two network round trips, and the
@@ -1124,6 +1260,35 @@ describe('CadLinkCoordinator', () => {
     expect(String(parked?.blockers[0])).toContain('Nothing was replaced');
   });
 
+  /** The switch is decided against the design on screen before the run list
+   * is read. A design the user opens during that read is newer than the
+   * decision -- even one its own file keeps -- and the switch Fusion asked
+   * for must not replace it. */
+  it('holds a Fusion solve command when another design is opened while the run list is read', async () => {
+    const runs = deferred<Response>();
+    const command = foreignSolveCommand((path) => (path.startsWith('/api/jobs?') ? runs.promise : null));
+    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
+    // Exists nowhere else, so the decision reads the run list.
+    act(() => useDesignStore.getState().updateField('R', 321));
+
+    await renderCoordinator();
+    await act(async () => { await new Promise((settle) => setTimeout(settle, 0)); });
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).startsWith('/api/jobs?'))).toBe(true);
+
+    act(() => { applyOpenedDesign(openedCurrent(222), 'elsewhere.cfg'); });
+    await act(async () => {
+      runs.resolve(json({ items: [], total: 0 }));
+      for (let i = 0; i < 3; i += 1) await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(useDesignStore.getState().design.R).toBe(222);
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
+    expect(command.counts.ingest).toBe(0);
+    expect(command.reported).toEqual([]);
+    expect(parkedSolveCommandStore.getSnapshot().command?.blockers)
+      .toEqual([expect.stringContaining('another design was opened while WG was loading it')]);
+  });
+
   /** An edit undone back to the design as it was opened loses nothing, so it
    * is no reason to hold the switch Fusion asked for. */
   it('switches to the project a Fusion solve command names when an edit was undone back to the opened design', async () => {
@@ -1139,7 +1304,7 @@ describe('CadLinkCoordinator', () => {
 
     expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
     expect(command.counts.ingest).toBe(1);
-    expect(command.reported).toEqual([]);
+    expectSolvedOnce(command.reported);
     expect(parkedSolveCommandStore.getSnapshot().command?.blockers ?? [])
       .not.toContainEqual(expect.stringContaining('Tritonia'));
   });
@@ -1239,7 +1404,7 @@ describe('CadLinkCoordinator', () => {
 
     expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
     expect(command.counts.ingest).toBe(1);
-    expect(command.reported).toEqual([]);
+    expectSolvedOnce(command.reported);
     const jobReads = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith('/api/jobs?')).length;
     expect(jobReads).toBeLessThanOrEqual(4);
   });
@@ -1260,7 +1425,7 @@ describe('CadLinkCoordinator', () => {
     });
 
     expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expect(command.reported).toEqual([]);
+    expectSolvedOnce(command.reported);
     expect(parkedSolveCommandStore.getSnapshot().command?.blockers ?? [])
       .not.toContainEqual(expect.stringContaining('Tritonia'));
   });
@@ -1341,10 +1506,15 @@ describe('CadLinkCoordinator', () => {
     return { otherProject, reported, counts, routes, solveCurrentCadImport };
   }
 
-  /** Taken on: the project is open, its return prepared, and the request is
-   * WG's to finish. What happens after the switch is the ordinary parked flow
-   * and is not what these tests are about. */
-  const takenOn = { commandId: 'cmd-other' };
+  /** Taken on and finished: the project is open, the return it names was
+   * prepared and solved, the solve's own acceptance is the one thing reported
+   * back to Fusion, and nothing is left parked. (These tests used to stop at
+   * "taken on", with nothing reported: the listing that opening a project
+   * queues superseded the request's preparation, so it was never solved.) */
+  function expectSolvedOnce(reported: Array<Record<string, unknown>>): void {
+    expect(reported).toEqual([expect.objectContaining({ commandId: 'cmd-other', state: 'accepted' })]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+  }
 
   /** A project list that cannot be read right now says nothing about whether
    * WG holds the design. It used to read as "this copy of WG does not have
@@ -1367,8 +1537,7 @@ describe('CadLinkCoordinator', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
     expect(command.counts.ingest).toBe(1);
-    expect(command.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject(takenOn);
+    expectSolvedOnce(command.reported);
   });
 
   it('backs off while the project list stays down, then waits for the user rather than refusing', async () => {
@@ -1422,8 +1591,7 @@ describe('CadLinkCoordinator', () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expect(command.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject(takenOn);
+    expectSolvedOnce(command.reported);
   });
 
   it('refuses a Fusion solve command whose project the server will not open', async () => {
@@ -1455,6 +1623,16 @@ describe('CadLinkCoordinator', () => {
       openCalls += 1;
       return openCalls === 1 ? pending.promise : null;
     });
+    // What was on screen each time a solve was started.
+    const solvedOn: Array<{ design: string | undefined; bundle: string | undefined }> = [];
+    command.solveCurrentCadImport.mockImplementation(async () => {
+      solvedOn.push({
+        design: useDocumentStore.getState().identity?.designId,
+        bundle: useCadReturnStore.getState().selectedBundle?.bundlePath,
+      });
+      await consumeParkedSolveCommand('job-9');
+      return 'submitted' as const;
+    });
     useDocumentStore.getState().markSaved(
       useDesignStore.getState().designRevision, documentSettingsSignature(),
     );
@@ -1483,11 +1661,11 @@ describe('CadLinkCoordinator', () => {
 
     expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
     expect(command.counts.ingest).toBe(1);
-    // It went through the project switch, not straight to a solve of the
-    // design that happened to be on screen.
-    expect(command.solveCurrentCadImport).not.toHaveBeenCalled();
-    expect(command.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject(takenOn);
+    // It went through the project switch first: the one solve it started was
+    // of the project and return Fusion named, not of the design that happened
+    // to be on screen.
+    expect(solvedOn).toEqual([{ design: 'wgd_other', bundle: command.otherProject.bundlePath }]);
+    expectSolvedOnce(command.reported);
   });
 
   /** A newer return of the open project is not a newer version of the request

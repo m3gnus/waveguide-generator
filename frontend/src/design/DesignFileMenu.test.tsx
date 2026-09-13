@@ -7,6 +7,8 @@ import { toSolveDesign } from '../jobs/actions';
 import { resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { wgSolveSettingsFromStore } from '../stores/designWire';
+import { withWgSolveBlock } from '../stores/wgSolveBlock';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
@@ -1067,5 +1069,125 @@ describe('replacing the design on screen', () => {
 
     expect(confirm).not.toHaveBeenCalled();
     expect(useDocumentStore.getState().designName).toBe('linked');
+  });
+
+  it('asks once when New is clicked twice while the first click is still deciding', async () => {
+    openRoutes();
+    act(() => useDesignStore.getState().updateField('R', 321));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const create = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.querySelector('span')?.textContent === 'New')!;
+
+    await act(async () => {
+      create.click();
+      create.click();
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(useDesignStore.getState().design.R).toBe(321);
+  });
+});
+
+/**
+ * Opening a CAD-linked design takes two round trips, and the design it was
+ * decided against can change during either. The open is refused at the last
+ * instant if anything newer happened; what the user did in the meantime stays.
+ */
+describe('a CAD-linked open overtaken while it loads', () => {
+  const designId = 'wgd_01K00000000000000000000000';
+  const lineageId = 'wgl_01K00000000000000000000000';
+
+  function body(value: unknown): Response {
+    return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  function deferredResponse() {
+    let resolve!: (value: Response) => void;
+    const promise = new Promise<Response>((settle) => { resolve = settle; });
+    return { promise, resolve };
+  }
+
+  /** The registry copy as the server parses it: its own geometry, and a
+   * solve block that states the symmetry it was sent with. */
+  function openedLinked() {
+    const design = useDesignStore.getState().design;
+    return {
+      dialect: 'ath', migrationsApplied: [],
+      passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+      design: {
+        ...design,
+        R: 160,
+        extra_blocks: withWgSolveBlock(design.extra_blocks, { ...wgSolveSettingsFromStore(), symmetry: 'full' }),
+      },
+      cadlink: { identity: { designId, lineageId, baseEditVersion: 2 }, classification: 'current', adoptionCandidate: null },
+    };
+  }
+
+  function linkedRoutes(open: () => Response | Promise<Response>) {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/cadlink/designs') return body({ items: [{
+        designId, lineageId, editVersion: 2, designHash: 'sha256:full', filename: 'linked.cfg',
+        branchedFromDesignId: null, branchedFromEditVersion: null,
+        exportCount: 1, lastExportedAt: '2026-08-20T11:00:00Z',
+        createdAt: '2026-08-19T10:00:00Z', updatedAt: '2026-08-20T12:00:00Z',
+      }] });
+      if (path === `/api/cadlink/designs/${designId}`) return body({
+        designId, lineageId, editVersion: 2, filename: 'linked.cfg',
+        updatedAt: '2026-08-20T12:00:00Z', text: 'registry snapshot',
+      });
+      if (path === '/api/design/open') return open();
+      return new Response('not found', { status: 404 });
+    });
+  }
+
+  async function showLinkedDesigns(): Promise<HTMLButtonElement> {
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const picker = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('CAD-linked designs'))!;
+    await act(async () => { picker.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+    return container.querySelector<HTMLButtonElement>('[aria-label="CAD-linked designs"] button')!;
+  }
+
+  it('keeps a solve-setting edit made while a CAD-linked design loads, and says the open was overtaken', async () => {
+    const pending = deferredResponse();
+    linkedRoutes(() => pending.promise);
+    act(() => root.render(<DesignFileMenu/>));
+    const project = await showLinkedDesigns();
+    await act(async () => { project.click(); await new Promise((settle) => setTimeout(settle, 0)); });
+
+    act(() => useSolveOptionsStore.setState({ symmetry: 'quarter' }));
+    await act(async () => {
+      pending.resolve(body(openedLinked()));
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(useSolveOptionsStore.getState().symmetry).toBe('quarter');
+    expect(useDocumentStore.getState().identity).toBeNull();
+    expect(useDesignStore.getState().design.R).not.toBe(160);
+    const status = container.querySelector('[role="status"]')?.textContent ?? '';
+    expect(status).toContain('linked.cfg');
+    expect(status).toContain('changed while linked.cfg was loading');
+    expect(status).not.toMatch(/save/i);
+  });
+
+  it('asks once when a CAD-linked design is clicked twice while the first click is still deciding', async () => {
+    linkedRoutes(() => body(openedLinked()));
+    act(() => useDesignStore.getState().updateField('R', 321));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    const project = await showLinkedDesigns();
+
+    await act(async () => {
+      project.click();
+      project.click();
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(useDesignStore.getState().design.R).toBe(321);
   });
 });

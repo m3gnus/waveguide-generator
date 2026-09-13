@@ -12,6 +12,7 @@
  * whatever the last file was called.
  */
 import { designWireWithAthPolars } from './athPolars';
+import { advanceEditorMutation } from './editorMutation';
 import type { ConfigBlock } from './design';
 import { blocksWithDesignTitle } from './designName';
 import { useDocumentStore } from './document';
@@ -108,6 +109,15 @@ export function documentSettingsSignature(
     solve: wgSolveSettingsFromStore(state),
   });
 }
+
+// A file-owned solve setting is part of the document a file records, so
+// changing one is newer than any open decided before it (see
+// `editorMutation.ts`). Compared by value, because a durable-settings
+// rehydrate that changes nothing still writes a new state object, and that
+// must not overtake an open that is loading.
+useSolveOptionsStore.subscribe((state, previous) => {
+  if (documentSettingsSignature(state) !== documentSettingsSignature(previous)) advanceEditorMutation();
+});
 
 /** Overlay the design's name, the ATH polar blocks, and WG's solver block. */
 export function designWireWithSolveSettings(
