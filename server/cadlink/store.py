@@ -243,6 +243,24 @@ _SCHEMA = (
     """,
     "CREATE INDEX IF NOT EXISTS cad_preparations_by_operation "
     "ON cad_preparations(operation_id, created_at)",
+    # The setup revision each project is prepared with, per source inventory
+    # (CAD-OPERATIONS.md, "Project setups").
+    """
+    CREATE TABLE IF NOT EXISTS cad_project_setups (
+      lineage_id TEXT NOT NULL,
+      inventory_sha256 TEXT NOT NULL,
+      revision_id TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (lineage_id, inventory_sha256)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS cad_settings (
+      key TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    """,
 )
 # Columns later stages added to cad_operations: nullable (or defaulted), so a
 # row written before them -- by an earlier build, or by an older release, which
@@ -1044,6 +1062,54 @@ class CadLinkStore:
         return self._read_one(
             "SELECT * FROM cad_setup_revisions WHERE revision_id = ?", (revision_id,)
         )
+
+    def record_project_setup(
+        self, lineage_id: str, inventory_sha256: str, revision_id: str
+    ) -> dict[str, Any]:
+        """Make a setup revision the one a project is prepared with, for these sources."""
+
+        if not lineage_id or not inventory_sha256 or not revision_id:
+            raise ValueError("a project setup names a lineage, an inventory and a revision")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO cad_project_setups (lineage_id, inventory_sha256, revision_id, "
+                "updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (lineage_id, inventory_sha256) "
+                "DO UPDATE SET revision_id = excluded.revision_id, "
+                "updated_at = excluded.updated_at",
+                (lineage_id, inventory_sha256, revision_id, utc_now()),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_project_setups WHERE lineage_id = ? AND inventory_sha256 = ?",
+                (lineage_id, inventory_sha256),
+            ).fetchone()
+        return dict(row)
+
+    def get_project_setup(
+        self, lineage_id: str, inventory_sha256: str
+    ) -> dict[str, Any] | None:
+        self.initialize()
+        return self._read_one(
+            "SELECT * FROM cad_project_setups WHERE lineage_id = ? AND inventory_sha256 = ?",
+            (lineage_id, inventory_sha256),
+        )
+
+    def set_setting(self, key: str, value: Mapping[str, Any]) -> None:
+        """Record one of WG's CAD Link settings, such as the solver selection."""
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO cad_settings (key, value_json, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, "
+                "updated_at = excluded.updated_at",
+                (key, canonical_json(dict(value)), utc_now()),
+            )
+
+    def get_setting(self, key: str) -> dict[str, Any] | None:
+        self.initialize()
+        row = self._read_one("SELECT value_json FROM cad_settings WHERE key = ?", (key,))
+        return json.loads(row["value_json"]) if row is not None else None
 
     def record_preparation(
         self,

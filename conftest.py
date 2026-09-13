@@ -46,6 +46,9 @@ os.environ[DATA_DIR_ENV] = str(SANDBOX_DATA_DIR)
 # the add-in of the person running it, so the startup refresh is off here;
 # tests of the refresh call it with an explicit add-ins folder.
 os.environ["WG2_WGLINK_REFRESH"] = "0"
+# Nor may it collect the solve commands a real Fusion delivered: the backend's
+# consumer loop is off here; tests drive one delivery pass at a time instead.
+os.environ["WG2_CAD_DELIVERY"] = "0"
 
 
 # -- The WGLink add-in installed on this machine ------------------------------

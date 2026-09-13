@@ -249,6 +249,28 @@ reproduces, because the driver library has no revisions.
   operation waits (`engine_unavailable`) with the capable engines named, and nothing
   switches engines silently. Recalling a run does not change the selector.
 
+## Project setups
+
+A solve Fusion sends for project B is prepared from B's own setup, while the editor keeps
+whatever project is open. Nothing on the backend reads the live UI:
+
+- **Recorded by the frontend.** As the user changes a project's solve settings, the
+  frontend records them as that project's setup for its source inventory
+  (`PUT /api/cadlink/project-setups`, `{lineageId, inventory, setup}`); the latest
+  recording is the project's. The solver selection is recorded the same way
+  (`PUT /api/cadlink/solver-selection`, `{engine}`).
+- **Resolved from the snapshot.** A preparation that names no setup revision takes the
+  snapshot's project -- the lineage of the WG design it was exported from, or the one its
+  Fusion document already has, never a new claim -- and that project's setup for exactly
+  the snapshot's sources (id, role, required).
+- **The engine is the one selected in WG.** A recorded setup keeps its engine only until
+  the selection says otherwise; the setup actually used is itself a setup revision, which
+  the operation names.
+- **None yet** means `setup_required`: a first-time model waits for the user to choose
+  its settings, and never borrows another project's.
+- **The polar grid** of the request is widened to what the ingestion derived for the
+  snapshot, as the frontend does; the runtime refuses a narrower one.
+
 ## Preparation
 
 A solve operation is prepared by the backend, in stages. The UI issues
@@ -302,6 +324,13 @@ blocking findings the user reviewed, and on which preparation) and observes.
   settled the same way. An operation an attempt held when the backend stopped is taken
   over and waits (`interrupted`). Startup recovery only reads the jobs database; the
   jobs runtime starts on its own.
+- **Delivery.** The backend is the one consumer of Fusion's solve commands. About once a
+  second it collects the delivered commands (retaining each snapshot before the delivery
+  is acknowledged) and starts preparing every operation no attempt has touched, from its
+  project's setup, submitting when it is ready. An operation waiting for the user is not
+  retried unasked; the UI issues `prepare`, `approvals` and `cancel` and observes. The
+  browser no longer consumes `GET /api/cadlink/solve-command`, which stays for
+  diagnostics. `WG2_CAD_DELIVERY=0` turns the loop off (the test suite does).
 - **Events.** Every committed change is published on the jobs channel as
   `{"v": 1, "kind": "cadOperation", "operation": {...}}`, after it is stored. It carries
   no cursor: a client that misses one reads `GET /api/cadlink/operations` (the unfinished

@@ -6360,6 +6360,37 @@
         "title": "PrepareOperationRequest",
         "type": "object"
       },
+      "ProjectSetupRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "inventory": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "minItems": 1,
+            "title": "Inventory",
+            "type": "array"
+          },
+          "lineageId": {
+            "minLength": 1,
+            "title": "Lineageid",
+            "type": "string"
+          },
+          "setup": {
+            "additionalProperties": true,
+            "title": "Setup",
+            "type": "object"
+          }
+        },
+        "required": [
+          "lineageId",
+          "inventory",
+          "setup"
+        ],
+        "title": "ProjectSetupRequest",
+        "type": "object"
+      },
       "ROSSEConfig": {
         "additionalProperties": false,
         "properties": {
@@ -7345,6 +7376,21 @@
           "design"
         ],
         "title": "SolverMeshRequest",
+        "type": "object"
+      },
+      "SolverSelectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "engine": {
+            "minLength": 1,
+            "title": "Engine",
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine"
+        ],
+        "title": "SolverSelectionRequest",
         "type": "object"
       },
       "SourceConfig": {
@@ -8506,6 +8552,50 @@
         ]
       }
     },
+    "/api/cadlink/project-setups": {
+      "put": {
+        "description": "Record a project's solve settings for its sources (CAD-OPERATIONS.md, \"Project setups\").\n\nA solve Fusion sends for that project is prepared from them, whatever\nproject the editor has open. The latest recording is the project's.",
+        "operationId": "put_project_setup_api_cadlink_project_setups_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectSetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Put Project Setup Api Cadlink Project Setups Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Project Setup",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
     "/api/cadlink/projects/{lineage_id}/documents": {
       "get": {
         "description": "The captured CAD documents this project's runs were solved from.",
@@ -8911,6 +9001,50 @@
           }
         },
         "summary": "Post Solve Command Outcome",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/solver-selection": {
+      "put": {
+        "description": "Record the engine selected in WG's solver selector; CAD Link never chooses one.",
+        "operationId": "put_solver_selection_api_cadlink_solver_selection_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SolverSelectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Put Solver Selection Api Cadlink Solver Selection Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Solver Selection",
         "tags": [
           "cadlink"
         ]

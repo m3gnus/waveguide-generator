@@ -44,6 +44,7 @@ from .ingest import (
     IngestRefusal,
     ingest_bundle,
     meshing_semantics_fingerprint,
+    read_snapshot,
     retain_snapshot,
     retained_snapshot_path,
 )
@@ -63,8 +64,14 @@ from .operations import (
     TERMINAL_STATES,
     canonical_json,
 )
+from .project_setup import project_setup, snapshot_project, widen_polar_to_derivation
 from .setup import CadSolveSetup, solve_request_for, validate_setup
-from .solve_command import CAD_SOLVE_SUBMISSION_PREFIX, SolveOutcomeConflict, record_outcome
+from .solve_command import (
+    CAD_SOLVE_SUBMISSION_PREFIX,
+    SolveOutcomeConflict,
+    collect_solve_deliveries,
+    record_outcome,
+)
 from .store import BindingConflict, CadLinkStore, StaleAttempt
 from .wgreturn import WgReturnError
 
@@ -305,13 +312,26 @@ def _advance(ctx: PreparationContext, operation_id: str, generation: int, **fiel
     return row
 
 
-def _load_setup(ctx: PreparationContext, revision_id: str | None) -> tuple[CadSolveSetup, str] | None:
-    if not revision_id:
+def _load_setup(
+    ctx: PreparationContext, revision_id: str | None, retained: Mapping[str, Any]
+) -> tuple[CadSolveSetup, str] | None:
+    """The setup this preparation uses, and its revision id.
+
+    One the request names; otherwise the snapshot's project's own, with the
+    engine selected in WG (CAD-OPERATIONS.md, "Project setups"). None when the
+    project has none for these sources yet.
+    """
+
+    if revision_id:
+        row = ctx.store.get_setup_revision(revision_id)
+        if row is None:
+            return None
+        return validate_setup(json.loads(row["setup_json"])), str(row["revision_id"])
+    manifest = read_snapshot(str(retained["retained_path"]), retained=True).manifest
+    lineage_id = snapshot_project(ctx.store, manifest)
+    if lineage_id is None:
         return None
-    row = ctx.store.get_setup_revision(revision_id)
-    if row is None:
-        return None
-    return validate_setup(json.loads(row["setup_json"])), str(row["revision_id"])
+    return project_setup(ctx.store, lineage_id, manifest.get("sources") or [])
 
 
 def _resumable(
@@ -388,7 +408,7 @@ def _prepare_sync(
             )
         _advance(ctx, operation_id, generation, snapshot=_snapshot_record(retained))
 
-    loaded = _load_setup(ctx, request.setup_revision_id)
+    loaded = _load_setup(ctx, request.setup_revision_id, retained)
     if loaded is None:
         # A first-time CAD-authored model never borrows settings from whatever
         # project is open: it waits for the user to choose them.
@@ -506,6 +526,8 @@ def _prepare_sync(
             ],
             client_request_id=submission_key(operation_id),
         )
+        # Never narrower than the ingestion derived: the runtime refuses that.
+        solve_request = widen_polar_to_derivation(solve_request, record.get("polar_grid_derivation"))
     except ValueError as exc:
         return "done", _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT, reason="submission_refused",
@@ -669,6 +691,44 @@ async def prepare_operation(
         )
 
 
+async def run_delivery_pass(
+    ctx: PreparationContext,
+    *,
+    spawn: Callable[[str, Awaitable[Any]], object],
+    running: set[str] | frozenset[str] = frozenset(),
+) -> list[str]:
+    """Collect Fusion's solve commands, and start preparing each new one.
+
+    The backend is the one consumer of solve commands (CAD-OPERATIONS.md,
+    "Delivery"): each is retained, recorded and acknowledged, then prepared
+    from its project's setup and submitted. Only an operation no attempt has
+    touched (``received``) is started, so one waiting for the user is never
+    retried unasked; ``running`` names the ones already started. Returns the
+    operations this pass started.
+    """
+
+    await asyncio.to_thread(
+        collect_solve_deliveries,
+        ctx.data_dir,
+        ctx.store,
+        retain=lambda operation_id: retain_operation_snapshot(
+            ctx.store, ctx.data_dir, ctx.workspace_root, operation_id
+        ),
+    )
+    rows = await asyncio.to_thread(
+        ctx.store.list_operations,
+        kind=PREPARE_AND_SOLVE, states={RECEIVED}, oldest_first=True, limit=100,
+    )
+    started: list[str] = []
+    for row in rows:
+        operation_id = str(row["operation_id"])
+        if row.get("legacy") or operation_id in running:
+            continue
+        started.append(operation_id)
+        spawn(operation_id, prepare_operation(ctx, operation_id, PreparationInput()))
+    return started
+
+
 def recover_operations(ctx: PreparationContext) -> int:
     """Startup: settle what a backend that stopped left of its solve operations.
 
@@ -727,5 +787,6 @@ __all__ = [
     "reconcile_with_jobs",
     "recover_operations",
     "retain_operation_snapshot",
+    "run_delivery_pass",
     "submission_key",
 ]
