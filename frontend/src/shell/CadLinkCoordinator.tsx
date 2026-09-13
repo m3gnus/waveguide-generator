@@ -395,6 +395,19 @@ export function returnBelongsToProject(
   return Boolean(designId && (bundle.designIds ?? []).includes(designId));
 }
 
+/** Whether two returns are of the same CAD document.
+ *
+ * The document is what a Fusion solve request was made for, so it is the
+ * scope in which a newer return may supersede one. A return that does not say
+ * which document it came from proves nothing, and counts as another. */
+export function sameCadDocument(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const left = a?.trim();
+  return Boolean(left) && left === b?.trim();
+}
+
 export function newestReturnArrival(
   items: CadReturnBundle[],
   previous: Map<string, string> | null,
@@ -1402,8 +1415,33 @@ export function CadLinkCoordinator() {
       const selected = useCadReturnStore.getState().selectedBundle;
       const claimedSinceSwitch = projectOpenPending.current && selectionClaimedAfterSwitch.current
         && selected !== null && (!arrived || arrived.bundlePath === selected.bundlePath);
+      // A Fusion solve request WG has taken on owns the selection it is
+      // preparing. Only a newer return of the same CAD document supersedes it.
+      // A return of any other document -- or one that does not say which -- is
+      // separate work: a later request never silently erases an earlier one,
+      // and a request is never solved against a bundle it did not name, so the
+      // arrival leaves both the request and its selection alone. A return the
+      // user asked Fusion for is newer intent and still takes the selection;
+      // the request then starts over from its own return (below). A request
+      // WG has not taken on yet owns nothing on screen and is never replaced.
+      const parked = parkedSolveCommandStore.getSnapshot().command;
+      const parkedOwnsSelection = Boolean(
+        arrived && !projectMismatch && parked
+        && parked.bundlePath !== arrived.bundlePath
+        && !heldBeforeTakenOn(solveCommandProgress.current, parked.commandId),
+      );
+      const supersedesParked = parkedOwnsSelection && sameCadDocument(
+        parked?.documentNativeId
+          ?? response.items.find((item) => item.bundlePath === parked?.bundlePath)?.documentNativeId,
+        arrived?.documentNativeId,
+      );
+      // Only while still awaited: a pull that has just timed out has already
+      // reported its failure, so its return arriving now is background news.
+      const requestedArrival = arrived !== null && arrived === requested
+        && pendingReturnRequestId.current === arrived.requestId;
+      const heldForParked = parkedOwnsSelection && !supersedesParked && !requestedArrival;
       let continuity: 'initial' | 'carried' | 'reset' = 'initial';
-      if (opened && !projectMismatch && !claimedSinceSwitch) {
+      if (opened && !projectMismatch && !claimedSinceSwitch && !heldForParked) {
         // A compatible current or saved source inventory keeps the user's solve
         // setup; a genuinely first listing starts clean without being a reset.
         continuity = arrived
@@ -1442,16 +1480,22 @@ export function CadLinkCoordinator() {
           enterCadWorkspace();
           return;
         }
-        const parked = parkedSolveCommandStore.getSnapshot().command;
-        // A request WG has not taken on yet is waiting for the user, not for
-        // a newer return: it names its own return, which may belong to
-        // another project entirely, and a newer one does not replace it.
-        if (
-          parked
-          && parked.bundlePath !== arrived.bundlePath
-          && !heldBeforeTakenOn(solveCommandProgress.current, parked.commandId)
-        ) {
-          await refuseParkedSolveCommand('Superseded by a newer return from Fusion.');
+        if (supersedesParked) {
+          await refuseParkedSolveCommand('Superseded by a newer return of the same Fusion document.');
+        } else if (parked && parkedOwnsSelection && requestedArrival) {
+          // The user's own request took the selection, so Solve now has to
+          // prepare this command's return again rather than solve the one on
+          // screen under its id.
+          solveCommandProgress.current.set(parked.commandId, {
+            state: 'waiting-for-user',
+            attempts: solveCommandProgress.current.get(parked.commandId)?.attempts ?? 0,
+            nextAttemptAt: 0,
+            resumeFromStart: true,
+            code: null,
+          });
+          parkedSolveCommandStore.setBlockers(parked.commandId, [
+            'The model you requested from Fusion replaced the one this request was prepared for. Press Solve now to prepare and solve it again, or dismiss the request.',
+          ]);
         }
         if (arrived.requestId === pendingReturnRequestId.current) {
           pendingReturnRequestId.current = null;
@@ -1462,9 +1506,12 @@ export function CadLinkCoordinator() {
           pendingReturnWaiter.current = null;
           waiter.settle(arrived);
         }
-        setStatus(`Received ${arrived.documentName ?? arrived.name} from Fusion 360.${
-          continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''
-        }`);
+        const arrivedName = arrived.documentName ?? arrived.name;
+        setStatus(heldForParked
+          ? `Received ${arrivedName} from Fusion 360. The solve Fusion asked for earlier is still waiting, so its model stays selected; select ${arrivedName} from the return list once that request is solved or dismissed.`
+          : `Received ${arrivedName} from Fusion 360.${
+            continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''
+          }`);
         // An arrival is news the user has to be able to see, so it owns the
         // workspace the same way an Onshape return does. A first listing does
         // not: nothing arrived, and stealing the mode on load would be wrong.
@@ -2132,6 +2179,8 @@ export function CadLinkCoordinator() {
       parkedSolveCommandStore.park({
         commandId: command.commandId,
         bundlePath: command.bundlePath,
+        documentNativeId: bundlesRef.current
+          .find((item) => item.bundlePath === command.bundlePath)?.documentNativeId ?? null,
         blockers: [blocker],
         parkedAt: command.requestedAt || new Date().toISOString(),
       });
@@ -2251,6 +2300,7 @@ export function CadLinkCoordinator() {
       parkedSolveCommandStore.park({
         commandId: command.commandId,
         bundlePath: command.bundlePath,
+        documentNativeId: bundle.documentNativeId ?? null,
         blockers: [],
         parkedAt: command.requestedAt || new Date().toISOString(),
       });

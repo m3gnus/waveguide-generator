@@ -12,6 +12,9 @@ import { useCadReturnStore } from './cadReturn';
 export interface ParkedSolveCommand {
   commandId: string;
   bundlePath: string;
+  /** The CAD document that return came from, when the listing says. Only a
+   * newer return of this document may supersede the command. */
+  documentNativeId?: string | null;
   /** Empty while the automatic attempt is still in flight. A non-empty list is
    * the parked state the CAD Link panel renders. */
   blockers: string[];

@@ -46,7 +46,11 @@ and the Fusion handoff marker (`expectedInstanceId`).
 
 The cheap return listing exposes `solverAnchorInstanceId`, per-instance body
 object IDs, body-fingerprint and transform hashes, source IDs, and default drive
-channel IDs. Source summaries retain their owning `instanceId`.
+channel IDs. Source summaries retain their owning `instanceId`. Each item also
+carries `documentNativeId`, the manifest's `document.native_id` (null when the
+adapter did not record one). A parked Fusion solve request is superseded only by
+a newer return of that same document; a return of another document, or of an
+unnamed one, leaves the request and the selection it is preparing in place.
 
 Ingestion accepts `expectedInstanceId`. A return containing repeated instances
 of the expected design is refused when that value is absent. An explicit value

@@ -2247,8 +2247,12 @@ describe('CadLinkCoordinator', () => {
     expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-parked');
   });
 
-  it('retires a parked solve command when a different newer return arrives', async () => {
-    let listing = { cadFolderConfigured: true, items: [initialBundle] };
+  it.each([
+    ['recorded on the command', 'fusion:doc-a'],
+    ['read from the listing', undefined],
+  ])('retires a parked solve command when a newer return of the same document arrives (document %s)', async (_label, parkedDocument) => {
+    const commanded: CadReturnBundle = { ...initialBundle, documentNativeId: 'fusion:doc-a' };
+    let listing = { cadFolderConfigured: true, items: [commanded] };
     const reported: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -2265,15 +2269,15 @@ describe('CadLinkCoordinator', () => {
     }));
     await renderCoordinator();
     parkedSolveCommandStore.park({
-      commandId: 'cmd-old', bundlePath: initialBundle.bundlePath, blockers: ['review settings'],
-      parkedAt: '2026-08-12T00:00:00Z',
+      commandId: 'cmd-old', bundlePath: commanded.bundlePath, documentNativeId: parkedDocument,
+      blockers: ['review settings'], parkedAt: '2026-08-12T00:00:00Z',
     });
     const arrived = {
-      ...initialBundle,
+      ...commanded,
       name: 'newer.wgreturn', bundlePath: 'wgreturn/newer.wgreturn',
       documentName: 'Newer return', modifiedAt: '2026-08-13T12:00:00Z',
     };
-    listing = { cadFolderConfigured: true, items: [arrived, initialBundle] };
+    listing = { cadFolderConfigured: true, items: [arrived, commanded] };
 
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
@@ -2282,11 +2286,170 @@ describe('CadLinkCoordinator', () => {
 
     expect(reported).toEqual([{
       commandId: 'cmd-old', state: 'refused', jobId: null,
-      reason: 'Superseded by a newer return from Fusion.',
+      reason: 'Superseded by a newer return of the same Fusion document.',
     }]);
     expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
     expect(useCadReturnStore.getState().selectedBundle).toEqual(arrived);
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_after_superseded_command');
+  });
+
+  /** Explicit solve requests stay separate. A return of another document --
+   * or one that does not say which document it is -- is not a newer version
+   * of the parked request, and must not take the selection it is preparing. */
+  it.each([
+    ['another document', 'fusion:doc-b'],
+    ['an unnamed document', null],
+  ])('keeps a parked solve command and its selection when a return of %s arrives', async (_label, documentNativeId) => {
+    const commanded: CadReturnBundle = { ...initialBundle, documentNativeId: 'fusion:doc-a' };
+    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = {
+      cadFolderConfigured: true, items: [commanded],
+    };
+    const reported: Array<Record<string, unknown>> = [];
+    let ingestCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json({ state: 'refused', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    expect(useCadReturnStore.getState().selectedBundle).toEqual(commanded);
+    const parked = {
+      commandId: 'cmd-a', bundlePath: commanded.bundlePath, documentNativeId: 'fusion:doc-a',
+      blockers: ['review settings'], parkedAt: '2026-08-12T00:00:00Z',
+    };
+    parkedSolveCommandStore.park(parked);
+    ingestCalls = 0;
+    const arrived: CadReturnBundle = {
+      ...initialBundle,
+      name: 'other.wgreturn', bundlePath: 'wgreturn/other.wgreturn',
+      documentName: 'Other document', documentNativeId, modifiedAt: '2026-08-13T12:00:00Z',
+    };
+    listing = { cadFolderConfigured: true, items: [arrived, commanded] };
+
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(reported).toEqual([]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toEqual(parked);
+    expect(useCadReturnStore.getState().selectedBundle).toEqual(commanded);
+    expect(ingestCalls).toBe(0);
+    // Not silent: the arrival is still reported, with why it waits.
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Received Other document');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('still waiting');
+  });
+
+  /** A return the user asked Fusion for is newer intent than a parked request
+   * from another document: it takes the selection, and the request starts over
+   * from its own return instead of being solved against the one on screen. */
+  it('restarts a parked solve command from its own return after a requested return of another document', async () => {
+    const linkedFusion: FusionCadStatus = {
+      ...closedFusion,
+      state: 'current', processRunning: true, running: true,
+      documentName: 'Speaker', documentId: 'fusion:doc-1',
+      link: {
+        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
+        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
+        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+        localBodyState: 'unmodified', bodyFingerprintHash: null,
+        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
+        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
+      },
+    };
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    const commanded: CadReturnBundle = { ...initialBundle, documentNativeId: 'fusion:doc-a' };
+    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = {
+      cadFolderConfigured: true, items: [commanded],
+    };
+    const reported: Array<Record<string, unknown>> = [];
+    // The server keeps offering the command until something answers it; it
+    // is visible from the moment Solve now takes it from the top.
+    let commandVisible = false;
+    const commandA = {
+      commandId: 'cmd-a', returnId: 'wgr_a', bundlePath: commanded.bundlePath,
+      manifestSha256: 'sha256:a', requestedAt: '2026-08-12T00:00:00Z',
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(linkedFusion);
+      if (path.endsWith('/request-fusion-return')) {
+        return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
+      }
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json({ state: 'refused', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) {
+        return json(commandVisible ? { command: commandA, outcome: null } : { command: null });
+      }
+      if (path.endsWith('/ingest')) return json(ingestRecord);
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return json({}, 404);
+    }));
+    // Which return was on screen each time a solve was asked for.
+    const solvedOn: Array<string | undefined> = [];
+    const solveCurrentCadImport = vi.fn(async () => {
+      solvedOn.push(useCadReturnStore.getState().selectedBundle?.bundlePath);
+      return 'busy' as const;
+    });
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
+    });
+    await renderCoordinator();
+    // A new selection re-reads Fusion's status; let that land before pulling.
+    await act(async () => {
+      useCadReturnStore.getState().selectBundle(commanded);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+    parkedSolveCommandStore.park({
+      commandId: 'cmd-a', bundlePath: commanded.bundlePath, documentNativeId: 'fusion:doc-a',
+      blockers: ['review settings'], parkedAt: '2026-08-12T00:00:00Z',
+    });
+
+    let pull!: Promise<CadReturnBundle>;
+    await act(async () => {
+      pull = cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
+      await Promise.resolve(); await Promise.resolve();
+    });
+    const pulled: CadReturnBundle = {
+      ...initialBundle,
+      name: 'pulled.wgreturn', bundlePath: 'wgreturn/pulled.wgreturn', requestId: 'req_1',
+      documentName: 'Speaker pulled', documentNativeId: 'fusion:doc-1', modifiedAt: '2026-08-13T12:00:00Z',
+    };
+    listing = { cadFolderConfigured: true, items: [pulled, commanded] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+    });
+    await act(async () => { await expect(pull).resolves.toMatchObject({ requestId: 'req_1' }); });
+
+    expect(reported).toEqual([]);
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(pulled.bundlePath);
+    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-a');
+    expect(String(parkedSolveCommandStore.getSnapshot().command?.blockers[0])).toMatch(/Press Solve now/);
+
+    // Solve now takes the request from the top: its own return is selected
+    // and prepared again, and nothing is solved against the pulled one.
+    commandVisible = true;
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand();
+      for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    });
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(commanded.bundlePath);
+    expect(solvedOn).not.toContain(pulled.bundlePath);
+    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-a');
+    expect(reported).toEqual([]);
   });
 
   it('automatically ingests a manually selected readable return', async () => {

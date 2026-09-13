@@ -38,6 +38,10 @@ export interface CadReturnBundle {
   modifiedAt: string;
   readable: boolean;
   documentName: string | null;
+  /** The CAD document this is a return of (the manifest's
+   * `document.native_id`), or null when the adapter did not record one.
+   * Scopes which newer return may supersede a parked Fusion solve request. */
+  documentNativeId?: string | null;
   requestId: string | null;
   sourceCount: number | null;
   instanceCount: number | null;

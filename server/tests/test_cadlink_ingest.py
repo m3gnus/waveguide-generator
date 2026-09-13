@@ -373,7 +373,11 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
     (good / "wgreturn.json").write_text(
         json.dumps(
             {
-                "document": {"name": "Speaker v4", "request_id": "request-a"},
+                "document": {
+                    "name": "Speaker v4",
+                    "native_id": "fusion:doc-a",
+                    "request_id": "request-a",
+                },
                 "instances": [{"instance_id": "instance-a", "design_id": "wgd_speaker"}],
                 "sources": [
                     {
@@ -401,12 +405,14 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
     ]
     assert result["items"][1]["readable"] is False
     assert result["items"][1]["reason"]
+    assert result["items"][1]["documentNativeId"] is None
     assert result["items"][0] == {
         "name": "speaker.wgreturn",
         "bundlePath": "wgreturn/speaker.wgreturn",
         "modifiedAt": result["items"][0]["modifiedAt"],
         "readable": True,
         "documentName": "Speaker v4",
+        "documentNativeId": "fusion:doc-a",
         "requestId": "request-a",
         "sourceCount": 1,
         "instanceCount": 1,

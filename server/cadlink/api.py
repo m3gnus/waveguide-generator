@@ -406,6 +406,7 @@ def _return_inventory(
             "modifiedAt": modified_at,
             "readable": False,
             "documentName": None,
+            "documentNativeId": None,
             "declaredCutPlanes": [],
             "requestId": None,
             "sourceCount": None,
@@ -554,6 +555,14 @@ def _return_inventory(
                 {
                     "readable": True,
                     "documentName": str(document.get("name") or candidate.stem),
+                    # The CAD document this is a return of, when the adapter
+                    # recorded it: a newer return of the same document is the
+                    # only one that may supersede a solve request made for it.
+                    "documentNativeId": (
+                        str(document.get("native_id"))
+                        if document.get("native_id")
+                        else None
+                    ),
                     "requestId": (
                         str(document.get("request_id"))
                         if document.get("request_id")
