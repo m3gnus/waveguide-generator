@@ -37,6 +37,7 @@ import sys
 
 import pytest
 
+from server.platform import shutdown_backstop
 from server.platform.signal_rearm import restore_sigpipe_ignore
 
 os.environ.setdefault("WG2_SOLVER_WARMUP", "0")
@@ -46,6 +47,26 @@ os.environ.setdefault("WG2_SOLVER_WARMUP", "0")
 # through the same switch an operator would use; the tests that are about the
 # gate call ``start_cpu_provisioning`` with an explicit environment.
 os.environ.setdefault("WG2_SKIP_BEAT_CPU_PROVISION", "1")
+
+# Shutdown backstop: a stop request makes ``launch/serve.py`` arm a watchdog
+# that ends the process with ``os._exit``. The tests about it run the server as
+# a child process. None may end *this* one, so for the whole run a firing
+# backstop is recorded instead, and the test it fired under fails.
+_backstop_exits: list[int] = []
+shutdown_backstop._process_exit = _backstop_exits.append
+
+
+@pytest.fixture(autouse=True)
+def _no_backstop_ends_the_test_process():
+    fired_before = len(_backstop_exits)
+    yield
+    if len(_backstop_exits) != fired_before:
+        pytest.fail(
+            "A shutdown backstop fired inside the test process; it would have ended "
+            "the run. Drive the stop path in a child process, or give the "
+            "ShutdownBackstop an explicit exit_process.",
+            pytrace=False,
+        )
 
 
 def pytest_sessionstart(session):

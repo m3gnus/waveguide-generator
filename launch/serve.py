@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from contextlib import contextmanager
 import json
 import logging
@@ -28,6 +29,7 @@ import uvicorn  # noqa: E402 - the checkout root must be importable first
 
 from launch.serve_options import PROGRAM_NAME, add_server_arguments  # noqa: E402
 from server.app import BUILD, create_app  # noqa: E402
+from server.mesh.gmsh_worker import gmsh_call_abandoned  # noqa: E402
 from server.platform.console import harden_console  # noqa: E402
 from server.platform.instance import (  # noqa: E402
     DEFAULT_PID_POLL_INTERVAL,
@@ -45,6 +47,7 @@ from server.platform.instance import (  # noqa: E402
 )
 from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
 from server.platform.paths import app_root, default_runs_dir, ensure_data_layout  # noqa: E402
+from server.platform.shutdown_backstop import ShutdownBackstop  # noqa: E402
 from server.platform.signal_rearm import (  # noqa: E402
     register_signal_rearm,
     unregister_signal_rearm,
@@ -201,8 +204,14 @@ def _watch_statusapp(
     stop: threading.Event,
     *,
     poll_interval: float = DEFAULT_PID_POLL_INTERVAL,
+    on_stop: Callable[[str], object] | None = None,
 ) -> None:
     """Gracefully stop when the owning status window closes or disappears.
+
+    ``on_stop`` is told why, after ``should_exit`` is set. ``main`` passes the
+    shutdown backstop's ``begin``, so every stop from here runs against a
+    deadline. That includes a parent that died without asking: on macOS and
+    Linux the server outlives a crashed launcher, and nobody else will end it.
 
     This thread lives for the whole run of an attached server, so what it costs
     while nothing is happening is the point. It used to re-test both conditions
@@ -247,6 +256,8 @@ def _watch_statusapp(
                 reason = "status window requested quit" if requested else "status window exited"
                 log.info("Stopping because the %s", reason)
                 server.should_exit = True
+                if on_stop is not None:
+                    on_stop(reason)
                 return
 
             outcome = wait_for_pid_exit(
@@ -264,6 +275,8 @@ def _watch_statusapp(
                 # answer than any probe can give, so do not re-test it.
                 log.info("Stopping because the status window exited")
                 server.should_exit = True
+                if on_stop is not None:
+                    on_stop("status window exited")
                 return
             if outcome == STOP_REQUESTED:
                 return
@@ -290,7 +303,9 @@ def _shutdown_signals() -> tuple[int, ...]:
 
 
 @contextmanager
-def _capture_shutdown_signals(server: uvicorn.Server):
+def _capture_shutdown_signals(
+    server: uvicorn.Server, backstop: ShutdownBackstop | None = None
+):
     """Install WG's handlers after Uvicorn has created its event loop.
 
     Uvicorn 0.49 enters ``Server.capture_signals`` inside the loop runner and
@@ -310,8 +325,14 @@ def _capture_shutdown_signals(server: uvicorn.Server):
         )
         if server.should_exit and signum == signal.SIGINT:
             server.force_exit = True
+            if backstop is not None:
+                # A second Ctrl+C: the user has stopped waiting for the
+                # graceful path, so the process stops waiting too.
+                backstop.exit_now("a second Ctrl+C")
         else:
             server.should_exit = True
+            if backstop is not None:
+                backstop.begin(f"{signal.Signals(signum).name} received")
 
     def install() -> None:
         for signum in _shutdown_signals():
@@ -417,10 +438,15 @@ def main(argv: list[str] | None = None) -> int:
         StopSignal() if args.status_control is not None else threading.Event()
     )
     shutdown_complete = threading.Event()
+    # Every stop path below begins this budget, and the budget ends the process
+    # if cleanup outlives it (server/platform/shutdown_backstop.py). Only a stop
+    # request arms it; building and serving are untouched.
+    backstop = ShutdownBackstop()
     # Before the app, so the capability probe this start runs can already report
     # "provisioning" rather than "not provisioned". It only starts a thread.
     _start_beat_cpu_provisioning()
     try:
+        backstop.activate()
         app = create_app(
             data_dir=paths.root,
             workspace_dir=default_runs_dir(),
@@ -467,10 +493,15 @@ def main(argv: list[str] | None = None) -> int:
         # Uvicorn enters this context only after its loop (uvloop when
         # available) exists, which is late enough that the loop cannot replace
         # the handlers we need for the outer cleanup path.
-        server.capture_signals = lambda: _capture_shutdown_signals(server)  # type: ignore[method-assign]
+        server.capture_signals = lambda: _capture_shutdown_signals(server, backstop)  # type: ignore[method-assign]
+
+        def request_stop(reason: str) -> None:
+            server.should_exit = True
+            backstop.begin(reason)
+
         # Windows-only, and a no-op anywhere else or without a console.
         harden_console(
-            lambda: setattr(server, "should_exit", True),
+            lambda: request_stop("console window was closed"),
             shutdown_complete,
         )
 
@@ -478,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
             threading.Thread(
                 target=_watch_statusapp,
                 args=(server, args.status_control, args.parent_pid, stop_status_watch),
+                kwargs={"on_stop": backstop.begin},
                 name="wg2-status-control",
                 daemon=True,
             ).start()
@@ -519,6 +551,13 @@ def main(argv: list[str] | None = None) -> int:
             flush_logs()
         finally:
             shutdown_complete.set()
+            backstop.deactivate()
+            if backstop.begun and gmsh_call_abandoned():
+                # Cleanup is done. What remains is interpreter exit, which would
+                # join the gmsh thread still inside its OCC call and so wait out
+                # the budget for nothing. Everything it would still run is
+                # crash-safe.
+                backstop.exit_now("cleanup finished with a gmsh call still running")
 
 
 if __name__ == "__main__":

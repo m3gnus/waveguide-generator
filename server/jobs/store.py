@@ -37,6 +37,8 @@ from server.solver.field_traces_store import (
 
 ALLOWED_STATUSES = frozenset({"queued", "running", "complete", "error", "cancelled"})
 MESH_ARTIFACT_GRACE_MINUTES = 60
+#: ``task_metadata_json`` key a Quit's shutdown sets on a job it interrupts.
+QUIT_INTERRUPTION_KEY = "interrupted_by_quit"
 SUPPORTED_SCHEMA_VERSION = 5
 ALLOWED_JOB_UPDATE_FIELDS = frozenset(
     {
@@ -811,8 +813,16 @@ class JobStore:
         job_id: str,
         fields: Mapping[str, Any],
         payload: Mapping[str, Any],
+        *,
+        interrupted_by_quit: bool = False,
     ) -> dict[str, Any] | None:
-        """Atomically request cancellation only while a job remains running."""
+        """Atomically request cancellation only while a job remains running.
+
+        ``interrupted_by_quit`` marks the row in the same write, so a job the
+        shutdown budget cuts off before its next checkpoint reads as
+        interrupted by Quit on the next start (``recover_on_startup``) rather
+        than as a server crash.
+        """
 
         values = dict(fields)
         unsupported = sorted(set(values) - ALLOWED_JOB_UPDATE_FIELDS)
@@ -821,6 +831,11 @@ class JobStore:
         values["updated_at"] = _now_iso()
         assignments = [f"{key} = ?" for key in values]
         params = [self._db_value(key, value) for key, value in values.items()]
+        if interrupted_by_quit:
+            assignments.append(
+                "task_metadata_json = json_set(COALESCE(task_metadata_json, '{}'), "
+                f"'$.{QUIT_INTERRUPTION_KEY}', json('true'))"
+            )
         with self._lock, self._transaction() as conn:
             changed = conn.execute(
                 f"""UPDATE simulation_jobs SET {', '.join(assignments)}
@@ -1491,30 +1506,64 @@ class JobStore:
         return ids, events
 
     def recover_on_startup(
-        self, restart_error_message: str
+        self,
+        restart_error_message: str,
+        *,
+        quit_stage_message: str | None = None,
+        quit_error_message: str | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Fail running orphans and return queued rows in FIFO order.
+        """Settle running orphans and return queued rows in FIFO order.
 
         This is the startup rule from v1 ``server/db.py:294-314`` and
-        ``server/services/job_runtime.py:629-686``.
+        ``server/services/job_runtime.py:629-686``: an orphan fails with
+        ``restart_error_message``. One marked by a Quit's shutdown
+        (``request_cancellation(..., interrupted_by_quit=True)``) is not a
+        failure: when ``quit_error_message`` is given it ends cancelled with
+        that reason instead. Neither kind is requeued.
         """
 
         now = _now_iso()
-        failed_events: list[dict[str, Any]] = []
+        recovery_events: list[dict[str, Any]] = []
         trace_rows: list[sqlite3.Row] = []
         with self._lock, self._transaction() as conn:
             running = conn.execute(
-                "SELECT id FROM simulation_jobs WHERE status = 'running' ORDER BY created_at ASC"
+                f"""SELECT id, json_extract(task_metadata_json, '$.{QUIT_INTERRUPTION_KEY}')
+                          AS interrupted_by_quit
+                   FROM simulation_jobs WHERE status = 'running' ORDER BY created_at ASC"""
             ).fetchall()
-            conn.execute(
-                """
-                UPDATE simulation_jobs
-                SET status = 'error', stage = 'error', stage_message = 'Simulation failed',
-                    error_message = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
-                WHERE status = 'running'
-                """,
-                (restart_error_message, now, now),
-            )
+            quit_ids = {
+                str(row["id"])
+                for row in running
+                if quit_error_message is not None and row["interrupted_by_quit"]
+            }
+            restarted_ids = [str(row["id"]) for row in running if str(row["id"]) not in quit_ids]
+            if restarted_ids:
+                conn.execute(
+                    f"""
+                    UPDATE simulation_jobs
+                    SET status = 'error', stage = 'error', stage_message = 'Simulation failed',
+                        error_message = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
+                    WHERE id IN ({",".join("?" for _ in restarted_ids)})
+                    """,
+                    (restart_error_message, now, now, *restarted_ids),
+                )
+            if quit_ids:
+                conn.execute(
+                    f"""
+                    UPDATE simulation_jobs
+                    SET status = 'cancelled', stage = 'cancelled', stage_message = ?,
+                        error_message = ?, cancellation_requested = 0,
+                        completed_at = COALESCE(completed_at, ?), updated_at = ?
+                    WHERE id IN ({",".join("?" for _ in quit_ids)})
+                    """,
+                    (
+                        quit_stage_message or quit_error_message,
+                        quit_error_message,
+                        now,
+                        now,
+                        *sorted(quit_ids),
+                    ),
+                )
             running_ids = [str(row["id"]) for row in running]
             if running_ids:
                 placeholders = ",".join("?" for _ in running_ids)
@@ -1554,10 +1603,21 @@ class JobStore:
                     running_ids,
                 )
             for row in running:
-                failed_events.append(
+                job_id = str(row["id"])
+                if job_id in quit_ids:
+                    recovery_events.append(
+                        self._append_event(
+                            conn,
+                            job_id,
+                            "cancelled",
+                            {"message": quit_error_message, "recovered": True},
+                        )
+                    )
+                    continue
+                recovery_events.append(
                     self._append_event(
                         conn,
-                        str(row["id"]),
+                        job_id,
                         "failed",
                         {"message": restart_error_message, "recovered": True},
                     )
@@ -1575,7 +1635,7 @@ class JobStore:
             self._remove_field_trace_path(
                 str(row["job_id"]), self._field_trace_path(str(row["path"]))
             )
-        return queued_jobs, failed_events
+        return queued_jobs, recovery_events
 
     def prune_terminal_jobs(
         self,

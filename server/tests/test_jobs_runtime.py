@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import sqlite3
 import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,10 +21,14 @@ from server.jobs.runtime import (
     JobNotFoundError,
     JobResourceUnavailableError,
     JobRuntime,
+    QUIT_INTERRUPTED_MESSAGE,
+    QUIT_INTERRUPTED_STAGE_MESSAGE,
+    RESTART_RECOVERY_MESSAGE,
     _apply_bempp_wall_default,
     merge_provisional_results,
 )
 from server.jobs.store import JobStore
+from server.platform.shutdown_backstop import CLEANUP_RESERVE_SECONDS, ShutdownBackstop
 
 
 def _request(*, delay_ms: int = 2, count: int = 5) -> SolveRequest:
@@ -420,6 +425,9 @@ def test_shutdown_waits_for_threaded_solver_cancellation_checkpoint(
             assert row is not None
             assert row["status"] == "cancelled"
             assert row["cancellation_requested"] is False
+            # Stopped by the app's own shutdown, not by the user.
+            assert row["stage_message"] == QUIT_INTERRUPTED_STAGE_MESSAGE
+            assert row["error_message"] == QUIT_INTERRUPTED_MESSAGE
         finally:
             inspection.close()
 
@@ -471,6 +479,210 @@ def test_startup_recovery_fails_running_orphan_and_requeues_fifo(
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_startup_recovery_reads_a_quit_interrupted_job_as_interrupted_by_quit(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    request_dump = _request(delay_ms=1).model_dump(mode="json")
+    now = datetime.now().isoformat()
+
+    def running(job_id: str) -> dict[str, Any]:
+        return {
+            "id": job_id,
+            "status": "running",
+            "created_at": now,
+            "updated_at": now,
+            "queued_at": now,
+            "started_at": now,
+            "progress": 0.3,
+            "stage": "solve",
+            "config_json": request_dump,
+            "config_summary_json": {"formula_type": "OSSE"},
+            "task_metadata": {},
+        }
+
+    store.create_job(running("quit-interrupted"))
+    store.create_job(running("crashed"))
+    marked = store.request_cancellation(
+        "quit-interrupted",
+        {"stage": "cancelling", "cancellation_requested": True},
+        {"stage": "cancelling", "message": "Shutdown requested"},
+        interrupted_by_quit=True,
+    )
+    assert marked is not None
+
+    async def scenario() -> None:
+        runtime = JobRuntime(store)
+        await runtime.start()
+        await runtime.wait_idle()
+        interrupted = await runtime.get_job("quit-interrupted")
+        crashed = await runtime.get_job("crashed")
+        # Not a failure and not requeued: the user quit on purpose.
+        assert interrupted["status"] == "cancelled"
+        assert interrupted["stage_message"] == QUIT_INTERRUPTED_STAGE_MESSAGE
+        assert interrupted["error_message"] == QUIT_INTERRUPTED_MESSAGE
+        assert interrupted["cancellation_requested"] is False
+        # An orphan nothing marked is still what it was: a crash.
+        assert crashed["status"] == "error"
+        assert crashed["error_message"] == RESTART_RECOVERY_MESSAGE
+        recovered = {
+            event["jobId"]: event
+            for event in store.replay_events(0)
+            if (event.get("payload") or {}).get("recovered") is True
+        }
+        assert recovered["quit-interrupted"]["type"] == "cancelled"
+        assert recovered["quit-interrupted"]["payload"]["message"] == QUIT_INTERRUPTED_MESSAGE
+        assert recovered["crashed"]["type"] == "failed"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_stop_budget_bounds_the_checkpoint_wait_and_the_next_start_reads_the_quit(
+    tmp_path: Path,
+) -> None:
+    recorded_exits: list[int] = []
+
+    async def scenario() -> float:
+        database = tmp_path / "jobs.db"
+        solve_started = threading.Event()
+        release_solver = threading.Event()
+
+        class NeverCheckpoints:
+            name = "never-checkpoints"
+
+            async def run(
+                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any
+            ) -> Any:
+                del cancel_cb, stage_cb
+
+                def solve() -> Any:
+                    # A native call with no cancellation point, like an OCC build.
+                    solve_started.set()
+                    release_solver.wait(30)
+                    return SimpleNamespace(
+                        results={"metadata": {}}, msh_text=None, mesh_stats=None
+                    )
+
+                return await asyncio.to_thread(solve)
+
+        def registry() -> EngineRegistry:
+            return EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _name: NeverCheckpoints(),
+            )
+
+        runtime = JobRuntime(JobStore(database), engine_registry=registry())
+        job_id = await runtime.submit(_bare_request(engine="bempp"))
+        assert await asyncio.to_thread(solve_started.wait, 5.0)
+        backstop = ShutdownBackstop(
+            CLEANUP_RESERVE_SECONDS + 0.5,
+            exit_process=recorded_exits.append,
+            flush=lambda: None,
+        )
+        backstop.activate()
+        backstop.begin("a stop request")
+        try:
+            started = time.monotonic()
+            await runtime.shutdown()
+            elapsed = time.monotonic() - started
+        finally:
+            backstop.deactivate()
+            release_solver.set()
+            backstop.exit_now("test finished")
+
+        # Cut off, not settled: the row is left for the next start to read.
+        inspection = JobStore(database)
+        inspection.initialize()
+        try:
+            left = inspection.get_job_row(job_id)
+            assert left is not None
+            assert left["status"] == "running"
+        finally:
+            inspection.close()
+
+        restarted = JobRuntime(JobStore(database), engine_registry=registry())
+        await restarted.start()
+        row = await restarted.get_job(job_id)
+        assert row["status"] == "cancelled"
+        assert row["stage_message"] == QUIT_INTERRUPTED_STAGE_MESSAGE
+        assert row["error_message"] == QUIT_INTERRUPTED_MESSAGE
+        await restarted.shutdown()
+        return elapsed
+
+    elapsed = asyncio.run(scenario())
+    # 0.5 s of budget was left for this wait; unbudgeted it is 10 s.
+    assert elapsed < 3.0, f"shutdown waited {elapsed:.2f} s for a job past its budget"
+
+
+def test_a_job_queued_at_quit_is_not_started_by_the_shutdown(tmp_path: Path) -> None:
+    async def scenario() -> tuple[int, str, str, list[str], str]:
+        database = tmp_path / "jobs.db"
+        solves_started: list[int] = []
+        first_started = threading.Event()
+
+        class CheckpointEngine:
+            name = "checkpoint"
+
+            async def run(
+                self, _request: SolveRequest, *, cancel_cb: Any, stage_cb: Any
+            ) -> Any:
+                del stage_cb
+
+                def solve() -> Any:
+                    solves_started.append(1)
+                    first_started.set()
+                    for _ in range(500):
+                        cancel_cb()
+                        time.sleep(0.01)
+                    return SimpleNamespace(
+                        results={"metadata": {}}, msh_text=None, mesh_stats=None
+                    )
+
+                return await asyncio.to_thread(solve)
+
+        runtime = JobRuntime(
+            JobStore(database),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _name: CheckpointEngine(),
+            ),
+        )
+        running_id = await runtime.submit(_bare_request(engine="bempp"))
+        assert await asyncio.to_thread(first_started.wait, 5.0)
+        queued_id = await runtime.submit(_bare_request(engine="bempp"))
+        await runtime.shutdown()
+
+        inspection = JobStore(database)
+        inspection.initialize()
+        try:
+            running_row = inspection.get_job_row(running_id)
+            queued_row = inspection.get_job_row(queued_id)
+            assert running_row is not None and queued_row is not None
+            requeued, _events = inspection.recover_on_startup(
+                RESTART_RECOVERY_MESSAGE,
+                quit_stage_message=QUIT_INTERRUPTED_STAGE_MESSAGE,
+                quit_error_message=QUIT_INTERRUPTED_MESSAGE,
+            )
+        finally:
+            inspection.close()
+        return (
+            len(solves_started),
+            str(running_row["status"]),
+            str(queued_row["status"]),
+            [str(row["id"]) for row in requeued],
+            queued_id,
+        )
+
+    solves, running_status, queued_status, requeued, queued_id = asyncio.run(scenario())
+    # Admission stopped: the queued job was neither started nor lost.
+    assert solves == 1
+    assert running_status == "cancelled"
+    assert queued_status == "queued"
+    assert requeued == [queued_id]
 
 
 def test_second_runtime_cannot_recover_jobs_owned_by_live_runtime(

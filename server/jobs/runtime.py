@@ -51,6 +51,7 @@ from server.jobs.models import (
 from server.jobs.store import ALLOWED_STATUSES, JobStore
 from server.integration.provenance import canonical_json_sha256, enrich_result_contract
 from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
+from server.platform.shutdown_backstop import shutdown_wait_limit
 from server.solver.imported import (
     ImportedMeshArtifactError,
     ImportedSymmetryUnsupportedError,
@@ -74,6 +75,16 @@ MAX_LOG_LINES = 200
 MAX_LOG_CHARS = 32_000
 MAX_LOG_EVENT_CHARS = 2_000
 CANCELLED_MESSAGE = "Simulation cancelled by user"
+#: What a job that Quit interrupted reads as. That covers a job stopped at a
+#: checkpoint during shutdown, and one the shutdown budget cut off and the next
+#: start recovered. It is distinct from the crash reason an unmarked orphan
+#: gets, and it is not a failure: the user chose to quit.
+QUIT_INTERRUPTED_STAGE_MESSAGE = "Interrupted by Quit"
+QUIT_INTERRUPTED_MESSAGE = (
+    "Interrupted by Quit: Waveguide Generator closed while this simulation was "
+    "running. Run it again to get results."
+)
+RESTART_RECOVERY_MESSAGE = "Server restarted during execution"
 RUNTIME_PERSIST_INTERVAL_SECONDS = 0.15
 SHUTDOWN_TASK_TIMEOUT_SECONDS = 10.0
 BEMPP_DEFAULT_WALL_THICKNESS_MM = 5.0
@@ -1466,6 +1477,8 @@ class JobRuntime:
         )
         self._started = False
         self._shutting_down = False
+        #: Jobs this runtime's own shutdown asked to stop (``_cancel_job``).
+        self._quit_interrupted: set[str] = set()
         self._start_lock = asyncio.Lock()
         # One turnstile per job whose stored results are being rewritten in
         # place. Only recombine does that today; the map holds nothing for a
@@ -1502,7 +1515,10 @@ class JobRuntime:
             try:
                 await asyncio.to_thread(self.store.initialize)
                 queued, recovery_events = await asyncio.to_thread(
-                    self.store.recover_on_startup, "Server restarted during execution"
+                    self.store.recover_on_startup,
+                    RESTART_RECOVERY_MESSAGE,
+                    quit_stage_message=QUIT_INTERRUPTED_STAGE_MESSAGE,
+                    quit_error_message=QUIT_INTERRUPTED_MESSAGE,
                 )
                 await asyncio.to_thread(
                     self.store.prune_terminal_jobs,
@@ -1519,7 +1535,15 @@ class JobRuntime:
             self._ensure_scheduler()
 
     async def shutdown(self) -> None:
-        """Cooperatively stop jobs, leaving timeout leftovers to startup recovery."""
+        """Cooperatively stop jobs, leaving timeout leftovers to startup recovery.
+
+        Each running job is marked interrupted by Quit in the same write that
+        requests its cancellation, before any wait, so the reason survives even
+        if the process's shutdown budget ends it mid-wait. The checkpoint wait
+        itself is bounded by that budget when one is running
+        (``shutdown_wait_limit``), so the owned-process cleanup registered after
+        this handler still gets its turn.
+        """
 
         self._shutting_down = True
         # Stop accepting new buffered callbacks, then persist the last accepted
@@ -1541,6 +1565,7 @@ class JobRuntime:
                         "cancellation_requested": True,
                     },
                     {"stage": "cancelling", "message": "Shutdown requested"},
+                    interrupted_by_quit=True,
                 )
             except Exception:
                 logger.exception(
@@ -1549,6 +1574,9 @@ class JobRuntime:
                 )
             else:
                 if event is not None:
+                    # None means the user had already asked to stop it; that
+                    # job stays a user cancellation.
+                    self._quit_interrupted.add(job_id)
                     self.events.publish(event)
                 state = self.store.cancellation_state(job_id)
                 cancellation_signalled = cancellation_signalled or bool(
@@ -1558,7 +1586,7 @@ class JobRuntime:
         pending: set[asyncio.Task[Any]] = set(tasks)
         if tasks and cancellation_signalled:
             _done, pending = await asyncio.wait(
-                tasks, timeout=SHUTDOWN_TASK_TIMEOUT_SECONDS
+                tasks, timeout=shutdown_wait_limit(SHUTDOWN_TASK_TIMEOUT_SECONDS)
             )
         for task in pending:
             task.cancel()
@@ -1572,6 +1600,7 @@ class JobRuntime:
         await asyncio.to_thread(self.store.close)
         await asyncio.to_thread(self._ownership.release)
         self._partial_results.clear()
+        self._quit_interrupted.clear()
         self._started = False
 
     async def submit(self, request: SolveRequest) -> str:
@@ -2526,7 +2555,10 @@ class JobRuntime:
             # field work resume only after every queued solve, rather than in
             # the narrow hand-off between adjacent jobs.
             async with self.metal_permit.solve():
-                while self._queue:
+                # Admission stops with shutdown: a queued job must not start in
+                # the gap a cancelled one leaves, where no Quit marks it and the
+                # budget cuts it off. It stays queued for the next start.
+                while self._queue and not self._shutting_down:
                     job_id = self._queue.popleft()
                     row = self.store.get_job_row(job_id)
                     if row is None or row["status"] != "queued":
@@ -2627,6 +2659,10 @@ class JobRuntime:
                 raise EngineUnavailableError(
                     f"Solve engine '{request.options.engine}' became unavailable"
                 )
+            if self._shutting_down:
+                # Shutdown began while this job was being prepared. It has not
+                # started, so its row stays queued for the next start.
+                return
             # Batch Q extends only this established engine-call seam.  FIFO
             # scheduling/recovery remains untouched; real adapters own their
             # gmsh-worker + asyncio.to_thread orchestration, following v1
@@ -2801,6 +2837,13 @@ class JobRuntime:
             await self._fail_job(job_id, str(exc))
 
     async def _cancel_job(self, job_id: str) -> None:
+        # A job that this process's own shutdown stopped at a checkpoint ends
+        # just as recovery records one the budget cut off: interrupted by Quit.
+        quit_interrupted = job_id in self._quit_interrupted
+        message = QUIT_INTERRUPTED_MESSAGE if quit_interrupted else CANCELLED_MESSAGE
+        stage_message = (
+            QUIT_INTERRUPTED_STAGE_MESSAGE if quit_interrupted else CANCELLED_MESSAGE
+        )
         self._partial_results.pop(job_id, None)
         await self._discard_channel_bases(job_id)
         await self._discard_radiation_impedance(job_id)
@@ -2810,13 +2853,13 @@ class JobRuntime:
                 {
                     "status": "cancelled",
                     "stage": "cancelled",
-                    "stage_message": CANCELLED_MESSAGE,
-                    "error_message": CANCELLED_MESSAGE,
+                    "stage_message": stage_message,
+                    "error_message": message,
                     "completed_at": _now_iso(),
                     "cancellation_requested": False,
                 },
                 "cancelled",
-                {"message": CANCELLED_MESSAGE},
+                {"message": message},
             )
         except Exception:
             logger.exception("Could not persist cancellation state for job %s", job_id)

@@ -12,11 +12,14 @@ import concurrent.futures
 from contextlib import contextmanager
 import functools
 import logging
+import os
+from pathlib import Path
 import sys
 import threading
 from collections.abc import Callable, Iterator
 from typing import Any, TypeVar
 
+from server.platform.shutdown_backstop import shutdown_wait_limit
 from server.platform.warmup import BackgroundWarmup
 from server.platform.signal_rearm import (
     rearm_registered_signals,
@@ -41,12 +44,20 @@ if sys.platform == "win32":
 log = logging.getLogger("wg.mesh")
 
 GMSH_WORKER_THREAD_NAME = "gmsh-worker"
+#: Test-only switch read by ``_park_for_test``.
+BLOCK_FOR_TEST_ENV = "WG2_TEST_GMSH_BLOCK_FILE"
 T = TypeVar("T")
 
 _executor: concurrent.futures.ThreadPoolExecutor | None = None
 _executor_lock = threading.Lock()
 _executor_condition = threading.Condition(_executor_lock)
 _shutting_down = False
+#: Operations submitted and not yet settled (queued or running), and whether
+#: the last stop with a deadline stopped waiting for one of them
+#: (``gmsh_call_abandoned``).
+_calls_in_flight = 0
+_in_flight_condition = threading.Condition()
+_abandoned_call = False
 
 _ERROR_ENVVAR_NOT_FOUND = 203
 
@@ -168,6 +179,7 @@ def _run_in_gmsh_session(
         if _signal_loop is not None:
             _rearm_signals_on_loop(_signal_loop)
     try:
+        _park_for_test(fn)
         return fn(*args, **kwargs)
     finally:
         if opened_here and gmsh is not None and gmsh.isInitialized():
@@ -175,6 +187,52 @@ def _run_in_gmsh_session(
                 gmsh.finalize()
             if _signal_loop is not None:
                 _rearm_signals_on_loop(_signal_loop)
+
+
+def _call_settled(_future: object = None) -> None:
+    global _calls_in_flight
+    with _in_flight_condition:
+        _calls_in_flight -= 1
+        _in_flight_condition.notify_all()
+
+
+def _submit_counted(
+    executor: concurrent.futures.ThreadPoolExecutor, call: Callable[[], T]
+) -> concurrent.futures.Future[T]:
+    """Submit one operation, counted from submission until its future settles.
+
+    Counting from submission, rather than from when the thread picks the call
+    up, leaves no moment in which a call is about to start but is not yet
+    counted, so an idle answer from ``_wait_until_idle`` is always true.
+    """
+
+    global _calls_in_flight
+    with _in_flight_condition:
+        _calls_in_flight += 1
+    try:
+        future = executor.submit(call)
+    except BaseException:
+        _call_settled()
+        raise
+    future.add_done_callback(_call_settled)
+    return future
+
+
+def _wait_until_idle(timeout: float) -> bool:
+    with _in_flight_condition:
+        return _in_flight_condition.wait_for(lambda: _calls_in_flight == 0, timeout)
+
+
+def gmsh_call_abandoned() -> bool:
+    """Whether shutdown stopped waiting for a gmsh call that is still running.
+
+    Such a call holds interpreter exit, which joins executor threads, so
+    ``launch/serve.py`` asks this once its cleanup is done and ends the process
+    instead of waiting out the rest of its budget.
+    """
+
+    with _in_flight_condition:
+        return _abandoned_call and _calls_in_flight > 0
 
 
 async def run_on_gmsh_worker(fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
@@ -185,7 +243,8 @@ async def run_on_gmsh_worker(fn: Callable[..., T], /, *args: Any, **kwargs: Any)
     """
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
+    # What ``loop.run_in_executor`` does, with the submission counted.
+    future = _submit_counted(
         _gmsh_executor(),
         functools.partial(
             _run_in_gmsh_session,
@@ -195,10 +254,37 @@ async def run_on_gmsh_worker(fn: Callable[..., T], /, *args: Any, **kwargs: Any)
             **kwargs,
         ),
     )
+    return await asyncio.wrap_future(future, loop=loop)
+
+
+def _no_gmsh_work() -> None:
+    """The warmup's operation: a session is opened and closed around nothing."""
+
+
+def _park_for_test(fn: Callable[..., Any]) -> None:
+    """Stand in for an OCC call that never returns, when a test asks for one.
+
+    Test-only, and inert unless ``WG2_TEST_GMSH_BLOCK_FILE`` names a file.
+    The shutdown harness (``server/tests/test_bounded_server_shutdown.py``)
+    has to hold this thread in a call Python cannot interrupt, because that is
+    what an OCC build does and it is what keeps a process alive: interpreter
+    exit joins executor threads. An uninterruptible ``threading.Event().wait()``
+    has exactly that property. The file records which operation was parked, so
+    the harness knows the build it queued is the one in flight. Nothing in the
+    application sets the variable, and the session warmup is never parked.
+    """
+
+    marker = os.environ.get(BLOCK_FOR_TEST_ENV)
+    if not marker or fn is _no_gmsh_work:
+        return
+    staged = Path(f"{marker}.tmp")
+    staged.write_text(f"{getattr(fn, '__qualname__', repr(fn))}\n", encoding="utf-8")
+    staged.replace(marker)
+    threading.Event().wait()
 
 
 async def _open_and_close_a_session() -> None:
-    await run_on_gmsh_worker(lambda: None)
+    await run_on_gmsh_worker(_no_gmsh_work)
 
 
 #: The process-wide session warmup. One gmsh library per process, so one warmup.
@@ -225,9 +311,18 @@ async def prewarm_gmsh_worker() -> None:
 
 
 async def shutdown_gmsh_worker() -> None:
-    """Finalize the executor without moving gmsh work onto another thread."""
+    """Finalize the executor without moving gmsh work onto another thread.
 
-    global _executor, _shutting_down
+    With no stop budget running (tests, the CLI, an embedder) this drains:
+    queued and running work finishes, then the thread is joined. Once
+    ``launch/serve.py`` has begun a stop budget it cannot drain an OCC build,
+    which has no cancellation point and may outlive the whole budget. So queued
+    work is dropped, a running call is waited for only while
+    ``shutdown_wait_limit`` allows, and past that the join is skipped and the
+    call is recorded as abandoned (``gmsh_call_abandoned``).
+    """
+
+    global _executor, _shutting_down, _abandoned_call
 
     # Drain first. The warmup owns a queued executor future, and tearing the
     # executor down underneath it would abandon a task that is about to touch a
@@ -247,13 +342,27 @@ async def shutdown_gmsh_worker() -> None:
         else:
             wait_for_existing = False
             _shutting_down = True
+            _abandoned_call = False
             executor = _executor
     if wait_for_existing:
         await asyncio.to_thread(wait_for_other_shutdown)
         return
     try:
         if executor is not None:
-            await asyncio.to_thread(executor.shutdown, True, cancel_futures=False)
+            limit = shutdown_wait_limit(None)
+            if limit is None:
+                await asyncio.to_thread(executor.shutdown, True, cancel_futures=False)
+            else:
+                executor.shutdown(wait=False, cancel_futures=True)
+                if await asyncio.to_thread(_wait_until_idle, limit):
+                    await asyncio.to_thread(executor.shutdown, True)
+                else:
+                    with _in_flight_condition:
+                        _abandoned_call = True
+                    log.warning(
+                        "A gmsh call was still running when shutdown ran out of time "
+                        "for it; not waiting for it"
+                    )
     finally:
         with _executor_condition:
             if _executor is executor:
@@ -264,6 +373,7 @@ async def shutdown_gmsh_worker() -> None:
 
 __all__ = [
     "GMSH_WORKER_THREAD_NAME",
+    "gmsh_call_abandoned",
     "gmsh_warmup",
     "prewarm_gmsh_worker",
     "run_on_gmsh_worker",
