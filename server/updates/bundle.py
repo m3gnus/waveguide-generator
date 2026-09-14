@@ -24,6 +24,13 @@ from shared import release_assets
 from shared.release_assets import is_release_tag
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name
 from server.updates.restart import RestartApproval
+# The owner marker's writer, beside its reader, the healthy-start cleanup
+# (contract §2.5). The app layer carries ``launchers``.
+from launchers.apply_update import (
+    read_staging_owner,
+    remove_staging_owner,
+    write_staging_owner,
+)
 
 
 DEFAULT_UPDATES_API_BASE = "https://api.github.com"
@@ -641,10 +648,16 @@ class BundleUpdateInstaller:
         volume_probe: VolumeProbe = filesystem_volume,
         free_space_probe: FreeSpaceProbe = free_disk_bytes,
         restart_approval: RestartApproval | None = None,
+        installation: str | None = None,
     ) -> None:
         self.data_dir = Path(data_dir).resolve()
         self.destination_app_dir = Path(destination_app_dir).resolve()
         self.request_path = Path(request_path).resolve()
+        #: This installation's key (``installation_key``), named in the owner
+        #: marker of every staging it starts; ``None`` when it has none.
+        self.installation = installation
+        #: The staging the handoff request names, and the owner marker in it.
+        self._handoff_staging: tuple[Path, dict[str, Any]] | None = None
         #: Set as the handoff request is written (contract §4.1, §4.2).
         self.restart_approval = (
             restart_approval if restart_approval is not None else RestartApproval()
@@ -772,20 +785,41 @@ class BundleUpdateInstaller:
         """
 
         with self._lock:
-            if target != self._handoff_target or self._state["installState"] not in {
-                "ready",
-                "idle",
-            }:
+            if target != self._handoff_target:
                 return
-            self._handoff_target = None
-            self._active_job_key = None
-            self._state = {
-                "installState": "failed",
-                "activeVersion": target.removeprefix("v"),
-                "downloadedBytes": 0,
-                "totalBytes": 0,
-                "error": f"The update to {target} did not start: {reason}. Try again.",
-            }
+            # No handoff will use this staging now: it is no longer this
+            # server's, and the healthy-start sweep may reclaim it once it is
+            # quiet (contract §2.5).
+            staging, self._handoff_staging = self._handoff_staging, None
+            failed_attempt = self._state["installState"] in {"ready", "idle"}
+            if failed_attempt:
+                self._handoff_target = None
+                self._active_job_key = None
+                self._state = {
+                    "installState": "failed",
+                    "activeVersion": target.removeprefix("v"),
+                    "downloadedBytes": 0,
+                    "totalBytes": 0,
+                    "error": f"The update to {target} did not start: {reason}. Try again.",
+                }
+        if staging is not None:
+            remove_staging_owner(*staging)
+
+    @staticmethod
+    def _abandon_staging(
+        update_dir: Path, owner: Mapping[str, Any] | None, *, created: bool
+    ) -> None:
+        """A staging that ended before its request was written: nothing will ever name it.
+
+        The folder goes if this run created it and nobody has claimed it since;
+        otherwise only this run's owner marker goes.
+        """
+
+        current = read_staging_owner(update_dir)
+        if created and (current is None or (owner is not None and current == dict(owner))):
+            shutil.rmtree(update_dir, ignore_errors=True)
+        elif owner is not None:
+            remove_staging_owner(update_dir, owner)
 
     @staticmethod
     def _job_key(
@@ -900,10 +934,19 @@ class BundleUpdateInstaller:
         expected_runtime_id: str,
         installed_runtime_id: str,
     ) -> None:
+        update_dir: Path | None = None
+        owner: dict[str, Any] | None = None
+        created = False
+        requested = False
         try:
             update_dir = (self.data_dir / "updates" / version).resolve()
             if not update_dir.is_relative_to(self.data_dir):
                 raise BundleInstallError("The bundle update directory escaped the data directory.")
+            created = not os.path.lexists(update_dir)
+            update_dir.mkdir(parents=True, exist_ok=True)
+            # Until a helper's journal names this folder, the marker is what
+            # says it is in use, and by which installation (contract §2.5).
+            owner = write_staging_owner(update_dir, self.installation)
             downloads = update_dir / "downloads"
             staged_root = update_dir / "staged"
             completed = 0
@@ -991,6 +1034,7 @@ class BundleUpdateInstaller:
             # appearing and the latch being set. If the request is never
             # written, nothing will restart, and the latch comes down again.
             self._handoff_target = f"v{version}"
+            self._handoff_staging = (update_dir, owner)
             self.restart_approval.approve(self._handoff_target)
             try:
                 temporary.write_text(
@@ -1002,6 +1046,7 @@ class BundleUpdateInstaller:
                 # "ready" to show the attempt as failed.
                 with self._lock:
                     temporary.replace(self.request_path)
+                    requested = True
                     self._state.update(
                         installState="ready", downloadedBytes=completed, error=None
                     )
@@ -1012,4 +1057,7 @@ class BundleUpdateInstaller:
                 )
                 raise
         except Exception as exc:  # noqa: BLE001 - all worker failures become API state
+            if not requested and update_dir is not None:
+                # No request names this staging, so no journal ever will.
+                self._abandon_staging(update_dir, owner, created=created)
             self._set_state(installState="failed", error=str(exc) or type(exc).__name__)

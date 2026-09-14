@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from io import BytesIO
 import hashlib
 import json
+import os
 from pathlib import Path
 import stat
 import threading
@@ -331,6 +333,96 @@ def test_digest_failure_is_reported_and_never_writes_a_request(tmp_path: Path) -
     assert state["installState"] == "failed"
     assert "checksum" in str(state["error"])
     assert not (tmp_path / "control" / "update.json").exists()
+
+
+def test_a_staging_that_fails_before_its_request_removes_the_folder_it_created(
+    tmp_path: Path,
+) -> None:
+    """Contract §6 item 4: a failed staging leaves nothing no journal will ever name.
+
+    A folder that already existed when the run began is not this run's to
+    remove; only the owner marker this run wrote goes from it.
+    """
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, _fetch = _fakes({name: app})
+    installer = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=lambda _url, _limit: f"{'0' * 64}  {name}\n".encode(),
+    )
+
+    _start(installer, "2.0.1", [_asset(name, app, "app")])
+    installer.wait(2)
+
+    assert installer.status()["installState"] == "failed"
+    assert not (tmp_path / "data" / "updates" / "2.0.1").exists()
+
+    other = _app_zip("2.0.2")
+    other_name = "update-app-2.0.2.zip"
+    earlier = tmp_path / "data" / "updates" / "2.0.2" / "downloads" / "kept.zip"
+    earlier.parent.mkdir(parents=True)
+    earlier.write_bytes(b"not this run's")
+    download, _fetch = _fakes({other_name: other})
+    installer = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=lambda _url, _limit: f"{'0' * 64}  {other_name}\n".encode(),
+    )
+
+    _start(installer, "2.0.2", [_asset(other_name, other, "app", version="2.0.2")])
+    installer.wait(2)
+
+    assert installer.status()["installState"] == "failed"
+    assert earlier.is_file()
+    assert not (earlier.parents[1] / ".staging-owner.json").exists()
+
+
+def test_staging_carries_its_owner_marker_until_its_request_is_discarded(
+    tmp_path: Path,
+) -> None:
+    """Contract §2.5: staging in progress names its owner, and a discard disowns it.
+
+    The marker is how another installation's healthy start tells staging in
+    use from staging nobody owns. The staged folder itself stays after a
+    discard, for the sweep of unowned staging to reclaim once it is quiet.
+    """
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    base_download, fetch = _fakes({name: app})
+    marker = tmp_path / "data" / "updates" / "2.0.1" / ".staging-owner.json"
+    seen: dict[str, object] = {}
+
+    def download(*args: object) -> None:
+        seen.update(json.loads(marker.read_text(encoding="utf-8")))
+        base_download(*args)  # type: ignore[arg-type]
+
+    installer = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=fetch,
+        installation="0123456789abcdef",
+    )
+
+    _start(installer, "2.0.1", [_asset(name, app, "app")])
+    installer.wait(2)
+
+    assert installer.status()["installState"] == "ready"
+    assert seen["schema"] == 1
+    assert seen["installation"] == "0123456789abcdef"
+    assert seen["pid"] == os.getpid()
+    assert datetime.fromisoformat(str(seen["createdAt"])).tzinfo is not None
+    assert marker.is_file(), "a handoff that is still waiting lost its owner marker"
+
+    # The launcher consumes and discards the request, and says so: the latch
+    # comes down, and the server treats the attempt as failed (contract §4.2).
+    (tmp_path / "control" / "update.json").unlink()
+    installer.restart_approval.release("the launcher discarded the request")
+
+    assert not marker.exists()
+    assert (tmp_path / "data" / "updates" / "2.0.1" / "staged" / "app").is_dir()
 
 
 def test_advertised_archive_over_the_size_cap_fails_before_downloading(

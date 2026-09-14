@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import errno
 import hashlib
 import json
@@ -949,7 +949,12 @@ def _publish_completion_record(
 
 
 def reclaim_committed_staging(
-    data_dir: Path, resources: Path, *, log: LogCallable | None = None
+    data_dir: Path,
+    resources: Path,
+    *,
+    log: LogCallable | None = None,
+    pid_alive: Callable[[int], bool] | None = None,
+    now: float | None = None,
 ) -> list[Path]:
     """Remove what the committed transaction staged under ``<data>/updates``, only that.
 
@@ -957,13 +962,17 @@ def reclaim_committed_staging(
     shared by every transaction and every installation using this data
     directory, so it is never removed whole. The roots come from the completion
     record the commit wrote before it deleted the journal. A root is removed only
-    if it resolves strictly inside ``<data>/updates`` and no other
-    installation's journal names it. The record then says ``reclaimed``, so the
-    cleanup runs once: a later staging into the same folder belongs to a later
-    transaction. Returns the roots removed.
+    if it resolves strictly inside ``<data>/updates``, no other installation's
+    journal names it, and no other installation's live owner marker is in it
+    (:data:`STAGING_OWNER_FILENAME`: that copy is staging into the same
+    version folder, and has no journal yet). The record then says
+    ``reclaimed``, so the cleanup runs once: a later staging into the same
+    folder belongs to a later transaction. Returns the roots removed.
     """
 
     directory = Path(data_dir)
+    own = installation_key(resources)
+    clock = time.time() if now is None else now
     if read_journal(directory, resources) is not None:
         # Either still unresolved, which the commit refused, or a record at this
         # installation's name that describes another installation. Neither says
@@ -996,6 +1005,14 @@ def reclaim_committed_staging(
             _emit_log(log, f"Left {root} in place: {reason}.")
             continue
         if target is None:
+            continue
+        owner = _live_staging_owner(target, now=clock, pid_alive=pid_alive)
+        if owner is not None and owner.get("installation") != own:
+            _emit_log(
+                log,
+                f"Left {root} in place: another installation is staging into it "
+                f"(process {owner.get('pid')}).",
+            )
             continue
         try:
             shutil.rmtree(target)
@@ -1083,6 +1100,237 @@ def _staging_named_by_other_installations(
             except OSError as exc:
                 return [], f"{path.name} names a staging root that cannot be resolved: {exc}"
     return named, None
+
+
+# ---------------------------------------------------------------------------
+# Staging no transaction names: the owner marker, and the sweep
+# ---------------------------------------------------------------------------
+
+#: Written by the server into ``<data>/updates/<version>/`` as it starts staging
+#: there, and removed when it abandons that staging (``server/updates/bundle.py``).
+#: A journal names staging only once the helper runs; until then this marker is
+#: what says the folder is in use, and by which installation.
+STAGING_OWNER_FILENAME = ".staging-owner.json"
+STAGING_OWNER_SCHEMA = 1
+
+#: How long a marker whose process has gone still speaks for its staging. The
+#: launcher stops the server before the helper writes its journal, so for those
+#: seconds the marker is all that protects a handoff's staging.
+STAGING_OWNER_GRACE_SECONDS = 3600.0
+#: A marker older than this protects nothing, whatever its process: process ids
+#: are reused, and no staging legitimately waits a day for its handoff (an
+#: approved restart expires after five minutes).
+STAGING_OWNER_MAX_AGE_SECONDS = 24 * 3600.0
+#: Staging with no live owner is swept only once nothing in it has changed for
+#: this long, so staging by a release that writes no marker is never swept while
+#: it downloads, extracts or waits for its helper.
+STAGING_QUIET_SECONDS = 3600.0
+
+
+def write_staging_owner(root: Path, installation: str | None) -> dict[str, Any]:
+    """Say that this process is staging into ``root``; returns the marker it wrote."""
+
+    payload: dict[str, Any] = {
+        "schema": STAGING_OWNER_SCHEMA,
+        "installation": installation,
+        "pid": os.getpid(),
+        "createdAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    target = Path(root) / STAGING_OWNER_FILENAME
+    temporary = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, target)
+    return payload
+
+
+def read_staging_owner(root: Path) -> dict[str, Any] | None:
+    """The owner marker in ``root``, or ``None`` when there is none to trust."""
+
+    try:
+        payload = json.loads((Path(root) / STAGING_OWNER_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != STAGING_OWNER_SCHEMA:
+        return None
+    return payload
+
+
+def remove_staging_owner(root: Path, owner: Mapping[str, Any]) -> bool:
+    """Remove the marker in ``root`` if it is still ``owner``'s. Returns whether it did."""
+
+    if read_staging_owner(root) != dict(owner):
+        return False
+    try:
+        (Path(root) / STAGING_OWNER_FILENAME).unlink()
+    except OSError:
+        return False
+    return True
+
+
+def _live_staging_owner(
+    root: Path, *, now: float, pid_alive: Callable[[int], bool] | None
+) -> dict[str, Any] | None:
+    """The owner marker in ``root`` while it still speaks for its staging, else ``None``.
+
+    Young markers always do (``STAGING_OWNER_GRACE_SECONDS``), old ones never
+    (``STAGING_OWNER_MAX_AGE_SECONDS``). In between, the marker's process must
+    still run; with no way to ask, it is taken to.
+    """
+
+    owner = read_staging_owner(root)
+    if owner is None:
+        return None
+    try:
+        created = datetime.fromisoformat(str(owner.get("createdAt"))).timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    age = now - created
+    if age >= STAGING_OWNER_MAX_AGE_SECONDS:
+        return None
+    if age < STAGING_OWNER_GRACE_SECONDS:
+        return owner
+    pid = owner.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return None
+    if pid_alive is None:
+        return owner
+    try:
+        alive = bool(pid_alive(pid))
+    except Exception:  # noqa: BLE001 - a check that fails cannot prove the owner gone
+        alive = True
+    return owner if alive else None
+
+
+def _quiet_since(root: Path, threshold: float) -> bool:
+    """Whether nothing under ``root`` changed after ``threshold``. Links are not followed."""
+
+    try:
+        if os.lstat(root).st_mtime > threshold:
+            return False
+        for current, directories, files in os.walk(root, followlinks=False):
+            for name in (*directories, *files):
+                if os.lstat(os.path.join(current, name)).st_mtime > threshold:
+                    return False
+    except OSError:
+        return False
+    return True
+
+
+def _request_staging_roots(request: Path) -> list[Path]:
+    """The staging roots a bundle handoff request that is present names."""
+
+    try:
+        payload = json.loads(Path(request).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(payload, dict) or payload.get("kind") != "apply_bundle":
+        return []
+    roots: list[Path] = []
+    for key in ("stagedAppDir", "stagedRuntimeDir"):
+        staged = _text_or_none(payload.get(key))
+        if staged is None:
+            continue
+        path = Path(staged)
+        try:
+            roots.append((path.parent.parent if path.parent.name == "staged" else path.parent).resolve())
+        except OSError:
+            continue
+    return roots
+
+
+def _is_link_or_junction(path: Path) -> bool:
+    is_junction = getattr(os.path, "isjunction", None)
+    return path.is_symlink() or (is_junction is not None and bool(is_junction(path)))
+
+
+def sweep_unowned_staging(
+    data_dir: Path,
+    resources: Path,
+    *,
+    requests: Sequence[Path] = (),
+    pid_alive: Callable[[int], bool] | None = None,
+    now: float | None = None,
+    log: LogCallable | None = None,
+) -> list[Path]:
+    """Remove the ``<data>/updates/<version>`` folders that nothing owns, and only those.
+
+    Healthy-start cleanup, after :func:`reclaim_committed_staging` (contract
+    §2.5). A staging that failed or was abandoned before any helper wrote a
+    journal -- a digest or manifest check that failed, a request the launcher
+    discarded, a leftover of a release before scoped cleanup -- is named by no
+    journal and no record, and nothing else would ever remove it. A folder goes
+    only when all of these hold:
+
+    * it is a directory directly inside ``<data>/updates``, not a link;
+    * no journal names it, this installation's or another's, and this
+      installation's own journal is not open;
+    * it is not a staging root this installation's record still retains;
+    * it is not the staging of a handoff request in ``requests`` that is present;
+    * it holds no owner marker that still speaks for it (:func:`_live_staging_owner`);
+    * nothing in it has changed for ``STAGING_QUIET_SECONDS``.
+
+    Another installation's journal that cannot be read could name anything, so
+    it stops the sweep, as it stops the scoped cleanup. Returns the folders removed.
+    """
+
+    directory = Path(data_dir)
+    if read_journal(directory, resources) is not None:
+        return []
+    protected, refusal = _staging_named_by_other_installations(directory, resources)
+    if refusal is not None:
+        _emit_log(log, f"Not sweeping update staging no transaction names: {refusal}.")
+        return []
+    try:
+        updates = (directory / "updates").resolve(strict=True)
+    except OSError:
+        return []
+    record = read_completion_record(directory, resources)
+    if record is not None and record.get("rollbackMaterial") == ROLLBACK_MATERIAL_RETAINED:
+        retained = record.get("stagingRoots")
+        for text in retained if isinstance(retained, list) else []:
+            if _text_or_none(text) is None:
+                continue
+            try:
+                protected.append(Path(text).resolve())
+            except OSError:
+                return []
+    for request in requests:
+        protected.extend(_request_staging_roots(request))
+    clock = time.time() if now is None else now
+    try:
+        entries = sorted(updates.iterdir())
+    except OSError as exc:
+        _emit_log(log, f"Could not list the update staging in {updates}: {exc}")
+        return []
+    removed: list[Path] = []
+    for entry in entries:
+        try:
+            if _is_link_or_junction(entry) or not entry.is_dir():
+                continue
+            resolved = entry.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved.parent != updates:
+            continue
+        if any(
+            other == resolved or other in resolved.parents or resolved in other.parents
+            for other in protected
+        ):
+            continue
+        if _live_staging_owner(resolved, now=clock, pid_alive=pid_alive) is not None:
+            continue
+        if not _quiet_since(resolved, clock - STAGING_QUIET_SECONDS):
+            continue
+        try:
+            shutil.rmtree(resolved)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _emit_log(log, f"Could not remove update staging no transaction owns {entry}: {exc}")
+            continue
+        removed.append(entry)
+        _emit_log(log, f"Removed update staging no transaction owns: {entry}")
+    return removed
 
 
 def layer_manifest_name(layer_name: str) -> str:

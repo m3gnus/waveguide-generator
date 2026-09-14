@@ -45,6 +45,7 @@ from server.updates.restart import RestartApproval
 from launchers.apply_update import (
     ApplyUpdateError,
     bundle_from_app_layer,
+    installation_key,
     lift_suppressed_build,
     read_completion_record,
     resources_directory,
@@ -1032,7 +1033,20 @@ class UpdateService:
                 destination_app_dir=self.repo_root,
                 request_path=self.update_request_path,
                 restart_approval=self.restart_approval,
+                installation=self._installation_key(),
             )
+
+    def _installation_key(self) -> str | None:
+        """The key this installation's journal and records carry, or ``None`` outside a bundle."""
+
+        try:
+            return installation_key(
+                resources_directory(
+                    bundle_from_app_layer(self.repo_root, self.platform_name), self.platform_name
+                )
+            )
+        except (ApplyUpdateError, OSError, RuntimeError, ValueError):
+            return None
 
     def _restart_called_off(self, target: str, reason: str) -> None:
         # A checkout handoff that did not happen (contract §4.2). The bundle

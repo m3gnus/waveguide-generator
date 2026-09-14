@@ -45,7 +45,9 @@ from launchers.apply_update import (
     reclaim_committed_staging,
     repair_bundle,
     resources_directory,
+    sweep_unowned_staging,
 )
+from server.platform.instance import pid_is_running
 
 
 #: ``(bundle, resources, data directory)`` of an installed bundle.
@@ -230,12 +232,28 @@ class HealthyStartSettlement:
 
     ``paths`` is asked at settle time, not at construction, because the
     controller that owns this can be built before its data directory is final.
+    ``requests`` names the handoff requests this start's launcher reads; the
+    staging one that is present names is never swept.
     """
 
-    def __init__(self, paths: Callable[[], BundlePaths | None]) -> None:
+    def __init__(
+        self,
+        paths: Callable[[], BundlePaths | None],
+        *,
+        requests: Callable[[], Sequence[Path]] | None = None,
+    ) -> None:
         self._paths = paths
+        self._requests = requests
         self._lock = threading.Lock()
         self._settled = False
+
+    def _request_paths(self) -> list[Path]:
+        if self._requests is None:
+            return []
+        try:
+            return [Path(path) for path in self._requests()]
+        except Exception:  # noqa: BLE001 - no requests known is the conservative answer here
+            return []
 
     @property
     def settled(self) -> bool:
@@ -288,12 +306,35 @@ class HealthyStartSettlement:
             self._settled = True
             if commit_detail.startswith("update transaction"):
                 log(f"Healthy start: {commit_detail}.")
-            _reclaim(bundle, resources, data_dir, log, report or _report_to_the_user)
+            _reclaim(
+                bundle,
+                resources,
+                data_dir,
+                log,
+                report or _report_to_the_user,
+                self._request_paths(),
+            )
             return True
 
 
+def _reclaim_staging(
+    data_dir: Path, resources: Path, log: Report, requests: Sequence[Path]
+) -> None:
+    """The committed transaction's own staging, then the staging nothing owns (§2.5)."""
+
+    reclaim_committed_staging(data_dir, resources, log=log, pid_alive=pid_is_running)
+    sweep_unowned_staging(
+        data_dir, resources, requests=requests, pid_alive=pid_is_running, log=log
+    )
+
+
 def _reclaim(
-    bundle: Path, resources: Path, data_dir: Path, log: Report, report: Report
+    bundle: Path,
+    resources: Path,
+    data_dir: Path,
+    log: Report,
+    report: Report,
+    requests: Sequence[Path] = (),
 ) -> None:
     previous = previous_generation_paths(resources)
     if sys.platform == "darwin":
@@ -301,9 +342,9 @@ def _reclaim(
             # Nothing to reseal around. A start that stopped part-way through
             # this cleanup may still have left the committed transaction's
             # staging; its completion record says so.
-            reclaim_committed_staging(data_dir, resources, log=log)
+            _reclaim_staging(data_dir, resources, log, requests)
             return
-        _reclaim_macos(bundle, resources, data_dir, previous, log, report)
+        _reclaim_macos(bundle, resources, data_dir, previous, log, report, requests)
         return
 
     # ``.failed`` is the trail a rollback leaves: Windows would not let the
@@ -327,7 +368,7 @@ def _reclaim(
         # runtime zip alone is well over 100 MB). Only that transaction's own
         # folders go: <data>/updates is shared with other transactions and
         # other installations, so it is never removed whole.
-        reclaim_committed_staging(data_dir, resources, log=log)
+        _reclaim_staging(data_dir, resources, log, requests)
 
 
 def _restore_held_previous(holding: Path, moved: list[tuple[Path, Path]]) -> list[str]:
@@ -357,6 +398,7 @@ def _reclaim_macos(
     previous: list[Path],
     log: Report,
     report: Report,
+    requests: Sequence[Path] = (),
 ) -> None:
     """Remove sealed rollback content only around a required sign/verify.
 
@@ -436,7 +478,7 @@ def _reclaim_macos(
         kind = "layer" if original.name in {"app.previous", "runtime.previous"} else "launcher file"
         log(f"Removed healthy-start rollback {kind}: {original}")
     # Only the committed transaction's own staging, as on the other path.
-    reclaim_committed_staging(data_dir, resources, log=log)
+    _reclaim_staging(data_dir, resources, log, requests)
 
 
 __all__ = [

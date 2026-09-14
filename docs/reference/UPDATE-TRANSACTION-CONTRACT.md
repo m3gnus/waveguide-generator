@@ -232,6 +232,39 @@ While staging is keyed by version (`bundle.py:866`), two transactions for one ve
 share a root. Keying staging by build identity is part of D2. Until then, one version
 has one staging root, and the root belongs to the transaction that last staged into it.
 
+**Staging no transaction names.** A staging that failed or was abandoned before any
+helper wrote a journal is named by no journal and no record. Three things keep it from
+leaking:
+
+- **An owner marker.** The server that stages writes
+  `<data>/updates/<version>/.staging-owner.json` (`schema`, `installation`, `pid`,
+  `createdAt`) as it starts. It removes the marker when the attempt is called off: a
+  launcher's discard or an expired approval (§4.2). The writer is
+  `BundleUpdateInstaller._run` in `server/updates/bundle.py`; the reader is beside the
+  cleanup in `launchers/apply_update.py`.
+- **A failed staging cleans up after itself.** One that fails before its request is
+  written removes the folder if that run created it, and otherwise only its own marker.
+- **A sweep.** After the scoped cleanup, every healthy start sweeps the
+  `<data>/updates/<version>` folders nothing owns (`sweep_unowned_staging`). A folder goes
+  only when all of these hold:
+  - no journal names it, and this installation's own journal is not open;
+  - this installation's record does not still retain it;
+  - the handoff request of this start's own controller, while present, does not name it;
+  - no owner marker still speaks for it;
+  - nothing in it has changed for an hour.
+
+  A marker speaks for its folder for an hour whatever its process, and after that, up
+  to a day old, only while its process runs. The launcher stops the server before the
+  helper writes its journal, which is why a marker outlives its process. Another
+  installation's unreadable journal stops the sweep, as it stops the scoped cleanup.
+  Links are never followed, only folders directly inside `<data>/updates` are
+  considered, and `<data>/updates` itself is never removed.
+
+Another installation's marker that still speaks for a root also stops the scoped cleanup
+from removing that root. That covers another copy staging the same version before its
+helper has written a journal. A release that writes no marker is protected by the quiet
+period alone until its helper's journal names its staging.
+
 ### 2.6 The recovery window
 
 Automatic rollback is possible until healthy-start cleanup runs. After that `.previous`
@@ -601,15 +634,15 @@ These are recorded, not designed.
 3. **A rollback to v0.3.1 or v0.3.2** does not apply suppression, and v0.3.1 ignores
    the journal altogether (§2.3, §3.3). Those versions stay compatible readers only in
    the sense of §3.3.
-4. **Staging that no transaction names is never reclaimed.**
-   - A staging that failed or was abandoned before the helper wrote a journal leaves
-     `<data>/updates/<version>` behind. Examples: a download, digest or manifest check
-     that failed, or a staged update that was never applied.
-   - The whole-folder removal cleared it at the next healthy start after an update.
-     Scoped cleanup (§2.5) does not, and the folder can hold a runtime archive over
-     100 MB.
-   - A guarded sweep is not designed here. It would remove version folders that no
-     journal or record names and that no staging in progress is using.
+4. **Staging that no transaction names.** Resolved by the owner marker, the failed
+   staging's own cleanup and the guarded sweep of §2.5 ("Staging no transaction names").
+   - Before, a staging that failed or was abandoned before the helper wrote a journal
+     left `<data>/updates/<version>` behind for good. Examples: a download, digest or
+     manifest check that failed, or a staged update that was never applied. The folder
+     can hold a runtime archive over 100 MB.
+   - What remains: staging by a release that writes no marker is protected only by the
+     sweep's quiet period. Keying staging by build identity (D2) would make a shared
+     version folder impossible.
 
 ---
 
@@ -671,6 +704,10 @@ that implements it removes the marker.
 | `test_an_approval_waits_for_a_job_that_is_being_marked_running` | §4.3 | Marking a job running and approving a restart are ordered by one lock |
 | `test_a_retry_made_while_healthy_start_cleanup_runs_is_not_undone` | §2.3, §2.5 | Cleanup's rewrite of the record keeps a suppression lifted while it ran |
 | `test_an_outcome_detail_names_the_home_folder_as_a_problem_report_does` | §2.2 | A detail that names a folder under home reads `~` in the status |
+| `test_healthy_start_sweeps_staging_that_no_transaction_owns` | §2.5 | The review's U1, inverted, on both paths: quiet unnamed staging and a long-dead owner's staging go; staging still being written and another installation's live staging stay |
+| `test_cleanup_spares_another_installations_staging_before_its_journal_exists` | §2.5 | The review's U2, inverted, on both paths: another installation's live owner marker keeps a root the committed transaction named |
+| `test_healthy_start_cleanup_leaves_a_pending_wglink_activation` | §2.4, §2.5 | A pending WGLink activation and the add-in it displaced survive both paths, however old |
+| `test_the_sweep_spares_the_staging_of_a_handoff_request_that_is_present` | §2.5 | The controller's present request keeps the staging it names; once it is gone, the same staging is swept |
 | `test_healthy_start_settles_only_the_build_the_journal_left_installed` | §4.6 | For an installed update, a rolled-back update and a restoring rollback: another commit, the transaction's other build or no manifest in the app layer commits and reclaims nothing and writes the line; the expected build then settles |
 | `test_a_browser_mode_start_needs_health_to_name_the_installed_build` | §4.6 | A bundle's own server naming another build is not ready and settles nothing; the same start settles once it names the installed build |
 | `test_a_no_gui_start_whose_health_names_another_build_does_not_settle` | §4.6 | Live uvicorn: a self-probe whose `/health` names another build reports once and settles nothing |
@@ -678,7 +715,10 @@ that implements it removes the marker.
 The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateControl.test.tsx`
 ("a held-back build and the last outcome") and `frontend/src/api/updates.test.ts`.
 
-Outside this file: `server/tests/test_updates.py`
+Outside this file: `server/tests/test_bundle_update_installer.py`
+`test_a_staging_that_fails_before_its_request_removes_the_folder_it_created` and
+`test_staging_carries_its_owner_marker_until_its_request_is_discarded` (§2.5, the server's
+side of the owner marker); `server/tests/test_updates.py`
 `test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it` (§4.2,
 checkout flow); `server/tests/test_statusapp_controller.py`
 `test_the_status_window_polls_on_until_the_interface_is_served` and

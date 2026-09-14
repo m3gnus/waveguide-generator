@@ -15,7 +15,7 @@ pass itself off as the behaviour under test.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 from io import BytesIO
 import json
@@ -820,6 +820,196 @@ def test_cleanup_finishes_after_an_interrupted_start_and_never_runs_twice(
     _healthy_start(installation, monkeypatch, platform_name)
 
     assert download.is_file(), "a finished cleanup ran again over a later transaction's staging"
+
+
+def _age(root: Path, seconds: float) -> None:
+    """Make everything under ``root`` look untouched for ``seconds``."""
+
+    when = time.time() - seconds
+    for current, directories, files in os.walk(root):
+        for name in [*files, *directories]:
+            os.utime(Path(current) / name, (when, when), follow_symlinks=False)
+    os.utime(root, (when, when))
+
+
+def _staging_owner(root: Path, *, installation: str, pid: int, age: float = 0.0) -> None:
+    """The owner marker a server writes into ``<data>/updates/<version>`` as it starts staging."""
+
+    created = datetime.now(timezone.utc) - timedelta(seconds=age)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".staging-owner.json").write_text(
+        json.dumps(
+            {"schema": 1, "installation": installation, "pid": pid, "createdAt": created.isoformat()}
+        ),
+        encoding="utf-8",
+    )
+
+
+def _a_pid_that_has_exited() -> int:
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait()
+    return process.pid
+
+
+@CLEANUP_PATHS
+def test_healthy_start_sweeps_staging_that_no_transaction_owns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.5 and §6 item 4: the review's U1, inverted.
+
+    Staging that no journal ever named -- a download whose digest or manifest
+    check failed, a request the launcher discarded, a leftover of a release
+    before scoped cleanup -- used to outlive every later healthy start, a
+    runtime archive of over 100 MB at a time. It is swept once it is quiet.
+    What is still being written, and another installation's live staging, stay.
+    """
+
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    updates = installation.data_dir / "updates"
+    abandoned = updates / "9.9.8" / "downloads" / "update-runtime.zip"
+    abandoned.parent.mkdir(parents=True)
+    abandoned.write_bytes(b"x" * 4096)
+    dead_owner = updates / "9.9.7"
+    (dead_owner / "downloads").mkdir(parents=True)
+    (dead_owner / "downloads" / "update-app.zip").write_bytes(b"spent")
+    _staging_owner(dead_owner, installation="0" * 16, pid=_a_pid_that_has_exited(), age=2 * 3600)
+    in_progress = updates / "9.9.6" / "downloads" / "update-app.zip"
+    in_progress.parent.mkdir(parents=True)
+    in_progress.write_bytes(b"still arriving")
+    live_owner = updates / "9.9.5"
+    (live_owner / "staged" / "app").mkdir(parents=True)
+    _staging_owner(live_owner, installation="1" * 16, pid=os.getpid())
+    for quiet in (updates / "9.9.8", dead_owner, live_owner):
+        _age(quiet, 2 * 3600)
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    if (installation.resources / "app.previous").exists():
+        pytest.fail("set-up: the healthy start did not reclaim; " + _update_log(installation))
+    assert not (updates / "9.9.8").exists(), "staging no transaction names outlived a healthy start"
+    assert not dead_owner.exists(), "staging whose owner is long gone was kept"
+    assert in_progress.is_file(), "staging that is still being written was removed"
+    assert (live_owner / "staged" / "app").is_dir(), "another installation's live staging was removed"
+    assert updates.is_dir()
+    assert "9.9.8" in _update_log(installation)
+
+
+@CLEANUP_PATHS
+def test_cleanup_spares_another_installations_staging_before_its_journal_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.5: the review's U2, inverted.
+
+    Another copy sharing the data directory has staged the same version into
+    the folder this installation's committed transaction named, and written
+    its request, but its helper has not written a journal yet. Its server
+    wrote an owner marker when it started staging, and a live marker of
+    another installation keeps the folder.
+    """
+
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    root = installation.data_dir / "updates" / "9.9.9"
+    other_staged = root / "staged" / "app"
+    other_staged.mkdir(parents=True, exist_ok=True)
+    (other_staged / "APP-MANIFEST.json").write_text("{}", encoding="utf-8")
+    _staging_owner(root, installation="2" * 16, pid=os.getpid())
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    if (installation.resources / "app.previous").exists():
+        pytest.fail("set-up: the healthy start did not reclaim; " + _update_log(installation))
+    assert (other_staged / "APP-MANIFEST.json").is_file(), (
+        "cleanup removed another installation's staging before its journal existed"
+    )
+    assert "another installation" in _update_log(installation)
+
+
+@CLEANUP_PATHS
+def test_healthy_start_cleanup_leaves_a_pending_wglink_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.4 and the review §6: cleanup leaves a pending WGLink package intact.
+
+    The pending activation and the managed add-in it displaced live under
+    ``<data>/integrations/wglink/activation/<key>/``, outside ``<data>/updates``,
+    and neither the scoped cleanup nor the sweep of unowned staging reaches
+    them, however long they have waited.
+    """
+
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    activation = (
+        installation.data_dir / "integrations" / "wglink" / "activation"
+        / installation_key(installation.resources)
+    )
+    kept = activation / "previous" / "WGLink" / "WGLink.py"
+    kept.parent.mkdir(parents=True)
+    kept.write_text("# the managed add-in the activation displaced\n", encoding="utf-8")
+    pending = activation / "pending.json"
+    pending.write_text(
+        json.dumps({"schema": 1, "kind": "wglink-pending-activation"}), encoding="utf-8"
+    )
+    _age(installation.data_dir / "integrations", 30 * 24 * 3600)
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    if (installation.resources / "app.previous").exists():
+        pytest.fail("set-up: the healthy start did not reclaim; " + _update_log(installation))
+    assert not (installation.data_dir / "updates" / "9.9.9").exists(), (
+        "set-up: the committed transaction's staging was not reclaimed"
+    )
+    assert pending.is_file() and kept.is_file(), "cleanup removed a pending WGLink activation"
+
+
+def test_the_sweep_spares_the_staging_of_a_handoff_request_that_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §2.5: a request the launcher has not consumed yet names staging that is in use.
+
+    The request is the controller's own; another installation's lives in that
+    launcher's control directory, where its owner marker speaks for it.
+    """
+
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
+    installation = _installation(tmp_path)
+    staging = installation.data_dir / "updates" / "9.9.9"
+    _age(staging, 2 * 3600)
+    request = tmp_path / "control" / "update.json"
+    request.parent.mkdir()
+    request.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "apply_bundle",
+                "version": "9.9.9",
+                "stagedAppDir": str(installation.staged_app),
+                "stagedRuntimeDir": str(installation.staged_runtime),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def window_start() -> None:
+        controller = StatusController(environ={**os.environ, "WG2_BUNDLE": "1"})
+        monkeypatch.setattr(
+            controller,
+            "bundle_paths",
+            lambda: (installation.bundle, installation.resources, installation.data_dir),
+        )
+        monkeypatch.setattr(
+            StatusController, "update_request_path", property(lambda _self: request)
+        )
+        if not controller.settle_update_transaction(_healthy_snapshot(), report=lambda _m: None):
+            pytest.fail("set-up: the start did not settle; " + _update_log(installation))
+
+    window_start()
+    assert installation.staged_app.is_dir(), "the sweep removed the staging a present request names"
+
+    request.unlink()
+    window_start()
+    assert not staging.exists(), "set-up: unowned, quiet staging with no request was not swept"
 
 
 # ---------------------------------------------------------------------------

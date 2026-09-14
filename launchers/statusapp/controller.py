@@ -385,7 +385,12 @@ class StatusController:
         self.settle_on_ready = settle_on_ready
         # Asked at settle time, so the paths are the ones this controller has
         # then, and so a caller can replace ``bundle_paths``.
-        self._healthy_start = HealthyStartSettlement(lambda: self.bundle_paths())
+        self._healthy_start = HealthyStartSettlement(
+            lambda: self.bundle_paths(),
+            # The request this controller's own server writes: while it is
+            # present, the staging it names is in use (contract §2.5).
+            requests=lambda: [path for path in (self.update_request_path,) if path is not None],
+        )
         self._settle_attempted = False
         #: The installed app layer's build label, read once when first needed.
         self._installed_build: str | None = None
