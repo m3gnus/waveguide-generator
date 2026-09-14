@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -527,6 +528,12 @@ def test_request_install_accepts_a_beta_release(tmp_path: Path) -> None:
     accepted = update.request_install()
 
     assert accepted == {"accepted": True, "tag": "v2.1.0-beta.1"}
+    # The checkout request appears after its pause on the server's monotonic
+    # clock, once the HTTP answer is out (contract §4.2).
+    deadline = time.monotonic() + 10.0
+    while not handoff.exists():
+        assert time.monotonic() < deadline, "the checkout request never appeared"
+        time.sleep(0.01)
     assert json.loads(handoff.read_text(encoding="utf-8"))["tag"] == "v2.1.0-beta.1"
 
 
