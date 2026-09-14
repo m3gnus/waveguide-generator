@@ -177,10 +177,20 @@ there when you want them. macOS does not prepare a BEAT · CPU runtime, so that
 row stays unavailable there until you provision one yourself, and AUTO prefers
 BEMPP as the CPU route.
 
-On Windows and Linux, AUTO prefers a provisioned BEAT · CPU to BEMPP once no
-GPU engine is available — it can only reach it on a machine where that 1 kHz
-solve has already run. Choosing an engine yourself always overrides this: an
-explicit BEMPP stays BEMPP.
+AUTO walks the same order on every platform: Metal, then the BEAT GPU engines,
+then BEMPP, then BEAT · CPU. So on Windows and Linux, once no GPU engine is
+available, AUTO takes BEMPP ahead of a provisioned BEAT · CPU, because BEMPP is
+the faster CPU engine over a full wide-band sweep. BEMPP assembles on an OpenCL
+device when it finds one and otherwise falls back to numba.
+
+Imported CAD geometry follows the same order with two differences: the BEAT GPU
+engines do not take it yet, and BEMPP offers it only where it assembles on
+OpenCL. On such a machine AUTO takes BEMPP ahead of BEAT · CPU for a CAD return
+too, although BEMPP's imported path is not yet qualified against Metal; BEAT ·
+CPU's is. Without an OpenCL device, AUTO passes BEMPP over for imported geometry
+and takes BEAT · CPU, which it can only reach on a machine where that 1 kHz
+solve has already run. Choosing an engine yourself always overrides AUTO: an
+explicit BEMPP stays BEMPP, and an explicit BEAT · CPU stays BEAT · CPU.
 
 The infinite-baffle setting is design physics, not a solver choice. Axisymmetric,
 Metal full 3D, and current BEMPP full 3D all implement the coupled interior plus
