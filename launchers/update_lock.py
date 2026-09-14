@@ -66,7 +66,7 @@ import re
 import secrets
 import time
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import Callable, Iterator, Mapping, TypeVar
 
 
 #: The claim lives beside the caches the launchers already redirect here, not
@@ -274,6 +274,14 @@ GRANT_SUFFIX = ".json"
 #: A grant is spent by the start it was minted for, which follows immediately.
 #: The window is generous for a slow machine and far short of a session.
 GRANT_LIFETIME_SECONDS = 600.0
+#: How often, and how far apart, a consumer retries a claim or a read that
+#: Windows refused with PermissionError. About 0.2 s in all: long enough for
+#: another consumer's rename or a scanner's open to finish, short enough that a
+#: start never waits on a grant somebody holds for good.
+GRANT_CLAIM_ATTEMPTS = 10
+GRANT_CLAIM_RETRY_SECONDS = 0.02
+
+_T = TypeVar("_T")
 
 
 NONCE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
@@ -367,6 +375,22 @@ def grant_relaunch(
     return nonce
 
 
+def _while_held(action: Callable[[], _T]) -> _T:
+    """Run ``action``, retrying briefly while Windows reports the file held.
+
+    Only PermissionError is retried: a sharing violation or a pending delete,
+    both of which pass. FileNotFoundError, and everything else, propagates from
+    the first attempt, because a grant that is not there has been spent.
+    """
+
+    for _ in range(GRANT_CLAIM_ATTEMPTS - 1):
+        try:
+            return action()
+        except PermissionError:
+            time.sleep(GRANT_CLAIM_RETRY_SECONDS)
+    return action()
+
+
 def consume_relaunch_grant(
     resources: str | os.PathLike[str],
     nonce: str | None,
@@ -383,6 +407,17 @@ def consume_relaunch_grant(
     exactly one succeeds, because the loser's rename finds nothing there. A read
     followed by an unlink would let both read the same payload and both answer
     yes, which is not a one-shot grant.
+
+    **On Windows, "held" is not "lost".** A rename, or an open, of a file that
+    another process has open at that moment can raise PermissionError instead of
+    acting. A rename opens the file before it moves it, so a consumer that opened
+    it just before the winner's rename can still move it afterwards, and while
+    it holds it the winner's read is refused. Answering False to either would
+    spend the grant for nobody; all six consumers of a race once answered False
+    on a Windows runner. So both steps are retried briefly on PermissionError,
+    and only FileNotFoundError means somebody else spent it. The grant still
+    ends under one claimed name, and only the consumer whose name that is can
+    read it, so exactly one answers yes.
 
     **A start that was given nothing consumes nothing.** No nonce, a malformed
     one, or one addressing another installation never reaches the grant file at
@@ -403,15 +438,18 @@ def consume_relaunch_grant(
         path = grant_path(resources, nonce, system=system, environ=environ, home=home)
     except (ValueError, OSError):
         return False
-    # One atomic move decides who spent it. The name is unique to this attempt so
-    # two winners cannot exist even if the loser retried.
+    # The move, and the read under the name it gave, decide who spent it. The
+    # name is unique to this attempt so two winners cannot exist even if the
+    # loser retried.
     claimed = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(4)}.spent")
     try:
-        os.rename(path, claimed)
+        _while_held(lambda: os.rename(path, claimed))
     except OSError:
+        # Gone: somebody else spent it. Still held after the retries: refused,
+        # and the grant is left where it was.
         return False
     try:
-        payload = json.loads(claimed.read_text(encoding="utf-8"))
+        payload = json.loads(_while_held(lambda: claimed.read_text(encoding="utf-8")))
     except (OSError, ValueError):
         return False
     finally:
@@ -434,6 +472,8 @@ def consume_relaunch_grant(
 
 __all__ = [
     "EXIT_UPDATE_IN_PROGRESS",
+    "GRANT_CLAIM_ATTEMPTS",
+    "GRANT_CLAIM_RETRY_SECONDS",
     "GRANT_LIFETIME_SECONDS",
     "LockLocationUnavailable",
     "RELAUNCH_ENVIRONMENT_VARIABLE",

@@ -20,12 +20,14 @@ Windows machine this repository has never had.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -1578,6 +1580,136 @@ def test_only_one_of_several_simultaneous_consumers_spends_a_grant(
         assert sorted(answers) == ["False"] * (consumers - 1) + ["True"], (
             f"round {round_number}: {answers}"
         )
+
+
+def _held(path: object) -> PermissionError:
+    """What Windows raises while another process holds a file for a moment."""
+
+    return PermissionError(errno.EACCES, "The file is being used by another process", str(path))
+
+
+def test_a_claim_refused_for_a_moment_still_spends_the_grant_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sharing violation on the claim is not a lost race.
+
+    Windows run 34769109613 answered False from all six consumers of the race
+    above: the rename that should have won raised PermissionError, which the
+    consumer took for a loss, so nobody spent the grant. Here every consumer's
+    first rename is refused that way. Each must try again, and exactly one wins.
+    """
+
+    _bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="new-1", runtime_generation="new-1"
+    )
+    nonce = update_lock.grant_relaunch(resources)
+    grant = update_lock.grant_path(resources, nonce)
+
+    real_rename = os.rename
+    refused: set[int] = set()
+    guard = threading.Lock()
+
+    def rename_refused_once_per_consumer(source: object, target: object) -> None:
+        with guard:
+            first = threading.get_ident() not in refused
+            refused.add(threading.get_ident())
+        if first:
+            raise _held(source)
+        real_rename(source, target)
+
+    monkeypatch.setattr(os, "rename", rename_refused_once_per_consumer)
+
+    consumers = 6
+    barrier = threading.Barrier(consumers)
+    answers: list[bool] = []
+
+    def consume() -> None:
+        barrier.wait()
+        answers.append(update_lock.consume_relaunch_grant(resources, nonce))
+
+    threads = [threading.Thread(target=consume) for _ in range(consumers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert len(refused) == consumers
+    assert sorted(answers) == [False] * (consumers - 1) + [True]
+    assert not grant.exists()
+    assert not list(grant.parent.glob("*.spent"))
+
+
+def test_a_claimed_grant_held_open_for_a_moment_is_still_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The winner's read of its own claim is retried too, and not destroyed.
+
+    On Windows a second consumer that opened the grant just before the winner's
+    rename still holds it, so the winner's first read can meet a sharing
+    violation. Answering False there and deleting the claim would spend the
+    grant for nobody.
+    """
+
+    _bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="new-1", runtime_generation="new-1"
+    )
+    nonce = update_lock.grant_relaunch(resources)
+
+    real_read_text = Path.read_text
+    reads_refused: list[str] = []
+
+    def read_refused_once(self: Path, *args: object, **kwargs: object) -> str:
+        if self.name.endswith(".spent") and not reads_refused:
+            reads_refused.append(self.name)
+            raise _held(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_refused_once)
+
+    assert update_lock.consume_relaunch_grant(resources, nonce) is True
+    assert reads_refused
+    assert update_lock.consume_relaunch_grant(resources, nonce) is False
+
+
+def test_a_lost_race_is_answered_at_once_and_a_held_grant_is_refused_boundedly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only PermissionError is retried, a bounded number of times.
+
+    A grant that is not there has been spent: one attempt says so. A grant held
+    for longer than the retries is refused rather than waited on, and is left
+    where it was, still spendable once whatever held it lets go.
+    """
+
+    _bundle, resources = _bundle_for_startup(
+        tmp_path, app_generation="new-1", runtime_generation="new-1"
+    )
+    real_rename = os.rename
+    attempts: list[object] = []
+
+    def counting_rename(source: object, target: object) -> None:
+        attempts.append(source)
+        real_rename(source, target)
+
+    monkeypatch.setattr(os, "rename", counting_rename)
+    assert update_lock.consume_relaunch_grant(resources, "0" * 32) is False
+    assert len(attempts) == 1
+
+    nonce = update_lock.grant_relaunch(resources)
+    grant = update_lock.grant_path(resources, nonce)
+    attempts.clear()
+
+    def always_held(source: object, target: object) -> None:
+        attempts.append(source)
+        raise _held(source)
+
+    monkeypatch.setattr(os, "rename", always_held)
+    assert update_lock.consume_relaunch_grant(resources, nonce) is False
+    assert len(attempts) == update_lock.GRANT_CLAIM_ATTEMPTS
+    assert grant.exists()
+
+    monkeypatch.setattr(os, "rename", real_rename)
+    assert update_lock.consume_relaunch_grant(resources, nonce) is True
 
 
 def test_the_in_app_startup_recovery_still_decides_when_nobody_owns_the_update(
