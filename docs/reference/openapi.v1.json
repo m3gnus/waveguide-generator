@@ -8479,7 +8479,7 @@
     },
     "/api/cadlink/operations/{operation_id}/cancel": {
       "post": {
-        "description": "Dismiss an operation: at once when idle, at the next step when running.",
+        "description": "Dismiss an operation: at once when idle, at the next step when running.\n\nA solve is reconciled with the jobs store first: one whose job already\nexists follows the job, and one that may have a job is not dismissed\nwhile the jobs store cannot be read (409).",
         "operationId": "post_cancel_cad_operation_api_cadlink_operations__operation_id__cancel_post",
         "parameters": [
           {

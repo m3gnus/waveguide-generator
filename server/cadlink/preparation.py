@@ -308,6 +308,56 @@ def reconcile_with_jobs(ctx: PreparationContext, operation_id: str) -> dict[str,
     return ctx.store.get_operation(operation_id)
 
 
+DISMISSAL_UNCONFIRMED = (
+    "WG cannot confirm yet whether a solve job was already started for this request, "
+    "because the jobs list cannot be read right now. Nothing was dismissed. Try again "
+    "in a moment."
+)
+
+
+class DismissalUnconfirmed(RuntimeError):
+    """A job may exist for the operation, and the jobs store cannot say whether it does."""
+
+
+def dismiss_operation(ctx: PreparationContext, operation_id: str) -> dict[str, Any] | None:
+    """Dismiss an operation, after reconciling it with the jobs store.
+
+    A solve whose submission key already made a job follows the job: it is
+    ``accepted`` with it, and the user cancels the job in the jobs list. An
+    idle solve whose request is bound -- a job may exist -- is not dismissed
+    while the jobs store cannot be read (:class:`DismissalUnconfirmed`):
+    cancelling it then could leave a job running under an operation that
+    reads "cancelled", and nothing reconciles a cancelled operation later.
+    A running attempt settles its own outcome, a job included. Otherwise as
+    :meth:`CadLinkStore.request_cancel`. None for an unknown operation.
+    """
+
+    store = ctx.store
+    row = store.get_operation(operation_id)
+    if row is None:
+        return None
+    if row["kind"] == PREPARE_AND_SOLVE and row["state"] not in TERMINAL_STATES:
+        try:
+            reconciled = reconcile_with_jobs(ctx, operation_id)
+            known = ctx.job_for_submission is not None
+        except Exception:  # noqa: BLE001 - unknown: decided below
+            logger.warning(
+                "Could not read the jobs for CAD operation %s before dismissing it.",
+                operation_id, exc_info=True,
+            )
+            reconciled, known = None, False
+        if reconciled is not None:
+            return reconciled
+        current = store.get_operation(operation_id) or row
+        if (
+            not known
+            and current.get("request_json")
+            and current["state"] in {RECEIVED, NEEDS_USER_INPUT}
+        ):
+            raise DismissalUnconfirmed(DISMISSAL_UNCONFIRMED)
+    return store.request_cancel(operation_id)
+
+
 def _finish(
     ctx: PreparationContext,
     operation_id: str,
@@ -882,9 +932,11 @@ def recover_operations(ctx: PreparationContext) -> int:
 
 
 __all__ = [
+    "DismissalUnconfirmed",
     "PreparationContext",
     "PreparationInput",
     "SnapshotUnavailable",
+    "dismiss_operation",
     "exchange_bundle_path",
     "operation_summary",
     "prepare_operation",

@@ -1191,3 +1191,90 @@ def test_one_unreadable_claim_never_holds_the_deliveries_behind_it(harness: Harn
     assert not (requests / "cmd-2.json").exists()
     assert harness.row("cmd-1")["snapshot_json"] is None
     assert json.loads(harness.row("cmd-2")["snapshot_json"])["manifest_sha256"] == second_manifest
+
+
+# -- a dismissal is reconciled with the jobs store first -----------------------------
+
+
+class _JobStore:
+    """The jobs store as the app wires it: ``job_for_submission_key``, which can fail."""
+
+    def __init__(self, harness: Harness) -> None:
+        self.harness = harness
+        self.error: BaseException | None = None
+
+    def job_for_submission_key(self, key: str) -> str | None:
+        if self.error is not None:
+            raise self.error
+        return self.harness.jobs.get(key)
+
+
+def _cancel(harness: Harness, jobs: _JobStore, operation_id: str = "cmd-1") -> dict[str, Any]:
+    from server.cadlink.api import post_cancel_cad_operation
+
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=harness.store,
+        data_dir=str(harness.data_dir),
+        jobs_runtime=SimpleNamespace(store=jobs, submit=None, events=None),
+        update_restart=None,
+        cad_workspace=None,
+    )))
+    return asyncio.run(post_cancel_cad_operation(operation_id, request))
+
+
+def _interrupted_while_bound(harness: Harness) -> None:
+    """Submission raised after the jobs system may have committed, and its store was unreadable."""
+
+    _received(harness)
+    revision = _revision(harness.store, _setup())
+    ctx = harness.context()
+
+    def unreadable(_key: str) -> str | None:
+        raise sqlite3.OperationalError("database is locked")
+
+    ctx.job_for_submission = unreadable
+    harness.submit_error = RuntimeError("connection reset after commit")
+    summary = asyncio.run(prepare_operation(ctx, "cmd-1", PreparationInput(setup_revision_id=revision)))
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "interrupted")
+    assert harness.row()["request_json"] is not None  # still bound: a job may exist
+
+
+def test_a_dismissal_follows_a_job_the_operation_already_made(harness: Harness) -> None:
+    _interrupted_while_bound(harness)
+    harness.jobs["cad-solve:cmd-1"] = "job-1"  # it did
+
+    summary = _cancel(harness, _JobStore(harness))
+
+    # The job exists: the operation is accepted with it, and the user cancels
+    # the job in the jobs list. It never reads "cancelled" beside a running job.
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
+    assert (harness.row()["state"], harness.row()["job_id"]) == ("accepted", "job-1")
+
+
+def test_a_dismissal_waits_while_wg_cannot_tell_whether_a_job_exists(harness: Harness) -> None:
+    from fastapi import HTTPException
+
+    _interrupted_while_bound(harness)
+    before = harness.row()
+    jobs = _JobStore(harness)
+    jobs.error = sqlite3.OperationalError("database is locked")
+
+    with pytest.raises(HTTPException) as refused:
+        _cancel(harness, jobs)
+
+    assert refused.value.status_code == 409
+    assert "cannot confirm" in str(refused.value.detail)
+    assert harness.row() == before
+    # Once the jobs store answers, the dismissal goes through.
+    jobs.error = None
+    assert _cancel(harness, jobs)["state"] == "cancelled"
+
+
+def test_a_request_that_was_never_bound_is_dismissed_without_the_jobs_store(
+    harness: Harness,
+) -> None:
+    _received(harness)
+    jobs = _JobStore(harness)
+    jobs.error = sqlite3.OperationalError("database is locked")
+
+    assert _cancel(harness, jobs)["state"] == "cancelled"

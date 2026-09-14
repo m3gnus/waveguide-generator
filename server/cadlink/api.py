@@ -64,8 +64,10 @@ from .ingest import (
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
 from .operations import PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
 from .preparation import (
+    DismissalUnconfirmed,
     PreparationContext,
     PreparationInput,
+    dismiss_operation,
     operation_summary,
     prepare_operation,
     recover_operations,
@@ -1822,13 +1824,20 @@ async def post_cad_operation_approvals(
 
 @router.post("/operations/{operation_id}/cancel")
 async def post_cancel_cad_operation(operation_id: str, request: Request) -> dict[str, Any]:
-    """Dismiss an operation: at once when idle, at the next step when running."""
+    """Dismiss an operation: at once when idle, at the next step when running.
 
-    store: CadLinkStore = request.app.state.cadlink_store
-    row = await asyncio.to_thread(store.request_cancel, operation_id)
+    A solve is reconciled with the jobs store first: one whose job already
+    exists follows the job, and one that may have a job is not dismissed
+    while the jobs store cannot be read (409).
+    """
+
+    context = _preparation_context(request.app.state)
+    try:
+        row = await asyncio.to_thread(dismiss_operation, context, operation_id)
+    except DismissalUnconfirmed as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if row is None:
         raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
-    context = _preparation_context(request.app.state)
     if context.publish is not None:
         context.publish(operation_summary(row))
     return operation_summary(row)
