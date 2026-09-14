@@ -99,6 +99,11 @@ GPU_ENGINES = ("metal", "metal-bem", "beat-metal", "beat-cuda", "beat-rocm")
 STARTUP_TIMEOUT_S = 300.0
 CAPABILITY_TIMEOUT_S = 2700.0
 CAPABILITY_POLL_S = 5.0
+#: How often a wait re-asks the server. A packaged application starting on a
+#: cold runner takes seconds to minutes, so a second is plenty; the stub tests
+#: shorten it, because their server answers at once and every wait would
+#: otherwise sleep a whole interval before its first successful poll.
+POLL_INTERVAL_S = 1.0
 SOLVE_TIMEOUT_S = 1800.0
 PROVISION_TIMEOUT_S = 2700.0
 SHUTDOWN_TIMEOUT_S = 90.0
@@ -480,9 +485,10 @@ def api(base: str, path: str, body: Any = None, *, what: str, timeout: float = 1
         raise QualificationError(f"{what} failed: {type(exc).__name__}: {exc}") from exc
 
 
-def wait_for(call: Any, seconds: float, what: str, *, interval: float = 1.0) -> Any:
+def wait_for(call: Any, seconds: float, what: str, *, interval: float | None = None) -> Any:
     """Poll until *call* returns something truthy, or fail saying what was awaited."""
 
+    interval = POLL_INTERVAL_S if interval is None else interval
     deadline = time.monotonic() + seconds
     last: str = "it never answered"
     while time.monotonic() < deadline:
@@ -624,7 +630,9 @@ class Server:
                 )
             return status if state == "complete" else None
 
-        return wait_for(check, SOLVE_TIMEOUT_S, f"job {job} to complete", interval=2.0)
+        return wait_for(
+            check, SOLVE_TIMEOUT_S, f"job {job} to complete", interval=2.0 * POLL_INTERVAL_S
+        )
 
     def completed(self, job: str) -> Any:
         self.await_complete(job)

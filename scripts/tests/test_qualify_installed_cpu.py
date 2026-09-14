@@ -1014,7 +1014,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-threading.Thread(target=server.serve_forever, daemon=True).start()
+# serve_forever's default 0.5 s poll made every stop wait that long for shutdown().
+threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True).start()
 deadline = time.monotonic() + 120
 while time.monotonic() < deadline:
     if args.status_control and args.status_control.exists():
@@ -1044,6 +1045,11 @@ def _quick_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
     # ``raising=False`` so the stub tests that predate the imported phase keep
     # running against a gate that has no such constant.
     monkeypatch.setattr(gate, "INGEST_TIMEOUT_S", 30.0, raising=False)
+    # The stub answers at once, so the production intervals were pure sleep:
+    # about 1 s per server start and more per capability poll, which the macOS
+    # runner multiplies 12-17x until the harness job runs out of its budget.
+    monkeypatch.setattr(gate, "POLL_INTERVAL_S", 0.02, raising=False)
+    monkeypatch.setattr(gate, "CAPABILITY_POLL_S", 0.02)
 
 
 def _stub_payload(tmp_path: Path, **settings: object) -> Path:
