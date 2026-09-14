@@ -2075,6 +2075,32 @@ def test_an_imported_solve_reported_by_another_engine_fails(
     assert section["ingest"]["ingest_id"].startswith("wgi_")
 
 
+def test_the_written_report_keeps_what_the_imported_phase_established_before_it_failed(
+    tmp_path: Path, _in_process: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The report main writes, not the phase's own section, after an imported failure.
+
+    The tests above read the section the phase fills; this one reads the report,
+    so a gate that attached the section only after a successful phase -- losing
+    it exactly when a failure needs it -- fails here. The pin read and the worker
+    probe launch processes and are covered by the end-to-end test; here they are
+    stubbed so the whole entry point runs in this process.
+    """
+
+    monkeypatch.setattr(gate, "check_pins", lambda *_args: {"stubbed": True})
+    monkeypatch.setattr(gate, "stop_our_workers", lambda *_args: {"stubbed": True})
+
+    code, report = _run_imported(
+        tmp_path, "--imported-engine", "beat-cpu", results_change_on_restart=True
+    )
+
+    assert code == 1
+    assert "restart" in str(report["error"])
+    section = report["imported_return"]
+    assert section["ingest"]["ingest_id"].startswith("wgi_")
+    assert [row["equal"] for row in section["reopen"]["jobs"].values()] == [False]
+
+
 def test_results_that_change_across_the_restart_fail(tmp_path: Path, _in_process: None) -> None:
     failure, section = _imported_phase(tmp_path, results_change_on_restart=True)
 
