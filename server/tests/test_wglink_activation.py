@@ -1414,6 +1414,123 @@ def test_a_pending_activation_completes_with_no_status_poll_at_all(
     assert polls == [] and addin_update._retry_task is None
 
 
+def test_a_failed_activation_is_retried_by_the_startup_pass_with_no_status_poll(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The updater review §2.5: while WG runs, it retries once Fusion is safely closed.
+
+    The first pass fails the way a Windows setup holding the install lock
+    makes it fail. No CAD Link view polls (no CAD folder, a hidden page, or
+    --no-gui), so only the startup pass can try again.
+    """
+
+    monkeypatch.setenv("WG2_WGLINK_REFRESH", "1")
+    monkeypatch.setattr(addin_update, "CONFIRMATION_POLL_FIRST", 0.001)
+    monkeypatch.setattr(addin_update, "FAILED_RETRY_SECONDS", 0.01)
+    monkeypatch.setattr(addin_update, "startup_confirmed", lambda *_args: (True, "confirmed"))
+    root = _populate(tmp_path / "wg")
+    addins = tmp_path / "AddIns"
+    target = _installed(addins, commit=OLD, root=root)
+    data = tmp_path / "data"
+    calls: list[dict[str, object]] = []
+    _fake_installer(monkeypatch, calls)
+    faked = addin_update._installer
+    attempts = {"lock": 0}
+
+    def loaded(root_path: Path):
+        module = faked(root_path)
+        real_lock = module._operation_lock
+
+        @contextmanager
+        def lock(addins_dir: Path, **kwargs):
+            attempts["lock"] += 1
+            if attempts["lock"] == 1:
+                # What the real lock raises after its 30 s wait.
+                raise module.InstallError(
+                    "Another WGLink install, update, or uninstall is still running; "
+                    "try again when it finishes."
+                )
+            with real_lock(addins_dir, **kwargs):
+                yield
+
+        module._operation_lock = lock
+        return module
+
+    monkeypatch.setattr(addin_update, "_installer", loaded)
+    passes: list[str] = []
+    real = addin_update.activate_wglink
+
+    def counted(**kwargs):
+        activation = real(root=root, addins_dir=addins, confirmed=CONFIRMED, **kwargs)
+        passes.append(activation.verdict)
+        return activation
+
+    monkeypatch.setattr(addin_update, "activate_wglink", counted)
+    polls: list[object] = []
+    monkeypatch.setattr(addin_update, "poll_activation", lambda **kwargs: polls.append(kwargs))
+
+    async def drive() -> None:
+        await addin_update.start_addin_refresh(data_dir=data)
+        task = addin_update.addin_refresh.task
+        assert task is not None
+        done, _pending_tasks = await asyncio.wait({task}, timeout=10)
+        assert done
+        await addin_update.shutdown_addin_refresh()
+
+    asyncio.run(drive())
+
+    assert passes == ["failed", "updated"]
+    report = addin_update.last_refresh()
+    assert report is not None and report["verdict"] == "updated"
+    assert addin_update.installed_commit(target) == PIN_A
+    assert [call["pin"] for call in calls] == [PIN_A]
+    assert polls == [] and addin_update._retry_task is None
+
+
+def test_the_startup_pass_backs_off_a_failing_activation_and_stops_once_superseded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Bounded backoff: the wait doubles up to a ceiling, and a settled verdict ends it."""
+
+    monkeypatch.setenv("WG2_WGLINK_REFRESH", "1")
+    monkeypatch.setattr(addin_update, "CONFIRMATION_POLL_FIRST", 0.001)
+    monkeypatch.setattr(addin_update, "FAILED_RETRY_SECONDS", 0.01)
+    monkeypatch.setattr(addin_update, "FAILED_RETRY_MAX_SECONDS", 0.04)
+    monkeypatch.setattr(addin_update, "startup_confirmed", lambda *_args: (True, "confirmed"))
+    verdicts = iter(["failed"] * 5 + ["superseded"])
+    passes: list[str] = []
+
+    def activate(**_kwargs):
+        verdict = next(verdicts)
+        passes.append(verdict)
+        return addin_update.Activation(verdict, f"pass {len(passes)}")
+
+    monkeypatch.setattr(addin_update, "activate_wglink", activate)
+    delays: list[float] = []
+    real_delay = addin_update._startup_retry_delay
+
+    def recorded(*args):
+        delay = real_delay(*args)
+        delays.append(delay)
+        return delay
+
+    monkeypatch.setattr(addin_update, "_startup_retry_delay", recorded)
+
+    async def drive() -> None:
+        await addin_update.start_addin_refresh(data_dir=tmp_path)
+        task = addin_update.addin_refresh.task
+        assert task is not None
+        done, _pending_tasks = await asyncio.wait({task}, timeout=10)
+        assert done
+        await addin_update.shutdown_addin_refresh()
+
+    asyncio.run(drive())
+
+    assert passes == ["failed"] * 5 + ["superseded"]
+    assert delays == [0.01, 0.02, 0.04, 0.04, 0.04]
+    assert (addin_update.last_refresh() or {}).get("verdict") == "superseded"
+
+
 def test_the_startup_retry_ends_at_shutdown_while_still_pending(
     tmp_path: Path, monkeypatch
 ) -> None:

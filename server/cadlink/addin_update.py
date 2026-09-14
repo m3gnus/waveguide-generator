@@ -125,8 +125,11 @@ _MAX_REGISTRY_BYTES = 4 * 1024 * 1024
 #: How long the startup pass waits between looks at the update journal.
 CONFIRMATION_POLL_FIRST = 0.5
 CONFIRMATION_POLL_MAX = 10.0
-#: A failed activation is retried by the status poll no sooner than this.
+#: A failed activation is retried by the status poll no sooner than this, and
+#: by the startup pass after this, the wait doubling after each failure that
+#: follows up to ``FAILED_RETRY_MAX_SECONDS``.
 FAILED_RETRY_SECONDS = 60.0
+FAILED_RETRY_MAX_SECONDS = 900.0
 #: While an activation stays pending, the startup pass tries again this often.
 ACTIVATION_RETRY_SECONDS = 60.0
 
@@ -1132,10 +1135,25 @@ def refresh_and_log(data_dir: Path | None = None) -> tuple[str, str]:
     return activation.verdict, activation.detail
 
 
-#: The verdicts each retry is for: the startup pass retries only pending work;
-#: the status poll also retries a failure, after its backoff.
-_STARTUP_RETRY = frozenset({"pending"})
+#: The verdicts each retry is for. Both retry pending work and a failure; the
+#: startup pass backs off a failure that repeats (:func:`_startup_retry_delay`).
+_STARTUP_RETRY = frozenset({"pending", "failed"})
 _POLL_RETRY = frozenset({"pending", "failed"})
+
+
+def _startup_retry_delay(verdict: str, failures: int) -> float:
+    """How long the startup pass waits before retrying ``verdict``.
+
+    Pending work waits for Fusion to close, so it is looked at again at a
+    steady pace. A failure -- the install lock another installer holds, a copy
+    that failed -- waits ``FAILED_RETRY_SECONDS``, doubling with each failure
+    in a row up to ``FAILED_RETRY_MAX_SECONDS``, so a failure that repeats
+    costs one pass every quarter of an hour, not one a minute.
+    """
+
+    if verdict != "failed":
+        return ACTIVATION_RETRY_SECONDS
+    return min(FAILED_RETRY_SECONDS * 2 ** max(failures - 1, 0), FAILED_RETRY_MAX_SECONDS)
 
 
 def _retry_pass(still: frozenset[str], data_dir: Path | None = None) -> tuple[str, str] | None:
@@ -1168,9 +1186,11 @@ async def _activate_after_confirmed_start() -> None:
     """The startup pass: wait until this start is confirmed, then run.
 
     While the activation stays pending it runs again about once a minute
-    (``ACTIVATION_RETRY_SECONDS``), sharing the pass lock with the status
-    poll's retry, and it ends once the work is activated, superseded or
-    failed, or when WG stops.
+    (``ACTIVATION_RETRY_SECONDS``); after a failed pass it runs again with a
+    bounded backoff (:func:`_startup_retry_delay`). It shares the pass lock
+    with the status poll's retry, and it ends once the work is activated,
+    superseded or otherwise settled, or when WG stops (the updater review
+    §2.5: while WG runs, it retries once Fusion is safely closed).
     """
 
     global _startup_waiting
@@ -1202,14 +1222,18 @@ async def _activate_after_confirmed_start() -> None:
     await asyncio.to_thread(refresh_and_log, data_dir)
     # The status poll retries only while the CAD Link UI polls: not with no
     # CAD folder, not in a hidden page, and not under --no-gui with no
-    # browser. So this pass keeps a pending activation going itself, slowly.
-    while (last_refresh() or {}).get("verdict") == "pending":
+    # browser. So this pass keeps a pending or failed activation going
+    # itself, slowly.
+    failures = 0
+    while (verdict := (last_refresh() or {}).get("verdict")) in _STARTUP_RETRY:
+        failures = failures + 1 if verdict == "failed" else 0
+        delay = _startup_retry_delay(verdict, failures)
         _startup_waiting = True
         try:
-            await asyncio.sleep(ACTIVATION_RETRY_SECONDS)
+            await asyncio.sleep(delay)
         finally:
             _startup_waiting = False
-        if (last_refresh() or {}).get("verdict") != "pending":
+        if (last_refresh() or {}).get("verdict") not in _STARTUP_RETRY:
             break  # the poll's pass settled it while this one slept
         if _pass_lock.locked() or (_retry_task is not None and not _retry_task.done()):
             continue  # the poll's own pass is running, and it reports
