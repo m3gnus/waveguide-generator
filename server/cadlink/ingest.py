@@ -988,6 +988,8 @@ def ingest_bundle(
         except ImportedMeshDependencyError:
             raise
         except ChildRefusal as exc:
+            # A refusal from a child that ran is already in the server log with
+            # its exit and output tail; the user's refusal keeps stage and wording.
             raise IngestRefusal(exc.stage, exc.detail) from exc
         except Exception as exc:
             message = str(exc)

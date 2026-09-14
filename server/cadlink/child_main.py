@@ -1,7 +1,7 @@
 """The disposable child that is allowed to touch untrusted STEP.
 
-Started as ``python -s -B -m server.cadlink.child_main`` by
-:mod:`server.cadlink.isolation`, once per artifact, never reused.  It reads one
+Run as ``__main__`` by :mod:`server.cadlink.isolation` (its ``child_command``),
+once per artifact, never reused.  It reads one
 JSON envelope from stdin, does exactly one task, writes one JSON result into
 its staging directory, and exits.
 

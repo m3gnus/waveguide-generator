@@ -373,6 +373,56 @@ def test_a_malformed_child_answer_is_refused(
         _run(step_file, behaviour)
 
 
+def test_a_child_that_dies_without_answering_leaves_its_exit_code_and_output(
+    step_file: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A Windows RC gate refusal once arrived as its wording and nothing else.
+
+    The child's output and exit code were dropped on the way to the HTTP
+    refusal, so a child that could not import its package looked exactly like
+    one OCC killed. Both now reach the refusal and the server log.
+    """
+
+    with caplog.at_level("WARNING", logger=isolation.__name__):
+        with pytest.raises(ChildRefusal) as refused:
+            _run(step_file, "dies_talking")
+
+    assert refused.value.returncode == 3
+    assert refused.value.detail == (
+        "the child exited with code 3 without writing a structured result"
+    )
+    logged = [
+        record
+        for record in caplog.records
+        if record.name == isolation.__name__ and record.levelname == "WARNING"
+    ]
+    assert len(logged) == 1
+    message = logged[0].getMessage()
+    assert "isolated CAD mesh task refused at stage 7 meshing" in message
+    assert "exited with code 3" in message
+    # The child's own text is quoted, so it cannot pass for a server record.
+    assert "    | ModuleNotFoundError: the double's last words" in message.splitlines()
+    assert not any(line.startswith("ModuleNotFoundError") for line in message.splitlines())
+
+
+@pytest.mark.parametrize(
+    ("returncode", "wording"),
+    [
+        (0, "with code 0"),
+        (3, "with code 3"),
+        (-6, "on signal SIGABRT (-6)"),
+        (3221225477, "with code 0xC0000005"),
+        (None, "with no recorded code"),
+    ],
+)
+def test_an_exit_is_described_in_the_words_a_reader_can_look_up(
+    returncode: int | None, wording: str
+) -> None:
+    """A POSIX signal and a Windows NTSTATUS are unreadable as decimals."""
+
+    assert isolation.describe_exit(returncode) == wording
+
+
 def test_an_artifact_name_outside_the_allowed_set_is_refused(step_file: Path) -> None:
     with pytest.raises(ChildRefusal, match="unexpected artifact"):
         with isolated_step_task(
@@ -551,6 +601,65 @@ def test_the_child_environment_is_an_allowlist_on_every_platform(tmp_path: Path)
             assert env["USERPROFILE"] != r"C:\Users\someone"
         else:
             assert env["HOME"] != "/Users/someone"
+        # The launch command makes ``server`` importable; an inherited or
+        # stale search path must not reach the child at all.
+        assert "PYTHONPATH" not in env
+
+
+# -- a bundled interpreter ----------------------------------------------------
+
+
+def test_the_real_child_starts_under_an_interpreter_that_ignores_pythonpath(
+    step_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Windows bundle's interpreters each carry an isolated ``._pth``.
+
+    CPython then runs in isolated mode: PYTHONPATH is ignored, and neither the
+    working directory nor a script's directory goes on ``sys.path``. The
+    runtime interpreter's ``._pth`` deliberately lists no ``app``, so a server
+    started under it (the installed RC gate does) had a child that could not
+    import ``server`` and died before writing a result. ``-I`` is the same
+    isolation for any interpreter, so this drives the production entrypoint
+    through the real harness with it added. An unknown task is the fastest
+    answer the real child gives, and a structured one: it proves the child
+    imported and ran.
+    """
+
+    # The premise: nothing but the launch may make ``server`` importable. An
+    # editable install in this interpreter would pass the check below with
+    # any launch at all.
+    premise = subprocess.run(
+        [sys.executable, "-I", "-c", "import server"],
+        cwd=step_file.parent,
+        capture_output=True,
+        check=False,
+    )
+    assert premise.returncode != 0, "this interpreter imports server by itself"
+
+    launch = isolation.start_child_process
+    commands: list[list[str]] = []
+
+    def isolated_interpreter(
+        command: list[str], popen_kwargs: dict[str, object], *, stage: str
+    ) -> subprocess.Popen[bytes]:
+        commands.append(command)
+        return launch([command[0], "-I", *command[1:]], popen_kwargs, stage=stage)
+
+    monkeypatch.setattr(isolation, "start_child_process", isolated_interpreter)
+    with pytest.raises(ChildRefusal) as refused:
+        with isolated_step_task(
+            "not-a-task",
+            {},
+            step_path=step_file,
+            budget=_budget(),
+            stage="stage 7 meshing",
+        ):
+            pass
+
+    assert commands and commands[0][0] == sys.executable
+    assert refused.value.detail == "unknown isolated CAD task 'not-a-task'", (
+        refused.value.diagnostics
+    )
 
 
 # -- memory containment ------------------------------------------------------
@@ -623,7 +732,7 @@ def test_windows_child_waits_for_its_envelope_until_after_job_assignment(
     # only the first attempt here made this test fail on hosted Windows CI while
     # the product itself retried correctly.
     process = isolation.start_child_process(
-        [sys.executable, "-s", "-B", "-m", "server.cadlink.child_main"],
+        isolation.child_command(),
         {
             "stdin": subprocess.PIPE,
             "stdout": subprocess.PIPE,

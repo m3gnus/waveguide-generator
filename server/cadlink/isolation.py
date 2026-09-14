@@ -34,6 +34,7 @@ import contextlib
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import platform
@@ -75,6 +76,8 @@ _TERMINATE_GRACE_S = 2.0
 #: doubling of the concurrency the gate set.
 _CHILD_SLOT = threading.BoundedSemaphore(MAX_CONCURRENT_STEP_CHILDREN)
 
+logger = logging.getLogger(__name__)
+
 
 class ChildRefusal(RuntimeError):
     """An isolated task did not produce a clean, verifiable success.
@@ -107,6 +110,9 @@ class ChildRefusal(RuntimeError):
         #: A bounded tail of the child's native stdout/stderr. Diagnostic text
         #: only -- it is never read as a verdict.
         self.diagnostics = diagnostics
+        #: How the child exited, once it has; ``None`` for a refusal made
+        #: before a child ran. Diagnostic like ``diagnostics``.
+        self.returncode: int | None = None
 
 
 @dataclass(frozen=True)
@@ -195,14 +201,54 @@ def child_environment(
         env["LOCALAPPDATA"] = str(Path(home) / "AppData" / "Local")
     else:
         env["HOME"] = home
-    # ``-s`` already drops user site-packages; PYTHONPATH is how the child
-    # finds ``server`` without inheriting whatever the parent's was.
-    env["PYTHONPATH"] = str(_REPO_ROOT)
+    # No PYTHONPATH: ``child_command`` makes ``server`` importable, and an
+    # interpreter with a ``._pth`` would ignore one anyway.
     # A child must not write into the repository, and __pycache__ would.
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
     env["WG_ISOLATED_CAD_CHILD"] = "1"
     return env
+
+
+#: Puts the app root first on ``sys.path``, then runs the entrypoint as ``-m``
+#: would. ``-m`` alone found ``server`` only through PYTHONPATH, and both of
+#: the Windows bundle's interpreters carry an isolated ``._pth``, which makes
+#: CPython ignore PYTHONPATH and leave the working directory off the path.
+#: The runtime interpreter's ``._pth`` lists no app directory at all, so a
+#: server started under it had a child that died before it could answer.
+_BOOTSTRAP = (
+    "import sys; root, name = sys.argv[1:3]; del sys.argv[1:3]; "
+    "sys.path.insert(0, root); "
+    "import runpy; runpy.run_module(name, run_name='__main__', alter_sys=True)"
+)
+
+
+def child_command(entrypoint: str = CHILD_ENTRYPOINT, *, root: Path = _REPO_ROOT) -> list[str]:
+    """Return the argv that starts one child, on any bundled interpreter.
+
+    ``-s`` drops user site-packages and ``-B`` keeps ``__pycache__`` out of the
+    app layer. The root travels as an argument rather than inside the code, so
+    no path is ever quoted into Python source.
+    """
+
+    return [sys.executable, "-s", "-B", "-c", _BOOTSTRAP, str(root), entrypoint]
+
+
+def describe_exit(returncode: int | None) -> str:
+    """Say how a child exited, in words a reader can look up."""
+
+    if returncode is None:
+        return "with no recorded code"
+    if returncode < 0:
+        try:
+            name = signal.Signals(-returncode).name
+        except ValueError:
+            name = str(-returncode)
+        return f"on signal {name} ({returncode})"
+    if returncode >= 0x80000000:
+        # A Windows NTSTATUS, such as 0xC0000005 for an access violation.
+        return f"with code 0x{returncode:08X}"
+    return f"with code {returncode}"
 
 
 # -- process-tree control --------------------------------------------------
@@ -567,12 +613,18 @@ def _verify_artifacts(
 
 
 def _read_result(
-    result_path: Path, *, stage: str, result_bytes: int, diagnostics: str
+    result_path: Path,
+    *,
+    stage: str,
+    result_bytes: int,
+    returncode: int | None,
+    diagnostics: str,
 ) -> dict[str, Any]:
     if not result_path.is_file() or result_path.is_symlink():
         raise ChildRefusal(
             stage,
-            "the child exited without writing a structured result",
+            f"the child exited {describe_exit(returncode)} without writing a "
+            "structured result",
             diagnostics=diagnostics,
         )
     size = result_path.stat().st_size
@@ -714,7 +766,7 @@ def _run_child(
     stage: str,
     entrypoint: str,
 ) -> ChildOutcome:
-    command = [sys.executable, "-s", "-B", "-m", entrypoint]
+    command = child_command(entrypoint)
     popen_kwargs: dict[str, Any] = {
         "stdin": subprocess.PIPE,
         "stdout": subprocess.PIPE,
@@ -780,14 +832,69 @@ def _run_child(
             with contextlib.suppress(Exception):
                 job.close()
 
+    try:
+        return _verified_answer(
+            envelope,
+            staging=staging,
+            out_dir=out_dir,
+            budget=budget,
+            allowed_artifacts=allowed_artifacts,
+            stage=stage,
+            killed_for=killed_for,
+            returncode=process.returncode,
+            diagnostics=diagnostics,
+        )
+    except ChildRefusal as exc:
+        exc.returncode = process.returncode
+        _log_child_refusal(str(envelope["task"]), exc)
+        raise
+
+
+def _log_child_refusal(task: str, refusal: ChildRefusal) -> None:
+    """Put a refused child's exit and last output in the server log.
+
+    Callers turn the refusal into an answer that carries only its stage and
+    wording. That is right for the user and useless for diagnosis: a child
+    that could not import its own package reads exactly like one OCC killed.
+    The exit and the output tail are what tell them apart. The tail is the
+    untrusted child's text, so every line of it is indented: none can pass for
+    a record of the server's own.
+    """
+
+    lines = refusal.diagnostics.strip("\n").splitlines() or ["(none)"]
+    logger.warning(
+        "isolated CAD %s task refused at %s; the child exited %s: %s\n"
+        "child output (tail):\n%s",
+        task,
+        refusal.stage,
+        describe_exit(refusal.returncode),
+        refusal.detail,
+        "\n".join("    | " + line for line in lines),
+    )
+
+
+def _verified_answer(
+    envelope: Mapping[str, Any],
+    *,
+    staging: Path,
+    out_dir: Path,
+    budget: ChildBudget,
+    allowed_artifacts: Sequence[str],
+    stage: str,
+    killed_for: str | None,
+    returncode: int | None,
+    diagnostics: str,
+) -> ChildOutcome:
+    """Accept an exited child's answer only if every check on it holds."""
+
     if killed_for is not None:
         raise ChildRefusal(stage, killed_for, diagnostics=diagnostics)
 
-    returncode = process.returncode
     envelope_out = _read_result(
         staging / "result.json",
         stage=stage,
         result_bytes=budget.result_bytes,
+        returncode=returncode,
         diagnostics=diagnostics,
     )
     if not envelope_out.get("ok"):
@@ -1061,7 +1168,9 @@ __all__ = [
     "ChildBudget",
     "ChildOutcome",
     "ChildRefusal",
+    "child_command",
     "child_environment",
+    "describe_exit",
     "isolated_step_task",
     "process_group_rss_bytes",
     "terminate_process_tree",

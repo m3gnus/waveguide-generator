@@ -110,6 +110,13 @@ def main() -> int:
     if behaviour == "no_result":
         return 0
 
+    if behaviour == "dies_talking":
+        # A child that cannot import its own package: a traceback on its
+        # output, a non-zero exit, and no result.
+        sys.stderr.write("ModuleNotFoundError: the double's last words\n")
+        sys.stderr.flush()
+        return 3
+
     if behaviour == "nonfinite":
         result_path.write_text(
             '{"protocol": 1, "task": "%s", "ok": true, "result": {"value": NaN}, '
