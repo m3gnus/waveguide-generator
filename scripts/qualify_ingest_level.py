@@ -195,34 +195,49 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     # body's outward winding; the auto quarter is re-oriented so the source
     # normal points along +z, which inverts every wall. Both engines then
     # solve an inside-out surface, so neither answer means anything.
+    #
+    # The mesher now winds a reduced mesh from its mirrored parent, and WG is to
+    # verify it, so this return will be either corrected or refused at ingest.
+    # Both are recorded; only a quarter that still arrives inverted stays a
+    # DEFECT row, and a corrected one is judged like any other quarter.
+    from server.cadlink.ingest import IngestRefusal
+
     rear = fixtures.linked_return(workspace, "rearcap", source_shape=1)
-    rear_quarter = fixtures.ingest(rear, root / "data-rearcap")
     rear_full = fixtures.ingest(rear, root / "data-rearcap", symmetry_mode="full")
-    postprocess = rear_quarter.record["mesh"]["metadata"]["postprocess"]
-    facts["rear_cap_quarter"] = {
-        "cut_planes": rear_quarter.record["symmetry"].get("cut_planes"),
-        "triangles": rear_quarter.record["mesh"]["stats"]["triangle_count"],
-        "flipped_global": postprocess.get("flipped_global"),
-        "full_flipped_global": rear_full.record["mesh"]["metadata"]["postprocess"].get("flipped_global"),
-        "orientation_valid": rear_quarter.record["mesh"]["integrity"].get("orientation_valid"),
-        "warnings": rear_quarter.record["mesh"]["stats"].get("warnings"),
-        "findings": sorted({str(item["kind"]) for item in rear_quarter.record.get("findings") or []}),
-    }
-    rear_facts = facts["rear_cap_quarter"]
-    for engine in engines:
-        errors = relative_error(_solve_record(engine, rear_quarter, "normal").observations(), _solve_record(engine, rear_full, "normal").observations())
-        record_row(Row("DEFECT (ingest): source on the plug's rear -- WG's quarter vs its full domain", engine, "full", "complex, all points", errors.tolist(), note=(
-            f"quarter re-oriented: flipped_global={rear_facts['flipped_global']} of {rear_facts['triangles']} triangles; "
+    try:
+        rear_quarter = fixtures.ingest(rear, root / "data-rearcap")
+    except IngestRefusal as exc:
+        facts["rear_cap_quarter"] = {"refused_at_ingest": str(exc)}
+        record_row(Row("source on the plug's rear: WG's quarter refused at ingest", "ingest", "full", "refusal", [0.0], note=str(exc)))
+    else:
+        postprocess = rear_quarter.record["mesh"]["metadata"]["postprocess"]
+        facts["rear_cap_quarter"] = {
+            "cut_planes": rear_quarter.record["symmetry"].get("cut_planes"),
+            "triangles": rear_quarter.record["mesh"]["stats"]["triangle_count"],
+            "flipped_global": postprocess.get("flipped_global"),
+            "full_flipped_global": rear_full.record["mesh"]["metadata"]["postprocess"].get("flipped_global"),
+            "orientation_valid": rear_quarter.record["mesh"]["integrity"].get("orientation_valid"),
+            "warnings": rear_quarter.record["mesh"]["stats"].get("warnings"),
+            "findings": sorted({str(item["kind"]) for item in rear_quarter.record.get("findings") or []}),
+        }
+        rear_facts = facts["rear_cap_quarter"]
+        inverted = bool(rear_facts["flipped_global"]) and rear_facts["flipped_global"] == rear_facts["triangles"]
+        note = (
+            f"flipped_global={rear_facts['flipped_global']} of {rear_facts['triangles']} triangles; "
             f"orientation_valid={rear_facts['orientation_valid']}; warnings={rear_facts['warnings']}; findings={rear_facts['findings']}"
-        )))
+        )
+        for engine in engines:
+            errors = relative_error(_solve_record(engine, rear_quarter, "normal").observations(), _solve_record(engine, rear_full, "normal").observations())
+            if inverted:
+                record_row(Row("DEFECT (ingest): source on the plug's rear -- WG's quarter vs its full domain", engine, "full", "complex, all points", errors.tolist(), note=note))
+            else:
+                record_row(Row("source on the plug's rear: WG's quarter vs its full domain", engine, "full", "complex, all points", errors.tolist(), tolerance=2.0 * TOLERANCE_MARGIN * discretisation[engine], note=note))
 
     # Fixture 4 on a real return: the same instance moved and turned in CAD.
     # Blocked today by ingestion, not by any engine: WG normalises a placed
     # anchor with gmsh's general affineTransform, which rewrites the planar
     # throat as a B-spline, and the throat check then refuses the return. The
     # attempt stays here so the fixture runs the day ingestion keeps the plane.
-    from server.cadlink.ingest import IngestRefusal
-
     placement = fixtures.placement_matrix([0.3, 1.0, 0.2], 70.0, [120.0, -40.0, 55.0])
     try:
         placed = fixtures.ingest(fixtures.linked_return(workspace, "placed", placement=placement), root / "data-placed")
