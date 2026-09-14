@@ -14,7 +14,7 @@ import re
 import sqlite3
 import subprocess
 import threading
-from typing import Any, Awaitable, Callable, Literal, Mapping
+from typing import Any, Awaitable, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -49,16 +49,6 @@ from .addin_update import last_refresh, poll_activation
 from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
 from .fusion_delivery import advertise_fusion_delivery
 from .fusion_return import publish_return_request
-from .solve_command import (
-    CAD_SOLVE_SUBMISSION_PREFIX,
-    PendingSolveCommand,
-    SolveOutcomeConflict,
-    collect_solve_deliveries,
-    delivered_command,
-    ledger_entry,
-    oldest_pending_solve_command,
-    record_outcome,
-)
 from .ingest import (
     IngestRefusal,
     build_deferred_viewport,
@@ -79,7 +69,6 @@ from .preparation import (
     operation_summary,
     prepare_operation,
     recover_operations,
-    retain_operation_snapshot,
     run_delivery_pass,
 )
 from .project_setup import SOLVER_SELECTION, inventory_sha256
@@ -924,173 +913,36 @@ async def request_fusion_return(
     }
 
 
-def _refuse_solve_command(
-    store: CadLinkStore, command: PendingSolveCommand, reason: str
-) -> dict[str, Any]:
-    """Refuse a command WG found unusable, or replay the outcome that stands."""
-
-    try:
-        return record_outcome(
-            store, command.command_id, state="refused", reason=reason, command=command,
-        )
-    except SolveOutcomeConflict as exc:
-        # Another poll recorded first; the first terminal outcome is the answer.
-        return exc.existing
-
-
-def _accept_recovered_job(
-    store: CadLinkStore, command: PendingSolveCommand, job_id: str
-) -> dict[str, Any]:
-    """Record the job a command's submission key already created as its outcome."""
-
-    try:
-        return record_outcome(store, command.command_id, state="accepted", job_id=job_id)
-    except SolveOutcomeConflict as exc:
-        return exc.existing
-
-
-def _pending_solve_command(
-    data_dir: Path,
-    workspace_root: Path,
-    store: CadLinkStore,
-    job_for_submission: Callable[[str], str | None] | None = None,
-) -> dict[str, Any]:
-    """The oldest CAD-authored solve command still owed an answer.
-
-    Delivered files are first moved into the operation store. A delivery owed
-    an answer of its own is answered first: a different request under a held
-    command id is refused, and a command whose outcome already stands replays
-    it, never a second submission. Otherwise the oldest unfinished operation is
-    handed out; a later request never takes its place.
-
-    A command is only actionable when it names a bundle inside this workspace
-    whose manifest still hashes to what the add-in recorded when it wrote the
-    command. Anything else is refused with its reason rather than silently
-    ignored, because CAD is waiting on an answer either way. A later return,
-    from this document or another, is not such a reason: explicit solve
-    requests stay separate (docs/architecture/CAD-OPERATIONS.md, "Ordering").
-    """
-
-    answer = collect_solve_deliveries(
-        data_dir,
-        store,
-        retain=lambda operation_id: retain_operation_snapshot(
-            store, data_dir, workspace_root, operation_id
-        ),
-    )
-    if answer is not None:
-        return answer
-    command = oldest_pending_solve_command(store)
-    if command is None:
-        return {"command": None}
-    if job_for_submission is not None:
-        job_id = job_for_submission(f"{CAD_SOLVE_SUBMISSION_PREFIX}{command.command_id}")
-        if job_id:
-            # Reconciliation through the submission key: the backend's
-            # preparation, or the browser of a build before the backend owned
-            # solves, created this job and its report never arrived -- a lost
-            # acknowledgement, a restart, an upgrade. The job is the outcome.
-            # Handing the command
-            # out again would submit it twice, or, from a client that builds the
-            # request differently, meet a submission-key conflict and stay
-            # parked behind it.
-            return {
-                "command": command.payload(),
-                "outcome": _accept_recovered_job(store, command, job_id),
-            }
-    try:
-        segments = _path_segments(command.bundle_path, "bundlePath")
-        if not segments or segments[0].casefold() != "wgreturn":
-            raise ValueError("bundlePath must be under the selected workspace's wgreturn/ directory")
-        if not segments[-1].endswith(".wgreturn"):
-            raise ValueError("bundlePath must name a .wgreturn bundle directory")
-        bundle_path = workspace_root.joinpath(*segments).resolve()
-        _strictly_inside(bundle_path, workspace_root, "bundlePath")
-        manifest = (bundle_path / "wgreturn.json").read_bytes()
-    except (ValueError, OSError) as exc:
-        outcome = _refuse_solve_command(store, command, str(exc))
-        return {
-            "command": command.payload(),
-            "outcome": outcome,
-        }
-    observed = f"sha256:{hashlib.sha256(manifest).hexdigest()}"
-    expected = command.manifest_sha256
-    if not expected.startswith("sha256:"):
-        expected = f"sha256:{expected}"
-    if observed != expected:
-        reason = (
-            "The return bundle changed after Fusion asked WG to solve it. "
-            "Send it again from Fusion."
-        )
-        outcome = _refuse_solve_command(store, command, reason)
-        return {
-            "command": command.payload(),
-            "outcome": outcome,
-        }
-    return {"command": command.payload(), "outcome": None}
-
-
 @router.get("/solve-command")
 async def get_solve_command(request: Request) -> dict[str, Any]:
-    workspace: WorkspaceState = request.app.state.cad_workspace
-    selected = workspace.selected_path()
-    if selected is None:
-        return {"command": None}
-    store: CadLinkStore = request.app.state.cadlink_store
-    job_store = getattr(getattr(request.app.state, "jobs_runtime", None), "store", None)
-    return await asyncio.to_thread(
-        _pending_solve_command,
-        Path(request.app.state.data_dir),
-        selected.resolve(),
-        store,
-        getattr(job_store, "job_for_submission_key", None),
-    )
+    """Nothing pending, always: the backend is the one consumer of solve commands.
 
+    A page from a build before the backend owned solves (v0.3.2,
+    v0.3.3-rc.1) polls this route and acts on what it hands out, and it can
+    still be open in a browser tab across an update restart. This answer is
+    the one it reads as "nothing pending": the route claims no delivery,
+    records no outcome and hands out no command such a page could start a
+    solve from (docs/architecture/CAD-OPERATIONS.md, "Solve-command
+    compatibility").
+    """
 
-def _report_solve_outcome(
-    store: CadLinkStore, data_dir: Path, payload: SolveCommandOutcome
-) -> dict[str, Any]:
-    # A stored operation carries its own request identity, and a file still
-    # waiting under its id is a delivery in its own right, refused or
-    # recovered by the next poll. Only a command the store has never seen
-    # takes its identity from the request file WG still holds; with neither,
-    # the outcome is kept as a legacy row.
-    command = None
-    if store.get_operation(payload.command_id) is None:
-        command = delivered_command(data_dir, payload.command_id)
-    try:
-        entry = record_outcome(
-            store,
-            payload.command_id,
-            state=payload.state,
-            job_id=payload.job_id,
-            reason=payload.reason,
-            command=command,
-        )
-    except SolveOutcomeConflict as exc:
-        # The first terminal outcome stands. Answering with it, rather than an
-        # error, lets the client retire its copy instead of retrying a report
-        # that can never be recorded.
-        entry = {**exc.existing, "conflict": True}
-    # Cleared: WG no longer holds the command as unfinished.
-    return {**entry, "cleared": ledger_entry(store, payload.command_id) is not None}
+    return {"command": None}
 
 
 @router.post("/solve-command/outcome")
 async def post_solve_command_outcome(
     payload: SolveCommandOutcome, request: Request
 ) -> dict[str, Any]:
-    """Record what happened to a CAD solve command.
+    """Answered and ignored: a solve command's outcome is the backend's to record.
 
-    Only terminal outcomes are recorded. A blocked command stays unfinished so
-    the user can satisfy the gate and run the same request.
+    The same older page reports here after its own Solve or Dismiss. A 2xx
+    answer lets it drop its copy; an error would leave its Dismiss card stuck,
+    or report a failure after a job that exists. Nothing is recorded: a job
+    such a page submitted under ``cad-solve:<commandId>`` is the operation's
+    outcome, and the backend finds it through that key.
     """
 
-    data_dir = Path(request.app.state.data_dir)
-    if payload.state == "blocked":
-        return {"state": "blocked", "cleared": False}
-    store: CadLinkStore = request.app.state.cadlink_store
-    return await asyncio.to_thread(_report_solve_outcome, store, data_dir, payload)
+    return {"commandId": payload.command_id, "recorded": False, "cleared": True}
 
 
 def _ingest_error(exc: Exception) -> HTTPException:

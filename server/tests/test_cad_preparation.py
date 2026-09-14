@@ -35,9 +35,10 @@ from server.cadlink.preparation import (
     operation_summary,
     prepare_operation,
     recover_operations,
+    retain_operation_snapshot,
 )
 from server.cadlink.setup import setup_content, setup_digest, validate_setup
-from server.cadlink.solve_command import oldest_pending_solve_command
+from server.cadlink.solve_command import collect_solve_deliveries
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import WgReturnError, read_wgreturn
 
@@ -229,6 +230,18 @@ def _received(harness: Harness, command_id: str = "cmd-1") -> tuple[str, str]:
     return bundle_path, manifest
 
 
+def _collect(harness: Harness) -> Any:
+    """Collect delivered solve commands as the backend's delivery loop does."""
+
+    return collect_solve_deliveries(
+        harness.data_dir,
+        harness.store,
+        retain=lambda operation_id: retain_operation_snapshot(
+            harness.store, harness.data_dir, harness.workspace.resolve(), operation_id
+        ),
+    )
+
+
 # -- setup revisions ---------------------------------------------------------------
 
 
@@ -304,8 +317,6 @@ def test_an_accepted_return_still_prepares_after_its_folder_is_removed_and_wg_re
 def test_a_delivered_return_is_retained_before_its_delivery_is_acknowledged(
     harness: Harness, tmp_path: Path
 ) -> None:
-    from server.cadlink.api import _pending_solve_command
-
     bundle_path, manifest = _write_return(harness.workspace)
     requests = harness.data_dir / "ipc" / "wglink" / ".wg-solve-requests"
     requests.mkdir(parents=True)
@@ -315,7 +326,7 @@ def test_a_delivered_return_is_retained_before_its_delivery_is_acknowledged(
         "requestedAt": "2026-09-13T01:00:00Z",
     }))
 
-    _pending_solve_command(harness.data_dir, harness.workspace.resolve(), harness.store)
+    _collect(harness)
 
     assert list(requests.iterdir()) == []  # acknowledged
     assert json.loads(harness.row()["snapshot_json"])["manifest_sha256"] == manifest
@@ -815,9 +826,10 @@ def test_an_existing_installation_upgrades_without_replaying_anything(tmp_path: 
     assert summaries["cmd-done"]["state"] == "accepted" and summaries["cmd-done"]["stage"] == "submitted"
     assert summaries["cmd-refused"]["state"] == "rejected"
     assert summaries["cmd-legacy"]["legacy"] is True
-    # Only the unfinished request is handed out again; nothing finished is.
-    pending = oldest_pending_solve_command(store)
-    assert pending is not None and pending.command_id == "cmd-open"
+    # Only the unfinished request is left for the delivery loop to prepare;
+    # nothing finished is.
+    waiting = store.list_operations(kind=PREPARE_AND_SOLVE, states={"received"}, oldest_first=True)
+    assert [row["operation_id"] for row in waiting if not row["legacy"]] == ["cmd-open"]
     with closing(sqlite3.connect(path)) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
         assert conn.execute("SELECT COUNT(*) FROM cad_setup_revisions").fetchone()[0] == 0
@@ -889,8 +901,6 @@ def test_cleanup_keeps_what_a_pending_operation_still_references(
 
 
 def test_a_malformed_return_never_blocks_the_deliveries_behind_it(harness: Harness) -> None:
-    from server.cadlink.api import _pending_solve_command
-
     nested = harness.workspace / "wgreturn" / "nested.wgreturn"
     nested.mkdir(parents=True)
     body = b"[" * 50_000  # under the size limit, deeper than the parser can go
@@ -909,7 +919,7 @@ def test_a_malformed_return_never_blocks_the_deliveries_behind_it(harness: Harne
             "requestedAt": at,
         }))
 
-    _pending_solve_command(harness.data_dir, harness.workspace.resolve(), harness.store)
+    _collect(harness)
 
     assert list(requests.iterdir()) == []
     assert harness.row("cmd-bad")["snapshot_json"] is None
@@ -988,3 +998,103 @@ def test_preparing_an_operation_that_is_not_a_solve_is_refused(harness: Harness)
 
     assert refused.value.status_code == 409
     assert harness.row("upd-1")["state"] == "received"
+
+
+# -- the legacy solve-command routes -------------------------------------------------
+#
+# A build before the backend owned solves (v0.3.2, v0.3.3-rc.1) polled
+# GET /api/cadlink/solve-command and posted outcomes back. Such a page can still
+# be open in a browser tab across an update restart. The backend's delivery loop
+# is the one consumer (CAD-OPERATIONS.md, "Solve-command compatibility"): these
+# routes collect nothing, record nothing and hand nothing out.
+
+
+def _legacy_request(harness: Harness) -> SimpleNamespace:
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        data_dir=str(harness.data_dir),
+        cadlink_store=harness.store,
+        cad_workspace=SimpleNamespace(selected_path=lambda: harness.workspace),
+        jobs_runtime=None,
+    )))
+
+
+def _deliver_file(harness: Harness, bundle_path: str, manifest: str, command_id: str = "cmd-1") -> Path:
+    requests = harness.data_dir / "ipc" / "wglink" / ".wg-solve-requests"
+    requests.mkdir(parents=True, exist_ok=True)
+    (requests / f"{command_id}.json").write_text(json.dumps({
+        "schemaVersion": 3, "target": "waveguide-generator", "commandId": command_id,
+        "operationId": command_id, "returnId": "wgr_1", "bundlePath": bundle_path,
+        "manifestSha256": manifest, "requestedAt": "2026-09-13T01:00:00Z",
+    }))
+    return requests
+
+
+def test_the_legacy_poll_collects_nothing_and_hands_nothing_out(harness: Harness) -> None:
+    from server.cadlink.api import get_solve_command
+
+    bundle_path, manifest = _write_return(harness.workspace)
+    requests = _deliver_file(harness, bundle_path, manifest)
+
+    assert asyncio.run(get_solve_command(_legacy_request(harness))) == {"command": None}
+    # The delivery waits for the backend's loop; the poll neither claimed nor recorded it.
+    assert [path.name for path in requests.iterdir()] == ["cmd-1.json"]
+    assert harness.store.get_operation("cmd-1") is None
+
+
+def test_a_legacy_poll_never_rejects_a_retained_operation(harness: Harness) -> None:
+    from server.cadlink.api import get_solve_command
+
+    bundle_path, manifest = _write_return(harness.workspace)
+    _accept(harness.store, "cmd-1", bundle_path, manifest)
+    retain_operation_snapshot(harness.store, harness.data_dir, harness.workspace.resolve(), "cmd-1")
+    assert json.loads(harness.row()["snapshot_json"])["manifest_sha256"] == manifest
+    # The WGLink folder is still selected, but the return has left it.
+    shutil.rmtree(harness.workspace / bundle_path)
+
+    assert asyncio.run(get_solve_command(_legacy_request(harness))) == {"command": None}
+
+    assert harness.row()["state"] == "received"
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
+
+
+def test_a_legacy_poll_never_ends_an_operation_an_attempt_holds(harness: Harness) -> None:
+    from server.cadlink.api import get_solve_command
+
+    bundle_path, manifest = _write_return(harness.workspace)
+    _accept(harness.store, "cmd-1", bundle_path, manifest)
+    generation = harness.store.claim("cmd-1", 0)
+    assert harness.store.bind_request(
+        "cmd-1", generation, setup_revision_id="wgs_x", request_json='{"x":1}'
+    ) is not None
+    (harness.workspace / bundle_path / "wgreturn.json").write_text("{}")  # the exchange copy changes
+    before = harness.row()
+
+    assert asyncio.run(get_solve_command(_legacy_request(harness))) == {"command": None}
+
+    assert harness.row() == before
+    # The attempt's job is still recorded as the operation's outcome.
+    recorded = harness.store.record_outcome("cmd-1", generation, "accepted", job_id="job-9")
+    assert recorded is not None and recorded["job_id"] == "job-9"
+
+
+def test_the_legacy_outcome_route_records_nothing(harness: Harness) -> None:
+    from server.cadlink.api import SolveCommandOutcome, post_solve_command_outcome
+
+    bundle_path, manifest = _write_return(harness.workspace)
+    _accept(harness.store, "cmd-1", bundle_path, manifest)
+    assert harness.store.claim("cmd-1", 0) == 1
+    before = harness.row()
+    request = _legacy_request(harness)
+
+    for report in (
+        SolveCommandOutcome(commandId="cmd-1", state="refused", reason="Dismissed."),
+        SolveCommandOutcome(commandId="cmd-1", state="accepted", jobId="job-5"),
+        SolveCommandOutcome(commandId="cmd-unknown", state="accepted", jobId="job-6"),
+    ):
+        answer = asyncio.run(post_solve_command_outcome(report, request))
+        # A 2xx answer: an old page drops its copy instead of showing a failure.
+        assert (answer["recorded"], answer["cleared"]) == (False, True)
+
+    assert harness.row() == before
+    assert harness.store.get_operation("cmd-unknown") is None

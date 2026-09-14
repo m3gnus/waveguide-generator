@@ -8966,6 +8966,7 @@
     },
     "/api/cadlink/solve-command": {
       "get": {
+        "description": "Nothing pending, always: the backend is the one consumer of solve commands.\n\nA page from a build before the backend owned solves (v0.3.2,\nv0.3.3-rc.1) polls this route and acts on what it hands out, and it can\nstill be open in a browser tab across an update restart. This answer is\nthe one it reads as \"nothing pending\": the route claims no delivery,\nrecords no outcome and hands out no command such a page could start a\nsolve from (docs/architecture/CAD-OPERATIONS.md, \"Solve-command\ncompatibility\").",
         "operationId": "get_solve_command_api_cadlink_solve_command_get",
         "responses": {
           "200": {
@@ -8989,7 +8990,7 @@
     },
     "/api/cadlink/solve-command/outcome": {
       "post": {
-        "description": "Record what happened to a CAD solve command.\n\nOnly terminal outcomes are recorded. A blocked command stays unfinished so\nthe user can satisfy the gate and run the same request.",
+        "description": "Answered and ignored: a solve command's outcome is the backend's to record.\n\nThe same older page reports here after its own Solve or Dismiss. A 2xx\nanswer lets it drop its copy; an error would leave its Dismiss card stuck,\nor report a failure after a job that exists. Nothing is recorded: a job\nsuch a page submitted under ``cad-solve:<commandId>`` is the operation's\noutcome, and the backend finds it through that key.",
         "operationId": "post_solve_command_outcome_api_cadlink_solve_command_outcome_post",
         "requestBody": {
           "content": {

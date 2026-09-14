@@ -14,10 +14,10 @@ operation store (``cad_operations`` in ``cadlink.db``), and only then deleted.
 What a WGLink older than version 3 writes -- the single slot
 ``.wg-solve-request.json``, or a version-2 file -- is refused visibly, with the
 remedy: WG installs the add-in it ships, and Fusion has to load it. From then on the
-store, not the file, is what WG hands out and records outcomes against. The
-ledger helpers below are the store's view, in the shape these routes have
-always returned. A command whose gates block is not terminal: it stays
-available so the user can acknowledge findings and run it.
+store, not the file, is the command: the backend's delivery loop is its one
+consumer, and prepares it from there. The ledger helpers below are the store's
+view of terminal outcomes. A command whose gates block is not terminal: it
+stays so the user can acknowledge findings and run it.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ import uuid
 from .identity import utc_now
 from .operations import (
     ACCEPTED,
-    CLAIMABLE_STATES,
     PREPARE_AND_SOLVE,
     REJECTED,
     TERMINAL_STATES,
@@ -77,8 +76,6 @@ LEDGER_FILENAME = "solve-commands.json"
 IPC_SUBDIRECTORY = Path("ipc") / "wglink"
 # How many recent outcomes ``read_ledger`` returns.
 LEDGER_LIMIT = 200
-# How many unfinished operations one look for the oldest may skip over.
-_PENDING_SCAN = 50
 
 _LEDGER_STATES = {"accepted": ACCEPTED, "refused": REJECTED}
 
@@ -92,8 +89,7 @@ _DELIVERY_LOCK = threading.Lock()
 class PendingSolveCommand:
     """A CAD-authored request to prepare and solve one exact return bundle.
 
-    ``marker_path`` is the file it was read from, or None once it is rebuilt
-    from the operation store.
+    ``marker_path`` is the file it was read from.
     """
 
     marker_path: Path | None
@@ -370,10 +366,10 @@ def collect_solve_deliveries(
 
     Returns the answer owed to one delivery on its own -- the replay of an
     outcome that already stands, or a refusal of a different request under an
-    id whose operation is finished or is not a solve -- in the solve-command
-    response shape, or None. It stops
-    at that answer, so later files wait for the next poll instead of losing
-    theirs.
+    id whose operation is finished or is not a solve -- as ``{"command",
+    "outcome"}``, or None. Nothing hands it to a client: the refusal is logged,
+    and the operation that holds the id is what the loop prepares. It stops at
+    that answer, so later files wait for the next pass.
     """
 
     with _DELIVERY_LOCK:
@@ -402,42 +398,6 @@ def collect_solve_deliveries(
             # recovers the same operation and answers it then.
             if _acknowledge(claim) and answer is not None:
                 return {"command": command.payload(), "outcome": answer}
-    return None
-
-
-def oldest_pending_solve_command(store: CadLinkStore) -> PendingSolveCommand | None:
-    """The oldest accepted solve command that has no outcome yet.
-
-    Solve requests stay separate and wait in acceptance order: a later request
-    never takes an earlier one's place. The command is rebuilt from the
-    operation's stored inputs. Its ``requestedAt`` is when WG accepted it,
-    because the producer's timestamp is transport and is not stored.
-    """
-
-    rows = store.list_operations(
-        kind=PREPARE_AND_SOLVE, states=CLAIMABLE_STATES, oldest_first=True, limit=_PENDING_SCAN
-    )
-    for row in rows:
-        if row["legacy"] or not row["inputs_json"]:
-            continue
-        inputs = json.loads(row["inputs_json"])
-        return PendingSolveCommand(
-            marker_path=None,
-            command_id=str(row["operation_id"]),
-            return_id=str(inputs["return_id"]),
-            bundle_path=str(inputs["bundle_path"]),
-            manifest_sha256=str(inputs["manifest_sha256"]),
-            requested_at=str(row["created_at"]),
-        )
-    return None
-
-
-def delivered_command(data_dir: Path, command_id: str) -> PendingSolveCommand | None:
-    """The oldest request on disk under this command id, left where it is."""
-
-    for delivery in _deliveries(data_dir):
-        if delivery.command.command_id == command_id:
-            return delivery.command
     return None
 
 

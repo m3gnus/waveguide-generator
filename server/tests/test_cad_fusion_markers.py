@@ -25,7 +25,7 @@ from typing import Any, Callable
 import pytest
 
 from server.cadlink.fusion_return import publish_return_request
-from server.cadlink.solve_command import collect_solve_deliveries, oldest_pending_solve_command
+from server.cadlink.solve_command import collect_solve_deliveries
 from server.cadlink.store import CadLinkStore
 from server.exports.cad_handoff import UPDATE_TARGET_REQUIRED, publish_fusion_handoff
 
@@ -246,8 +246,8 @@ def test_a_solve_command_the_addin_writes_after_startup_is_one_operation(
     store = CadLinkStore.for_data_dir(data_dir)
     try:
         assert collect_solve_deliveries(data_dir, store) is None
-        pending = oldest_pending_solve_command(store)
-        assert pending is not None and pending.command_id == "cmd-1"
+        waiting = store.list_operations(states={"received"}, oldest_first=True)
+        assert [row["operation_id"] for row in waiting] == ["cmd-1"]
         assert not written.exists()
         assert len(store.list_operations()) == 1
     finally:

@@ -116,9 +116,9 @@ A command is accepted only once its identity, digest, target and inputs are comm
   cancelled operation.
 - **Job ids stick.** A job id, once attached, is never cleared.
 - **Solve commands.** The backend prepares each solve command as an attempt of its own,
-  claiming it first (see "Preparation"). The outcome route, which only the browser of an
-  earlier build called, records a result as the operation's current attempt without
-  claiming first; it stays for diagnostics.
+  claiming it first (see "Preparation"). Nothing else records their outcomes: the outcome
+  route an earlier build's browser called records nothing (see "Solve-command
+  compatibility").
 
 ## States
 
@@ -342,8 +342,9 @@ blocking findings the user reviewed, and on which preparation) and observes.
   because nothing could be retained. A failing pass is logged once per distinct error and
   the loop backs off to half a minute while it persists. Operations an older build left
   untouched are prepared at the first start after the upgrade, as the user asked when
-  sending them. The browser no longer consumes `GET /api/cadlink/solve-command`, which
-  stays for diagnostics. `WG2_CAD_DELIVERY=0` turns the loop off (the test suite does).
+  sending them. Nothing else consumes them: `GET /api/cadlink/solve-command` answers that
+  nothing is pending (see "Solve-command compatibility"). `WG2_CAD_DELIVERY=0` turns the
+  loop off (the test suite does).
 - **Events.** Every committed change is published on the jobs channel as
   `{"v": 1, "kind": "cadOperation", "operation": {...}}`, after it is stored. It carries
   no cursor: a client that misses one reads `GET /api/cadlink/operations` (the unfinished
@@ -442,9 +443,10 @@ is the operation `prepare_and_solve`, with the `commandId` as its operation ID.
 - **What an older add-in writes.** A WGLink older than delivery version 3 writes the
   single slot `.wg-solve-request.json`, or a version-2 file in the folder above. WG
   claims such a command and refuses it, with the remedy as its reason (restart Fusion so
-  it loads the add-in WG installed). The refusal is recorded and answered like any
-  other. It is never run. A command under an ID the store already holds is instead a
-  repeat delivery, and is recovered or refused as the delivery table says.
+  it loads the add-in WG installed). The refusal is recorded as the operation's outcome
+  and logged, like any other. It is never run. A command under an ID the store already
+  holds is instead a repeat delivery, and is recovered or refused as the delivery table
+  says.
 
 **Consuming a delivery.** WG takes each file in four steps:
 
@@ -464,57 +466,61 @@ deliveries are taken oldest first: by `requestedAt` compared as text, then by th
 modification time, then by its name. `requestedAt` is optional, and a file without one
 is taken first.
 
-**What polling answers.** `GET /api/cadlink/solve-command` first moves delivered files
-into the store, oldest first, until one is owed an answer of its own. Then:
+**What a delivery pass does.** Nothing polls for commands any more. The backend's delivery
+loop (see "Preparation") moves delivered files into the store, oldest first, and prepares
+the operations from there. A pass stops at a delivery that is owed an answer of its own;
+later files wait for the next pass.
 
-- **A delivery owed its own answer is answered first**, one per poll; later files wait
-  for the next poll. A delivery of a command whose outcome already stands replays that
-  outcome, and an older add-in's command is answered with its refusal.
-- **A different request under a held ID is refused.** The file is removed and the
-  refusal is logged. The refusal is also the answer when the operation holding the ID
-  is finished, or is not a solve. While that operation is an unfinished solve, it is
-  not: a client takes an answer under a command ID as the end of that command, so the
-  unfinished operation stays the one handed out.
-- **Otherwise the answer is the oldest unfinished solve operation**, in the order WG
-  accepted them. A command that waits on the user stays first in line, and a later
-  request never takes its place. This is not "latest wins".
-- **A command whose job already exists is reconciled, not handed out again.** A solve
+- **A delivery owed its own answer** is a command whose outcome already stands (the
+  answer replays it), an older add-in's command, or a different request under an ID whose
+  operation is finished or is not a solve (the answer refuses it). The file is removed
+  and the refusal is logged. No client receives the answer.
+- **A different request under the ID of an unfinished solve** is refused and removed as
+  well, and the refusal is logged. It does not end the operation holding the ID.
+- **Nothing is handed out.** The loop starts each operation no attempt has touched, oldest
+  first. A command that waits on the user stays waiting, and a later request never takes
+  its place. This is not "latest wins".
+- **A command whose job already exists is reconciled, not prepared again.** A solve
   command's job is submitted under the submission key `cad-solve:<commandId>`: by the
   backend's preparation, and before the backend owned solves, by the browser. If the jobs
   store holds a job under that key, it is that command's outcome and its report never
   arrived: a lost acknowledgement, a restart, an upgrade from a build whose browser
-  submitted it.
-  WG records `accepted` with that job and answers with it. Handing the command out again
-  would submit it twice, or, from a client that builds the request differently, meet a
-  submission-key conflict and stay parked behind it.
-- **The command is rebuilt from the stored inputs.** Its `requestedAt` is when WG
-  accepted it, because the producer's timestamp is transport and is not stored.
-- **The checks against the workspace still apply** before a command is handed out. A
-  command that fails one is `rejected`, with its reason as the operation's outcome.
+  submitted it. Preparation records `accepted` with that job before it does anything else
+  (see "Preparation", "Recovery").
+- **The exchange folder decides nothing once a return is retained.** Preparation reads
+  WG's copy, so a return that has since left the WGLink folder, or changed there, still
+  prepares from what was accepted. A return that was never retained is checked when
+  preparation retains it; one that no longer matches its command is `rejected`
+  (`snapshot_invalid`).
 
 ## Solve-command compatibility
 
-`GET /api/cadlink/solve-command` and `POST /api/cadlink/solve-command/outcome` keep
-their response shapes. The outcome route records the first terminal outcome, and
-repeating the same outcome is idempotent. Its `cleared` field is true once an outcome
-stands for the command, so WG no longer holds it as unfinished.
+`GET /api/cadlink/solve-command` and `POST /api/cadlink/solve-command/outcome` are kept, and
+neither decides anything. The backend's delivery loop is the one consumer of solve
+commands; a second, independently active consumer is what these routes must never be
+again.
 
-An outcome is recorded on the operation the store holds under its command ID. A
-file still waiting under that ID does not change which
-request the outcome belongs to; the next poll refuses or recovers that file as a
-delivery in its own right. Only a command the store has never seen takes its request
-identity from a file WG still holds. With neither, the outcome is kept as a legacy row.
+- **`GET /api/cadlink/solve-command`** always answers `{"command": null}`. It claims no
+  delivery, records no outcome and hands out no command.
+- **`POST /api/cadlink/solve-command/outcome`** takes the same body as before and records
+  nothing. It answers `{"commandId", "recorded": false, "cleared": true}`: `cleared` tells
+  a client to drop its copy, because the backend owns the command. A job a client
+  submitted under `cad-solve:<commandId>` is the operation's outcome, and the backend
+  finds it through that key (see "Preparation", "Recovery").
 
-A conflicting report is not recorded. That covers a different outcome from the one that
-stands. The route answers with the outcome that stands plus `"conflict": true`. A
-client then retires its copy instead of retrying a report that can never be recorded.
-The stored operation is left untouched.
+**Why they answer instead of returning 404.** The pages of v0.3.2 and v0.3.3-rc.1 poll the
+first route and post to the second, and such a page can still be open in a `--browser`
+tab across an update restart.
 
-Polling applies the same rule before it replays an outcome or hands a command out. A
-delivery whose ID already names a different request, or a different kind of operation,
-is refused and removed; "What polling answers" says when that refusal is also the
-answer. The operation that holds the ID is never rewritten, and its result is never the
-answer to that delivery.
+- It reads a failed poll exactly as "nothing pending", so for the first route either
+  answer would do.
+- A failed report is different. The page's Dismiss leaves its card up. Its Solve reports
+  that the acknowledgement failed after the job was created. A newer return from Fusion
+  stops its arrival handling part way. A 2xx answer lets it drop its copy instead.
+
+With nothing handed out, such a page parks no new command and starts no solve of its own.
+A command it parked before the restart stays on that page until the user solves or
+dismisses it there; a job it submits for it is reconciled through the submission key.
 
 ## Delivery version
 

@@ -5,24 +5,22 @@ Each test holds one rule of ``docs/architecture/CAD-OPERATIONS.md``.
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import closing
 from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
 import sqlite3
-from types import SimpleNamespace
 
 import pytest
 
 from server.cadlink import store as store_module
-from server.cadlink.api import get_solve_command
 from server.cadlink.operations import fusion_mutation_precheck, request_digest
 from server.cadlink.solve_command import (
     LEDGER_FILENAME,
     SOLVE_REQUEST_FILENAME,
     PendingSolveCommand,
+    collect_solve_deliveries,
     ledger_entry,
     read_ledger,
     solve_command_request,
@@ -484,15 +482,7 @@ def test_the_json_ledger_folds_into_the_store_exactly_once(tmp_path: Path) -> No
     assert _count(_db(tmp_path)) == 2
 
 
-class _Workspace:
-    def __init__(self, path: Path) -> None:
-        self._path = path
-
-    def selected_path(self) -> Path:
-        return self._path
-
-
-def test_a_folded_ledger_outcome_still_replays_through_get_solve_command(tmp_path: Path) -> None:
+def test_a_folded_ledger_outcome_still_replays_to_a_redelivery(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     workspace = tmp_path / "workspace"
     _seed_ledger(data_dir)
@@ -514,17 +504,10 @@ def test_a_folded_ledger_outcome_still_replays_through_get_solve_command(tmp_pat
         ),
         encoding="utf-8",
     )
-    # Never initialized before the first poll: the read itself must migrate.
+    # Never initialized before the first pass: the read itself must migrate.
     store = CadLinkStore.for_data_dir(data_dir)
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                data_dir=str(data_dir), cadlink_store=store, cad_workspace=_Workspace(workspace)
-            )
-        )
-    )
     try:
-        result = asyncio.run(get_solve_command(request))
+        result = collect_solve_deliveries(data_dir, store)
     finally:
         store.close()
 
