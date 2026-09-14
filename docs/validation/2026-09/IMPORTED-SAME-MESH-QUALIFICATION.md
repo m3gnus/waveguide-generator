@@ -1,6 +1,6 @@
 # Imported CAD on Metal and BEAT-CPU: same-mesh qualification
 
-Status: a dated measurement, 2026-09-13, at `waveguide-generator` `31856070` on
+Status: a dated measurement, 2026-09-14, at `waveguide-generator` `4dca8d33` on
 Darwin arm64 (Python 3.13.1), with `hornlab-metal-bem` `e7e32d0`,
 `hornlab-beat-bem` `74da18c` and `hornlab-bempp-bem` `57b1260`. It describes that
 commit and those pins, not a current release status.
@@ -11,8 +11,11 @@ answers one question: **given the same mesh, source tags, anchor frame, excitati
 and frequencies, do Metal and BEAT-CPU give the same complex answer, within a
 tolerance derived from how accurate each one is?**
 
-Every judged row below passes. Rows with no tolerance are reported, not judged:
-discretisation errors, which define the tolerances, and two ingest findings.
+Every judged row passes. Most rows are judged against an upper bound. The two
+non-vacuity rows are judged against a lower bound, because they must show that
+the fixture can tell a mistake apart. Rows with no bound are reported, not
+judged: discretisation errors, which define the tolerances, and two ingest
+findings.
 
 Reproduce on a host with Metal and a provisioned BEAT CPU runtime:
 
@@ -20,19 +23,23 @@ Reproduce on a host with Metal and a provisioned BEAT CPU runtime:
 python scripts/qualify_imported_same_mesh.py --json result.json --markdown result.md
 ```
 
+The run needs both engines. With either one missing it exits 2, because a run
+with nothing to compare must not report success.
+
 The machine-readable result of this run is
 [`imported-same-mesh-qualification.json`](imported-same-mesh-qualification.json).
 `scripts/tests/test_qualify_imported_same_mesh.py` checks the harness itself: the
-geometry, the analytic references, the error measure and the fixture. It runs
-without a solver. `WG2_QUALIFY_IMPORTED=1` adds the real run to that file.
+geometry, the analytic references, the error measure, the verdicts and the
+fixture. It runs without a solver. `WG2_QUALIFY_IMPORTED=1` adds the real run to
+that file.
 
 ## The rotated frame against the analytic answer
 
 This is the fixture most likely to hide a mistake, so it comes first. An
-oscillating sphere and its anchor frame are rotated by 70° about (0.3, 1, 0.2)
-and translated by (0.12, −0.04, 0.055) m. The solve must undo that, because
-polar cuts and the DI sphere are frame-relative. BEAT additionally needs the
-rigid rotation that maps the record's frame onto its own +z/+x/+y.
+oscillating sphere and its anchor frame are rotated by 131° about (1, −0.4, 0.7)
+and translated by (0.21, −0.37, 0.52) m. The solve must undo that, because polar
+cuts and the DI sphere are frame-relative. BEAT additionally needs the rigid
+rotation that maps the record's frame onto its own +z/+x/+y.
 
 | Engine | Moved vs unmoved (tolerance 1e-3) | Moved vs analytic | Tolerance |
 | --- | --- | --- | --- |
@@ -45,12 +52,28 @@ at that density plus the exact-equivalence tolerance. That is why the margin
 looks thin: the row asks "does moving the body change the error?", and the
 answer is no. The error against the analytic answer (1.7e-2) is the
 discretisation error of the 960-triangle sphere, identical to the unmoved row
-below. It is not a frame error. A frame, sign or axis mistake reads between
-about 1 and 2.
+below. It is not a frame error.
 
-An off-axis cap checks that u and v map as well as the axis. Moved vs unmoved
-reads 1.98e-06 on Metal and 5.91e-07 on BEAT-CPU. Its horizontal and vertical
-cuts differ by 1.99, as an asymmetric source must.
+The oscillating sphere is symmetric about its axis, so it cannot show a swapped
+or mirrored u and v. That is checked by a second body.
+
+- **The fixture:** a sphere driven on an off-axis cap centred at 30° of azimuth,
+  between +x and +y and nearer +x. It is moved and turned the same way.
+- **Moved vs unmoved:** 2.00e-06 on Metal and 6.16e-07 on BEAT-CPU.
+- **Why the check is not vacuous:** a u mirror, a v mirror (a handedness error)
+  and a u/v swap would each move the cap and change the field. Two rows
+  measure by how much, and each is judged at ≥ 10 × the exact tolerance at
+  every frequency:
+  - the horizontal cut differs from the vertical by at least 6.10e-02, and by
+    up to 0.81;
+  - the vertical cut differs from its own mirror by at least 1.58e-01, and by up
+    to 1.35.
+
+  So any of those mistakes would fail the moved-vs-unmoved rows by at least
+  sixty times their tolerance.
+- **Sign flips:** the error measure reads 2.0 for a sign flip, which is tested
+  on its own. No frame or axis mistake was injected into the engines for this
+  record.
 
 ## How the tolerances are derived
 
@@ -72,10 +95,11 @@ cuts differ by 1.99, as an asymmetric source must.
   | BEAT-CPU | oscillating | 6.71e-02 | 1.72e-02 | 4.33e-03 |
 
   BEAT-CPU's error falls about 4× per 4.3× triangles, which is second order in
-  element size. Metal's does too down to 960 triangles, then only 2.2× to 3,968,
-  levelling near 5e-3. That is consistent with Metal's complex-wavenumber
-  formulation (`complex_k`, shift 0.005) setting an accuracy floor of that size.
-  It is an observation, not a proven cause.
+  element size. Metal's does too down to 960 triangles. From 960 to 3,968 its
+  pulsating error falls only 2.2× (the oscillating one 3.3×), levelling near
+  5e-3. That is consistent with Metal's complex-wavenumber formulation
+  (`complex_k`, shift 0.005) setting an accuracy floor of that size. It is an
+  observation, not a proven cause.
 - **Same-mesh tolerance: 1.5 × (worst per-frequency sum of both engines' errors
   at that density).** Two solutions that are each within e₁ and e₂ of the truth
   are within e₁ + e₂ of each other: the triangle inequality. The 1.5 covers only
@@ -89,9 +113,8 @@ cuts differ by 1.99, as an asymmetric source must.
   - a reduced domain against the whole;
   - the same triangles moved.
 
-  These differ only by single-precision assembly: measured up to 7e-5 on BEAT
-  and 1e-5 on Metal. 1e-3 is about fifteen times that, and three orders below
-  the smallest error a frame, sign or tag mistake produced in these fixtures.
+  These differ only by single-precision assembly: measured here up to 7.0e-5 on
+  BEAT and 8.0e-6 on Metal. 1e-3 is about fourteen times the larger.
 - **Horn tolerance, from the horn's own refinement.** A real return has no
   formula, so the reference density's error is estimated from a ladder of the
   same return.
@@ -105,14 +128,27 @@ cuts differ by 1.99, as an asymmetric source must.
   - That gives estimated reference errors of 7.95e-02 on Metal and 1.39e-02 on
     BEAT-CPU, and a same-mesh horn tolerance of 1.5 × the worst per-frequency
     sum, 1.40e-01.
-  - **The order check does not hold for Metal.** Order 2 predicts the coarse
-    level to sit 4.56× as far from the finest as the reference does. BEAT-CPU
-    reads 8.42: it converges faster than assumed, so its estimate is
-    conservative. Metal reads 2.12, which is below what *any* positive order
-    predicts for these three densities (at least 3.2). Metal's horn ladder is
-    not in its asymptotic range, and its Richardson estimate is indicative only.
-    The same-mesh verdict does not depend on it: the two engines differ by
-    1.82e-02, 7.7× inside the tolerance.
+  - **Neither engine passes the order check, and they miss it in opposite
+    directions.** Order 2 predicts the coarse level to sit 4.56× as far from the
+    finest as the reference does.
+    - BEAT-CPU reads 8.42, which fits an order near 5: faster than the spheres
+      showed.
+    - Metal reads 2.12, which no positive order fits for these three densities
+      (at least 3.21). Metal's horn ladder is not in its asymptotic range.
+  - **Metal's estimate overshoots, and the record's own data says by how much.**
+    One engine's true error cannot exceed the other's plus their measured
+    difference. BEAT-CPU's estimate plus the measured difference caps Metal's
+    error at 3.21e-02 at 3 kHz, not 7.95e-02, so the Metal estimate is at least
+    2.5× too large.
+  - Capping each estimate that way would tighten the tolerances:
+    - same-mesh: 1.40e-01 → 6.90e-02;
+    - Metal quarter-vs-full: 2.38e-01 → 9.63e-02;
+    - BEAT-CPU quarter-vs-full: unchanged at 4.17e-02.
+
+    The cap is recorded, not used: feeding the measured difference back into the
+    tolerance that judges it would be circular. Every horn row passes under
+    either set: the engines differ by 1.82e-02, and the quarters differ from the
+    full domain by 1.13e-02 (Metal) and 1.19e-03 (BEAT-CPU).
 
 ## Results
 
@@ -124,33 +160,47 @@ cuts differ by 1.99, as an asymmetric source must.
 | Hemispheres, normal, two channels: top / bottom / channel sum | 3.51e-03 / 3.51e-03 / 4.80e-03 | 5.22e-02 |
 | Hemispheres, axial motion, one channel | 4.12e-03 | 5.22e-02 |
 | Hemispheres, axial, two channels: top / bottom / channel sum | 3.24e-03 / 3.24e-03 / 4.12e-03 | 5.22e-02 |
-| Rotated + translated off-axis cap, all points | 2.98e-03 | 5.22e-02 |
-| Off-axis cap, source-average pressure (impedance) | 5.04e-03 | 5.22e-02 |
+| Rotated + translated off-axis cap, all points | 3.00e-03 | 5.22e-02 |
+| Off-axis cap, source-average pressure (impedance) | 5.09e-03 | 5.22e-02 |
 | Horn quarter from a real return (470 tri), normal | 1.82e-02 | 1.40e-01 |
 | Horn quarter from a real return, axial | 1.82e-02 | 1.40e-01 |
 
 Every comparison is complex, at every polar-cut and DI-sphere point, per channel
 and for the channel sum. Magnitudes alone are never compared.
 
+The axial two-channel hemisphere fixture includes a rear-facing axial source: the
+bottom hemisphere's area-weighted `n·axis` is negative. Metal flips such a tag
+outward, and BEAT's imported path now does the same.
+
+The impedance row is held to the tolerance derived from the far field. No
+separate analytic bound for source-average pressure is derived here.
+
 **Exact equivalences, each engine against itself (tolerance 1e-3)**
 
 | Fixture | Metal | BEAT-CPU |
 | --- | --- | --- |
-| Two-channel sum vs one merged channel (worst of 3 densities) | 7.15e-06 | 9.92e-06 |
-| Repeated HF: two bodies, two-channel sum vs one channel | 7.88e-07 | 8.99e-07 |
-| Repeated HF: left mirrors right in the horizontal cut | 6.66e-07 | 8.11e-07 |
-| x0 half vs whole, normal / axial | 4.85e-06 / 7.94e-06 | 4.36e-05 / 5.65e-05 |
-| x0+y0 quarter vs whole, normal / axial | 7.34e-06 / 7.95e-06 | 6.98e-05 / 5.07e-05 |
-| Return edited in CAD (acknowledged) vs unedited | 2.88e-07 | 0 |
+| Two-channel sum vs one merged channel (worst of 3 densities) | 7.14e-06 | 9.92e-06 |
+| Repeated HF: two bodies, two-channel sum vs one channel | 7.81e-07 | 8.99e-07 |
+| Repeated HF: left mirrors right, all three cuts | 6.57e-07 | 8.11e-07 |
+| x0 half vs whole, normal / axial | 4.79e-06 / 7.94e-06 | 4.36e-05 / 5.65e-05 |
+| x0+y0 quarter vs whole, normal / axial | 7.34e-06 / 7.96e-06 | 6.98e-05 / 5.07e-05 |
+| Return with edited body evidence (acknowledged) vs unedited | 1.42e-07 | 0 |
 
 **Real returns through WG's own ingest**
+
+The returns are built here, not exported from a CAD program. The body is a STEP
+that `hornlab-mesher` writes from a point-grid horn: an inner bore of 10 to
+30 mm radius over 60 mm, a 4 mm wall, and a flat throat membrane in the throat
+plane. It is wrapped in a `.wgreturn` manifest the way WGLink writes a linked
+return. The source is tagged by geometry, not by paint; the paint findings below
+come from that. Identity hashes and body fingerprints are placeholders.
 
 | Fixture | Result |
 | --- | --- |
 | WG's auto quarter vs the forced full domain (1,856 tri) | Metal 1.13e-02 (tolerance 2.38e-01); BEAT-CPU 1.19e-03 (tolerance 4.17e-02). The bound is twice each engine's horn error estimate, because these are two meshes of one body. |
 | A y-only half, through the real plan | BEAT-CPU is refused at submission: `imported_symmetry_unsupported_by_engine`, "it cannot mirror this return's y-only half (mirrored on y = 0); it solves full, half-yz, quarter". Metal solves it, and AUTO picks Metal. |
-| A linked return copied into a fresh app data dir | The fixture uses paths with spaces and non-ASCII characters (`Kopia från annan dator/Högtalare ÅÄÖ.wgreturn`, `App Data – Ärende 1`), with no design registry and no cached mesh. It is imported, prepared, solved through the job runtime, stored and reopened, on both engines. Both jobs are `complete`, the reopened results are identical, and the engine metadata names the engine that ran. Findings: `freshness` / `missing_design` (blocking, acknowledged), `stale-detection-unavailable`, `source-paint-missing` (blocking, acknowledged: the fixture tags geometry, not paint). |
-| A return whose body was edited in CAD | The `freshness` / `body_modified` finding is blocking and acknowledged, and the solve matches the unedited return exactly. |
+| A linked return copied into a fresh app data dir | The fixture uses paths with spaces and non-ASCII characters (`Kopia från annan dator/Högtalare ÅÄÖ.wgreturn`, `App Data – Ärende 1`), with no design registry and no cached mesh. It is imported, prepared, solved through the job runtime, stored and reopened, on both engines. Both jobs are `complete`, the reopened results are identical, and the stored engine metadata names the engine requested (`metal` / `beat-cpu`). Findings: `freshness` / `missing_design` (blocking, acknowledged), `stale-detection-unavailable`, `source-paint-missing` (blocking, acknowledged). |
+| A return whose body evidence says it was edited in CAD | The `freshness` / `body_modified` finding is blocking and acknowledged. The STEP is the unedited body, and only the fingerprints differ, so the exact match is expected by construction. What the row shows is that acknowledging the finding does not change the solve. |
 
 ## Two ingest findings, not engine results
 
@@ -161,6 +211,8 @@ and for the channel sum. Magnitudes alone are never compared.
   - WG normalises a placed anchor with gmsh's general `affineTransform`. That
     rewrites the planar throat as a B-spline, and the linked-throat gate
     requires a plane.
+  - The harness counts only that refusal as the known block; any other refusal
+    fails.
   - The fixture stays in the harness and runs the day ingest keeps the plane.
   - The record-level rotated fixtures above do cover the engines' frame
     handling.
@@ -171,7 +223,9 @@ and for the channel sum. Magnitudes alone are never compared.
   - **Result:** the forced full domain keeps the closed body's outward winding.
     The auto quarter is re-oriented so the source normal points along +z. Every
     triangle is flipped (`flipped_global` 472 of 472), with
-    `orientation_valid: true`, no warning and no finding.
+    `orientation_valid: true` and no warning. The only findings are the ones
+    every return here carries (`freshness`, `source-paint-missing`,
+    `stale-detection-unavailable`); none is about orientation.
   - **Consequence:** Metal and BEAT-CPU then solve an inside-out surface, and
     their quarter-vs-full errors read 1.04 and 1.00. Neither answer means
     anything.
@@ -179,9 +233,9 @@ and for the channel sum. Magnitudes alone are never compared.
     either engine.
   - **Real returns:** a real return tags the planar throat disc, which faces the
     bore; the add-in strips paint that spreads to the rear cap. The
-    qualification fixture does the same (flat membrane), and a test holds it to
-    that. WG's own `server/tests/test_cadlink_ingest_symmetry.py` builds the
-    rear-cap body and asserts only `orientation_valid`.
+    qualification fixture does the same, and a test holds it to that. WG's own
+    `server/tests/test_cadlink_ingest_symmetry.py` builds the rear-cap body and
+    asserts only `orientation_valid`.
 
 ## Interior resonances
 
@@ -209,7 +263,7 @@ Unedited output of the run (`--markdown`).
 | --- | --- | --- | --- | --- | --- | --- |
 | pulsating sphere L0 (224 tri), one channel | metal | analytic | complex, all points | 5.08e-02 |  |  |
 | pulsating sphere L0 (224 tri), two channels | metal | analytic | complex, all points | 5.08e-02 |  |  |
-| pulsating sphere L0, two-channel sum | metal | one channel | complex, all points | 7.38e-07 | 1.00e-03 | pass |
+| pulsating sphere L0, two-channel sum | metal | one channel | complex, all points | 7.34e-07 | 1.00e-03 | pass |
 | pulsating sphere L0 (224 tri), one channel | beat-cpu | analytic | complex, all points | 5.41e-02 |  |  |
 | pulsating sphere L0 (224 tri), two channels | beat-cpu | analytic | complex, all points | 5.41e-02 |  |  |
 | pulsating sphere L0, two-channel sum | beat-cpu | one channel | complex, all points | 8.43e-07 | 1.00e-03 | pass |
@@ -217,7 +271,7 @@ Unedited output of the run (`--markdown`).
 | oscillating sphere L0 (224 tri), one tag | beat-cpu | analytic | complex, all points | 6.71e-02 |  |  |
 | pulsating sphere L1 (960 tri), one channel | metal | analytic | complex, all points | 1.24e-02 |  |  |
 | pulsating sphere L1 (960 tri), two channels | metal | analytic | complex, all points | 1.24e-02 |  |  |
-| pulsating sphere L1, two-channel sum | metal | one channel | complex, all points | 2.18e-06 | 1.00e-03 | pass |
+| pulsating sphere L1, two-channel sum | metal | one channel | complex, all points | 2.16e-06 | 1.00e-03 | pass |
 | pulsating sphere L1 (960 tri), one channel | beat-cpu | analytic | complex, all points | 1.35e-02 |  |  |
 | pulsating sphere L1 (960 tri), two channels | beat-cpu | analytic | complex, all points | 1.35e-02 |  |  |
 | pulsating sphere L1, two-channel sum | beat-cpu | one channel | complex, all points | 3.02e-06 | 1.00e-03 | pass |
@@ -225,7 +279,7 @@ Unedited output of the run (`--markdown`).
 | oscillating sphere L1 (960 tri), one tag | beat-cpu | analytic | complex, all points | 1.72e-02 |  |  |
 | pulsating sphere L2 (3968 tri), one channel | metal | analytic | complex, all points | 5.61e-03 |  |  |
 | pulsating sphere L2 (3968 tri), two channels | metal | analytic | complex, all points | 5.61e-03 |  |  |
-| pulsating sphere L2, two-channel sum | metal | one channel | complex, all points | 7.15e-06 | 1.00e-03 | pass |
+| pulsating sphere L2, two-channel sum | metal | one channel | complex, all points | 7.14e-06 | 1.00e-03 | pass |
 | pulsating sphere L2 (3968 tri), one channel | beat-cpu | analytic | complex, all points | 3.36e-03 |  |  |
 | pulsating sphere L2 (3968 tri), two channels | beat-cpu | analytic | complex, all points | 3.36e-03 |  |  |
 | pulsating sphere L2, two-channel sum | beat-cpu | one channel | complex, all points | 9.92e-06 | 1.00e-03 | pass |
@@ -243,23 +297,25 @@ Unedited output of the run (`--markdown`).
 | rotated + translated oscillating sphere | metal | analytic | complex, all points | 1.76e-02 | 1.86e-02 | pass |
 | rotated + translated oscillating sphere | beat-cpu | unmoved | complex, all points | 1.77e-06 | 1.00e-03 | pass |
 | rotated + translated oscillating sphere | beat-cpu | analytic | complex, all points | 1.72e-02 | 1.82e-02 | pass |
-| rotated + translated off-axis cap | metal | unmoved | complex, all points | 1.98e-06 | 1.00e-03 | pass |
-| off-axis cap: horizontal differs from vertical | metal | vertical cut | complex, polar | 1.99e+00 |  |  |
-| rotated + translated off-axis cap | beat-cpu | unmoved | complex, all points | 5.91e-07 | 1.00e-03 | pass |
-| off-axis cap: horizontal differs from vertical | beat-cpu | vertical cut | complex, polar | 1.99e+00 |  |  |
-| rotated + translated off-axis cap | metal | beat-cpu | complex, all points | 2.98e-03 | 5.22e-02 | pass |
-| off-axis cap: source-average pressure (impedance) | metal | beat-cpu | complex impedance | 5.04e-03 | 5.22e-02 | pass |
-| repeated HF: two bodies, two-channel sum | metal | one channel | complex, all points | 7.88e-07 | 1.00e-03 | pass |
-| repeated HF: left mirrors right in the horizontal cut | metal | mirror | complex, polar | 6.66e-07 | 1.00e-03 | pass |
+| rotated + translated off-axis cap | metal | unmoved | complex, all points | 2.00e-06 | 1.00e-03 | pass |
+| off-axis cap: horizontal differs from vertical | metal | vertical cut | complex, polar | 8.08e-01 | ≥ 1.00e-02 (least 6.10e-02) | pass |
+| off-axis cap: vertical cut differs from its mirror | metal | mirrored | complex, polar | 1.35e+00 | ≥ 1.00e-02 (least 1.58e-01) | pass |
+| rotated + translated off-axis cap | beat-cpu | unmoved | complex, all points | 6.16e-07 | 1.00e-03 | pass |
+| off-axis cap: horizontal differs from vertical | beat-cpu | vertical cut | complex, polar | 8.06e-01 | ≥ 1.00e-02 (least 6.10e-02) | pass |
+| off-axis cap: vertical cut differs from its mirror | beat-cpu | mirrored | complex, polar | 1.35e+00 | ≥ 1.00e-02 (least 1.58e-01) | pass |
+| rotated + translated off-axis cap | metal | beat-cpu | complex, all points | 3.00e-03 | 5.22e-02 | pass |
+| off-axis cap: source-average pressure (impedance) | metal | beat-cpu | complex impedance | 5.09e-03 | 5.22e-02 | pass |
+| repeated HF: two bodies, two-channel sum | metal | one channel | complex, all points | 7.81e-07 | 1.00e-03 | pass |
+| repeated HF: left mirrors right in the horizontal cut | metal | mirror | complex, polar | 6.57e-07 | 1.00e-03 | pass |
 | repeated HF: two bodies, two-channel sum | beat-cpu | one channel | complex, all points | 8.99e-07 | 1.00e-03 | pass |
 | repeated HF: left mirrors right in the horizontal cut | beat-cpu | mirror | complex, polar | 8.11e-07 | 1.00e-03 | pass |
-| x0 return vs whole, normal | metal | whole | complex, all points | 4.85e-06 | 1.00e-03 | pass |
+| x0 return vs whole, normal | metal | whole | complex, all points | 4.79e-06 | 1.00e-03 | pass |
 | x0 return vs whole, normal | beat-cpu | whole | complex, all points | 4.36e-05 | 1.00e-03 | pass |
 | x0 return vs whole, axial | metal | whole | complex, all points | 7.94e-06 | 1.00e-03 | pass |
 | x0 return vs whole, axial | beat-cpu | whole | complex, all points | 5.65e-05 | 1.00e-03 | pass |
 | x0+y0 return vs whole, normal | metal | whole | complex, all points | 7.34e-06 | 1.00e-03 | pass |
 | x0+y0 return vs whole, normal | beat-cpu | whole | complex, all points | 6.98e-05 | 1.00e-03 | pass |
-| x0+y0 return vs whole, axial | metal | whole | complex, all points | 7.95e-06 | 1.00e-03 | pass |
+| x0+y0 return vs whole, axial | metal | whole | complex, all points | 7.96e-06 | 1.00e-03 | pass |
 | x0+y0 return vs whole, axial | beat-cpu | whole | complex, all points | 5.07e-05 | 1.00e-03 | pass |
 | horn return, coarse vs fine density | metal | fine | complex, all points | 4.24e-02 |  |  |
 | horn return, reference vs fine density | metal | fine | complex, all points | 2.00e-02 |  |  |
@@ -277,5 +333,5 @@ Unedited output of the run (`--markdown`).
 | y-only half: BEAT-CPU refused at submission with the reason | beat-cpu | plan | verdict | 0.00e+00 | 5.00e-01 | pass |
 | fresh app data dir: import, prepare, solve, store, reopen | metal | end to end | job | 0.00e+00 | 5.00e-01 | pass |
 | fresh app data dir: import, prepare, solve, store, reopen | beat-cpu | end to end | job | 0.00e+00 | 5.00e-01 | pass |
-| return edited in CAD (acknowledged) vs the unedited return | metal | unedited | complex, all points | 2.88e-07 | 1.00e-03 | pass |
+| return edited in CAD (acknowledged) vs the unedited return | metal | unedited | complex, all points | 1.42e-07 | 1.00e-03 | pass |
 | return edited in CAD (acknowledged) vs the unedited return | beat-cpu | unedited | complex, all points | 0.00e+00 | 1.00e-03 | pass |

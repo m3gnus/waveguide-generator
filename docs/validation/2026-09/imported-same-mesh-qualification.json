@@ -1,9 +1,9 @@
 {
   "environment": {
-    "generated_at": "2026-09-13T17:56:21+00:00",
+    "generated_at": "2026-09-14T05:23:52+00:00",
     "platform": "Darwin arm64",
     "python": "3.13.1",
-    "waveguide-generator": "31856070",
+    "waveguide-generator": "4dca8d33",
     "hornlab-metal-bem": "0.1.0 @ e7e32d0",
     "hornlab-beat-bem": "0.1.0 @ 74da18c",
     "hornlab-bempp-bem": "0.1.1 @ 57b1260"
@@ -15,11 +15,11 @@
   },
   "discretisation_errors": {
     "metal/pulsating/L0": [
-      0.031139399261324894,
-      0.02713808282246657,
-      0.027307941067317928,
-      0.04347441925005889,
-      0.05081659355639052
+      0.03113940056022212,
+      0.027138085121659015,
+      0.027307941437190994,
+      0.043474407746493866,
+      0.050816577867809694
     ],
     "beat-cpu/pulsating/L0": [
       0.031148149727599713,
@@ -29,11 +29,11 @@
       0.05410643943193885
     ],
     "metal/oscillating/L0": [
-      0.06795029269908143,
-      0.06814490262666757,
-      0.056913437618047506,
-      0.041516123683014466,
-      0.048478705063133926
+      0.06795029339489773,
+      0.06814490420186876,
+      0.056913442795304976,
+      0.041516136069503655,
+      0.0484787162446526
     ],
     "beat-cpu/oscillating/L0": [
       0.0669594883030595,
@@ -43,11 +43,11 @@
       0.04618374330464859
     ],
     "metal/pulsating/L1": [
-      0.007832629744516338,
-      0.00674527598551878,
-      0.008236187098408999,
-      0.01244222482986072,
-      0.011921117297106699
+      0.007832629612436259,
+      0.006745276961478109,
+      0.008236188941460571,
+      0.012442232080770207,
+      0.011921113683002678
     ],
     "beat-cpu/pulsating/L1": [
       0.00784165218587309,
@@ -57,11 +57,11 @@
       0.013517150017485786
     ],
     "metal/oscillating/L1": [
-      0.01732406986890867,
-      0.01762372091098474,
-      0.015295584420138309,
-      0.010675972877393906,
-      0.014052731885098289
+      0.01732408245302622,
+      0.017623724333535134,
+      0.015295582479061468,
+      0.010675964180322557,
+      0.014052707081243074
     ],
     "beat-cpu/oscillating/L1": [
       0.017162621455768415,
@@ -71,11 +71,11 @@
       0.011808411208472659
     ],
     "metal/pulsating/L2": [
-      0.0019546839572339753,
-      0.0016295555380313562,
-      0.0034199234649414764,
-      0.005611843273462401,
-      0.004592425085548517
+      0.0019546840907187866,
+      0.0016295551273397219,
+      0.0034199242402233906,
+      0.005611842022958738,
+      0.004592425608390647
     ],
     "beat-cpu/pulsating/L2": [
       0.0019640583343900407,
@@ -85,11 +85,11 @@
       0.0033645286194141483
     ],
     "metal/oscillating/L2": [
-      0.0043576087750521585,
-      0.004692935045432059,
-      0.004789486478365348,
-      0.002879817361171227,
-      0.005270547886325804
+      0.0043576091374892345,
+      0.004692929905746515,
+      0.004789491267682836,
+      0.0028798240560661517,
+      0.005270549217171387
     ],
     "beat-cpu/oscillating/L2": [
       0.004332004839639769,
@@ -100,9 +100,9 @@
     ]
   },
   "same_mesh_tolerance": {
-    "0": 0.20285495548096222,
-    "1": 0.05219824441428786,
-    "2": 0.013532346367944715
+    "0": 0.202854957843764,
+    "1": 0.05219824954811345,
+    "2": 0.013532338658416397
   },
   "exact_tolerance": 0.001,
   "reference_edge_m": 0.027589937928294336,
@@ -120,14 +120,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.031139381320536574,
-        0.027138112855002117,
-        0.0273079152435729,
-        0.043474066243176616,
-        0.05081670735819383
+        0.031139381644781385,
+        0.027138111953401635,
+        0.02730791085466893,
+        0.04347405583968716,
+        0.05081671472076317
       ],
-      "worst": 0.05081670735819383,
+      "worst": 0.05081671472076317,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -137,14 +138,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.031139399261324894,
-        0.02713808282246657,
-        0.027307941067317928,
-        0.04347441925005889,
-        0.05081659355639052
+        0.03113940056022212,
+        0.027138085121659015,
+        0.027307941437190994,
+        0.043474407746493866,
+        0.050816577867809694
       ],
-      "worst": 0.05081659355639052,
+      "worst": 0.050816577867809694,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -154,14 +156,15 @@
       "compared_with": "one channel",
       "quantity": "complex, all points",
       "errors": [
-        4.1496777369261856e-07,
-        4.6802634831784014e-07,
-        4.2760161917108005e-07,
-        7.38035778731159e-07,
-        7.119285344520798e-07
+        4.176171119756356e-07,
+        4.651480450619178e-07,
+        4.2684888860687113e-07,
+        7.20383173930984e-07,
+        7.3405224785362e-07
       ],
-      "worst": 7.38035778731159e-07,
+      "worst": 7.3405224785362e-07,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "linearity: the bases of two tags sum to their merged tag"
     },
@@ -179,6 +182,7 @@
       ],
       "worst": 0.05410650270623008,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -196,6 +200,7 @@
       ],
       "worst": 0.05410643943193885,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -213,6 +218,7 @@
       ],
       "worst": 8.425412087465146e-07,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "linearity: the bases of two tags sum to their merged tag"
     },
@@ -222,14 +228,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.06795029269908143,
-        0.06814490262666757,
-        0.056913437618047506,
-        0.041516123683014466,
-        0.048478705063133926
+        0.06795029339489773,
+        0.06814490420186876,
+        0.056913442795304976,
+        0.041516136069503655,
+        0.0484787162446526
       ],
-      "worst": 0.06814490262666757,
+      "worst": 0.06814490420186876,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -247,6 +254,7 @@
       ],
       "worst": 0.06709173436064059,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -256,14 +264,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.007832717272555667,
-        0.00674504761473095,
-        0.008236422198992401,
-        0.012441976134734058,
-        0.011920901548654647
+        0.007832717987930312,
+        0.006745045486794924,
+        0.008236422474711961,
+        0.012441979732842832,
+        0.011920925996291583
       ],
-      "worst": 0.012441976134734058,
+      "worst": 0.012441979732842832,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -273,14 +282,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.007832629744516338,
-        0.00674527598551878,
-        0.008236187098408999,
-        0.01244222482986072,
-        0.011921117297106699
+        0.007832629612436259,
+        0.006745276961478109,
+        0.008236188941460571,
+        0.012442232080770207,
+        0.011921113683002678
       ],
-      "worst": 0.01244222482986072,
+      "worst": 0.012442232080770207,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -290,14 +300,15 @@
       "compared_with": "one channel",
       "quantity": "complex, all points",
       "errors": [
-        8.61478992122858e-07,
-        1.4447751957649792e-06,
-        1.7003929826308003e-06,
-        2.038487562096066e-06,
-        2.1824145590347013e-06
+        8.605879263468438e-07,
+        1.457195080584058e-06,
+        1.7001735126015688e-06,
+        2.0239951746691273e-06,
+        2.1612953255252314e-06
       ],
-      "worst": 2.1824145590347013e-06,
+      "worst": 2.1612953255252314e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "linearity: the bases of two tags sum to their merged tag"
     },
@@ -315,6 +326,7 @@
       ],
       "worst": 0.013517241518809838,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -332,6 +344,7 @@
       ],
       "worst": 0.013517150017485786,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -349,6 +362,7 @@
       ],
       "worst": 3.0198824365291016e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "linearity: the bases of two tags sum to their merged tag"
     },
@@ -358,14 +372,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.01732406986890867,
-        0.01762372091098474,
-        0.015295584420138309,
-        0.010675972877393906,
-        0.014052731885098289
+        0.01732408245302622,
+        0.017623724333535134,
+        0.015295582479061468,
+        0.010675964180322557,
+        0.014052707081243074
       ],
-      "worst": 0.01762372091098474,
+      "worst": 0.017623724333535134,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -383,6 +398,7 @@
       ],
       "worst": 0.017175108698540498,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -392,14 +408,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.0019542980093873725,
-        0.0016298790713210574,
-        0.0034195957626667575,
-        0.005613612489072343,
-        0.004593234849409902
+        0.0019542977531507516,
+        0.0016298796378163764,
+        0.0034195958717347296,
+        0.005613606666269001,
+        0.004593236056600966
       ],
-      "worst": 0.005613612489072343,
+      "worst": 0.005613606666269001,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -409,14 +426,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.0019546839572339753,
-        0.0016295555380313562,
-        0.0034199234649414764,
-        0.005611843273462401,
-        0.004592425085548517
+        0.0019546840907187866,
+        0.0016295551273397219,
+        0.0034199242402233906,
+        0.005611842022958738,
+        0.004592425608390647
       ],
-      "worst": 0.005611843273462401,
+      "worst": 0.005611842022958738,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -426,14 +444,15 @@
       "compared_with": "one channel",
       "quantity": "complex, all points",
       "errors": [
-        2.6086914822207456e-06,
-        2.4764224194857122e-06,
-        4.974938346116633e-06,
-        7.150762675958191e-06,
-        6.099194607369146e-06
+        2.6077777563671808e-06,
+        2.4760526574731844e-06,
+        4.967401365871515e-06,
+        7.139778359910609e-06,
+        6.10828135867499e-06
       ],
-      "worst": 7.150762675958191e-06,
+      "worst": 7.139778359910609e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "linearity: the bases of two tags sum to their merged tag"
     },
@@ -451,6 +470,7 @@
       ],
       "worst": 0.0033635453475444658,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -468,6 +488,7 @@
       ],
       "worst": 0.0033645286194141483,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -485,6 +506,7 @@
       ],
       "worst": 9.921019726751654e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "linearity: the bases of two tags sum to their merged tag"
     },
@@ -494,14 +516,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.0043576087750521585,
-        0.004692935045432059,
-        0.004789486478365348,
-        0.002879817361171227,
-        0.005270547886325804
+        0.0043576091374892345,
+        0.004692929905746515,
+        0.004789491267682836,
+        0.0028798240560661517,
+        0.005270549217171387
       ],
-      "worst": 0.005270547886325804,
+      "worst": 0.005270549217171387,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -519,6 +542,7 @@
       ],
       "worst": 0.004332004839639769,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": ""
     },
@@ -528,14 +552,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex per channel",
       "errors": [
-        1.1491561377452813e-05,
-        0.00023968455521635528,
-        0.001816766264119566,
-        0.004263801691158323,
-        0.004801221744445142
+        1.1491222799345004e-05,
+        0.00023968446787053893,
+        0.0018167680081844172,
+        0.004263799313336809,
+        0.004801212153954116
       ],
-      "worst": 0.004801221744445142,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.004801212153954116,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -545,14 +570,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex per channel",
       "errors": [
-        2.291670252621753e-05,
-        0.00028127706264883173,
-        0.0016441514385282247,
-        0.002786494768826608,
-        0.0035119447200257113
+        2.291621596595071e-05,
+        0.000281278682786012,
+        0.0016441540067934318,
+        0.0027864966468891766,
+        0.0035119251087104898
       ],
-      "worst": 0.0035119447200257113,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.0035119251087104898,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -562,14 +588,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex per channel",
       "errors": [
-        2.3004891741660513e-05,
-        0.00028197861794440946,
-        0.0016449465809755931,
-        0.00278248666845047,
-        0.0035061721755426482
+        2.3005190949696543e-05,
+        0.00028197971549885273,
+        0.0016449465104401751,
+        0.0027824868513528535,
+        0.003506181835204257
       ],
-      "worst": 0.0035061721755426482,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.003506181835204257,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -579,14 +606,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex channel sum",
       "errors": [
-        1.1479685407682885e-05,
-        0.00023980784611701717,
-        0.0018166988125907972,
-        0.004264262020650823,
-        0.004802248827008791
+        1.1479996197179249e-05,
+        0.0002398091989429222,
+        0.0018166999469508367,
+        0.004264262166171451,
+        0.004802234998372692
       ],
-      "worst": 0.004802248827008791,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.004802234998372692,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -596,14 +624,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex per channel",
       "errors": [
-        1.0777054460243358e-05,
-        0.00023771993233373415,
-        0.0018515053485406148,
-        0.004123012986006261,
-        0.004107707015993109
+        1.077904447804113e-05,
+        0.00023772103681762649,
+        0.001851501011068113,
+        0.004123021912318439,
+        0.004107698143138611
       ],
-      "worst": 0.004123012986006261,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.004123021912318439,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": "an axial hemisphere faces backwards; every engine must drive it as Metal does"
     },
@@ -613,14 +642,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex per channel",
       "errors": [
-        2.489817014158145e-05,
-        0.0003006199518604739,
-        0.0016025061142779073,
-        0.002547111543494897,
-        0.0032423568815646005
+        2.4897640740491547e-05,
+        0.00030062064200845495,
+        0.001602503846856953,
+        0.0025471077274569886,
+        0.003242347577682095
       ],
-      "worst": 0.0032423568815646005,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.003242347577682095,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": "an axial hemisphere faces backwards; every engine must drive it as Metal does"
     },
@@ -630,14 +660,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex per channel",
       "errors": [
-        2.474210633832495e-05,
-        0.0003007185767281169,
-        0.0016031395853371995,
-        0.00254240704363542,
-        0.003235420548162172
+        2.4741914435106116e-05,
+        0.00030071729268769704,
+        0.0016031403643212289,
+        0.0025424089279863183,
+        0.0032354094406553424
       ],
-      "worst": 0.003235420548162172,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.0032354094406553424,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": "an axial hemisphere faces backwards; every engine must drive it as Metal does"
     },
@@ -647,14 +678,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex channel sum",
       "errors": [
-        1.0868618788871463e-05,
-        0.00023770352931902302,
-        0.0018512160099588351,
-        0.004122847376956317,
-        0.004108014721303606
+        1.0868681393429065e-05,
+        0.00023770310175449163,
+        0.0018512153751331355,
+        0.004122845721913007,
+        0.004107997614747497
       ],
-      "worst": 0.004122847376956317,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.004122845721913007,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -664,14 +696,15 @@
       "compared_with": "unmoved",
       "quantity": "complex, all points",
       "errors": [
-        6.676615758126736e-07,
-        6.482055314623345e-07,
-        9.130620618453411e-07,
-        1.3293600681984256e-06,
-        1.838485286389378e-06
+        6.495053167120891e-07,
+        6.477668141902019e-07,
+        9.255717451231281e-07,
+        1.3249115837246348e-06,
+        1.8433021964467035e-06
       ],
-      "worst": 1.838485286389378e-06,
+      "worst": 1.8433021964467035e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 4: the frame rotation"
     },
@@ -681,14 +714,15 @@
       "compared_with": "analytic",
       "quantity": "complex, all points",
       "errors": [
-        0.017324417064013352,
-        0.01762395091073552,
-        0.01529568327589911,
-        0.010676213581291723,
-        0.014053345033945362
+        0.01732442037530765,
+        0.017623956093180855,
+        0.015295692445905328,
+        0.010676205925595782,
+        0.01405334550922987
       ],
-      "worst": 0.01762395091073552,
-      "tolerance": 0.018623720910984742,
+      "worst": 0.017623956093180855,
+      "tolerance": 0.018623724333535135,
+      "minimum": null,
       "passed": true,
       "note": "fixture 4 against the analytic reference"
     },
@@ -706,6 +740,7 @@
       ],
       "worst": 1.7660789959019813e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 4: the frame rotation"
     },
@@ -723,6 +758,7 @@
       ],
       "worst": 0.01717516030891484,
       "tolerance": 0.0181751086985405,
+      "minimum": null,
       "passed": true,
       "note": "fixture 4 against the analytic reference"
     },
@@ -732,14 +768,15 @@
       "compared_with": "unmoved",
       "quantity": "complex, all points",
       "errors": [
-        1.512442063429763e-07,
-        3.671315927710124e-07,
-        8.395009782112922e-07,
-        1.4856870742888814e-06,
-        1.9807045902054714e-06
+        1.576403101520913e-07,
+        3.6555491485707386e-07,
+        8.421254602086411e-07,
+        1.5522541214843538e-06,
+        1.9992538331478528e-06
       ],
-      "worst": 1.9807045902054714e-06,
+      "worst": 1.9992538331478528e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 4: u and v must map as well as the axis"
     },
@@ -749,16 +786,35 @@
       "compared_with": "vertical cut",
       "quantity": "complex, polar",
       "errors": [
-        0.16190996931165638,
-        0.5063104689319214,
-        1.1337805196391566,
-        1.5628151380027189,
-        1.9882670504502427
+        0.061023584510670616,
+        0.1894329317819439,
+        0.42394772752941323,
+        0.6651526987129452,
+        0.8077693497006393
       ],
-      "worst": 1.9882670504502427,
+      "worst": 0.8077693497006393,
       "tolerance": null,
-      "passed": null,
-      "note": "non-vacuity: the fixture distinguishes u from v"
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: a u/v swap changes the field"
+    },
+    {
+      "fixture": "off-axis cap: vertical cut differs from its mirror",
+      "engine": "metal",
+      "compared_with": "mirrored",
+      "quantity": "complex, polar",
+      "errors": [
+        0.15824819003684817,
+        0.4860229542388385,
+        1.0006375789459643,
+        1.1815170378750202,
+        1.3547697778300885
+      ],
+      "worst": 1.3547697778300885,
+      "tolerance": null,
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: a v mirror (handedness) changes the field"
     },
     {
       "fixture": "rotated + translated off-axis cap",
@@ -766,14 +822,15 @@
       "compared_with": "unmoved",
       "quantity": "complex, all points",
       "errors": [
-        3.088892458127391e-07,
-        3.239094458204804e-07,
-        3.5671554644462826e-07,
-        4.6871294158208156e-07,
-        5.910773651370026e-07
+        2.420059988119695e-07,
+        2.5902946571295904e-07,
+        3.2711909669759504e-07,
+        4.909323942334218e-07,
+        6.158901421887338e-07
       ],
-      "worst": 5.910773651370026e-07,
+      "worst": 6.158901421887338e-07,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 4: u and v must map as well as the axis"
     },
@@ -783,16 +840,35 @@
       "compared_with": "vertical cut",
       "quantity": "complex, polar",
       "errors": [
-        0.16194631740657367,
-        0.506616707491056,
-        1.1340555049506063,
-        1.5601413390168373,
-        1.985450004192376
+        0.06103833843875268,
+        0.189543239017284,
+        0.4240096639490884,
+        0.6648219392608393,
+        0.8062496608773672
       ],
-      "worst": 1.985450004192376,
+      "worst": 0.8062496608773672,
       "tolerance": null,
-      "passed": null,
-      "note": "non-vacuity: the fixture distinguishes u from v"
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: a u/v swap changes the field"
+    },
+    {
+      "fixture": "off-axis cap: vertical cut differs from its mirror",
+      "engine": "beat-cpu",
+      "compared_with": "mirrored",
+      "quantity": "complex, polar",
+      "errors": [
+        0.15828409474179636,
+        0.4863040576433493,
+        1.0008049079416526,
+        1.179154067168215,
+        1.3542345029203298
+      ],
+      "worst": 1.3542345029203298,
+      "tolerance": null,
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: a v mirror (handedness) changes the field"
     },
     {
       "fixture": "rotated + translated off-axis cap",
@@ -800,14 +876,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex, all points",
       "errors": [
-        2.7775660164878503e-05,
-        0.00029655881182286456,
-        0.001627718065513035,
-        0.0026650776627705265,
-        0.002977856494325561
+        2.8794788259881314e-05,
+        0.0002983984051647565,
+        0.0016308192239985774,
+        0.002665349886045694,
+        0.003002468255833175
       ],
-      "worst": 0.002977856494325561,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.003002468255833175,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -817,14 +894,15 @@
       "compared_with": "beat-cpu",
       "quantity": "complex impedance",
       "errors": [
-        0.0003034492823375841,
-        0.0006401739110848909,
-        0.0025421300589637394,
-        0.0042284270052390304,
-        0.005039217969570503
+        0.00030812640940620136,
+        0.0006524323192962113,
+        0.0025672894772207073,
+        0.004267894379844714,
+        0.005088577052071731
       ],
-      "worst": 0.005039217969570503,
-      "tolerance": 0.05219824441428786,
+      "worst": 0.005088577052071731,
+      "tolerance": 0.05219824954811345,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -834,14 +912,15 @@
       "compared_with": "one channel",
       "quantity": "complex, all points",
       "errors": [
-        5.661322131494927e-07,
-        6.784184622334528e-07,
-        6.462905795934601e-07,
-        7.881142237769921e-07,
-        7.39286067661939e-07
+        5.679035290088356e-07,
+        6.789505497348398e-07,
+        6.465034611881217e-07,
+        7.80723871548848e-07,
+        7.365081814789284e-07
       ],
-      "worst": 7.881142237769921e-07,
+      "worst": 7.80723871548848e-07,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "identities kept: ['hf-left', 'hf-right']"
     },
@@ -851,14 +930,15 @@
       "compared_with": "mirror",
       "quantity": "complex, polar",
       "errors": [
-        5.919967970286267e-07,
-        5.759489586650237e-07,
-        5.274178363450153e-07,
-        6.664895514490326e-07,
-        5.804401783160533e-07
+        5.939416276319553e-07,
+        5.800531001992779e-07,
+        5.275466159658661e-07,
+        6.568555486307978e-07,
+        5.746599051612115e-07
       ],
-      "worst": 6.664895514490326e-07,
+      "worst": 6.568555486307978e-07,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -876,6 +956,7 @@
       ],
       "worst": 8.993703889958504e-07,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "identities kept: ['hf-left', 'hf-right']"
     },
@@ -893,6 +974,7 @@
       ],
       "worst": 8.108444137838463e-07,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -902,14 +984,15 @@
       "compared_with": "whole",
       "quantity": "complex, all points",
       "errors": [
-        1.268762504553206e-06,
-        1.7544748831246046e-06,
-        2.2392331082367244e-06,
-        3.3107498669476966e-06,
-        4.849045821277579e-06
+        1.2763046688454496e-06,
+        1.7544228752037897e-06,
+        2.272391014588074e-06,
+        3.3169797632309644e-06,
+        4.788020041474804e-06
       ],
-      "worst": 4.849045821277579e-06,
+      "worst": 4.788020041474804e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 6: reduced domain executed natively"
     },
@@ -927,6 +1010,7 @@
       ],
       "worst": 4.364213779706431e-05,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 6: reduced domain executed natively"
     },
@@ -936,14 +1020,15 @@
       "compared_with": "whole",
       "quantity": "complex, all points",
       "errors": [
-        1.2122367031391428e-06,
-        1.3095218480053613e-06,
-        1.5255516351177832e-06,
-        4.046986542353608e-06,
-        7.939959312683691e-06
+        1.2127564458319028e-06,
+        1.30875172057473e-06,
+        1.5181477948785858e-06,
+        4.044577218585835e-06,
+        7.943195475893805e-06
       ],
-      "worst": 7.939959312683691e-06,
+      "worst": 7.943195475893805e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 6: reduced domain executed natively"
     },
@@ -961,6 +1046,7 @@
       ],
       "worst": 5.6543786687542424e-05,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 6: reduced domain executed natively"
     },
@@ -970,14 +1056,15 @@
       "compared_with": "whole",
       "quantity": "complex, all points",
       "errors": [
-        1.0583437393646308e-06,
-        1.8243334186842111e-06,
-        2.066106304584826e-06,
-        4.2188504247910815e-06,
-        7.341349671488548e-06
+        1.0539614700569977e-06,
+        1.8369105135247029e-06,
+        2.066039313342655e-06,
+        4.210326754576411e-06,
+        7.3412364176745325e-06
       ],
-      "worst": 7.341349671488548e-06,
+      "worst": 7.3412364176745325e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 6: reduced domain executed natively"
     },
@@ -995,6 +1082,7 @@
       ],
       "worst": 6.983982618501513e-05,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 6: reduced domain executed natively"
     },
@@ -1004,14 +1092,15 @@
       "compared_with": "whole",
       "quantity": "complex, all points",
       "errors": [
-        1.0121433773218024e-06,
-        1.2478954430231298e-06,
-        1.5155242992171764e-06,
-        4.861648094800679e-06,
-        7.949993786435654e-06
+        1.0106325765192872e-06,
+        1.249479797583654e-06,
+        1.514668148783869e-06,
+        4.86181803828472e-06,
+        7.964148792603349e-06
       ],
-      "worst": 7.949993786435654e-06,
+      "worst": 7.964148792603349e-06,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 6: reduced domain executed natively"
     },
@@ -1029,6 +1118,7 @@
       ],
       "worst": 5.072942041629919e-05,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
       "note": "fixture 6: reduced domain executed natively"
     },
@@ -1038,12 +1128,13 @@
       "compared_with": "fine",
       "quantity": "complex, all points",
       "errors": [
-        0.021198964524653932,
-        0.033495055457063536,
-        0.04238711517136601
+        0.021199002494308627,
+        0.03349514176411444,
+        0.042387130509318686
       ],
-      "worst": 0.04238711517136601,
+      "worst": 0.042387130509318686,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": "fixture 3 on a real return"
     },
@@ -1053,12 +1144,13 @@
       "compared_with": "fine",
       "quantity": "complex, all points",
       "errors": [
-        0.0017593718502556643,
-        0.010294741848515955,
-        0.019996848146711352
+        0.0017594312185393827,
+        0.010294861332529494,
+        0.01999687526715211
       ],
-      "worst": 0.019996848146711352,
+      "worst": 0.01999687526715211,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": "fixture 3 on a real return"
     },
@@ -1068,12 +1160,13 @@
       "compared_with": "extrapolated",
       "quantity": "complex, all points",
       "errors": [
-        0.006992946341522512,
-        0.04091834101815201,
-        0.07948114326667548
+        0.006993182311662861,
+        0.04091881592929444,
+        0.07948125106184507
       ],
-      "worst": 0.07948114326667548,
+      "worst": 0.07948125106184507,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": "3.97 x the reference-to-fine distance, order 2"
     },
@@ -1089,6 +1182,7 @@
       ],
       "worst": 0.029477706391010848,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": "fixture 3 on a real return"
     },
@@ -1104,6 +1198,7 @@
       ],
       "worst": 0.003500417075254182,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": "fixture 3 on a real return"
     },
@@ -1119,6 +1214,7 @@
       ],
       "worst": 0.01391305014721282,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": "3.97 x the reference-to-fine distance, order 2"
     },
@@ -1128,12 +1224,13 @@
       "compared_with": "beat-cpu",
       "quantity": "complex, all points",
       "errors": [
-        0.0005743946090284364,
-        0.0069035839247864,
-        0.01820009469523637
+        0.000574397291698553,
+        0.006903692539107764,
+        0.0182000318022073
       ],
-      "worst": 0.01820009469523637,
-      "tolerance": 0.14009129012083243,
+      "worst": 0.0182000318022073,
+      "tolerance": 0.14009145181358684,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -1143,12 +1240,13 @@
       "compared_with": "beat-cpu",
       "quantity": "complex, all points",
       "errors": [
-        0.0005744619014635524,
-        0.006903705866186454,
-        0.018200041857434374
+        0.0005745007257864539,
+        0.006903499704965826,
+        0.01819999998485249
       ],
-      "worst": 0.018200041857434374,
-      "tolerance": 0.14009129012083243,
+      "worst": 0.01819999998485249,
+      "tolerance": 0.14009145181358684,
+      "minimum": null,
       "passed": true,
       "note": ""
     },
@@ -1158,12 +1256,13 @@
       "compared_with": "full",
       "quantity": "complex, all points",
       "errors": [
-        0.001072383898867086,
-        0.005921849715941056,
-        0.011294947103584828
+        0.0010723654924823518,
+        0.005921613471452578,
+        0.01129496923390914
       ],
-      "worst": 0.011294947103584828,
-      "tolerance": 0.23844342980002642,
+      "worst": 0.01129496923390914,
+      "tolerance": 0.23844375318553523,
+      "minimum": null,
       "passed": true,
       "note": "different meshes of one body: bounded by twice the engine's discretisation error"
     },
@@ -1179,6 +1278,7 @@
       ],
       "worst": 0.001190813413803281,
       "tolerance": 0.04173915044163846,
+      "minimum": null,
       "passed": true,
       "note": "different meshes of one body: bounded by twice the engine's discretisation error"
     },
@@ -1188,14 +1288,15 @@
       "compared_with": "full",
       "quantity": "complex, all points",
       "errors": [
-        1.0446599068654856,
-        0.9985783000062778,
-        0.9953108763554193
+        1.0446601755934435,
+        0.9985782423597268,
+        0.9953110553704922
       ],
-      "worst": 1.0446599068654856,
+      "worst": 1.0446601755934435,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
-      "note": "quarter re-oriented: flipped_global=472 of 472 triangles; no warning, no finding"
+      "note": "quarter re-oriented: flipped_global=472 of 472 triangles; orientation_valid=True; warnings=[]; findings=['freshness', 'source-paint-missing', 'stale-detection-unavailable']"
     },
     {
       "fixture": "DEFECT (ingest): source on the plug's rear -- WG's quarter vs its full domain",
@@ -1209,8 +1310,9 @@
       ],
       "worst": 1.0014923902047663,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
-      "note": "quarter re-oriented: flipped_global=472 of 472 triangles; no warning, no finding"
+      "note": "quarter re-oriented: flipped_global=472 of 472 triangles; orientation_valid=True; warnings=[]; findings=['freshness', 'source-paint-missing', 'stale-detection-unavailable']"
     },
     {
       "fixture": "horn: placed in CAD (rotated + translated) -- BLOCKED at ingest",
@@ -1222,6 +1324,7 @@
       ],
       "worst": 1.0,
       "tolerance": null,
+      "minimum": null,
       "passed": null,
       "note": "stage 4 STEP import + normalisation: STEP import + normalisation: anchor throat face did not resolve after placement; nearest area-compatible face 14 has plane residual 7.10542736e-15 mm (planar=False)"
     },
@@ -1235,6 +1338,7 @@
       ],
       "worst": 0.0,
       "tolerance": 0.5,
+      "minimum": null,
       "passed": true,
       "note": "it cannot mirror this return's y-only half (mirrored on y = 0); it solves full, half-yz, quarter"
     },
@@ -1248,6 +1352,7 @@
       ],
       "worst": 0.0,
       "tolerance": 0.5,
+      "minimum": null,
       "passed": true,
       "note": "{'status': 'complete', 'error': None, 'engine': {'engine': 'metal', 'package': 'hornlab-metal-bem', 'package_version': '0.1.0', 'device': 'metal', 'formulation': 'complex_k', 'complex_k_shift': 0.005}, 'reopened_equal': True}"
     },
@@ -1261,6 +1366,7 @@
       ],
       "worst": 0.0,
       "tolerance": 0.5,
+      "minimum": null,
       "passed": true,
       "note": "{'status': 'complete', 'error': None, 'engine': {'engine': 'beat-cpu', 'package': 'hornlab-beat-bem', 'package_version': '0.1.0', 'device': 'cpu', 'formulation': 'burton_miller', 'precision': 'single'}, 'reopened_equal': True}"
     },
@@ -1270,14 +1376,15 @@
       "compared_with": "unedited",
       "quantity": "complex, all points",
       "errors": [
-        5.5206175665967364e-08,
-        2.8796432071645874e-07,
-        1.7584231087027384e-07
+        1.0316289995511464e-07,
+        1.1564780719198124e-07,
+        1.4156778048179436e-07
       ],
-      "worst": 2.8796432071645874e-07,
+      "worst": 1.4156778048179436e-07,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
-      "note": "same body, same sizes: the same mesh"
+      "note": "unedited STEP, edited body evidence: the acknowledgement must not change the solve"
     },
     {
       "fixture": "return edited in CAD (acknowledged) vs the unedited return",
@@ -1291,29 +1398,30 @@
       ],
       "worst": 0.0,
       "tolerance": 0.001,
+      "minimum": null,
       "passed": true,
-      "note": "same body, same sizes: the same mesh"
+      "note": "unedited STEP, edited body evidence: the acknowledgement must not change the solve"
     }
   ],
   "timings_s": {
-    "pulsating-L0-one channel-metal": 0.1969326669932343,
-    "pulsating-L0-two channels-metal": 0.16109345899894834,
-    "pulsating-L0-one channel-beat-cpu": 0.20523266700911336,
-    "pulsating-L0-two channels-beat-cpu": 0.4051028329995461,
-    "oscillating-L0-one tag-metal": 0.1560241249972023,
-    "oscillating-L0-one tag-beat-cpu": 0.19239949999609962,
-    "pulsating-L1-one channel-metal": 0.41534508400945924,
-    "pulsating-L1-two channels-metal": 0.47459987498587,
-    "pulsating-L1-one channel-beat-cpu": 0.8819520830002148,
-    "pulsating-L1-two channels-beat-cpu": 1.778843500011135,
-    "oscillating-L1-one tag-metal": 0.4100622500118334,
-    "oscillating-L1-one tag-beat-cpu": 0.8337232499907259,
-    "pulsating-L2-one channel-metal": 2.8893139580031857,
-    "pulsating-L2-two channels-metal": 2.8947754169930704,
-    "pulsating-L2-one channel-beat-cpu": 6.43534150000778,
-    "pulsating-L2-two channels-beat-cpu": 13.190290832979372,
-    "oscillating-L2-one tag-metal": 2.8964967080100905,
-    "oscillating-L2-one tag-beat-cpu": 7.035089458018774
+    "pulsating-L0-one channel-metal": 0.19433250001748092,
+    "pulsating-L0-two channels-metal": 0.16731679200893268,
+    "pulsating-L0-one channel-beat-cpu": 0.2010896250139922,
+    "pulsating-L0-two channels-beat-cpu": 0.38811749999877065,
+    "oscillating-L0-one tag-metal": 0.1515635419928003,
+    "oscillating-L0-one tag-beat-cpu": 0.17760037499829195,
+    "pulsating-L1-one channel-metal": 0.41270608399645425,
+    "pulsating-L1-two channels-metal": 0.4682478749891743,
+    "pulsating-L1-one channel-beat-cpu": 0.9300382499932311,
+    "pulsating-L1-two channels-beat-cpu": 1.6976008749916218,
+    "oscillating-L1-one tag-metal": 0.4089916670054663,
+    "oscillating-L1-one tag-beat-cpu": 0.854809166979976,
+    "pulsating-L2-one channel-metal": 2.8132854159921408,
+    "pulsating-L2-two channels-metal": 2.831579999998212,
+    "pulsating-L2-one channel-beat-cpu": 7.006015790975653,
+    "pulsating-L2-two channels-beat-cpu": 14.812099541013595,
+    "oscillating-L2-one tag-metal": 2.8404589160054456,
+    "oscillating-L2-one tag-beat-cpu": 6.990064084006008
   },
   "ingest_facts": {
     "horn_triangles": {
@@ -1328,10 +1436,20 @@
     "horn_richardson_factor": 3.9746835443037964,
     "horn_order_check": {
       "predicted_coarse_over_reference": 4.557982850142915,
-      "metal": 2.119689806132619,
+      "metal": 2.1196876983548503,
       "beat-cpu": 8.421198319308944
     },
-    "horn_same_mesh_tolerance": 0.14009129012083243,
+    "horn_same_mesh_tolerance": 0.14009145181358684,
+    "horn_error_consistency": {
+      "metal": {
+        "richardson_estimate": 0.07948125106184507,
+        "bound_from_other_engines": 0.03211308194942012
+      },
+      "beat-cpu": {
+        "richardson_estimate": 0.01391305014721282,
+        "bound_from_other_engines": 0.09789197999172242
+      }
+    },
     "horn_full_triangles": 1856,
     "rear_cap_quarter": {
       "cut_planes": [
@@ -1342,7 +1460,12 @@
       "flipped_global": 472,
       "full_flipped_global": 0,
       "orientation_valid": true,
-      "warnings": []
+      "warnings": [],
+      "findings": [
+        "freshness",
+        "source-paint-missing",
+        "stale-detection-unavailable"
+      ]
     },
     "placed_refusal": "stage 4 STEP import + normalisation: STEP import + normalisation: anchor throat face did not resolve after placement; nearest area-compatible face 14 has plane residual 7.10542736e-15 mm (planar=False)",
     "y_only_plan": {
