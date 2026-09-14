@@ -3068,6 +3068,54 @@ def test_the_beat_adapter_preflight_refuses_a_return_at_submission(tmp_path: Pat
     assert "Engines that can: none on this host." in str(caught.value)
 
 
+def _record_mesh_with_open_edges(tmp_path: Path, count: int | None) -> dict[str, Any]:
+    """The shared record's ``mesh`` entry, with or without an open-edge count."""
+
+    shape = tmp_path / "record-shape.msh"
+    shape.write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
+    mesh = _record(shape)["mesh"]
+    if count is not None:
+        mesh["integrity"] = {"off_plane_open_edge_count": count}
+    return mesh
+
+
+@pytest.mark.parametrize(("open_edges", "named"), [(None, []), (0, ["bempp"])])
+def test_an_explicit_refusal_names_only_engines_whose_own_verdict_takes_the_record(
+    tmp_path: Path, open_edges: int | None, named: list[str]
+) -> None:
+    """"Engines that can" is each engine's own verdict, preflight included.
+
+    BEAT · CPU cannot mirror a y-only half. BEMPP declares imported geometry
+    and mirrors one, but its own preflight refuses a record that cannot show
+    it has no free rim -- one with no open-edge count. The refusal used to
+    name it from its declaration alone, while the selector showed it refused.
+    With the count present BEMPP takes the record, and is named.
+    """
+
+    changes = _y_only_half()
+    changes["mesh"] = _record_mesh_with_open_edges(tmp_path, open_edges)
+    registry = _AdapterRegistry(
+        _metal(available=False, reason="no Apple GPU"),
+        _bempp(sources=("parametric", "imported")),
+        _beat_cpu(),
+    )
+
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(_submit_record(tmp_path / "submit", registry, "beat-cpu", changes))
+
+    assert caught.value.details["engine"] == "beat-cpu"
+    assert caught.value.details["reason_code"] == "imported_symmetry_unsupported_by_engine"
+    assert caught.value.details["capable_engines"] == named
+    offer = ", ".join(named) if named else "none on this host"
+    assert f"Engines that can: {offer}." in str(caught.value)
+
+    # The selector shows the same engines as able to take it, and the plan's
+    # refusal names the same list.
+    plan = asyncio.run(_plan(tmp_path / "plan", registry, "beat-cpu", changes))
+    assert [name for name, entry in _verdicts(plan).items() if entry["solves"]] == named
+    assert f"Engines that can: {offer}." in plan["reason"]
+
+
 # The imported plan: every engine's verdict on one ingested return, read by the
 # solver selector, from the same function a submission resolves with.
 

@@ -1035,29 +1035,41 @@ async def _imported_preflight_refusal(
     return refusal if isinstance(refusal, str) and refusal else None
 
 
-def _engines_able_to_take(
+async def _engines_able_to_take(
     declared: Mapping[str, EngineInfo],
     order: tuple[str, ...],
     *,
     exclude: str,
     resolved_quadrants: Any,
     needed_features: set[str],
+    engine_registry: EngineRegistry,
+    imported_record: Mapping[str, Any] | None,
+    imported_msh_text: str | None,
 ) -> list[str]:
-    """The engines, other than ``exclude``, whose declaration takes this return here.
+    """The engines, other than ``exclude``, that would take this return here.
 
-    Declaration, capability and availability only: no adapter is built and no
-    preflight run, so a refusal can name them without solving anything.
+    Each engine's own ``imported_engine_verdict`` -- the one the selector
+    shows, its adapter's preflight included -- so a refusal never names an
+    engine that would refuse the record in turn. It runs only on the refusal
+    path, and solves nothing.
     """
 
-    return [
-        name
-        for name in order
-        if name != exclude
-        and (info := declared.get(name)) is not None
-        and _IMPORTED_GEOMETRY in info.geometry_sources
-        and _imported_capability_blocker(info, resolved_quadrants, needed_features) is None
-        and info.available
-    ]
+    able: list[str] = []
+    for name in order:
+        info = declared.get(name)
+        if name == exclude or info is None:
+            continue
+        verdict = await imported_engine_verdict(
+            info,
+            resolved_quadrants=resolved_quadrants,
+            needed_features=needed_features,
+            engine_registry=engine_registry,
+            imported_record=imported_record,
+            imported_msh_text=imported_msh_text,
+        )
+        if verdict.solves:
+            able.append(name)
+    return able
 
 
 def _imported_request_refusal(request: SolveRequest) -> tuple[str, str] | None:
@@ -1300,12 +1312,15 @@ async def resolve_imported_submission(
         # user's pick is refused, never swapped, and the refusal names the
         # engines that can take this record here.
         if explicit:
-            able = _engines_able_to_take(
+            able = await _engines_able_to_take(
                 declared,
                 order,
                 exclude=name,
                 resolved_quadrants=resolved_quadrants,
                 needed_features=needed_features,
+                engine_registry=engine_registry,
+                imported_record=imported_record,
+                imported_msh_text=imported_msh_text,
             )
             raise ImportedSolveRefusal(
                 "imported_engine_unsupported",
