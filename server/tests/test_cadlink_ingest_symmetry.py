@@ -1347,12 +1347,11 @@ def test_a_rear_facing_source_is_never_solved_inverted(tmp_path: Path) -> None:
     its source faces +z inverts every triangle of it, and the solve differs
     from the full domain by 87-100% -- with ``orientation_valid`` still true.
 
-    Both branches below are live on purpose. A mesher that winds a reduced
-    component from its mirrored parent keeps the quarter; the pinned one before
-    that winds it from its source, and WG must then catch the inversion and
-    solve the full domain instead. Whichever ran, what is solved is wound like
-    the full model. The pin bump that delivers the mesher side can drop the
-    second branch.
+    The pinned mesher winds a reduced component from its mirrored parent, so
+    the quarter is kept, wound like the full model, and the disagreeing source
+    is reported rather than obeyed. ``verify_reduced_orientation`` still stands
+    behind it: a mesher that inverted the quarter again would cost the
+    reduction, not solve it inverted.
     """
 
     pytest.importorskip("gmsh")
@@ -1374,36 +1373,24 @@ def test_a_rear_facing_source_is_never_solved_inverted(tmp_path: Path) -> None:
     assert comparison["source_z"][1] < 0.0
     assert comparison["source_z"][0] < 0.0
 
-    if _child_orients_from_parent(full):
-        assert auto["symmetry"]["cut_planes"] == ["x0", "y0"]
-        assert "fallback" not in auto["symmetry_verification"]
-        orientation = auto["symmetry_verification"]["reduced_orientation"]
-        assert orientation["inverted_component_count"] == 0
-        postprocess = auto["mesh"]["metadata"]["postprocess"]
-        assert postprocess["reduced_orientation"] == "mirrored-parent"
-        assert postprocess["flipped_global"] == 0
-        assert postprocess["symmetry_parent_volume_flipped"] == 0
-        assert postprocess["symmetry_parent_volume_kept"] >= 1
-        # Kept, but not silently: the source disagreed with the parent.
-        assert postprocess["symmetry_source_parent_conflicts"] >= 1
-        assert any(
-            "which their tagged source alone would have inverted" in warning
-            for warning in auto["mesh"]["stats"]["warnings"]
-        )
-    else:
-        assert auto["symmetry"]["cut_planes"] == []
-        fallback = auto["symmetry_verification"]["fallback"]
-        assert fallback["rejected_cut_planes"] == ["x0", "y0"]
-        assert "wound against the model they mirror" in fallback["reason"]
-        assert fallback["reduced_orientation"]["inverted_component_count"] >= 1
-        finding = next(
-            item
-            for item in auto["findings"]
-            if item["kind"] == "symmetry-cut-unverified"
-        )
-        assert finding["blocking"] is True
-        assert "Tag a source face that faces the bore" in finding["detail"]
-        assert "Re-export" not in finding["detail"]
+    # Asked of the record, because the CAD child imports its own mesher. A
+    # child without the mode is running a mesher WG no longer pins.
+    assert _child_orients_from_parent(full), full["mesh"]["metadata"]["postprocess"]
+    assert auto["symmetry"]["cut_planes"] == ["x0", "y0"]
+    assert "fallback" not in auto["symmetry_verification"]
+    orientation = auto["symmetry_verification"]["reduced_orientation"]
+    assert orientation["inverted_component_count"] == 0
+    postprocess = auto["mesh"]["metadata"]["postprocess"]
+    assert postprocess["reduced_orientation"] == "mirrored-parent"
+    assert postprocess["flipped_global"] == 0
+    assert postprocess["symmetry_parent_volume_flipped"] == 0
+    assert postprocess["symmetry_parent_volume_kept"] >= 1
+    # Kept, but not silently: the source disagreed with the parent.
+    assert postprocess["symmetry_source_parent_conflicts"] >= 1
+    assert any(
+        "which their tagged source alone would have inverted" in warning
+        for warning in auto["mesh"]["stats"]["warnings"]
+    )
 
 
 _RETURN_IDS["rear-quarter"] = "wgr_01J5A8QK3M9T2XVBH0RD7NWEQ0"
@@ -1415,13 +1402,12 @@ def test_a_declared_quarter_with_a_rear_facing_source_is_never_solved_inverted(
     """A declared domain has no whole model to fall back to.
 
     The author cut it in CAD, so the other three quarters are not in the STEP.
-    It is either wound like the full model and solved, or refused with the
-    reason -- the advice about holes in the cut faces would be wrong here.
+    It is wound like the full model and solved. Were it wound against it, it
+    would be refused rather than solved, because the missing quarters are not
+    there to fall back to.
     """
 
     pytest.importorskip("gmsh")
-    from server.cadlink.ingest import IngestRefusal
-
     full = _ingest(
         tmp_path / "f",
         _horn_bundle(tmp_path / "f", "rear-full", source_shape=REAR_CAP),
@@ -1431,23 +1417,16 @@ def test_a_declared_quarter_with_a_rear_facing_source_is_never_solved_inverted(
         tmp_path / "q", "rear-quarter", planes=("x0", "y0"), source_shape=REAR_CAP
     )
 
-    if _child_orients_from_parent(full):
-        declared = _ingest(tmp_path / "q", bundle)
-        assert declared["symmetry"]["domain_planes"] == ["x0", "y0"]
-        orientation = declared["symmetry_verification"]["reduced_orientation"]
-        assert orientation["inverted_component_count"] == 0
-        comparison = _winding_against_full(declared, full)
-        assert comparison["volume_ratio"] == pytest.approx(1.0, abs=0.01)
-        assert comparison["agreement"] >= 0.95
-        assert comparison["source_z"][0] < 0.0
-        assert comparison["source_z"][1] < 0.0
-    else:
-        with pytest.raises(
-            IngestRefusal, match="wound against the model they mirror"
-        ) as refusal:
-            _ingest(tmp_path / "q", bundle)
-        assert "Tag a source face that faces the bore" in str(refusal.value)
-        assert "free of other holes" not in str(refusal.value)
+    assert _child_orients_from_parent(full), full["mesh"]["metadata"]["postprocess"]
+    declared = _ingest(tmp_path / "q", bundle)
+    assert declared["symmetry"]["domain_planes"] == ["x0", "y0"]
+    orientation = declared["symmetry_verification"]["reduced_orientation"]
+    assert orientation["inverted_component_count"] == 0
+    comparison = _winding_against_full(declared, full)
+    assert comparison["volume_ratio"] == pytest.approx(1.0, abs=0.01)
+    assert comparison["agreement"] >= 0.95
+    assert comparison["source_z"][0] < 0.0
+    assert comparison["source_z"][1] < 0.0
 
 
 def _child_orients_from_parent(record: dict[str, Any]) -> bool:
