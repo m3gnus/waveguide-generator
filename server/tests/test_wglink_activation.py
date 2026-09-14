@@ -1189,6 +1189,78 @@ def test_a_fusion_check_that_cannot_tell_keeps_the_activation_pending(
     assert addin_update.installed_commit(target) == OLD
 
 
+def test_the_in_lock_gate_reads_a_fusion_it_cannot_see_as_open(
+    short_tmp_path: Path, monkeypatch
+) -> None:
+    """Under the lock, "unknown" stops the pass before the real installer runs at all.
+
+    The installer's ``should_proceed`` would also defer, but only after its
+    journal recovery and its staging inside AddIns, which must not happen while
+    Fusion may be running. So this drives the real installer, spied, and the
+    fake's early ``should_proceed`` cannot stand in for the gate.
+    """
+
+    # The package fixture is built for version 9.8.7, and the installer checks it.
+    build = {**BUILD_A, "version": "9.8.7"}
+    root = _populate(short_tmp_path / "wg", build, PIN_A)
+    package = _real_package(short_tmp_path / "pkg", root, PIN_A)
+    _build(root, build, PIN_A)
+    addins = short_tmp_path / "AddIns"
+    target = _installed(addins, commit=OLD, root=root)
+    data = short_tmp_path / "data"
+    entered: list[int] = []
+    recovered: list[Path] = []
+    staged: list[Path] = []
+    real_loader = addin_update._installer
+
+    def loaded(root_path: Path):
+        module = real_loader(root_path)
+        real_unlocked = module._install_unlocked
+        real_recover = module._recover_install_transaction
+        real_publish = module.publish_staging_directory
+
+        def install_unlocked(**kwargs):
+            entered.append(1)
+            return real_unlocked(**{**kwargs, "archive_path": package})
+
+        def recover(addins_dir, *args, **kwargs):
+            recovered.append(Path(addins_dir))
+            return real_recover(addins_dir, *args, **kwargs)
+
+        def publish(parent, *args, **kwargs):
+            staged.append(Path(parent))
+            return real_publish(parent, *args, **kwargs)
+
+        module._install_unlocked = install_unlocked
+        module._recover_install_transaction = recover
+        module.publish_staging_directory = publish
+        return module
+
+    monkeypatch.setattr(addin_update, "_installer", loaded)
+
+    activation = addin_update.activate_wglink(
+        root=root, addins_dir=addins, data_dir=data,
+        fusion_running=lambda: "unknown", confirmed=CONFIRMED,
+    )
+
+    assert activation.verdict == "pending"
+    assert "could not tell whether Fusion is running" in activation.detail
+    assert (entered, recovered, staged) == ([], [], [])
+    assert addin_update.installed_commit(target) == OLD
+    assert not (addins / ".WGLink-install-transaction.json").exists()
+    assert not [path for path in addins.iterdir() if path.name.startswith(".WGLink-install-") and path.is_dir()]
+
+    # The same harness with Fusion closed reaches the real staging and installs,
+    # so the empty lists above are the gate's doing, not the spies'.
+    installed = addin_update.activate_wglink(
+        root=root, addins_dir=addins, data_dir=data,
+        fusion_running=lambda: "closed", confirmed=CONFIRMED,
+    )
+    assert installed.verdict == "updated", installed.detail
+    assert entered == [1] and recovered and staged
+    assert addin_update.installed_commit(target) == PIN_A
+
+
 def test_a_first_install_touches_nothing_under_addins_while_fusion_may_be_open(
     tmp_path: Path, monkeypatch
 ) -> None:
