@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import signal
 import subprocess
 import sys
 import time
@@ -410,7 +411,9 @@ def test_a_child_that_dies_without_answering_leaves_its_exit_code_and_output(
     [
         (0, "with code 0"),
         (3, "with code 3"),
-        (-6, "on signal SIGABRT (-6)"),
+        # Signal numbers are the platform's own: SIGABRT is 6 on POSIX and 22 on
+        # Windows, where a literal -6 names no signal at all.
+        (-int(signal.SIGABRT), f"on signal SIGABRT ({-int(signal.SIGABRT)})"),
         (3221225477, "with code 0xC0000005"),
         (None, "with no recorded code"),
     ],
