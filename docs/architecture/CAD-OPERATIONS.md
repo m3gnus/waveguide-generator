@@ -494,6 +494,44 @@ add-in it ships.
   developer sync, and an add-in another Waveguide Generator installation manages; WG
   still refuses either while it is too old, and says why. The add-in Fusion is running
   changes only when Fusion restarts.
+- **WGLink activation.** Changing Fusion's add-in follows the order an app update needs
+  (`server/cadlink/addin_update.py`):
+  - **After this start is confirmed.** Nothing changes while this installation has an open
+    update journal. A healthy start closes it through `commit_transaction`, which the
+    healthy-start settlement calls in every launch mode: the window, `--browser` and
+    `--no-gui` (`launchers/statusapp/healthy_start.py`). The only other way a journal goes
+    is recovery removing one it cannot trust once it has rolled back or aborted
+    (`launchers/apply_update.py`); the build that then starts is the one recovery kept. So
+    a build that rolls back never leaves its add-in behind with the older WG. A source
+    checkout has no journal.
+  - **Never while Fusion is open, or while WG cannot tell.** A fresh WGLink heartbeat, a
+    running Fusion process, and a process check that fails or times out
+    (`fusion_process_state`) all count as open. The change is then recorded as pending in
+    `<data>/integrations/wglink/activation/<installation key>/pending.json`, outside
+    `<data>/updates/`, and nothing is created in Fusion's add-ins folder. The record names
+    the build (`version`, `commit`, `runtimeId` from `APP-MANIFEST.json`), the required
+    pin, the target and its ownership, and the verified package by digest. The status
+    reads "WGLink activation is pending until Fusion closes".
+  - **Decided under `.WGLink-install.lock`.** The pass that replaces the add-in reads the
+    start, Fusion, the pin, the build, the pending work and the owner under the lock the
+    replacement holds. It reads the pin and build again just before the installer runs,
+    and the installer asks about Fusion, the pin and the build once more immediately before
+    it moves anything; a "no" leaves the target untouched and the work pending, or
+    superseded. Pending work from another build, pin, installation or add-ins folder is
+    discarded and logged, never installed; so is work whose target another installation or
+    a developer sync has taken since.
+  - **Who finishes it.** While WG runs, the Fusion status poll retries a pending activation
+    once Fusion has closed, and the startup pass retries it about once a minute, so it does
+    not depend on the CAD Link UI being open. Each start re-checks it once confirmed. When
+    WG is not running, nothing is promised.
+  - **Rollback material.** The managed add-in a replacement displaces is kept, marker and
+    all, in `activation/<installation key>/previous/`. A hand-copied add-in is not kept.
+  - **Fusion's registry** (`JSLoadedScriptsinfo`) is read, never written. A duplicate
+    registration, one from another folder, or one not set to run on startup is reported
+    with the status (`addinRefresh.registration`).
+  - "Activated" means Fusion's next start loads the new copy, never that it runs it.
+    The loaded identity arrives with the Phase 4 handshake
+    (`addin_update.loaded_addin_identity`).
 - **What an older WG left is removed.** At every start WG removes the single slots
   `.fusion-return-request.json` and `.fusion-handoff.json`, their records
   (`.legacy-slot.json`), and request files of another schema. No add-in this WG talks to

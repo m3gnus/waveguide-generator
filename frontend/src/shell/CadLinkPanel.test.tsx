@@ -410,15 +410,71 @@ describe('CadLinkPanel', () => {
       state: 'addin-outdated', headline: 'WGLink add-in is out of date', action: null,
     });
     expect(fusionWorkflowView({
-      ...outdated, addinRefresh: { verdict: 'updated', detail: '' },
-    }).detail).toContain('Restart Fusion 360 to load it');
-    expect(fusionWorkflowView({
       ...outdated, addinRefresh: { verdict: 'failed', detail: 'the bundled WGLink package is missing' },
     }).detail).toContain('the bundled WGLink package is missing');
     expect(fusionWorkflowView({
       ...outdated, addinRefresh: { verdict: 'external', detail: 'managed by another Waveguide Generator' },
     }).detail).toContain('another Waveguide Generator installation');
-    expect(fusionWorkflowView({ ...outdated, addinRefresh: null }).detail).toContain('Restart Fusion 360');
+    // No report yet is not a claim that anything was installed.
+    const unknown = fusionWorkflowView({ ...outdated, addinRefresh: null }).detail;
+    expect(unknown).toContain('still checking');
+    expect(unknown).not.toContain('installed');
+  });
+
+  it('states each WGLink activation outcome honestly', () => {
+    const outdated = { ...currentFusion, state: 'addin_outdated' as const };
+    const detail = (addinRefresh: FusionCadStatus['addinRefresh']) =>
+      fusionWorkflowView({ ...outdated, addinRefresh }).detail;
+
+    // Pending: WG never replaces the add-in while Fusion is open.
+    const pending = detail({ verdict: 'pending', detail: 'WGLink activation is pending until Fusion closes' });
+    expect(pending).toContain('WGLink activation is pending until Fusion closes');
+    expect(pending).toContain('Close Fusion to finish updating WGLink');
+    expect(pending).not.toMatch(/Restart Fusion/);
+
+    // Activated: installed on disk for Fusion's next start, never "running".
+    for (const verdict of ['installed', 'updated', 'replaced']) {
+      const activated = detail({ verdict, detail: '' });
+      expect(activated).toContain('Fusion loads it the next time it starts');
+      expect(activated).not.toContain('Restart Fusion 360 to load it');
+    }
+
+    // Superseded: pending work from another build is named, and never installed.
+    const superseded = 'a pending WGLink activation was discarded: it was staged by build 0.3.4 (bbbb), and this is 0.3.3 (aaaa)';
+    expect(detail({ verdict: 'current', detail: 'WGLink is at the pinned aaaa', superseded }))
+      .toContain('A pending WGLink activation was discarded: it was staged by build 0.3.4');
+    expect(detail({ verdict: 'superseded', detail: 'the installed Waveguide Generator is now 0.3.4' }))
+      .toContain('Restart Waveguide Generator');
+
+    // Failed, with the reason.
+    expect(detail({ verdict: 'failed', detail: 'could not update WGLink: disk full' }))
+      .toContain('could not update WGLink: disk full');
+
+    // Waiting for this start to be confirmed.
+    expect(detail({ verdict: 'awaiting-startup', detail: 'update transaction t1 is open' }))
+      .toContain('only once this start is confirmed');
+
+    // Fusion's own registry is reported, never edited.
+    const registration = { state: 'duplicate', detail: 'Fusion has WGLink registered 2 times.' };
+    expect(detail({ verdict: 'updated', detail: '', registration }))
+      .toContain('Fusion has WGLink registered 2 times.');
+  });
+
+  it('carries a pending or failed WGLink activation into every other state', () => {
+    const closed = { ...currentFusion, state: 'closed' as const, running: false, processRunning: false };
+    expect(fusionWorkflowView({ ...closed, addinRefresh: { verdict: 'updated', detail: '' } }).detail)
+      .toContain('Fusion loads it when it next starts');
+    expect(fusionWorkflowView({ ...currentFusion, addinRefresh: { verdict: 'pending', detail: '' } }).detail)
+      .toContain('WGLink activation is pending until Fusion closes');
+    expect(fusionWorkflowView({ ...currentFusion, addinRefresh: { verdict: 'failed', detail: 'lock held' } }).detail)
+      .toContain('WG could not update WGLink (lock held)');
+    // Nothing to say is nothing added.
+    expect(fusionWorkflowView({ ...currentFusion, addinRefresh: { verdict: 'current', detail: '' } }).detail)
+      .toBe(fusionWorkflowView(currentFusion).detail);
+    // A registry problem is named where WGLink is not working.
+    const manual = { state: 'manual', detail: 'Tick Run on Startup for WGLink.' };
+    expect(fusionWorkflowView({ ...closed, addinRefresh: { verdict: 'current', detail: '', registration: manual } }).detail)
+      .toContain('Tick Run on Startup for WGLink.');
   });
 
   it('says an interrupted update needs recovery before anything else about the link', () => {

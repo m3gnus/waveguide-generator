@@ -72,6 +72,53 @@ def fusion_process_running(*, system: str | None = None) -> bool:
     return completed.returncode == 0
 
 
+FUSION_RUNNING = "running"
+FUSION_CLOSED = "closed"
+FUSION_UNKNOWN = "unknown"
+
+
+def fusion_process_state(*, system: str | None = None) -> str:
+    """Whether Fusion runs: ``running``, ``closed``, or ``unknown``.
+
+    :func:`fusion_process_running` reads a check that failed as "not running",
+    which is right for presence and wrong for anything that must not act while
+    Fusion is open. Here a missing ``pgrep`` or ``tasklist``, a check that
+    times out, and one that cannot run or errors are ``unknown``, and WGLink
+    activation treats that as open. A platform Fusion does not run on is
+    ``closed``.
+    """
+
+    resolved = platform.system() if system is None else system
+    if resolved == "Darwin":
+        tool = shutil.which("pgrep")
+        command = [tool, "-x", "Autodesk Fusion"] if tool else None
+    elif resolved == "Windows":
+        tool = shutil.which("tasklist")
+        command = [tool, "/FI", "IMAGENAME eq Fusion360.exe", "/NH"] if tool else None
+    else:
+        return FUSION_CLOSED
+    if command is None:
+        return FUSION_UNKNOWN
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            command,
+            check=False,
+            capture_output=True,
+            timeout=2,
+            **background_process_kwargs(system=resolved),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return FUSION_UNKNOWN
+    if resolved == "Windows":
+        if completed.returncode != 0:
+            return FUSION_UNKNOWN
+        return FUSION_RUNNING if b"Fusion360.exe" in completed.stdout else FUSION_CLOSED
+    # pgrep: 0 is a match, 1 is none, anything else is an error.
+    if completed.returncode == 0:
+        return FUSION_RUNNING
+    return FUSION_CLOSED if completed.returncode == 1 else FUSION_UNKNOWN
+
+
 def _timestamp(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
@@ -487,6 +534,10 @@ __all__ = [
     "ADDIN_OUTDATED_MESSAGE",
     "FUSION_STATUS_FILENAME",
     "FUSION_STATUS_TTL",
+    "FUSION_CLOSED",
+    "FUSION_RUNNING",
+    "FUSION_UNKNOWN",
     "fusion_process_running",
+    "fusion_process_state",
     "read_fusion_status",
 ]

@@ -5,7 +5,23 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from server.cadlink import addin_update
+
+
+@pytest.fixture(autouse=True)
+def _no_live_fusion_or_shared_state(monkeypatch, tmp_path: Path) -> None:
+    """Fusion is closed and this start is confirmed unless a test says otherwise.
+
+    Activation never replaces the add-in while Fusion runs, so a test that asked
+    the real machine would change verdict whenever Fusion happened to be open.
+    """
+
+    monkeypatch.setattr(addin_update, "fusion_process_state", lambda: "closed")
+    monkeypatch.setattr(addin_update, "_running_builds", {})
+    monkeypatch.setattr(addin_update, "_report", None)
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "data"))
 
 
 def _wg_root(tmp_path: Path, commit: str) -> Path:
@@ -122,7 +138,8 @@ def _recording_installer(monkeypatch, addins: Path, calls: list[dict[str, object
             target.mkdir(parents=True, exist_ok=True)
             return "installed", target
 
-        module.install = install
+        # Activation replaces the add-in under the lock it already holds.
+        module._install_unlocked = install
         return module
 
     monkeypatch.setattr(addin_update, "_installer", recording)
@@ -149,7 +166,7 @@ def test_an_add_in_no_waveguide_generator_manages_is_replaced(
     verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
 
     assert verdict == "replaced"
-    assert "restart Fusion" in detail
+    assert "Fusion loads it the next time it starts" in detail
     assert calls and calls[0]["replace_external"] is True
     # Only the verified package this build ships replaces it; never a fetch.
     assert calls[0]["archive_path"] == archive
@@ -191,9 +208,9 @@ def test_startup_installs_an_absent_add_in_where_fusion_is_installed(
     addins = tmp_path / "Autodesk Fusion" / "API" / "AddIns"
     addins.parent.mkdir(parents=True)
     archive = tmp_path / "wglink.zip"
+    archive.write_bytes(b"verified package")
     calls: list[dict[str, object]] = []
     _recording_installer(monkeypatch, addins, calls)
-    monkeypatch.setattr(addin_update, "fusion_process_running", lambda: False)
     monkeypatch.setattr(addin_update, "_verified_shipped_package", lambda *_args: (archive, None))
 
     verdict, _detail = addin_update.refresh_wglink(root=root)
@@ -202,20 +219,28 @@ def test_startup_installs_an_absent_add_in_where_fusion_is_installed(
     assert calls and calls[0]["archive_path"] == archive
 
 
-def test_the_startup_refresh_can_be_turned_off_and_reports_what_it_did(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_activation_can_be_turned_off_and_reports_what_it_did(monkeypatch) -> None:
     seen: list[str] = []
-    monkeypatch.setattr(addin_update, "refresh_wglink", lambda: seen.append("ran") or ("updated", "x"))
+    monkeypatch.setattr(
+        addin_update,
+        "activate_wglink",
+        lambda **_kwargs: seen.append("ran") or addin_update.Activation("updated", "x"),
+    )
 
     monkeypatch.setenv("WG2_WGLINK_REFRESH", "0")
     assert addin_update.refresh_and_log()[0] == "disabled"
     assert seen == []
-    assert addin_update.last_refresh() == {"verdict": "disabled", "detail": "WG2_WGLINK_REFRESH=0"}
+    report = addin_update.last_refresh()
+    assert report is not None
+    assert (report["verdict"], report["detail"]) == ("disabled", "WG2_WGLINK_REFRESH=0")
 
     monkeypatch.setenv("WG2_WGLINK_REFRESH", "1")
     assert addin_update.refresh_and_log() == ("updated", "x")
-    assert addin_update.last_refresh() == {"verdict": "updated", "detail": "x"}
+    report = addin_update.last_refresh()
+    assert report is not None
+    assert (report["verdict"], report["detail"]) == ("updated", "x")
+    # The Phase 4 handshake's seam: nothing reports what Fusion loaded yet.
+    assert report["loadedIdentity"] is None
 
 
 def test_startup_recovers_a_managed_target_after_a_crash_moved_it_to_backup(
@@ -281,7 +306,7 @@ def test_an_explicit_first_install_uses_only_the_verified_shipped_package(
             (target / "WGLink.py").write_text("# installed\n", encoding="utf-8")
             return "installed", target
 
-        module.install = install
+        module._install_unlocked = install
         return module
 
     monkeypatch.setattr(addin_update, "_installer", recording)
@@ -296,7 +321,7 @@ def test_an_explicit_first_install_uses_only_the_verified_shipped_package(
     )
 
     assert verdict == "installed"
-    assert "restart Fusion" in detail
+    assert "Fusion loads it the next time it starts" in detail
     assert calls and calls[0]["archive_path"] == archive
 
 
@@ -312,12 +337,13 @@ def test_an_implicit_first_install_requires_fusion_to_be_installed(tmp_path: Pat
         return module
 
     monkeypatch.setattr(addin_update, "_installer", recording)
-    monkeypatch.setattr(addin_update, "fusion_process_running", lambda: False)
 
     verdict, detail = addin_update.refresh_wglink(root=root, install_absent=True)
 
     assert verdict == "not-detected"
     assert "not installed" in detail
+    # Deciding that created nothing where Fusion would look.
+    assert not addins.exists()
 
 
 def test_a_verified_package_failure_is_reported_without_installing(tmp_path: Path, monkeypatch) -> None:
@@ -328,7 +354,7 @@ def test_a_verified_package_failure_is_reported_without_installing(tmp_path: Pat
 
     def recording(root_path: Path):
         module = real(root_path)
-        module.install = lambda **kwargs: calls.append(kwargs)
+        module._install_unlocked = lambda **kwargs: calls.append(kwargs)
         return module
 
     monkeypatch.setattr(addin_update, "_installer", recording)
@@ -361,14 +387,14 @@ def test_a_stale_managed_add_in_is_updated_to_the_pin(tmp_path: Path, monkeypatc
         def install(**kwargs):
             calls.append(kwargs)
             return "installed", addins / "WGLink"
-        module.install = install
+        module._install_unlocked = install
         return module
 
     monkeypatch.setattr(addin_update, "_installer", recording)
 
     verdict, detail = addin_update.refresh_wglink(root=root, addins_dir=addins)
     assert verdict == "updated"
-    assert "restart Fusion" in detail
+    assert "Fusion loads it the next time it starts" in detail
     assert calls and calls[0]["root"] == root
     assert calls[0]["offline_only"] is False
 
@@ -419,7 +445,7 @@ def test_an_installer_failure_is_reported_and_never_raised(tmp_path: Path, monke
         module = real(root_path)
         def install(**_kwargs):
             raise RuntimeError("no network")
-        module.install = install
+        module._install_unlocked = install
         return module
 
     monkeypatch.setattr(addin_update, "_installer", exploding)
@@ -429,13 +455,13 @@ def test_an_installer_failure_is_reported_and_never_raised(tmp_path: Path, monke
     assert "no network" in detail
 
 
-def test_create_app_reconciles_the_add_in_at_boot_and_drains_it_at_shutdown(
+def test_create_app_starts_activation_at_boot_and_drains_it_at_shutdown(
     tmp_path: Path,
 ) -> None:
     """The wiring, not just the decision.
 
     Every verdict below is reachable only if something actually calls this, and
-    the reconciliation is the one part of the round trip with no user action
+    the startup pass is the one part of the round trip with no user action
     behind it. Draining rather than cancelling matters here more than for a
     warmup: this task can be mid-install, and abandoning it would leave a
     staging directory beside the user's add-in.
@@ -444,7 +470,7 @@ def test_create_app_reconciles_the_add_in_at_boot_and_drains_it_at_shutdown(
     from server.app import create_app
 
     application = create_app(data_dir=tmp_path)
-    assert "start_addin_refresh" in {
+    assert "start_addin_activation" in {
         handler.__name__ for handler in application.router.on_startup
     }
     assert "shutdown_addin_refresh" in {
@@ -452,19 +478,22 @@ def test_create_app_reconciles_the_add_in_at_boot_and_drains_it_at_shutdown(
     }
 
 
-def test_the_reconciliation_runs_off_the_startup_thread(monkeypatch) -> None:
+def test_the_startup_pass_runs_off_the_startup_thread(monkeypatch) -> None:
     """Startup must not wait on file work, however short it usually is."""
 
     import asyncio
 
     seen: list[str] = []
+    monkeypatch.setenv("WG2_WGLINK_REFRESH", "1")
+    monkeypatch.setattr(addin_update, "startup_confirmed", lambda *_args: (True, "confirmed"))
     monkeypatch.setattr(
-        addin_update, "refresh_and_log", lambda: seen.append("ran") or ("current", "")
+        addin_update, "refresh_and_log", lambda *_args: seen.append("ran") or ("current", "")
     )
 
     async def drive() -> None:
         await addin_update.start_addin_refresh()
         assert addin_update.addin_refresh.task is not None
+        await asyncio.wait({addin_update.addin_refresh.task})
         await addin_update.shutdown_addin_refresh()
 
     asyncio.run(drive())

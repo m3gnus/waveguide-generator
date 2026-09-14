@@ -486,7 +486,13 @@ def create_app(
     # has never touched Fusion. Reconciling the two is a marker comparison in
     # the ordinary case, and a local copy from the package this release ships in
     # the case that is not -- but it is still file work, so it goes on a thread.
-    application.router.add_event_handler("startup", start_addin_refresh)
+    # It also waits: nothing changes Fusion's add-in until this start is
+    # confirmed, because a build that rolls back must not leave its add-in
+    # behind with the older WG (addin_update.startup_confirmed).
+    async def start_addin_activation() -> None:
+        await start_addin_refresh(data_dir=resolved_data_dir)
+
+    application.router.add_event_handler("startup", start_addin_activation)
     application.router.add_event_handler("shutdown", shutdown_addin_refresh)
     # Likewise the engine probe: it is the page load's slowest request, and
     # leaving it lazy made it contend with the first symmetry resolution.

@@ -397,14 +397,22 @@ For Fusion 360:
    Restart Fusion after installing WG and confirm **Run on Startup** is ticked under
    **Utilities → Scripts and Add-Ins**; Fusion's own record of that toggle
    overrides the add-in manifest, so a copy once started by hand stays manual
-   until the box is ticked. After that, WG keeps the add-in current by itself:
-   each start compares the installed copy against the add-in commit that
-   release pins and updates it from the package the release carries, with no
-   network and no second installer run. It does not install an absent add-in at
-   startup. Restart Fusion when it updates one. It updates
-   only an add-in this Waveguide Generator installed — one managed by another WG
-   installation, one installed by something else, and one synced by a developer
-   are each left exactly as they are. Install from exactly one location — a second copy
+   until the box is ticked. After that, WG keeps the add-in current by itself.
+   Once a start of WG is confirmed healthy, it compares the installed copy with
+   the add-in commit that release pins and brings it to that commit from the
+   package the release carries, with no network and no second installer run;
+   where Fusion is installed and has no WGLink yet, it installs one the same way.
+   It never changes the add-in while Fusion is open: the CAD Link panel then says
+   **WGLink activation is pending until Fusion closes**, and WG finishes it when
+   you close Fusion while WG is running, or at its next start. Fusion loads the
+   new copy the next time it starts. A WGLink no Waveguide Generator manages
+   (copied in by hand) is replaced; one managed by another WG installation, and
+   one synced by a developer, are left exactly as they are. The managed copy a
+   replacement displaced is kept in WG's data folder for a later rollback; a
+   hand-copied one is not kept. WG
+   reads Fusion's own list of add-ins and tells you when WGLink is registered
+   twice, registered from another folder, or not set to run on startup; it never
+   edits that list. Install from exactly one location — a second copy
    loads a second module instance and the two fight over the panel. The installer
    preserves a developer-managed copy instead of overwriting it. Setup reports
    whether WGLink was installed, updated, not selected, not detected, preserved,

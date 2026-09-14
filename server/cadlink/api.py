@@ -44,7 +44,7 @@ from server.workspace.archive import (
     reclaim_captured_documents,
 )
 
-from .addin_update import last_refresh
+from .addin_update import last_refresh, poll_activation
 from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
 from .fusion_delivery import advertise_fusion_delivery
 from .fusion_return import publish_return_request
@@ -822,11 +822,20 @@ async def fusion_status(
         returned_bundle=returned_bundle,
         returned_manifest=returned_manifest,
     )
-    if status.get("state") == "addin_outdated":
-        # What startup did about it: installed or updated WG's own add-in (so a
-        # Fusion restart is the remedy), left another installation's alone, or
-        # failed -- the UI's prompt says which.
-        status["addinRefresh"] = last_refresh()
+    # WGLink activation waits for Fusion to close, and while WG runs this poll
+    # is what finishes it (server/cadlink/addin_update.py). Once WG has decided,
+    # the report goes with every state, so the UI can name a pending, activated,
+    # superseded or failed activation anywhere; an outdated add-in always gets
+    # it, to name the remedy. Activation turned off is said only there.
+    await poll_activation(
+        fusion_open=bool(status.get("processRunning") or status.get("running")),
+        data_dir=Path(request.app.state.data_dir),
+    )
+    report = last_refresh()
+    if status.get("state") == "addin_outdated" or (
+        report is not None and report.get("verdict") != "disabled"
+    ):
+        status["addinRefresh"] = report
     status["cadFolderConfigured"] = selected is not None
     status["cadFolderPath"] = str(selected) if selected is not None else None
     status["cadConnectionIssue"] = None

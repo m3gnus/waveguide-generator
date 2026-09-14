@@ -121,10 +121,24 @@ export interface FusionRecoveryRequired {
   exportId: string | null;
 }
 
-/** What WG's startup did about Fusion's WGLink (server/cadlink/addin_update.py). */
+/** How Fusion's own registry lists WGLink, read-only (server/cadlink/addin_update.py). */
+export interface WgLinkRegistration {
+  /** `unregistered`, `registered`, or a problem: `manual`, `duplicate`, `elsewhere`. */
+  state: string;
+  detail: string;
+}
+
+/** What WG last decided about Fusion's WGLink: its activation (server/cadlink/addin_update.py). */
 export interface WgLinkRefreshReport {
+  /** `pending` until Fusion closes; `installed`, `updated` or `replaced` once activated;
+   * `awaiting-startup`, `superseded`, `failed`, or a verdict that changed nothing. */
   verdict: string;
   detail: string;
+  /** Why pending work from another build, pin, installation or owner was discarded. */
+  superseded?: string | null;
+  registration?: WgLinkRegistration | null;
+  /** CAD Link Phase 4's handshake: the build WGLink reports it loaded. Null until then. */
+  loadedIdentity?: Record<string, string> | null;
 }
 
 export type CadRealizedDimensionsState = 'no_link' | 'link_unavailable' | 'export_missing' | 'not_captured' | 'unavailable' | 'current' | 'stale';
@@ -173,7 +187,8 @@ export interface FusionCadStatus {
   /** The delivery version the add-in reports; below WG's, the state is `addin_outdated`. */
   addinDeliveryVersion?: number | null;
   recoveryRequired?: FusionRecoveryRequired | null;
-  /** Present with `addin_outdated`: what startup did, so the prompt names the remedy. */
+  /** WG's WGLink activation, once it has decided: every state can name a pending,
+   * activated or failed one, and `addin_outdated` names the remedy from it. */
   addinRefresh?: WgLinkRefreshReport | null;
   realizedDimensions: CadRealizedDimensions;
 }

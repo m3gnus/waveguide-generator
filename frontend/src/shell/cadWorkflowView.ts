@@ -1,4 +1,4 @@
-import type { FusionCadStatus } from '../api/cadlink';
+import type { FusionCadStatus, WgLinkRefreshReport } from '../api/cadlink';
 import type { OnshapeStatus } from '../api/onshape';
 
 /** Shared by the CAD Link panel, the rail card, and the coordinator's send
@@ -62,26 +62,97 @@ function explainedStaleDetail(status: FusionCadStatus, detail: string): string {
   return explanation ? `${detail} ${explanation}` : detail;
 }
 
-/** The remedy for an add-in older than WG, from what WG's startup did about it. */
+/** Activation verdicts that changed Fusion's WGLink folder (server/cadlink/addin_update.py). */
+const ACTIVATED_VERDICTS = new Set(['installed', 'updated', 'replaced']);
+/** Registry findings that decide whether Fusion loads what WG installed. */
+const REGISTRATION_PROBLEMS = new Set(['duplicate', 'elsewhere', 'manual']);
+const EXCHANGE_NOTHING = 'Until then WG and Fusion exchange nothing.';
+
+function sentence(text: string): string {
+  const trimmed = text.trim().replace(/[.;:]+$/, '');
+  return trimmed ? `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}.` : '';
+}
+
+/** What follows any add-in message: discarded pending work, and Fusion's own registration. */
+function activationFootnotes(refresh: WgLinkRefreshReport | null | undefined, withRegistration: boolean): string {
+  const notes: string[] = [];
+  if (refresh?.superseded) notes.push(sentence(refresh.superseded));
+  const registration = refresh?.registration;
+  if (withRegistration && registration && REGISTRATION_PROBLEMS.has(registration.state)) {
+    notes.push(registration.detail);
+  }
+  return notes.length ? ` ${notes.join(' ')}` : '';
+}
+
+/** The remedy for an add-in older than WG, from what WG's activation did about it.
+ *
+ * Activation never changes the add-in while Fusion is open, and "activated"
+ * means Fusion's next start loads the new copy -- never that it runs it. */
 function outdatedAddinDetail(status: FusionCadStatus): string {
   const refresh = status.addinRefresh;
   const verdict = refresh?.verdict ?? null;
-  if (verdict === 'updated' || verdict === 'installed' || verdict === 'replaced' || verdict === 'current') {
-    return 'WG has installed the WGLink add-in that matches it. Restart Fusion 360 to load it; until then WG and Fusion exchange nothing.';
+  const notes = activationFootnotes(refresh, true);
+  if (verdict === null) {
+    return 'WG is still checking Fusion\'s WGLink add-in. Until Fusion runs the WGLink that matches this Waveguide Generator, they exchange nothing.';
+  }
+  if (verdict === 'pending') {
+    return `WGLink activation is pending until Fusion closes. Close Fusion to finish updating WGLink: WG installs the add-in that matches it once Fusion is closed, and says here when Fusion can be reopened. ${EXCHANGE_NOTHING}${notes}`;
+  }
+  if (ACTIVATED_VERDICTS.has(verdict)) {
+    return `WG has installed the WGLink add-in that matches it, and Fusion loads it the next time it starts. ${EXCHANGE_NOTHING}${notes}`;
+  }
+  if (verdict === 'current') {
+    return `Fusion's WGLink folder already holds the add-in that matches WG, but Fusion is running an older one. Restart Fusion 360 so it loads the installed copy. ${EXCHANGE_NOTHING}${notes}`;
+  }
+  if (verdict === 'awaiting-startup') {
+    return `WG changes Fusion's WGLink only once this start is confirmed, so an update that rolls back never leaves its add-in behind (${refresh?.detail ?? ''}). ${EXCHANGE_NOTHING}${notes}`;
+  }
+  if (verdict === 'superseded') {
+    return `WG did not change Fusion's WGLink: ${refresh?.detail ?? ''}. Restart Waveguide Generator so the installed build finishes updating it. ${EXCHANGE_NOTHING}${notes}`;
   }
   if (verdict === 'external') {
-    return `Fusion's WGLink belongs to another Waveguide Generator installation, which is older than this one. Update or remove that installation, then restart Fusion 360. (${refresh?.detail ?? ''})`;
+    return `Fusion's WGLink belongs to another Waveguide Generator installation, which is older than this one. Update or remove that installation, then restart Fusion 360. (${refresh?.detail ?? ''})${notes}`;
   }
   if (verdict === 'developer') {
-    return 'Fusion is running a developer copy of WGLink that is older than this Waveguide Generator. Sync it again, then restart WGLink in Fusion.';
+    return `Fusion is running a developer copy of WGLink that is older than this Waveguide Generator. Sync it again, then restart WGLink in Fusion.${notes}`;
   }
   if (verdict === 'failed' || verdict === 'unavailable' || verdict === 'not-detected') {
-    return `WG could not install the WGLink add-in that matches it: ${refresh?.detail ?? 'no detail'}. Reinstall Waveguide Generator, then restart Fusion 360.`;
+    return `WG could not install the WGLink add-in that matches it: ${refresh?.detail ?? 'no detail'}. Reinstall Waveguide Generator, then restart Fusion 360.${notes}`;
   }
-  return 'Restart Fusion 360 so it loads the WGLink add-in that this Waveguide Generator installed. Until then WG and Fusion exchange nothing.';
+  if (verdict === 'disabled') {
+    return `WG does not update WGLink here (${refresh?.detail ?? ''}). Install the WGLink that matches this Waveguide Generator, then restart Fusion 360.${notes}`;
+  }
+  return `Fusion is running a WGLink add-in older than this Waveguide Generator, and WG did not replace it (${refresh?.detail ?? verdict}). ${EXCHANGE_NOTHING}${notes}`;
+}
+
+/** What every other state adds about WGLink activation, or '' when there is nothing to add. */
+function activationNote(state: CadWorkflowView['state'], refresh: WgLinkRefreshReport | null | undefined): string {
+  const verdict = refresh?.verdict ?? null;
+  // Where WGLink is not working, Fusion's own registration may be why.
+  const troubled = state === 'addin-offline' || state === 'closed';
+  const notes = activationFootnotes(refresh, troubled);
+  if (verdict === 'pending') {
+    return `WGLink activation is pending until Fusion closes: close Fusion to finish updating WGLink.${notes}`;
+  }
+  if (verdict === 'failed') {
+    return `WG could not update WGLink (${refresh?.detail ?? 'no detail'}).${notes}`;
+  }
+  if (verdict !== null && ACTIVATED_VERDICTS.has(verdict) && state === 'closed') {
+    return `WG has installed the WGLink add-in that matches it; Fusion loads it when it next starts.${notes}`;
+  }
+  return troubled ? activationFootnotes(refresh, true).trim() : '';
 }
 
 export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowView {
+  const view = fusionConnectionView(status);
+  if (status === null || view.state === 'checking' || view.state === 'not-configured' || view.state === 'addin-outdated') {
+    return view;
+  }
+  const note = activationNote(view.state, status.addinRefresh);
+  return note ? { ...view, detail: `${view.detail} ${note}` } : view;
+}
+
+function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   if (status === null) return {
     state: 'checking',
     headline: 'Checking Fusion 360…',

@@ -197,7 +197,11 @@ reclaimed with it. All of these are optional keys under schema `1` (§3.3).
 - The pending WGLink activation and its staged package belong to the CAD Link
   integration. They are delivered through the CAD Link plan's mixed-version and
   handshake phases.
-- Their location is chosen there, and it must not be under `<data>/updates/`.
+- Their location is chosen there, and it must not be under `<data>/updates/`. It is
+  `<data>/integrations/wglink/activation/<installation key>/`: `pending.json`, and the
+  managed add-in a replacement displaced, under `previous/`
+  (`server/cadlink/addin_update.py`; `docs/architecture/CAD-OPERATIONS.md`, "WGLink
+  activation"). The package it names is the one inside the app layer, verified by digest.
 - The updater never reads, writes or removes them. Nothing in Phase 1 creates them.
 - Whether they can exist for an add-in WG never installed depends on D5 (§5). The
   cleanup rule below holds either way.

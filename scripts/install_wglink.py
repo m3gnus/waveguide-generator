@@ -9,7 +9,7 @@ import hashlib
 import importlib.util
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -805,6 +805,34 @@ def _recover_install_transaction(addins_dir: Path, root: Path) -> None:
     _finish_transaction(journal, workspace)
 
 
+def _retain_previous(previous: Path, destination: Path, root: Path) -> None:
+    """Keep the managed copy a replacement displaced, instead of discarding it.
+
+    Called after the new copy is published and before recovery would remove
+    ``previous``, so it reuses this journal's own rename rather than taking a
+    second copy. Only a copy this installation managed is kept -- its
+    ``wglink_install.json`` travels with it as the ownership record. Best
+    effort: the replacement has already committed, and a failure here leaves
+    ``previous`` where recovery discards it, exactly as before.
+    """
+
+    if not is_managed_target(previous, root):
+        return
+    incoming = destination.with_name(f".{destination.name}.incoming")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if _path_present(incoming):
+            _remove_entry(incoming)
+        # A move, not a rename: the data directory need not share a volume
+        # with Fusion's add-ins folder.
+        shutil.move(str(previous), str(incoming))
+        if _path_present(destination):
+            _remove_entry(destination)
+        incoming.rename(destination)
+    except OSError:
+        return
+
+
 def install(
     *,
     root: Path = REPO_ROOT,
@@ -815,6 +843,8 @@ def install(
     replace_external: bool = False,
     data_dir: Path | None = None,
     offline_only: bool = False,
+    retain_previous: Path | None = None,
+    should_proceed: Callable[[], bool] | None = None,
 ) -> tuple[str, Path | None]:
     resolved_platform = _platform_name(platform)
     resolved_addins = addins_dir or default_addins_dir(resolved_platform)
@@ -832,6 +862,8 @@ def install(
             replace_external=replace_external,
             data_dir=data_dir,
             offline_only=offline_only,
+            retain_previous=retain_previous,
+            should_proceed=should_proceed,
         )
 
 
@@ -845,6 +877,8 @@ def _install_unlocked(
     replace_external: bool = False,
     data_dir: Path | None = None,
     offline_only: bool = False,
+    retain_previous: Path | None = None,
+    should_proceed: Callable[[], bool] | None = None,
 ) -> tuple[str, Path | None]:
     root = root.resolve()
     platform = _platform_name(platform)
@@ -925,6 +959,18 @@ def _install_unlocked(
         _remove_entry(staging_parent)
         raise
 
+    # The last question before anything moves (WG asks whether Fusion is still
+    # closed). A "no" leaves the target exactly as it was: nothing has been
+    # renamed, so the prepared journal and its workspace simply go.
+    try:
+        proceed = should_proceed is None or should_proceed()
+    except BaseException:
+        _finish_transaction(journal, staging_parent)
+        raise
+    if not proceed:
+        _finish_transaction(journal, staging_parent)
+        return "deferred", target
+
     try:
         if transaction["hadPrevious"]:
             target.rename(previous)
@@ -935,6 +981,12 @@ def _install_unlocked(
         _sync_directory(addins_dir)
         transaction["phase"] = "published"
         _write_transaction(journal, transaction)
+        if (
+            retain_previous is not None
+            and transaction["hadPrevious"]
+            and _matches_transaction_target(target, root, transaction)
+        ):
+            _retain_previous(previous, retain_previous, root)
         _recover_install_transaction(addins_dir, root)
     except Exception:
         # Ordinary failures roll back immediately. Process termination and
