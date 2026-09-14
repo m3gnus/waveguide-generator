@@ -44,10 +44,13 @@ MESH_STAGE = "stage 7 meshing"
 # no argument, request field, or environment variable that can select it. The
 # real-geometry regression uses the context manager below to ask the disposable
 # child to install one named fixture before importing the mesher's function.
+# The child keeps its own copy of these names (``server.cadlink.child_main``).
 _MESH_CHILD_FAULT_FIXTURE: ContextVar[str | None] = ContextVar(
     "mesh_child_fault_fixture", default=None
 )
-_KNOWN_MESH_CHILD_FAULT_FIXTURES = frozenset({"leaking-reduced-domain"})
+_KNOWN_MESH_CHILD_FAULT_FIXTURES = frozenset(
+    {"leaking-reduced-domain", "inverted-reduced-domain"}
+)
 
 
 @contextmanager

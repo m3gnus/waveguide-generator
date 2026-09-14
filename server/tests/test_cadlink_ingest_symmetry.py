@@ -1429,6 +1429,81 @@ def test_a_declared_quarter_with_a_rear_facing_source_is_never_solved_inverted(
     assert comparison["source_z"][1] < 0.0
 
 
+_RETURN_IDS.update(
+    {
+        "inverted": "wgr_01J5A8QK3M9T2XVBH0RD7NWER0",
+        "quarter-inverted": "wgr_01J5A8QK3M9T2XVBH0RD7NWES0",
+    }
+)
+
+
+def test_an_inverted_auto_cut_quarter_falls_back_to_the_full_domain(
+    tmp_path: Path,
+) -> None:
+    """What the rear-cap tests promise, on a real ingest: the reduction is lost.
+
+    The pinned mesher winds a reduced component from its mirrored parent, so no
+    fixture comes back inverted any more. The inversion is injected where one
+    would appear instead -- the postprocessed quarter, every triangle reversed,
+    before WG verifies it. It is closed modulo its cut planes and consistent,
+    so only ``verify_reduced_orientation`` stands between it and the solver.
+    """
+
+    pytest.importorskip("gmsh")
+    bundle = _horn_bundle(tmp_path, "inverted")
+    with _inject_mesh_child_fault("inverted-reduced-domain"):
+        record = _ingest(tmp_path, bundle)
+
+    assert record["symmetry"]["cut_planes"] == []
+    verification = record["symmetry_verification"]
+    assert verification["verified"] is True
+    fallback = verification["fallback"]
+    assert fallback["rejected_cut_planes"] == ["x0", "y0"]
+    assert fallback["capped_planes"] == []
+    # Rejected for its winding alone: the reduced boundary itself was sound.
+    assert fallback["off_plane_free_edge_count"] == 0
+    assert fallback["reduced_orientation"]["inverted_component_count"] >= 1
+    assert "wound against the model they mirror" in fallback["reason"]
+
+    finding = next(
+        item for item in record["findings"] if item["kind"] == "symmetry-cut-unverified"
+    )
+    assert finding["blocking"] is True
+    assert finding["rejected_cut_planes"] == ["x0", "y0"]
+    assert "full domain was meshed" in finding["detail"]
+    assert "wound against the model they mirror" in finding["detail"]
+    # The remedy that keeps a reduction on this mesher, not the leak's.
+    assert "Tag a source face that faces the bore" in finding["detail"]
+    assert "Re-export" not in finding["detail"]
+
+    # The fault reaches reduced meshes only, so the fallback is the full model
+    # wound outward, read from the arrays the solver will read.
+    assert record["mesh"]["stats"]["domain_multiplier"] == 1.0
+    points, triangles, _tags = _solver_arrays(record)
+    p0, p1, p2 = (points[triangles[:, k]] for k in range(3))
+    assert float(np.einsum("ij,ij->i", p0, np.cross(p1, p2)).sum()) > 0.0
+
+
+def test_an_inverted_declared_quarter_is_refused_instead_of_solved(
+    tmp_path: Path,
+) -> None:
+    """A declared quarter has no whole model to fall back to, so it is refused."""
+
+    pytest.importorskip("gmsh")
+    from server.cadlink.ingest import IngestRefusal
+
+    bundle = _reduced_bundle(tmp_path, "quarter-inverted", planes=("x0", "y0"))
+    with _inject_mesh_child_fault("inverted-reduced-domain"):
+        with pytest.raises(
+            IngestRefusal, match="wound against the model they mirror"
+        ) as refused:
+            _ingest(tmp_path, bundle)
+
+    message = str(refused.value)
+    assert "Tag a source face that faces the bore" in message
+    assert "Or return the whole model." in message
+
+
 def _child_orients_from_parent(record: dict[str, Any]) -> bool:
     """Did the mesher in the CAD child wind reduced domains from their parent?
 

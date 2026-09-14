@@ -250,14 +250,20 @@ def _task_mesh(
 
     fault_fixture = payload.get("_test_fault_fixture")
     if fault_fixture is not None:
-        if fault_fixture != "leaking-reduced-domain":
+        if fault_fixture not in {"leaking-reduced-domain", "inverted-reduced-domain"}:
             raise ChildTaskError(f"unknown mesh child fault fixture {fault_fixture!r}")
         # The parent can add this field only through its private, context-local
         # test hook. Keeping the implementation with the test support means the
         # production mesher has no fault branch at all.
-        from server.tests.child_fault_fixtures import install_reduced_domain_leak
+        from server.tests.child_fault_fixtures import (
+            install_reduced_domain_inversion,
+            install_reduced_domain_leak,
+        )
 
-        install_reduced_domain_leak()
+        if fault_fixture == "leaking-reduced-domain":
+            install_reduced_domain_leak()
+        else:
+            install_reduced_domain_inversion()
 
     built = build_imported_mesh(
         source,
