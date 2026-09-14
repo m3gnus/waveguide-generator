@@ -7,6 +7,11 @@ them; they are not a current release status dashboard.
   ad-hoc signed bundle, an unsigned script and an unsigned binary, all measured
   against genuinely quarantined artifacts; and what an Apple Developer ID would
   cost.
+- [Imported CAD same-mesh qualification](IMPORTED-SAME-MESH-QUALIFICATION.md): Metal
+  and BEAT-CPU are given the same imported record and compared as complex responses,
+  against tolerances derived from analytic spheres and a refinement ladder. It covers
+  rotated, repeated-HF and reduced-domain fixtures and real returns through WG's
+  ingest. Two ingest findings are recorded.
 
 ## Open: the one-pass manual test for the disk-image installer
 
