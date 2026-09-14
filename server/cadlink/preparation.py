@@ -152,7 +152,11 @@ def operation_summary(row: Mapping[str, Any]) -> dict[str, Any]:
         "setupRevisionId": row.get("setup_revision_id"),
         "preparationId": row.get("preparation_id"),
         "snapshot": (
-            {"manifestSha256": snapshot.get("manifest_sha256")}
+            {
+                "manifestSha256": snapshot.get("manifest_sha256"),
+                "documentName": snapshot.get("document_name"),
+                "projectLineageId": snapshot.get("project_lineage_id"),
+            }
             if isinstance(snapshot, Mapping)
             else None
         ),
@@ -200,16 +204,21 @@ def exchange_bundle_path(workspace_root: Path | None, bundle_path: str) -> Path:
     return path
 
 
-def _snapshot_record(retained: Mapping[str, Any]) -> dict[str, str]:
-    """What an operation stores of its snapshot: hashes, never a path.
+def _snapshot_record(store: CadLinkStore, retained: Mapping[str, Any]) -> dict[str, Any]:
+    """What an operation stores of its snapshot: hashes and whose it is, never a path.
 
     The copy's place follows from the manifest hash (``retained_snapshot_path``),
-    so a moved data directory does not orphan it.
+    so a moved data directory does not orphan it. The document's name and the
+    project it belongs to, when WG knows one, are what lets the UI say which
+    project to open for its settings.
     """
 
+    manifest = _retained_manifest(retained)
     return {
         "manifest_sha256": str(retained["manifest_sha256"]),
         "artifact_sha256": str(retained["artifact_sha256"]),
+        "document_name": _document_name(manifest),
+        "project_lineage_id": snapshot_project(store, manifest) if manifest else None,
     }
 
 
@@ -250,7 +259,7 @@ def retain_operation_snapshot(
             data_dir,
             expected_manifest_sha256=str(inputs.get("manifest_sha256") or "") or None,
         )
-        store.record_snapshot(operation_id, _snapshot_record(retained))
+        store.record_snapshot(operation_id, _snapshot_record(store, retained))
     except Exception as exc:  # noqa: BLE001 - retention at receive is best effort
         logger.info("Could not retain the snapshot of CAD operation %s: %s", operation_id, exc)
         return None
@@ -334,6 +343,26 @@ def _load_setup(
     return project_setup(ctx.store, lineage_id, manifest.get("sources") or [])
 
 
+def _retained_manifest(retained: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """A retained snapshot's manifest, already verified when it was retained."""
+
+    try:
+        manifest = json.loads(
+            (Path(str(retained["retained_path"])) / "wgreturn.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return manifest if isinstance(manifest, Mapping) else None
+
+
+def _document_name(manifest: Mapping[str, Any] | None) -> str | None:
+    """The CAD document a snapshot came from, as the user named it."""
+
+    document = manifest.get("document") if manifest is not None else None
+    name = str(document.get("name") or "").strip() if isinstance(document, Mapping) else ""
+    return name or None
+
+
 def _resumable(
     store: CadLinkStore,
     row: Mapping[str, Any],
@@ -406,7 +435,7 @@ def _prepare_sync(
                 ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
                 message=f"WG could not read the return Fusion sent: {exc}",
             )
-        _advance(ctx, operation_id, generation, snapshot=_snapshot_record(retained))
+        _advance(ctx, operation_id, generation, snapshot=_snapshot_record(store, retained))
 
     try:
         loaded = _load_setup(ctx, request.setup_revision_id, retained)
@@ -424,9 +453,18 @@ def _prepare_sync(
     if loaded is None:
         # A first-time CAD-authored model never borrows settings from whatever
         # project is open: it waits for the user to choose them.
+        # Whose it is may have become known since it was retained.
+        snapshot = _snapshot_record(store, retained)
+        _advance(ctx, operation_id, generation, snapshot=snapshot)
+        document = snapshot["document_name"]
         return "done", _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT, reason="setup_required",
-            message="Choose the solve settings for this model in WG, then press Solve now.",
+            message=(
+                f"Choose the solve settings for {document} in WG: open it from File → "
+                "CAD-linked designs, then press Solve now."
+                if document
+                else "Choose the solve settings for this model in WG, then press Solve now."
+            ),
         )
     setup, revision_id = loaded
     manifest_sha256 = str(retained["manifest_sha256"])

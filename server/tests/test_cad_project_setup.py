@@ -157,6 +157,8 @@ def test_a_model_with_no_recorded_setup_waits_for_its_settings(harness: Harness)
 
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
     assert harness.submitted == []
+    # It names the document whose settings are wanted, which the UI cannot know.
+    assert "Tritonia speaker" in summary["message"]
 
 
 def _deliver(harness: Harness, command_id: str, bundle_path: str, manifest: str) -> Path:
@@ -414,3 +416,39 @@ def test_a_waiver_on_project_a_does_not_carry_to_project_b(harness: Harness) -> 
     # The same finding on B is B's own to review, even with A's waiver sent along.
     b = harness.prepare("cmd-b", **waived)
     assert (b["state"], b["reason"]) == ("needs_user_input", "findings_need_review")
+
+
+def test_a_manifest_role_is_matched_as_the_panel_names_it(harness: Harness) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, _setup())  # "HF", as the returns listing canonicalises it
+    step = b"STEP lower"
+    manifest = copy.deepcopy(_manifest(step))
+    manifest["instances"][0]["design_id"] = b_design
+    manifest["sources"][0]["role"] = "hf"
+    bundle = harness.workspace / "wgreturn" / "lower.wgreturn"
+    bundle.mkdir(parents=True)
+    (bundle / "assembly.step").write_bytes(step)
+    body = json.dumps(manifest).encode("utf-8")
+    (bundle / "wgreturn.json").write_bytes(body)
+    _accept(
+        harness.store, "cmd-b", "wgreturn/lower.wgreturn",
+        "sha256:" + hashlib.sha256(body).hexdigest(),
+    )
+
+    assert harness.prepare("cmd-b")["state"] == "accepted"
+
+
+def test_an_operation_names_its_document_and_project(harness: Harness) -> None:
+    from server.cadlink.preparation import operation_summary
+
+    b_design, b_lineage = _project(harness, 60.0)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _deliver(harness, "cmd-b", bundle_path, manifest)
+
+    _pass(harness)
+
+    assert operation_summary(harness.row("cmd-b"))["snapshot"] == {
+        "manifestSha256": manifest,
+        "documentName": "Tritonia speaker",
+        "projectLineageId": b_lineage,
+    }

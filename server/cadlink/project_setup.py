@@ -23,6 +23,7 @@ from typing import Any
 from server.jobs.models import SolveRequest
 
 from .operations import canonical_json
+from .roles import canonical_source_role
 from .setup import CadSolveSetup, setup_content, setup_digest, validate_setup
 from .store import CadLinkStore
 
@@ -34,10 +35,18 @@ _DEFAULT_DIAGONAL_INCLINATION_DEG = 45
 
 
 def inventory_sha256(sources: Sequence[Mapping[str, Any]]) -> str:
-    """A source inventory's identity: which sources, in which roles, required or not."""
+    """A source inventory's identity: which sources, in which roles, required or not.
+
+    Roles are canonical (``canonical_source_role``), as the returns listing and
+    so the frontend state them, whatever spelling the manifest used.
+    """
 
     entries = sorted(
-        [str(item.get("id") or ""), str(item.get("role") or ""), bool(item.get("required"))]
+        [
+            str(item.get("id") or ""),
+            canonical_source_role(str(item.get("role") or "")),
+            bool(item.get("required")),
+        ]
         for item in sources
         if isinstance(item, Mapping)
     )

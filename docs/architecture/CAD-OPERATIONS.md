@@ -263,8 +263,12 @@ whatever project is open. Nothing on the backend reads the live UI:
   snapshot's project as ingestion files it -- the lineage of the solver anchor instance's
   WG design or, when the anchor names no design, the one its Fusion document already has;
   never a new claim -- and that project's setup for exactly the snapshot's sources (id,
-  role and required, as the manifest states them). A recorded setup this build cannot use
-  is `setup_required` too.
+  canonical role and required, as the returns listing states them). A recorded setup this
+  build cannot use is `setup_required` too.
+- **Whose it is.** An operation's summary names its snapshot's document and, when WG knows
+  it, the project (`snapshot.documentName`, `snapshot.projectLineageId`), so the UI can
+  offer to open that project for its settings; the `setup_required` message names the
+  document as well.
 - **The engine is the one selected in WG.** A recorded setup keeps its engine only until
   the selection says otherwise; the setup actually used is itself a setup revision, which
   the operation names.

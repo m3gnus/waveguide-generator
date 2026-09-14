@@ -1994,7 +1994,7 @@ class ProjectSetupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     lineage_id: str = Field(alias="lineageId", min_length=1)
-    #: The sources the setup is for, with the roles the manifest states.
+    #: The sources the setup is for, with canonical roles, as the returns listing states them.
     inventory: list[SourceInventoryItem] = Field(min_length=1)
     setup: dict[str, Any]
 
