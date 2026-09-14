@@ -216,9 +216,13 @@ solve is submitted whichever engine you choose.
 Imported CAD geometry takes the same engine choice as a design: the CAD solve
 options list the engines, and AUTO takes the first available one that solves
 imported geometry. Metal does, and so does BEAT · CPU, which runs on every
-platform without a GPU. BEAT · CPU mirrors an x0 half and an x0+y0 quarter
-natively; a return cut on y0 alone is refused on BEAT with the reason, and
-solves on Metal. The passive-cardioid campaign is Metal-only. Field-plane traces are available
+platform without a GPU. BEMPP · CPU does too, where it assembles on an OpenCL
+device; a build that would fall back to numba does not offer imported geometry.
+BEAT · CPU mirrors an x0 half and an x0+y0 quarter natively; a return cut on y0
+alone is refused on BEAT with the reason, and solves on Metal or BEMPP. BEMPP
+refuses a return with open edges off its mirror planes, because it holds the
+pressure at zero on a free rim where Metal does not; close the shell in CAD, or
+choose another engine. The passive-cardioid campaign is Metal-only. Field-plane traces are available
 from free-standing Metal and BEMPP full-3D solves; Axisymmetric, coupled-IB and
 ground-plane solves report that traces are unavailable. A grounded solve keeps
 none because the field evaluation carries no ground image: it would draw the

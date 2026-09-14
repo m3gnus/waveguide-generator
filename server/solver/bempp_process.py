@@ -162,6 +162,45 @@ def _exit_when_parent_does() -> None:
     ).start()
 
 
+def _solve_payload(
+    payload: Mapping[str, Any],
+    *,
+    stage: Callable[[str, float, str], None],
+    result: Callable[[int, dict[str, Any]], None],
+) -> dict[str, Any]:
+    """Run one queued solve in this process: a design, or an imported CAD record."""
+
+    if payload.get("kind") == "imported":
+        from .bempp_imported import solve_imported_bempp_from_msh_text
+
+        return solve_imported_bempp_from_msh_text(
+            payload["msh_text"],
+            payload["request"],
+            payload["record"],
+            field_trace_cap_bytes=payload.get("field_trace_cap_bytes"),
+            stage_callback=stage,
+            result_callback=result,
+        )
+    from .bempp import solve_bempp_from_msh_text
+
+    return solve_bempp_from_msh_text(
+        payload["msh_text"],
+        payload["context"],
+        mesh_metadata=payload.get("mesh_metadata"),
+        mesh_stats=payload.get("mesh_stats"),
+        field_trace_cap_bytes=payload.get("field_trace_cap_bytes"),
+        stage_callback=stage,
+        result_callback=result,
+        # Not forced serial any more. The original reason was that Stop could
+        # not cancel a frequency already inside a worker process -- but that
+        # predates this module. Stop now kills this child, and
+        # ``server/platform/process_tree.py`` makes that reach the sweep
+        # workers too, so the sweep can use every core without giving up a
+        # bounded cancel.
+        force_serial=False,
+    )
+
+
 def _bempp_worker_main(connection: Connection) -> None:
     """Serve native solves in one warm process, one job at a time."""
 
@@ -170,7 +209,6 @@ def _bempp_worker_main(connection: Connection) -> None:
     # parent's job object contains the tree instead.
     adopt_process_group()
     _exit_when_parent_does()
-    from .bempp import solve_bempp_from_msh_text
 
     try:
         while True:
@@ -201,22 +239,7 @@ def _bempp_worker_main(connection: Connection) -> None:
                 connection.send(("result", job_id, (int(index), response)))
 
             try:
-                response = solve_bempp_from_msh_text(
-                    payload["msh_text"],
-                    payload["context"],
-                    mesh_metadata=payload.get("mesh_metadata"),
-                    mesh_stats=payload.get("mesh_stats"),
-                    field_trace_cap_bytes=payload.get("field_trace_cap_bytes"),
-                    stage_callback=stage,
-                    result_callback=result,
-                    # Not forced serial any more. The original reason was that
-                    # Stop could not cancel a frequency already inside a worker
-                    # process -- but that predates this module. Stop now kills
-                    # this child, and ``server/platform/process_tree.py`` makes
-                    # that reach the sweep workers too, so the sweep can use
-                    # every core without giving up a bounded cancel.
-                    force_serial=False,
-                )
+                response = _solve_payload(payload, stage=stage, result=result)
             except BaseException as exc:  # noqa: BLE001 - report native failures
                 connection.send(
                     (
@@ -388,6 +411,53 @@ class BemppProcessHost:
     ) -> dict[str, Any]:
         """Run one solve, killing the worker if cancellation is requested."""
 
+        return await self._run_payload(
+            {
+                "msh_text": msh_text,
+                "context": context,
+                "mesh_metadata": dict(mesh_metadata or {}),
+                "mesh_stats": dict(mesh_stats or {}),
+                "field_trace_cap_bytes": field_trace_cap_bytes,
+            },
+            cancel_cb=cancel_cb,
+            stage_cb=stage_cb,
+            result_cb=result_cb,
+        )
+
+    async def run_imported(
+        self,
+        msh_text: str,
+        request: Any,
+        record: Mapping[str, Any],
+        *,
+        field_trace_cap_bytes: int | None = None,
+        cancel_cb: CancelCallback,
+        stage_cb: StageCallback,
+        result_cb: ResultCallback | None,
+    ) -> dict[str, Any]:
+        """Run one imported-CAD solve in the same killable worker."""
+
+        return await self._run_payload(
+            {
+                "kind": "imported",
+                "msh_text": msh_text,
+                "request": request,
+                "record": dict(record),
+                "field_trace_cap_bytes": field_trace_cap_bytes,
+            },
+            cancel_cb=cancel_cb,
+            stage_cb=stage_cb,
+            result_cb=result_cb,
+        )
+
+    async def _run_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        cancel_cb: CancelCallback,
+        stage_cb: StageCallback,
+        result_cb: ResultCallback | None,
+    ) -> dict[str, Any]:
         with self._state_lock:
             if self._active_job_id is not None:
                 raise BemppWorkerError(
@@ -398,13 +468,6 @@ class BemppProcessHost:
             self._active_job_id = job_id
             connection = self._ensure_started()
 
-        payload = {
-            "msh_text": msh_text,
-            "context": context,
-            "mesh_metadata": dict(mesh_metadata or {}),
-            "mesh_stats": dict(mesh_stats or {}),
-            "field_trace_cap_bytes": field_trace_cap_bytes,
-        }
         try:
             await asyncio.to_thread(connection.send, (job_id, payload))
             while True:
@@ -502,10 +565,34 @@ async def solve_bempp_in_process(
     )
 
 
+async def solve_imported_bempp_in_process(
+    msh_text: str,
+    request: Any,
+    record: Mapping[str, Any],
+    *,
+    field_trace_cap_bytes: int | None = None,
+    cancel_cb: CancelCallback,
+    stage_cb: StageCallback,
+    result_cb: ResultCallback | None,
+) -> dict[str, Any]:
+    """Solve an imported CAD record in the application-wide killable worker."""
+
+    return await _HOST.run_imported(
+        msh_text,
+        request,
+        record,
+        field_trace_cap_bytes=field_trace_cap_bytes,
+        cancel_cb=cancel_cb,
+        stage_cb=stage_cb,
+        result_cb=result_cb,
+    )
+
+
 __all__ = [
     "BemppProcessHost",
     "BemppWorkerError",
     "prewarm_bempp_process",
     "shutdown_bempp_process",
     "solve_bempp_in_process",
+    "solve_imported_bempp_in_process",
 ]

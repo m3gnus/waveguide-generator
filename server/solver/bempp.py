@@ -8,6 +8,7 @@ capability state and never gets faked.
 
 from __future__ import annotations
 
+import asyncio
 from functools import lru_cache
 import importlib
 import importlib.metadata
@@ -19,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from server.jobs.models import SolveRequest
+from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
 from server.preview.translate import has_closed_outer_body
 
@@ -49,6 +50,7 @@ from .ground_plane import (
     observation_below_ground_warning,
     place_above_ground,
 )
+from .imported import read_verified_import_mesh, verify_record_mesh_text
 from .infinite_baffle import require_coupled_aperture_tag
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -79,9 +81,19 @@ except (ImportError, OSError):
     bempp_solve_frequencies = None  # type: ignore[assignment]
 
 
-#: What this adapter solves (``EngineInfo.geometry_sources``). Imported CAD
-#: geometry is not among them yet: ``BemppEngine.run`` always meshes the design.
-GEOMETRY_SOURCES: tuple[str, ...] = ("parametric",)
+#: What this adapter can solve (``EngineInfo.geometry_sources``). Imported CAD
+#: geometry is declared only while BEMPP assembles on OpenCL: numba is never a
+#: shipping backend, so a host that would fall back to it does not offer
+#: imported geometry at all (:func:`geometry_sources_for`).
+GEOMETRY_SOURCES: tuple[str, ...] = ("parametric", "imported")
+
+
+def geometry_sources_for(status: Mapping[str, Any]) -> tuple[str, ...]:
+    """The geometry sources this host's BEMPP declares, from its probe."""
+
+    if status.get("assembly_backend") == PREFERRED_ASSEMBLY_BACKEND:
+        return GEOMETRY_SOURCES
+    return tuple(source for source in GEOMETRY_SOURCES if source != "imported")
 
 #: Imported features beyond the mesh (``EngineInfo.imported_features``).
 IMPORTED_FEATURES: tuple[str, ...] = ()
@@ -1131,6 +1143,14 @@ def solve_bempp_from_msh_text(
 class BemppEngine:
     name = "bempp"
 
+    def imported_preflight(self, record: Mapping[str, Any], msh_text: str) -> str | None:
+        """Why BEMPP cannot solve this imported record, answered before a job exists."""
+
+        del msh_text
+        from .bempp_imported import imported_bempp_preflight
+
+        return imported_bempp_preflight(record)
+
     async def run(
         self,
         request: SolveRequest,
@@ -1139,7 +1159,17 @@ class BemppEngine:
         stage_cb: StageCallback,
         artifact_cb: ArtifactCallback | None = None,
         result_cb: ResultCallback | None = None,
+        imported_record: Mapping[str, Any] | None = None,
     ) -> EngineRunResult:
+        if isinstance(request.geometry, ImportedGeometrySource):
+            return await self._run_imported(
+                request,
+                imported_record,
+                cancel_cb=cancel_cb,
+                stage_cb=stage_cb,
+                artifact_cb=artifact_cb,
+                result_cb=result_cb,
+            )
         if (request.options.solver_mode or "").strip().lower() == "circsym":
             from .circsym import AxisymmetricEngine
 
@@ -1186,5 +1216,61 @@ class BemppEngine:
             field_trace_unavailable_reason=field_trace_reason,
         )
 
+    async def _run_imported(
+        self,
+        request: SolveRequest,
+        imported_record: Mapping[str, Any] | None,
+        *,
+        cancel_cb: CancelCallback,
+        stage_cb: StageCallback,
+        artifact_cb: ArtifactCallback | None,
+        result_cb: ResultCallback | None,
+    ) -> EngineRunResult:
+        if imported_record is None:
+            raise ValueError("imported BEMPP solve requires its ingestion record")
+        # The verified record mesh, never a re-mesh: the same bytes Metal and
+        # BEAT are handed for the same record.
+        execution_msh = imported_record.get("_execution_msh_text")
+        if isinstance(execution_msh, str):
+            msh_text = verify_record_mesh_text(imported_record, execution_msh)
+        else:
+            msh_text = await asyncio.to_thread(read_verified_import_mesh, imported_record)
+        mesh_record = imported_record.get("mesh")
+        mesh_stats = (
+            dict(mesh_record.get("stats") or {}) if isinstance(mesh_record, Mapping) else {}
+        )
+        if artifact_cb is not None:
+            await artifact_cb(msh_text, mesh_stats)
+        cancel_cb()
+        from .bempp_process import solve_imported_bempp_in_process
 
-__all__ = ["BemppEngine", "BemppUnavailable", "bempp_status", "solve_bempp_from_msh_text"]
+        # In the same killable worker as a design solve, so Stop stays prompt.
+        results = await solve_imported_bempp_in_process(
+            msh_text,
+            request,
+            {key: value for key, value in imported_record.items() if key != "_execution_msh_text"},
+            cancel_cb=cancel_cb,
+            stage_cb=stage_cb,
+            result_cb=result_cb,
+        )
+        results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
+        channel_bases = results.pop("_channel_bases_npz", None)
+        field_traces = results.pop("_field_traces", None)
+        field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
+        return EngineRunResult(
+            results=results,
+            msh_text=msh_text,
+            mesh_stats=mesh_stats,
+            channel_bases=channel_bases,
+            field_traces=field_traces,
+            field_trace_unavailable_reason=field_trace_reason,
+        )
+
+
+__all__ = [
+    "BemppEngine",
+    "BemppUnavailable",
+    "bempp_status",
+    "geometry_sources_for",
+    "solve_bempp_from_msh_text",
+]

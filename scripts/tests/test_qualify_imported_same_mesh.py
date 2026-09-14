@@ -21,6 +21,7 @@ import json
 import math
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -225,6 +226,61 @@ def test_the_return_contract_binds_to_the_throat_disc_that_faces_the_bore(tmp_pa
     contract = manifest["instances"][0]["source_contract"]
     assert contract["throat_z_mm"] == pytest.approx(0.0, abs=1e-6)
     assert contract["expected_disc_area_mm2"] == pytest.approx(math.pi * 10.0**2, rel=0.01)
+
+
+def test_bempp_joins_the_qualification_only_where_it_assembles_on_opencl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # numba is never qualified: a host that would assemble on it is reported,
+    # and every BEMPP row is simply absent there.
+    from server.engines import registry
+    from server.solver import bempp
+
+    detected = [SimpleNamespace(name=name, available=True, reason="ok") for name in ("metal", "beat-cpu", "bempp")]
+    monkeypatch.setattr(registry, "detect_engines", lambda: detected)
+
+    monkeypatch.setattr(bempp, "bempp_status", lambda: {"assembly_backend": "numba"})
+    assert qual.available_engines()["bempp"] == "not qualified here: assembly backend numba is not OpenCL"
+    monkeypatch.setattr(bempp, "bempp_status", lambda: {"assembly_backend": "opencl"})
+    assert qual.available_engines()["bempp"] == "available"
+
+
+def test_every_record_level_fixture_carries_the_open_edge_evidence_bempp_needs() -> None:
+    # Closed spheres, and cuts whose rims lie on their mirror planes: none has a
+    # free rim, and a record that did not say so would be refused by BEMPP.
+    from server.solver.bempp_imported import imported_bempp_preflight
+
+    points, triangles, tags = qual.sphere_mesh(0, split=True)
+    whole = qual.record_for(qual.gmsh22(points, triangles, tags), qual.HEMISPHERE_TAGS)
+    cut_points, cut_triangles, cut_tags = qual.keep_side(points, triangles, tags, ["x0", "y0"])
+    quarter = qual.record_for(
+        qual.gmsh22(cut_points, cut_triangles, cut_tags), qual.HEMISPHERE_TAGS, domain_planes=("x0", "y0")
+    )
+
+    assert imported_bempp_preflight(whole) is None
+    assert imported_bempp_preflight(quarter) is None
+
+
+def test_bempp_meets_the_analytic_sphere_on_an_opencl_device() -> None:
+    # The BEMPP arm of the qualification, where it can run at all. Checked
+    # inside the test rather than at collection: the OpenCL probe is slow, and
+    # a host without the opt-in must not pay it.
+    if os.environ.get("WG2_QUALIFY_IMPORTED") != "1":
+        pytest.skip("real BEMPP solve; set WG2_QUALIFY_IMPORTED=1 on a host with an OpenCL device")
+    from server.solver.bempp import bempp_status
+
+    if bempp_status().get("assembly_backend") != "opencl":
+        pytest.skip("BEMPP is qualified on an OpenCL device only; numba is never used")
+
+    points, triangles, tags = qual.sphere_mesh(qual.REFERENCE_LEVEL, split=True)
+    record = qual.record_for(qual.gmsh22(points, triangles, tags), qual.HEMISPHERE_TAGS)
+    solved = qual.solve("bempp", record, qual.ONE_CHANNEL)
+    errors = qual.relative_error(solved.observations(), qual.analytic_observations(solved, "pulsating"))
+
+    # Twice the worst CPU engine's error on this sphere in the recorded run
+    # (BEAT-CPU, 1.35e-2 at 960 triangles), with the harness's margin: BEMPP
+    # solves the same complex_k formulation as Metal on the same mesh.
+    assert float(np.max(errors)) <= qual.TOLERANCE_MARGIN * 2.0 * 1.35e-2
 
 
 @pytest.mark.skipif(

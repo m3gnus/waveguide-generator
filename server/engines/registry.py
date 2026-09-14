@@ -325,7 +325,14 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                     name == "bempp"
                     and bool(status.get("ground_plane_composes_with_symmetry"))
                 ),
-                geometry_sources=tuple(adapter.GEOMETRY_SOURCES),
+                # An adapter whose declaration depends on the host -- BEMPP
+                # offers imported geometry only on OpenCL -- answers from its
+                # probe; the others declare a constant.
+                geometry_sources=tuple(
+                    adapter.geometry_sources_for(status)
+                    if hasattr(adapter, "geometry_sources_for")
+                    else adapter.GEOMETRY_SOURCES
+                ),
                 imported_features=tuple(adapter.IMPORTED_FEATURES),
                 symmetry_domains=_symmetry_domains(name),
                 field_traces=True,
