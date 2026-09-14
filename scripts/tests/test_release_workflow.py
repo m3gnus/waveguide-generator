@@ -17,6 +17,7 @@ import textwrap
 from typing import NamedTuple
 
 import pytest
+import yaml
 
 from shared import release_assets
 
@@ -28,15 +29,19 @@ VERSION = "9.9.9"
 RUNTIME_ID = "0123456789ab"
 
 
-def test_release_workflow_requires_main_ancestry_and_successful_ci() -> None:
+def test_release_workflow_requires_main_ancestry_and_source_qualification() -> None:
     assert "actions: read" in WORKFLOW
     assert "contents: write" in WORKFLOW
     assert "fetch-depth: 0" in WORKFLOW
     assert 'git merge-base --is-ancestor "$release_commit" origin/main' in WORKFLOW
-    assert 'workflow_id: "ci.yml"' in WORKFLOW
-    assert "head_sha: process.env.RELEASE_COMMIT" in WORKFLOW
-    assert 'event: "push"' in WORKFLOW
-    assert 'run.conclusion === "success"' in WORKFLOW
+    # CI no longer runs on push, so a push-triggered run of the release commit
+    # never exists. A guard that looked one up could only refuse every release,
+    # or be loosened into one that passes without CI. The release runs ci.yml
+    # itself instead; the structure is asserted in the section at the end.
+    assert "uses: ./.github/workflows/ci.yml" in WORKFLOW
+    assert "listWorkflowRuns" not in WORKFLOW
+    assert 'event: "push"' not in WORKFLOW
+    assert "must have successful CI" not in WORKFLOW
 
 
 def test_a_tag_push_cannot_trigger_a_release_build() -> None:
@@ -476,7 +481,6 @@ RELEASE_ACTION_PINS = {
     "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
     "actions/download-artifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093",
     "actions/attest": "508db95dd578ae2727ebd6217d5ba78e4fbda05d",
-    "actions/github-script": "f28e40c7f34bde8b3046d885e986cb6290c5673b",
     "astral-sh/setup-uv": "08807647e7069bb48b6ef5acd8ec9567f424441b",
     "softprops/action-gh-release": "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65",
 }
@@ -830,3 +834,134 @@ def test_the_flag_the_guard_prints_is_what_the_publisher_would_set(
         assert result.returncode == 0, result.stderr
         assert result.outputs["prerelease"] == expected
         assert release_assets.is_prerelease(declared) is (expected == "true")
+
+
+# --- Source qualification -----------------------------------------------------
+#
+# Hosted CI stopped running on every push and pull request: routine integration
+# is gated by the full local suite, once per landed batch. ci.yml still runs on
+# demand, and release.yml and rc-build.yml call it on the commit they build.
+# That call is the only hosted CI a release gets, so what these pin is that
+# nothing is built, attested, uploaded or published without it.
+
+CI_WORKFLOW = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+QUALIFICATION = "./.github/workflows/ci.yml"
+
+#: What in a step builds, attests, uploads or publishes.
+PRODUCING_ACTIONS = (
+    "actions/attest@",
+    "actions/upload-artifact@",
+    "softprops/action-gh-release@",
+)
+PRODUCING_COMMANDS = ("npm run build", "build_bundle.py", "git push", "gh release")
+
+
+def _keys_only(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def _triggers(workflow: dict) -> dict:
+    # PyYAML reads a bare `on:` key as the boolean True.
+    return workflow.get("on", workflow.get(True)) or {}
+
+
+def _needs(job: dict) -> set[str]:
+    needs = job.get("needs", [])
+    return {needs} if isinstance(needs, str) else set(needs)
+
+
+def _ancestors(jobs: dict, name: str) -> set[str]:
+    """Every job ``name`` transitively needs."""
+
+    seen: set[str] = set()
+    pending = list(_needs(jobs[name]))
+    while pending:
+        job = pending.pop()
+        if job not in seen:
+            seen.add(job)
+            pending.extend(_needs(jobs[job]))
+    return seen
+
+
+def _produces(job: dict) -> bool:
+    for step in job.get("steps") or []:
+        if str(step.get("uses", "")).startswith(PRODUCING_ACTIONS):
+            return True
+        if any(command in str(step.get("run", "")) for command in PRODUCING_COMMANDS):
+            return True
+    return False
+
+
+def test_hosted_ci_runs_only_on_demand_or_when_a_release_workflow_calls_it() -> None:
+    workflow = yaml.safe_load(CI_WORKFLOW)
+
+    assert set(_triggers(workflow)) == {"workflow_dispatch", "workflow_call"}
+    keys = _keys_only(CI_WORKFLOW)
+    assert "push:" not in keys
+    assert "pull_request" not in keys
+    # It existed to cancel superseded push runs. Under workflow_call
+    # `github.workflow` names the caller, so a workflow-level group here would
+    # share, or cancel, the calling release run's.
+    assert "concurrency" not in workflow
+
+
+def test_hosted_ci_needs_nothing_a_release_caller_does_not_grant() -> None:
+    """A called workflow's token holds only what the calling job grants.
+
+    The callers grant `contents: read`. A job here asking for more would not
+    widen anything; it would fail every release at startup instead.
+    """
+
+    workflow = yaml.safe_load(CI_WORKFLOW)
+    blocks = [workflow.get("permissions")] + [
+        job.get("permissions") for job in workflow["jobs"].values()
+    ]
+    for block in blocks:
+        if block is None:
+            continue
+        assert isinstance(block, dict), block
+        assert set(block.items()) <= {("contents", "read")}, block
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "builders"),
+    (
+        (
+            "release.yml",
+            WORKFLOW,
+            {"spa", "macos-bundle", "windows-bundle", "linux-bundle", "publish"},
+        ),
+        (
+            "rc-build.yml",
+            RC_WORKFLOW,
+            {"spa", "macos-bundle", "windows-bundle", "linux-bundle"},
+        ),
+    ),
+    ids=("release", "candidate"),
+)
+def test_nothing_is_built_attested_or_published_before_source_qualification(
+    name: str, text: str, builders: set[str]
+) -> None:
+    jobs = yaml.safe_load(text)["jobs"]
+    qualifying = [job for job, body in jobs.items() if body.get("uses") == QUALIFICATION]
+    assert len(qualifying) == 1, f"{name} must call ci.yml exactly once"
+    qualify = qualifying[0]
+    call = jobs[qualify]
+    # Read-only and no secrets: ci.yml needs nothing more.
+    assert call.get("permissions") == {"contents": "read"}, name
+    assert "secrets" not in call, name
+    assert "if" not in call, name
+
+    producing = {job for job, body in jobs.items() if _produces(body)}
+    # The detector has to see the build jobs, or everything below is vacuous.
+    assert builders <= producing, sorted(builders - producing)
+    for job in sorted(producing):
+        assert qualify in _ancestors(jobs, job), f"{name}: {job} does not need {qualify}"
+    # A job downstream of qualification must not be able to run after it failed.
+    for job, body in jobs.items():
+        if qualify in _ancestors(jobs, job):
+            condition = str(body.get("if", ""))
+            for escape in ("always()", "failure()", "cancelled()"):
+                assert escape not in condition, f"{name}: {job} runs on {escape}"

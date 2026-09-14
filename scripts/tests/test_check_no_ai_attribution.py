@@ -521,3 +521,11 @@ def test_the_workflow_hands_the_script_the_events_own_base() -> None:
     )
     assert "--upstream" not in commands
     assert "origin/" not in commands
+    # ci.yml runs only on demand or as release qualification, where the event
+    # names no base: it reads everything since the last release, whose tags the
+    # job must fetch. Commands only here too: the step's comment names the flag.
+    assert "--since-last-release" in commands
+    ci_commands = "\n".join(
+        line for line in ci.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert '"+refs/tags/v*:refs/tags/v*"' in ci_commands

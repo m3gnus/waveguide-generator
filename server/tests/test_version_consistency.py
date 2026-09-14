@@ -79,7 +79,7 @@ def test_the_version_in_the_tree_is_one_a_release_may_carry() -> None:
     version = bump_version.current()
     assert not is_build_stamp(version), version
     # And it parses as a release version without anyone having to ask for a
-    # build stamp -- which is what `ci.yml`'s drift job does on every commit.
+    # build stamp -- which is what `ci.yml`'s drift job does.
     assert bump_version.parse(version, where="test")
 
 

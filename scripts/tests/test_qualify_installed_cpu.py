@@ -689,7 +689,8 @@ def test_no_step_turns_a_failed_qualification_into_a_pass() -> None:
 
     spec = _workflow()
     for name, body in spec["jobs"].items():
-        for step in body["steps"]:
+        # The qualify job calls ci.yml and has no steps of its own.
+        for step in body.get("steps") or []:
             assert "continue-on-error" not in step, f"{name}: {step.get('name')}"
             run = step.get("run") or ""
             if "qualify_installed_cpu.py" in run:
@@ -715,9 +716,13 @@ def test_the_workflow_action_inventory_is_explicit() -> None:
     repositories = {
         str(step["uses"]).split("@", 1)[0]
         for job in spec["jobs"].values()
-        for step in job["steps"]
+        for step in job.get("steps") or []
         if "uses" in step
     }
+    # A job that calls a reusable workflow is a dependency too. The only one is
+    # this repository's own ci.yml, as source qualification.
+    workflows = {str(job["uses"]) for job in spec["jobs"].values() if "uses" in job}
+    assert workflows == {"./.github/workflows/ci.yml"}
     assert repositories == {
         "actions/checkout",
         "actions/setup-node",

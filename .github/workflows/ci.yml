@@ -5,22 +5,24 @@ name: CI
 # gates link to. What runs here is everything that is deterministic on a hosted
 # runner -- suites, build, and the drift gates that keep generated files honest.
 
-# `main` is the sole trunk (one-branch model, 2026-09-03): work lands there,
-# betas are pre-release tags cut from it, and stable versions are full
-# releases -- so the tag list, not a branch, is the release history. The old
-# `next` integration branch is retired.
+# Nothing starts this workflow on its own: a push to `main` or a pull request
+# runs nothing here. Routine integration is gated by the full local suite, run
+# once per landed batch under the workspace landing policy. This runs in two
+# ways only:
+#
+# - on demand, as a diagnostic on any ref: `gh workflow run ci.yml --ref <ref>`;
+# - as source qualification, when release.yml or rc-build.yml calls it on the
+#   exact commit it is about to build. Their build jobs need the calling job,
+#   so a red qualification builds, attests and publishes nothing.
+#
+# A called run uses this file as it stands at the caller's commit, and its
+# token holds only what the calling job grants, `contents: read` -- all that any
+# job here needs. It publishes no release artifacts either way.
 on:
-  # Qualify an exact topic candidate on every platform before it is landed.
-  # Uses the existing jobs and permissions; publishes no release artifacts.
   workflow_dispatch:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# No concurrency group: under workflow_call github.workflow is the caller's, so one here could cancel the calling run.
 
 jobs:
   frontend:
@@ -102,7 +104,11 @@ jobs:
         with:
           python-version: "3.13"
       - name: Fetch the base this branch is measured against
-        run: git fetch --no-tags --prune origin "+refs/heads/*:refs/remotes/origin/*"
+        # Branches for a trunk or pull-request base, and the release tags that
+        # --since-last-release measures from.
+        run: |
+          git fetch --no-tags --prune origin "+refs/heads/*:refs/remotes/origin/*"
+          git fetch --no-tags origin "+refs/tags/v*:refs/tags/v*"
       - name: Check new commits for AI attribution
         env:
           # A pull request is measured against its own base. A push is measured
@@ -115,6 +121,14 @@ jobs:
           # success over a batch whose messages it never read. An empty range is
           # indistinguishable from a clean branch in the output, which is why it
           # survived. The script prints the range it actually used.
+          #
+          # Neither event starts this workflow now. A dispatch names no base,
+          # and a call from release.yml or rc-build.yml reports the caller's
+          # workflow_dispatch; a release commit is ON main, so the trunk range
+          # would be empty for the same reason. --since-last-release measures
+          # those runs from the last release tag before HEAD instead, so
+          # qualification reads every commit the release carries. A push or
+          # pull request would still be measured against its own base.
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
           BEFORE_SHA: ${{ github.event.before }}
@@ -122,7 +136,8 @@ jobs:
           python scripts/check_no_ai_attribution.py \
             --event "$EVENT_NAME" \
             --base-ref "$BASE_REF" \
-            --before "$BEFORE_SHA"
+            --before "$BEFORE_SHA" \
+            --since-last-release
 
   drift:
     name: Generated-file drift
@@ -156,7 +171,7 @@ jobs:
     #
     # Windows has hung here on a blocking Win32 dialog: the suite stops making
     # progress but the process never exits, so without a cap the job sits at
-    # GitHub's 6-hour default and only dies when the next push cancels it. The
+    # GitHub's 6-hour default. The
     # detector for that is pytest.ini's faulthandler_timeout=300 with
     # faulthandler_exit_on_timeout, which names the blocked frame and kills the
     # run after five minutes on any single test. This job cap is the backstop

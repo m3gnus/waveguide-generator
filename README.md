@@ -429,7 +429,7 @@ python scripts/bump_version.py patch
 
 `major` and `minor` do the obvious thing, `rc`, `beta` and `alpha` produce a
 release candidate (below), `--set X.Y.Z` sets an exact version, and `--check`
-proves every copy agrees. CI runs `--check` on every push; so does
+proves every copy agrees. CI's drift job runs `--check`, and so does
 `server/tests/test_version_consistency.py`.
 
 Releases are two deliberate commands, and **the tag is created last, by CI**:
@@ -443,8 +443,9 @@ Phase 1 stops once CI is green on the exact release commit; nothing is tagged
 and no version is spent. Phase 2 dispatches
 `.github/workflows/release.yml` against that **commit**, which **refuses to run
 when `shared/version.json` does not move forward past every published tag, the
-commit is not reachable from `origin/main`, or CI did not succeed for that exact
-commit** — a build that misreports itself is worse than a failed release.
+commit is not reachable from `origin/main`, or `ci.yml`, which the workflow
+runs on that exact commit before building anything, fails** — a build that
+misreports itself is worse than a failed release.
 
 Its SPA job attaches `update-spa-<version>.tar.gz`; the macOS job
 builds the canonical platform-neutral app ZIP and manifest, the macOS runtime ZIP,
@@ -551,8 +552,8 @@ a label beginning `alpha`, `beta` or `rc` is a release pre-release, and every
 other label is a build stamp. `shared/release_assets.release_prerelease` owns
 that whitelist, and every place both can appear asks it:
 
-- `scripts/bump_version.py --check` — which `ci.yml`'s drift job runs on every
-  push — accepts a stable version or a candidate, and refuses a build stamp. A
+- `scripts/bump_version.py --check` — which `ci.yml`'s drift job runs —
+  accepts a stable version or a candidate, and refuses a build stamp. A
   release tree may not carry one. `--build-stamp` is the build's own route to
   the same verification.
 - `scripts/bump_version.py <level>` refuses to compute anything from a build

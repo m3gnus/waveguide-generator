@@ -11,6 +11,12 @@ name: Release
 # GIT-WORKFLOW.md section 4 keeps published tags immutable. With the tag created
 # last, a failed build costs nothing and the same version is retried.
 #
+# Nothing is built until the qualify job has passed. It runs the whole of
+# ci.yml, which a same-repository call runs at this run's own commit,
+# github.sha; the SPA job needs it, and every later job needs the SPA job. It
+# replaced a lookup of a push-triggered ci.yml run on the release commit, which
+# stopped existing when CI stopped running on push.
+#
 # Every action is pinned to an immutable commit, with the release it belonged to
 # in a trailing comment. A major tag such as `@v4` moves, so a workflow that
 # names one does not describe the code that ran: the inputs of a release build
@@ -51,12 +57,24 @@ permissions:
   contents: read
 
 jobs:
+  qualify:
+    name: Qualify the release commit
+    # Read-only on purpose: ci.yml needs nothing more, and a called workflow's
+    # token can hold no more than the calling job grants it.
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   spa:
     name: Build the SPA
     runs-on: ubuntu-latest
+    # Source qualification first. Every later job needs this one, so nothing is
+    # built, attested or published unless ci.yml passed on this commit.
+    needs: qualify
     # A job-level block replaces the workflow's, so the two workflow-level
-    # permissions are restated here and in each build job: this job's CI check
-    # needs actions: read. Only the attestation adds id-token and attestations.
+    # permissions are restated here and in each build job. actions: read served
+    # the CI-run lookup the qualify job replaced; dropping it is a permissions
+    # change of its own. Only the attestation adds id-token and attestations.
     permissions:
       actions: read
       contents: read
@@ -226,31 +244,6 @@ jobs:
           echo "version=$declared" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
-
-      - name: The release commit must have successful CI
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
-        env:
-          RELEASE_COMMIT: ${{ steps.release_guard.outputs.release_commit }}
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const response = await github.rest.actions.listWorkflowRuns({
-              owner,
-              repo,
-              workflow_id: "ci.yml",
-              head_sha: process.env.RELEASE_COMMIT,
-              event: "push",
-              status: "completed",
-              per_page: 100,
-            });
-            const successful = response.data.workflow_runs.some(
-              (run) => run.conclusion === "success"
-            );
-            if (!successful) {
-              core.setFailed(
-                `CI has not completed successfully for ${process.env.RELEASE_COMMIT}.`
-              );
-            }
 
       - name: Build the SPA
         working-directory: frontend

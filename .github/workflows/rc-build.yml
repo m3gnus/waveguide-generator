@@ -39,6 +39,13 @@ name: RC build
 # `--ref` must resolve to `sha` when the run starts. Build a fix branch with
 # `gh workflow run rc-build.yml --ref <branch> -f sha=<branch tip>`;
 # `--ref main -f sha=<branch tip>` now fails before building anything.
+#
+# Nothing is built until the qualify job has passed: it runs the whole of
+# ci.yml at this run's commit, github.sha, and the SPA job needs it, so every
+# later job does too. CI no longer runs on push, so without it a candidate of
+# main would be built from a commit nothing hosted had checked. The source guard
+# therefore runs after qualification: a mismatched dispatch still builds
+# nothing, it only finds out later.
 on:
   workflow_dispatch:
     inputs:
@@ -51,9 +58,19 @@ permissions:
   contents: read
 
 jobs:
+  qualify:
+    name: Qualify the candidate commit
+    # Read-only on purpose: ci.yml needs nothing more, and a called workflow's
+    # token can hold no more than the calling job grants it.
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   spa:
     name: Build the SPA
     runs-on: ubuntu-latest
+    # Source qualification first; every later job needs this one.
+    needs: qualify
     permissions:
       contents: read
       id-token: write

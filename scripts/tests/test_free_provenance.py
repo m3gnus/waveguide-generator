@@ -33,15 +33,24 @@ GUARD = "Verify the candidate matches the workflow source"
 ATTESTING = {"id-token": "write", "attestations": "write"}
 RC_BUILD = {"contents": "read", **ATTESTING}
 # A job-level block replaces the workflow's rather than adding to it, so each
-# release build job restates actions: read, which the SPA job's CI check needs.
+# release build job restates the workflow's actions: read. Nothing reads it now
+# -- the SPA job's CI-run lookup became the qualify job -- and removing it is a
+# permissions change of its own.
 RELEASE_BUILD = {"actions": "read", "contents": "read", **ATTESTING}
 PUBLISH = {"contents": "write"}
+#: The call to ci.yml that every build job needs. Read-only: ci.yml needs no
+#: more, and a called workflow's token holds no more than the caller grants.
+QUALIFY = {"contents": "read"}
 
 #: Every job each workflow has, and its exact permission block (None: inherits
 #: the workflow's). Exact, so a job that gains anything is caught.
 JOB_PERMISSIONS = {
-    RC_WORKFLOW: dict.fromkeys(BUILD_JOBS, RC_BUILD),
-    RELEASE_WORKFLOW: {**dict.fromkeys(BUILD_JOBS, RELEASE_BUILD), "publish": PUBLISH},
+    RC_WORKFLOW: {"qualify": QUALIFY, **dict.fromkeys(BUILD_JOBS, RC_BUILD)},
+    RELEASE_WORKFLOW: {
+        "qualify": QUALIFY,
+        **dict.fromkeys(BUILD_JOBS, RELEASE_BUILD),
+        "publish": PUBLISH,
+    },
     PROPOSAL_WORKFLOW: {
         "identity": None,
         **dict.fromkeys(BUILD_JOBS, RC_BUILD),
