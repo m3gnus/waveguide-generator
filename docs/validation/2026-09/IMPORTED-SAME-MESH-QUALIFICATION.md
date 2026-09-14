@@ -11,9 +11,9 @@ answers one question: **given the same mesh, source tags, anchor frame, excitati
 and frequencies, do Metal and BEAT-CPU give the same complex answer, within a
 tolerance derived from how accurate each one is?**
 
-Every judged row passes. Most rows are judged against an upper bound. The two
-non-vacuity rows are judged against a lower bound, because they must show that
-the fixture can tell a mistake apart. Rows with no bound are reported, not
+Every judged row passes. Most rows are judged against an upper bound. The
+non-vacuity rows (two kinds, one row per engine each) are judged against a
+lower bound, because they must show that the fixture can tell a mistake apart. Rows with no bound are reported, not
 judged: discretisation errors, which define the tolerances, and two ingest
 findings.
 
@@ -61,16 +61,18 @@ or mirrored u and v. That is checked by a second body.
   between +x and +y and nearer +x. It is moved and turned the same way.
 - **Moved vs unmoved:** 2.00e-06 on Metal and 6.16e-07 on BEAT-CPU.
 - **Why the check is not vacuous:** a u mirror, a v mirror (a handedness error)
-  and a u/v swap would each move the cap and change the field. Two rows
-  measure by how much, and each is judged at ≥ 10 × the exact tolerance at
-  every frequency:
-  - the horizontal cut differs from the vertical by at least 6.10e-02, and by
-    up to 0.81;
-  - the vertical cut differs from its own mirror by at least 1.58e-01, and by up
-    to 1.35.
+  and a u/v swap would each move the cap and change the field. Two kinds of row
+  measure the last two, each judged at ≥ 10 × the exact tolerance at every
+  frequency:
+  - for a u/v swap, the horizontal cut differs from the vertical by at least
+    6.10e-02, and by up to 0.81;
+  - for a v mirror, the vertical cut differs from its own mirror by at least
+    1.58e-01, and by up to 1.35.
 
-  So any of those mistakes would fail the moved-vs-unmoved rows by at least
-  sixty times their tolerance.
+  The u mirror is visible, since the cap sits mostly at +x, but no row measures
+  it. These differences are measured per cut. The moved-vs-unmoved rows
+  normalise over every point, so they would see each one diluted by that cut's
+  share of the whole: less than these figures, but still far above their 1e-3.
 - **Sign flips:** the error measure reads 2.0 for a sign flip, which is tested
   on its own. No frame or axis mistake was injected into the engines for this
   record.
@@ -138,7 +140,7 @@ or mirrored u and v. That is checked by a second body.
   - **Metal's estimate overshoots, and the record's own data says by how much.**
     One engine's true error cannot exceed the other's plus their measured
     difference. BEAT-CPU's estimate plus the measured difference caps Metal's
-    error at 3.21e-02 at 3 kHz, not 7.95e-02, so the Metal estimate is at least
+    error at 3.21e-02 at 3 kHz, not 7.95e-02, so the Metal estimate is about
     2.5× too large.
   - Capping each estimate that way would tighten the tolerances:
     - same-mesh: 1.40e-01 → 6.90e-02;
@@ -181,7 +183,7 @@ separate analytic bound for source-average pressure is derived here.
 | --- | --- | --- |
 | Two-channel sum vs one merged channel (worst of 3 densities) | 7.14e-06 | 9.92e-06 |
 | Repeated HF: two bodies, two-channel sum vs one channel | 7.81e-07 | 8.99e-07 |
-| Repeated HF: left mirrors right, all three cuts | 6.57e-07 | 8.11e-07 |
+| Repeated HF: left mirrors right in the horizontal cut (the row compares all three cuts) | 6.57e-07 | 8.11e-07 |
 | x0 half vs whole, normal / axial | 4.79e-06 / 7.94e-06 | 4.36e-05 / 5.65e-05 |
 | x0+y0 quarter vs whole, normal / axial | 7.34e-06 / 7.96e-06 | 6.98e-05 / 5.07e-05 |
 | Return with edited body evidence (acknowledged) vs unedited | 1.42e-07 | 0 |

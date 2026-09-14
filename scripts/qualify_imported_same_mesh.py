@@ -509,9 +509,8 @@ def max_edge(points: np.ndarray, triangles: np.ndarray) -> float:
 
 #: A same-engine exact equivalence -- linearity, a mirror image, a reduced
 #: domain against the whole, the same triangles moved -- differs only by
-#: single-precision assembly: measured up to 7e-5 on BEAT, 1e-5 on Metal.
-#: 1e-3 is fifteen times that, and three orders below the smallest error a
-#: frame, sign or tag mistake produced in these fixtures (a sign flip reads 2.0).
+#: single-precision assembly: measured up to 7.0e-5 on BEAT and 8.0e-6 on
+#: Metal. 1e-3 is about fourteen times the larger; a sign flip reads 2.0.
 EXACT_TOLERANCE = 1.0e-3
 
 #: Margin on a same-mesh tolerance. The same-mesh bound below is
@@ -546,12 +545,10 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
     # and as two channels whose bases must sum to it. The oscillating sphere is
     # one axial tag: an axial split would ask each engine a different question
     # (see the rear-facing fixture below).
-    ladder: dict[tuple[str, str], list[tuple[float, np.ndarray]]] = {}
     level_errors: dict[tuple[str, str, int], np.ndarray] = {}
     for level in range(len(LADDER)):
         for kind in ("pulsating", "oscillating"):
             points, triangles, tags = sphere_mesh(level, split=kind == "pulsating")
-            h = max_edge(points, triangles)
             text = gmsh22(points, triangles, tags)
             if kind == "pulsating":
                 record = record_for(text, HEMISPHERE_TAGS)
@@ -566,7 +563,6 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
                     solved_cases[label] = solved
                     timings[f"{kind}-L{level}-{label}-{engine}"] = solved.wall_seconds
                     errors = relative_error(solved.observations(), analytic_observations(solved, kind))
-                    ladder.setdefault((kind, engine), []).append((h, errors))
                     level_errors[(kind, engine, level)] = errors
                     record_row(Row(f"{kind} sphere L{level} ({len(triangles)} tri), {label}", engine, "analytic", "complex, all points", errors.tolist()))
                 if kind == "pulsating":
@@ -667,9 +663,11 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
         record_row(Row("rotated + translated off-axis cap", engine, "unmoved", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="fixture 4: u and v must map as well as the axis"))
         horizontal = base.planes.index("horizontal")
         vertical = base.planes.index("vertical")
-        # Non-vacuity, judged: a mapping mistake would change the moved solve
-        # by at least these differences, so each must stand well clear of the
-        # exact-equivalence tolerance the moved-vs-unmoved rows are held to.
+        # Non-vacuity, judged: a u/v swap or a v mirror changes the cut each of
+        # these measures by that much. The moved-vs-unmoved rows normalise
+        # over every point, so the change they would see is this diluted by
+        # the cut's share -- still far above the exact tolerance, which is why
+        # each must stand well clear of it.
         asymmetry = relative_error(base.pressure["cap"][:, horizontal, :], base.pressure["cap"][:, vertical, :])
         record_row(Row("off-axis cap: horizontal differs from vertical", engine, "vertical cut", "complex, polar", asymmetry.tolist(), minimum=10.0 * EXACT_TOLERANCE, note="non-vacuity: a u/v swap changes the field"))
         handedness = relative_error(base.pressure["cap"][:, vertical, ::-1], base.pressure["cap"][:, vertical, :])
