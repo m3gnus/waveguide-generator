@@ -326,8 +326,41 @@ describe('UpdateControl', () => {
       const copy = [...dialog.querySelectorAll<HTMLButtonElement>('button')]
         .find((button) => button.textContent === 'Copy update diagnostics');
       await act(async () => copy!.click());
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
       const copied = JSON.parse(String((writeText.mock.calls[0] as unknown[])[0]));
       expect(copied.repairRequired).toEqual(repair);
+    });
+
+    it("copies the updater's own logs with the diagnostics, read when asked for", async () => {
+      const logs = {
+        tailBytes: 65536,
+        logs: {
+          'update.log': '[2026-09-14T10:00:00] Installed and verified the staged bundle layers.\n',
+          'update-handoff.log': null,
+          'rollback-handoff.log': 'rollback helper started\n',
+        },
+      };
+      const requested: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        requested.push(String(input));
+        return String(input) === '/api/updates/diagnostics'
+          ? new Response(JSON.stringify(logs), { status: 200 })
+          : new Response(JSON.stringify({ accepted: true, tag: 'v2.0.1' }), { status: 202 });
+      }));
+      act(() => root.render(<Harness value={heldStatus()}/>));
+      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+      // Not when the dialog opens: the logs are read for the copy alone.
+      expect(requested).not.toContain('/api/updates/diagnostics');
+
+      const copy = [...host.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'Copy update diagnostics');
+      await act(async () => copy!.click());
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
+
+      const copied = JSON.parse(String((writeText.mock.calls[0] as unknown[])[0]));
+      expect(requested).toContain('/api/updates/diagnostics');
+      expect(copied.updateLogs).toEqual(logs);
+      expect(copied.lastOutcome).toEqual(rolledBack);
     });
 
     it('copies update diagnostics that carry the last outcome', async () => {
@@ -337,6 +370,7 @@ describe('UpdateControl', () => {
         .find((button) => button.textContent === 'Copy update diagnostics');
       expect(copy).toBeDefined();
       await act(async () => copy!.click());
+      await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
       const copied = JSON.parse(String((writeText.mock.calls[0] as unknown[])[0]));
       expect(copied.lastOutcome).toEqual(rolledBack);
       expect(copied.suppressed).toEqual(held);

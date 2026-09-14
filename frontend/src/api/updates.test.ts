@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getUpdateChannel,
+  getUpdateDiagnostics,
   getUpdateStatus,
   installApplicationUpdate,
   retrySuppressedUpdate,
@@ -211,6 +212,29 @@ describe('the last update outcome and a held-back build', () => {
   it('surfaces the reason a retry was refused', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: 'That build is not held back.' }, 409)));
     await expect(retrySuppressedUpdate(heldBuild)).rejects.toThrow('That build is not held back.');
+  });
+});
+
+describe('getUpdateDiagnostics', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reads the updater's own logs, bounded and scrubbed by the server", async () => {
+    const logs = {
+      tailBytes: 65536,
+      logs: { 'update.log': 'installed\n', 'update-handoff.log': null, 'rollback-handoff.log': null },
+    };
+    const fetchMock = vi.fn(async () => jsonResponse(logs));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(getUpdateDiagnostics()).resolves.toEqual(logs);
+    expect(fetchMock).toHaveBeenCalledWith('/api/updates/diagnostics');
+  });
+
+  it.each([
+    ['a log that is not text', { tailBytes: 65536, logs: { 'update.log': 7 } }],
+    ['no logs at all', { tailBytes: 65536 }],
+  ] as [string, Record<string, unknown>][])('rejects %s', async (_label, value) => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(value)));
+    await expect(getUpdateDiagnostics()).rejects.toThrow('Update diagnostics response is invalid');
   });
 });
 

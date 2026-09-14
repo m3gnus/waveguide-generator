@@ -511,6 +511,50 @@ def test_status_endpoint_runs_the_blocking_service_off_loop(tmp_path: Path):
     assert refreshed["force"] is True and refreshed["thread"] != main_thread
 
 
+def test_the_diagnostics_endpoint_carries_the_updaters_logs_without_the_home_folder(
+    tmp_path: Path,
+):
+    """The updater review §3.3: "Copy update diagnostics" covers the update logs.
+
+    ``update.log``, ``update-handoff.log`` and ``rollback-handoff.log``, each
+    its last 64 KB from its first whole line, with the home folder as ``~`` the
+    way a problem report writes it. A log that does not exist reads ``None``.
+    """
+
+    now = [1_700_000_000.0]
+    update = service(tmp_path, lambda _etag: ReleaseResponse(release("2.0.0"), None), now)
+    logs = tmp_path / "data" / "logs"
+    logs.mkdir(parents=True)
+    staging = Path.home() / "Library" / "Application Support" / "WG" / "updates" / "0.3.4"
+    (logs / "update.log").write_bytes(
+        f"[2026-09-14T10:00:00] Removed the update downloads: {staging}\n".encode()
+    )
+    (logs / "update-handoff.log").write_bytes(b"helper started\n")
+    app = FastAPI()
+    mount_updates(
+        app,
+        running_version="2.0.0",
+        data_dir=tmp_path / "data",
+        repo_root=tmp_path,
+        service=update,
+    )
+    endpoint = next(
+        (route.endpoint for route in app.routes if route.path == "/api/updates/diagnostics"),
+        None,
+    )
+    assert endpoint is not None, "no GET /api/updates/diagnostics"
+
+    answer = asyncio.run(endpoint())
+
+    assert answer["tailBytes"] == 64 * 1024
+    assert set(answer["logs"]) == {"update.log", "update-handoff.log", "rollback-handoff.log"}
+    assert answer["logs"]["rollback-handoff.log"] is None
+    assert answer["logs"]["update-handoff.log"] == "helper started\n"
+    text = answer["logs"]["update.log"]
+    assert str(Path.home()) not in text
+    assert "Removed the update downloads: ~" in text
+
+
 def test_install_endpoint_requires_confirmation_and_runs_off_loop(tmp_path: Path):
     class FakeService:
         def request_install(self) -> dict[str, object]:

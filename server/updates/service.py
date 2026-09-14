@@ -1155,6 +1155,23 @@ class UpdateService:
         resources = self._installed_resources(checkout)
         return read_completion_record(self.data_dir, resources) if resources is not None else None
 
+    def diagnostic_logs(self) -> dict[str, Any]:
+        """The updater's own logs for "Copy update diagnostics" (the updater review §3.3).
+
+        The last ``MAX_UPDATE_LOG_BYTES`` of ``update.log``, ``update-handoff.log``
+        and ``rollback-handoff.log`` in ``<data>/logs``, each from its first
+        whole line and with the home folder as ``~``, exactly as the problem
+        report carries them. A log that does not exist is ``None``.
+        """
+
+        from server.diagnostics.bundle import MAX_UPDATE_LOG_BYTES, update_log_tails
+        from server.diagnostics.scrub import scrub_rules
+
+        return {
+            "tailBytes": MAX_UPDATE_LOG_BYTES,
+            "logs": update_log_tails(self.data_dir / "logs", scrub_rules()),
+        }
+
     def _repair_required(self, checkout: dict[str, Any]) -> dict[str, Any] | None:
         """This installation's rollback that did not finish, or ``None`` (the review §3.3).
 

@@ -145,6 +145,11 @@ completion record only remembers what the journal decided.
   - The dialog shows the outcome as a "Last update" fact, and explains one that did not
     install. "Copy update diagnostics", in the same dialog, copies the update state
     with both fields. It leaves out the install command, which names a local folder.
+  - "Copy update diagnostics" also carries the updater's own logs, read when it is
+    clicked from `GET /api/updates/diagnostics`: the last 64 KB of `update.log`,
+    `update-handoff.log` and `rollback-handoff.log`, each from its first whole line, with
+    the home folder as `~` (`update_log_tails` in `server/diagnostics/bundle.py`). The
+    problem report carries the same tails.
   - A failed rollback writes no record: it leaves this installation's journal in
     `rolling-back`, which every start's recovery would otherwise have finished. The status
     reports it as `repairRequired`, the transaction and the journal's detail with the home

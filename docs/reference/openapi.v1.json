@@ -11254,6 +11254,26 @@
         "summary": "Choose Update Channel"
       }
     },
+    "/api/updates/diagnostics": {
+      "get": {
+        "operationId": "update_diagnostics_api_updates_diagnostics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Diagnostics Api Updates Diagnostics Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Update Diagnostics"
+      }
+    },
     "/api/updates/install": {
       "post": {
         "operationId": "install_update_api_updates_install_post",

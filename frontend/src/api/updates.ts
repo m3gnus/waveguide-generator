@@ -473,6 +473,31 @@ export async function installApplicationUpdate(): Promise<UpdateInstallAccepted>
 }
 
 /**
+ * The updater's own logs, for "Copy update diagnostics" (the updater review
+ * §3.3): `update.log`, `update-handoff.log` and `rollback-handoff.log`, each
+ * its last `tailBytes` from its first whole line, with the home folder as `~`.
+ * A log that does not exist is `null`. Its counterpart is `diagnostic_logs` in
+ * `server/updates/service.py`.
+ */
+export interface UpdateDiagnosticLogs {
+  tailBytes: number;
+  logs: Record<string, string | null>;
+}
+
+export async function getUpdateDiagnostics(): Promise<UpdateDiagnosticLogs> {
+  const response = await fetch('/api/updates/diagnostics');
+  if (!response.ok) throw new Error(`Update diagnostics request failed (${response.status})`);
+  const payload: unknown = await response.json();
+  if (!isRecord(payload)
+    || !isNonNegativeNumber(payload.tailBytes)
+    || !isRecord(payload.logs)
+    || !Object.values(payload.logs).every(isNullableString)) {
+    throw new Error('Update diagnostics response is invalid');
+  }
+  return payload as unknown as UpdateDiagnosticLogs;
+}
+
+/**
  * The explicit retry of a build that rolled back (contract §2.3).
  *
  * It lifts exactly that one suppression and installs nothing: the next status

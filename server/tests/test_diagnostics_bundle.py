@@ -112,6 +112,55 @@ def test_log_text_is_scrubbed(paths) -> None:
     assert text.endswith("adopted ~/Documents/Horns\n")
 
 
+def test_the_updaters_own_logs_are_included_and_scrubbed(paths) -> None:
+    """The updater review §3.3: update.log and both handoff logs travel with a report.
+
+    A report about an update that went wrong had only the server's log, which
+    stops where the handoff starts. A log that does not exist is simply absent.
+    """
+
+    (paths.logs / "update.log").write_bytes(
+        b"[2026-09-14T10:00:00] Removed the update downloads: /home/ada/.local/share/WG/updates/0.3.4\n"
+    )
+    (paths.logs / "update-handoff.log").write_bytes(b"helper started from /home/ada/Applications/WG\n")
+
+    members = build(paths)
+
+    assert members["logs/update.log"] == (
+        b"[2026-09-14T10:00:00] Removed the update downloads: ~/.local/share/WG/updates/0.3.4\n"
+    )
+    assert members["logs/update-handoff.log"] == b"helper started from ~/Applications/WG\n"
+    assert "logs/rollback-handoff.log" not in members
+    manifest = json.loads(members["manifest.json"])
+    notes = {member["name"]: member["note"] for member in manifest["members"]}
+    assert "update" in notes["logs/update.log"].lower()
+    assert "handoff" in notes["logs/update-handoff.log"].lower() or "helper" in notes["logs/update-handoff.log"].lower()
+
+
+def test_an_update_log_tail_starts_at_a_whole_line(paths) -> None:
+    """Each update log is its last 64 KB, from the first whole line in them.
+
+    A tail cut in the middle of a line can begin with the end of a home path --
+    ``ada/Library/...`` -- which no scrubbing rule recognises, since the rule
+    needs the whole root. So the partial first line is dropped, not kept.
+    """
+
+    limit = 64 * 1024
+    head = "ada/Library/WG\n"
+    body = "".join(f"[{index:06d}] kept\n" for index in range(4000))
+    padding = limit - len(head) - len(body)
+    body += "[" + "." * (padding - 2) + "\n"
+    # The last ``limit`` bytes begin exactly at the "ada/" of this line's path.
+    content = "[000000] start\n" * 10 + "[boundary] cleaned /home/" + head + body
+    (paths.logs / "update.log").write_bytes(content.encode("utf-8"))
+
+    text = build(paths)["logs/update.log"].decode("utf-8")
+
+    assert "ada" not in text
+    assert text == body
+    assert len(text.encode("utf-8")) <= limit
+
+
 def test_the_design_stays_out_unless_it_is_asked_for(paths) -> None:
     """The single most important property of this bundle."""
 

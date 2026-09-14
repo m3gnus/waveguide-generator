@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObjec
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getUpdateChannel,
+  getUpdateDiagnostics,
   getUpdateStatus,
   installApplicationUpdate,
   retrySuppressedUpdate,
   setUpdateChannel,
   type UpdateBuildIdentity,
   type UpdateChannel,
+  type UpdateDiagnosticLogs,
   type UpdateOutcome,
   type UpdateStatus,
 } from '../api/updates';
@@ -371,11 +373,16 @@ function outcomeExplanation(outcome: UpdateOutcome): string {
 
 /**
  * What "Copy update diagnostics" copies: the update state as the server
- * reported it, with the last outcome from the completion record. The install
- * command is left out because it names a folder on this machine; the server
- * already leaves the record's staging folders out.
+ * reported it, with the last outcome from the completion record, and the
+ * updater's own logs (`updateLogs`, bounded and scrubbed by the server, or the
+ * reason they could not be read). The install command is left out because it
+ * names a folder on this machine; the server already leaves the record's
+ * staging folders out.
  */
-export function updateDiagnostics(status: UpdateStatus | undefined): string {
+export function updateDiagnostics(
+  status: UpdateStatus | undefined,
+  logs: UpdateDiagnosticLogs | { error: string } | null = null,
+): string {
   const checkout = status?.checkout;
   const release = status?.release;
   return JSON.stringify({
@@ -406,7 +413,30 @@ export function updateDiagnostics(status: UpdateStatus | undefined): string {
     lastOutcome: status?.lastOutcome ?? null,
     suppressed: status?.suppressed ?? null,
     repairRequired: status?.repairRequired ?? null,
+    updateLogs: logs,
   }, null, 2);
+}
+
+/**
+ * Put text that is still being fetched on the clipboard, from inside the click.
+ *
+ * WebKit -- the macOS desktop window -- lets a click write the clipboard only
+ * from within the click, and the logs arrive after it. A `ClipboardItem` can
+ * hold the pending text, so the write itself happens in the click. Where that
+ * is unavailable or refused, the text is awaited and written the usual way.
+ */
+async function writePendingText(text: Promise<string>): Promise<void> {
+  const clipboard = navigator.clipboard;
+  if (typeof ClipboardItem !== 'undefined' && typeof clipboard.write === 'function') {
+    try {
+      const blob = text.then((value) => new Blob([value], { type: 'text/plain' }));
+      await clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      return;
+    } catch {
+      // Fall back to the plain write below.
+    }
+  }
+  await clipboard.writeText(await text);
 }
 
 export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
@@ -574,8 +604,16 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
   };
   const copyDiagnostics = async () => {
     const operation = ++operationGeneration.current;
+    // The logs are read for the copy alone, not whenever the dialog opens. A
+    // failure to read them still copies the rest, with the reason.
+    const text = getUpdateDiagnostics().then(
+      (logs) => updateDiagnostics(data, logs),
+      (reason: unknown) => updateDiagnostics(data, {
+        error: reason instanceof Error ? reason.message : String(reason),
+      }),
+    );
     try {
-      await navigator.clipboard.writeText(updateDiagnostics(data));
+      await writePendingText(text);
       if (operation === operationGeneration.current) setFeedback('Update diagnostics copied.');
     } catch {
       if (operation === operationGeneration.current) setFeedback('Clipboard access failed, so the update diagnostics were not copied.');

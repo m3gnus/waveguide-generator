@@ -83,7 +83,19 @@ _MEMBER_NOTES = {
     "frontend-errors.json": "Interface errors this session reported to the server.",
     "logs/server.log": "The application log.",
     "logs/server.log.1": "The previous application log, kept across rotation.",
+    "logs/update.log": "The updater's log: installs, rollbacks and healthy-start cleanup (its last 64 KB).",
+    "logs/update-handoff.log": "What the update helper printed as it started (its last 64 KB).",
+    "logs/rollback-handoff.log": "What the rollback helper printed as it started (its last 64 KB).",
 }
+
+#: The updater's own logs, in ``<data>/logs``: ``update.log`` from the helper
+#: and the healthy-start settlement, and the two handoff logs the launcher
+#: writes a helper's output to. "Copy update diagnostics" and the problem
+#: report carry the same tails of them (the updater review §3.3).
+UPDATE_LOG_NAMES = ("update.log", "update-handoff.log", "rollback-handoff.log")
+#: Each is its last 64 KB: the most recent attempts, which are the ones a
+#: report about an update is about.
+MAX_UPDATE_LOG_BYTES = 64 * 1024
 
 
 def _now_iso() -> str:
@@ -136,6 +148,30 @@ def read_log_text(path: Path, *, limit: int, tail: bool = False) -> str | None:
     # solver can leave a partial sequence at the end of one. Losing the report
     # over the last three bytes of it would be an absurd trade.
     return raw.decode("utf-8", errors="replace")
+
+
+def update_log_tails(logs_dir: Path, rules: ScrubRules) -> dict[str, str | None]:
+    """The last ``MAX_UPDATE_LOG_BYTES`` of each updater log, scrubbed; ``None`` when absent.
+
+    A tail cut in the middle of a line starts with the end of that line, and
+    the end of a home path -- ``ada/Library/...`` -- is what no scrubbing rule
+    recognises, since a rule needs the whole root. So a log longer than the
+    limit starts at its first whole line in the tail, never part-way through one.
+    """
+
+    tails: dict[str, str | None] = {}
+    for name in UPDATE_LOG_NAMES:
+        try:
+            raw = (Path(logs_dir) / name).read_bytes()
+        except (OSError, ValueError):
+            tails[name] = None
+            continue
+        if len(raw) > MAX_UPDATE_LOG_BYTES:
+            raw = raw[-MAX_UPDATE_LOG_BYTES:]
+            newline = raw.find(b"\n")
+            raw = raw[newline + 1 :] if newline >= 0 else b""
+        tails[name] = scrub_text(raw.decode("utf-8", errors="replace"), rules)
+    return tails
 
 
 def collect_system(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -382,6 +418,11 @@ def build_bundle(
         text = read_log_text(path, limit=MAX_APP_LOG_BYTES, tail=tail)
         if text is not None:
             members[name] = scrub_text(text, rules).encode("utf-8")
+    # The server's log stops where an update's handoff starts; the updater's
+    # own logs carry the rest (already scrubbed, and bounded to their tails).
+    for name, text in update_log_tails(paths.logs, rules).items():
+        if text is not None:
+            members[f"logs/{name}"] = text.encode("utf-8")
 
     if job_id and job_log is not None:
         members[f"logs/job-{job_id}.log"] = scrub_text(job_log, rules).encode("utf-8")
@@ -462,6 +503,9 @@ def bundle_filename(summary: Mapping[str, Any]) -> str:
 __all__ = [
     "DESIGN_NAMESPACES",
     "MAX_APP_LOG_BYTES",
+    "MAX_UPDATE_LOG_BYTES",
+    "UPDATE_LOG_NAMES",
+    "update_log_tails",
     "MAX_JOB_LOG_BYTES",
     "SCHEMA_VERSION",
     "SCRUB_STATEMENT",

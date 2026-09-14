@@ -65,6 +65,13 @@ def mount_updates(
     ) -> dict[str, object]:
         return await asyncio.to_thread(update_service.get_status, force=refresh)
 
+    @application.get("/api/updates/diagnostics")
+    async def update_diagnostics() -> dict[str, object]:
+        # The logs "Copy update diagnostics" adds to the update state: each a
+        # bounded tail, scrubbed of the home folder. Read from disk, so off the
+        # event loop, as the status is.
+        return await asyncio.to_thread(update_service.diagnostic_logs)
+
     @application.get("/api/updates/channel")
     async def update_channel() -> dict[str, object]:
         return {"channel": update_service.channel()}
