@@ -214,6 +214,14 @@ reclaimed with it. All of these are optional keys under schema `1` (§3.3).
   (`server/cadlink/addin_update.py`; `docs/architecture/CAD-OPERATIONS.md`, "WGLink
   activation"). The package it names is the one inside the app layer, verified by digest.
 - The updater never reads, writes or removes them. Nothing in Phase 1 creates them.
+- The update status does report WGLink's partial success, from the activation's
+  in-memory verdict and never from these files: `wglink`, the verdict and its detail
+  with the home folder as `~` (`_wglink_activation` in `server/updates/service.py`,
+  imported inside the call so `server/updates` never imports `server/cadlink` as it
+  loads). While the verdict is `pending`, the update dialog says, after an installed
+  update, "Waveguide Generator updated successfully. Close Fusion to finish updating
+  WGLink. WG will confirm when it is ready to reopen." The CAD Link view says it too
+  when no CAD folder is chosen.
 - Whether they can exist for an add-in WG never installed depends on D5 (§5). The
   cleanup rule below holds either way.
 
@@ -760,7 +768,8 @@ request taken back); `server/tests/test_updates.py`
 `test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it` (§4.2,
 checkout flow), `test_a_checkout_request_is_due_on_arrival_whatever_the_wall_clocks_say`
 and `test_an_expired_checkout_restart_revokes_its_request` (§4.2, checkout readiness and
-the request taken back); `server/tests/test_statusapp_controller.py`
+the request taken back), `test_the_update_status_reports_a_pending_wglink_activation` and
+`test_the_update_service_imports_no_cad_link_module` (§2.4, WGLink's partial success); `server/tests/test_statusapp_controller.py`
 `test_the_status_window_polls_on_until_the_interface_is_served` and
 `test_the_status_window_reports_a_start_that_cannot_confirm_the_update` (§4.5, browser
 mode); and in `server/tests/test_desktop_launcher.py`, the window's refusal of a second

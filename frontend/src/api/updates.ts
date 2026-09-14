@@ -149,6 +149,18 @@ export interface UpdateRepair {
   detail: string;
 }
 
+/**
+ * What WG last decided about Fusion's WGLink add-in (the updater review §3.8):
+ * `pending` until Fusion closes, an activated verdict once installed, or one
+ * that changed nothing. Only the verdict and its detail, with the home folder
+ * as `~`; the full report stays with CAD Link. Its counterpart is
+ * `_wglink_activation` in `server/updates/service.py`.
+ */
+export interface UpdateWgLinkActivation {
+  verdict: string;
+  detail: string;
+}
+
 export interface UpdateStatus {
   schemaVersion: 1;
   runningVersion: string;
@@ -172,6 +184,8 @@ export interface UpdateStatus {
   suppressed?: UpdateBuildIdentity | null;
   /** A rollback that did not finish, so the installation needs repair. Absent from an older server. */
   repairRequired?: UpdateRepair | null;
+  /** WG's WGLink activation, once it has decided; `null` before then or when it is off. */
+  wglink?: UpdateWgLinkActivation | null;
   installState: UpdateInstallState;
   activeVersion: string | null;
   downloadedBytes: number;
@@ -327,6 +341,10 @@ function isUpdateRepair(value: unknown): value is UpdateRepair {
   return isRecord(value) && isNullableString(value.transaction) && typeof value.detail === 'string';
 }
 
+function isWgLinkActivation(value: unknown): value is UpdateWgLinkActivation {
+  return isRecord(value) && typeof value.verdict === 'string' && value.verdict !== '' && typeof value.detail === 'string';
+}
+
 function isCheckoutStatus(value: unknown): value is CheckoutStatus {
   if (!isRecord(value)
     || !isCheckoutKind(value.kind)
@@ -388,6 +406,7 @@ function isUpdateStatus(value: unknown): value is UpdateStatus {
     && (!Object.hasOwn(value, 'lastOutcome') || value.lastOutcome === null || isUpdateOutcome(value.lastOutcome))
     && (!Object.hasOwn(value, 'suppressed') || value.suppressed === null || isHeldBackBuild(value.suppressed))
     && (!Object.hasOwn(value, 'repairRequired') || value.repairRequired === null || isUpdateRepair(value.repairRequired))
+    && (!Object.hasOwn(value, 'wglink') || value.wglink === null || isWgLinkActivation(value.wglink))
     && isInstallState(value.installState)
     && (value.installState === 'idle' ? value.activeVersion === null : isVersion(value.activeVersion))
     && isNonNegativeNumber(value.downloadedBytes)

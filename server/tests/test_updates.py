@@ -6,6 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 import subprocess
+import sys
 import threading
 import time
 from typing import Any
@@ -553,6 +554,66 @@ def test_the_diagnostics_endpoint_carries_the_updaters_logs_without_the_home_fol
     text = answer["logs"]["update.log"]
     assert str(Path.home()) not in text
     assert "Removed the update downloads: ~" in text
+
+
+def test_the_update_status_reports_a_pending_wglink_activation(tmp_path: Path, monkeypatch):
+    """The updater review §3.8: WGLink's partial success is said in the update flow.
+
+    The status carries the activation's verdict and detail -- what WG last
+    decided, never the pending files, which the updater does not read -- with
+    the home folder as ``~``. No report yet, and activation turned off, carry
+    nothing.
+    """
+
+    from server.cadlink import addin_update
+
+    now = [1_700_000_000.0]
+    update = service(tmp_path, lambda _etag: ReleaseResponse(release("2.0.0"), None), now)
+    monkeypatch.setattr(addin_update, "_report", None)
+    assert update.get_status()["wglink"] is None
+
+    target = Path.home() / "Library" / "Application Support" / "Autodesk" / "WGLink"
+    monkeypatch.setattr(
+        addin_update,
+        "_report",
+        addin_update.Activation(
+            "pending", f"WGLink activation is pending until Fusion closes; it replaces {target}"
+        ).report(),
+    )
+    shown = update.get_status()["wglink"]
+
+    assert shown is not None and set(shown) == {"verdict", "detail"}
+    assert shown["verdict"] == "pending"
+    assert str(Path.home()) not in shown["detail"] and "~" in shown["detail"]
+
+    monkeypatch.setattr(
+        addin_update, "_report", addin_update.Activation("disabled", "WG2_WGLINK_REFRESH=0").report()
+    )
+    assert update.get_status()["wglink"] is None
+
+
+def test_the_update_service_imports_no_cad_link_module(tmp_path: Path):
+    """server/updates reads WGLink's verdict without a module-level import of server/cadlink.
+
+    Importing the update service in a fresh interpreter loads nothing from
+    ``server.cadlink``, so the two packages can never import each other at
+    module level.
+    """
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, server.updates.service; "
+            "print(sorted(name for name in sys.modules if name.startswith('server.cadlink')))",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "[]", result.stdout
 
 
 def test_install_endpoint_requires_confirmation_and_runs_off_loop(tmp_path: Path):

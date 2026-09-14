@@ -413,6 +413,7 @@ export function updateDiagnostics(
     lastOutcome: status?.lastOutcome ?? null,
     suppressed: status?.suppressed ?? null,
     repairRequired: status?.repairRequired ?? null,
+    wglink: status?.wglink ?? null,
     updateLogs: logs,
   }, null, 2);
 }
@@ -468,6 +469,11 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
   const lastOutcome = data?.lastOutcome ?? null;
   // A rollback that did not finish (the updater review §3.3 "Honest outcomes").
   const repair = !mismatch ? data?.repairRequired ?? null : null;
+  // WGLink waits for Fusion to close before WG replaces it (the review §3.8).
+  const wglinkPending = !mismatch && data?.wglink?.verdict === 'pending';
+  const wglinkNote = wglinkPending
+    ? `${lastOutcome?.outcome === 'installed' ? 'Waveguide Generator updated successfully. ' : ''}Close Fusion to finish updating WGLink. WG will confirm when it is ready to reopen.`
+    : null;
 
   const close = useCallback(() => {
     operationGeneration.current += 1;
@@ -759,6 +765,11 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
         {lastOutcome && lastOutcome.outcome !== 'installed' && !held && <p className="update-note warn">
           <b>Last update</b>
           {outcomeExplanation(lastOutcome)}
+        </p>}
+
+        {wglinkNote && <p className="update-note warn" role="status">
+          <b>WGLink</b>
+          {wglinkNote}
         </p>}
 
         {commandAction && <section className="update-install" aria-labelledby="update-install-title">

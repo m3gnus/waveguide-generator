@@ -1172,6 +1172,35 @@ class UpdateService:
             "logs": update_log_tails(self.data_dir / "logs", scrub_rules()),
         }
 
+    @staticmethod
+    def _wglink_activation() -> dict[str, str] | None:
+        """What WG last decided about Fusion's WGLink, for the update dialog (the review §3.8).
+
+        The verdict and its detail only, with the home folder as ``~``: the
+        in-memory report of ``server.cadlink.addin_update``, never the pending
+        files, which the updater does not read (contract §2.4). ``None`` before
+        WG has decided, and when activation is turned off. The import is made
+        here, not at module level, so ``server.updates`` never imports
+        ``server.cadlink`` as it loads.
+        """
+
+        try:
+            from server.cadlink.addin_update import last_refresh
+
+            report = last_refresh()
+        except Exception:  # noqa: BLE001 - the update status never fails over WGLink
+            return None
+        if not isinstance(report, dict):
+            return None
+        verdict = report.get("verdict")
+        if not isinstance(verdict, str) or not verdict or verdict == "disabled":
+            return None
+        detail = report.get("detail")
+        return {
+            "verdict": verdict,
+            "detail": _without_home(detail) if isinstance(detail, str) else "",
+        }
+
     def _repair_required(self, checkout: dict[str, Any]) -> dict[str, Any] | None:
         """This installation's rollback that did not finish, or ``None`` (the review §3.3).
 
@@ -1907,6 +1936,8 @@ class UpdateService:
             # "Rollback failed, repair required" (the review §3.3 "Honest
             # outcomes"): a failed rollback writes no completion record.
             repair = self._repair_required(checkout)
+            # WGLink's partial success after an update (the review §3.8).
+            wglink = self._wglink_activation()
             action = None
             if (
                 availability == "available"
@@ -1954,6 +1985,7 @@ class UpdateService:
                 "lastOutcome": outcome,
                 "suppressed": suppressed,
                 "repairRequired": repair,
+                "wglink": wglink,
                 **install_status,
             }
 

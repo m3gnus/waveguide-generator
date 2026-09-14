@@ -799,6 +799,17 @@ describe('CadLinkPanel', () => {
       .toContain('Tick Run on Startup for WGLink.');
   });
 
+  it('names a pending WGLink activation even with no CAD folder chosen', () => {
+    // WG updates WGLink whether or not a CAD folder is set, so a user without
+    // one must still learn that Fusion has to close to finish it (the updater
+    // review §3.8).
+    const unconfigured = { ...closedFusion, cadFolderConfigured: false };
+    const view = fusionWorkflowView({ ...unconfigured, addinRefresh: { verdict: 'pending', detail: '' } });
+    expect(view).toMatchObject({ state: 'not-configured', action: null });
+    expect(view.detail).toContain('close Fusion to finish updating WGLink');
+    expect(fusionWorkflowView(unconfigured).detail).not.toContain('WGLink activation');
+  });
+
   it('says an interrupted update needs recovery before anything else about the link', () => {
     expect(fusionWorkflowView({
       ...currentFusion,

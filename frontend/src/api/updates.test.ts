@@ -179,6 +179,12 @@ describe('the last update outcome and a held-back build', () => {
     expect(result.lastOutcome).toEqual(lastOutcome);
   });
 
+  it('accepts a WGLink activation the update is waiting on', async () => {
+    const wglink = { verdict: 'pending', detail: 'WGLink activation is pending until Fusion closes' };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...bundlePayload, wglink })));
+    expect((await getUpdateStatus()).wglink).toEqual(wglink);
+  });
+
   it('accepts a rollback that did not finish, which needs repair', async () => {
     const repairRequired = { transaction: '5f0c', detail: 'The restored bundle failed its signature check.' };
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...bundlePayload, repairRequired })));
@@ -193,6 +199,7 @@ describe('the last update outcome and a held-back build', () => {
     ['a build identity with a stray field', { suppressed: { ...heldBuild, path: '/somewhere' } }],
     ['a repair notice with no detail', { repairRequired: { transaction: '5f0c' } }],
     ['a repair notice that is not an object', { repairRequired: 'yes' }],
+    ['a WGLink report with no verdict', { wglink: { detail: 'pending' } }],
   ] as [string, Record<string, unknown>][])('rejects %s', async (_label, fields) => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...bundlePayload, ...fields })));
     await expect(getUpdateStatus()).rejects.toThrow('Update status response is invalid');

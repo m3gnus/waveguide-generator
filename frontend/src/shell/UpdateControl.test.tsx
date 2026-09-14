@@ -331,6 +331,35 @@ describe('UpdateControl', () => {
       expect(copied.repairRequired).toEqual(repair);
     });
 
+    it('reports WGLink partial success after an update, in the update flow', async () => {
+      const installed: UpdateOutcome = { ...rolledBack, outcome: 'installed', suppressedBuilds: [] };
+      act(() => root.render(<Harness value={bundleStatus({
+        availability: 'current',
+        release: null,
+        action: null,
+        canInstall: false,
+        lastOutcome: installed,
+        wglink: { verdict: 'pending', detail: 'WGLink activation is pending until Fusion closes' },
+      })}/>));
+      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+      const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+
+      expect(dialog.textContent).toContain(
+        'Waveguide Generator updated successfully. Close Fusion to finish updating WGLink. WG will confirm when it is ready to reopen.',
+      );
+    });
+
+    it('says nothing about WGLink when no activation is waiting', async () => {
+      const installed: UpdateOutcome = { ...rolledBack, outcome: 'installed', suppressedBuilds: [] };
+      act(() => root.render(<Harness value={bundleStatus({
+        lastOutcome: installed,
+        wglink: { verdict: 'current', detail: '' },
+      })}/>));
+      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+
+      expect(host.querySelector('[role="dialog"]')!.textContent).not.toContain('Close Fusion to finish updating WGLink');
+    });
+
     it("copies the updater's own logs with the diagnostics, read when asked for", async () => {
       const logs = {
         tailBytes: 65536,

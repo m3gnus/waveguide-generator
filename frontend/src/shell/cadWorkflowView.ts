@@ -145,7 +145,10 @@ function activationNote(state: CadWorkflowView['state'], refresh: WgLinkRefreshR
 
 export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowView {
   const view = fusionConnectionView(status);
-  if (status === null || view.state === 'checking' || view.state === 'not-configured' || view.state === 'addin-outdated') {
+  // With no CAD folder chosen the note still belongs here: WG updates WGLink
+  // either way, and a user without a folder must still learn that Fusion has
+  // to close to finish it (the updater review §3.8).
+  if (status === null || view.state === 'checking' || view.state === 'addin-outdated') {
     return view;
   }
   const note = activationNote(view.state, status.addinRefresh);
