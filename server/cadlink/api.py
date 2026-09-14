@@ -986,9 +986,11 @@ def _pending_solve_command(
     if job_for_submission is not None:
         job_id = job_for_submission(f"{CAD_SOLVE_SUBMISSION_PREFIX}{command.command_id}")
         if job_id:
-            # Reconciliation through the submission key: the browser created
-            # this job and its report never arrived -- a lost acknowledgement, a
-            # reload, an upgrade. The job is the outcome. Handing the command
+            # Reconciliation through the submission key: the backend's
+            # preparation, or the browser of a build before the backend owned
+            # solves, created this job and its report never arrived -- a lost
+            # acknowledgement, a restart, an upgrade. The job is the outcome.
+            # Handing the command
             # out again would submit it twice, or, from a client that builds the
             # request differently, meet a submission-key conflict and stay
             # parked behind it.

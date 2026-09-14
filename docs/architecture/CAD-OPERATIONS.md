@@ -115,8 +115,10 @@ A command is accepted only once its identity, digest, target and inputs are comm
   terminal row. A result from an obsolete attempt changes nothing and cannot revive a
   cancelled operation.
 - **Job ids stick.** A job id, once attached, is never cleared.
-- **This cut's solve commands.** The browser runs a solve command, and the outcome route
-  records its result as the operation's current attempt, without claiming first.
+- **Solve commands.** The backend prepares each solve command as an attempt of its own,
+  claiming it first (see "Preparation"). The outcome route, which only the browser of an
+  earlier build called, records a result as the operation's current attempt without
+  claiming first; it stays for diagnostics.
 
 ## States
 
@@ -476,10 +478,12 @@ into the store, oldest first, until one is owed an answer of its own. Then:
 - **Otherwise the answer is the oldest unfinished solve operation**, in the order WG
   accepted them. A command that waits on the user stays first in line, and a later
   request never takes its place. This is not "latest wins".
-- **A command whose job already exists is reconciled, not handed out again.** The
-  browser submits a solve command's job under the submission key
-  `cad-solve:<commandId>`. If the jobs store holds a job under that key, the browser
-  created it and its report never arrived: a lost acknowledgement, a reload, an upgrade.
+- **A command whose job already exists is reconciled, not handed out again.** A solve
+  command's job is submitted under the submission key `cad-solve:<commandId>`: by the
+  backend's preparation, and before the backend owned solves, by the browser. If the jobs
+  store holds a job under that key, it is that command's outcome and its report never
+  arrived: a lost acknowledgement, a restart, an upgrade from a build whose browser
+  submitted it.
   WG records `accepted` with that job and answers with it. Handing the command out again
   would submit it twice, or, from a client that builds the request differently, meet a
   submission-key conflict and stay parked behind it.

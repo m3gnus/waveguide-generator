@@ -269,8 +269,9 @@ def retain_operation_snapshot(
 def reconcile_with_jobs(ctx: PreparationContext, operation_id: str) -> dict[str, Any] | None:
     """Record ``accepted`` when the operation's submission key already made a job.
 
-    The job is the outcome: the browser or an earlier attempt created it and
-    its acknowledgement never arrived. Returns the row when it did so.
+    The job is the outcome: an earlier attempt created it, or the browser of a
+    build before the backend owned solves did, and its acknowledgement never
+    arrived. Returns the row when it did so.
     """
 
     if ctx.job_for_submission is None:

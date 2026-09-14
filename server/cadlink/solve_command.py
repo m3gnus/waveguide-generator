@@ -62,8 +62,10 @@ OUTDATED_ADDIN_REASON = (
     "Generator, which it no longer accepts. Restart Fusion so it loads the WGLink "
     "that WG installed, then use Solve in WG again."
 )
-# The submission key the browser gives a solve command's job. A job created
-# under it is that command's outcome, whatever request it carried.
+# The submission key a solve command's job is submitted under: by the backend's
+# preparation (``preparation.submission_key``), and before the backend owned
+# solves, by the browser. A job created under it is that command's outcome,
+# whatever request it carried.
 CAD_SOLVE_SUBMISSION_PREFIX = "cad-solve:"
 # A delivery is claimed by renaming it to this prefix in its own folder before
 # it is read, so a producer writing the same path afterwards writes a new file
