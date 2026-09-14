@@ -16,6 +16,7 @@ import { CadLinkCoordinator } from '../shell/CadLinkCoordinator';
 import { provideExportDestinationPrompt } from '../shell/exportDestinationPrompt';
 import { ExportDestinationDialog } from '../shell/ExportDestinationDialog';
 import { DesignFileMenu } from './DesignFileMenu';
+import { applyOpenedDesign as applyOpenedDocument, takeDesignOpenTicket } from './openCadProject';
 import { discardConfirmation } from './replacementCheck';
 
 /**
@@ -1215,5 +1216,74 @@ describe('a CAD-linked open overtaken while it loads', () => {
 
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(useDesignStore.getState().design.R).toBe(321);
+  });
+
+  function respondToDesignOpen(r: number) {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => (
+      String(input) === '/api/design/open' ? body(openedResponse(r)) : new Response('not found', { status: 404 })
+    ));
+  }
+
+  /** A file whose own read -- not the server round trip -- is the slow part:
+   * the realistic case a large or remote file produces, and the one the
+   * plain `.cfg` Open used to leave unticketed. */
+  function slowLocalFile(name: string) {
+    let resolveText!: (value: string) => void;
+    const text = new Promise<string>((resolve) => { resolveText = resolve; });
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', { configurable: true, value: [{ name, text: () => text }] });
+    act(() => input.dispatchEvent(new Event('change', { bubbles: true })));
+    return resolveText;
+  }
+
+  it('does not let a slow local file replace a design another open already put on screen, and says so', async () => {
+    respondToDesignOpen(777);
+    act(() => root.render(<DesignFileMenu/>));
+    const resolveText = slowLocalFile('slow.cfg');
+    await Promise.resolve();
+
+    // Another open -- a CAD Link project switch, elsewhere in the shell --
+    // takes its own ticket and applies while this file is still being read,
+    // exactly as `CadProjectPanel`'s own open flow does.
+    act(() => {
+      takeDesignOpenTicket();
+      applyOpenedDocument(openedResponse(160), 'linked.cfg');
+    });
+    expect(useDesignStore.getState().design.R).toBe(160);
+
+    await act(async () => {
+      resolveText('R = 777');
+      // The file's own decision also reads the run list and posts to
+      // `/api/design/open`, neither of which this synchronous stub settles
+      // in one microtask.
+      await new Promise((settle) => setTimeout(settle, 0));
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(useDesignStore.getState().design.R).toBe(160);
+    const status = container.querySelector('[role="status"]')?.textContent ?? '';
+    expect(status).toContain('slow.cfg');
+    expect(status).toContain('another design');
+  });
+
+  it('keeps a solve-setting edit made while a slow local file is being read, and says the open was overtaken', async () => {
+    respondToDesignOpen(777);
+    act(() => root.render(<DesignFileMenu/>));
+    const resolveText = slowLocalFile('slow.cfg');
+    await Promise.resolve();
+
+    act(() => useSolveOptionsStore.setState({ symmetry: 'quarter' }));
+
+    await act(async () => {
+      resolveText('R = 777');
+      await new Promise((settle) => setTimeout(settle, 0));
+      await new Promise((settle) => setTimeout(settle, 0));
+    });
+
+    expect(useSolveOptionsStore.getState().symmetry).toBe('quarter');
+    expect(useDesignStore.getState().design.R).not.toBe(777);
+    const status = container.querySelector('[role="status"]')?.textContent ?? '';
+    expect(status).toContain('slow.cfg');
+    expect(status).not.toMatch(/save/i);
   });
 });

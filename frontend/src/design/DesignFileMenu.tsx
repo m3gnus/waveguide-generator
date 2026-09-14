@@ -39,6 +39,7 @@ import { listCadLinkedDesigns, type CadLinkedDesignSummary } from '../api/cadlin
 import { cadProjectReference } from '../api/cadProjects';
 import {
   applyOpenedDesign as applyOpenedDocument,
+  assertDesignOpenCurrent,
   editableIdentity,
   openCadLinkedProject,
   takeDesignOpenTicket,
@@ -129,7 +130,6 @@ export function DesignFileMenu() {
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
-  const documentMutationGeneration = useRef(0);
   const openInput = useRef<HTMLInputElement>(null);
   const reportInput = useRef<HTMLInputElement>(null);
   const meshInput = useRef<HTMLInputElement>(null);
@@ -141,18 +141,6 @@ export function DesignFileMenu() {
     };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
-  }, []);
-
-  useEffect(() => {
-    const changed = () => { documentMutationGeneration.current += 1; };
-    const unsubscribeDesign = useDesignStore.subscribe(changed);
-    const unsubscribeDocument = useDocumentStore.subscribe(changed);
-    const unsubscribeSolveOptions = useSolveOptionsStore.subscribe(changed);
-    return () => {
-      unsubscribeDesign();
-      unsubscribeDocument();
-      unsubscribeSolveOptions();
-    };
   }, []);
 
   async function act(operation: () => Promise<void>) {
@@ -173,8 +161,19 @@ export function DesignFileMenu() {
   async function readSelected(input: HTMLInputElement, reportOnly: boolean) {
     const file = input.files?.[0];
     input.value = '';
-    if (!file) return;
-    const openingGeneration = documentMutationGeneration.current;
+    // `busyRef` guards re-entrancy the same way `mayReplace` does, and before
+    // the ticket: a call that is about to be a no-op (`act` below refuses it
+    // too) must not still bump the open-request counter and make a real
+    // in-flight open look superseded by nothing.
+    if (!file || busyRef.current) return;
+    // Taken now, before the first await, so an open asked for earlier --
+    // including one already in flight for this same input -- becomes stale.
+    // The other opens (the CAD-linked project switcher, `openProject` above)
+    // take theirs the same way and refuse just as unconditionally below;
+    // this one used to ask "the design changed while loading, replace it?"
+    // instead, which let whichever answer arrived last win the race no
+    // matter which was actually newer.
+    const ticket = takeDesignOpenTicket();
     await act(async () => {
       const text = await file.text();
       if (reportOnly) {
@@ -189,13 +188,13 @@ export function DesignFileMenu() {
       // Taken after every await, including the run-list read inside it, so
       // what is decided is the design on screen at the moment it is replaced.
       const wouldLose = await replacingWouldLose();
-      const changedWhileOpening = openingGeneration !== documentMutationGeneration.current;
-      if (wouldLose || changedWhileOpening) {
-        const question = wouldLose
-          ? discardConfirmation(`open ${file.name}`)
-          : `The design on screen changed while ${file.name} was loading. Replace it with ${file.name}?`;
-        if (!window.confirm(question)) return;
-      }
+      if (wouldLose && !window.confirm(discardConfirmation(`open ${file.name}`))) return;
+      // Refuses, with the same structured message every other open uses,
+      // when a newer open was asked for, another load applied first, or the
+      // design, its name or a file-owned solve setting changed while this
+      // one was in flight. Immediately before the write, so nothing between
+      // here and `applyOpenedDesign` can race it.
+      assertDesignOpenCurrent(ticket, file.name);
       applyOpenedDesign(opened, file.name);
     });
   }
