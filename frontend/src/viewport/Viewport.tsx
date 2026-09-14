@@ -749,7 +749,18 @@ export function Viewport() {
   }, [solverRefresh, solverViewSelected]);
 
   useEffect(
-    () => subscribeRevision((event) => solverRefresh.designChanged(event.revision)),
+    () => subscribeRevision((event) => {
+      // A load replaces the document; a solver-mesh build already in flight
+      // for the one it replaced is still answering a question nobody is
+      // asking any more. `designChanged` alone does not stop it -- it only
+      // marks the edit missed and lets the in-flight build finish first -- so
+      // without this, that build's own (still-current) generation can commit
+      // the replaced design's mesh into `importedMeshStore` for one frame
+      // before the follow-up build `designChanged` triggers overwrites it.
+      // Bumping the generation here makes that commit refuse itself instead.
+      if (event.reason === 'load') importedMeshStore.beginIntent();
+      solverRefresh.designChanged(event.revision);
+    }),
     [solverRefresh],
   );
 

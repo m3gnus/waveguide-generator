@@ -796,6 +796,70 @@ describe('BEMPP wall plan-adjustment note', () => {
   });
 });
 
+describe('solver-mesh refresh across a design load', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  function solverMeshResponse(key: string) {
+    return {
+      msh_text: meshFixture,
+      stats: { triangle_count: 1, vertex_count: 1, warnings: [], mesh_cache_key: key, mesh_cache_hit: false },
+      cut_planes: [],
+      quadrants: 1,
+    };
+  }
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    resetDesignStore();
+    resetCadReturnStore();
+    workspaceModeStore.setMode('parametric');
+    importedMeshStore.showSolver();
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    importedMeshStore.clear();
+    workspaceModeStore.setMode('parametric');
+    vi.restoreAllMocks();
+  });
+
+  // `resetDesignStore` always rewinds the revision counter to the same value
+  // (1), so a solver-mesh build already in flight when New replaces the
+  // design is -- by revision number alone -- indistinguishable from one that
+  // would answer the new document. `SolverMeshRefreshController.designChanged`
+  // trusts the revision number and no-ops when it has not moved, so nothing
+  // else asks for a fresh build either: without a separate identity, the
+  // stale build's mesh would be shown and nothing would ever correct it.
+  it('never shows a solver-mesh build answering the design New already replaced', async () => {
+    let resolveOld!: (value: Response) => void;
+    const oldResponse = new Promise<Response>((resolve) => { resolveOld = resolve; });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => (
+      String(input) === '/api/solver-mesh' ? oldResponse : new Response('not found', { status: 404 })
+    ));
+
+    act(() => root.render(<Viewport />));
+    expect(importedMeshStore.getSnapshot().solver).toBeNull();
+
+    act(() => resetDesignStore());
+
+    await act(async () => {
+      resolveOld(new Response(JSON.stringify(solverMeshResponse('old')), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(importedMeshStore.getSnapshot().solver).toBeNull();
+  });
+});
+
 describe('camera refit', () => {
   const scene = (source: 'cad' | 'solver' | 'file', ingestId: string | null) =>
     createImportedMeshScene('Speaker', parseMSH(meshFixture), source, ingestId);
