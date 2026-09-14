@@ -1169,8 +1169,11 @@ def ingest_bundle(
                 "detail": (
                     f"the {planes or 'symmetry'} reduction was discarded because "
                     f"{fallback.get('reason')}. The full domain was meshed and will be "
-                    "solved instead, at 2-4x the cost. Re-export a stitched, watertight "
-                    "body to regain the reduction."
+                    "solved instead, at 2-4x the cost. "
+                    + str(
+                        fallback.get("remedy")
+                        or "Re-export a stitched, watertight body to regain the reduction."
+                    )
                 ),
             }
         )

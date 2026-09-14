@@ -47,7 +47,19 @@ def _horn_points(n_phi: int = 16, n_length: int = 4) -> tuple[np.ndarray, np.nda
     return inner, outer
 
 
-def _write_horn_step(path: Path, *, vertical_offset_mm: float) -> Any:
+#: The flat membrane: a planar disc at z = 0 facing into the bore, which is the
+#: face a real return tags (the add-in's ``_throat_faces`` and WG's
+#: ``geometry_candidate_matches`` both want a planar disc on the throat plane).
+FLAT_THROAT_DISC = 0
+#: The rounded-cap membrane. Its only planar face is the throat plug's REAR, at
+#: z = -4 mm, facing away from the fluid in the bore, so the linked-throat
+#: contract binds to a source that looks away from the open axis.
+REAR_CAP = 1
+
+
+def _write_horn_step(
+    path: Path, *, vertical_offset_mm: float, source_shape: int = FLAT_THROAT_DISC
+) -> Any:
     from hornlab_mesher.cad import write_step
     from hornlab_mesher.geometry import PointGridHornGeometry
 
@@ -57,6 +69,7 @@ def _write_horn_step(path: Path, *, vertical_offset_mm: float) -> Any:
         outer_points=outer,
         wall_thickness_mm=4.0,
         vertical_offset_mm=vertical_offset_mm,
+        source_shape=source_shape,
     )
     _step_path, info = _run_in_gmsh_session(
         write_step, geometry, path, open_throat=False
@@ -64,8 +77,28 @@ def _write_horn_step(path: Path, *, vertical_offset_mm: float) -> Any:
     return info
 
 
+def _planar_faces_nearest_bore_first(gmsh: Any, surfaces: list[int]) -> list[int]:
+    """Planar faces, the one nearest the bore (highest z) first."""
+
+    planar = [
+        surface
+        for surface in surfaces
+        if str(gmsh.model.getType(2, surface)).casefold() == "plane"
+    ]
+    assert planar, "the horn fixture always has a planar throat face"
+    return sorted(
+        planar,
+        key=lambda surface: -float(gmsh.model.occ.getCenterOfMass(2, surface)[2]),
+    )
+
+
 def _measure_throat(step_path: Path) -> dict[str, float]:
-    """Measure the planar throat face of the written body, as CAD would."""
+    """Measure the planar throat face of the written body, as CAD would.
+
+    The throat is the planar face nearest the bore: the z = 0 disc of the flat
+    membrane, or -- on the rounded cap, where it is the only planar face -- the
+    plug's rear.
+    """
 
     import gmsh
     from hornlab_mesher.step_import import gmsh_surface_tags
@@ -75,14 +108,9 @@ def _measure_throat(step_path: Path) -> dict[str, float]:
         gmsh.clear()
         gmsh.model.occ.importShapes(str(step_path), highestDimOnly=True)
         gmsh.model.occ.synchronize()
-        planar = [
-            surface
-            for surface in gmsh_surface_tags()
-            if str(gmsh.model.getType(2, surface)).casefold() == "plane"
-        ]
-        assert len(planar) == 1, planar
-        centre = [float(value) for value in gmsh.model.occ.getCenterOfMass(2, planar[0])]
-        area = float(gmsh.model.occ.getMass(2, planar[0]))
+        throat = _planar_faces_nearest_bore_first(gmsh, gmsh_surface_tags())[0]
+        centre = [float(value) for value in gmsh.model.occ.getCenterOfMass(2, throat)]
+        area = float(gmsh.model.occ.getMass(2, throat))
         gmsh.clear()
         return {"centre": centre, "area_mm2": area}
 
@@ -161,10 +189,15 @@ def _horn_bundle(
     *,
     vertical_offset_mm: float = 0.0,
     placed: bool = False,
+    source_shape: int = FLAT_THROAT_DISC,
 ) -> Path:
     bundle = tmp_path / "workspace" / "wgreturn" / f"{name}.wgreturn"
     bundle.mkdir(parents=True)
-    info = _write_horn_step(bundle / "assembly.step", vertical_offset_mm=vertical_offset_mm)
+    info = _write_horn_step(
+        bundle / "assembly.step",
+        vertical_offset_mm=vertical_offset_mm,
+        source_shape=source_shape,
+    )
     # The contract is measured on the body as WG exported it: link coordinates.
     throat = _measure_throat(bundle / "assembly.step")
     area = float(throat["area_mm2"])
@@ -598,11 +631,21 @@ def test_a_return_moved_in_cad_is_normalised_back_with_its_throat_intact(
     assert placed["symmetry"]["cut_planes"] == ["x0", "y0"]
     # Per-plane diagnostics carry the rotation's round-off (~1e-11 mm), so
     # the decision is compared exactly and the measurements to tolerance.
+    # Which surface is worst is a measurement too -- an argmax over residuals.
+    # On the flat throat disc every residual is round-off (4e-12 to 2e-11 mm,
+    # measured), so that argmax is a tie the rotation breaks arbitrarily; it is
+    # compared only where the worst residual stands above the tolerance.
     assert placed["symmetry"]["planes"].keys() == unplaced["symmetry"]["planes"].keys()
     for plane, diagnostics in unplaced["symmetry"]["planes"].items():
         moved = placed["symmetry"]["planes"][plane]
         assert moved.keys() == diagnostics.keys()
+        residuals_are_round_off = all(
+            float(record.get("max_residual_step_units") or 0.0) <= 1.0e-9
+            for record in (diagnostics, moved)
+        )
         for name, value in diagnostics.items():
+            if name == "worst_residual_surface" and residuals_are_round_off:
+                continue
             if isinstance(value, float):
                 assert moved[name] == pytest.approx(value, rel=0.0, abs=1.0e-9), name
             else:
@@ -797,16 +840,12 @@ def _name_throat_shell(path: Path, label: str) -> None:
         gmsh.clear()
         gmsh.model.occ.importShapes(str(path), highestDimOnly=False)
         gmsh.model.occ.synchronize()
-        planar = [
-            index
-            for index, (_dim, tag) in enumerate(sorted(gmsh.model.getEntities(2)))
-            if str(gmsh.model.getType(2, tag)).casefold() == "plane"
-        ]
+        surfaces = [tag for _dim, tag in sorted(gmsh.model.getEntities(2))]
+        throat = _planar_faces_nearest_bore_first(gmsh, surfaces)[0]
         gmsh.clear()
-        # The open cut leaves no face on y = 0, so the throat cap is the only
-        # planar face left.
-        assert len(planar) == 1, planar
-        return planar[0]
+        # The open cut leaves no face on y = 0, so the planar faces left are the
+        # throat disc and the plug's rear; the throat is the one nearer the bore.
+        return surfaces.index(throat)
 
     index = _run_in_gmsh_session(throat_face_index)
     text = path.read_text(errors="replace")
@@ -847,10 +886,11 @@ def _reduced_bundle(
     planes: tuple[str, ...] = ("y0",),
     declare: bool = True,
     unlinked: bool = False,
+    source_shape: int = FLAT_THROAT_DISC,
 ) -> Path:
     """The round horn, cut open on ``planes`` in CAD, optionally declaring it."""
 
-    bundle = _horn_bundle(tmp_path, name)
+    bundle = _horn_bundle(tmp_path, name, source_shape=source_shape)
     assembly = bundle / "assembly.step"
     _cut_step_open(assembly, planes)
     step = assembly.read_bytes()
@@ -1193,3 +1233,281 @@ def test_an_undeclared_quarter_is_recognised_on_both_planes(tmp_path: Path) -> N
     )
     assert finding["blocking"] is True
     assert sorted(finding["detected_planes"]) == ["x0", "y0"]
+
+
+# ----------------------------------- a reduced domain vs the full model it mirrors
+
+_RETURN_IDS.update(
+    {
+        "rear": "wgr_01J5A8QK3M9T2XVBH0RD7NWEN0",
+        "rear-full": "wgr_01J5A8QK3M9T2XVBH0RD7NWEP0",
+    }
+)
+
+#: Physical tag of the one source in these fixtures.
+_SOURCE_TAG = 101
+
+
+def _solver_arrays(record: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    import meshio
+
+    mesh = meshio.read(record["mesh_store_path"], file_format="gmsh")
+    return (
+        np.asarray(mesh.points, dtype=float),
+        np.asarray(mesh.get_cells_type("triangle"), dtype=np.int64),
+        np.asarray(mesh.get_cell_data("gmsh:physical", "triangle")),
+    )
+
+
+def _area_vectors(points: np.ndarray, triangles: np.ndarray) -> np.ndarray:
+    return np.cross(
+        points[triangles[:, 1]] - points[triangles[:, 0]],
+        points[triangles[:, 2]] - points[triangles[:, 0]],
+    )
+
+
+def _winding_against_full(
+    solved: dict[str, Any], full: dict[str, Any]
+) -> dict[str, Any]:
+    """Compare the solved domain's winding with the forced full domain's.
+
+    Two independent readings. The mirrored signed volume: each reduced
+    component is closed by its mirror images, and the cut-plane caps add
+    nothing to an origin-based volume sum, so the domain multiplier times the
+    solved mesh's signed volume is the full body's volume, sign included --
+    +1 of the full domain's when wound alike, -1 when inverted. And a local
+    one: each solved triangle's normal against the full-domain triangle with
+    the nearest centroid. The tessellations differ, and across the 4 mm wall
+    the nearest centroid is sometimes on the other face, so a correct quarter
+    agrees on ~98% of its triangles and an inverted one on ~2% (measured).
+    """
+
+    sp, st, stags = _solver_arrays(solved)
+    fp, ft, ftags = _solver_arrays(full)
+    s_normals, f_normals = _area_vectors(sp, st), _area_vectors(fp, ft)
+    s_centroids, f_centroids = sp[st].mean(axis=1), fp[ft].mean(axis=1)
+    nearest = np.argmin(
+        ((s_centroids[:, None, :] - f_centroids[None, :, :]) ** 2).sum(axis=2), axis=1
+    )
+    agreement = np.einsum("ij,ij->i", s_normals, f_normals[nearest]) > 0.0
+
+    def volume(points: np.ndarray, triangles: np.ndarray) -> float:
+        p0, p1, p2 = (points[triangles[:, k]] for k in range(3))
+        return float(np.einsum("ij,ij->i", p0, np.cross(p1, p2)).sum() / 6.0)
+
+    multiplier = float(solved["mesh"]["stats"]["domain_multiplier"])
+    return {
+        "volume_ratio": multiplier * volume(sp, st) / volume(fp, ft),
+        "agreement": float(np.mean(agreement)),
+        "source_z": (
+            float(_area_vectors(sp, st[stags == _SOURCE_TAG]).sum(axis=0)[2]),
+            float(_area_vectors(fp, ft[ftags == _SOURCE_TAG]).sum(axis=0)[2]),
+        ),
+    }
+
+
+def test_the_quarter_is_wound_like_the_full_domain_it_mirrors(tmp_path: Path) -> None:
+    """The flat throat disc, the face a real return tags, faces into the bore.
+
+    ``orientation_valid`` cannot see a whole component wound the wrong way --
+    an inverted mesh is perfectly consistent -- so the quarter is compared with
+    the same return forced to stay whole.
+    """
+
+    pytest.importorskip("gmsh")
+    quarter = _ingest(tmp_path / "q", _horn_bundle(tmp_path / "q", "round"))
+    full = _ingest(
+        tmp_path / "f", _horn_bundle(tmp_path / "f", "full"), symmetry_mode="full"
+    )
+
+    assert quarter["symmetry"]["cut_planes"] == ["x0", "y0"]
+    assert full["symmetry"]["cut_planes"] == []
+    orientation = quarter["symmetry_verification"]["reduced_orientation"]
+    assert orientation["checked"] is True
+    assert orientation["component_count"] >= 1
+    assert orientation["inverted_component_count"] == 0
+
+    comparison = _winding_against_full(quarter, full)
+    assert comparison["volume_ratio"] == pytest.approx(1.0, abs=0.01)
+    assert comparison["agreement"] >= 0.95
+    # The disc drives into the bore, +z, in both domains.
+    assert comparison["source_z"][0] > 0.0
+    assert comparison["source_z"][1] > 0.0
+    postprocess = quarter["mesh"]["metadata"]["postprocess"]
+    assert postprocess["flipped_global"] == 0
+    assert int(postprocess.get("symmetry_source_parent_conflicts") or 0) == 0
+
+
+def test_a_rear_facing_source_is_never_solved_inverted(tmp_path: Path) -> None:
+    """A tagged source that looks away from the fluid, on a real ingest.
+
+    The rounded cap's only planar face is the throat plug's rear, so the
+    linked-throat contract binds to it and the source faces -z. The full model
+    is wound outward, that face included. A mesher that winds the quarter so
+    its source faces +z inverts every triangle of it, and the solve differs
+    from the full domain by 87-100% -- with ``orientation_valid`` still true.
+
+    Both branches below are live on purpose. A mesher that winds a reduced
+    component from its mirrored parent keeps the quarter; the pinned one before
+    that winds it from its source, and WG must then catch the inversion and
+    solve the full domain instead. Whichever ran, what is solved is wound like
+    the full model. The pin bump that delivers the mesher side can drop the
+    second branch.
+    """
+
+    pytest.importorskip("gmsh")
+    auto = _ingest(
+        tmp_path / "q",
+        _horn_bundle(tmp_path / "q", "rear", source_shape=REAR_CAP),
+    )
+    full = _ingest(
+        tmp_path / "f",
+        _horn_bundle(tmp_path / "f", "rear-full", source_shape=REAR_CAP),
+        symmetry_mode="full",
+    )
+
+    comparison = _winding_against_full(auto, full)
+    assert comparison["volume_ratio"] == pytest.approx(1.0, abs=0.01)
+    assert comparison["agreement"] >= 0.95
+    # The source looks away from the bore in the full model, and still does in
+    # what is solved.
+    assert comparison["source_z"][1] < 0.0
+    assert comparison["source_z"][0] < 0.0
+
+    if _child_orients_from_parent(full):
+        assert auto["symmetry"]["cut_planes"] == ["x0", "y0"]
+        assert "fallback" not in auto["symmetry_verification"]
+        orientation = auto["symmetry_verification"]["reduced_orientation"]
+        assert orientation["inverted_component_count"] == 0
+        postprocess = auto["mesh"]["metadata"]["postprocess"]
+        assert postprocess["reduced_orientation"] == "mirrored-parent"
+        assert postprocess["flipped_global"] == 0
+        assert postprocess["symmetry_parent_volume_flipped"] == 0
+        assert postprocess["symmetry_parent_volume_kept"] >= 1
+        # Kept, but not silently: the source disagreed with the parent.
+        assert postprocess["symmetry_source_parent_conflicts"] >= 1
+        assert any(
+            "which their tagged source alone would have inverted" in warning
+            for warning in auto["mesh"]["stats"]["warnings"]
+        )
+    else:
+        assert auto["symmetry"]["cut_planes"] == []
+        fallback = auto["symmetry_verification"]["fallback"]
+        assert fallback["rejected_cut_planes"] == ["x0", "y0"]
+        assert "wound against the model they mirror" in fallback["reason"]
+        assert fallback["reduced_orientation"]["inverted_component_count"] >= 1
+        finding = next(
+            item
+            for item in auto["findings"]
+            if item["kind"] == "symmetry-cut-unverified"
+        )
+        assert finding["blocking"] is True
+        assert "Tag a source face that faces the bore" in finding["detail"]
+        assert "Re-export" not in finding["detail"]
+
+
+_RETURN_IDS["rear-quarter"] = "wgr_01J5A8QK3M9T2XVBH0RD7NWEQ0"
+
+
+def test_a_declared_quarter_with_a_rear_facing_source_is_never_solved_inverted(
+    tmp_path: Path,
+) -> None:
+    """A declared domain has no whole model to fall back to.
+
+    The author cut it in CAD, so the other three quarters are not in the STEP.
+    It is either wound like the full model and solved, or refused with the
+    reason -- the advice about holes in the cut faces would be wrong here.
+    """
+
+    pytest.importorskip("gmsh")
+    from server.cadlink.ingest import IngestRefusal
+
+    full = _ingest(
+        tmp_path / "f",
+        _horn_bundle(tmp_path / "f", "rear-full", source_shape=REAR_CAP),
+        symmetry_mode="full",
+    )
+    bundle = _reduced_bundle(
+        tmp_path / "q", "rear-quarter", planes=("x0", "y0"), source_shape=REAR_CAP
+    )
+
+    if _child_orients_from_parent(full):
+        declared = _ingest(tmp_path / "q", bundle)
+        assert declared["symmetry"]["domain_planes"] == ["x0", "y0"]
+        orientation = declared["symmetry_verification"]["reduced_orientation"]
+        assert orientation["inverted_component_count"] == 0
+        comparison = _winding_against_full(declared, full)
+        assert comparison["volume_ratio"] == pytest.approx(1.0, abs=0.01)
+        assert comparison["agreement"] >= 0.95
+        assert comparison["source_z"][0] < 0.0
+        assert comparison["source_z"][1] < 0.0
+    else:
+        with pytest.raises(
+            IngestRefusal, match="wound against the model they mirror"
+        ) as refusal:
+            _ingest(tmp_path / "q", bundle)
+        assert "Tag a source face that faces the bore" in str(refusal.value)
+        assert "free of other holes" not in str(refusal.value)
+
+
+def _child_orients_from_parent(record: dict[str, Any]) -> bool:
+    """Did the mesher in the CAD child wind reduced domains from their parent?
+
+    Asked of a record rather than of this process: the ingest runs in the
+    isolated CAD child, whose interpreter need not import the mesher this one
+    does. A mesher with the mode echoes it on every postprocess, a full domain
+    included, and one without it records no mode at all.
+    """
+
+    postprocess = record["mesh"]["metadata"]["postprocess"]
+    return postprocess.get("reduced_orientation") == "mirrored-parent"
+
+
+def _open_unit_box(scale: float) -> tuple[np.ndarray, np.ndarray]:
+    """A box quarter open on x=0 and y=0 -- the reduced form of a closed box."""
+
+    points = scale * np.asarray(
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0],
+         [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]],
+        dtype=float,
+    )
+    outward = np.asarray(
+        [[1, 3, 7], [1, 7, 5], [2, 6, 7], [2, 7, 3],
+         [0, 2, 3], [0, 3, 1], [4, 5, 7], [4, 7, 6]],
+        dtype=np.int64,
+    )
+    return points, outward
+
+
+def test_reduced_orientation_is_judged_per_component_from_the_solver_arrays() -> None:
+    from server.mesh.imported import verify_reduced_orientation
+
+    points, outward = _open_unit_box(1.0)
+    record = verify_reduced_orientation(points, outward, cut_planes=("x0", "y0"))
+    assert record["checked"] is True
+    assert record["component_count"] == 1
+    assert record["inverted_component_count"] == 0
+    # Origin-based, the open quarter still reads its closed piece's volume.
+    assert record["signed_volume_mm3"] == pytest.approx(1.0)
+
+    inverted = verify_reduced_orientation(
+        points, outward[:, [0, 2, 1]], cut_planes=("x0", "y0")
+    )
+    assert inverted["inverted_component_count"] == 1
+    assert inverted["inverted_triangle_count"] == 8
+
+    # One inverted body cannot hide behind a larger correct one.
+    big_points, big = _open_unit_box(10.0)
+    both = verify_reduced_orientation(
+        np.vstack([big_points, points]),
+        np.vstack([big, outward[:, [0, 2, 1]] + len(big_points)]),
+        cut_planes=("x0", "y0"),
+    )
+    assert both["signed_volume_mm3"] > 0.0
+    assert both["component_count"] == 2
+    assert both["inverted_component_count"] == 1
+
+    # A full domain has no mirror to be wound against.
+    assert verify_reduced_orientation(
+        points, outward[:, [0, 2, 1]], cut_planes=()
+    )["checked"] is False

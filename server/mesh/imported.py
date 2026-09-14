@@ -1092,6 +1092,115 @@ def verify_symmetry_cut(
     return record
 
 
+#: Mirrors ``hornlab_mesher.step_import.SIGNED_VOLUME_NOISE_REL``: below this
+#: fraction of a component's own ``area ** 1.5`` its signed volume is rounding
+#: noise rather than an orientation, and the mesher leaves such a component
+#: unresolved (and says so, see ``_orientation_warnings``).
+REDUCED_ORIENTATION_NOISE_REL = 1.0e-9
+
+
+def _edge_connected_components(triangles: np.ndarray) -> np.ndarray:
+    """Label each triangle with the component it reaches through shared edges."""
+
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    count = len(triangles)
+    edges = np.sort(triangles[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
+    owners = np.repeat(np.arange(count), 3)
+    order = np.lexsort((edges[:, 1], edges[:, 0]))
+    edges, owners = edges[order], owners[order]
+    shared = np.all(edges[1:] == edges[:-1], axis=1)
+    graph = coo_matrix(
+        (np.ones(int(shared.sum())), (owners[:-1][shared], owners[1:][shared])),
+        shape=(count, count),
+    )
+    _components, labels = connected_components(graph, directed=False)
+    return labels
+
+
+def verify_reduced_orientation(
+    points_mm: Any,
+    triangles: Any,
+    *,
+    cut_planes: Iterable[str],
+) -> dict[str, Any]:
+    """Check that a reduced domain is wound like the full model it mirrors.
+
+    A full-domain import is oriented outward from its solid by signed volume
+    (the mesher's contract for a closed component). In a verified reduced
+    domain every free edge lies on a cut plane through the origin, so each
+    component is closed by its own mirror images, and the cut-plane caps that
+    would close it add nothing to the origin-based volume sum -- ``r . n``
+    vanishes on a plane through the origin. A component's own signed volume is
+    therefore exactly ``1 / 2**k`` of the full body's, sign included. Negative
+    means it is wound against the model it mirrors: every normal the solver
+    reads, the source's included, is reversed. Nothing else notices, because
+    an inverted mesh is perfectly consistent -- ``orientation_valid`` holds.
+
+    Counted from the arrays the solver reads, per edge-connected component, so
+    one inverted body cannot hide behind a larger correct one. Uncut returns
+    are not judged here, for the reason ``verify_symmetry_cut`` gives.
+    """
+
+    planes = tuple(str(plane) for plane in cut_planes)
+    record: dict[str, Any] = {
+        "cut_planes": list(planes),
+        "checked": False,
+        "component_count": 0,
+        "inverted_component_count": 0,
+        "inverted_triangle_count": 0,
+        "unresolved_component_count": 0,
+    }
+    tris = np.asarray(triangles, dtype=np.int64)
+    if not planes or len(tris) == 0:
+        return record
+    points = np.asarray(points_mm, dtype=float)
+    labels = _edge_connected_components(tris)
+    p0, p1, p2 = points[tris[:, 0]], points[tris[:, 1]], points[tris[:, 2]]
+    volume_terms = np.einsum("ij,ij->i", p0, np.cross(p1, p2)) / 6.0
+    areas = 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0), axis=1)
+    count = int(labels.max()) + 1
+    volumes = np.bincount(labels, weights=volume_terms, minlength=count)
+    floors = (
+        REDUCED_ORIENTATION_NOISE_REL
+        * np.bincount(labels, weights=areas, minlength=count) ** 1.5
+    )
+    unresolved = np.abs(volumes) <= floors
+    inverted = ~unresolved & (volumes < 0.0)
+    record.update(
+        {
+            "checked": True,
+            "component_count": count,
+            "inverted_component_count": int(np.count_nonzero(inverted)),
+            "inverted_triangle_count": int(
+                np.bincount(labels, minlength=count)[inverted].sum()
+            ),
+            "unresolved_component_count": int(np.count_nonzero(unresolved)),
+            "signed_volume_mm3": float(volumes.sum()),
+        }
+    )
+    return record
+
+
+def _reduced_orientation_kwargs() -> dict[str, str]:
+    """Ask the mesher to orient a reduced component from its mirrored parent.
+
+    WG meshes solids and orients a full-domain import outward by signed volume,
+    so a reduced domain must be wound the same way or it solves a different
+    model. ``hornlab_mesher`` revisions without
+    ``REDUCED_ORIENTATION_MIRRORED_PARENT`` orient a reduced component from its
+    tagged source instead, and invert it when that source faces away from the
+    open axis. :func:`verify_reduced_orientation` catches that result, and the
+    reduction is discarded rather than solved inverted.
+    """
+
+    from hornlab_mesher import step_import
+
+    mode = getattr(step_import, "REDUCED_ORIENTATION_MIRRORED_PARENT", None)
+    return {"reduced_orientation": mode} if mode else {}
+
+
 def polar_grid_from_symmetry(symmetry_report: Mapping[str, Any]) -> dict[str, Any]:
     """Pin full sweeps on rejected planes and one-sided sweeps only on cuts."""
 
@@ -2209,7 +2318,10 @@ def measure_surface_deviation(
 def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
     """Surface any component whose global orientation is still a guess.
 
-    A symmetry-reduced component is oriented from its tagged source cap. That
+    Where the mesher supports it, a symmetry-reduced component is wound from
+    its mirrored parent, like the full model (``_reduced_orientation_kwargs``),
+    and only one wound within its volume's noise floor reaches the rules
+    below. Otherwise it is oriented from its tagged source cap. That
     projection abstains for several reasons, and the mesher answers each
     differently, so a reader cannot tell them apart from one count:
 
@@ -2273,6 +2385,20 @@ def _orientation_warnings(repair: Mapping[str, Any]) -> list[str]:
             f"{corrected} symmetry-reduced component(s) were imported wound away "
             "from the bore and re-oriented from their source cap; the solve uses "
             "the corrected winding, and no action is needed"
+        )
+    # Information as well. Where the mesher can, it winds each reduced
+    # component like the full model it mirrors (``_reduced_orientation_kwargs``)
+    # and counts the components its source-cap rules would have wound the
+    # other way: a source facing away from the open axis (a throat plug's rear
+    # face), or a throat collar read on the outside of a solid wall. The second
+    # is a correctly tagged source, so this says what happened, not what to fix.
+    conflicts = int(repair.get("symmetry_source_parent_conflicts") or 0)
+    if conflicts and repair.get("reduced_orientation") == "mirrored-parent":
+        warnings.append(
+            f"{conflicts} symmetry-reduced component(s) were wound like the full "
+            "model they mirror, which their tagged source alone would have "
+            "inverted; the solve uses the full model's winding, and no action is "
+            "needed"
         )
     return warnings
 
@@ -3084,6 +3210,7 @@ def build_imported_mesh(
                 symmetry_planes=domain_planes,
                 tolerance=5.0e-3,
                 symmetry_snap_tolerance=SYMMETRY_SNAP_TOLERANCE_MM,
+                **_reduced_orientation_kwargs(),
             )
             points_mm, triangles, tags = _mesh_arrays(processed)
             frequency = mesh_frequency_validation(
@@ -3166,6 +3293,33 @@ def build_imported_mesh(
                     "reason": (
                         f"{verification['integrity_off_plane_open_edge_count']} open "
                         "mesh edges lie off the cut planes; the reduced domain leaks"
+                    ),
+                }
+            )
+        # An inverted reduced domain passes every check above -- it is closed
+        # modulo its cut planes and perfectly consistent, only wound against
+        # the model it mirrors. It is judged after them, so a leak is reported
+        # as the leak it is rather than as a volume read off an open surface.
+        orientation = verify_reduced_orientation(
+            points_mm, triangles, cut_planes=domain_planes
+        )
+        verification["reduced_orientation"] = orientation
+        if verification["verified"] and orientation["inverted_component_count"]:
+            verification.update(
+                {
+                    "verified": False,
+                    "reason": (
+                        f"{orientation['inverted_component_count']} of "
+                        f"{orientation['component_count']} reduced mesh "
+                        "component(s) came back wound against the model they "
+                        "mirror, which reverses every normal the solver reads"
+                    ),
+                    # What this mesher can still reduce: a component wound
+                    # from a source that faces the bore agrees with its
+                    # parent, which is why the flat throat disc keeps its cut.
+                    "remedy": (
+                        "Tag a source face that faces the bore to keep the "
+                        "reduction."
                     ),
                 }
             )
@@ -3339,6 +3493,8 @@ def build_imported_mesh(
                 "off_plane_free_edge_samples": list(
                     rejected.get("off_plane_free_edge_samples") or []
                 ),
+                "remedy": rejected.get("remedy"),
+                "reduced_orientation": rejected.get("reduced_orientation"),
             },
         }
     # A declared reduced domain has no full-domain version to fall back to: the
@@ -3355,8 +3511,12 @@ def build_imported_mesh(
             "symmetry: this return declares it was already cut on "
             + ", ".join(declared_cut_planes)
             + f", but the meshed boundary denies it: {verification.get('reason')}. "
-            "Leave the cut faces open and free of other holes, or return the "
-            "whole model."
+            + (
+                f"{verification['remedy']} Or return the whole model."
+                if verification.get("remedy")
+                else "Leave the cut faces open and free of other holes, or return "
+                "the whole model."
+            )
         )
     result["symmetry"]["requested_mode"] = symmetry_mode
     result["symmetry"]["declared_cut_planes"] = list(declared_cut_planes)
