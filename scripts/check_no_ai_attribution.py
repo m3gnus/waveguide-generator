@@ -33,6 +33,14 @@ the checkout is the pushed commit and `origin/main` is that same commit, so
 without reading one message. That was the state until 2026-09-08, on the primary
 landing path.
 
+A dispatch names no base, and neither does a release workflow calling ci.yml:
+the called run reports the caller's `workflow_dispatch`. Trunk is no answer for
+a release commit, which is ON main, so `origin/main..HEAD` is empty for exactly
+the reason above. `--since-last-release` measures such a run from the most
+recent release tag reachable from HEAD's parent, so release qualification reads
+every commit the release carries. No such tag is a refusal, never a fallback to
+trunk.
+
 A push that creates a ref carries the all-zero SHA as its base, and a push over
 rewritten history carries a base the checkout no longer has. Neither has a range
 this check can compute, and neither may fall back to all of history -- see
@@ -83,13 +91,22 @@ ZERO_SHA = "0" * 40
 
 
 def select_upstream(
-    *, event_name: str, base_ref: str, before: str, default_branch: str = "main"
+    *,
+    event_name: str,
+    base_ref: str,
+    before: str,
+    default_branch: str = "main",
+    last_release: str | None = None,
 ) -> str | None:
     """The commit the event's new commits are measured against.
 
     ``None`` means the event names no base this check can use -- a created ref,
     or a base the checkout does not have -- and the caller falls back to the tip
     commit alone.
+
+    ``last_release`` is the base for an event that names none of its own, when
+    the caller asked for it with ``--since-last-release``. It never overrides a
+    push's or a pull request's own base.
 
     Pure, so the mapping from an event payload to a range is testable without a
     repository. It is the part that was wrong.
@@ -104,9 +121,46 @@ def select_upstream(
         if not sha or set(sha) == {"0"}:
             return None
         return sha
-    # workflow_dispatch, or a hand run that named no event: the branch's own
-    # trunk is the only base available, and a hand run can pass --upstream.
+    # workflow_dispatch -- which is also what a release workflow calling ci.yml
+    # reports -- or a hand run that named no event. The last release when asked
+    # for; otherwise the branch's own trunk, and a hand run can pass --upstream.
+    if last_release:
+        return last_release
     return f"origin/{(base_ref or default_branch).strip()}"
+
+
+#: Release tags only. A `-updates` companion names the same commit as its
+#: release and is not a release itself.
+RELEASE_TAG_GLOB = "v[0-9]*"
+COMPANION_TAG_GLOB = "v*-updates"
+
+
+def last_release_tag(head: str) -> str | None:
+    """The most recent release tag reachable from ``head``'s parent, or None.
+
+    The parent, not ``head``: a commit that already carries a tag -- an RC
+    rebuilt from a tagged commit -- would otherwise measure an empty range.
+    """
+
+    result = subprocess.run(
+        [
+            "git",
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--match",
+            RELEASE_TAG_GLOB,
+            "--exclude",
+            COMPANION_TAG_GLOB,
+            f"{head}^",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    tag = result.stdout.strip()
+    return tag if result.returncode == 0 and tag else None
 
 
 def resolves(revision: str) -> bool:
@@ -171,12 +225,31 @@ def main(argv: list[str] | None = None) -> int:
         help="github.event.before: what the ref pointed at before a push.",
     )
     parser.add_argument("--head", default="HEAD")
+    parser.add_argument(
+        "--since-last-release",
+        action="store_true",
+        help="When the event names no base of its own (a dispatch, or a release "
+        "workflow calling ci.yml), measure from the last release tag before HEAD.",
+    )
     args = parser.parse_args(argv)
 
     from_event = args.upstream is None
+    last_release = None
+    if from_event and args.since_last_release:
+        last_release = last_release_tag(args.head)
+        if last_release is None:
+            # Documented in the module docstring: trunk here is the empty range.
+            raise SystemExit(
+                f"--since-last-release: no release tag is reachable from "
+                f"{args.head}^, so there is no range to read. CI needs "
+                f"fetch-depth: 0 and the release tags fetched."
+            )
     upstream = (
         select_upstream(
-            event_name=args.event, base_ref=args.base_ref, before=args.before
+            event_name=args.event,
+            base_ref=args.base_ref,
+            before=args.before,
+            last_release=last_release,
         )
         if from_event
         else args.upstream

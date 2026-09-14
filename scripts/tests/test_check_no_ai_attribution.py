@@ -216,6 +216,140 @@ def test_a_hand_run_or_dispatch_still_measures_against_trunk() -> None:
     )
 
 
+def test_a_dispatch_asked_to_is_measured_from_the_last_release() -> None:
+    assert (
+        select_upstream(
+            event_name="workflow_dispatch", base_ref="", before="", last_release="v1.2.3"
+        )
+        == "v1.2.3"
+    )
+
+
+def test_the_last_release_never_replaces_an_events_own_base() -> None:
+    assert (
+        select_upstream(
+            event_name="push", base_ref="", before="abc1234", last_release="v1.2.3"
+        )
+        == "abc1234"
+    )
+    assert (
+        select_upstream(
+            event_name="pull_request", base_ref="main", before="", last_release="v1.2.3"
+        )
+        == "origin/main"
+    )
+
+
+# --- Release qualification ----------------------------------------------------
+#
+# ci.yml no longer runs on push. It runs on demand, and when release.yml or
+# rc-build.yml calls it on the commit it is about to build -- and a called run
+# reports the caller's event, `workflow_dispatch`, with no base of its own. A
+# release commit is ON main, so the trunk range is as empty as the old push
+# range was. `--since-last-release` measures it from the previous release.
+
+
+def _release_commit_on_trunk(tmp_path: Path, *, trailer: bool) -> Path:
+    """A checkout shaped as a release qualification sees it.
+
+    The last release is tagged, with its companion beside it; the release's
+    work follows, then the version commit, and `origin/main` is that commit.
+    """
+
+    repo = _repo(tmp_path)
+    _git("tag", "v0.1.0", cwd=repo)
+    _git("tag", "v0.1.0-updates", cwd=repo)
+    message = f"Work since the release\n\nWhy.\n\n{REAL_TRAILER}" if trailer else "Work"
+    _commit(repo, "two\n", message)
+    _commit(repo, "three\n", "More work since the release")
+    _commit(repo, "four\n", "Version 0.2.0")
+    _git("update-ref", "refs/remotes/origin/main", "HEAD", cwd=repo)
+    return repo
+
+
+def test_a_release_commit_measured_against_trunk_reads_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression witness: without the flag, qualification passes vacuously."""
+
+    monkeypatch.chdir(_release_commit_on_trunk(tmp_path, trailer=True))
+
+    assert main(["--event", "workflow_dispatch", "--head", "HEAD"]) == 0
+
+
+def test_release_qualification_reads_every_commit_since_the_last_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The trailer is two commits below the tip, where no tip check looks."""
+
+    monkeypatch.chdir(_release_commit_on_trunk(tmp_path, trailer=True))
+
+    assert (
+        main(["--event", "workflow_dispatch", "--head", "HEAD", "--since-last-release"])
+        == 1
+    )
+
+
+def test_a_clean_release_passes_over_commits_it_really_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(_release_commit_on_trunk(tmp_path, trailer=False))
+
+    assert (
+        main(["--event", "workflow_dispatch", "--head", "HEAD", "--since-last-release"])
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "checking v0.1.0..HEAD" in out
+    assert "No AI attribution in 3 new commit(s)." in out
+
+
+def test_a_companion_tag_is_not_the_last_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`v*-updates` names machinery, and must not shorten the range."""
+
+    repo = _release_commit_on_trunk(tmp_path, trailer=True)
+    _git("tag", "v9.0.0-updates", "HEAD~1", cwd=repo)
+    monkeypatch.chdir(repo)
+
+    assert (
+        main(["--event", "workflow_dispatch", "--head", "HEAD", "--since-last-release"])
+        == 1
+    )
+
+
+def test_a_commit_that_already_carries_a_tag_is_still_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An RC rebuilt from a tagged commit: its own tag is not its base."""
+
+    repo = _repo(tmp_path)
+    _git("tag", "v0.1.0", cwd=repo)
+    _commit(repo, "two\n", f"Version 0.2.0-rc.1\n\n{REAL_TRAILER}")
+    _git("tag", "v0.2.0-rc.1", cwd=repo)
+    monkeypatch.chdir(repo)
+
+    assert (
+        main(["--event", "workflow_dispatch", "--head", "HEAD", "--since-last-release"])
+        == 1
+    )
+
+
+def test_no_release_tag_is_a_refusal_not_a_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Falling back to trunk here would be the vacuous range again."""
+
+    repo = _repo(tmp_path)
+    _commit(repo, "two\n", "Work with no release behind it")
+    _git("update-ref", "refs/remotes/origin/main", "HEAD", cwd=repo)
+    monkeypatch.chdir(repo)
+
+    with pytest.raises(SystemExit, match="no release tag"):
+        main(["--event", "workflow_dispatch", "--head", "HEAD", "--since-last-release"])
+
+
 def _trunk_push(tmp_path: Path) -> tuple[Path, str]:
     """A checkout shaped exactly as CI's is on a push to `main`.
 
