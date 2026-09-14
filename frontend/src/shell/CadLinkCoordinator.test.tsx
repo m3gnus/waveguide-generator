@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
 import { selectCadWorkspace } from '../api/cadWorkspace';
 import type { CadOperationSummary } from '../api/cadOperations';
-import { applyOpenedDesign } from '../design/openCadProject';
+import { applyOpenedDesign, openCadLinkedProject, takeDesignOpenTicket } from '../design/openCadProject';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { showJobModel } from '../jobs/showJobModel';
 import { preferencesStore } from '../prefs/preferences';
@@ -28,7 +28,7 @@ import {
   showIngestedMeshInViewport,
   SupersededError,
 } from './CadLinkCoordinator';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { cadSolveBlockerNow, jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
 const initialBundle: CadReturnBundle = {
@@ -1903,11 +1903,11 @@ describe('CadLinkCoordinator', () => {
       if (path === '/api/cadlink/operations') return json({ operations: [cadOperation()] });
       if (path.endsWith('/prepare') || path.endsWith('/cancel')) {
         posted.push({ path, body: init?.body ? JSON.parse(String(init.body)) : null });
+        // As the routes answer: prepare with the row as it was before the
+        // claim, cancel with the row the request left.
         return path.endsWith('/cancel')
-          ? json(cadOperation({ state: 'cancelled', reason: null, attemptGeneration: 2, updatedAt: '2026-09-14T10:00:10Z' }))
-          : json({ operation: cadOperation({
-            state: 'processing', stage: 'validating', reason: null, attemptGeneration: 2, updatedAt: '2026-09-14T10:00:09Z',
-          }) });
+          ? json(cadOperation({ state: 'cancelled', reason: null, updatedAt: '2026-09-14T10:00:10Z' }))
+          : json({ operation: cadOperation() });
       }
       // A marker Fusion left behind: the backend's to collect, never this client's.
       if (path.endsWith('/solve-command')) return json({ command: {
@@ -1939,7 +1939,10 @@ describe('CadLinkCoordinator', () => {
     await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().solveOperation('op-1'); });
     // No setup revision: the backend resolves the snapshot's own project setup.
     expect(posted).toEqual([{ path: '/api/cadlink/operations/op-1/prepare', body: { submit: true } }]);
-    expect(useCadOperationsStore.getState().operations['op-1']?.state).toBe('processing');
+    // Nothing moves until the attempt reports on the jobs channel.
+    expect(useCadOperationsStore.getState().operations['op-1']).toMatchObject({
+      state: 'needs_user_input', attemptGeneration: 1,
+    });
 
     await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().dismissOperation('op-1'); });
     expect(posted[1]).toEqual({ path: '/api/cadlink/operations/op-1/cancel', body: null });
@@ -2138,5 +2141,96 @@ describe('CadLinkCoordinator', () => {
 
     expect(importedMeshStore.isCurrentGeneration(second)).toBe(true);
     expect(importedMeshStore.getSnapshot().cad?.artifactToken).toBe('wgi_first:solver');
+  });
+
+  /** Stub the three calls opening a CAD-linked project actually makes. */
+  function projectOpenRoutes(designId: string, lineageId: string, name: string) {
+    return (path: string): Response | null => {
+      if (path.endsWith(`/designs/${designId}`)) {
+        return json({ designId, lineageId, editVersion: 2, filename: `${name}.cfg`, text: 'R = 160' });
+      }
+      if (path.endsWith('/cadlink/designs')) {
+        return json({ items: [{
+          designId, lineageId, filename: `${name}.cfg`, documentName: name,
+          archiveStem: name, exportCount: 1, editVersion: 2,
+          createdAt: '2026-09-04T00:00:00Z', updatedAt: '2026-09-04T00:00:00Z',
+        }] });
+      }
+      if (path === '/api/design/open') {
+        return json({
+          dialect: 'ath', migrationsApplied: [],
+          passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+          design: useDesignStore.getState().design,
+          cadlink: {
+            identity: { designId, lineageId, baseEditVersion: 2 },
+            classification: 'current',
+          },
+        });
+      }
+      return null;
+    };
+  }
+
+  it('drops a viewport mesh it could not replace rather than blocking the next solve', async () => {
+    const first: CadReturnBundle = { ...initialBundle, name: 'first.wgreturn', bundlePath: 'wgreturn/first.wgreturn' };
+    const second: CadReturnBundle = { ...initialBundle, name: 'second.wgreturn', bundlePath: 'wgreturn/second.wgreturn' };
+    let artifactsFail = false;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [first, second] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/ingest')) {
+        const bundlePath = String((JSON.parse(String(init?.body)) as { bundlePath: string }).bundlePath);
+        return json({ ...ingestRecord, ingest_id: bundlePath === first.bundlePath ? 'wgi_first' : 'wgi_second' });
+      }
+      if (path.includes('/viewport-mesh') || path.endsWith('/mesh')) {
+        return artifactsFail ? json({}, 500) : new Response(viewportMesh, { status: 200 });
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    await act(async () => { cadLinkCoordinatorBridge.getSnapshot().selectBundle(first); });
+    await vi.waitFor(() => expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_first'));
+
+    // Both display artifacts fail for the next model the user picks.
+    artifactsFail = true;
+    await act(async () => { cadLinkCoordinatorBridge.getSnapshot().selectBundle(second); });
+    await vi.waitFor(() => expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_second'));
+    await vi.waitFor(() => expect(importedMeshStore.getSnapshot().cad).toBeNull());
+    // An empty slot is honest, and it is no reason to refuse the solve.
+    expect(cadSolveBlockerNow()).toBeNull();
+  });
+
+  /** Opening another project from File → CAD-linked designs while a send is on
+   * the wire: the identity the export registers belongs to the design that was
+   * exported, never to the one on screen when the response lands. */
+  it('does not adopt a send identity after File → CAD-linked designs opened another project', async () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
+    }, 'current');
+    const pending = deferred<Response>();
+    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') return pending.promise;
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return routes(path) ?? json({}, 404);
+    }));
+
+    await renderCoordinator();
+    let send!: Promise<unknown>;
+    await act(async () => {
+      send = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await openCadLinkedProject('wgd_other', takeDesignOpenTicket(), { loadSource: 'cad-project-switch' });
+    });
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
+
+    await act(async () => { pending.resolve(sendResult()); await send; });
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
   });
 });

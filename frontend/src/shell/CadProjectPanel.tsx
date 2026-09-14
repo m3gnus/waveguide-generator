@@ -129,6 +129,24 @@ async function openCadOnlyProject(project: CadProject, ticket: DesignOpenTicket)
   return projectName(project);
 }
 
+/** Open a CAD-linked project as the switcher does: asking before a design
+ * that exists nowhere else is discarded, and never over anything opened
+ * since. Resolves with what was opened, or null when the user kept the design. */
+export async function openCadProject(project: CadProject): Promise<string | null> {
+  if (await replacingWouldLose()
+    && !window.confirm(discardConfirmation('open this CAD-linked project'))) return null;
+  // Taken as soon as the switch is decided, before its first await: the
+  // switch applies only if nothing newer happened in between. A CAD-only
+  // project replaces no design, so an edit to the design cannot overtake
+  // it; a newer open or another design put on screen still can.
+  const ticket = takeDesignOpenTicket({ checkEdits: Boolean(project.designId) });
+  if (project.designId) {
+    const opened = await openCadLinkedProject(project.designId, ticket, { loadSource: 'cad-project-switch' });
+    return opened.filename;
+  }
+  return openCadOnlyProject(project, ticket);
+}
+
 function ProjectSwitcher({ current, label, onOpened, onError }: {
   /** The current project's lineage: the one identity every project has. */
   current: string | null;
@@ -166,22 +184,10 @@ function ProjectSwitcher({ current, label, onOpened, onError }: {
     busyRef.current = true;
     setBusy(true);
     try {
-      if (await replacingWouldLose()
-        && !window.confirm(discardConfirmation('open this CAD-linked project'))) return;
-      // Taken as soon as the switch is decided, before its first await: the
-      // switch applies only if nothing newer happened in between. A CAD-only
-      // project replaces no design, so an edit to the design cannot overtake
-      // it; a newer open or another design put on screen still can.
-      const ticket = takeDesignOpenTicket({ checkEdits: Boolean(project.designId) });
-      if (project.designId) {
-        const opened = await openCadLinkedProject(project.designId, ticket, { loadSource: 'cad-project-switch' });
-        setOpen(false);
-        onOpened(opened.filename);
-      } else {
-        const name = await openCadOnlyProject(project, ticket);
-        setOpen(false);
-        onOpened(name);
-      }
+      const name = await openCadProject(project);
+      if (name === null) return;
+      setOpen(false);
+      onOpened(name);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {

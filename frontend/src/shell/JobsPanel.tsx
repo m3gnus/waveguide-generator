@@ -190,6 +190,10 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   const cancelled = job.status === 'cancelled';
   const rating = job.rating ?? 0;
   const [editing, setEditing] = useState(false);
+  // A solve CAD Link submitted for a Fusion request is keyed by its operation.
+  const cadOperationId = job.client_request_id?.startsWith('cad-solve:')
+    ? job.client_request_id.slice('cad-solve:'.length)
+    : null;
   const [titleDraft, setTitleDraft] = useState(job.label ?? '');
   const [displayLabel, setDisplayLabel] = useState(job.label);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -289,6 +293,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     </header>
     {renameError && <div className="job-error job-rename-error" role="alert">{renameError}</div>}
     {job.results_discarded_at && <div className="job-retention-note">Results were cleaned up to save space.</div>}
+    {cadOperationId && <div className="job-retention-note job-cad-operation" title="Fusion asked for this solve; CAD Link prepared and submitted it as this operation.">From CAD operation {cadOperationId}</div>}
     {running ? <>
       <p>{metrics(job, now)}</p>
       <div className="job-stage"><span>{job.stage_message ?? job.stage ?? 'waiting…'}</span><b>{Math.round(job.progress * 100)}%</b></div>

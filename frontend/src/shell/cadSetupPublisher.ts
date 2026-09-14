@@ -13,11 +13,12 @@ import {
   incompleteDriverChannels,
   passiveCardioidBlocker,
   passiveCardioidWire,
-  projectChannelDrivers,
   useCadReturnStore,
 } from '../stores/cadReturn';
 import { useDocumentStore } from '../stores/document';
 import { polarValidationError, useSolveOptionsStore } from '../stores/solveOptions';
+import { subscribeSolveSettingsEdits } from '../stores/solveSettingsEdits';
+import { workspaceModeStore } from '../stores/workspaceMode';
 
 /**
  * What the backend prepares a Fusion solve of this project from
@@ -52,15 +53,17 @@ function projectLineage(state: CadReturnSnapshot): string | null {
  * snapshot contributes (type, ingest and hashes, acknowledged findings) and
  * without widening the polar grid, which the backend does from the snapshot it
  * prepares. The engine is the solver selector's. Null while the settings are
- * not a solve the Solve button would accept either.
+ * not a solve the Solve button would accept either. `lineageId` files it under
+ * a project the caller knows better, such as the one the backend names for an
+ * operation's snapshot.
  */
 export function buildCadProjectSetup(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
   solveStore: SolveOptionsSnapshot = useSolveOptionsStore.getState(),
   preparation: CadPreparationSnapshot = useCadPreparationStore.getState(),
+  lineageId: string | null = projectLineage(state),
 ): CadProjectSetup | null {
   const bundle = state.selectedBundle;
-  const lineageId = projectLineage(state);
   if (!bundle || !bundle.sources.length || !lineageId) return null;
   if (incompleteDriverChannels(state).length) return null;
   const cardioidPresent = hasPassiveCardioidSurface(bundle.sources);
@@ -94,6 +97,8 @@ export function buildCadProjectSetup(
   }));
   return {
     lineageId,
+    // The roles exactly as the return states them; the backend owns their
+    // canonical form.
     inventory: bundle.sources.map(({ id, role, required }) => ({ id, role, required })),
     setup: {
       schema_version: 1,
@@ -143,21 +148,22 @@ function selectionKey(state: CadReturnSnapshot): string | null {
 }
 
 /**
- * Record the open project's setup as its settings change, and the solver
- * selection whenever it changes.
+ * Record the open project's setup when the user changes its settings, and the
+ * solver selection whenever it changes.
  *
- * A setup is recorded when the user changes a setting, or when a model is
- * selected whose project already has saved settings. A model selected for the
- * first time starts from defaults nobody chose, so it is left for the backend
- * to answer `setup_required` about rather than recorded as the project's.
+ * Only an edit the user makes in the CAD workspace is recorded. A selection,
+ * an ingestion or a recalled run changes the same stores without anyone
+ * choosing anything -- a first-time model's defaults, or one project's
+ * settings carried into the next -- and a solve option edited for the
+ * parametric design is not the retained CAD project's. "Use these settings and
+ * solve" records the same setup on demand (CadLinkCoordinator).
  */
 export function startCadSetupPublisher(
   options: { fetcher?: typeof fetch; debounceMs?: number } = {},
 ): () => void {
   const fetcher = options.fetcher ?? fetch;
   const debounceMs = options.debounceMs ?? SETUP_DEBOUNCE_MS;
-  let selection: string | null = null;
-  let observed: string | null = null;
+  let selection = selectionKey(useCadReturnStore.getState());
   let published: string | null = null;
   let pending: CadProjectSetup | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -172,7 +178,7 @@ export function startCadSetupPublisher(
     const key = JSON.stringify(next);
     if (key === published) return;
     published = key;
-    // Advisory: a failed recording is retried by the next change, and until
+    // Advisory: a failed recording is retried by the next edit, and until
     // then the backend waits for a setup rather than guessing one.
     void putProjectSetup(next, fetcher).catch(() => { if (published === key) published = null; });
   };
@@ -183,23 +189,18 @@ export function startCadSetupPublisher(
     timer = setTimeout(flush, debounceMs);
   };
 
-  const observe = () => {
-    const state = useCadReturnStore.getState();
-    const built = buildCadProjectSetup(state);
-    const key = built ? JSON.stringify(built) : null;
-    const nextSelection = selectionKey(state);
-    if (nextSelection !== selection) {
-      // The previous project's last edit is still its own.
-      flush();
-      selection = nextSelection;
-      observed = key;
-      const bundle = state.selectedBundle;
-      if (built && bundle && projectChannelDrivers(bundle, state.projectLineageId) !== null) schedule(built);
-      return;
-    }
-    if (!built || key === observed) return;
-    observed = key;
-    schedule(built);
+  const onEdit = () => {
+    if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
+    const built = buildCadProjectSetup();
+    if (built) schedule(built);
+  };
+
+  // An edit still waiting belongs to the project it was made in.
+  const onSelection = () => {
+    const next = selectionKey(useCadReturnStore.getState());
+    if (next === selection) return;
+    selection = next;
+    flush();
   };
 
   const observeEngine = () => {
@@ -210,13 +211,11 @@ export function startCadSetupPublisher(
   };
 
   const unsubscribers = [
-    useCadReturnStore.subscribe(observe),
-    useCadPreparationStore.subscribe(observe),
-    useDocumentStore.subscribe(observe),
-    useSolveOptionsStore.subscribe(() => { observeEngine(); observe(); }),
+    subscribeSolveSettingsEdits(onEdit),
+    useCadReturnStore.subscribe(onSelection),
+    useSolveOptionsStore.subscribe(observeEngine),
   ];
   observeEngine();
-  observe();
   return () => {
     unsubscribers.forEach((unsubscribe) => unsubscribe());
     flush();

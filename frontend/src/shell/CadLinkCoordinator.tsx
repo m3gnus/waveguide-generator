@@ -14,6 +14,7 @@ import type { CadSetup, JobItem } from '../api/jobsSocket';
 import {
   cancelCadOperation,
   prepareCadOperation,
+  putProjectSetup,
   type CadOperationApprovals,
   type CadOperationSummary,
 } from '../api/cadOperations';
@@ -22,6 +23,7 @@ import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type Onshape
 import { fromResult, parseWire } from '../results/crossoverSpec';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { getDriver } from '../api/drivers';
+import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
   DRIVER_FIELD_KEYS,
@@ -63,7 +65,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { designNameSlug } from '../stores/designName';
 import { fusionWorkflowView } from './cadWorkflowView';
-import { startCadSetupPublisher } from './cadSetupPublisher';
+import { buildCadProjectSetup, startCadSetupPublisher } from './cadSetupPublisher';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 import { useModalDialogFocus } from './dialogFocus';
@@ -102,6 +104,9 @@ interface CadLinkCoordinatorSnapshot {
    * that reported them, and solve. */
   approveOperation(operationId: string, approvals: CadOperationApprovals): Promise<void>;
   dismissOperation(operationId: string): Promise<void>;
+  /** Record the settings on screen as the model's project setup, then
+   * prepare the operation with exactly that revision. */
+  solveOperationWithSettings(operationId: string): Promise<void>;
   /** The one Fusion outbound path: derives open-vs-update and the expected
    * document guard from the live status, and parks on the two-way conflict
    * (returning null) until the user confirms through the coordinator dialog. */
@@ -142,6 +147,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   solveOperation: unavailable,
   approveOperation: unavailable,
   dismissOperation: unavailable,
+  solveOperationWithSettings: unavailable,
   sendWgToFusion: unavailable,
   cancelFusionConflict: () => undefined,
   clearFeedback: () => undefined,
@@ -1866,6 +1872,8 @@ export function CadLinkCoordinator() {
       if (mounted.current) setStatus(done);
     } catch (reason) {
       if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason));
+      // The card that asked offers its action again.
+      throw reason;
     }
   }, []);
 
@@ -1887,6 +1895,23 @@ export function CadLinkCoordinator() {
     () => cancelCadOperation(operationId),
     'Dismissed the solve Fusion asked for.',
   ), [actOnOperation]);
+
+  /** Use these settings and solve: the settings on screen become the setup of
+   * the model's project -- the one the backend names for the snapshot, when it
+   * knows -- and the operation is prepared with exactly that revision. */
+  const solveOperationWithSettings = useCallback((operationId: string) => actOnOperation(async () => {
+    const operation = useCadOperationsStore.getState().operations[operationId];
+    const built = buildCadProjectSetup(
+      undefined, undefined, undefined, operation?.snapshot?.projectLineageId ?? undefined,
+    );
+    if (!built) {
+      throw new Error(importedSubmissionBlocker()
+        ?? 'WG does not know this model’s project yet. Prepare it from the return list, then try again.');
+    }
+    const recorded = await putProjectSetup(built);
+    return prepareCadOperation(operationId, { setupRevisionId: recorded.revisionId });
+  }, 'Recorded these settings for the model’s project. Preparing and solving it; its run appears in the Jobs rail once it is submitted.'),
+  [actOnOperation]);
 
   // Fusion's solve commands are the backend's (CAD-OPERATIONS.md, "Delivery"):
   // it collects each one, prepares it from its project's recorded setup and
@@ -1983,6 +2008,7 @@ export function CadLinkCoordinator() {
       solveOperation,
       approveOperation,
       dismissOperation,
+      solveOperationWithSettings,
       sendWgToFusion,
       cancelFusionConflict,
       clearFeedback,
@@ -2018,6 +2044,7 @@ export function CadLinkCoordinator() {
       solveOperation: unavailable,
       approveOperation: unavailable,
       dismissOperation: unavailable,
+      solveOperationWithSettings: unavailable,
       sendWgToFusion: unavailable,
       cancelFusionConflict: () => undefined,
       clearFeedback: () => undefined,
@@ -2033,6 +2060,7 @@ export function CadLinkCoordinator() {
     clearFeedback,
     approveOperation,
     dismissOperation,
+    solveOperationWithSettings,
     error,
     fusionStatus,
     ingest,

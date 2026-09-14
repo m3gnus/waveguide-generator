@@ -24,6 +24,8 @@ export interface AutoExportFormatStatus {
 
 export interface JobItem {
   id: string;
+  /** The submission key; `cad-solve:<operation id>` for a solve CAD Link submitted. */
+  client_request_id?: string | null;
   run_number: number;
   parent_job_id: string | null;
   status: JobStatus;
@@ -642,8 +644,9 @@ function parseCadOperation(message: JsonRecord): CadOperationSummary | null {
 /** Receives the backend's CAD operation updates (CAD-OPERATIONS.md, "Events"). */
 export interface CadOperationListener {
   operation(operation: CadOperationSummary): void;
-  /** Updates carry no cursor, so one missed while disconnected is recovered
-   * by reading the authoritative list again. */
+  /** Updates carry no cursor, so every connection -- the first included --
+   * reads the authoritative list again: an update sent before it, or while
+   * disconnected, is recovered there. */
   resync(): void;
 }
 
@@ -691,7 +694,6 @@ export class JobsSocketManager {
   }>();
   private readonly listeners = new Set<() => void>();
   private readonly cadOperationListeners = new Set<CadOperationListener>();
-  private connectedBefore = false;
   private snapshot: JobsSnapshot = {
     connection: 'idle', epoch: null, cursor: null, jobs: [], error: null,
   };
@@ -854,8 +856,6 @@ export class JobsSocketManager {
       }
       if (this.helloSeen) return;
       this.helloSeen = true;
-      const reconnected = this.connectedBefore;
-      this.connectedBefore = true;
       this.reconnectAttempt = 0;
       this.heartbeatMs = Math.max(250, hello.heartbeatSec * 2_000);
       this.update({ connection: 'connected', epoch: hello.epoch, error: null });
@@ -863,7 +863,7 @@ export class JobsSocketManager {
       if (this.snapshot.cursor !== null && socket.readyState === OPEN) {
         socket.send(JSON.stringify({ v: 1, kind: 'resume', epoch: hello.epoch, cursor: this.snapshot.cursor }));
       }
-      if (reconnected) this.cadOperationListeners.forEach((listener) => listener.resync());
+      this.cadOperationListeners.forEach((listener) => listener.resync());
       return;
     }
     if (!this.helloSeen) return;

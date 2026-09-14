@@ -68,4 +68,23 @@ describe('CAD operations store', () => {
     expect(Object.keys(operations).sort()).toEqual(['op-2', 'op-new']);
     expect(operations['op-2'].state).toBe('processing');
   });
+
+  it('keeps an update that finished an operation over a listing taken before it, and the held copy on a tie', async () => {
+    const { apply, load } = useCadOperationsStore.getState();
+    let answer!: (response: Response) => void;
+    const fetcher = vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    const loading = load(fetcher as unknown as typeof fetch);
+    // Both reported on the jobs channel while the listing was in flight.
+    apply(summary({ operationId: 'op-1', state: 'accepted', stage: 'submitted', jobId: 'job-1', attemptGeneration: 1, updatedAt: '2026-09-14T10:00:05Z' }));
+    apply(summary({ operationId: 'op-2', state: 'processing', stage: 'validating', attemptGeneration: 1, updatedAt: '2026-09-14T10:00:05Z' }));
+    answer(json({ operations: [
+      // Taken before the job existed; a clock a little ahead changes nothing.
+      summary({ operationId: 'op-1', state: 'processing', stage: 'preparing-mesh', attemptGeneration: 1, updatedAt: '2026-09-14T10:00:07Z' }),
+      summary({ operationId: 'op-2', state: 'processing', stage: 'received', attemptGeneration: 1, updatedAt: '2026-09-14T10:00:05Z' }),
+    ] }));
+    await loading;
+    const operations = useCadOperationsStore.getState().operations;
+    expect(operations['op-1']).toMatchObject({ state: 'accepted', stage: 'submitted', jobId: 'job-1' });
+    expect(operations['op-2'].stage).toBe('validating');
+  });
 });

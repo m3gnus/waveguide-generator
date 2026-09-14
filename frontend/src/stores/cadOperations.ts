@@ -25,6 +25,19 @@ function isNewer(incoming: CadOperationSummary, held: CadOperationSummary): bool
   return next >= current;
 }
 
+/** Whether a listed copy replaces the one held. A listing was taken before
+ * whatever has reached this client since, so it never undoes an operation's
+ * end, and a tie keeps the copy held. */
+function listingReplaces(listed: CadOperationSummary, held: CadOperationSummary): boolean {
+  if (!isPendingCadOperation(held) && isPendingCadOperation(listed)) return false;
+  if (listed.attemptGeneration !== held.attemptGeneration) {
+    return listed.attemptGeneration > held.attemptGeneration;
+  }
+  const next = Date.parse(listed.updatedAt ?? '');
+  const current = Date.parse(held.updatedAt ?? '');
+  return !Number.isNaN(next) && !Number.isNaN(current) && next > current;
+}
+
 // Outside Zustand state: a load must not forget an operation a message
 // reported while the listing was in flight, and that bookkeeping renders nothing.
 let loadGeneration = 0;
@@ -52,7 +65,7 @@ export const useCadOperationsStore = create<CadOperationsState>((set, get) => ({
     });
     listed.forEach((operation) => {
       const held = next[operation.operationId];
-      next[operation.operationId] = held && !isNewer(operation, held) ? held : operation;
+      next[operation.operationId] = held && !listingReplaces(operation, held) ? held : operation;
     });
     set({ operations: next });
   },
@@ -67,7 +80,7 @@ export function pendingCadOperations(
     .sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? ''));
 }
 
-/** Feed the store from the jobs channel, reading the list again on reconnect. */
+/** Feed the store from the jobs channel, reading the list again on every connection. */
 export function connectCadOperations(manager: JobsSocketManager = jobsSocket): () => void {
   return manager.subscribeCadOperations({
     operation: (operation) => { useCadOperationsStore.getState().apply(operation); },

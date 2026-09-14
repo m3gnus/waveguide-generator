@@ -201,6 +201,19 @@ describe('jobs panel run list', () => {
     expect(host.querySelector('.job-card .pill')).toBeNull();
   });
 
+  it('names the CAD operation a run was submitted for', async () => {
+    const fromFusion = job(14, 'Speaker', 'cad-import');
+    fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
+    fromFusion.client_request_id = 'cad-solve:op-7';
+    const byHand = job(13, 'Parametric');
+    byHand.client_request_id = 'something-else';
+    publishJobs([fromFusion, byHand]);
+    await act(async () => root.render(<JobsPanel/>));
+    const notes = [...host.querySelectorAll('.job-cad-operation')];
+    expect(notes).toHaveLength(1);
+    expect(notes[0].textContent).toBe('From CAD operation op-7');
+  });
+
   it('recalls a CAD run ingestion into the CAD workspace and viewport', async () => {
     const imported = job(12, 'Returned speaker', 'cad-import');
     imported.config_summary = { geometry_type: 'imported' };

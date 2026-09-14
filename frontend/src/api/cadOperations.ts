@@ -22,7 +22,14 @@ export interface CadOperationSummary {
   attemptGeneration: number;
   setupRevisionId: string | null;
   preparationId: string | null;
-  snapshot: { manifestSha256: string | null } | null;
+  /** The snapshot the operation solves: its manifest and, once known, the CAD
+   * document's name and the project it belongs to. A first-time document has
+   * no project yet. */
+  snapshot: {
+    manifestSha256: string | null;
+    documentName?: string | null;
+    projectLineageId?: string | null;
+  } | null;
   legacy: boolean;
   createdAt: string | null;
   updatedAt: string | null;

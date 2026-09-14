@@ -471,8 +471,9 @@ describe('jobs websocket state machine', () => {
     manager.start();
     sockets[0].message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
     sockets[0].message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 27, jobs: [] });
-    // The first connection is the start, which the listener's owner loads itself.
-    expect(resyncs).toBe(0);
+    // The first connection too: an update between the owner's own load and
+    // this hello would otherwise be lost.
+    expect(resyncs).toBe(1);
     const operation = {
       operationId: 'op-1', kind: 'prepare_and_solve', state: 'processing', stage: 'validating',
       attemptGeneration: 1, updatedAt: '2026-09-14T10:00:00Z',
@@ -489,7 +490,7 @@ describe('jobs websocket state machine', () => {
     sockets[0].close();
     vi.advanceTimersByTime(250);
     sockets[1].message({ v: 1, kind: 'hello', epoch: 5, heartbeatSec: 15 });
-    expect(resyncs).toBe(1);
+    expect(resyncs).toBe(2);
     unsubscribe();
     sockets[1].message({ v: 1, kind: 'cadOperation', operation });
     expect(operations).toHaveLength(1);

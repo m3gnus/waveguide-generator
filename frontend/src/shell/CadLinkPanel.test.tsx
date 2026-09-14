@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { jobsSocket } from '../api/jobsSocket';
+import { applyOpenedDesign } from '../design/openCadProject';
 import type { OnshapeLink } from '../api/onshape';
 import { preferencesStore } from '../prefs/preferences';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
@@ -168,25 +169,51 @@ describe('CadLinkPanel', () => {
     operationId: 'op-1', kind: 'prepare_and_solve', state: 'needs_user_input', stage: 'ready',
     reason: 'ready_to_solve', message: 'Prepared, and waiting for you to start the solve.', jobId: null,
     attemptGeneration: 1, setupRevisionId: 'wgs_1', preparationId: 'wgp_1',
-    snapshot: { manifestSha256: record.manifest_sha256 }, legacy: false,
+    snapshot: { manifestSha256: record.manifest_sha256, documentName: 'Speaker', projectLineageId: 'wgl_speaker' },
+    legacy: false,
     createdAt: '2026-09-14T10:00:00Z', updatedAt: '2026-09-14T10:00:05Z',
     ...overrides,
   });
 
+  const buttonTexts = (card: HTMLElement) => [...card.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.textContent);
+  const buttonLabels = (card: HTMLElement) => [...card.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-label'));
+  const operationCard = (operationId: string) => host.querySelector<HTMLElement>(`[data-operation-id="${operationId}"]`)!;
+  const buttonIn = (card: HTMLElement, text: string) => [...card.querySelectorAll<HTMLButtonElement>('button')]
+    .find((button) => button.textContent === text);
+
   /** Routes the operation actions through the real coordinator and records
-   * what they post; `detail` answers GET /operations/{id}. */
-  const recordOperationRequests = (detail?: Record<string, unknown>) => {
+   * what they send. Prepare answers with the row as it was before the claim,
+   * as the route does; `failPrepare` names operations whose prepare fails, and
+   * the first `detailFailures` reads of `detail` fail. */
+  const recordOperationRequests = (options: {
+    detail?: Record<string, unknown>;
+    detailFailures?: number;
+    failPrepare?: string[];
+  } = {}) => {
     const posted: Array<{ path: string; body: unknown }> = [];
+    let detailFailures = options.detailFailures ?? 0;
     const base = vi.mocked(fetch).getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
+      if (path === '/api/cadlink/project-setups') {
+        const body = JSON.parse(String(init?.body)) as { lineageId: string };
+        posted.push({ path, body });
+        return json({ lineageId: body.lineageId, inventorySha256: 'sha256:i', revisionId: 'wgs_9' });
+      }
       if (path.startsWith('/api/cadlink/operations/')) {
-        if (!init?.method) return detail ? json(detail) : json({}, 404);
-        posted.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
         const operationId = decodeURIComponent(path.split('/')[4]);
-        return path.endsWith('/cancel')
-          ? json(cadOperation({ operationId, state: 'cancelled', attemptGeneration: 9 }))
-          : json({ operation: cadOperation({ operationId, state: 'processing', attemptGeneration: 9 }) });
+        if (!init?.method) {
+          if (detailFailures > 0) {
+            detailFailures -= 1;
+            return json({ detail: 'The CAD operations store is busy.' }, 503);
+          }
+          return options.detail ? json(options.detail) : json({}, 404);
+        }
+        posted.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+        const held = useCadOperationsStore.getState().operations[operationId] ?? cadOperation({ operationId });
+        if (path.endsWith('/cancel')) return json({ ...held, state: 'cancelled', updatedAt: '2026-09-14T11:00:00Z' });
+        if (options.failPrepare?.includes(operationId)) return json({ detail: 'The jobs system is not answering.' }, 503);
+        return json({ operation: held });
       }
       return base(input, init);
     }));
@@ -203,6 +230,7 @@ describe('CadLinkPanel', () => {
       apply(cadOperation({ operationId: 'op-ready' }));
       apply(cadOperation({
         operationId: 'op-engine', reason: 'engine_unavailable', preparationId: null, createdAt: '2026-09-14T10:00:01Z',
+        snapshot: { manifestSha256: record.manifest_sha256, documentName: null, projectLineageId: null },
         message: 'The selected engine, metal, cannot solve this model on this machine. Engines that can: bempp, beat-cpu.',
       }));
       apply(cadOperation({
@@ -216,17 +244,23 @@ describe('CadLinkPanel', () => {
     const cards = [...host.querySelectorAll<HTMLElement>('.cad-operation')];
     expect(cards.map((card) => card.dataset.operationId)).toEqual(['op-ready', 'op-engine', 'op-setup']);
     const [ready, engine, setup] = cards;
-    const buttons = (card: HTMLElement) => [...card.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.textContent);
+    // A status line inside the card, not a live region wrapped around its buttons.
+    expect(ready.getAttribute('role')).toBeNull();
+    expect(ready.querySelector('[role="status"]')?.textContent).toContain('Waiting for you');
+    expect(ready.querySelector('[role="status"] button')).toBeNull();
     expect(ready.textContent).toContain('Fusion asked for a solve');
     expect(ready.textContent).toContain('Prepared, and waiting for you to start the solve.');
     for (const id of ['op-ready', 'wgs_1', 'wgp_1']) expect(ready.textContent).toContain(id);
-    expect(buttons(ready)).toEqual(['Dismiss', 'Solve now']);
+    expect(buttonTexts(ready)).toEqual(['Dismiss', 'Solve now']);
+    // Each action names what it acts on: the document when known.
+    expect(buttonLabels(ready)).toEqual(['Dismiss: Speaker', 'Solve now: Speaker']);
     // The refusal names the engines that can; WG points at the selector and picks none.
     expect(engine.textContent).toContain('Engines that can: bempp, beat-cpu.');
     expect(engine.textContent).toContain('solver selector');
-    expect(buttons(engine)).toEqual(['Dismiss', 'Open Simulation', 'Solve now']);
+    expect(buttonTexts(engine)).toEqual(['Dismiss', 'Open Simulation', 'Solve now']);
+    expect(buttonLabels(engine)[0]).toBe('Dismiss: operation op-engine');
     expect(setup.textContent).toContain('Choose the solve settings for this model in WG');
-    expect(buttons(setup)).toEqual(['Dismiss', 'Open Simulation', 'Solve now']);
+    expect(buttonTexts(setup)).toEqual(['Dismiss', 'Open Simulation', 'Use these settings and solve']);
 
     await act(async () => { ready.querySelector<HTMLButtonElement>('button.primary')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
@@ -239,15 +273,18 @@ describe('CadLinkPanel', () => {
     expect(useSolveOptionsStore.getState().engine).toBe(engineBefore);
   });
 
-  it('shows the blocking findings a preparation reported and approves them on that preparation only', async () => {
+  it('shows the blocking findings a preparation reported, retries a failed read, and approves them on that preparation only', async () => {
     await renderAndSelect();
     await clickIngest();
     const posted = recordOperationRequests({
-      ...cadOperation({ operationId: 'op-review', reason: 'findings_need_review', preparationId: 'wgp_7' }),
-      approvals: [],
-      preparation: {
-        preparationId: 'wgp_7', ingestId: record.ingest_id, snapshotSha256: 'sha256:s', setupRevisionId: 'wgs_1',
-        reportSha256: record.report_sha256, blockingFindingIds: ['finding-a'], attemptGeneration: 1,
+      detailFailures: 1,
+      detail: {
+        ...cadOperation({ operationId: 'op-review', reason: 'findings_need_review', preparationId: 'wgp_7' }),
+        approvals: [],
+        preparation: {
+          preparationId: 'wgp_7', ingestId: record.ingest_id, snapshotSha256: 'sha256:s', setupRevisionId: 'wgs_1',
+          reportSha256: record.report_sha256, blockingFindingIds: ['finding-a'], attemptGeneration: 1,
+        },
       },
     });
     act(() => {
@@ -256,16 +293,159 @@ describe('CadLinkPanel', () => {
         message: 'Review the blocking findings, then approve them to solve.',
       }));
     });
-    const card = host.querySelector<HTMLElement>('[data-operation-id="op-review"]')!;
+    const card = operationCard('op-review');
+    await vi.waitFor(() => expect(card.textContent).toContain('Could not read the findings'));
+    expect(buttonIn(card, 'Approve and solve')).toBeUndefined();
+    await act(async () => { buttonIn(card, 'Retry')!.click(); });
     await vi.waitFor(() => expect(card.textContent).toContain('finding-a'));
+    expect(card.textContent).not.toContain('Could not read the findings');
     expect(card.textContent).toContain('freshness');
-    const approve = [...card.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Approve and solve')!;
-    await act(async () => { approve.click(); });
+    await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toEqual({
       path: '/api/cadlink/operations/op-review/prepare',
       body: { submit: true, approvals: { preparationId: 'wgp_7', findingIds: ['finding-a'] } },
+    });
+  });
+
+  it('holds an action until its operation moves on, offers it again when the request fails, and leaves a received one to the backend', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    const posted = recordOperationRequests({ failPrepare: ['op-fails'] });
+    act(() => {
+      const { apply } = useCadOperationsStore.getState();
+      apply(cadOperation({ operationId: 'op-ready' }));
+      apply(cadOperation({ operationId: 'op-fails', createdAt: '2026-09-14T10:00:01Z' }));
+      apply(cadOperation({
+        operationId: 'op-new', state: 'received', stage: 'received', reason: null, message: null,
+        createdAt: '2026-09-14T10:00:02Z',
+      }));
+    });
+    const solveNow = (operationId: string) => buttonIn(operationCard(operationId), 'Solve now');
+    // The backend's own loop prepares an operation nobody has touched.
+    expect(solveNow('op-new')).toBeUndefined();
+
+    await act(async () => { solveNow('op-ready')!.click(); });
+    await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Preparing the model Fusion sent'));
+    expect(posted).toHaveLength(1);
+    // Answered with the row as it was: nothing has moved on, so a second press
+    // cannot start a second attempt.
+    expect(solveNow('op-ready')!.disabled).toBe(true);
+    await act(async () => { solveNow('op-ready')!.click(); });
+    expect(posted).toHaveLength(1);
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: 'op-ready', state: 'processing', stage: 'validating', reason: null,
+        attemptGeneration: 2, updatedAt: '2026-09-14T10:01:00Z',
+      }));
+    });
+    expect(solveNow('op-ready')).toBeUndefined();
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: 'op-ready', reason: 'preparation_failed', attemptGeneration: 2, updatedAt: '2026-09-14T10:02:00Z',
+      }));
+    });
+    expect(solveNow('op-ready')!.disabled).toBe(false);
+
+    await act(async () => { solveNow('op-fails')!.click(); });
+    await vi.waitFor(() => expect(host.querySelector('.cad-alert-error')?.textContent).toContain('The jobs system is not answering.'));
+    expect(solveNow('op-fails')!.disabled).toBe(false);
+  });
+
+  /** The design on screen as it was opened from its own project. */
+  function openedProject(designId = 'wgd_current', lineageId = 'wgl_current') {
+    return {
+      dialect: 'ath', migrationsApplied: [],
+      passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+      design: { ...useDesignStore.getState().design, R: 150 },
+      cadlink: { identity: { designId, lineageId, baseEditVersion: 2 }, classification: 'current' },
+    } as unknown as Parameters<typeof applyOpenedDesign>[0];
+  }
+
+  it('opens the project a waiting operation belongs to, asking before unsaved work is discarded', async () => {
+    act(() => { applyOpenedDesign(openedProject(), 'current.cfg'); });
+    useDesignStore.getState().updateField('R', 321);
+    const opened: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.startsWith('/api/jobs')) return json({ items: [] });
+      if (path === '/api/cadlink/designs') return json({ items: [{
+        designId: 'wgd_other', lineageId: 'wgl_other', filename: 'Tritonia.cfg', documentName: 'Tritonia',
+        archiveStem: 'Tritonia', exportCount: 1, editVersion: 2,
+        createdAt: '2026-09-04T00:00:00Z', updatedAt: '2026-09-04T00:00:00Z',
+      }] });
+      if (path === '/api/cadlink/designs/wgd_other') {
+        opened.push(path);
+        return json({ designId: 'wgd_other', lineageId: 'wgl_other', editVersion: 2, filename: 'Tritonia.cfg', updatedAt: '2026-09-04T00:00:00Z', text: 'R = 160' });
+      }
+      if (path === '/api/design/open') {
+        opened.push(path);
+        return json(openedProject('wgd_other', 'wgl_other'));
+      }
+      return json({}, 404);
+    }));
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: 'op-other', reason: 'setup_required', stage: 'received', setupRevisionId: null, preparationId: null,
+        message: 'Choose the solve settings for this model in WG, then press Solve now.',
+        snapshot: { manifestSha256: `sha256:${'b'.repeat(64)}`, documentName: 'Tritonia', projectLineageId: 'wgl_other' },
+      }));
+    });
+    const card = operationCard('op-other');
+    expect(buttonTexts(card)).toEqual(['Dismiss', 'Open Tritonia']);
+
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await act(async () => { buttonIn(card, 'Open Tritonia')!.click(); });
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    // Declined: the design on screen stays, edits and all.
+    expect(opened).toEqual([]);
+    expect(useDesignStore.getState().design.R).toBe(321);
+    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
+
+    confirm.mockReturnValue(true);
+    await act(async () => { buttonIn(operationCard('op-other'), 'Open Tritonia')!.click(); });
+    await vi.waitFor(() => expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other'));
+    expect(opened).toEqual(['/api/cadlink/designs/wgd_other', '/api/design/open']);
+  });
+
+  it('asks for the return to be selected first when its model has no project yet', async () => {
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: 'op-first', reason: 'setup_required', stage: 'received', setupRevisionId: null, preparationId: null,
+        message: 'Choose the solve settings for this model in WG, then press Solve now.',
+        snapshot: { manifestSha256: `sha256:${'c'.repeat(64)}`, documentName: 'Tritonia v2', projectLineageId: null },
+      }));
+    });
+    const card = operationCard('op-first');
+    expect(card.textContent).toContain('Select Tritonia v2 in the return list first');
+    expect(buttonTexts(card)).toEqual(['Dismiss']);
+  });
+
+  it('solves a stored snapshot with Fusion closed: its settings are recorded, then it is prepared', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    await vi.waitFor(() => expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.running).toBe(false));
+    const posted = recordOperationRequests();
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: 'op-stored', reason: 'setup_required', stage: 'received', setupRevisionId: null, preparationId: null,
+        message: 'Choose the solve settings for this model in WG, then press Solve now.',
+      }));
+    });
+    await act(async () => { buttonIn(operationCard('op-stored'), 'Use these settings and solve')!.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[0]).toMatchObject({
+      path: '/api/cadlink/project-setups',
+      body: { lineageId: 'wgl_speaker', inventory: [{ id: 'source-hf', role: 'HF', required: true }] },
+    });
+    expect((posted[0].body as { setup: { schema_version: number } }).setup.schema_version).toBe(1);
+    expect(posted[1]).toEqual({
+      path: '/api/cadlink/operations/op-stored/prepare',
+      body: { setupRevisionId: 'wgs_9', submit: true },
     });
   });
 
@@ -874,8 +1054,18 @@ describe('CadLinkPanel', () => {
     const unlink = [...host.querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent === 'Unlink')!;
     expect(unlink.title).toContain('left as it is');
+    // Two steps, like creating a public document: the first only asks.
+    const question = () => [...host.querySelectorAll<HTMLElement>('.cad-direction-alert[role="alert"]')]
+      .find((alert) => alert.textContent?.includes('Unlink Tritonia?'));
     await act(async () => { unlink.click(); });
+    expect(question()).toBeDefined();
+    expect(unlinked).toEqual([]);
+    await act(async () => { buttonIn(question()!, 'Cancel')!.click(); });
+    expect(question()).toBeUndefined();
+    await act(async () => { unlink.click(); });
+    await act(async () => { buttonIn(question()!, 'Unlink Tritonia')!.click(); });
     await vi.waitFor(() => expect(unlinked).toEqual([{ designId: 'wgd_a', instanceId: 'inst-a' }]));
+    expect(question()).toBeUndefined();
     await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Unlinked Tritonia'));
     await vi.waitFor(() => {
       expect([...host.querySelectorAll('button')].some((button) => button.textContent === 'Unlink')).toBe(false);

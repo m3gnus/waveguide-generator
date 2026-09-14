@@ -415,6 +415,7 @@ export function CadLinkPanel() {
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
   const [unlinkingOnshape, setUnlinkingOnshape] = useState(false);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
   const onshapeSendGeneration = useRef(0);
   const onshape = preferences.cadApplication === 'onshape';
   const {
@@ -523,6 +524,7 @@ export function CadLinkPanel() {
       cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setUnlinkingOnshape(false);
+      setConfirmUnlink(false);
     }
   };
 
@@ -568,7 +570,7 @@ export function CadLinkPanel() {
     className="link-button cad-onshape-unlink"
     disabled={unlinkingOnshape || sendingToOnshape}
     title="Forget this link. The Onshape document is left as it is; the next send creates a new document."
-    onClick={() => void unlinkFromOnshape()}
+    onClick={() => setConfirmUnlink(true)}
   >{unlinkingOnshape ? 'Unlinking…' : 'Unlink'}</button>;
 
   const linkActions = onshape
@@ -670,6 +672,7 @@ export function CadLinkPanel() {
       {onshape && publicOnly && !confirmPublicDocument && <div className="cad-alert cad-alert-notice" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
       {onshape && onshapeConnection?.insecureKeyFile && <div className="cad-alert cad-alert-error" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
       {onshape && confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
+      {onshape && confirmUnlink && linkedDocument && <div className="cad-direction-alert" role="alert"><div><b>Unlink {linkedDocument.documentName}?</b><span>WG forgets this link. The Onshape document is left exactly as it is, and the next send creates a new document.</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmUnlink(false)}>Cancel</button><button className="primary" disabled={unlinkingOnshape} onClick={() => void unlinkFromOnshape()}>Unlink {linkedDocument.documentName}</button></div></div>}
     </section>
 
     {/* 3 · Model: is the geometry sound? */}
