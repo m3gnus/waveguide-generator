@@ -214,6 +214,14 @@ jobs:
         # After the uploads on purpose: a candidate that fails this gate is
         # still the candidate somebody has to look at, and the job goes red
         # either way.
+        #
+        # --imported-engine adds the fresh-install CAD return: a committed
+        # .wgreturn ingested, solved, and fetched again after a restart, under
+        # a data directory and workspace whose names hold spaces and non-ASCII
+        # characters. BEAT CPU must solve it. Metal solves it too when this
+        # candidate offers Metal; a hosted runner may have no usable Metal
+        # device, and then the report records the application's reason rather
+        # than failing.
         run: |
           set -euo pipefail
           root="$(mktemp -d)"
@@ -229,7 +237,9 @@ jobs:
             --work "$root/work" \
             --output "$root/qualification" \
             --pins-json pins.json \
-            --build-manifest "$manifest"
+            --build-manifest "$manifest" \
+            --imported-engine beat-cpu \
+            --imported-engine-when-offered metal
 
       - name: Qualify Quit during a blocked mesh build on the same candidate
         # The packaged half of the shutdown gate
@@ -393,6 +403,12 @@ jobs:
         # therefore the installer's output, which is what a user receives.
         #
         # After the upload on purpose; see the macOS job.
+        #
+        # --imported-engine adds the fresh-install CAD return, as on macOS:
+        # ingested, solved on BEAT CPU, and fetched again after a restart,
+        # under paths the script creates with spaces and non-ASCII characters.
+        # The script creates them, not PowerShell, so no quoting rule here can
+        # drop a character before the application sees it.
         run: |
           $ErrorActionPreference = "Stop"
           $root = Join-Path $env:RUNNER_TEMP ("cpu-gate-" + [guid]::NewGuid().ToString("N"))
@@ -417,7 +433,8 @@ jobs:
             --work (Join-Path $root "work") `
             --output (Join-Path $root "qualification") `
             --pins-json pins.json `
-            --build-manifest $manifest
+            --build-manifest $manifest `
+            --imported-engine beat-cpu
           # PowerShell does not turn a native command's non-zero exit into a
           # terminating error: $ErrorActionPreference governs PowerShell errors,
           # not exit codes, so without this the qualifier could fail and the step
@@ -564,6 +581,10 @@ jobs:
         # session happened to open.
         #
         # After the upload on purpose; see the macOS job.
+        #
+        # --imported-engine adds the fresh-install CAD return, as on macOS:
+        # ingested, solved on BEAT CPU, and fetched again after a restart,
+        # under paths with spaces and non-ASCII characters.
         run: |
           set -euo pipefail
           root="$(mktemp -d)"
@@ -580,7 +601,8 @@ jobs:
             --work "$root/work" \
             --output "$root/qualification" \
             --pins-json pins.json \
-            --build-manifest "$manifest"
+            --build-manifest "$manifest" \
+            --imported-engine beat-cpu
 
       - name: Qualify Quit during a blocked mesh build on the same candidate
         # See the macOS job.

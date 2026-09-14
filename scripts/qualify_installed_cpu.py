@@ -21,6 +21,16 @@ rules, add a backend, or teach the application anything about CPU availability;
 that work belongs to the engine registry and is not duplicated here. It reads
 what the application reports through its own API and holds it to the contract.
 
+**The imported return, on a fresh install.** With ``--imported-engine`` it also
+runs the path a CAD Link user takes on a new machine, against the same
+payload and without Fusion: a fresh data directory, a committed ``.wgreturn``
+copied into the selected workspace under a name with spaces and non-ASCII
+characters, ingested through ``/api/cadlink/ingest``, solved through
+``/api/solve`` on each named engine, and fetched again after the server is
+stopped and started on the same data directory. WG has no Save command; the
+jobs store is what keeps a result, so reopening it is the save-and-reopen
+check.
+
 Everything it needs is in the standard library and in the packaged runtime, so
 it runs with no environment of its own on any of the three platforms.
 """
@@ -28,17 +38,21 @@ it runs with no environment of its own on any of the three platforms.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import platform
+import shutil
 import socket
 import subprocess
 import sys
 import traceback
 import time
 from typing import Any
+import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -89,6 +103,44 @@ SOLVE_TIMEOUT_S = 1800.0
 PROVISION_TIMEOUT_S = 2700.0
 SHUTDOWN_TIMEOUT_S = 90.0
 PROBE_TIMEOUT_S = 300.0
+#: Ingestion meshes the return in a child process before it answers. A cold
+#: runner importing gmsh and OCC for the first time spends most of this.
+INGEST_TIMEOUT_S = 900.0
+
+#: The imported-return phase, run only when ``--imported-engine`` names one.
+#:
+#: Every name it creates holds a space and non-ASCII characters, and it is
+#: created by this script rather than by the workflow's shell, so no platform's
+#: quoting can drop them before the application sees them. They are escaped so
+#: the source stays ASCII and nothing can normalise them in transit: an en
+#: dash and an A-umlaut; an a-ring; an o-umlaut and A-ring, A-umlaut, O-umlaut.
+IMPORTED_DATA_DIR_NAME = "App Data \u2013 \u00c4rende 1"
+IMPORTED_WORKSPACE_NAME = "Kopia fr\u00e5n annan dator"
+IMPORTED_BUNDLE_NAME = "H\u00f6gtalare \u00c5\u00c4\u00d6.wgreturn"
+#: The committed linked return the phase imports; its README says how it was made.
+DEFAULT_IMPORTED_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "imported-return" / "round.wgreturn"
+)
+#: Two frequencies, like the parametric solve. The question is whether the
+#: installed payload imports, solves and keeps an imported result, not whether
+#: the answer is accurate: ``scripts/qualify_imported_same_mesh.py`` owns that.
+IMPORTED_FREQUENCIES = [1000.0, 2000.0]
+#: The sizes the qualification fixtures mesh with (``mesh_sizes()`` in
+#: ``scripts/imported_ingest_fixtures.py``). A source takes the return's own
+#: ``suggested_resolution_mm`` when it gives one.
+IMPORTED_RIGID_SIZE_MM = 20.0
+IMPORTED_TRANSITION_MM = 30.0
+IMPORTED_SOURCE_SIZE_MM = 8.0
+#: The only blocking findings a fresh install may report for the fixture, as
+#: kind -> the verdict it must carry (``None``: any). Freshness has to say
+#: ``missing_design``, which is the evidence that the design registry was
+#: empty. The fixture tags geometry rather than paint, so
+#: ``source-paint-missing`` is expected. Anything else that blocks is a
+#: regression, and acknowledging it would hide one.
+FRESH_INSTALL_BLOCKING: dict[str, str | None] = {
+    "freshness": "missing_design",
+    "source-paint-missing": None,
+}
 
 #: Run inside the packaged interpreter, which is the one with the BEAT package.
 #: For every record in *this run's own* registry directory it opens the host's
@@ -398,6 +450,33 @@ def http(base: str, path: str, body: Any = None, *, timeout: float = 120.0) -> A
         return payload
 
 
+def http_bytes(base: str, path: str, *, timeout: float = 120.0) -> tuple[bytes, dict[str, str]]:
+    """The exact bytes of a response and its headers, for comparing stored results."""
+
+    request = Request(f"{base}{path}", headers={"Accept": "application/json"})  # noqa: S310 - loopback
+    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - loopback
+        content = response.read()
+        headers = {name.lower(): value for name, value in response.headers.items()}
+    return content, headers
+
+
+def api(base: str, path: str, body: Any = None, *, what: str, timeout: float = 120.0) -> Any:
+    """``http``, with a refusal turned into a failure that says what was refused.
+
+    The application answers a refused ingest or solve with a body naming the
+    reason. An ``HTTPError`` on its own reports only the status, which is the
+    least useful thing to find in a failed gate's report.
+    """
+
+    try:
+        return http(base, path, body, timeout=timeout)
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:2000]
+        raise QualificationError(f"{what} was refused with HTTP {exc.code}: {detail}") from exc
+    except (URLError, OSError) as exc:
+        raise QualificationError(f"{what} failed: {type(exc).__name__}: {exc}") from exc
+
+
 def wait_for(call: Any, seconds: float, what: str, *, interval: float = 1.0) -> Any:
     """Poll until *call* returns something truthy, or fail saying what was awaited."""
 
@@ -521,7 +600,7 @@ class Server:
             },
         )["job_id"]
 
-    def completed(self, job: str) -> Any:
+    def await_complete(self, job: str) -> Any:
         def check() -> Any:
             status = http(self.base, f"/api/status/{job}")
             state = str(status.get("status"))
@@ -531,8 +610,35 @@ class Server:
                 )
             return status if state == "complete" else None
 
-        wait_for(check, SOLVE_TIMEOUT_S, f"job {job} to complete", interval=2.0)
+        return wait_for(check, SOLVE_TIMEOUT_S, f"job {job} to complete", interval=2.0)
+
+    def completed(self, job: str) -> Any:
+        self.await_complete(job)
         return http(self.base, f"/api/results/{job}", timeout=300.0)
+
+    def stored_results(self, job: str) -> tuple[bytes, str]:
+        """The exact stored bytes of a job's results, and their SHA-256.
+
+        The route serves the bytes the jobs store holds and names their digest
+        in a header. The digest is computed here as well, and a disagreement
+        fails, so a comparison across a restart compares what was stored rather
+        than what either side said about it.
+        """
+
+        try:
+            content, headers = http_bytes(self.base, f"/api/results/{job}", timeout=300.0)
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:1000]
+            raise QualificationError(
+                f"the results of job {job} could not be fetched: HTTP {exc.code} {detail}"
+            ) from exc
+        digest = hashlib.sha256(content).hexdigest()
+        declared = headers.get("x-wg-results-sha256")
+        if declared is not None and declared != digest:
+            raise QualificationError(
+                f"job {job}'s results hash to {digest}, but the server declared {declared}"
+            )
+        return content, digest
 
 
 # ---------------------------------------------------------------------------
@@ -926,6 +1032,557 @@ def stop_our_workers(
     return answer
 
 
+# ---------------------------------------------------------------------------
+# The imported return, on a fresh install
+# ---------------------------------------------------------------------------
+
+
+def _same_path(candidate: object, expected: Path) -> bool:
+    """Do a path the application reported and one this run chose name one place?
+
+    Both sides are resolved, as in ``_inside``, and compared in NFC and under
+    the platform's case rule. A filesystem may hand a non-ASCII name back
+    decomposed, and an A-umlaut as one code point and as ``A`` followed by a
+    combining diaeresis name the same folder.
+    """
+
+    if not isinstance(candidate, str) or not candidate:
+        return False
+    try:
+        resolved = (Path(candidate).resolve(), Path(expected).resolve())
+    except OSError:
+        return False
+    first, second = (
+        os.path.normcase(unicodedata.normalize("NFC", str(path))) for path in resolved
+    )
+    return first == second
+
+
+def _name_traits(name: str) -> dict[str, bool]:
+    return {"spaces": " " in name, "non_ascii": any(ord(character) > 127 for character in name)}
+
+
+def _finding_summary(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: item.get(key) for key in ("id", "kind", "blocking", "verdict") if key in item}
+
+
+def verify_return_bundle(bundle: Path) -> dict[str, Any]:
+    """Hold a ``.wgreturn`` to its own manifest, and read what the phase needs.
+
+    Ingest checks the same checksums first and would refuse a damaged bundle
+    anyway. Checking here names the file and the field before a server has
+    been started for it, and checking the copy as well shows the exotic name
+    cost nothing on the way in.
+    """
+
+    manifest_path = bundle / "wgreturn.json"
+    if not manifest_path.is_file():
+        raise QualificationError(f"{bundle} holds no wgreturn.json; it is not a return bundle")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files:
+        raise QualificationError(f"{manifest_path} lists no files")
+    for name, entry in sorted(files.items()):
+        path = bundle / name
+        if not path.is_file():
+            raise QualificationError(f"{bundle.name} lists {name}, which is missing")
+        data = path.read_bytes()
+        declared = entry if isinstance(entry, dict) else {}
+        if len(data) != declared.get("size_bytes"):
+            raise QualificationError(
+                f"{bundle.name}/{name} is {len(data)} bytes; its manifest says "
+                f"{declared.get('size_bytes')}"
+            )
+        digest = "sha256:" + hashlib.sha256(data).hexdigest()
+        if digest != declared.get("sha256"):
+            raise QualificationError(
+                f"{bundle.name}/{name} has sha256 {digest}; its manifest says "
+                f"{declared.get('sha256')}"
+            )
+    anchor = (manifest.get("coordinate_system") or {}).get("solver_anchor_instance_id")
+    instances = [item for item in manifest.get("instances") or [] if isinstance(item, dict)]
+    chosen = next(
+        (item for item in instances if item.get("instance_id") == anchor),
+        instances[0] if instances else {},
+    )
+    design_id = chosen.get("design_id")
+    if not isinstance(design_id, str) or not design_id:
+        raise QualificationError(f"{manifest_path} names no design for its anchor instance")
+    sources = [
+        item for item in manifest.get("sources") or [] if isinstance(item, dict) and item.get("id")
+    ]
+    if not sources:
+        raise QualificationError(f"{manifest_path} declares no sources")
+    return {
+        "files": sorted(files),
+        "return_id": (manifest.get("return") or {}).get("id"),
+        "design_id": design_id,
+        "source_ids": [str(item["id"]) for item in sources],
+        "source_sizes_mm": {
+            str(item["id"]): float(item.get("suggested_resolution_mm") or IMPORTED_SOURCE_SIZE_MM)
+            for item in sources
+        },
+    }
+
+
+def blocking_acknowledgements(record: Mapping[str, Any]) -> dict[str, Any]:
+    """The acknowledgements a fresh install's imported solve needs, and no more.
+
+    A blocking finding holds a solve until the request acknowledges it as
+    ``"<report_sha256>:<finding id>"``, in ``acknowledged_findings`` on
+    ``ImportedGeometrySource``. Acknowledging every blocking finding would pass
+    any regression that added one, so only the kinds a fresh install must
+    report are accepted (``FRESH_INSTALL_BLOCKING``). Freshness has to be there
+    and say ``missing_design``: that is how the application says its design
+    registry had never heard of this return's design.
+    """
+
+    report = record.get("report_sha256")
+    if not isinstance(report, str) or not report:
+        raise QualificationError(
+            "the ingestion record carries no report_sha256, so none of its findings "
+            "can be acknowledged"
+        )
+    findings = [item for item in record.get("findings") or [] if isinstance(item, Mapping)]
+    blocking = [item for item in findings if item.get("blocking") is True]
+    unexpected = [item for item in blocking if item.get("kind") not in FRESH_INSTALL_BLOCKING]
+    if unexpected:
+        raise QualificationError(
+            "a fresh install reported blocking findings it should not have: "
+            f"{[_finding_summary(item) for item in unexpected]}. Acknowledging them "
+            "would hide whatever caused them"
+        )
+    wrong = []
+    for item in blocking:
+        wanted = FRESH_INSTALL_BLOCKING[str(item.get("kind"))]
+        if wanted is not None and item.get("verdict") != wanted:
+            wrong.append(_finding_summary(item))
+    if wrong:
+        raise QualificationError(
+            f"a fresh install reported {wrong}; its freshness verdict must be missing_design"
+        )
+    if not any(item.get("kind") == "freshness" for item in blocking):
+        raise QualificationError(
+            "the return reported no freshness finding with verdict missing_design, so the "
+            "design registry already knew its design and this was not a fresh install"
+        )
+    if any(not item.get("id") for item in blocking):
+        raise QualificationError(f"a blocking finding carries no id: {blocking}")
+    return {
+        "report_sha256": report,
+        "acknowledged": [f"{report}:{item['id']}" for item in blocking],
+        "blocking": [_finding_summary(item) for item in blocking],
+        "informational": [
+            _finding_summary(item) for item in findings if item.get("blocking") is not True
+        ],
+    }
+
+
+def check_imported_result(result: Mapping[str, Any], requested: str) -> dict[str, Any]:
+    """An imported solve ran on the engine asked for, with numbers on every channel.
+
+    The parametric solve's contract, applied per channel. The job's own record
+    of the engine that ran, ``metadata.solver_engine.engine``, must be the one
+    requested, so a substitution fails instead of qualifying the wrong
+    backend; and every channel's axes must be finite and not all zero.
+    """
+
+    metadata = result.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    solver_engine = metadata.get("solver_engine")
+    solver_engine = solver_engine if isinstance(solver_engine, Mapping) else {}
+    engine = solver_engine.get("engine")
+    if engine != requested:
+        raise QualificationError(
+            f"an imported solve requested on {requested!r} reported "
+            f"solver_engine.engine {engine!r}"
+        )
+    if metadata.get("geometry_type") != "imported":
+        raise QualificationError(
+            f"an imported solve on {requested!r} reported geometry_type "
+            f"{metadata.get('geometry_type')!r}, not imported"
+        )
+    channels = result.get("channels")
+    if not isinstance(channels, Mapping) or not channels:
+        raise QualificationError(f"the imported result on {requested!r} carries no channels")
+    checked: dict[str, Any] = {}
+    for channel, payload in channels.items():
+        if not isinstance(payload, Mapping):
+            raise QualificationError(
+                f"channel {channel!r} of the imported result on {requested!r} is not an object"
+            )
+        try:
+            checked[str(channel)] = check_axes(dict(payload))
+        except QualificationError as exc:
+            raise QualificationError(
+                f"channel {channel!r} of the imported result on {requested!r}: {exc}"
+            ) from exc
+    return {
+        "solver_engine": dict(solver_engine),
+        "geometry_type": metadata.get("geometry_type"),
+        "channels": checked,
+    }
+
+
+def await_engine_rows(
+    server: Server, names: list[str], output: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Wait until every named engine row is available, or preparation has stopped.
+
+    ``await_cpu_row``'s settling rule over several rows: the wait ends at once
+    when all of them are available, and ends with the application's own
+    reasons when one still is not once CPU preparation is no longer in flight.
+    """
+
+    deadline = time.monotonic() + CAPABILITY_TIMEOUT_S
+    samples: list[dict[str, Any]] = []
+    while True:
+        capabilities = server.capabilities()
+        rows = {name: engine_row(capabilities, name) for name in names}
+        in_flight = bool(capabilities.get("cpuPreparationInFlight"))
+        samples.append(
+            {
+                "at": round(time.monotonic(), 1),
+                "cpuPreparationInFlight": in_flight,
+                "rows": {
+                    name: {"available": row.get("available"), "reason": row.get("reason")}
+                    for name, row in rows.items()
+                },
+            }
+        )
+        if all(row.get("available") is True for row in rows.values()):
+            settled = "available"
+        elif not in_flight and len(samples) > 1:
+            settled = "not-preparing"
+        elif time.monotonic() >= deadline:
+            settled = "timeout"
+        else:
+            time.sleep(CAPABILITY_POLL_S)
+            continue
+        (output / "imported-capability-samples.json").write_text(
+            json.dumps(samples, indent=2), encoding="utf-8"
+        )
+        return capabilities, {"settled": settled, "samples": len(samples)}
+
+
+def _drive_channels(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """One drive channel per default channel the return's own sources name."""
+
+    skipped = {str(item) for item in record.get("skipped_source_ids") or []}
+    channels: dict[str, list[str]] = {}
+    for source in record.get("sources") or []:
+        if not isinstance(source, Mapping) or not source.get("id"):
+            continue
+        source_id = str(source["id"])
+        if source_id in skipped:
+            continue
+        channel = str(source.get("default_drive_channel_id") or f"drive-{source_id}")
+        channels.setdefault(channel, []).append(source_id)
+    if not channels:
+        raise QualificationError("the ingestion record names no source to drive")
+    return [
+        {"id": channel, "source_ids": ids, "motion": "normal"} for channel, ids in channels.items()
+    ]
+
+
+def _listed_jobs(base: str, when: str) -> dict[str, Mapping[str, Any]]:
+    listing = api(base, "/api/jobs?limit=200", what=f"listing the jobs {when}")
+    return {
+        str(item.get("id")): item
+        for item in (listing or {}).get("items") or []
+        if isinstance(item, Mapping)
+    }
+
+
+def qualify_imported_return(
+    interpreter: Path,
+    app: Path,
+    environment: dict[str, str],
+    work: Path,
+    output: Path,
+    *,
+    required: list[str],
+    when_offered: list[str],
+    fixture: Path,
+    section: dict[str, Any],
+) -> None:
+    """Import, prepare, solve, save and reopen a CAD return on a fresh install.
+
+    Fills *section* in place, as ``qualify`` fills the report, so a failure
+    keeps every step it had already established.
+
+    **Fresh.** A data directory this run creates and nothing has used: it must
+    not exist beforehand, and once the server is up its jobs list and design
+    registry must both be empty. Engine runtimes live outside the data
+    directory; BEAT's CPU runtime is the one the application prepared for the
+    parametric solve, in this run's own runtime directory.
+
+    **Where.** The data directory and the workspace are created here, under
+    names with spaces and non-ASCII characters. The workspace is selected
+    through the application's own API twice: as the run workspace, which on
+    Windows otherwise defaults to the user's Documents, and as the CAD Link
+    folder, which is the root ``bundlePath`` resolves against. A fresh install
+    has no CAD Link folder, and ingest refuses without one.
+
+    **Import and prepare.** Ingest is synchronous: it meshes the return and
+    answers with the record, whose blocking findings the solve acknowledges.
+
+    **Solve.** One job per engine, each named explicitly. A required engine the
+    candidate does not offer fails the gate. A when-offered engine it does not
+    offer is recorded with the application's reason and skipped.
+
+    **Save and reopen.** WG keeps results in its jobs store. The server is
+    stopped the way the product stops it and started again on the same data
+    directory, and every job must still be listed as complete, with stored
+    results byte-identical to those fetched before the restart.
+    """
+
+    fixture = fixture.expanduser().resolve()
+    data_dir = work / IMPORTED_DATA_DIR_NAME
+    workspace = work / IMPORTED_WORKSPACE_NAME
+    bundle = workspace / "wgreturn" / IMPORTED_BUNDLE_NAME
+    bundle_path = f"wgreturn/{IMPORTED_BUNDLE_NAME}"
+    section.update(
+        {
+            "requested": {"required": list(required), "when_offered": list(when_offered)},
+            "paths": {
+                "data_dir": str(data_dir),
+                "workspace": str(workspace),
+                "bundle": str(bundle),
+                "bundle_path_in_request": bundle_path,
+                "names": {
+                    name: _name_traits(name)
+                    for name in (
+                        IMPORTED_DATA_DIR_NAME,
+                        IMPORTED_WORKSPACE_NAME,
+                        IMPORTED_BUNDLE_NAME,
+                    )
+                },
+            },
+        }
+    )
+    verified = verify_return_bundle(fixture)
+    section["fixture"] = {"path": str(fixture), **verified}
+    existed = data_dir.exists()
+    section["fresh"] = {"data_dir_existed_before": existed}
+    if existed:
+        raise QualificationError(
+            f"{data_dir} already exists. The imported phase qualifies a fresh install and "
+            "will not reuse a data directory; give --work a new directory"
+        )
+    workspace.mkdir(parents=True, exist_ok=True)
+    section["engines"] = []
+    solved: list[dict[str, Any]] = []
+    status = work / "status"
+
+    with Server(
+        interpreter, app, environment, data_dir, status / "imported-1",
+        output / "imported-server-1.log",
+    ) as server:
+        base = server.base
+        jobs_before = len(_listed_jobs(base, "of the fresh install"))
+        designs = api(base, "/api/cadlink/designs", what="reading the fresh design registry")
+        designs_before = len((designs or {}).get("items") or [])
+        section["fresh"].update(jobs_before=jobs_before, designs_before=designs_before)
+        if jobs_before:
+            raise QualificationError(
+                f"the fresh data directory already lists {jobs_before} jobs, so this is not "
+                "a fresh install"
+            )
+        if designs_before:
+            raise QualificationError(
+                f"the design registry of the fresh install already lists {designs_before} "
+                "designs, so this is not a fresh install"
+            )
+
+        capabilities, settled = await_engine_rows(server, list(required), output)
+        section["capabilities"] = settled
+        planned: list[dict[str, Any]] = []
+        for name in required:
+            row = engine_row(capabilities, name)
+            entry = {
+                "engine": name,
+                "requirement": "required",
+                "offered": row.get("available") is True,
+                "reason": row.get("reason"),
+            }
+            section["engines"].append(entry)
+            if not entry["offered"]:
+                entry["decision"] = "not offered"
+                raise QualificationError(
+                    f"the candidate did not offer imported engine {name!r} "
+                    f"({settled['settled']}): {row.get('reason')!r}"
+                )
+            planned.append(entry)
+        for name in when_offered:
+            row = engine_row(capabilities, name)
+            entry = {
+                "engine": name,
+                "requirement": "when-offered",
+                "offered": row.get("available") is True,
+                "reason": row.get("reason") if row else f"the candidate reports no {name!r} engine",
+            }
+            section["engines"].append(entry)
+            if entry["offered"]:
+                planned.append(entry)
+            else:
+                entry["decision"] = "not offered"
+
+        # Both selections before anything is imported or solved, and both read
+        # back: a run that wrote into somebody's Documents and only then
+        # checked would already have done what the check exists to prevent.
+        api(base, "/api/workspace/select", {"path": str(workspace)},
+            what="selecting the run workspace")
+        runs = api(base, "/api/workspace/path", what="reading the run workspace")
+        api(base, "/api/cad-workspace/select", {"path": str(workspace)},
+            what="selecting the CAD Link folder")
+        cad = api(base, "/api/cad-workspace/path", what="reading the CAD Link folder")
+        section["workspace"] = {"runs": runs.get("path"), "cad": cad.get("path")}
+        for label, answer in (("run workspace", runs), ("CAD Link folder", cad)):
+            if not _same_path(answer.get("path"), workspace):
+                raise QualificationError(
+                    f"the application reports its {label} as {answer.get('path')!r}, "
+                    f"not {str(workspace)!r}"
+                )
+
+        bundle.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(fixture, bundle)
+        section["fixture"]["copy_verified"] = verify_return_bundle(bundle)["files"]
+        sizes = verified["source_sizes_mm"]
+        request = {
+            "bundlePath": bundle_path,
+            "mesh": {
+                "rigidSizeMm": IMPORTED_RIGID_SIZE_MM,
+                "transitionMm": IMPORTED_TRANSITION_MM,
+                "sourceSizeMm": sizes,
+            },
+            "expectedDesignId": verified["design_id"],
+        }
+        record = api(base, "/api/cadlink/ingest", request, what="ingesting the return",
+                     timeout=INGEST_TIMEOUT_S)
+        if not isinstance(record, Mapping) or not record.get("ingest_id"):
+            raise QualificationError(f"ingest answered without an ingest_id: {str(record)[:500]}")
+        (output / "imported-ingest-record.json").write_text(
+            json.dumps(record, indent=2), encoding="utf-8"
+        )
+        section["ingest"] = {
+            "request": request,
+            "ingest_id": record.get("ingest_id"),
+            "report_sha256": record.get("report_sha256"),
+            "manifest_sha256": record.get("manifest_sha256"),
+            "artifact_sha256": record.get("artifact_sha256"),
+            "findings": [
+                _finding_summary(item)
+                for item in record.get("findings") or []
+                if isinstance(item, Mapping)
+            ],
+        }
+        acknowledged = blocking_acknowledgements(record)["acknowledged"]
+        section["ingest"]["acknowledged"] = acknowledged
+
+        geometry = {
+            "type": "imported",
+            "ingest_id": record["ingest_id"],
+            "manifest_sha256": record.get("manifest_sha256"),
+            "artifact_sha256": record.get("artifact_sha256"),
+            "drive_channels": _drive_channels(record),
+            "mesh": {
+                "rigid_size_mm": IMPORTED_RIGID_SIZE_MM,
+                "transition_mm": IMPORTED_TRANSITION_MM,
+                "source_size_mm": sizes,
+            },
+            "acknowledged_findings": acknowledged,
+        }
+        polar = record.get("polar_grid_derivation")
+        angle_range = (polar if isinstance(polar, Mapping) else {}).get("angle_range") or [
+            -180.0, 180.0, 73,
+        ]
+        for entry in planned:
+            engine = entry["engine"]
+            accepted = api(
+                base,
+                "/api/solve",
+                {
+                    "geometry": geometry,
+                    "options": {
+                        "engine": engine,
+                        "frequencies_hz": list(IMPORTED_FREQUENCIES),
+                        "polar_config": {
+                            "angle_range": list(angle_range),
+                            "distance": 2.0,
+                            "enabled_axes": ["horizontal", "vertical", "diagonal"],
+                        },
+                    },
+                },
+                what=f"submitting the imported solve on {engine}",
+            )
+            job = str((accepted or {}).get("job_id") or "")
+            if not job:
+                raise QualificationError(f"the imported solve on {engine} returned no job id")
+            entry["job_id"] = job
+            server.await_complete(job)
+            content, digest = server.stored_results(job)
+            (output / f"imported-result-{engine}.json").write_bytes(content)
+            entry["results_sha256"] = digest
+            checked = check_imported_result(json.loads(content), engine)
+            entry.update(
+                decision="solved",
+                solver_engine=checked["solver_engine"],
+                channels=checked["channels"],
+            )
+            solved.append(entry)
+        listed = _listed_jobs(base, "after solving")
+        section["listed_before_restart"] = [entry["job_id"] for entry in solved if entry["job_id"] in listed]
+
+    # WG has no Save: the jobs store is what keeps a result. Stop the way the
+    # product stops, start again on the same data directory, and find it.
+    reopen: dict[str, Any] = {"jobs": {}}
+    section["reopen"] = reopen
+    with Server(
+        interpreter, app, environment, data_dir, status / "imported-2",
+        output / "imported-server-2.log",
+    ) as server:
+        listed = _listed_jobs(server.base, "after the restart")
+        for entry in solved:
+            job = entry["job_id"]
+            row = {
+                "listed": (listed.get(job) or {}).get("status") == "complete",
+                "equal": False,
+                "sha256_before": entry["results_sha256"],
+                "sha256_after": None,
+            }
+            reopen["jobs"][job] = row
+            _content, digest = server.stored_results(job)
+            row["sha256_after"] = digest
+            row["equal"] = digest == entry["results_sha256"]
+        again = api(
+            server.base,
+            f"/api/cadlink/ingest/{section['ingest']['ingest_id']}",
+            what="reading the ingestion record after the restart",
+        )
+        reopen["ingest_record_reopened"] = (
+            isinstance(again, Mapping)
+            and again.get("report_sha256") == section["ingest"]["report_sha256"]
+        )
+        cad = api(server.base, "/api/cad-workspace/path",
+                  what="reading the CAD Link folder after the restart")
+        reopen["cad_workspace_persisted"] = _same_path(cad.get("path"), workspace)
+
+    missing = [job for job, row in reopen["jobs"].items() if not row["listed"]]
+    if missing:
+        raise QualificationError(
+            f"jobs {missing} are not listed as complete after a restart on the same data "
+            "directory"
+        )
+    changed = [job for job, row in reopen["jobs"].items() if not row["equal"]]
+    if changed:
+        raise QualificationError(f"the stored results of jobs {changed} changed across the restart")
+    if not reopen["ingest_record_reopened"]:
+        raise QualificationError("the ingestion record did not survive the restart")
+    if not reopen["cad_workspace_persisted"]:
+        raise QualificationError("the CAD Link folder selection did not survive the restart")
+
+
 def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     """Fill *report* in place, so a failure keeps everything established so far.
 
@@ -1023,6 +1680,24 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     report["solve"] = check_solve(result, expected_pins)
     report["gpu_independence"] = gpu_independence(capabilities, report["solve"])
 
+    # After the parametric gate has passed, and on servers of its own: the
+    # imported phase needs a data directory nothing has used, and a restart,
+    # neither of which the single parametric server may have.
+    if arguments.imported_engine:
+        section: dict[str, Any] = {}
+        report["imported_return"] = section
+        qualify_imported_return(
+            interpreter,
+            app,
+            environment,
+            work,
+            output,
+            required=arguments.imported_engine,
+            when_offered=arguments.imported_engine_when_offered,
+            fixture=arguments.imported_fixture,
+            section=section,
+        )
+
 
 def pins_from_file(path: Path | None) -> dict[str, str]:
     """Every module commit the build declared, read from ``pins.json``.
@@ -1118,15 +1793,64 @@ def build_parser() -> argparse.ArgumentParser:
             "the run has already failed and this cannot change that"
         ),
     )
+    parser.add_argument(
+        "--imported-engine",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=(
+            "also qualify a fresh-install CAD return: import the committed .wgreturn, "
+            "solve it on this engine, and reopen the result after a restart. The "
+            "candidate must offer the engine (repeatable)"
+        ),
+    )
+    parser.add_argument(
+        "--imported-engine-when-offered",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=(
+            "solve the imported return on this engine too when the candidate's capability "
+            "row reports it available; otherwise record the application's reason and go "
+            "on (repeatable; needs at least one --imported-engine)"
+        ),
+    )
+    parser.add_argument(
+        "--imported-fixture",
+        type=Path,
+        default=DEFAULT_IMPORTED_FIXTURE,
+        help="the .wgreturn bundle the imported phase copies in (default: the committed one)",
+    )
     parser.add_argument("--expected-version")
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-tree-sha256")
     return parser
 
 
+def check_imported_arguments(parser: argparse.ArgumentParser, arguments: argparse.Namespace) -> None:
+    """Refuse an imported-engine selection that could qualify nothing or says two things."""
+
+    required = list(dict.fromkeys(arguments.imported_engine))
+    optional = list(dict.fromkeys(arguments.imported_engine_when_offered))
+    both = sorted(set(required) & set(optional))
+    if both:
+        parser.error(
+            f"{', '.join(both)} is given as both --imported-engine and "
+            "--imported-engine-when-offered"
+        )
+    if optional and not required:
+        parser.error(
+            "--imported-engine-when-offered needs at least one --imported-engine: a run "
+            "whose only imported engines were optional could qualify nothing"
+        )
+    arguments.imported_engine = required
+    arguments.imported_engine_when_offered = optional
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    check_imported_arguments(parser, arguments)
     arguments.expected_pin = parse_pins(arguments.expected_pin)
     arguments.cleanup = None
     started = time.time()
@@ -1170,7 +1894,11 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(report, indent=2, default=str), encoding="utf-8"
         )
     if failure is not None:
-        print(f"CPU qualification FAILED: {failure}", file=sys.stderr)
+        # A failure can now name a path with non-ASCII characters, and a
+        # Windows runner's piped stderr is not UTF-8. The report above keeps
+        # the text exactly; this line only has to survive the console.
+        line = f"CPU qualification FAILED: {failure}"
+        print(line.encode("ascii", "backslashreplace").decode("ascii"), file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2, default=str))
     return 0

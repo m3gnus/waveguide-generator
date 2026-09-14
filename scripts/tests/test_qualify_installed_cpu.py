@@ -14,10 +14,13 @@ recorded as owed rather than simulated.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import unicodedata
 
 import pytest
 
@@ -693,9 +696,10 @@ exec(compile(open(argv[0]).read(), argv[0], "exec"),
 
 _STUB_SERVER = '''
 """A stand-in for launch/serve.py: the endpoints the qualifier drives."""
-import argparse, json, threading, time
+import argparse, hashlib, json, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", type=int)
@@ -712,6 +716,26 @@ RESULT = SETTINGS["result"]
 
 WORKSPACE = {"path": str(Path(args.data_dir) / "workspace-default")}
 
+# What the application keeps in its data directory, so a second start on the
+# same directory sees what the first one stored -- and can be told to forget.
+DATA = Path(args.data_dir)
+DATA.mkdir(parents=True, exist_ok=True)
+STATE_PATH = DATA / "stub-state.json"
+STATE = (
+    json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    if STATE_PATH.exists()
+    else {"starts": 0, "cad_workspace": None, "ingests": {}, "jobs": {}}
+)
+STATE["starts"] += 1
+IMPORTED_REQUESTS = DATA / "imported-solve-requests.json"
+
+
+def save():
+    STATE_PATH.write_text(json.dumps(STATE), encoding="utf-8")
+
+
+save()
+
 
 def capabilities():
     global CAPABILITY_POLLS
@@ -721,39 +745,112 @@ def capabilities():
         and (time.monotonic() - STARTED) >= SETTINGS["ready_after_s"]
     )
     available = bool(settled) and SETTINGS["ever_ready"]
+    metal = bool(SETTINGS.get("metal_available", False))
     return {
         "engines": [
             {"name": "beat-cpu", "available": available,
              "reason": "ready" if available else "preparing"},
             {"name": "beat-metal", "available": False, "reason": "no GPU here"},
+            {"name": "metal", "available": metal,
+             "reason": "ready" if metal else "no Metal device on this runner"},
         ],
         "cpuPreparationInFlight": not settled,
     }
+
+
+def imported_record():
+    findings = []
+    if not SETTINGS.get("design_known"):
+        findings.append({"id": "f-fresh", "kind": "freshness", "blocking": True,
+                         "instance_id": "anchor", "verdict": "missing_design"})
+    findings.append({"id": "f-paint", "kind": "source-paint-missing", "blocking": True,
+                     "source_id": "source-hf"})
+    findings.append({"id": "f-note", "kind": "freshness-degraded", "blocking": False})
+    if SETTINGS.get("extra_blocking"):
+        findings.append({"id": "f-heal", "kind": "healing-performed", "blocking": True})
+    return {
+        "ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWEF0",
+        "report_sha256": "sha256:" + "c" * 64,
+        "manifest_sha256": "sha256:" + "d" * 64,
+        "artifact_sha256": "sha256:" + "e" * 64,
+        "sources": [{"id": "source-hf", "default_drive_channel_id": "drive-hf"}],
+        "polar_grid_derivation": {"angle_range": [-180.0, 180.0, 73]},
+        "findings": findings,
+        "finding_ids": [item["id"] for item in findings],
+    }
+
+
+def imported_result(job):
+    frequencies = job["frequencies"]
+    spl = [90.0 + index for index in range(len(frequencies))]
+    if SETTINGS.get("imported_nan"):
+        spl[0] = float("nan")
+    channel = {
+        "frequencies": frequencies,
+        "spl_on_axis": {"frequencies": frequencies, "spl": spl,
+                        "phase_degrees": [0.0] * len(frequencies)},
+        "directivity": {"horizontal": [[88.0, 87.0] for _ in frequencies]},
+    }
+    reported = SETTINGS.get("substitute", {}).get(job["engine"], job["engine"])
+    result = {
+        "result_kind": "multi_channel",
+        "result_contract_version": 2,
+        "channels": {"drive-hf": channel},
+        "channel_order": ["drive-hf"],
+        "frequencies": frequencies,
+        "metadata": {"geometry_type": "imported", "ingest_id": job["ingest_id"],
+                     "solver_engine": {"engine": reported}},
+    }
+    if SETTINGS.get("results_change_on_restart") and STATE["starts"] > 1:
+        result["metadata"]["reopened"] = True
+    return result
 
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_a):
         pass
 
-    def _send(self, payload):
-        body = json.dumps(payload).encode()
-        self.send_response(200)
+    def _send(self, payload, status=200, headers=None):
+        body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == "/health":
+        path = urlsplit(self.path).path
+        if path == "/health":
             self._send({"status": "ok"})
-        elif self.path == "/api/capabilities":
+        elif path == "/api/capabilities":
             self._send(capabilities())
-        elif self.path == "/api/workspace/path":
+        elif path == "/api/workspace/path":
             self._send(WORKSPACE)
-        elif self.path.startswith("/api/status/"):
+        elif path == "/api/cad-workspace/path":
+            self._send({"path": STATE["cad_workspace"],
+                        "selected": STATE["cad_workspace"] is not None})
+        elif path == "/api/cadlink/designs":
+            self._send({"items": [{"designId": "wgd_known"}] if SETTINGS.get("designs_listed") else []})
+        elif path.startswith("/api/cadlink/ingest/"):
+            record = STATE["ingests"].get(path.rsplit("/", 1)[-1])
+            self._send(record if record else {"detail": "unknown"}, 200 if record else 404)
+        elif path == "/api/jobs":
+            forget = SETTINGS.get("forget_jobs_on_restart") and STATE["starts"] > 1
+            items = [] if forget else [
+                {"id": job, "status": "complete", "has_results": True} for job in STATE["jobs"]
+            ]
+            self._send({"items": items, "total": len(items), "limit": 200, "offset": 0})
+        elif path.startswith("/api/status/"):
             self._send({"status": "complete"})
-        elif self.path.startswith("/api/results/"):
-            self._send(RESULT)
+        elif path.startswith("/api/results/"):
+            job = STATE["jobs"].get(path.rsplit("/", 1)[-1])
+            if job is None:
+                self._send(RESULT)
+            else:
+                body = json.dumps(imported_result(job), sort_keys=True).encode()
+                self._send(body, headers={"X-WG-Results-SHA256": hashlib.sha256(body).hexdigest()})
         else:
             self._send({})
 
@@ -763,7 +860,43 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/workspace/select":
             WORKSPACE["path"] = body["path"]
             self._send(WORKSPACE)
+        elif self.path == "/api/cad-workspace/select":
+            STATE["cad_workspace"] = body["path"]
+            save()
+            self._send({"selected": True, "path": body["path"]})
+        elif self.path == "/api/cadlink/ingest":
+            (DATA / "ingest-request.json").write_text(json.dumps(body), encoding="utf-8")
+            if STATE["cad_workspace"] is None:
+                self._send({"detail": "No WGLink folder has been selected."}, 409)
+                return
+            segments = body["bundlePath"].split("/")
+            bundle = Path(STATE["cad_workspace"]).joinpath(*segments)
+            if segments[0] != "wgreturn" or not (bundle / "wgreturn.json").is_file():
+                self._send({"detail": f"no return bundle at {body['bundlePath']}"}, 422)
+                return
+            record = imported_record()
+            STATE["ingests"][record["ingest_id"]] = record
+            save()
+            self._send(record)
         elif self.path == "/api/solve":
+            geometry = body.get("geometry") or {}
+            if geometry.get("type") == "imported":
+                sent = json.loads(IMPORTED_REQUESTS.read_text()) if IMPORTED_REQUESTS.exists() else []
+                sent.append(body)
+                IMPORTED_REQUESTS.write_text(json.dumps(sent), encoding="utf-8")
+                record = STATE["ingests"][geometry["ingest_id"]]
+                wanted = {f"{record['report_sha256']}:{item['id']}"
+                          for item in record["findings"] if item["blocking"]}
+                if set(geometry.get("acknowledged_findings") or []) != wanted:
+                    self._send({"error": {"message": "unacknowledged blocking findings"}}, 422)
+                    return
+                job = f"job-imported-{len(STATE['jobs']) + 1}"
+                STATE["jobs"][job] = {"engine": body["options"]["engine"],
+                                      "frequencies": body["options"]["frequencies_hz"],
+                                      "ingest_id": geometry["ingest_id"]}
+                save()
+                self._send({"job_id": job})
+                return
             Path(args.data_dir).mkdir(parents=True, exist_ok=True)
             (Path(args.data_dir) / "solve-request.json").write_text(json.dumps(body))
             self._send({"job_id": "job-1"})
@@ -797,6 +930,9 @@ def _quick_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gate, "SOLVE_TIMEOUT_S", 30.0)
     monkeypatch.setattr(gate, "PROVISION_TIMEOUT_S", 30.0)
     monkeypatch.setattr(gate, "SHUTDOWN_TIMEOUT_S", 20.0)
+    # ``raising=False`` so the stub tests that predate the imported phase keep
+    # running against a gate that has no such constant.
+    monkeypatch.setattr(gate, "INGEST_TIMEOUT_S", 30.0, raising=False)
 
 
 def _stub_payload(tmp_path: Path, **settings: object) -> Path:
@@ -1257,3 +1393,493 @@ def test_the_julia_depot_is_inside_the_run(tmp_path: Path) -> None:
 
     assert environment["JULIA_DEPOT_PATH"] == str(work / "julia-depot")
     assert (work / "julia-depot").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# The fresh-install imported return
+# ---------------------------------------------------------------------------
+#
+# A candidate can pass the parametric gate while the path a CAD Link user
+# takes on a new machine -- a return arriving in a folder with a name nobody
+# chose for a parser, ingested with no design registry, solved, and found again
+# after the application is closed -- has never run. These hold the imported
+# phase to that sequence: every step it claims, and every way it can fail.
+
+FIXTURE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "imported-return" / "round.wgreturn"
+)
+
+
+def _fixture_manifest() -> dict:
+    return json.loads((FIXTURE / "wgreturn.json").read_text(encoding="utf-8"))
+
+
+def test_the_committed_return_fixture_matches_its_own_manifest() -> None:
+    """The checksums ingest verifies first, verified here before any runner does."""
+
+    files = _fixture_manifest()["files"]
+
+    assert files, "the fixture manifest lists no files"
+    for name, entry in files.items():
+        data = (FIXTURE / name).read_bytes()
+        assert entry["sha256"] == "sha256:" + hashlib.sha256(data).hexdigest(), name
+        assert entry["size_bytes"] == len(data), name
+    assert sorted(path.name for path in FIXTURE.iterdir()) == sorted([*files, "wgreturn.json"])
+    # Copied on every candidate, so it stays small.
+    assert sum(entry["size_bytes"] for entry in files.values()) < 300_000
+
+
+def test_the_fixture_binds_the_throat_to_the_bore_facing_disc() -> None:
+    """The builder's flat membrane: the contract names the disc in the throat plane.
+
+    With a rounded membrane the only planar face left would be the plug's rear,
+    facing away from the bore, and the contract would bind there instead.
+    """
+
+    contract = _fixture_manifest()["instances"][0]["source_contract"]
+
+    assert abs(contract["throat_z_mm"]) < 1e-6
+    assert contract["throat_plane_link"]["normal"] == [0, 0, 1]
+    assert 290.0 < contract["expected_disc_area_mm2"] < 330.0
+
+
+def test_the_fixture_carries_no_local_path() -> None:
+    manifest = (FIXTURE / "wgreturn.json").read_text(encoding="utf-8")
+    header = (FIXTURE / "assembly.step").read_bytes()[:2000].decode("ascii")
+
+    for body in (manifest, header):
+        for marker in ("/Users/", "/home/", "/private/", "/tmp/", ":\\\\", "C:/"):
+            assert marker not in body, marker
+
+
+def test_line_endings_cannot_change_the_fixture_bytes() -> None:
+    """The manifest pins the STEP's SHA-256, so a checkout must not rewrite it.
+
+    The repository default normalises text on commit and fixes LF on checkout.
+    A STEP is ASCII, so it would be treated as text; ``-text`` makes the bytes
+    the commit holds the bytes every platform gets, whatever the generator
+    wrote. The STEP writer leaves trailing spaces, and ``-whitespace`` keeps a
+    whitespace fix from stripping those pinned bytes.
+    """
+
+    root = Path(__file__).resolve().parents[2]
+    rules = [
+        line.split()
+        for line in (root / ".gitattributes").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    fixture = [rule[1:] for rule in rules if rule[0] == "scripts/fixtures/imported-return/**"]
+
+    assert fixture, "no .gitattributes rule covers the fixture"
+    assert "-text" in fixture[-1]
+    assert "-whitespace" in fixture[-1]
+
+
+@pytest.mark.parametrize(
+    "name", ("IMPORTED_DATA_DIR_NAME", "IMPORTED_WORKSPACE_NAME", "IMPORTED_BUNDLE_NAME")
+)
+def test_every_name_the_imported_phase_creates_has_spaces_and_non_ascii(name: str) -> None:
+    """Created by the script, not the shell, so no platform's quoting can drop them."""
+
+    value = getattr(gate, name)
+
+    assert " " in value
+    assert any(ord(character) > 127 for character in value)
+    assert unicodedata.is_normalized("NFC", value)
+
+
+def test_the_bundle_name_is_one_ingest_accepts() -> None:
+    assert gate.IMPORTED_BUNDLE_NAME.endswith(".wgreturn")
+    assert "/" not in gate.IMPORTED_BUNDLE_NAME and "\\" not in gate.IMPORTED_BUNDLE_NAME
+
+
+def test_the_gate_uses_the_committed_fixture_by_default() -> None:
+    assert gate.DEFAULT_IMPORTED_FIXTURE.resolve() == FIXTURE
+
+
+def test_a_tampered_fixture_is_refused_before_it_is_copied(tmp_path: Path) -> None:
+    copy = tmp_path / "round.wgreturn"
+    shutil.copytree(FIXTURE, copy)
+
+    verified = gate.verify_return_bundle(copy)
+    assert verified["files"] == ["assembly.step"]
+    assert verified["design_id"] == _fixture_manifest()["instances"][0]["design_id"]
+    assert verified["source_ids"] == ["source-hf"]
+
+    step = copy / "assembly.step"
+    step.write_bytes(step.read_bytes().replace(b"ISO-10303-21", b"ISO-10303-22", 1))
+    with pytest.raises(gate.QualificationError, match="sha256"):
+        gate.verify_return_bundle(copy)
+
+    step.write_bytes(step.read_bytes() + b"\n")
+    with pytest.raises(gate.QualificationError, match="bytes"):
+        gate.verify_return_bundle(copy)
+
+
+REPORT_SHA = "sha256:" + "c" * 64
+FRESH = {"id": "f1", "kind": "freshness", "blocking": True, "verdict": "missing_design"}
+PAINT = {"id": "f2", "kind": "source-paint-missing", "blocking": True}
+NOTE = {"id": "f3", "kind": "freshness-degraded", "blocking": False}
+
+
+def test_only_the_blocking_findings_of_a_fresh_install_are_acknowledged() -> None:
+    answer = gate.blocking_acknowledgements(
+        {"report_sha256": REPORT_SHA, "findings": [FRESH, NOTE, PAINT]}
+    )
+
+    assert answer["acknowledged"] == [f"{REPORT_SHA}:f1", f"{REPORT_SHA}:f2"]
+    assert [item["kind"] for item in answer["informational"]] == ["freshness-degraded"]
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    (
+        pytest.param(
+            {"report_sha256": REPORT_SHA,
+             "findings": [FRESH, PAINT, {"id": "f4", "kind": "healing-performed", "blocking": True}]},
+            "healing-performed",
+            id="unexpected-blocking",
+        ),
+        pytest.param(
+            {"report_sha256": REPORT_SHA, "findings": [PAINT]},
+            "missing_design",
+            id="design-already-known",
+        ),
+        pytest.param(
+            {"report_sha256": REPORT_SHA,
+             "findings": [dict(FRESH, verdict="design_changed"), PAINT]},
+            "design_changed",
+            id="other-freshness-verdict",
+        ),
+        pytest.param({"findings": [FRESH, PAINT]}, "report_sha256", id="no-report-digest"),
+    ),
+)
+def test_a_finding_a_fresh_install_should_not_have_is_never_acknowledged_away(
+    record: dict[str, object], message: str
+) -> None:
+    """Acknowledging whatever blocks would hide the regression that caused it."""
+
+    with pytest.raises(gate.QualificationError, match=message):
+        gate.blocking_acknowledgements(record)
+
+
+def _imported_result(engine: str = "beat-cpu", **overrides: object) -> dict[str, object]:
+    channel = {key: value for key, value in _result().items()
+               if key in ("frequencies", "spl_on_axis", "directivity")}
+    result: dict[str, object] = {
+        "result_kind": "multi_channel",
+        "channels": {"drive-hf": channel},
+        "channel_order": ["drive-hf"],
+        "frequencies": [500.0, 1000.0],
+        "metadata": {"geometry_type": "imported", "ingest_id": "wgi_x",
+                     "solver_engine": {"engine": engine}},
+    }
+    result.update(overrides)
+    return result
+
+
+def test_an_imported_result_from_the_requested_engine_passes() -> None:
+    report = gate.check_imported_result(_imported_result("metal"), "metal")
+
+    assert report["solver_engine"]["engine"] == "metal"
+    assert report["channels"]["drive-hf"]["frequencies"] == 2
+    assert report["channels"]["drive-hf"]["finite_non_zero"] > 0
+
+
+_ZEROED_CHANNEL = {
+    "frequencies": [0.0, 0.0],
+    "spl_on_axis": {"frequencies": [0.0, 0.0], "spl": [0.0, 0.0], "phase_degrees": [0.0, 0.0]},
+    "directivity": {"horizontal": [[0.0, 0.0], [0.0, 0.0]]},
+}
+
+
+@pytest.mark.parametrize(
+    ("result", "requested", "message"),
+    (
+        pytest.param(_imported_result("beat-cpu"), "metal", "reported", id="substituted"),
+        pytest.param(_imported_result(metadata={"geometry_type": "imported"}), "beat-cpu",
+                     "reported", id="no-engine"),
+        pytest.param(_imported_result(metadata={"geometry_type": "parametric",
+                                                "solver_engine": {"engine": "beat-cpu"}}),
+                     "beat-cpu", "imported", id="not-imported"),
+        pytest.param(_imported_result(channels={}), "beat-cpu", "no channels", id="no-channels"),
+        pytest.param(
+            _imported_result(channels={"drive-hf": dict(
+                _ZEROED_CHANNEL,
+                spl_on_axis={"frequencies": [500.0, 1000.0], "spl": [float("nan"), 1.0],
+                             "phase_degrees": [0.0, 0.0]},
+                frequencies=[500.0, 1000.0])}),
+            "beat-cpu", "non-finite", id="nan"),
+        pytest.param(_imported_result(channels={"drive-hf": _ZEROED_CHANNEL}), "beat-cpu",
+                     "nothing was solved", id="all-zero"),
+    ),
+)
+def test_an_imported_result_the_contract_refuses_fails(
+    result: dict[str, object], requested: str, message: str
+) -> None:
+    with pytest.raises(gate.QualificationError, match=message):
+        gate.check_imported_result(result, requested)
+
+
+def test_an_optional_imported_engine_needs_a_required_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A run whose only imported engines were optional could qualify nothing."""
+
+    with pytest.raises(SystemExit) as raised:
+        gate.main([
+            "--payload", str(tmp_path), "--work", str(tmp_path / "w"),
+            "--output", str(tmp_path / "o"),
+            "--imported-engine-when-offered", "metal",
+        ])
+
+    assert raised.value.code == 2
+    assert "at least one --imported-engine" in capsys.readouterr().err
+
+
+def test_an_imported_engine_is_either_required_or_optional(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        gate.main([
+            "--payload", str(tmp_path), "--work", str(tmp_path / "w"),
+            "--output", str(tmp_path / "o"),
+            "--imported-engine", "metal", "--imported-engine-when-offered", "metal",
+        ])
+
+    assert raised.value.code == 2
+    assert "both --imported-engine and --imported-engine-when-offered" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("job", PLATFORM_JOBS)
+def test_every_platform_qualifies_a_fresh_install_imported_return(job: str) -> None:
+    """BEAT CPU everywhere; Metal on macOS, and only when the candidate offers it."""
+
+    command = next(
+        step["run"] for step in _steps(job) if "qualify_installed_cpu.py" in (step.get("run") or "")
+    )
+
+    assert "--imported-engine beat-cpu" in command, job
+    if job == "macos-bundle":
+        assert "--imported-engine-when-offered metal" in command
+    else:
+        assert "metal" not in command, job
+
+
+def _run_imported(
+    tmp_path: Path, *extra: str, **settings: object
+) -> tuple[int, dict[str, object]]:
+    payload = _stub_payload(tmp_path, **settings)
+    output = tmp_path / "out"
+    code = gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            *extra,
+        ]
+    )
+    return code, json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+
+
+def _imported_requests(tmp_path: Path) -> list[dict[str, object]]:
+    sent = tmp_path / "work" / gate.IMPORTED_DATA_DIR_NAME / "imported-solve-requests.json"
+    return json.loads(sent.read_text(encoding="utf-8")) if sent.exists() else []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_fresh_install_ingests_solves_and_reopens_an_imported_return(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    """The whole sequence against a stub: import, prepare, solve, restart, reopen."""
+
+    code, report = _run_imported(
+        tmp_path, "--imported-engine", "beat-cpu", "--imported-engine-when-offered", "metal"
+    )
+
+    assert code == 0, report.get("error")
+    section = report["imported_return"]
+    work = tmp_path / "work"
+    data_dir = work / gate.IMPORTED_DATA_DIR_NAME
+    workspace = work / gate.IMPORTED_WORKSPACE_NAME
+
+    # A data directory nothing had used, under names a parser has to survive.
+    assert section["fresh"] == {
+        "data_dir_existed_before": False, "jobs_before": 0, "designs_before": 0,
+    }
+    assert section["paths"]["data_dir"] == str(data_dir)
+    assert section["paths"]["workspace"] == str(workspace)
+    # The committed return, copied into the selected workspace's wgreturn/.
+    copied = workspace / "wgreturn" / gate.IMPORTED_BUNDLE_NAME
+    assert (copied / "wgreturn.json").read_bytes() == (FIXTURE / "wgreturn.json").read_bytes()
+    # Ingested through the application's own API, relative to that workspace.
+    ingest = json.loads((data_dir / "ingest-request.json").read_text(encoding="utf-8"))
+    assert ingest["bundlePath"] == f"wgreturn/{gate.IMPORTED_BUNDLE_NAME}"
+    assert ingest["expectedDesignId"] == _fixture_manifest()["instances"][0]["design_id"]
+    assert set(ingest["mesh"]) == {"rigidSizeMm", "transitionMm", "sourceSizeMm"}
+    # The blocking findings, acknowledged as report:finding; the other is not.
+    assert section["ingest"]["acknowledged"] == [
+        f"{REPORT_SHA}:f-fresh", f"{REPORT_SHA}:f-paint",
+    ]
+    sent = _imported_requests(tmp_path)
+    assert [body["options"]["engine"] for body in sent] == ["beat-cpu"]
+    assert sent[0]["geometry"]["type"] == "imported"
+    assert sent[0]["geometry"]["ingest_id"] == section["ingest"]["ingest_id"]
+    # BEAT CPU solved. Metal was not offered here: the reason is recorded, and
+    # that is not a failure.
+    engines = {row["engine"]: row for row in section["engines"]}
+    assert engines["beat-cpu"]["decision"] == "solved"
+    assert engines["beat-cpu"]["solver_engine"]["engine"] == "beat-cpu"
+    assert engines["metal"]["requirement"] == "when-offered"
+    assert engines["metal"]["decision"] == "not offered"
+    assert engines["metal"]["reason"] == "no Metal device on this runner"
+    # Stopped, started again on the same data directory, and found unchanged.
+    reopen = section["reopen"]
+    job = engines["beat-cpu"]["job_id"]
+    assert reopen["jobs"][job] == {
+        "listed": True, "equal": True,
+        "sha256_before": engines["beat-cpu"]["results_sha256"],
+        "sha256_after": engines["beat-cpu"]["results_sha256"],
+    }
+    assert reopen["ingest_record_reopened"] is True
+    assert reopen["cad_workspace_persisted"] is True
+    assert (tmp_path / "out" / "imported-server-1.log").is_file()
+    assert (tmp_path / "out" / "imported-server-2.log").is_file()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_metal_also_solves_when_the_candidate_offers_it(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    code, report = _run_imported(
+        tmp_path, "--imported-engine", "beat-cpu", "--imported-engine-when-offered", "metal",
+        metal_available=True,
+    )
+
+    assert code == 0, report.get("error")
+    assert [body["options"]["engine"] for body in _imported_requests(tmp_path)] == [
+        "beat-cpu", "metal",
+    ]
+    engines = {row["engine"]: row for row in report["imported_return"]["engines"]}
+    assert engines["metal"]["offered"] is True
+    assert engines["metal"]["decision"] == "solved"
+    assert engines["metal"]["solver_engine"]["engine"] == "metal"
+    assert all(row["equal"] for row in report["imported_return"]["reopen"]["jobs"].values())
+    assert len(report["imported_return"]["reopen"]["jobs"]) == 2
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_required_imported_engine_the_candidate_does_not_offer_fails(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    code, report = _run_imported(tmp_path, "--imported-engine", "metal")
+
+    assert code == 1
+    assert "metal" in report["error"]
+    assert "no Metal device on this runner" in report["error"]
+    assert _imported_requests(tmp_path) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_an_imported_solve_reported_by_another_engine_fails(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    code, report = _run_imported(
+        tmp_path, "--imported-engine", "beat-cpu", substitute={"beat-cpu": "metal"}
+    )
+
+    assert code == 1
+    assert "reported" in report["error"]
+    # What was established before the failure survives it.
+    assert report["imported_return"]["ingest"]["ingest_id"].startswith("wgi_")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_results_that_change_across_the_restart_fail(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    code, report = _run_imported(
+        tmp_path, "--imported-engine", "beat-cpu", results_change_on_restart=True
+    )
+
+    assert code == 1
+    assert "restart" in report["error"]
+    assert [row["equal"] for row in report["imported_return"]["reopen"]["jobs"].values()] == [False]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_job_the_restarted_application_does_not_list_fails(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    code, report = _run_imported(
+        tmp_path, "--imported-engine", "beat-cpu", forget_jobs_on_restart=True
+    )
+
+    assert code == 1
+    assert "not listed" in report["error"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_an_unexpected_blocking_finding_fails_rather_than_being_acknowledged(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    code, report = _run_imported(tmp_path, "--imported-engine", "beat-cpu", extra_blocking=True)
+
+    assert code == 1
+    assert "healing-performed" in report["error"]
+    assert _imported_requests(tmp_path) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_return_whose_design_was_already_known_is_not_a_fresh_install(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    code, report = _run_imported(tmp_path, "--imported-engine", "beat-cpu", design_known=True)
+
+    assert code == 1
+    assert "missing_design" in report["error"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_design_registry_that_is_not_empty_is_not_a_fresh_install(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    code, report = _run_imported(tmp_path, "--imported-engine", "beat-cpu", designs_listed=True)
+
+    assert code == 1
+    assert "design registry" in report["error"]
+    assert _imported_requests(tmp_path) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_non_finite_imported_numbers_fail(tmp_path: Path, _quick_timeouts: None) -> None:
+    code, report = _run_imported(tmp_path, "--imported-engine", "beat-cpu", imported_nan=True)
+
+    assert code == 1
+    assert "non-finite" in report["error"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_reused_data_directory_is_refused_as_a_fresh_install(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    (tmp_path / "work" / gate.IMPORTED_DATA_DIR_NAME).mkdir(parents=True)
+
+    code, report = _run_imported(tmp_path, "--imported-engine", "beat-cpu")
+
+    assert code == 1
+    assert "fresh" in report["error"]
+    assert not (tmp_path / "out" / "imported-server-1.log").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_without_an_imported_engine_the_gate_is_unchanged(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    code, report = _run_imported(tmp_path)
+
+    assert code == 0, report.get("error")
+    assert "imported_return" not in report
+    assert not (tmp_path / "out" / "imported-server-1.log").exists()

@@ -19,3 +19,11 @@
 # a Windows-only solver has to read back verbatim.
 docs/validation/abec-g8-circsym-ib/** -text
 docs/validation/abec-rerun/** -text
+
+# The installed-candidate gate's CAD return. Its manifest pins the STEP's
+# SHA-256 and size, and ingest verifies both before anything else, so the bytes
+# every checkout gets must be the bytes the commit holds -- whatever line
+# endings the generator happened to write. The STEP writer also leaves trailing
+# spaces, which are pinned bytes too: -whitespace keeps whitespace checks from
+# flagging them, and whitespace fixes from stripping them.
+scripts/fixtures/imported-return/** -text -whitespace
