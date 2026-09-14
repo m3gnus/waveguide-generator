@@ -224,13 +224,20 @@ def publish_fusion_request(
                     continue
             sequences.append(_sequence(existing) or 0)
         own = directory / f"{request_id}.json"
+        sequence = max(sequences) + 1
         _write_json(own, {
             **payload,
             "schemaVersion": SCHEMA_VERSION,
             "requestId": request_id,
             "operationId": request_id,
-            SEQUENCE_FIELD: max(sequences) + 1,
+            SEQUENCE_FIELD: sequence,
         })
+    # The request id is the operation id: it follows the request through the
+    # add-in's heartbeat and outcomes (CAD-OPERATIONS.md, "WG-produced Fusion requests").
+    logger.info(
+        "Published Fusion request %s in %s (delivery sequence %d).",
+        request_id, channel.directory, sequence,
+    )
     return PublishedRequest(request_id=request_id, path=own, withdrawn=tuple(withdrawn))
 
 

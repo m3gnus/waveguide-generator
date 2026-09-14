@@ -89,6 +89,15 @@ def publish_fusion_handoff(
     published = publish_fusion_request(
         data_dir, HANDOFFS, payload, str(uuid.uuid4()), withdraw=supersedes
     )
+    logger.info(
+        "Fusion %s %s published for export %s%s.",
+        "update" if expected_instance_id else "insert",
+        published.request_id,
+        export_id,
+        f" of instance {expected_instance_id} in {expected_document_id}"
+        if expected_instance_id
+        else "",
+    )
     for request_id in published.withdrawn:
         logger.info(
             "Fusion update %s was superseded by %s for the same link before the "

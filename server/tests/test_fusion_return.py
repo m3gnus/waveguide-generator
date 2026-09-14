@@ -25,3 +25,23 @@ def test_return_request_is_machine_local_and_targets_the_addin_session(tmp_path)
     assert payload["expectedReturnStateHash"] == "sha256:return-state"
     assert payload["requestId"] == payload["operationId"] == request_id
     assert not (tmp_path / "ipc" / "wglink" / ".fusion-return-request.json").exists()
+
+
+def test_a_published_request_logs_its_request_id(tmp_path, caplog) -> None:
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="server.cadlink.fusion_delivery"):
+        _path, request_id = publish_return_request(
+            tmp_path,
+            session_id="session-a",
+            design_id="wgd_a",
+            document_id="fusion:doc-a",
+            instance_id="instance-a",
+            expected_return_state_hash="sha256:return-state",
+        )
+
+    assert any(
+        request_id in record.getMessage() and "delivery sequence 1" in record.getMessage()
+        for record in caplog.records
+        if record.name == "server.cadlink.fusion_delivery"
+    )

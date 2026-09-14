@@ -1278,3 +1278,33 @@ def test_a_request_that_was_never_bound_is_dismissed_without_the_jobs_store(
     jobs.error = sqlite3.OperationalError("database is locked")
 
     assert _cancel(harness, jobs)["state"] == "cancelled"
+
+
+# -- correlation in WG's logs --------------------------------------------------------
+
+
+def test_each_attempt_logs_its_operation_and_generation(harness: Harness, caplog) -> None:
+    import logging
+
+    _received(harness)
+
+    def logged(*parts: str) -> bool:
+        return any(
+            all(part in record.getMessage() for part in parts)
+            for record in caplog.records
+            if record.name == "server.cadlink.preparation"
+        )
+
+    with caplog.at_level(logging.INFO, logger="server.cadlink.preparation"):
+        assert harness.prepare()["reason"] == "setup_required"
+        assert harness.prepare(setup_revision_id=_revision(harness.store, _setup()))["state"] == "accepted"
+
+    # The first attempt: claimed, validated, and waiting for its settings.
+    assert logged("cmd-1", "attempt 1", "claimed")
+    assert logged("cmd-1", "attempt 1", "stage validating")
+    assert logged("cmd-1", "attempt 1", "finished needs_user_input", "setup_required")
+    # The second: its own generation at every step, and the job it made.
+    assert logged("cmd-1", "attempt 2", "claimed")
+    for stage in ("validating", "preparing-mesh", "ready"):
+        assert logged("cmd-1", "attempt 2", f"stage {stage}")
+    assert logged("cmd-1", "attempt 2", "finished accepted", "job-1")

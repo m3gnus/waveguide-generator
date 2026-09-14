@@ -301,6 +301,7 @@ def reconcile_with_jobs(ctx: PreparationContext, operation_id: str) -> dict[str,
     job_id = ctx.job_for_submission(submission_key(operation_id))
     if not job_id:
         return None
+    logger.info("CAD operation %s: its submission key already made job %s.", operation_id, job_id)
     try:
         record_outcome(ctx.store, operation_id, state="accepted", job_id=job_id)
     except SolveOutcomeConflict:
@@ -382,6 +383,14 @@ def _finish(
     )
     if row is None:
         raise _Fenced()
+    logger.info(
+        "CAD operation %s, attempt %d: finished %s%s%s.",
+        operation_id,
+        generation,
+        row["state"],
+        f" ({row['reason']})" if row.get("reason") else "",
+        f", job {row['job_id']}" if row.get("job_id") else "",
+    )
     _publish(ctx, row)
     return row
 
@@ -390,6 +399,8 @@ def _advance(ctx: PreparationContext, operation_id: str, generation: int, **fiel
     row = ctx.store.advance_operation(operation_id, generation, **fields)
     if row is None:
         raise _Fenced()
+    if fields.get("stage"):
+        logger.info("CAD operation %s, attempt %d: stage %s.", operation_id, generation, fields["stage"])
     _publish(ctx, row)
     return row
 
@@ -610,6 +621,10 @@ def _prepare_sync(
     )
     if prepared is None:
         raise _Fenced()
+    logger.info(
+        "CAD operation %s, attempt %d: stage ready, preparation %s.",
+        operation_id, generation, preparation_id,
+    )
     _publish(ctx, prepared)
 
     reviewed = (
@@ -812,6 +827,7 @@ async def prepare_operation(
     )
     if generation is None:
         return operation_summary(await asyncio.to_thread(store.get_operation, operation_id))
+    logger.info("CAD operation %s: attempt %d claimed it.", operation_id, generation)
     _publish(ctx, await asyncio.to_thread(store.get_operation, operation_id))
     try:
         step, value = await asyncio.to_thread(_prepare_sync, ctx, operation_id, generation, request)
@@ -822,6 +838,11 @@ async def prepare_operation(
             await _submit(ctx, operation_id, generation, solve_request, revision_id)
         )
     except _Fenced:
+        logger.info(
+            "CAD operation %s, attempt %d: a later attempt or a dismissal holds the "
+            "operation now; this attempt stopped without writing.",
+            operation_id, generation,
+        )
         return operation_summary(
             await asyncio.to_thread(_settle_fenced, ctx, operation_id, generation)
         )
@@ -926,6 +947,10 @@ def recover_operations(ctx: PreparationContext) -> int:
             },
         )
         if recorded is not None:
+            logger.info(
+                "CAD operation %s: attempt %d took it over at startup; it waits as interrupted.",
+                operation_id, generation,
+            )
             changed += 1
             _publish(ctx, recorded)
     return changed

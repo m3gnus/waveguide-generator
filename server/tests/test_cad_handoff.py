@@ -130,3 +130,30 @@ def test_a_handoff_to_an_outdated_addin_says_why_nothing_happens_yet(tmp_path: P
     assert _handoff_waiting_notice(tmp_path) is None
     (folder / ".fusion-status.json").unlink()
     assert _handoff_waiting_notice(tmp_path) is None
+
+
+def test_a_published_handoff_logs_its_request_and_export(tmp_path: Path, caplog) -> None:
+    import logging
+
+    data_dir = tmp_path / "data"
+    workspace = tmp_path / "workspace"
+    bundle = workspace / "wglink" / "horn.wglink"
+    bundle.mkdir(parents=True)
+
+    with caplog.at_level(logging.INFO, logger="server.exports.cad_handoff"):
+        published = publish_fusion_handoff(
+            data_dir,
+            workspace,
+            _result(bundle),
+            expected_document_id="fusion:doc-a",
+            expected_instance_id="instance-b",
+            expected_return_state_hash="sha256:return-state",
+        )
+
+    assert any(
+        published.request_id in record.getMessage()
+        and "wge_01KZV700000000000000000000" in record.getMessage()
+        and "instance-b" in record.getMessage()
+        for record in caplog.records
+        if record.name == "server.exports.cad_handoff"
+    )
