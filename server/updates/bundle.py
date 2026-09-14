@@ -23,7 +23,7 @@ from scripts.fetch_spa import SpaError, expected_digest, file_digest
 from shared import release_assets
 from shared.release_assets import is_release_tag
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name
-from server.updates.restart import RestartApproval
+from server.updates.restart import RestartApproval, RestartRelease, revoke_request
 # The owner marker's writer, beside its reader, the healthy-start cleanup
 # (contract §2.5). The app layer carries ``launchers``.
 from launchers.apply_update import (
@@ -664,7 +664,9 @@ class BundleUpdateInstaller:
         )
         #: What this installer's own handoff request would install, once written.
         self._handoff_target: str | None = None
-        self.restart_approval.add_release_listener(self._restart_called_off)
+        #: The id of the approval this installer's handoff request carries.
+        self._handoff_approval: int | None = None
+        self.restart_approval.add_release_observer(self._restart_called_off)
         self.downloader = downloader
         self.small_fetcher = small_fetcher
         self.volume_probe = volume_probe
@@ -774,25 +776,40 @@ class BundleUpdateInstaller:
                 "error": None,
             }
 
-    def _restart_called_off(self, target: str, reason: str) -> None:
-        """The launcher did not hand off (contract §4.2): show a failed install.
+    def _restart_called_off(self, release: RestartRelease) -> None:
+        """This installer's approved restart came down (contract §4.2).
 
-        The launcher deleted the request as it discarded it, and ``status``
-        reads a missing request as consumed, so without this the dialog would
-        drop back to idle with nothing to say. A write that failed inside
-        ``_run`` reports its own error instead, which is why only ``ready`` and
-        a consumed ``idle`` are replaced.
+        The request is taken back first, renamed out of the launcher's reach
+        (:func:`revoke_request`), so the attempt can be shown as failed and stay
+        failed: a launcher that comes back late finds nothing to hand off. When
+        the approval merely expired and the request is already gone, the
+        launcher took it -- a handoff is under way -- so nothing may say the
+        update did not start, and the staging keeps its owner marker for the
+        helper's journal. A launcher's discard notice, or a write that failed,
+        rules the handoff out whether or not the file is still there.
+
+        The launcher deleted a request it discarded, and ``status`` reads a
+        missing request as consumed, so without this the dialog would drop back
+        to idle with nothing to say. A write that failed inside ``_run`` reports
+        its own error instead, which is why only ``ready`` and a consumed
+        ``idle`` are replaced.
         """
 
         with self._lock:
-            if target != self._handoff_target:
+            if release.approval != self._handoff_approval:
+                return  # an earlier attempt's, or the checkout flow's
+            self._handoff_approval = None
+            # Under the lock the request is published under, so the file and
+            # the state change together.
+            revoked = revoke_request(self.request_path)
+            if release.expired and not revoked:
                 return
             # No handoff will use this staging now: it is no longer this
             # server's, and the healthy-start sweep may reclaim it once it is
             # quiet (contract §2.5).
             staging, self._handoff_staging = self._handoff_staging, None
-            failed_attempt = self._state["installState"] in {"ready", "idle"}
-            if failed_attempt:
+            if self._state["installState"] in {"ready", "idle"}:
+                target = release.target
                 self._handoff_target = None
                 self._active_job_key = None
                 self._state = {
@@ -800,7 +817,7 @@ class BundleUpdateInstaller:
                     "activeVersion": target.removeprefix("v"),
                     "downloadedBytes": 0,
                     "totalBytes": 0,
-                    "error": f"The update to {target} did not start: {reason}. Try again.",
+                    "error": f"The update to {target} did not start: {release.reason}. Try again.",
                 }
         if staging is not None:
             remove_staging_owner(*staging)
@@ -1035,7 +1052,9 @@ class BundleUpdateInstaller:
             # written, nothing will restart, and the latch comes down again.
             self._handoff_target = f"v{version}"
             self._handoff_staging = (update_dir, owner)
-            self.restart_approval.approve(self._handoff_target)
+            approval = self.restart_approval.approve(self._handoff_target)
+            with self._lock:
+                self._handoff_approval = approval
             try:
                 temporary.write_text(
                     json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
@@ -1053,7 +1072,8 @@ class BundleUpdateInstaller:
             except BaseException as exc:
                 self.restart_approval.release(
                     "the handoff request could not be written: "
-                    f"{str(exc) or type(exc).__name__}"
+                    f"{str(exc) or type(exc).__name__}",
+                    approval,
                 )
                 raise
         except Exception as exc:  # noqa: BLE001 - all worker failures become API state

@@ -7,12 +7,14 @@ import json
 from pathlib import Path
 import subprocess
 import threading
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 import pytest
 
 from server.updates.api import mount_updates
+from server.updates.restart import RestartApproval
 from server.updates.service import (
     INCOMPLETE_TTL_SECONDS,
     ReleaseResponse,
@@ -157,13 +159,102 @@ def test_ready_release_can_signal_the_status_owner_for_installation(tmp_path: Pa
 
     assert update.get_status()["canInstall"] is True
     result = update.request_install()
+    _wait_for(request_path)
     payload = json.loads(request_path.read_text(encoding="utf-8"))
 
     assert result == {"accepted": True, "tag": "v2.0.1"}
     assert payload["schemaVersion"] == 1
     assert payload["kind"] == "install_release"
     assert payload["tag"] == "v2.0.1"
-    assert payload["readyAtEpoch"] > 0
+    # Due on arrival: the delay was served on the server's monotonic clock.
+    assert payload["readyAtEpoch"] == 0
+
+
+def _wait_for(path: Path, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        if time.monotonic() > deadline:
+            pytest.fail(f"set-up: {path.name} never appeared")
+        time.sleep(0.01)
+
+
+def test_a_checkout_request_is_due_on_arrival_whatever_the_wall_clocks_say(tmp_path: Path):
+    """Contract §4.2 (the review's U12): readiness is on the monotonic clock.
+
+    The request used to carry the server's wall-clock time plus 0.75 s, and the
+    launcher compared that with its own wall clock. A launcher clock behind the
+    server's, or a step in either, held the request for as long -- past the
+    approval's expiry, so WG could restart after saying it would not. Now the
+    server serves the delay itself, on its monotonic clock, before the request
+    appears, and the request is due on arrival.
+    """
+
+    from launchers.statusapp.updater import consume_update_request
+
+    now = [1_700_000_000.0]
+    request_path = tmp_path / "control" / "update.json"
+    request_path.parent.mkdir()
+    update = service(
+        tmp_path,
+        lambda _etag: ReleaseResponse(release("2.0.1"), None),
+        now,
+        platform_name="darwin",
+        update_request_path=request_path,
+    )
+
+    started = time.monotonic()
+    assert update.request_install() == {"accepted": True, "tag": "v2.0.1"}
+    # The HTTP answer goes out before the request appears.
+    assert not request_path.exists()
+    _wait_for(request_path)
+    assert time.monotonic() - started >= update.checkout_handoff_delay - 0.05
+
+    # A launcher whose wall clock is ten minutes behind the server's takes it at once.
+    assert consume_update_request(request_path, now=time.time() - 600) == "v2.0.1"
+
+
+def test_an_expired_checkout_restart_revokes_its_request(tmp_path: Path):
+    """Contract §4.2: an expiry takes the request back before it says "did not start".
+
+    And once the launcher has taken the request, an expiry says nothing of the
+    kind: a handoff is under way.
+    """
+
+    from launchers.statusapp.updater import consume_update_request
+
+    now = [1_700_000_000.0]
+    ticks = [1000.0]
+    request_path = tmp_path / "control" / "update.json"
+    request_path.parent.mkdir()
+    update = service(
+        tmp_path,
+        lambda _etag: ReleaseResponse(release("2.0.1"), None),
+        now,
+        platform_name="darwin",
+        update_request_path=request_path,
+        restart_approval=RestartApproval(ttl=300.0, clock=lambda: ticks[0]),
+    )
+
+    update.request_install()
+    _wait_for(request_path)
+    ticks[0] += 301.0
+    shown = update.get_status()
+
+    assert shown["installState"] == "failed", shown
+    assert "did not start" in str(shown["error"])
+    assert not request_path.exists()
+    assert request_path.with_name("update.json.revoked").is_file()
+    assert consume_update_request(request_path) is None
+
+    update.request_install()
+    _wait_for(request_path)
+    assert consume_update_request(request_path) == "v2.0.1"  # the launcher takes it
+    ticks[0] += 301.0
+    shown = update.get_status()
+
+    assert shown["installState"] == "idle", shown
+    assert shown["error"] is None
+    assert update.restart_approval.pending is None
 
 
 def test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it(
@@ -203,7 +294,7 @@ def test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it
     )
     approved: list[str] = []
     approve = failing.restart_approval.approve
-    failing.restart_approval.approve = lambda target: (approved.append(target), approve(target))  # type: ignore[method-assign]
+    failing.restart_approval.approve = lambda target: (approved.append(target), approve(target))[1]  # type: ignore[method-assign]
 
     with pytest.raises(UpdateInstallUnavailable, match="could not create the update handoff"):
         failing.request_install()

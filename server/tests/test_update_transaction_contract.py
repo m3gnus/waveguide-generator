@@ -1424,7 +1424,7 @@ def test_a_restart_approval_is_released_when_the_handoff_request_cannot_be_writt
     approved: list[str] = []
     approve = latch.approve
     monkeypatch.setattr(
-        latch, "approve", lambda target: (approved.append(target), approve(target))
+        latch, "approve", lambda target: (approved.append(target), approve(target))[1]
     )
 
     state = _stage_through_the_app(app)
@@ -2163,6 +2163,28 @@ def test_an_approved_restart_expires_when_no_handoff_follows(
     assert len(warnings) == 1, warnings
 
 
+def test_a_late_release_for_an_earlier_approval_leaves_the_new_one_latched() -> None:
+    """Contract §4.2 (the review's U13): a release names the approval it answers.
+
+    ``approve`` returns an id, and a release that carries an older one -- a
+    notice about attempt A arriving after attempt B was approved -- changes
+    nothing. A release without an id, the launcher's notice, still releases
+    whatever is pending, since only one approval is ever pending.
+    """
+
+    latch = RestartApproval()
+    first = latch.approve("v2.0.1")
+    assert latch.release("the handoff request could not be written", first)
+    second = latch.approve("v2.0.2")
+    assert second != first
+
+    assert not latch.release("a late notice about the first attempt", first)
+    assert latch.pending == "v2.0.2"
+
+    assert latch.release("the status window did not hand off")
+    assert latch.pending is None
+
+
 def test_the_window_declines_an_adopted_server_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2219,6 +2241,33 @@ def test_a_called_off_restart_shows_as_a_failed_install(
     assert shown["installState"] == "failed", shown
     assert "Discarded an invalid update request" in str(shown["error"])
     assert app.state.update_restart.pending is None
+
+
+def test_an_expired_restart_in_the_app_is_taken_back_by_the_installer_that_approved_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.2: each writer takes back its own request, in the app's own wiring.
+
+    The update service and the bundle installer share one latch and one request
+    path, and the service is told first. It must leave the bundle's approval to
+    the installer; taking the request itself would make the installer read the
+    expiry as a handoff under way and say nothing.
+    """
+
+    request_path = tmp_path / "control" / "update.json"
+    app = create_app(data_dir=tmp_path / "data", update_request_path=request_path)
+    state = _stage_through_the_app(app)
+    if state["installState"] != "ready" or not request_path.is_file():
+        pytest.fail(f"set-up: the restart was never approved: {state}")
+
+    # The approval is due: the latch's own clock is not under test.
+    monkeypatch.setattr(app.state.update_restart, "_ttl", 0.0)
+    shown = app.state.update_service.bundle_installer.status()
+
+    assert shown["installState"] == "failed", shown
+    assert "did not start" in str(shown["error"])
+    assert not request_path.exists()
+    assert request_path.with_name("update.json.revoked").is_file()
 
 
 def test_a_cad_return_ingested_after_restart_approval_is_refused(tmp_path: Path) -> None:

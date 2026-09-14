@@ -21,6 +21,7 @@ from server.updates.bundle import (
     BundleUpdateInstaller,
     extract_layer_archive,
 )
+from server.updates.restart import RestartApproval
 
 
 RUNTIME_ID = "0123456789ab"
@@ -423,6 +424,76 @@ def test_staging_carries_its_owner_marker_until_its_request_is_discarded(
 
     assert not marker.exists()
     assert (tmp_path / "data" / "updates" / "2.0.1" / "staged" / "app").is_dir()
+
+
+def _staged_and_approved(
+    tmp_path: Path, now: list[float]
+) -> tuple[BundleUpdateInstaller, Path]:
+    """One app-only staging, its request written and its restart approved on ``now``."""
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, fetch = _fakes({name: app})
+    installer = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=fetch,
+        restart_approval=RestartApproval(ttl=300.0, clock=lambda: now[0]),
+    )
+    _start(installer, "2.0.1", [_asset(name, app, "app")])
+    installer.wait(2)
+    request = tmp_path / "control" / "update.json"
+    if installer.status()["installState"] != "ready" or not request.is_file():
+        pytest.fail(f"set-up: staging did not reach ready: {installer.status()}")
+    return installer, request
+
+
+def test_an_expired_restart_revokes_its_request_before_saying_it_did_not_start(
+    tmp_path: Path,
+) -> None:
+    """Contract §4.2 (the review's U12): an expiry takes the request back first.
+
+    The dialog says the update did not start. A launcher that comes back late
+    -- a machine that slept past the approval -- must then find nothing to hand
+    off, or WG would restart and install after saying it would not.
+    """
+
+    from launchers.statusapp.updater import consume_update_request
+
+    now = [1000.0]
+    installer, request = _staged_and_approved(tmp_path, now)
+
+    now[0] += 301.0
+    shown = installer.status()
+
+    assert shown["installState"] == "failed", shown
+    assert "did not start" in str(shown["error"])
+    assert not request.exists(), "the expired approval left its request for a late launcher"
+    assert request.with_name("update.json.revoked").is_file()
+    assert consume_update_request(request, data_dir=tmp_path / "data") is None
+    assert installer.restart_approval.pending is None
+
+
+def test_an_expired_restart_whose_request_was_taken_does_not_say_it_did_not_start(
+    tmp_path: Path,
+) -> None:
+    """Contract §4.2: with the request already gone, the launcher took it.
+
+    A handoff is under way, so nothing may say the update did not start, and
+    the staging keeps its owner marker for the helper's journal to take over.
+    """
+
+    now = [1000.0]
+    installer, request = _staged_and_approved(tmp_path, now)
+    request.unlink()  # what the launcher does as it takes the request to hand off
+
+    now[0] += 301.0
+    shown = installer.status()
+
+    assert shown["installState"] != "failed", shown
+    assert "did not start" not in str(shown["error"])
+    assert installer.restart_approval.pending is None
+    assert (tmp_path / "data" / "updates" / "2.0.1" / ".staging-owner.json").is_file()
 
 
 def test_advertised_archive_over_the_size_cap_fails_before_downloading(

@@ -421,10 +421,32 @@ process (`application.state.update_restart`):
   - Expiry is checked whenever the latch is read: by a refusing route, the update status,
     and the install status. The job runtime also reads it when an approval that holds its
     queue is due to expire (§4.3).
-  - The update dialog shows an expiry as a failed attempt, as it shows a discard.
+  - The update dialog shows an expiry as a failed attempt, as it shows a discard, unless
+    the launcher had already taken the request (below).
 - A called-off restart is a failed attempt the update dialog shows, through the existing
   `installState` and `error` fields: "The update to `<version>` did not start: `<reason>`.
   Try again."
+- **The request is taken back first.** When an approval comes down, the writer that
+  approved it renames its own request, if it is still there, to `<request>.revoked`
+  (`revoke_request` in `server/updates/restart.py`) before it reports anything. The
+  launcher reads a request and then deletes it, and a delete that finds the file gone
+  hands off nothing, in this release and in v0.3.1 and v0.3.2 alike. So a launcher that
+  comes back late, for example after the machine slept past the approval, cannot restart
+  WG after the dialog said the update did not start.
+  - An expiry that finds the request already gone means the launcher took it: a handoff
+    is under way, the dialog does not say the update did not start, and the staging keeps
+    its owner marker (§2.5). A launcher's discard notice, or a request that could not be
+    written, rules the handoff out whether or not the file is still there.
+- **A release names its approval.** `approve` returns an id. The writers release with it,
+  so a release that arrives after a newer approval changes nothing, and the expiry checks
+  the same id. The launcher's notice carries no id and releases whatever is pending; only
+  one approval is ever pending.
+- **The checkout request is due on arrival.** It used to carry the server's wall-clock
+  time plus 0.75 s, which the launcher compared with its own wall clock, so a clock step
+  could hold it past the expiry. The server now writes it to a temporary name, serves the
+  0.75 s on its own monotonic clock, and only then moves it where the launcher looks, with
+  `readyAtEpoch` 0 (`CHECKOUT_HANDOFF_DELAY` in `server/updates/service.py`). A request whose
+  approval came down in the meantime never appears.
 - The interface shows the refusal's message where it shows any refused solve, retry,
   install or CAD preparation.
 
@@ -685,6 +707,7 @@ that implements it removes the marker.
 | `test_a_release_notice_that_cannot_be_written_is_logged_and_the_server_kept` | §4.2 | A notice that cannot be written is retried, then logged, and the server is not restarted |
 | `test_an_approved_restart_expires_when_no_handoff_follows` | §4.2 | The latch comes down on its own after `RESTART_APPROVAL_TTL`, once, logs one line and tells its listeners |
 | `test_a_called_off_restart_shows_as_a_failed_install` | §4.2 | A discard shows in the install status as a failed attempt, with the reason |
+| `test_a_late_release_for_an_earlier_approval_leaves_the_new_one_latched` | §4.2 | A release carries the approval it answers; a late one for an earlier approval leaves the newer one latched |
 | `test_a_cad_return_ingested_after_restart_approval_is_refused` | §4.2 | `POST /api/cadlink/ingest` refuses with the envelope |
 | `test_an_adopted_server_does_not_settle_this_installations_transaction` | §4.5 | An exit-2 adoption is declined and reported, and nothing is reclaimed |
 | `test_the_window_declines_an_adopted_server_too` | §4.5 | So does the window's own delegation |
@@ -718,9 +741,14 @@ The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateCont
 Outside this file: `server/tests/test_bundle_update_installer.py`
 `test_a_staging_that_fails_before_its_request_removes_the_folder_it_created` and
 `test_staging_carries_its_owner_marker_until_its_request_is_discarded` (§2.5, the server's
-side of the owner marker); `server/tests/test_updates.py`
+side of the owner marker), and
+`test_an_expired_restart_revokes_its_request_before_saying_it_did_not_start` and
+`test_an_expired_restart_whose_request_was_taken_does_not_say_it_did_not_start` (§4.2, the
+request taken back); `server/tests/test_updates.py`
 `test_a_checkout_install_latches_the_restart_and_a_failed_handoff_releases_it` (§4.2,
-checkout flow); `server/tests/test_statusapp_controller.py`
+checkout flow), `test_a_checkout_request_is_due_on_arrival_whatever_the_wall_clocks_say`
+and `test_an_expired_checkout_restart_revokes_its_request` (§4.2, checkout readiness and
+the request taken back); `server/tests/test_statusapp_controller.py`
 `test_the_status_window_polls_on_until_the_interface_is_served` and
 `test_the_status_window_reports_a_start_that_cannot_confirm_the_update` (§4.5, browser
 mode); and in `server/tests/test_desktop_launcher.py`, the window's refusal of a second

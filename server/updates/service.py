@@ -38,7 +38,7 @@ from server.updates.bundle import (
     trusted_asset_url,
     updates_api_base,
 )
-from server.updates.restart import RestartApproval
+from server.updates.restart import RestartApproval, RestartRelease, revoke_request
 # The completion record's own reader and writer (contract §2.2), so the file
 # has one implementation. The app layer carries ``launchers``, and the helper
 # that writes the record is this same module.
@@ -53,6 +53,14 @@ from launchers.apply_update import (
 
 
 REPOSITORY = GITHUB_REPOSITORY
+
+#: How long a checkout handoff request waits, on this process's monotonic clock,
+#: before it appears where the launcher looks: time for the HTTP answer to reach
+#: the browser before the status owner stops this server. The request itself is
+#: then due on arrival (``readyAtEpoch`` 0), so no wall clock is compared across
+#: processes (contract §4.2).
+CHECKOUT_HANDOFF_DELAY = 0.75
+
 LATEST_RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 RECENT_RELEASES_API = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=20"
 
@@ -1026,7 +1034,13 @@ class UpdateService:
         )
         #: Why the last approved checkout restart was called off, for the dialog.
         self._called_off: str | None = None
-        self.restart_approval.add_release_listener(self._restart_called_off)
+        #: The checkout handoff: the approval its request carries, and the
+        #: written request that has not appeared yet (``checkout_handoff_delay``).
+        self._handoff_lock = threading.Lock()
+        self._checkout_approval: int | None = None
+        self._pending_handoff: tuple[int, threading.Timer, Path] | None = None
+        self.checkout_handoff_delay = CHECKOUT_HANDOFF_DELAY
+        self.restart_approval.add_release_observer(self._restart_called_off)
         if self.bundle_installer is None and self.update_request_path is not None:
             self.bundle_installer = BundleUpdateInstaller(
                 data_dir=self.data_dir,
@@ -1048,10 +1062,75 @@ class UpdateService:
         except (ApplyUpdateError, OSError, RuntimeError, ValueError):
             return None
 
-    def _restart_called_off(self, target: str, reason: str) -> None:
-        # A checkout handoff that did not happen (contract §4.2). The bundle
-        # installer reports its own; ``get_status`` shows this one otherwise.
-        self._called_off = f"The update to {target} did not start: {reason}. Try again."
+    def _restart_called_off(self, release: RestartRelease) -> None:
+        """A checkout handoff that did not happen (contract §4.2).
+
+        The bundle installer reports its own. The request is taken back first:
+        one not yet published never appears, and one the launcher has not taken
+        is renamed out of its reach. An approval that merely expired, whose
+        request the launcher already took, is a handoff under way, and nothing
+        may say it did not start.
+        """
+
+        with self._handoff_lock:
+            if release.approval != self._checkout_approval:
+                return  # the bundle installer's, or an earlier attempt's
+            self._checkout_approval = None
+            pending, self._pending_handoff = self._pending_handoff, None
+            if pending is not None:
+                _approval, timer, temporary = pending
+                timer.cancel()
+                self._discard_file(temporary)
+            request = self.update_request_path
+            revoked = request is not None and revoke_request(request)
+        if release.expired and pending is None and not revoked:
+            return
+        self._called_off = (
+            f"The update to {release.target} did not start: {release.reason}. Try again."
+        )
+
+    @staticmethod
+    def _discard_file(path: Path) -> None:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+    def _publish_checkout_request(self, approval: int, temporary: Path, request_path: Path) -> None:
+        """Move the written request where the launcher looks, after ``checkout_handoff_delay``.
+
+        The delay runs on this process's monotonic clock (a timer), so the
+        launcher may take the request as soon as it appears. A request whose
+        approval came down in the meantime never appears.
+        """
+
+        def publish() -> None:
+            failure: OSError | None = None
+            with self._handoff_lock:
+                pending = self._pending_handoff
+                if pending is None or pending[0] != approval:
+                    return  # called off meanwhile; the observer removed it
+                self._pending_handoff = None
+                if self.restart_approval.current() != approval:
+                    self._discard_file(temporary)
+                    return
+                try:
+                    temporary.replace(request_path)
+                    return
+                except OSError as exc:
+                    failure = exc
+            self._discard_file(temporary)
+            # Nothing will restart, so the latch comes down (and the observer
+            # shows the failed attempt).
+            self.restart_approval.release(
+                f"the handoff request could not be written: {failure}", approval
+            )
+
+        timer = threading.Timer(max(float(self.checkout_handoff_delay), 0.0), publish)
+        timer.daemon = True
+        with self._handoff_lock:
+            self._pending_handoff = (approval, timer, temporary)
+        timer.start()
 
     def _installed_resources(self, checkout: dict[str, Any]) -> Path | None:
         """The installed copy the helper names this app layer's records by.
@@ -1901,31 +1980,35 @@ class UpdateService:
             "schemaVersion": 1,
             "kind": "install_release",
             "tag": tag,
-            # Give the HTTP response time to reach the browser before the
-            # status owner observes this file and gracefully stops the server.
-            "readyAtEpoch": time.time() + 0.75,
+            # Due as soon as it is present. The pause that lets the HTTP answer
+            # reach the browser before the status owner stops this server is
+            # served on this process's monotonic clock before the request
+            # appears (``_publish_checkout_request``). A wall-clock time here
+            # was compared with the launcher's own wall clock, and a step in
+            # either could hold the request past the approval's expiry.
+            "readyAtEpoch": 0,
         }
         temporary = request_path.with_name(
             f".{request_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
         )
         # Writing the request approves the restart (contract §4.1), so the latch
         # goes up first, and comes down again if the request is never written.
-        self.restart_approval.approve(tag)
+        approval = self.restart_approval.approve(tag)
+        with self._handoff_lock:
+            self._checkout_approval = approval
         try:
             temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
-            temporary.replace(request_path)
         except BaseException as exc:
             # Whatever stopped it, no request exists, so nothing will restart.
             self.restart_approval.release(
-                f"the handoff request could not be written: {str(exc) or type(exc).__name__}"
+                f"the handoff request could not be written: {str(exc) or type(exc).__name__}",
+                approval,
             )
-            try:
-                temporary.unlink()
-            except OSError:
-                pass
+            self._discard_file(temporary)
             if isinstance(exc, OSError):
                 raise UpdateInstallUnavailable(
                     f"WG could not create the update handoff: {exc}"
                 ) from exc
             raise
+        self._publish_checkout_request(approval, temporary, request_path)
         return {"accepted": True, "tag": tag}
