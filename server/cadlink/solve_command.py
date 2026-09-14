@@ -70,6 +70,17 @@ CAD_SOLVE_SUBMISSION_PREFIX = "cad-solve:"
 # it is read, so a producer writing the same path afterwards writes a new file
 # rather than one the consumer is about to delete.
 CLAIM_PREFIX = ".wg-solve-claim-"
+# What retaining a delivery's snapshot found (CAD-OPERATIONS.md, "Consuming a
+# delivery"). A delivery is acknowledged once its snapshot is retained, or once
+# its return can never be retained as it is named, which preparation then
+# refuses. A return that cannot be read now keeps its claim for the next pass,
+# for at most RETENTION_PASSES passes; then the delivery is acknowledged anyway
+# and the operation waits for its return, so no claim is held for ever.
+RETAINED = "retained"
+RETAIN_INVALID = "invalid"
+RETAIN_TRANSIENT = "transient"
+# About half a minute at the delivery loop's cadence.
+RETENTION_PASSES = 30
 # The JSON outcome ledger of earlier versions. The store imports it once and
 # renames it; nothing reads it after that.
 LEDGER_FILENAME = "solve-commands.json"
@@ -83,6 +94,8 @@ logger = logging.getLogger(__name__)
 # One consumer per process at a time. Files are still claimed by rename,
 # because the producer writing them is another process.
 _DELIVERY_LOCK = threading.Lock()
+# How many passes each kept claim has waited for its return, by claim name.
+_retention_waits: dict[str, int] = {}
 
 
 @dataclass(frozen=True)
@@ -333,6 +346,28 @@ def _persist(store: CadLinkStore, command: PendingSolveCommand) -> dict[str, Any
     return None
 
 
+def _keep_for_retention(claim: Path, command: PendingSolveCommand) -> bool:
+    """Whether a claim whose return cannot be read now waits for another pass."""
+
+    waited = _retention_waits.get(claim.name, 0) + 1
+    if waited < RETENTION_PASSES:
+        _retention_waits[claim.name] = waited
+        if waited == 1:
+            logger.info(
+                "The return of solve command %r cannot be read yet; its delivery is kept "
+                "for the next pass.",
+                command.command_id,
+            )
+        return True
+    logger.warning(
+        "The return of solve command %r could not be read in %d passes. Its delivery is "
+        "acknowledged, and the operation waits for its return.",
+        command.command_id,
+        waited,
+    )
+    return False
+
+
 def _refuse_outdated(store: CadLinkStore, command: PendingSolveCommand) -> dict[str, Any]:
     """Refuse a command an older WGLink wrote, with the remedy, as its outcome."""
 
@@ -355,6 +390,7 @@ def collect_solve_deliveries(
     store: CadLinkStore,
     *,
     retain: Callable[[str], object] | None = None,
+    held: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Move delivered solve commands into the operation store, oldest first.
 
@@ -362,7 +398,11 @@ def collect_solve_deliveries(
     newer command written to the same slot meanwhile therefore survives, and a
     poll interrupted after a claim leaves the claim for the next poll to finish.
     ``retain`` keeps the snapshot an operation names in WG's own storage before
-    its delivery is acknowledged (CAD-OPERATIONS.md, "Preparation").
+    its delivery is acknowledged (CAD-OPERATIONS.md, "Consuming a delivery").
+    When it reports ``RETAIN_TRANSIENT`` the claim is kept for the next pass,
+    up to ``RETENTION_PASSES``, and the pass goes on to the files behind it;
+    ``held`` then receives that operation's id, so nothing prepares it from a
+    return WG does not hold yet.
 
     Returns the answer owed to one delivery on its own -- the replay of an
     outcome that already stands, or a refusal of a different request under an
@@ -373,7 +413,13 @@ def collect_solve_deliveries(
     """
 
     with _DELIVERY_LOCK:
-        for delivery in _deliveries(data_dir):
+        deliveries = _deliveries(data_dir)
+        # A claim that is gone -- acknowledged, or taken by another consumer --
+        # waits for nothing any more.
+        present = {delivery.path.name for delivery in deliveries if delivery.claimed}
+        for name in set(_retention_waits) - present:
+            del _retention_waits[name]
+        for delivery in deliveries:
             claim = delivery.path if delivery.claimed else _claim(delivery.path)
             if claim is None:
                 continue
@@ -392,8 +438,15 @@ def collect_solve_deliveries(
                 answer = _refuse_outdated(store, command)
             else:
                 answer = _persist(store, command)
-                if retain is not None:
-                    retain(command.command_id)
+                if (
+                    retain is not None
+                    and retain(command.command_id) == RETAIN_TRANSIENT
+                    and _keep_for_retention(claim, command)
+                ):
+                    if held is not None:
+                        held.add(command.command_id)
+                    continue
+            _retention_waits.pop(claim.name, None)
             # A delete that fails leaves the claim for the next poll, which
             # recovers the same operation and answers it then.
             if _acknowledge(claim) and answer is not None:

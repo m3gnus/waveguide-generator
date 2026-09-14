@@ -452,3 +452,25 @@ def test_an_operation_names_its_document_and_project(harness: Harness) -> None:
         "documentName": "Tritonia speaker",
         "projectLineageId": b_lineage,
     }
+
+
+def test_the_loop_prepares_an_operation_once_its_return_is_retained(harness: Harness) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, _setup())
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    bundle = harness.workspace / bundle_path
+    hidden = harness.workspace / "still-syncing"
+    bundle.rename(hidden)  # the command arrived before its return could be read
+    requests = _deliver(harness, "cmd-b", bundle_path, manifest)
+
+    # Its delivery is kept, and nothing is prepared from a return WG does not hold.
+    assert _pass(harness) == []
+    assert harness.row("cmd-b")["state"] == "received"
+    assert [path.name for path in requests.iterdir() if path.name.startswith(".wg-solve-claim-")]
+    hidden.rename(bundle)
+
+    assert _pass(harness) == ["cmd-b"]
+
+    row = harness.row("cmd-b")
+    assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+    assert list(requests.iterdir()) == []

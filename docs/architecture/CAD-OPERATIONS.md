@@ -287,7 +287,7 @@ blocking findings the user reviewed, and on which preparation) and observes.
 
 | Stage | What is done | Committed as |
 | --- | --- | --- |
-| `received` | Accepted. The snapshot was retained in WG's storage before the delivery was acknowledged, when the return could be read then | the operation row, `snapshot_json` |
+| `received` | Accepted. The snapshot is retained in WG's storage before the delivery is acknowledged; a return that cannot be read yet keeps its delivery for a while (see "Consuming a delivery") | the operation row, `snapshot_json` |
 | `validating` | The retained copy is found, or made now for an operation received before retention | `snapshot_json` |
 | `preparing-mesh` | The retained snapshot is ingested and meshed with the setup's options | an ingestion record, published under the attempt's fence |
 | `ready` | The preparation is recorded, with its blocking findings | `cad_preparations`, `preparation_id` |
@@ -335,7 +335,9 @@ blocking findings the user reviewed, and on which preparation) and observes.
 - **Delivery.** The backend is the one consumer of Fusion's solve commands. About once a
   second it collects the delivered commands (retaining each snapshot before the delivery
   is acknowledged) and starts preparing every operation no attempt has touched, from its
-  project's setup, submitting when it is ready. It starts only an operation still
+  project's setup, submitting when it is ready. An operation whose delivery is kept,
+  because its return cannot be read yet, is started once it is retained or once its
+  delivery is given up. It starts only an operation still
   untouched at the generation it listed, so it never takes over the user's own attempt,
   and an operation waiting for the user is not retried unasked; the UI issues `prepare`,
   `approvals` and `cancel` and observes. Without a WGLink folder nothing is collected,
@@ -448,7 +450,7 @@ is the operation `prepare_and_solve`, with the `commandId` as its operation ID.
   holds is instead a repeat delivery, and is recovered or refused as the delivery table
   says.
 
-**Consuming a delivery.** WG takes each file in four steps:
+**Consuming a delivery.** WG takes each file in five steps:
 
 1. **Claim** it: rename it to a unique `.wg-solve-claim-<random>.json` in the same
    folder. A producer that writes the same path afterwards writes a new file, which the
@@ -457,7 +459,16 @@ is the operation `prepare_and_solve`, with the `commandId` as its operation ID.
 2. **Read** the claim. What the rename took is the request.
 3. **Persist** it: accept the operation, or recover the one it repeats, as in the
    delivery table above.
-4. **Delete** the claim. WG deletes only the file it consumed, and only after the store
+4. **Retain** the snapshot the operation names in WG's own storage (see "Preparation").
+   - Retained, or never retainable as it is named (malformed, changed since the command,
+     outside the WGLink folder): go on. Preparation refuses a return that cannot be
+     retained.
+   - Not readable now (not in the WGLink folder yet, a file another process holds, a drive
+     that is not mounted): the claim stays, and the next pass tries again. After 30
+     passes, about half a minute, WG goes on anyway; the operation then waits for its
+     return (`preparation_failed`), as it would have without the claim. A claim that waits
+     never holds up the files behind it.
+5. **Delete** the claim. WG deletes only the file it consumed, and only after the store
    holds the operation. If the delete fails, the next poll recovers the same operation
    from the claim that is left.
 

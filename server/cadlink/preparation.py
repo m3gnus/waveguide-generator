@@ -6,9 +6,10 @@ One ``prepare_and_solve`` operation is prepared in fenced stages
     received -> validating -> preparing-mesh -> ready -> submitted
 
 - **received**: the snapshot is retained in WG's own storage before the
-  delivery is acknowledged (``retain_operation_snapshot``). From then on
-  preparation reads the retained copy, so a return whose exchange folder was
-  removed still prepares.
+  delivery is acknowledged (``retain_operation_snapshot``); a return that
+  cannot be read yet keeps its delivery for a bounded number of passes. From
+  then on preparation reads the retained copy, so a return whose exchange
+  folder was removed still prepares.
 - **validating**: the retained copy is found, or made now for an operation
   received before retention existed.
 - **preparing-mesh**: the retained snapshot is ingested and meshed with the
@@ -36,6 +37,7 @@ from dataclasses import dataclass
 import json
 import logging
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from server.jobs.models import SolveRequest
@@ -68,6 +70,9 @@ from .project_setup import project_setup, snapshot_project, widen_polar_to_deriv
 from .setup import CadSolveSetup, solve_request_for, validate_setup
 from .solve_command import (
     CAD_SOLVE_SUBMISSION_PREFIX,
+    RETAIN_INVALID,
+    RETAIN_TRANSIENT,
+    RETAINED,
     SolveOutcomeConflict,
     collect_solve_deliveries,
     record_outcome,
@@ -237,22 +242,31 @@ def _retained(data_dir: Path, row: Mapping[str, Any]) -> dict[str, Any] | None:
 
 def retain_operation_snapshot(
     store: CadLinkStore, data_dir: Path, workspace_root: Path | None, operation_id: str
-) -> dict[str, Any] | None:
+) -> str:
     """Receive-time retention: keep the snapshot an unfinished solve operation names.
 
-    Called before the delivery is acknowledged. A return that cannot be read
-    now is left to the operation's own handling, which refuses it or waits
-    with the reason. Nothing is raised here: a return the parser cannot take
-    must never hold up the deliveries behind it.
+    Called before the delivery is acknowledged, and says whether it may be:
+
+    - ``RETAINED``: WG holds the snapshot, or there is nothing for it to hold
+      (the operation is unknown, finished, or not a solve).
+    - ``RETAIN_INVALID``: the return can never be retained as the command
+      names it -- malformed, changed since the command, outside the WGLink
+      folder. The delivery is acknowledged, and preparation refuses it.
+    - ``RETAIN_TRANSIENT``: the return cannot be read now -- not in the
+      WGLink folder yet, a file another process holds, a drive that is not
+      mounted, a store that is busy. The delivery waits for another pass.
+
+    Nothing is raised: a return the parser cannot take must never hold up the
+    deliveries behind it. An unexpected failure is logged and counts as
+    invalid, so its delivery is acknowledged, as before.
     """
 
     try:
         row = store.get_operation(operation_id)
         if row is None or row["kind"] != PREPARE_AND_SOLVE or row["state"] in TERMINAL_STATES:
-            return None
-        existing = _retained(data_dir, row)
-        if existing is not None:
-            return existing
+            return RETAINED
+        if _retained(data_dir, row) is not None:
+            return RETAINED
         inputs = _inputs(row)
         retained = retain_snapshot(
             exchange_bundle_path(workspace_root, str(inputs.get("bundle_path") or "")),
@@ -260,10 +274,18 @@ def retain_operation_snapshot(
             expected_manifest_sha256=str(inputs.get("manifest_sha256") or "") or None,
         )
         store.record_snapshot(operation_id, _snapshot_record(store, retained))
-    except Exception as exc:  # noqa: BLE001 - retention at receive is best effort
-        logger.info("Could not retain the snapshot of CAD operation %s: %s", operation_id, exc)
-        return None
-    return retained
+    except (OSError, sqlite3.Error) as exc:
+        # SnapshotUnavailable is an OSError: cannot proceed now, not never.
+        logger.debug("Could not retain the snapshot of CAD operation %s yet: %s", operation_id, exc)
+        return RETAIN_TRANSIENT
+    except ValueError as exc:
+        # WgReturnError, a changed return, a path outside the WGLink folder.
+        logger.info("The snapshot of CAD operation %s cannot be retained: %s", operation_id, exc)
+        return RETAIN_INVALID
+    except Exception as exc:  # noqa: BLE001 - retention at receive never holds up a delivery
+        logger.warning("Could not retain the snapshot of CAD operation %s: %s", operation_id, exc)
+        return RETAIN_INVALID
+    return RETAINED
 
 
 def reconcile_with_jobs(ctx: PreparationContext, operation_id: str) -> dict[str, Any] | None:
@@ -772,13 +794,16 @@ async def run_delivery_pass(
     "Delivery"): each is retained, recorded and acknowledged, then prepared
     from its project's setup and submitted. Only an operation no attempt has
     touched (``received``) is started, so one waiting for the user is never
-    retried unasked; ``running`` names the ones already started. Without a
-    WGLink folder nothing is collected, because nothing could be retained.
-    Returns the operations this pass started.
+    retried unasked; ``running`` names the ones already started. One whose
+    delivery is kept because its return cannot be read yet is started once the
+    return is retained, or once the delivery is given up. Without a WGLink
+    folder nothing is collected, because nothing could be retained. Returns
+    the operations this pass started.
     """
 
     if ctx.workspace_root is None:
         return []
+    held: set[str] = set()
     await asyncio.to_thread(
         collect_solve_deliveries,
         ctx.data_dir,
@@ -786,6 +811,7 @@ async def run_delivery_pass(
         retain=lambda operation_id: retain_operation_snapshot(
             ctx.store, ctx.data_dir, ctx.workspace_root, operation_id
         ),
+        held=held,
     )
     rows = await asyncio.to_thread(
         ctx.store.list_operations,
@@ -794,7 +820,7 @@ async def run_delivery_pass(
     started: list[str] = []
     for row in rows:
         operation_id = str(row["operation_id"])
-        if row.get("legacy") or operation_id in running:
+        if row.get("legacy") or operation_id in running or operation_id in held:
             continue
         started.append(operation_id)
         spawn(

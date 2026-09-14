@@ -1098,3 +1098,96 @@ def test_the_legacy_outcome_route_records_nothing(harness: Harness) -> None:
 
     assert harness.row() == before
     assert harness.store.get_operation("cmd-unknown") is None
+
+
+# -- a delivery is acknowledged after its snapshot is retained -----------------------
+
+
+def _claims(requests: Path) -> list[str]:
+    return sorted(path.name for path in requests.iterdir() if path.name.startswith(".wg-solve-claim-"))
+
+
+def _retention_passes(monkeypatch, passes: int) -> None:
+    from server.cadlink import solve_command
+
+    # raising=False: the bound is what acknowledging after retention introduced.
+    monkeypatch.setattr(solve_command, "RETENTION_PASSES", passes, raising=False)
+
+
+def test_a_delivery_is_acknowledged_only_after_its_snapshot_is_retained(harness: Harness) -> None:
+    bundle_path, manifest = _write_return(harness.workspace)
+    bundle = harness.workspace / bundle_path
+    hidden = harness.workspace / "not-yet-readable"
+    bundle.rename(hidden)  # a file another process holds, a drive not mounted, a folder not synced
+    requests = _deliver_file(harness, bundle_path, manifest)
+
+    _collect(harness)
+
+    # The claim is kept: the add-in's command is not spent on a return WG could not keep.
+    assert len(_claims(requests)) == 1
+    assert harness.row()["snapshot_json"] is None
+    hidden.rename(bundle)
+    _collect(harness)
+
+    assert list(requests.iterdir()) == []
+    assert json.loads(harness.row()["snapshot_json"])["manifest_sha256"] == manifest
+    # The return then leaves the WGLink folder, and the operation still prepares.
+    shutil.rmtree(bundle)
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
+
+
+def test_a_claim_whose_return_stays_unreadable_is_acknowledged_at_the_bound(
+    harness: Harness, monkeypatch, caplog
+) -> None:
+    import logging
+
+    _retention_passes(monkeypatch, 3)
+    bundle_path, manifest = _write_return(harness.workspace)
+    (harness.workspace / bundle_path).rename(harness.workspace / "gone")
+    requests = _deliver_file(harness, bundle_path, manifest)
+
+    with caplog.at_level(logging.INFO, logger="server.cadlink.solve_command"):
+        for _kept in range(2):
+            _collect(harness)
+            assert len(_claims(requests)) == 1
+        _collect(harness)
+
+    assert list(requests.iterdir()) == []
+    assert any(
+        record.levelno == logging.WARNING and "cmd-1" in record.getMessage()
+        for record in caplog.records
+    )
+    # Acknowledged anyway, and the operation waits for its return, as before.
+    row = harness.row()
+    assert (row["state"], row["snapshot_json"]) == ("received", None)
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+
+
+def test_a_return_that_can_never_be_retained_is_acknowledged_at_once(harness: Harness) -> None:
+    bundle_path, _manifest_sha = _write_return(harness.workspace)
+    # The command names a manifest this return does not have.
+    requests = _deliver_file(harness, bundle_path, "sha256:" + "0" * 64)
+
+    _collect(harness)
+
+    assert list(requests.iterdir()) == []
+    assert harness.row()["snapshot_json"] is None
+    summary = harness.prepare()
+    assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
+
+
+def test_one_unreadable_claim_never_holds_the_deliveries_behind_it(harness: Harness) -> None:
+    first_path, first_manifest = _write_return(harness.workspace, "first.wgreturn")
+    second_path, second_manifest = _write_return(harness.workspace, "second.wgreturn", step=b"STEP 2")
+    (harness.workspace / first_path).rename(harness.workspace / "gone")
+    requests = _deliver_file(harness, first_path, first_manifest, "cmd-1")
+    _deliver_file(harness, second_path, second_manifest, "cmd-2")
+
+    _collect(harness)
+
+    assert len(_claims(requests)) == 1
+    assert not (requests / "cmd-2.json").exists()
+    assert harness.row("cmd-1")["snapshot_json"] is None
+    assert json.loads(harness.row("cmd-2")["snapshot_json"])["manifest_sha256"] == second_manifest
