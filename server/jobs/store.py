@@ -42,6 +42,14 @@ QUIT_INTERRUPTION_KEY = "interrupted_by_quit"
 #: ``task_metadata_json`` key the update restart's shutdown sets beside the Quit
 #: one (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.3).
 UPDATE_RESTART_INTERRUPTION_KEY = "interrupted_by_update_restart"
+#: What a `running` row that the user had already asked to stop
+#: (``cancellation_requested = 1``) reads as if the process ends -- Quit's
+#: budget, a crash, a forced kill -- before its own cancellation checkpoint
+#: applies. Equal to ``server.jobs.runtime.CANCELLED_MESSAGE``, the message an
+#: ordinary in-process cancellation uses for both ``stage_message`` and
+#: ``error_message``; kept as a literal here rather than imported, because
+#: ``runtime`` imports this module and the reverse would cycle.
+RECOVERED_USER_CANCELLATION_MESSAGE = "Simulation cancelled by user"
 SUPPORTED_SCHEMA_VERSION = 5
 ALLOWED_JOB_UPDATE_FIELDS = frozenset(
     {
@@ -1587,6 +1595,7 @@ class JobStore:
         quit_error_message: str | None = None,
         update_restart_stage_message: str | None = None,
         update_restart_error_message: str | None = None,
+        user_cancelled_message: str | None = RECOVERED_USER_CANCELLATION_MESSAGE,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Settle running orphans and return queued rows in FIFO order.
 
@@ -1597,7 +1606,14 @@ class JobStore:
         failure: when ``quit_error_message`` is given it ends cancelled with
         that reason instead. One the update restart's shutdown marked ends
         cancelled with ``update_restart_error_message`` when that is given, and
-        otherwise reads as Quit, whose mark it also carries. None is requeued.
+        otherwise reads as Quit, whose mark it also carries. A row the user had
+        already asked to stop (``cancellation_requested = 1``) but that carries
+        neither mark -- the ordinary case, since ``mark_running_interrupted_by_quit``
+        leaves such a row to its own request rather than also marking it -- ends
+        cancelled with ``user_cancelled_message`` when that is given (the
+        default matches ``server.jobs.runtime.CANCELLED_MESSAGE``) instead of
+        being read as a crash: the user chose to stop it before the process
+        ever ended. None is requeued.
         """
 
         now = _now_iso()
@@ -1605,7 +1621,8 @@ class JobStore:
         trace_rows: list[sqlite3.Row] = []
         with self._lock, self._transaction() as conn:
             running = conn.execute(
-                f"""SELECT id, json_extract(task_metadata_json, '$.{QUIT_INTERRUPTION_KEY}')
+                f"""SELECT id, cancellation_requested,
+                          json_extract(task_metadata_json, '$.{QUIT_INTERRUPTION_KEY}')
                           AS interrupted_by_quit,
                           json_extract(task_metadata_json, '$.{UPDATE_RESTART_INTERRUPTION_KEY}')
                           AS interrupted_by_update_restart
@@ -1624,10 +1641,26 @@ class JobStore:
                 and row["interrupted_by_quit"]
                 and str(row["id"]) not in update_restart_ids
             }
+            # A row the user had already asked to stop was deliberately left
+            # unmarked by `mark_running_interrupted_by_quit` (it only marks
+            # `cancellation_requested = 0` rows) -- so it carries neither flag
+            # above and would otherwise fall through to the orphan branch
+            # below and read as a crash, even though nothing failed: the user
+            # asked for exactly this outcome before the process ever ended.
+            user_cancelled_ids = {
+                str(row["id"])
+                for row in running
+                if user_cancelled_message is not None
+                and row["cancellation_requested"]
+                and str(row["id"]) not in quit_ids
+                and str(row["id"]) not in update_restart_ids
+            }
             restarted_ids = [
                 str(row["id"])
                 for row in running
-                if str(row["id"]) not in quit_ids and str(row["id"]) not in update_restart_ids
+                if str(row["id"]) not in quit_ids
+                and str(row["id"]) not in update_restart_ids
+                and str(row["id"]) not in user_cancelled_ids
             ]
             if restarted_ids:
                 conn.execute(
@@ -1671,6 +1704,23 @@ class JobStore:
                         now,
                         now,
                         *sorted(update_restart_ids),
+                    ),
+                )
+            if user_cancelled_ids:
+                conn.execute(
+                    f"""
+                    UPDATE simulation_jobs
+                    SET status = 'cancelled', stage = 'cancelled', stage_message = ?,
+                        error_message = ?, cancellation_requested = 0,
+                        completed_at = COALESCE(completed_at, ?), updated_at = ?
+                    WHERE id IN ({",".join("?" for _ in user_cancelled_ids)})
+                    """,
+                    (
+                        user_cancelled_message,
+                        user_cancelled_message,
+                        now,
+                        now,
+                        *sorted(user_cancelled_ids),
                     ),
                 )
             running_ids = [str(row["id"]) for row in running]
@@ -1725,6 +1775,19 @@ class JobStore:
                                     if job_id in update_restart_ids
                                     else quit_error_message
                                 ),
+                                "recovered": True,
+                            },
+                        )
+                    )
+                    continue
+                if job_id in user_cancelled_ids:
+                    recovery_events.append(
+                        self._append_event(
+                            conn,
+                            job_id,
+                            "cancelled",
+                            {
+                                "message": user_cancelled_message,
                                 "recovered": True,
                             },
                         )

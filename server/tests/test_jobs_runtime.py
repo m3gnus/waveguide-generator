@@ -16,6 +16,7 @@ from server.engines.dryrun import DryRunEngine
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.models import ChannelCombineSpec, SolveRequest
 from server.jobs.runtime import (
+    CANCELLED_MESSAGE,
     JobConflictError,
     JobMeshDiscardedError,
     JobNotFoundError,
@@ -1650,8 +1651,14 @@ def test_a_quit_marks_every_running_job_the_moment_it_begins(tmp_path: Path) -> 
             assert job["status"] == "cancelled", job
             assert job["stage_message"] == QUIT_INTERRUPTED_STAGE_MESSAGE
             assert job["error_message"] == QUIT_INTERRUPTED_MESSAGE
-        # A job the user had already asked to stop keeps its own story.
+        # A job the user had already asked to stop keeps its own story: it
+        # was stopped, not crashed by the restart, and not interrupted by
+        # Quit either -- nothing marked it that way, because
+        # `mark_running_interrupted_by_quit` leaves an already-cancellation-
+        # requested row to its own request rather than also marking it.
         cancelled = await next_start.get_job("user-cancelled")
+        assert cancelled["status"] == "cancelled", cancelled
+        assert cancelled["error_message"] == CANCELLED_MESSAGE
         assert cancelled["error_message"] != QUIT_INTERRUPTED_MESSAGE
         await next_start.shutdown()
 
