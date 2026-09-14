@@ -26,6 +26,7 @@ import numpy as np
 
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
+from server.platform.temp_session import temporary_directory_root
 
 from .base import (
     ArtifactCallback,
@@ -317,7 +318,9 @@ def solve_official_beat_from_msh_text(
     monitor_stop = threading.Event()
     monitor_error: list[BaseException] = []
     watcher: threading.Thread | None = None
-    with tempfile.TemporaryDirectory(prefix="hornlab-official-beat-") as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="hornlab-official-beat-", dir=temporary_directory_root()
+    ) as directory:
         job_dir = Path(directory)
         mesh_path = job_dir / "surface.msh"
         cancel_path = job_dir / "cancel.marker"

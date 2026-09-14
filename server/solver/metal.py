@@ -30,6 +30,7 @@ from server.jobs.models import (
     SolveRequest,
 )
 from server.mesh.builder import build_solver_mesh
+from server.platform.temp_session import temporary_directory_root
 from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
@@ -384,7 +385,8 @@ def _native_solve_mesh(
     path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".msh", delete=False, encoding="utf-8"
+            mode="w", suffix=".msh", delete=False, encoding="utf-8",
+            dir=temporary_directory_root(),
         ) as handle:
             path = Path(handle.name)
             handle.write(msh_text)
@@ -755,7 +757,8 @@ def solve_metal_from_msh_text(
         path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".msh", delete=False, encoding="utf-8"
+                mode="w", suffix=".msh", delete=False, encoding="utf-8",
+                dir=temporary_directory_root(),
             ) as handle:
                 path = Path(handle.name)
                 handle.write(msh_text)
@@ -1889,7 +1892,8 @@ def solve_imported_metal_from_msh_text(
     coupled_mf_channel: Any | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".msh", delete=False, encoding="utf-8"
+            mode="w", suffix=".msh", delete=False, encoding="utf-8",
+            dir=temporary_directory_root(),
         ) as handle:
             path = Path(handle.name)
             handle.write(msh_text)

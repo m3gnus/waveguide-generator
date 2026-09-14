@@ -1,15 +1,18 @@
 """A temporary directory per server process, and the startup sweep of dead ones.
 
 A server that ends through the shutdown backstop's ``os._exit`` or the
-launcher's tree kill runs no cleanup. Every ``tempfile.TemporaryDirectory``
-open at that moment -- a mesh build's ``wg2-solver-mesh-*``, an STL export's,
-an imported mesh's -- then stays in the system temporary directory for good,
-and a Quit during a build always ends that way.
+launcher's tree kill runs no cleanup. Every temporary file and directory open
+at that moment -- a mesh build's ``wg2-solver-mesh-*``, the ``.msh`` a solver
+is reading, an STL or STEP export's, an imported mesh's -- then stays in the
+system temporary directory for good, and a Quit during a build or a solve
+always ends that way.
 
 So ``launch/serve.py`` gives the process one directory of its own,
 ``wg2-run-<pid>-<random>``, and holds an OS lock on the ``.owner.lock`` inside
-it for as long as the process lives. WG's own ``TemporaryDirectory`` call
-sites make their directories inside it (``dir=temporary_directory_root()``).
+it for as long as the process lives. WG's own temporary files and directories
+are made inside it (``dir=temporary_directory_root()``), and
+``server/tests/test_temp_session.py`` holds every ``tempfile`` call in the
+server to that.
 The operating system releases that lock however the process ends, so a later
 start can tell a dead owner's directory from a live one exactly -- whichever
 build, checkout or data directory the owner belonged to -- and it sweeps only
@@ -70,10 +73,10 @@ _active_root: str | None = None
 
 
 def temporary_directory_root() -> str | None:
-    """Where WG makes its own temporary directories: ``dir=`` for ``tempfile``.
+    """Where WG makes its own temporary files and directories: ``dir=`` for ``tempfile``.
 
-    The active session's directory in a launched server, so a directory a
-    stop leaves behind is swept by the next start; ``None`` (the system
+    The active session's directory in a launched server, so whatever a stop
+    leaves behind is swept by the next start; ``None`` (the system
     temporary directory) everywhere else -- tests, the CLI, the CAD child.
     """
 

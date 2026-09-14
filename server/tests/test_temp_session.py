@@ -288,19 +288,31 @@ def test_a_lock_that_stays_held_is_a_failure_that_leaves_nothing(
     assert list(tmp_path.iterdir()) == []
 
 
-def test_every_wg_temporary_directory_is_made_in_the_session() -> None:
-    """A ``wg2-*`` ``TemporaryDirectory`` outside the session is swept a day late.
+def test_no_server_temporary_file_lands_loose_in_the_system_temporary_directory() -> None:
+    """A forced exit leaves every temporary file and directory open at that moment.
 
-    Each call site that names a ``wg2-`` prefix must pass
-    ``dir=temporary_directory_root()``. The one exception is owned by the
-    solver work and is covered by the one-day rule instead.
+    Loose in the system temporary directory, no rule removes one -- unless it
+    carries a legacy ``wg2-`` directory prefix, and then only a day later. So
+    every ``tempfile`` call in the server names its ``dir=``: the session's
+    (``temporary_directory_root()``) for scratch space -- a mesh build, the mesh
+    a solver reads, a STEP round trip -- or the destination's own parent for a
+    file staged beside where it is published. A ``wg2-`` directory always goes
+    in the session.
+
+    The exemption is not WG's scratch space. It is the untrusted CAD child's
+    ``wg-cad-child-*`` sandbox, which CAD Link keeps in the system temporary
+    directory on purpose (``server/cadlink/isolation.py``). A forced exit during
+    an external-STEP import still leaves that sandbox behind.
     """
 
     import ast
 
     exempt = {
-        "server/solver/field_plane.py": "solver-owned; its wg2-field-plane-* sweep after a day",
+        "server/cadlink/isolation.py": "the CAD child's wg-cad-child-* sandbox; CAD Link's to place",
     }
+    #: Each call's positional slot for ``dir``: a ``dir`` passed there cannot be
+    #: read by name, while an earlier positional (a ``mode``) is harmless.
+    dir_slot = {"TemporaryDirectory": 2, "mkdtemp": 2, "mkstemp": 2, "NamedTemporaryFile": 6}
 
     def callee(node: ast.AST) -> str | None:
         if isinstance(node, ast.Attribute):
@@ -309,41 +321,113 @@ def test_every_wg_temporary_directory_is_made_in_the_session() -> None:
             return node.id
         return None
 
+    def calls(node: ast.AST | None, name: str) -> bool:
+        return isinstance(node, ast.Call) and callee(node.func) == name
+
     offenders: list[str] = []
     sites = 0
+    exempt_sites = dict.fromkeys(exempt, 0)
     for path in sorted((REPO_ROOT / "server").rglob("*.py")):
         relative = path.relative_to(REPO_ROOT).as_posix()
         if relative.startswith("server/tests/"):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or callee(node.func) not in {
-                "TemporaryDirectory",
-                "mkdtemp",
-            }:
-                continue
-            prefix = next(
-                (
-                    keyword.value.value
-                    for keyword in node.keywords
-                    if keyword.arg == "prefix" and isinstance(keyword.value, ast.Constant)
-                ),
-                None,
-            )
-            if not (isinstance(prefix, str) and prefix.startswith("wg2-")):
+            name = callee(node.func) if isinstance(node, ast.Call) else None
+            if name not in dir_slot:
                 continue
             sites += 1
             if relative in exempt:
-                assert prefix.startswith(LEGACY_PREFIXES), f"{relative}: {prefix} is never swept"
+                exempt_sites[relative] += 1
                 continue
-            directory = next((k.value for k in node.keywords if k.arg == "dir"), None)
-            if not (
-                isinstance(directory, ast.Call)
-                and callee(directory.func) == "temporary_directory_root"
+            where = f"{relative}:{node.lineno}"
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+            directory = keywords.get("dir")
+            prefix = keywords.get("prefix")
+            if directory is None and (
+                len(node.args) > dir_slot[name]
+                or any(isinstance(argument, ast.Starred) for argument in node.args)
             ):
-                offenders.append(f"{relative}:{node.lineno} ({prefix})")
+                offenders.append(f"{where}: pass dir= by keyword so this check can read it")
+            elif directory is None or (
+                isinstance(directory, ast.Constant) and directory.value is None
+            ):
+                offenders.append(f"{where}: no dir=, so the system temporary directory")
+            elif calls(directory, "gettempdir"):
+                offenders.append(f"{where}: dir=gettempdir() is the system temporary directory")
+            elif (
+                isinstance(prefix, ast.Constant)
+                and isinstance(prefix.value, str)
+                and prefix.value.startswith("wg2-")
+                and not calls(directory, "temporary_directory_root")
+            ):
+                offenders.append(f"{where}: {prefix.value} outside the session")
 
-    assert sites >= 4, "the scan found none of WG's own temporary directories"
+    assert sites >= 15, f"the scan found only {sites} temporary-file calls in the server"
     assert offenders == []
-    for relative in exempt:
-        assert (REPO_ROOT / relative).is_file(), f"stale exemption: {relative}"
+    assert all(exempt_sites.values()), f"stale exemption: {exempt_sites}"
+
+
+def _active_session(tmp_path: Path) -> TemporarySession:
+    session = TemporarySession.create(tmp_path)
+    session.activate()
+    return session
+
+
+def test_a_solvers_mesh_file_is_written_inside_the_active_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``.msh`` a native solver reads is ``delete=False``: a forced exit
+    mid-solve leaves it. Inside the session, the next start sweeps it."""
+
+    from types import SimpleNamespace
+
+    from server.solver import metal
+
+    seen: list[Path] = []
+
+    def solve_frequencies(path: str, _frequencies: list[float], _config: object) -> object:
+        seen.append(Path(path))
+        assert Path(path).read_text(encoding="utf-8") == "msh"
+        return SimpleNamespace()
+
+    monkeypatch.setattr(metal, "native_solve_frequencies", solve_frequencies)
+    session = _active_session(tmp_path)
+    try:
+        metal._native_solve_mesh("msh", [1000.0], object(), sort_after=False)
+        assert [path.parent for path in seen] == [session.path]
+        assert not seen[0].exists()
+    finally:
+        session.close(remove=True)
+
+
+def test_a_field_plane_mesh_is_staged_inside_the_active_session(tmp_path: Path) -> None:
+    from collections import OrderedDict
+    from types import SimpleNamespace
+
+    from server.solver.field_plane import FieldPlaneService
+    from server.solver.field_traces_store import METAL_FIELD_TRACE_BACKEND
+
+    loaded: list[Path] = []
+
+    def load_mesh(path: Path, **_kwargs: object) -> object:
+        loaded.append(Path(path))
+        return object()
+
+    cache = SimpleNamespace(_mesh_cache=OrderedDict(), _mesh_cache_entries=1)
+    session = _active_session(tmp_path)
+    try:
+        FieldPlaneService._cached_mesh(
+            cache,
+            METAL_FIELD_TRACE_BACKEND,
+            SimpleNamespace(load_mesh=load_mesh),
+            "job",
+            "sha",
+            "msh",
+            None,
+        )
+        assert len(loaded) == 1
+        assert loaded[0].parent.parent == session.path
+        assert loaded[0].parent.name.startswith("wg2-field-plane-")
+    finally:
+        session.close(remove=True)

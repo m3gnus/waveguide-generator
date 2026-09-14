@@ -35,6 +35,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.platform.temp_session import temporary_directory_root
 
 from . import bempp
 from .acoustics import solver_sound_speed_m_per_s
@@ -404,7 +405,8 @@ def solve_imported_bempp_from_msh_text(
     path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".msh", delete=False, encoding="utf-8"
+            mode="w", suffix=".msh", delete=False, encoding="utf-8",
+            dir=temporary_directory_root(),
         ) as handle:
             path = Path(handle.name)
             handle.write(msh_text)

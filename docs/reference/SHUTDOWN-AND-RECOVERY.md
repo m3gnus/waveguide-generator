@@ -70,21 +70,23 @@ skips is crash-safe by construction:
   failed / Server restarted during execution". Interrupted jobs are not
   requeued, because the user quit on purpose. Jobs that were still queued are
   requeued.
-- **Temporary files.** Each server process makes WG's own temporary
-  directories -- mesh builds, STL exports, imported meshes -- inside one
-  directory of its own, `wg2-run-<pid>-<random>` in the system temporary
-  directory, and holds an OS lock inside it for as long as it lives. Each start
-  removes every such directory whose lock is free -- its owner is gone, however
-  it ended -- and never one whose owner is alive, whichever build or checkout
-  that is. A clean exit removes its own, unless a thread was still busy when
-  cleanup finished; then the next start does. The system temporary directory itself
-  is not redirected: BEAT keeps the registry of its persistent host there, and
+- **Temporary files.** Each server process makes WG's own temporary files and
+  directories -- mesh builds, the mesh each solver and the field plane read,
+  STL and STEP exports, imported meshes -- inside one directory of its own,
+  `wg2-run-<pid>-<random>` in the system temporary directory, and holds an OS
+  lock inside it for as long as it lives. Each start removes every such
+  directory whose lock is free -- its owner is gone, however it ended -- and
+  never one whose owner is alive, whichever build or checkout that is. A clean
+  exit removes its own, unless a thread was still busy when cleanup finished;
+  then the next start does. The system temporary directory itself is not
+  redirected: BEAT keeps the registry of its persistent host there, and
   the mesher its publish lock, and both must outlive the process. Directories
   with no session to belong to (`wg2-solver-mesh-*`, `wg2-imported-mesh-*`,
   `wg2-imported-viewport-*`, `wg2-field-plane-*`, `wg2-stl-mesh-*` directly in
-  the temporary directory, from an earlier release or from the field-plane
-  solver) have no owner to ask and are removed once nothing has changed them
-  for a day.
+  the temporary directory, from an earlier release) have no owner to ask and
+  are removed once nothing has changed them for a day. One directory stays
+  outside the session on purpose: the isolated CAD child's `wg-cad-child-*`
+  sandbox, which a forced exit during an external-STEP import leaves behind.
 
 ## BEAT's persistent host on Windows
 

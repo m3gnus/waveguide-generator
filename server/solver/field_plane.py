@@ -23,6 +23,7 @@ from numpy.typing import NDArray
 from server.jobs.models import FieldPlaneRequest, FieldPlaneSpec
 from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
+from server.platform.temp_session import temporary_directory_root
 
 from .combine import (
     expand_legacy_channels,
@@ -793,7 +794,9 @@ class FieldPlaneService:
         if cached is not None:
             self._mesh_cache[key] = cached
             return cached
-        with tempfile.TemporaryDirectory(prefix="wg2-field-plane-") as directory:
+        with tempfile.TemporaryDirectory(
+            prefix="wg2-field-plane-", dir=temporary_directory_root()
+        ) as directory:
             mesh_path = Path(directory) / "mesh.msh"
             mesh_path.write_text(mesh_text, encoding="utf-8")
             mesh = backend_api.load_mesh(

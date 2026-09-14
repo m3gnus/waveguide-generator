@@ -332,7 +332,12 @@ def _write_step(inner_points: np.ndarray) -> str:
         )
         gmsh.model.occ.remove([(1, tag) for tag in construction_curves], recursive=True)
         gmsh.model.occ.synchronize()
-        with tempfile.NamedTemporaryFile(prefix="waveguide-inner-", suffix=".step", delete=False) as handle:
+        with tempfile.NamedTemporaryFile(
+            prefix="waveguide-inner-",
+            suffix=".step",
+            delete=False,
+            dir=temporary_directory_root(),
+        ) as handle:
             step_path = Path(handle.name)
         gmsh.write(str(step_path))
         text = _normalise_step_header(
@@ -793,7 +798,7 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     if plan.warning:
         logger.warning("Solid STEP export sizing: %s", plan.warning)
     with tempfile.NamedTemporaryFile(
-        prefix="waveguide-solid-", suffix=".step", delete=False
+        prefix="waveguide-solid-", suffix=".step", delete=False, dir=temporary_directory_root()
     ) as handle:
         step_path = Path(handle.name)
     try:

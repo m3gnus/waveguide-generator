@@ -49,6 +49,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.platform.temp_session import temporary_directory_root
 
 from .acoustics import solver_sound_speed_m_per_s
 from .base import CancelCallback, ResultCallback, StageCallback
@@ -896,7 +897,8 @@ def solve_imported_beat_from_msh_text(
             path: Path | None = None
             try:
                 with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".msh", delete=False, encoding="utf-8"
+                    mode="w", suffix=".msh", delete=False, encoding="utf-8",
+                    dir=temporary_directory_root(),
                 ) as handle:
                     path = Path(handle.name)
                     handle.write(mesh.text(group_tags))
