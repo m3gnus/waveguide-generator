@@ -527,20 +527,18 @@ async function submissionRefusal(response: Response): Promise<SolveSubmissionRef
   );
 }
 
+// No client_request_id: the only one the browser ever sent was a Fusion
+// command's cad-solve:<id>, and that namespace now belongs to the backend,
+// which prepares and submits Fusion's commands itself.
 export async function submitImported(
   submission: ImportedSolveSubmission,
   fetcher: typeof fetch = fetch,
   label = 'cad-import',
-  clientRequestId?: string,
 ): Promise<string> {
   const response = await fetcher('/api/solve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      ...submission,
-      label,
-      ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
-    }),
+    body: JSON.stringify({ ...submission, label }),
   });
   if (!response.ok) throw await submissionRefusal(response);
   return ((await response.json()) as { job_id: string }).job_id;

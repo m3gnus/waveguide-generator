@@ -22,7 +22,6 @@ import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
 import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -301,14 +300,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // The CAD document names its own runs; see jobs/runNameSource.
       const designName = currentRunNameSource().name;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-      const parked = parkedSolveCommandStore.getSnapshot().command;
-      const selectedBundlePath = useCadReturnStore.getState().selectedBundle?.bundlePath;
-      const clientRequestId = parked && parked.bundlePath === selectedBundlePath
-        ? `cad-solve:${parked.commandId}`
-        : undefined;
       // A typed refusal is the server naming a condition; the user needs the
       // remedy. Translating here covers every imported entry point at once.
-      const jobId = await submitImported(effectiveSubmission, fetch, label, clientRequestId).catch((error) => {
+      const jobId = await submitImported(effectiveSubmission, fetch, label).catch((error) => {
         // No engine here can solve imported geometry: a capability this
         // machine lacks, which an automatic caller keeps rather than refuses.
         if (
@@ -322,14 +316,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
           ? new Error(explainImportedRefusal(error.message))
           : error;
       });
-      // A Fusion-authored request is retired by its ledger entry, not by the
-      // marker on disk. Reporting the job from the one place every imported
-      // solve passes through is what makes a manual Solve consume the parked
-      // command instead of leaving it to replay into a duplicate run.
-      await consumeParkedSolveCommand(jobId);
-      // Do not advance the label sequence until the CAD acknowledgement is
-      // durable. A replay after an acknowledgement failure must hash to the
-      // identical solve request and recover this same job id.
+      // Fusion's "Solve in WG" commands are the backend's to prepare and submit
+      // (under cad-solve:<id>), so a solve from here never carries a command key.
       acceptSubmittedLabel(designName);
       compareSelection.awaitRun(jobId);
       await jobsSocket.refresh();

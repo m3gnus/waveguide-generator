@@ -142,13 +142,15 @@ describe('solve submission', () => {
         frequency_range: [200, 20_000], num_frequencies: 24,
         polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false, field_plane: true },
       },
-    }, fetcher as typeof fetch, 'cad-run', 'cad-solve:cmd-1');
+    }, fetcher as typeof fetch, 'cad-run');
     expect(body).toMatchObject({
       geometry: { type: 'imported', ingest_id: 'wgi_example' },
       label: 'cad-run',
-      client_request_id: 'cad-solve:cmd-1',
     });
     expect(body).not.toHaveProperty('design');
+    // cad-solve:<id> keys are the backend's, for Fusion's commands; the browser
+    // sends none.
+    expect(body).not.toHaveProperty('client_request_id');
   });
 
   // Which engine solves imported geometry is the server's decision, and "no
