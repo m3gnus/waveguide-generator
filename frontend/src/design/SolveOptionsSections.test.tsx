@@ -4,8 +4,21 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
+import type { ImportedSolvePlanSnapshot } from '../jobs/useImportedSolvePlan';
 import { defaultPolarUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { DirectivityMapControls, effectiveGridView, FrequencySweepControls, SolveOptionsControls } from './SolveOptionsSections';
+
+// The server's per-engine verdict on one CAD return (POST
+// /api/solve/imported-plan). A test hands the selector one directly; with no
+// return prepared it is empty, which is what the real hook answers.
+const importedPlan = vi.hoisted(() => ({
+  current: { plan: null, error: null, isPending: false } as ImportedSolvePlanSnapshot,
+}));
+vi.mock('../jobs/useImportedSolvePlan', () => ({
+  useImportedSolvePlan: (enabled: boolean): ImportedSolvePlanSnapshot => (
+    enabled ? importedPlan.current : { plan: null, error: null, isPending: false }
+  ),
+}));
 
 /**
  * The solve and directivity controls are not registry-driven, so the registry's
@@ -20,6 +33,7 @@ describe('solve and directivity control help', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     vi.useFakeTimers();
     resetSolveOptionsStore();
+    importedPlan.current = { plan: null, error: null, isPending: false };
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
     document.body.append(host);
@@ -135,6 +149,45 @@ describe('solve and directivity control help', () => {
     expect(host.querySelector('#mesh-validation-mode')).not.toBeNull();
     expect(host.querySelector('#cad-solve-frequency-mode')).not.toBeNull();
     expect(host.querySelector('#solve-verbose')).not.toBeNull();
+  });
+
+  // Per record, the selector shows the server's verdict, not the capability
+  // snapshot: BEMPP here is available and declares imported geometry, and is
+  // still refused for this return, with the server's own reason beside it.
+  it('disables an engine the imported plan refuses for this return, with the server reason', () => {
+    const imported = ['parametric', 'imported'];
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [
+        { name: 'metal', label: 'Metal — Apple GPU', available: true, reason: null, version: 'test', fast_paths: [], geometry_sources: imported },
+        { name: 'bempp', label: 'BEMPP — CPU', available: true, reason: null, version: 'test', fast_paths: [], geometry_sources: imported },
+        { name: 'beat-cpu', label: 'BEAT · CPU — no GPU needed', available: true, reason: null, version: 'test', fast_paths: [], geometry_sources: imported },
+      ],
+    });
+    const refusal = 'this return has 3 open edges off its mirror planes. BEMPP holds the pressure at zero on a free rim.';
+    importedPlan.current = {
+      plan: {
+        ingest_id: 'wgi_test', requested: 'auto', engine: 'metal', code: null,
+        reason: 'AUTO selected the first available engine', domain: 'half_yz',
+        engines: [
+          { name: 'metal', label: 'Metal — Apple GPU', solves: true },
+          { name: 'bempp', label: 'BEMPP — CPU', solves: false, stage: 'preflight', code: 'imported_return_unsupported_by_engine', reason: refusal },
+          { name: 'beat-cpu', label: 'BEAT · CPU — no GPU needed', solves: true },
+        ],
+      },
+      error: null,
+      isPending: false,
+    };
+
+    render(<SolveOptionsControls mode="cad" ingestRecord={null} />);
+
+    const options = new Map(
+      [...host.querySelector<HTMLSelectElement>('#cad-solve-engine')!.options].map((option) => [option.value, option]),
+    );
+    expect(options.get('bempp')!.disabled).toBe(true);
+    expect(options.get('bempp')!.textContent).toContain(refusal);
+    expect(options.get('metal')!.disabled).toBe(false);
+    expect(options.get('beat-cpu')!.disabled).toBe(false);
+    expect(host.textContent).toContain('Metal — Apple GPU · full 3-D · free space');
   });
 
   it('reports widened and unchanged effective display grids through the submission derivation', () => {

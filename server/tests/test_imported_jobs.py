@@ -3323,16 +3323,76 @@ _CARDIOID = {
     "passive_cardioid_foam_resistance_pa_s_m3": 10_000.0,
 }
 
+@dataclass(frozen=True)
+class _GuardFixture:
+    """One kind of imported return, as the facts that decide which engines take it."""
+
+    planes: tuple[str, ...] = ()
+    #: The record's off-plane open-edge count; None for a record too old to say.
+    open_edge_count: int | None = 0
+    #: A throat frame BEAT would have to rotate its mirror plane out of place for.
+    tilted: bool = False
+    cardioid: bool = False
+    ground_plane: bool = False
+
+
 _GUARD_FIXTURES = {
-    "full": (["full"], {}, False),
-    "x0-half": (["half-yz"], {}, False),
-    "y0-half": (["half-xz"], {}, False),
-    "quarter": (["quarter"], {}, False),
-    "ground-plane": (["full"], {}, True),
-    "passive-cardioid": (["full"], _CARDIOID, False),
+    "full": _GuardFixture(),
+    "x0-half": _GuardFixture(planes=("x0",)),
+    "y0-half": _GuardFixture(planes=("y0",)),
+    "quarter": _GuardFixture(planes=("x0", "y0")),
+    "ground-plane": _GuardFixture(ground_plane=True),
+    "passive-cardioid": _GuardFixture(cardioid=True),
+    # Each refused by one engine's own adapter preflight, the stage only the
+    # record and its mesh can answer, and never by a declaration.
+    "tilted-x0-half": _GuardFixture(planes=("x0",), tilted=True),
+    "no-open-edge-count": _GuardFixture(planes=("x0",), open_edge_count=None),
 }
 
-_GUARD_PLANES = {"full": [], "x0-half": ["x0"], "y0-half": ["y0"], "quarter": ["x0", "y0"]}
+_GUARD_QUADRANTS = {(): 1234, ("x0",): 14, ("y0",): 12, ("x0", "y0"): 1}
+
+
+def _tilted_throat_frame() -> dict[str, list[float]]:
+    """A throat axis tilted 30 degrees about y: BEAT's rotation would move x = 0."""
+
+    angle = math.radians(30.0)
+    return {
+        "axis": [math.sin(angle), 0.0, math.cos(angle)],
+        "u": [math.cos(angle), 0.0, -math.sin(angle)],
+        "v": [0.0, 1.0, 0.0],
+        "origin_m": [0.0, 0.0, 0.0],
+        "mouth_center_m": [0.0, 0.0, 0.0],
+        "source_center_m": [0.0, 0.0, 0.0],
+    }
+
+
+def _guard_expected_capable(fixture: _GuardFixture, assembly_backend: str) -> set[str]:
+    """Which engines should take the return, from what each is documented to do.
+
+    Written from the capability record, not read back from the detector, so a
+    declaration that drifts -- BEMPP offering imported geometry on numba -- is
+    caught rather than echoed back as the prediction:
+
+    * Metal mirrors every imported domain and runs the passive cardioid;
+    * BEAT · CPU mirrors full, x0-half and quarter domains, runs no campaign,
+      and needs a frame that leaves its mirror plane where it is;
+    * BEMPP takes imported geometry only while it assembles on OpenCL, runs no
+      campaign, and needs a record that shows it has no free rim;
+    * no engine takes a ground plane under imported geometry.
+    """
+
+    if fixture.ground_plane:
+        return set()
+    capable = {"metal"}
+    if fixture.planes != ("y0",) and not fixture.cardioid and not fixture.tilted:
+        capable.add("beat-cpu")
+    if (
+        assembly_backend == "opencl"
+        and not fixture.cardioid
+        and fixture.open_edge_count == 0
+    ):
+        capable.add("bempp")
+    return capable
 
 
 class _DetectedRegistry:
@@ -3353,18 +3413,32 @@ class _DetectedRegistry:
         return None
 
 
+@pytest.mark.parametrize("assembly_backend", ["numba", "opencl"])
 @pytest.mark.parametrize("fixture", sorted(_GUARD_FIXTURES))
 def test_imported_outcomes_follow_from_each_engines_declared_capability(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixture: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixture: str, assembly_backend: str
 ) -> None:
-    from server.engines.registry import detect_engines, engine_supports_symmetry
+    """The selector and the submission follow each engine's own capability.
+
+    For every engine the real detector registers -- BEMPP probed on both of its
+    assembly backends -- and each kind of return, the plan's verdict and the
+    explicit submission agree with the prediction: the engine's declaration
+    plus its adapter's own preflight on this record, asked directly. And the
+    engines that take the return are the ones each is documented to take.
+    """
+
+    from server.engines.registry import create_engine, detect_engines, engine_supports_symmetry
     from server.jobs.runtime import resolve_imported_submission
     from server.solver import beat, bempp, circsym
 
     available = {"available": True, "reason": "ok", "version": "t"}
     monkeypatch.setattr(circsym, "circsym_status", lambda: dict(available))
     monkeypatch.setattr(metal, "metal_status", lambda: dict(available))
-    monkeypatch.setattr(bempp, "bempp_status", lambda: dict(available))
+    monkeypatch.setattr(
+        bempp,
+        "bempp_status",
+        lambda: dict(available, assembly_backend=assembly_backend),
+    )
     monkeypatch.setattr(
         beat,
         "beat_backend_statuses",
@@ -3372,37 +3446,56 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
     )
     engines = detect_engines(environ={})
     registry = _DetectedRegistry(engines)
-    domain_key = {"ground-plane": "full", "passive-cardioid": "full"}.get(fixture, fixture)
-    _domains, geometry_changes, ground_plane = _GUARD_FIXTURES[fixture]
-    quadrants = {"full": 1234, "x0-half": 14, "y0-half": 12, "quarter": 1}[domain_key]
-    needed = {"passive-cardioid"} if geometry_changes else set()
+    facts = _GUARD_FIXTURES[fixture]
+    quadrants = _GUARD_QUADRANTS[facts.planes]
+    geometry_changes = _CARDIOID if facts.cardioid else {}
+    needed = {"passive-cardioid"} if facts.cardioid else set()
+    record_changes = _domain_changes(list(facts.planes))
+    record_changes["mesh"] = _record_mesh_with_open_edges(tmp_path, facts.open_edge_count)
+    if facts.tilted:
+        record_changes["anchor"] = {
+            "instance_id": "i",
+            "design_id": None,
+            "throat_frame": _tilted_throat_frame(),
+        }
 
-    async def scenario() -> dict[str, tuple[bool, bool, bool]]:
+    async def scenario() -> dict[str, tuple[bool, bool, bool, str | None]]:
         runtime, ingest_id, record = await _runtime_fixture(
-            tmp_path, _domain_changes(_GUARD_PLANES[domain_key]), mesh_text=_POSITIVE_MESH
+            tmp_path, record_changes, mesh_text=_POSITIVE_MESH
         )
         runtime.engine_registry = registry  # type: ignore[assignment]
-        outcomes: dict[str, tuple[bool, bool, bool]] = {}
+        outcomes: dict[str, tuple[bool, bool, bool, str | None]] = {}
         try:
             for info in engines:
                 request = _plan_request(ingest_id, info.name, **geometry_changes)
-                request.options.ground_plane.enabled = ground_plane
-                predicted = (
+                request.options.ground_plane.enabled = facts.ground_plane
+                declared = (
                     info.name != "axisym"
                     and "imported" in info.geometry_sources
                     and engine_supports_symmetry(info, quadrants)
                     and needed <= set(info.imported_features)
-                    and not ground_plane
+                    and not facts.ground_plane
+                )
+                # The adapter's own verdict on this record, asked directly: the
+                # stage the plan and the submission must both run.
+                preflight = (
+                    getattr(create_engine(info.name), "imported_preflight", None)
+                    if declared
+                    else None
+                )
+                predicted = declared and (
+                    not callable(preflight) or preflight(record, _POSITIVE_MESH) is None
                 )
                 plan = await runtime.plan_imported(request)
-                listed = {entry["name"]: entry["solves"] for entry in plan["engines"]}
+                verdict = next(
+                    (entry for entry in plan["engines"] if entry["name"] == info.name),
+                    {},
+                )
                 try:
                     resolution = await resolve_imported_submission(
                         request,
                         registry,
-                        symmetry_metadata=_imported_symmetry_metadata(
-                            {**record, **_domain_changes(_GUARD_PLANES[domain_key])}, "auto"
-                        ),
+                        symmetry_metadata=_imported_symmetry_metadata(record, "auto"),
                         imported_record=record,
                         imported_msh_text=_POSITIVE_MESH,
                     )
@@ -3411,8 +3504,9 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
                     submitted = False
                 outcomes[info.name] = (
                     predicted,
-                    listed.get(info.name, False),
+                    bool(verdict.get("solves", False)),
                     submitted,
+                    verdict.get("stage"),
                 )
         finally:
             await runtime.shutdown()
@@ -3421,16 +3515,16 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
     outcomes = asyncio.run(scenario())
 
     assert outcomes, "the detector registered no engine"
-    for name, (predicted, listed, submitted) in outcomes.items():
-        assert listed == predicted, f"{fixture}: selector verdict for {name}"
-        assert submitted == predicted, f"{fixture}: submission outcome for {name}"
-    # The fixtures are not vacuous: at least one engine is capable and at
-    # least one is refused wherever a gate exists.
-    capable = {name for name, (predicted, _, _) in outcomes.items() if predicted}
-    assert capable == (
-        set()
-        if fixture == "ground-plane"
-        else {"metal"}
-        if fixture in {"y0-half", "passive-cardioid"}
-        else {"metal", "beat-cpu"}
+    for name, (predicted, listed, submitted, _stage) in outcomes.items():
+        assert listed == predicted, f"{fixture}/{assembly_backend}: selector verdict for {name}"
+        assert submitted == predicted, f"{fixture}/{assembly_backend}: submission outcome for {name}"
+    capable = {name for name, (predicted, _, _, _) in outcomes.items() if predicted}
+    assert capable == _guard_expected_capable(facts, assembly_backend), (
+        f"{fixture}/{assembly_backend}"
     )
+    # The preflight fixtures are refused where they claim to be: at the
+    # adapter's preflight, the stage a declaration-only guard cannot see.
+    if fixture == "tilted-x0-half":
+        assert outcomes["beat-cpu"][3] == "preflight"
+    if fixture == "no-open-edge-count" and assembly_backend == "opencl":
+        assert outcomes["bempp"][3] == "preflight"

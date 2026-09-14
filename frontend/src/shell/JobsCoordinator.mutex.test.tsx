@@ -648,6 +648,46 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
 
+  // What the selector holds is what a CAD solve sends: the user's pick as they
+  // left it -- AUTO stays AUTO for the server to resolve -- and never an engine
+  // the browser chose on their behalf.
+  it.each(['beat-cpu', 'auto'])('submits the engine selected in the solver selector (%s) for a CAD solve', async (engine) => {
+    const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
+    useCadReturnStore.setState({
+      ingestRecord: {
+        ingest_id: ingestId,
+        manifest_sha256: `sha256:${'1'.repeat(64)}`,
+        artifact_sha256: `sha256:${'2'.repeat(64)}`,
+        report_sha256: `sha256:${'3'.repeat(64)}`,
+        findings: [],
+        evidence: { fem_air_volumes: [] },
+        polar_grid_derivation: {},
+      } as unknown as CadReturnIngestRecord,
+      needsIngest: false,
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      sourceSizesMm: { 'source-hf': 4 },
+      rigidSizeMm: 8,
+      transitionMm: 12,
+      skippedSourceIds: [],
+    });
+    importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
+    act(() => useSolveOptionsStore.getState().setEngine(engine));
+    mocks.submitImported.mockResolvedValue('job-cad');
+
+    await act(async () => {
+      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
+    });
+    act(() => workspaceModeStore.setMode('cad'));
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.textContent).toBe('Solve CAD Link');
+    await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mocks.submitImported).toHaveBeenCalledOnce();
+    expect(mocks.submitImported.mock.calls[0][0].options.engine).toBe(engine);
+    // Submitting leaves the selection alone.
+    expect(useSolveOptionsStore.getState().engine).toBe(engine);
+  });
+
   it('labels a CAD Link run from the Fusion document rather than the design left open behind it', async () => {
     // The parametric design is `horn` here, and it is not the geometry being
     // solved. Naming CAD runs from it is how a Fusion return used to be filed
