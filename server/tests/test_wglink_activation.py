@@ -1445,7 +1445,13 @@ def test_a_poll_that_activates_is_not_undone_by_the_startup_retry(
     async def drive() -> None:
         await addin_update.start_addin_refresh(data_dir=data)
         deadline = time.monotonic() + 5
-        while (addin_update.last_refresh() or {}).get("verdict") != "pending":
+        # "pending" is recorded while the startup pass still holds the pass
+        # lock, and a poll that finds the lock held defers to the next poll.
+        # Wait for the lock too, or this poll may start no pass at all.
+        while (
+            (addin_update.last_refresh() or {}).get("verdict") != "pending"
+            or addin_update._pass_lock.locked()
+        ):
             assert time.monotonic() < deadline
             await asyncio.sleep(0.01)
         # Fusion closes with the CAD Link UI open: the poll's pass installs.
