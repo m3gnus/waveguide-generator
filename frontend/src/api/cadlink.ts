@@ -39,8 +39,7 @@ export interface CadReturnBundle {
   readable: boolean;
   documentName: string | null;
   /** The CAD document this is a return of (the manifest's
-   * `document.native_id`), or null when the adapter did not record one.
-   * Scopes which newer return may supersede a parked Fusion solve request. */
+   * `document.native_id`), or null when the adapter did not record one. */
   documentNativeId?: string | null;
   requestId: string | null;
   sourceCount: number | null;
@@ -365,7 +364,7 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
   return new CadLinkApiError(`Request failed: ${response.status} ${response.statusText}`.trim(), [], response.status);
 }
 
-async function jsonRequest<T>(path: string, init: RequestInit | undefined, fetcher: typeof fetch): Promise<T> {
+export async function jsonRequest<T>(path: string, init: RequestInit | undefined, fetcher: typeof fetch): Promise<T> {
   const response = await fetcher(path, init);
   if (!response.ok) throw await responseError(response);
   return response.json() as Promise<T>;

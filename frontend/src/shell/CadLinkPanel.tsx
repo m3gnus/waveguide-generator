@@ -1,10 +1,9 @@
 import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useEffect } from 'react';
 import type { CadReturnBundle, CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
-import { OnshapePublicConsentRequired, sendDesignToOnshape } from '../api/onshape';
+import { OnshapePublicConsentRequired, sendDesignToOnshape, unlinkOnshape } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { parkedSolveCommandStore } from '../stores/solveCommand';
 import { currentDocumentLoad, isCurrentDocumentLoad, recordCommittedAthPolars, useDesignStore } from '../stores/design';
 import { keptContentKeyOf, rememberSentCopy } from '../design/replacementCheck';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
@@ -21,6 +20,7 @@ import { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from '.
 import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
+import { CadOperationsSection, shortSha256 } from './CadOperationsSection';
 import { requestSettings } from './settingsNavigation';
 import { workspaceNavigation } from './workspaceNavigation';
 import './cadLinkPanel.css';
@@ -412,9 +412,9 @@ export function CadLinkPanel() {
   const identity = useDocumentStore((current) => current.identity);
   const setCadLink = useDocumentStore((current) => current.setCadLink);
   const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
-  const parkedCommand = useSyncExternalStore(parkedSolveCommandStore.subscribe, parkedSolveCommandStore.getSnapshot, parkedSolveCommandStore.getSnapshot).command;
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
+  const [unlinkingOnshape, setUnlinkingOnshape] = useState(false);
   const onshapeSendGeneration = useRef(0);
   const onshape = preferences.cadApplication === 'onshape';
   const {
@@ -506,6 +506,26 @@ export function CadLinkPanel() {
 
   const sendToFusion = () => { void cadCoordinator.sendWgToFusion().catch(() => undefined); };
 
+  // Forget this design's link to its Onshape document. The document itself
+  // is left exactly as it is; the next send creates a new one.
+  const unlinkFromOnshape = async () => {
+    const link = onshapeStatus?.link;
+    const designId = identity?.designId ?? link?.designId;
+    if (!link || !designId) return;
+    cadCoordinator.clearFeedback(); setUnlinkingOnshape(true);
+    try {
+      const result = await unlinkOnshape(designId, link.instanceId);
+      cadCoordinator.reportStatus(result.unlinked
+        ? `Unlinked ${link.documentName}. The Onshape document is unchanged; the next send creates a new one.`
+        : `${link.documentName} was already unlinked.`);
+      await cadCoordinator.refreshOnshapeStatus();
+    } catch (reason) {
+      cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setUnlinkingOnshape(false);
+    }
+  };
+
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
   // Imported geometry is solved only by an engine that declares it (runtime.py
   // `resolve_imported_submission`): Metal, and BEAT's CPU backend, which every
@@ -532,9 +552,6 @@ export function CadLinkPanel() {
     fusionStatus?.running && fusionStatus.documentName && fusionStatus.documentId
     && fusionStatus.link && identity?.designId,
   );
-  // A Fusion solve request that stopped at a gate is held, not discarded, so it
-  // needs somewhere to be seen and acted on.
-  const parked = parkedCommand && parkedCommand.blockers.length > 0 ? parkedCommand : null;
   // Onshape's Free plan makes every document world-readable. Say so before the
   // user sends, not after -- and say it from the plan WG actually read.
   const publicOnly = onshapeConnection?.plan?.publicOnly === true;
@@ -547,12 +564,19 @@ export function CadLinkPanel() {
   const fusionBothChanged = Boolean(fusionStatus?.wgChangesAvailable && fusionStatus.fusionChangesAvailable);
   const staleModel = Boolean(record && state.needsIngest);
   const onshapeActionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
+  const unlinkButton = <button
+    className="link-button cad-onshape-unlink"
+    disabled={unlinkingOnshape || sendingToOnshape}
+    title="Forget this link. The Onshape document is left as it is; the next send creates a new document."
+    onClick={() => void unlinkFromOnshape()}
+  >{unlinkingOnshape ? 'Unlinking…' : 'Unlink'}</button>;
 
   const linkActions = onshape
     ? <>
       <button className="link-button" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>Send to Onshape</button>
       {linkedDocument && <button className="link-button" disabled={ingesting} title="Export the linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver." onClick={() => { void cadCoordinator.returnFromOnshape().catch(() => undefined); }}>Bring geometry into WG</button>}
       {linkedDocument?.documentUrl && <a className="link-button" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open in Onshape</a>}
+      {linkedDocument && unlinkButton}
     </>
     : <>
       <button className="link-button" disabled={sendingToFusion} title="Rebuild the linked Fusion waveguide from the current WG design." onClick={sendToFusion}>Send to Fusion</button>
@@ -634,6 +658,7 @@ export function CadLinkPanel() {
           {onshape && workflow.state !== 'not-configured' && !confirmPublicDocument && workflow.action && <button className="primary cad-primary-action" disabled={sendingToOnshape} onClick={() => void sendToOnshape()}>{sendingToOnshape ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : onshapeActionLabel}</button>}
           {onshape && linkedDocument && workflow.state !== 'not-configured' && <button className="cad-secondary-action" disabled={ingesting} onClick={() => { void cadCoordinator.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Returning & preparing…' : 'Bring Onshape geometry into WG'}</button>}
           {onshape && linkedDocument?.documentUrl && <a className="link-button cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
+          {onshape && linkedDocument && workflow.state !== 'not-configured' && unlinkButton}
         </>}
       {/* Which WGLink is actually running, from its own heartbeat. Informational
           only: it is the version the add-in's manifest states, which does not
@@ -674,6 +699,10 @@ export function CadLinkPanel() {
         >{freshnessSummary(record)}</span>}
         <time dateTime={record?.created_at || bundle.modifiedAt} title={fullTime(record?.created_at || bundle.modifiedAt)}>{relativeTime(record?.created_at || bundle.modifiedAt)}</time>
       </div>}
+      {record && <p
+        className="cad-detail cad-model-provenance"
+        title="The snapshot is the returned model, named by its manifest hash. The preparation is the ingestion whose mesh is on screen and would be solved."
+      >Snapshot <code>{shortSha256(record.manifest_sha256)}</code> · Preparation <code>{record.ingest_id}</code></p>}
       {importedSolverUnavailable && <div className="cad-alert cad-alert-notice cad-solver-unavailable" role="status">
         <b>No engine here can solve this CAD model right now.</b>{' '}
         {importedSolverReasons.length
@@ -707,13 +736,9 @@ export function CadLinkPanel() {
         >Open Simulation</button>
       </div>}
       {record && <ChecksSection record={record}/>}
-      {parked && <div className="cad-direction-alert cad-parked-command" role="status">
-        <div><b>Fusion asked for a solve</b><span>Waiting on: {parked.blockers.join(' · ')}</span></div>
-        <div className="cad-confirm-actions">
-          <button title="Refuse the request for good; Fusion will not offer it again." onClick={() => void cadCoordinator.dismissSolveCommand().catch(() => undefined)}>Dismiss</button>
-          <button className="primary" onClick={() => { void cadCoordinator.solveParkedCommand().catch(() => undefined); }}>Solve now</button>
-        </div>
-      </div>}
+      {/* Solves Fusion sent, which the backend prepares from each project's own
+          setup: shown here so the ones waiting on the user can be acted on. */}
+      <CadOperationsSection record={record}/>
       <ModelVersions
         projectBundles={projectBundles}
         unlinkedReturns={unlinkedReturns}

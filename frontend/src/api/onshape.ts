@@ -175,3 +175,18 @@ export async function returnOnshapeToWg(
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<OnshapeReturnResult>;
 }
+
+/** Forget one link. The Onshape document itself is left exactly as it is. */
+export async function unlinkOnshape(
+  designId: string,
+  instanceId: string | null = null,
+  fetcher: typeof fetch = fetch,
+): Promise<{ unlinked: boolean }> {
+  const response = await fetcher('/api/cadlink/onshape/unlink', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ designId, instanceId }),
+  });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return response.json() as Promise<{ unlinked: boolean }>;
+}

@@ -1,5 +1,6 @@
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { compareSelection, provisionalResults, type ResultData } from './results';
+import type { CadOperationSummary } from './cadOperations';
 
 /**
  * Reference-compares own properties. Nested values are compared by identity,
@@ -627,6 +628,25 @@ function parsePartialResult(message: JsonRecord): PartialResultMessage | null {
   return message as unknown as PartialResultMessage;
 }
 
+/** Only what merging an update needs is checked; the rest is the server's. */
+function parseCadOperation(message: JsonRecord): CadOperationSummary | null {
+  const operation = message.operation;
+  if (!isRecord(operation)) return null;
+  if (typeof operation.operationId !== 'string' || operation.operationId.length === 0) return null;
+  if (typeof operation.kind !== 'string' || typeof operation.state !== 'string') return null;
+  if (!isNonNegativeInteger(operation.attemptGeneration)) return null;
+  if (hasOwn(operation, 'updatedAt') && !isNullableString(operation.updatedAt)) return null;
+  return operation as unknown as CadOperationSummary;
+}
+
+/** Receives the backend's CAD operation updates (CAD-OPERATIONS.md, "Events"). */
+export interface CadOperationListener {
+  operation(operation: CadOperationSummary): void;
+  /** Updates carry no cursor, so one missed while disconnected is recovered
+   * by reading the authoritative list again. */
+  resync(): void;
+}
+
 const OPEN = 1;
 const MAX_JOB_REFRESH_ATTEMPTS = 3;
 const defaultFactory: JobsWebSocketFactory = (url) => new WebSocket(url) as unknown as JobsWebSocketLike;
@@ -670,6 +690,8 @@ export class JobsSocketManager {
     confirmed: number | null;
   }>();
   private readonly listeners = new Set<() => void>();
+  private readonly cadOperationListeners = new Set<CadOperationListener>();
+  private connectedBefore = false;
   private snapshot: JobsSnapshot = {
     connection: 'idle', epoch: null, cursor: null, jobs: [], error: null,
   };
@@ -685,6 +707,11 @@ export class JobsSocketManager {
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  };
+
+  subscribeCadOperations = (listener: CadOperationListener): (() => void) => {
+    this.cadOperationListeners.add(listener);
+    return () => this.cadOperationListeners.delete(listener);
   };
 
   start(): void {
@@ -827,6 +854,8 @@ export class JobsSocketManager {
       }
       if (this.helloSeen) return;
       this.helloSeen = true;
+      const reconnected = this.connectedBefore;
+      this.connectedBefore = true;
       this.reconnectAttempt = 0;
       this.heartbeatMs = Math.max(250, hello.heartbeatSec * 2_000);
       this.update({ connection: 'connected', epoch: hello.epoch, error: null });
@@ -834,6 +863,7 @@ export class JobsSocketManager {
       if (this.snapshot.cursor !== null && socket.readyState === OPEN) {
         socket.send(JSON.stringify({ v: 1, kind: 'resume', epoch: hello.epoch, cursor: this.snapshot.cursor }));
       }
+      if (reconnected) this.cadOperationListeners.forEach((listener) => listener.resync());
       return;
     }
     if (!this.helloSeen) return;
@@ -898,6 +928,16 @@ export class JobsSocketManager {
         return;
       }
       this.onEvent(event);
+      return;
+    }
+    if (decoded.kind === 'cadOperation') {
+      const operation = parseCadOperation(decoded);
+      if (operation === null) {
+        this.update({ error: 'Invalid jobs cadOperation message' });
+        return;
+      }
+      this.armHeartbeat();
+      this.cadOperationListeners.forEach((listener) => listener.operation(operation));
       return;
     }
     // Additive message kinds are ignored until this client understands them.

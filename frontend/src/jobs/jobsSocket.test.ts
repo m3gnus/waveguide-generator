@@ -459,6 +459,43 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('hands CAD operation updates to their listener and asks it to resync after a reconnect', () => {
+    const sockets: MockSocket[] = [];
+    const manager = new JobsSocketManager(() => { const socket = new MockSocket(); sockets.push(socket); return socket; }, vi.fn(), 'ws://test/ws/jobs');
+    const operations: unknown[] = [];
+    let resyncs = 0;
+    const unsubscribe = manager.subscribeCadOperations({
+      operation: (operation) => { operations.push(operation); },
+      resync: () => { resyncs += 1; },
+    });
+    manager.start();
+    sockets[0].message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    sockets[0].message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 27, jobs: [] });
+    // The first connection is the start, which the listener's owner loads itself.
+    expect(resyncs).toBe(0);
+    const operation = {
+      operationId: 'op-1', kind: 'prepare_and_solve', state: 'processing', stage: 'validating',
+      attemptGeneration: 1, updatedAt: '2026-09-14T10:00:00Z',
+    };
+    sockets[0].message({ v: 1, kind: 'cadOperation', operation });
+    expect(operations).toEqual([operation]);
+    // Not a jobs event: the cursor is untouched.
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 27, error: null });
+    sockets[0].message({ v: 1, kind: 'cadOperation', operation: { state: 'processing' } });
+    expect(operations).toHaveLength(1);
+    expect(manager.getSnapshot().error).toBe('Invalid jobs cadOperation message');
+    // An update missed while disconnected has no cursor to replay, so a
+    // reconnect asks the listener to read the authoritative list again.
+    sockets[0].close();
+    vi.advanceTimersByTime(250);
+    sockets[1].message({ v: 1, kind: 'hello', epoch: 5, heartbeatSec: 15 });
+    expect(resyncs).toBe(1);
+    unsubscribe();
+    sockets[1].message({ v: 1, kind: 'cadOperation', operation });
+    expect(operations).toHaveLength(1);
+    manager.stop();
+  });
+
   it('recovers a cursor gap by requesting replay without relying on an unsolicited snapshot', async () => {
     const socket = new MockSocket();
     const fetcher = vi.fn(async () => json(job({ status: 'running' })));

@@ -3,22 +3,23 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
+import type { CadOperationSummary } from '../api/cadOperations';
 import { jobsSocket } from '../api/jobsSocket';
 import type { OnshapeLink } from '../api/onshape';
 import { preferencesStore } from '../prefs/preferences';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { expandLegacy, toWire, withDelayMode } from '../results/crossoverSpec';
+import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore, useDesignStore } from '../stores/design';
-import { parkedSolveCommandStore } from '../stores/solveCommand';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { buildImportedSubmission, CadLinkPanel, declaredDomainPhrase, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
-import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
+import { JobsCoordinator } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
 const mocks = vi.hoisted(() => ({ submitImported: vi.fn() }));
@@ -102,7 +103,7 @@ describe('CadLinkPanel', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetCadReturnStore(); resetSolveOptionsStore(); resetDocumentStore(); resetDesignStore(); preferencesStore.resetForTests();
     capabilityClient.clear();
-    parkedSolveCommandStore.clear();
+    resetCadOperationsStore();
     workspaceModeStore.setMode('parametric');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
@@ -115,7 +116,7 @@ describe('CadLinkPanel', () => {
       return json(record);
     }));
   });
-  afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); parkedSolveCommandStore.clear(); workspaceModeStore.setMode('parametric'); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); host.remove(); });
+  afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); resetCadOperationsStore(); workspaceModeStore.setMode('parametric'); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); host.remove(); });
 
   const openHistory = () => {
     const disclosure = host.querySelector<HTMLButtonElement>('.cad-history > .section-heading button')!;
@@ -163,87 +164,146 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector('.cad-viewport-source-buttons')).toBeNull();
   });
 
-  it('shows a parked Fusion solve request with its reasons, a resume, and a dismiss', async () => {
-    await renderAndSelect();
-    await clickIngest();
-    act(() => parkedSolveCommandStore.park({
-      commandId: 'cmd-1',
-      bundlePath: listing.items[0].bundlePath,
-      blockers: ['a solve is already running'],
-      parkedAt: '2026-08-18T12:00:00Z',
-    }));
-
-    const banner = host.querySelector('.cad-parked-command')!;
-    expect(banner.textContent).toContain('Fusion asked for a solve');
-    expect(banner.textContent).toContain('Waiting on: a solve is already running');
-    const buttons = [...banner.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.textContent);
-    expect(buttons).toEqual(['Dismiss', 'Solve now']);
-
-    // Resuming starts the very request Fusion parked.
-    const solveCurrentCadImport = vi.fn(async () => 'submitted' as const);
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
-    });
-    const [dismiss, resume] = [...banner.querySelectorAll<HTMLButtonElement>('button')];
-    await act(async () => { resume.click(); await Promise.resolve(); await Promise.resolve(); });
-    expect(importedSubmissionBlocker()).toBeNull();
-    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
-
-    // Dismissing retires the request instead of leaving it to replay.
-    await act(async () => { dismiss.click(); await Promise.resolve(); await Promise.resolve(); });
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-    expect(host.querySelector('.cad-parked-command')).toBeNull();
+  const cadOperation = (overrides: Partial<CadOperationSummary> = {}): CadOperationSummary => ({
+    operationId: 'op-1', kind: 'prepare_and_solve', state: 'needs_user_input', stage: 'ready',
+    reason: 'ready_to_solve', message: 'Prepared, and waiting for you to start the solve.', jobId: null,
+    attemptGeneration: 1, setupRevisionId: 'wgs_1', preparationId: 'wgp_1',
+    snapshot: { manifestSha256: record.manifest_sha256 }, legacy: false,
+    createdAt: '2026-09-14T10:00:00Z', updatedAt: '2026-09-14T10:00:05Z',
+    ...overrides,
   });
 
-  it('runs a Fusion command straight through both real coordinators without parking on findings', async () => {
-    vi.useFakeTimers();
-    let command: Record<string, unknown> | null = null;
-    const outcomes: Array<Record<string, unknown>> = [];
+  /** Routes the operation actions through the real coordinator and records
+   * what they post; `detail` answers GET /operations/{id}. */
+  const recordOperationRequests = (detail?: Record<string, unknown>) => {
+    const posted: Array<{ path: string; body: unknown }> = [];
+    const base = vi.mocked(fetch).getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
+      if (path.startsWith('/api/cadlink/operations/')) {
+        if (!init?.method) return detail ? json(detail) : json({}, 404);
+        posted.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+        const operationId = decodeURIComponent(path.split('/')[4]);
+        return path.endsWith('/cancel')
+          ? json(cadOperation({ operationId, state: 'cancelled', attemptGeneration: 9 }))
+          : json({ operation: cadOperation({ operationId, state: 'processing', attemptGeneration: 9 }) });
+      }
+      return base(input, init);
+    }));
+    return posted;
+  };
+
+  it('shows each pending CAD operation with its state, reason, identity and the action it needs', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    const posted = recordOperationRequests();
+    const engineBefore = useSolveOptionsStore.getState().engine;
+    act(() => {
+      const { apply } = useCadOperationsStore.getState();
+      apply(cadOperation({ operationId: 'op-ready' }));
+      apply(cadOperation({
+        operationId: 'op-engine', reason: 'engine_unavailable', preparationId: null, createdAt: '2026-09-14T10:00:01Z',
+        message: 'The selected engine, metal, cannot solve this model on this machine. Engines that can: bempp, beat-cpu.',
+      }));
+      apply(cadOperation({
+        operationId: 'op-setup', reason: 'setup_required', stage: 'received', setupRevisionId: null, preparationId: null,
+        createdAt: '2026-09-14T10:00:02Z', message: 'Choose the solve settings for this model in WG, then press Solve now.',
+      }));
+      // Finished: its run is in the Jobs rail, not here.
+      apply(cadOperation({ operationId: 'op-done', state: 'accepted', stage: 'submitted', reason: null, jobId: 'job-1', createdAt: '2026-09-14T09:00:00Z' }));
+    });
+
+    const cards = [...host.querySelectorAll<HTMLElement>('.cad-operation')];
+    expect(cards.map((card) => card.dataset.operationId)).toEqual(['op-ready', 'op-engine', 'op-setup']);
+    const [ready, engine, setup] = cards;
+    const buttons = (card: HTMLElement) => [...card.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.textContent);
+    expect(ready.textContent).toContain('Fusion asked for a solve');
+    expect(ready.textContent).toContain('Prepared, and waiting for you to start the solve.');
+    for (const id of ['op-ready', 'wgs_1', 'wgp_1']) expect(ready.textContent).toContain(id);
+    expect(buttons(ready)).toEqual(['Dismiss', 'Solve now']);
+    // The refusal names the engines that can; WG points at the selector and picks none.
+    expect(engine.textContent).toContain('Engines that can: bempp, beat-cpu.');
+    expect(engine.textContent).toContain('solver selector');
+    expect(buttons(engine)).toEqual(['Dismiss', 'Open Simulation', 'Solve now']);
+    expect(setup.textContent).toContain('Choose the solve settings for this model in WG');
+    expect(buttons(setup)).toEqual(['Dismiss', 'Open Simulation', 'Solve now']);
+
+    await act(async () => { ready.querySelector<HTMLButtonElement>('button.primary')!.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await act(async () => { engine.querySelector<HTMLButtonElement>('button')!.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted).toEqual([
+      { path: '/api/cadlink/operations/op-ready/prepare', body: { submit: true } },
+      { path: '/api/cadlink/operations/op-engine/cancel', body: null },
+    ]);
+    expect(useSolveOptionsStore.getState().engine).toBe(engineBefore);
+  });
+
+  it('shows the blocking findings a preparation reported and approves them on that preparation only', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    const posted = recordOperationRequests({
+      ...cadOperation({ operationId: 'op-review', reason: 'findings_need_review', preparationId: 'wgp_7' }),
+      approvals: [],
+      preparation: {
+        preparationId: 'wgp_7', ingestId: record.ingest_id, snapshotSha256: 'sha256:s', setupRevisionId: 'wgs_1',
+        reportSha256: record.report_sha256, blockingFindingIds: ['finding-a'], attemptGeneration: 1,
+      },
+    });
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: 'op-review', reason: 'findings_need_review', preparationId: 'wgp_7',
+        message: 'Review the blocking findings, then approve them to solve.',
+      }));
+    });
+    const card = host.querySelector<HTMLElement>('[data-operation-id="op-review"]')!;
+    await vi.waitFor(() => expect(card.textContent).toContain('finding-a'));
+    expect(card.textContent).toContain('freshness');
+    const approve = [...card.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Approve and solve')!;
+    await act(async () => { approve.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toEqual({
+      path: '/api/cadlink/operations/op-review/prepare',
+      body: { submit: true, approvals: { preparationId: 'wgp_7', findingIds: ['finding-a'] } },
+    });
+  });
+
+  it('leaves Fusion solve commands to the backend: nothing on screen reads or solves one', async () => {
+    vi.useFakeTimers();
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requests.push(path);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        outcomes.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        command = null;
-        return json({ state: 'recorded', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command, outcome: null });
-      if (path.endsWith('/ingest')) return json(record);
-      if (path.includes('/viewport-mesh')) return new Response(meshFixture, { status: 200 });
+      if (path.endsWith('/solve-command')) return json({ command: {
+        commandId: 'cmd-fusion-1', returnId: 'wgr-fusion-1', bundlePath: listing.items[0].bundlePath,
+        manifestSha256: `sha256:${'4'.repeat(64)}`, requestedAt: '2026-08-20T12:00:00Z',
+      }, outcome: null });
       if (path.endsWith('/api/capabilities')) return json({
         engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [] }],
       });
       return json({}, 404);
     }));
-    mocks.submitImported.mockResolvedValue('job-fusion-1');
-
     await act(async () => {
       root.render(<FullCadLinkTestSurface/>);
       await Promise.resolve();
       await Promise.resolve();
     });
-    command = {
-      commandId: 'cmd-fusion-1',
-      returnId: 'wgr-fusion-1',
-      bundlePath: listing.items[0].bundlePath,
-      manifestSha256: `sha256:${'4'.repeat(64)}`,
-      requestedAt: '2026-08-20T12:00:00Z',
-    };
     await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
 
-    // The record carries a blocking finding, and the solve still goes straight
-    // through: findings inform, the wire records them, nothing parks.
-    expect(host.querySelector('.cad-parked-command')).toBeNull();
-    expect(importedSubmissionBlocker()).toBeNull();
-    expect(mocks.submitImported).toHaveBeenCalledOnce();
-    expect(mocks.submitImported.mock.calls[0][0].geometry.ingest_id).toBe(record.ingest_id);
-    expect(mocks.submitImported.mock.calls[0][0].geometry.acknowledged_findings)
-      .toEqual([`${record.report_sha256}:finding-a`]);
-    expect(outcomes).toEqual([{
-      commandId: 'cmd-fusion-1', state: 'accepted', jobId: 'job-fusion-1', reason: null,
-    }]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+    expect(requests.filter((path) => path.includes('/solve-command'))).toEqual([]);
+    expect(mocks.submitImported).not.toHaveBeenCalled();
+    expect(host.querySelector('.cad-operation')).toBeNull();
+  });
+
+  it('names the snapshot and the preparation of the model on screen', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    const provenance = host.querySelector('.cad-model-provenance')!;
+    expect(provenance.textContent).toContain(`Snapshot ${'1'.repeat(12)}`);
+    expect(provenance.textContent).toContain(`Preparation ${record.ingest_id}`);
   });
 
   it('tries the full-domain viewport artifact before silently falling back on 404', async () => {
@@ -771,6 +831,55 @@ describe('CadLinkPanel', () => {
     const link = host.querySelector<HTMLAnchorElement>('.cad-onshape-open')!;
     expect(link.href).toBe('https://cad.onshape.com/documents/DID/w/WID');
     expect(link.rel).toContain('noopener');
+  });
+
+  it('unlinks the linked Onshape document and leaves the document itself alone', async () => {
+    const link = {
+      instanceId: 'inst-a', designId: 'wgd_a', accountId: 'ACC', documentId: 'DID', workspaceId: 'WID',
+      documentName: 'Tritonia', documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
+      isPublic: false, partStudioElementId: 'PART', variableStudioElementId: 'VARS',
+      featureStudioElementId: null, nativeFeatureId: null,
+      datumFeatureStudioElementId: null, datumFeatureId: null, buildMode: 'import',
+      lastSequence: 2, updatedAt: '2026-08-13T09:00:00Z',
+    };
+    useDocumentStore.getState().setCadLink({ designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 1 }, 'current');
+    let linked = true;
+    const unlinked: unknown[] = [];
+    preferencesStore.update({ cadApplication: 'onshape' });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.startsWith('/api/cadlink/onshape/connection')) {
+        return json({
+          configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+          insecureKeyFile: false, account: null, plan: null,
+        });
+      }
+      if (path.endsWith('/onshape/status')) {
+        return json(onshapeStatus(linked
+          ? { state: 'stale', wgChangesAvailable: true, link, matchingLinks: [link], selectedInstanceId: 'inst-a' }
+          : {}));
+      }
+      if (path.endsWith('/onshape/unlink')) {
+        unlinked.push(JSON.parse(String(init?.body)));
+        linked = false;
+        return json({ unlinked: true });
+      }
+      return json({}, 404);
+    }));
+    await act(async () => {
+      root.render(<CadLinkTestSurface/>);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    const unlink = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Unlink')!;
+    expect(unlink.title).toContain('left as it is');
+    await act(async () => { unlink.click(); });
+    await vi.waitFor(() => expect(unlinked).toEqual([{ designId: 'wgd_a', instanceId: 'inst-a' }]));
+    await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Unlinked Tritonia'));
+    await vi.waitFor(() => {
+      expect([...host.querySelectorAll('button')].some((button) => button.textContent === 'Unlink')).toBe(false);
+    });
   });
 
   it('offers no action and explains where the key goes when Onshape is not connected', async () => {

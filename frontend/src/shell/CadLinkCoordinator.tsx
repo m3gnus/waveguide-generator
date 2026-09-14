@@ -4,16 +4,19 @@ import {
   getFusionCadStatus,
   getIngest,
   ingestReturn,
-  getSolveCommand,
   listReturns,
-  reportSolveCommandOutcome,
   requestFusionReturn,
   type CadReturnBundle,
   type CadReturnIngestRecord,
   type FusionCadStatus,
-  type PendingSolveCommand,
 } from '../api/cadlink';
 import type { CadSetup, JobItem } from '../api/jobsSocket';
+import {
+  cancelCadOperation,
+  prepareCadOperation,
+  type CadOperationApprovals,
+  type CadOperationSummary,
+} from '../api/cadOperations';
 import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { fromResult, parseWire } from '../results/crossoverSpec';
@@ -43,10 +46,7 @@ import {
 import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
-import {
-  parkedSolveCommandStore,
-  refuseParkedSolveCommand,
-} from '../stores/solveCommand';
+import { connectCadOperations, useCadOperationsStore } from '../stores/cadOperations';
 import {
   polarConfigFromUi,
   polarUiFromConfig,
@@ -54,15 +54,8 @@ import {
   type SymmetryMode,
 } from '../stores/solveOptions';
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
-import { cadProjectName, listCadProjects, newestReturnForProject, type CadProject } from '../api/cadProjects';
-import { DesignOpenSupersededError, openCadLinkedProject, takeDesignOpenTicket } from '../design/openCadProject';
-import {
-  keptContentKeyNow,
-  keptContentKeyOf,
-  rememberSentCopy,
-  replacingWouldLose,
-  replacingWouldLoseNow,
-} from '../design/replacementCheck';
+import { cadProjectName, listCadProjects, newestReturnForProject } from '../api/cadProjects';
+import { keptContentKeyOf, rememberSentCopy } from '../design/replacementCheck';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
@@ -70,7 +63,8 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { designNameSlug } from '../stores/designName';
 import { fusionWorkflowView } from './cadWorkflowView';
-import { jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
+import { startCadSetupPublisher } from './cadSetupPublisher';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 import { useModalDialogFocus } from './dialogFocus';
 
@@ -101,10 +95,13 @@ interface CadLinkCoordinatorSnapshot {
   ingestSelected(): Promise<CadReturnIngestRecord>;
   pullFromFusion(): Promise<CadReturnBundle>;
   pullAndSolve(): Promise<'solving' | 'blocked' | 'failed'>;
-  /** Start the parked Fusion solve request; blockers are re-reported into it. */
-  solveParkedCommand(): Promise<void>;
-  /** Refuse the parked Fusion solve request for good. */
-  dismissSolveCommand(): Promise<void>;
+  /** Solve now: the backend prepares a CAD operation from its project's own
+   * setup and submits it. */
+  solveOperation(operationId: string): Promise<void>;
+  /** Approve the blocking findings the user reviewed, on the preparation
+   * that reported them, and solve. */
+  approveOperation(operationId: string, approvals: CadOperationApprovals): Promise<void>;
+  dismissOperation(operationId: string): Promise<void>;
   /** The one Fusion outbound path: derives open-vs-update and the expected
    * document guard from the live status, and parks on the two-way conflict
    * (returning null) until the user confirms through the coordinator dialog. */
@@ -142,8 +139,9 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   ingestSelected: unavailable,
   pullFromFusion: unavailable,
   pullAndSolve: unavailable,
-  solveParkedCommand: unavailable,
-  dismissSolveCommand: unavailable,
+  solveOperation: unavailable,
+  approveOperation: unavailable,
+  dismissOperation: unavailable,
   sendWgToFusion: unavailable,
   cancelFusionConflict: () => undefined,
   clearFeedback: () => undefined,
@@ -172,9 +170,6 @@ function pageIsVisible(): boolean {
  * The `*Idle` figures are what an app nobody is using costs. The base figures
  * are what CAD work costs, and only those are latency the user can feel. */
 export const cadPollIntervals = {
-  /** See the solve-command poll: this is dead time on a clock the user watches. */
-  solveCommandMs: 1_000,
-  solveCommandIdleMs: 10_000,
   returnsMs: 2_500,
   returnsIdleMs: 30_000,
   fusionStatusMs: 2_500,
@@ -233,97 +228,6 @@ function startAdaptivePoll(
   };
 }
 
-/** Why the project a Fusion-requested return names could not be put on screen. */
-type ReturnOpenCode =
-  | 'ambiguous_design'
-  | 'project_list_unavailable'
-  | 'design_not_held'
-  | 'unsaved_changes'
-  | 'superseded_by_open'
-  | 'project_open_failed';
-
-/** The answer to "open the project this Fusion-requested return names", and
- * with it what may happen to the request next.
- *
- * Only `rejected` is refused back to Fusion. A refusal is permanent -- its
- * ledger entry is what deletes the marker -- so it is kept for what can never
- * succeed. `retryable` is a condition that may clear on its own: WG reports
- * nothing and tries again later. `needs_user_input` keeps the request and
- * waits for the user. "Cannot right now" is not "never". */
-type ReturnOpenOutcome =
-  | { kind: 'ready' }
-  | { kind: 'retryable' | 'needs_user_input' | 'rejected'; code: ReturnOpenCode; message: string };
-
-/** Classify a project open that failed for a reason other than the guard.
- *
- * Only a 4xx is refused: it is the server's considered answer about this
- * design. The server erroring (5xx) or not answering at all (`fetch` rejects
- * with a TypeError) may clear on its own, so it is retried. So is a failure
- * that carries no status at all: the design-text request's client keeps none,
- * and its 5xx must not become a permanent refusal. The retry is bounded and
- * ends with the user, never with a refusal. */
-function classifyOpenFailure(reason: unknown, projectName: string): ReturnOpenOutcome {
-  const detail = reason instanceof Error ? reason.message : String(reason);
-  const status = reason instanceof CadLinkApiError ? reason.status : null;
-  const refusedByServer = status !== null && status >= 400 && status < 500;
-  return {
-    kind: refusedByServer ? 'rejected' : 'retryable',
-    code: 'project_open_failed',
-    message: `Fusion asked WG to solve a return from ${projectName}, which could not be opened: ${detail}`,
-  };
-}
-
-/** End a message with a full stop so another sentence can follow it: a
- * failure's detail ("Failed to fetch") often has none of its own. */
-function asSentence(text: string): string {
-  const trimmed = text.trim();
-  return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
-}
-
-/** A Fusion request the engine selected in WG cannot solve, and what to do
- * about it. CAD Link never picks an engine: the server's refusal names the
- * engines that can take this geometry, and the request is kept, parked, until
- * the user picks one of them in the solver selector or dismisses it. */
-function capabilityBlocker(message: string): string {
-  return `${asSentence(message)} WG is keeping this request: pick an engine that can solve it in the solver selector, then press Solve now, or dismiss it.`;
-}
-
-/** Where one Fusion solve command stands, for the life of this coordinator.
- *
- * - `processing`: WG owns it and works on it at the first poll at or after
- *   `nextAttemptAt`. A transient failure lands here again, later.
- * - `waiting-for-user`: parked with a blocker the user has to clear.
- * - `finished`: its outcome reached Fusion, or was shown; never looked at again.
- *
- * This replaces a single "seen" latch, which made any failure before the
- * command was parked permanent until the coordinator remounted. */
-interface SolveCommandProgress {
-  state: 'processing' | 'waiting-for-user' | 'finished';
-  /** Transient failures so far, for the bounded retry. */
-  attempts: number;
-  nextAttemptAt: number;
-  /** Waiting before WG took the request on: nothing was prepared for it, so
-   * resuming it means processing it again from the start, not solving
-   * whatever else is on screen. */
-  resumeFromStart: boolean;
-  /** Why it waits, when that can clear without the user pressing anything. */
-  code: ReturnOpenCode | null;
-}
-
-/** After this many transient failures a command waits for the user instead. */
-const SOLVE_COMMAND_MAX_ATTEMPTS = 6;
-
-/** 2, 4, 8, 16 and 32 s after the first five failures; never over a minute. */
-function solveCommandRetryDelayMs(failures: number): number {
-  return Math.min(1_000 * 2 ** failures, 60_000);
-}
-
-/** A parked command WG has not taken on yet, so Solve must start it over. */
-function heldBeforeTakenOn(progress: Map<string, SolveCommandProgress>, commandId: string): boolean {
-  const entry = progress.get(commandId);
-  return entry?.state === 'waiting-for-user' && entry.resumeFromStart;
-}
-
 export const cadLinkCoordinatorBridge = {
   getSnapshot: () => bridgeSnapshot,
   subscribe(listener: () => void) {
@@ -380,34 +284,11 @@ export function returnBelongsToAnotherProject(
 /** Whether a return is positively linked to the open registry project.
  * Unlinked returns remain available for manual adoption, but must not be
  * guessed into every project merely because they name no other project. */
-
-/** The one design a return names, when it names exactly one.
- *
- * A bundle carrying instances of two different designs has no single target,
- * so nothing can be opened on its behalf and the refusal stands. */
-export function soleReturnedDesignId(bundle: CadReturnBundle): string | null {
-  const returned = Array.from(new Set(bundle.designIds ?? []));
-  return returned.length === 1 ? returned[0] : null;
-}
-
 export function returnBelongsToProject(
   bundle: CadReturnBundle,
   designId: string | null | undefined,
 ): boolean {
   return Boolean(designId && (bundle.designIds ?? []).includes(designId));
-}
-
-/** Whether two returns are of the same CAD document.
- *
- * The document is what a Fusion solve request was made for, so it is the
- * scope in which a newer return may supersede one. A return that does not say
- * which document it came from proves nothing, and counts as another. */
-export function sameCadDocument(
-  a: string | null | undefined,
-  b: string | null | undefined,
-): boolean {
-  const left = a?.trim();
-  return Boolean(left) && left === b?.trim();
 }
 
 export function newestReturnArrival(
@@ -684,9 +565,20 @@ const wait = (ms: number): Promise<void> =>
  * re-publishes an equal record on every Fusion poll and each of those bumps the
  * generation, so a wait that spans several seconds would be cancelled by
  * routine polling and never finish. What actually matters is whether the slot
- * still holds this ingestion, so that is what is checked — and the swap only
+ * and CAD Link still hold this ingestion, so that is what is checked: a newer
+ * selection's viewport load is never cancelled by it. The swap also only
  * takes the viewport if the CAD model view still owns it, leaving a user who
  * switched to the solve-mesh view where they are. */
+/** Whether CAD Link has moved on from this ingestion: another return is
+ * selected, or this one is being prepared again, so a viewport load for it
+ * may be in flight. */
+function anotherSelectionInFlight(ingestId: string): boolean {
+  const current = useCadReturnStore.getState();
+  return current.ingestRecord
+    ? current.ingestRecord.ingest_id !== ingestId
+    : current.selectedBundle !== null;
+}
+
 function upgradeToDisplayMesh(
   record: CadReturnIngestRecord,
   name: string,
@@ -709,6 +601,9 @@ function upgradeToDisplayMesh(
         if (result.status === 202) continue;
         if (!result.ok) return;
         if (importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) return;
+        // The slot keeps this ingestion until a newer selection's own scene
+        // lands; taking the intent meanwhile would cancel that load.
+        if (anotherSelectionInFlight(ingestId)) return;
         try {
           importedMeshStore.setCad(
             cadDisplayScene(record, name, result.text),
@@ -1044,18 +939,13 @@ export function CadLinkCoordinator() {
   const [onshapeStatus, setOnshapeStatus] = useState<OnshapeStatus | null>(null);
   const [selectedOnshapeInstanceId, setSelectedOnshapeInstanceId] = useState<string | null>(null);
   const [onshapeConnection, setOnshapeConnection] = useState<OnshapeConnection | null>(null);
-  // Read by the solve-command consumer, which must not take `bundles` as a
-  // dependency: every returns poll hands `setBundles` a fresh array, so a
-  // dependency there tore the marker poll down and rebuilt it -- with an extra
-  // immediate read -- on every single listing, forever. The ref is also the
-  // fresher answer, since it is whatever the last listing saw.
-  const bundlesRef = useRef<CadReturnBundle[]>([]);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
   const projectOpenPending = useRef(false);
-  // Set when a Fusion solve request that opened a project selects the return
-  // it names. That project's own listing, queued by the open, then leaves the
-  // selection alone (see `refresh`). Reset by every project switch.
-  const selectionClaimedAfterSwitch = useRef(false);
+  // When the user last picked a return from the list. A return Fusion wrote,
+  // or was asked for, before that pick is older intent than the pick and
+  // never takes the selection from it (see `refresh`). Reset by every
+  // project switch.
+  const manualSelectionAt = useRef<number | null>(null);
   // A return was refused because it names a design other than the open one.
   // Until the user acts on that, WG must not put some third project's geometry
   // on screen in its place: entering CAD Link is how a refusal is shown, and
@@ -1077,10 +967,6 @@ export function CadLinkCoordinator() {
   // Set while a caller awaits one exact correlated arrival. The poll loop is
   // still the only thing that discovers returns; this lets a composed action
   // (pull, then ingest, then solve) continue from that discovery.
-  const solveCommandInFlight = useRef(false);
-  const solveCommandProgress = useRef(new Map<string, SolveCommandProgress>());
-  const consumeSolveCommandRef = useRef<() => Promise<void>>(async () => undefined);
-  const autoIngestPending = useRef(false);
   const ingestSelectedRef = useRef<() => Promise<CadReturnIngestRecord>>(unavailable);
   const selectBundleRef = useRef<(bundle: CadReturnBundle, projectLineageId?: string | null) => void>(() => undefined);
   const pendingReturnWaiter = useRef<{
@@ -1090,14 +976,13 @@ export function CadLinkCoordinator() {
   } | null>(null);
   const fusionPullPromise = useRef<Promise<CadReturnBundle> | null>(null);
   const onshape = preferences.cadApplication === 'onshape';
-  bundlesRef.current = bundles;
 
   // --- Poll cadence -------------------------------------------------------
-  // Three polls are mounted for the whole life of the app, because the
-  // coordinator is: a return, a status change or a Fusion-authored solve may
-  // arrive from outside WG at any moment, and nothing else is listening. At
-  // their base rates that is roughly 1.5 requests a second, which is what an
-  // idle window with no CAD application anywhere near it used to cost.
+  // Two polls are mounted for the whole life of the app, because the
+  // coordinator is: a return or a status change may arrive from outside WG at
+  // any moment, and nothing else is listening. At their base rates that is
+  // most of a request a second, which is what an idle window with no CAD
+  // application anywhere near it used to cost.
   //
   // So the cadence is evidence-driven rather than constant. `null` suspends a
   // poll outright; the wake paths below are what bring it back.
@@ -1106,8 +991,8 @@ export function CadLinkCoordinator() {
    * server must not be mistaken for an unconfigured one and silenced. */
   const cadFolderConfigured = useRef<boolean | null>(null);
   /** Whether Fusion itself is running. Someone with Fusion open is doing CAD
-   * work even when WG shows the parametric design, and the whole point of the
-   * marker poll is to be quick for them. */
+   * work even when WG shows the parametric design, and the polls exist to be
+   * quick for them. */
   const fusionProcessLive = useRef(false);
   const lastFusionState = useRef<string | null>(null);
   const lastCadActivityAt = useRef(Date.now());
@@ -1122,7 +1007,6 @@ export function CadLinkCoordinator() {
     || pendingReturnRequestId.current !== null
     || pendingReturnWaiter.current !== null
     || fusionPullPromise.current !== null
-    || parkedSolveCommandStore.getSnapshot().command !== null
   ), []);
 
   /** Restart every poll at its base rate. Called for anything that means the
@@ -1135,7 +1019,7 @@ export function CadLinkCoordinator() {
   }, []);
 
   /** `unconfiguredMs` is what a poll costs while no CAD workspace folder is
-   * selected: `null` for the two that have nothing to say until one is, and
+   * selected: `null` for the Fusion heartbeat, which has nothing to say until one is, and
    * the idle rate for the returns listing, which is also how WG finds out that
    * a folder has since been chosen without making the user restart. */
   const pollDelayMs = useCallback((
@@ -1163,23 +1047,9 @@ export function CadLinkCoordinator() {
     };
   }, []);
 
-  /** Start automatic preparation only when no Fusion-authored solve command
-   * owns selection/ingestion. A returns poll can finish while the solve-command
-   * poll is merely checking; remember that arrival and retry after the check
-   * proves there is no command to consume. */
+  /** Prepare the selected return. Fusion's solve commands are prepared by the
+   * backend from their own retained snapshots, so nothing here waits on one. */
   const autoIngestSelected = useCallback(() => {
-    const parked = parkedSolveCommandStore.getSnapshot().command;
-    // A request still waiting to open its own project owns nothing on screen
-    // yet, so it does not hold up preparing the open project's returns.
-    if (parked && !heldBeforeTakenOn(solveCommandProgress.current, parked.commandId)) {
-      autoIngestPending.current = false;
-      return;
-    }
-    if (solveCommandInFlight.current) {
-      autoIngestPending.current = true;
-      return;
-    }
-    autoIngestPending.current = false;
     void ingestSelectedRef.current().catch(() => undefined);
   }, []);
 
@@ -1190,7 +1060,7 @@ export function CadLinkCoordinator() {
       // return. Drop the previous project's geometry and make the latest
       // positively-linked return eligible for selection on the next listing.
       projectOpenPending.current = true;
-      selectionClaimedAfterSwitch.current = false;
+      manualSelectionAt.current = null;
       // Opening a project is exactly what a foreign-return refusal asks for,
       // so it is what lifts the restore hold.
       refusedForeignReturn.current = false;
@@ -1412,40 +1282,26 @@ export function CadLinkCoordinator() {
       const destination = projectOpenPending.current
         ? useDocumentStore.getState().identity?.lineageId ?? null
         : undefined;
-      // A selection the Fusion request that opened this project has made since
-      // -- the return that request names -- is newer than this listing's pick.
-      // Replacing it would supersede the preparation it started, and the
-      // request would never be solved.
-      const selected = useCadReturnStore.getState().selectedBundle;
-      const claimedSinceSwitch = projectOpenPending.current && selectionClaimedAfterSwitch.current
-        && selected !== null && (!arrived || arrived.bundlePath === selected.bundlePath);
-      // A Fusion solve request WG has taken on owns the selection it is
-      // preparing. Only a newer return of the same CAD document supersedes it.
-      // A return of any other document -- or one that does not say which -- is
-      // separate work: a later request never silently erases an earlier one,
-      // and a request is never solved against a bundle it did not name, so the
-      // arrival leaves both the request and its selection alone. A return the
-      // user asked Fusion for is newer intent and still takes the selection;
-      // the request then starts over from its own return (below). A request
-      // WG has not taken on yet owns nothing on screen and is never replaced.
-      const parked = parkedSolveCommandStore.getSnapshot().command;
-      const parkedOwnsSelection = Boolean(
-        arrived && !projectMismatch && parked
-        && parked.bundlePath !== arrived.bundlePath
-        && !heldBeforeTakenOn(solveCommandProgress.current, parked.commandId),
-      );
-      const supersedesParked = parkedOwnsSelection && sameCadDocument(
-        parked?.documentNativeId
-          ?? response.items.find((item) => item.bundlePath === parked?.bundlePath)?.documentNativeId,
-        arrived?.documentNativeId,
-      );
       // Only while still awaited: a pull that has just timed out has already
       // reported its failure, so its return arriving now is background news.
       const requestedArrival = arrived !== null && arrived === requested
         && pendingReturnRequestId.current === arrived.requestId;
-      const heldForParked = parkedOwnsSelection && !supersedesParked && !requestedArrival;
+      // A return the user picked from the list is newer intent than any return
+      // Fusion wrote, or was asked for, before that pick: such an arrival never
+      // takes the selection, or the viewport, from it. One sent after the pick
+      // is newer still, and does.
+      const selected = useCadReturnStore.getState().selectedBundle;
+      const arrivalRequestedAt = arrived
+        ? (requestedArrival ? pendingReturnRequestedAt.current : Date.parse(arrived.modifiedAt))
+        : null;
+      const heldForManualPick = Boolean(
+        arrived && !projectMismatch && selected && selected.bundlePath !== arrived.bundlePath
+        && manualSelectionAt.current !== null
+        && arrivalRequestedAt !== null && Number.isFinite(arrivalRequestedAt)
+        && arrivalRequestedAt <= manualSelectionAt.current,
+      );
       let continuity: 'initial' | 'carried' | 'reset' = 'initial';
-      if (opened && !projectMismatch && !claimedSinceSwitch && !heldForParked) {
+      if (opened && !projectMismatch && !heldForManualPick) {
         // A compatible current or saved source inventory keeps the user's solve
         // setup; a genuinely first listing starts clean without being a reset.
         continuity = arrived
@@ -1460,9 +1316,7 @@ export function CadLinkCoordinator() {
       }
       if (projectOpenPending.current) {
         projectOpenPending.current = false;
-        selectionClaimedAfterSwitch.current = false;
-        // The request that claimed the selection reports its own progress.
-        if (!claimedSinceSwitch) setStatus(initial
+        setStatus(initial
           ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; prepare it to restore Simulation geometry.`
           : 'Project design loaded. No matching CAD return is available yet; return the project from Fusion or Onshape to prepare Simulation geometry.');
       }
@@ -1484,35 +1338,25 @@ export function CadLinkCoordinator() {
           enterCadWorkspace();
           return;
         }
-        if (supersedesParked) {
-          await refuseParkedSolveCommand('Superseded by a newer return of the same Fusion document.');
-        } else if (parked && parkedOwnsSelection && requestedArrival) {
-          // The user's own request took the selection, so Solve now has to
-          // prepare this command's return again rather than solve the one on
-          // screen under its id.
-          solveCommandProgress.current.set(parked.commandId, {
-            state: 'waiting-for-user',
-            attempts: solveCommandProgress.current.get(parked.commandId)?.attempts ?? 0,
-            nextAttemptAt: 0,
-            resumeFromStart: true,
-            code: null,
-          });
-          parkedSolveCommandStore.setBlockers(parked.commandId, [
-            'The model you requested from Fusion replaced the one this request was prepared for. Press Solve now to prepare and solve it again, or dismiss the request.',
-          ]);
-        }
         if (arrived.requestId === pendingReturnRequestId.current) {
           pendingReturnRequestId.current = null;
           pendingReturnRequestedAt.current = null;
         }
+        const arrivedName = arrived.documentName ?? arrived.name;
+        const keptName = selected ? selected.documentName ?? selected.name : null;
         const waiter = pendingReturnWaiter.current;
         if (waiter && arrived.requestId === waiter.requestId) {
           pendingReturnWaiter.current = null;
-          waiter.settle(arrived);
+          // A composed pull must not go on to prepare and solve a model the
+          // user did not keep on screen.
+          if (heldForManualPick) {
+            waiter.fail(new SupersededError(`Received ${arrivedName} from Fusion 360, but you selected ${keptName} after asking for it.`));
+          } else {
+            waiter.settle(arrived);
+          }
         }
-        const arrivedName = arrived.documentName ?? arrived.name;
-        setStatus(heldForParked
-          ? `Received ${arrivedName} from Fusion 360. The solve Fusion asked for earlier is still waiting, so its model stays selected; select ${arrivedName} from the return list once that request is solved or dismissed.`
+        setStatus(heldForManualPick
+          ? `Received ${arrivedName} from Fusion 360. You selected ${keptName} after it was sent, so ${keptName} stays selected; select ${arrivedName} from the return list to use it.`
           : `Received ${arrivedName} from Fusion 360.${
             continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''
           }`);
@@ -1520,7 +1364,7 @@ export function CadLinkCoordinator() {
         // workspace the same way an Onshape return does. A first listing does
         // not: nothing arrived, and stealing the mode on load would be wrong.
         enterCadWorkspace();
-        autoIngestSelected();
+        if (!heldForManualPick) autoIngestSelected();
       } else if (!initial) {
         const selected = useCadReturnStore.getState().selectedBundle;
         if (!selected) return;
@@ -1739,13 +1583,16 @@ export function CadLinkCoordinator() {
         return fail(new Error('Fusion changed documents. Refresh CAD Link and try again.'));
       }
       setError(null);
+      // When the user asked, not when Fusion acknowledged: a return picked
+      // in between is newer than this request (see `refresh`).
+      const askedAt = Date.now();
       const result = await requestFusionReturn({
         designId: identity.designId,
         documentId: fusionStatus.documentId,
         instanceId: fusionStatus.link.instanceId,
         expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
       }).catch(fail);
-      expectFusionReturn(result.requestId);
+      expectFusionReturn(result.requestId, askedAt);
       setStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
       const arrival = new Promise<CadReturnBundle>((settle, reject) => {
         pendingReturnWaiter.current = { requestId: result.requestId, settle, fail: reject };
@@ -1885,8 +1732,12 @@ export function CadLinkCoordinator() {
       return;
     }
     // A selection the user made themselves is the acknowledgement a standing
-    // refusal was waiting for; the restore's own selection is not.
-    if (!restoringCadProject.current) refusedForeignReturn.current = false;
+    // refusal was waiting for, and newer intent than any return already sent;
+    // the restore's own selection is neither.
+    if (!restoringCadProject.current) {
+      refusedForeignReturn.current = false;
+      manualSelectionAt.current = Date.now();
+    }
     useCadReturnStore.getState().selectBundle(bundle, projectLineageId);
     rereadDrivers();
     importedMeshStore.beginIntent();
@@ -2002,421 +1853,51 @@ export function CadLinkCoordinator() {
     }
   }, [ingestSelected, pullFromFusion]);
 
-  /** Start the parked Fusion request from the panel, once its gate is clear. */
-  const solveParkedCommand = useCallback(async () => {
-    const parked = parkedSolveCommandStore.getSnapshot().command;
-    if (!parked) return;
+  /** Act on a CAD operation the backend holds. The backend does the work and
+   * reports it on the jobs channel; the answer here is only what it recorded
+   * when asked, merged like any other update. */
+  const actOnOperation = useCallback(async (
+    action: () => Promise<CadOperationSummary>,
+    done: string,
+  ): Promise<void> => {
     setError(null);
-    if (heldBeforeTakenOn(solveCommandProgress.current, parked.commandId)) {
-      // Nothing is prepared for this request yet, so solving now would solve
-      // whatever else is on screen. Take it from the top instead -- open its
-      // project, prepare its return, solve -- with a fresh retry budget,
-      // because pressing Solve is the user saying "try again".
-      solveCommandProgress.current.set(parked.commandId, {
-        state: 'processing', attempts: 0, nextAttemptAt: 0, resumeFromStart: false, code: null,
-      });
-      parkedSolveCommandStore.clear();
-      await consumeSolveCommandRef.current();
-      return;
-    }
     try {
-      const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
-      if (outcome === 'busy') {
-        parkedSolveCommandStore.setBlockers(parked.commandId, ['a solve is already running']);
-        setStatus('A solve is already running. Start the model Fusion sent when it finishes.');
-        return;
-      }
-      setStatus('Solving the model Fusion sent.');
+      useCadOperationsStore.getState().apply(await action());
+      if (mounted.current) setStatus(done);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      parkedSolveCommandStore.setBlockers(parked.commandId, [
-        reason instanceof SolveEngineUnavailableError ? capabilityBlocker(message) : message,
-      ]);
-      if (mounted.current) setError(message);
+      if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason));
     }
   }, []);
 
-  /** Give up on the parked Fusion request. Terminal on purpose: the ledger
-   * entry is what deletes the marker, so a dismissed command cannot come back
-   * on the next page load. */
-  const dismissSolveCommand = useCallback(async () => {
-    if (!parkedSolveCommandStore.getSnapshot().command) return;
-    await refuseParkedSolveCommand('Dismissed in Waveguide Generator without solving.');
-    if (mounted.current) {
-      setError(null);
-      setStatus('Dismissed the solve Fusion asked for. It will not be offered again.');
-    }
-  }, []);
+  /** Solve now: the backend prepares the operation from the setup its project
+   * recorded -- never from whatever is open here -- and submits it. */
+  const solveOperation = useCallback((operationId: string) => actOnOperation(
+    () => prepareCadOperation(operationId),
+    'Preparing the model Fusion sent. Its run appears in the Jobs rail once it is submitted.',
+  ), [actOnOperation]);
 
-  /** Open the project a Fusion-requested return names, so the request lands.
-   *
-   * The bundle names its design, WG holds that design, and the user asked for
-   * this exact geometry to be solved: everything needed to put the right
-   * project on screen is already here. Refusing and printing the name of the
-   * project the user should go and open by hand is a step WG can take itself,
-   * and pressing Solve in Fusion three times to be told the same thing is not
-   * a workflow.
-   *
-   * Two things it still will not do. It will not open over a design that
-   * exists nowhere else (no run and no opened file matches it; see
-   * `replacementCheck.ts`) -- opening a project replaces the working design,
-   * and the manual switcher asks before discarding, so an automatic switch
-   * must not be the one path that discards silently. Such a design makes the
-   * request wait for the user instead, and it goes ahead once nothing would
-   * be lost. And it will not guess:
-   * a bundle naming two designs names no single target, and a design this copy
-   * of WG does not hold cannot be opened at all. Those two are refused, and the
-   * refusal says which project. A project list or an open that fails on its
-   * own is neither: WG tries again later. */
-  const openProjectForReturn = useCallback(
-    async (bundle: CadReturnBundle): Promise<ReturnOpenOutcome> => {
-      const designId = soleReturnedDesignId(bundle);
-      if (!designId) {
-        return {
-          kind: 'rejected',
-          code: 'ambiguous_design',
-          message: 'Fusion asked WG to solve a return that names more than one CAD-linked design, so WG cannot tell which project to open. Open it from File → CAD-linked designs, then send the solve again.',
-        };
-      }
-      let project: CadProject | undefined;
-      try {
-        project = (await listCadProjects()).find((item) => item.designId === designId);
-      } catch (reason) {
-        // A list that cannot be read right now says nothing about whether WG
-        // holds the design. Reading it as "not held" refused the request for good.
-        const detail = reason instanceof Error ? reason.message : String(reason);
-        return {
-          kind: 'retryable',
-          code: 'project_list_unavailable',
-          message: `Fusion asked WG to solve a return from ${bundle.documentName ?? bundle.name}, but WG could not read its list of CAD-linked projects: ${detail}`,
-        };
-      }
-      if (!project) {
-        return {
-          kind: 'rejected',
-          code: 'design_not_held',
-          message: 'Fusion asked WG to solve a return from a CAD-linked design this copy of WG does not have.',
-        };
-      }
-      const name = cadProjectName(project);
-      // The document the switch is decided against, captured before the
-      // decision's own await: a design opened while the run list is read is
-      // newer than the decision, even one that would be kept, and it stays.
-      const decidedAgainstLoad = currentDocumentLoad();
-      // Decided before the open's own awaits, so it may read the run list;
-      // the guard below asks again, synchronously, from what this read.
-      if (await replacingWouldLose()) {
-        const remedy = `open ${name} from File → CAD-linked designs, which asks before discarding; or dismiss it.`;
-        return {
-          kind: 'needs_user_input',
-          code: 'unsaved_changes',
-          message: keptContentKeyNow() === null
-            ? `Fusion asked WG to solve a return from ${name}, but the directivity settings on screen are incomplete, so WG cannot tell whether opening ${name} would lose the design. Finish them, then solve it or export a copy, and the request carries on; or ${remedy}`
-            : `Fusion asked WG to solve a return from ${name}, but no run matches the design on screen, and neither does what WG last opened, exported or sent, so opening ${name} may lose it. Solve it or export a copy and the request carries on; or ${remedy}`,
-        };
-      }
-      // The open ticket every open takes, taken once the switch is decided. An
-      // open asked for after it, or anything else put on screen while the
-      // registry read and the parse are in flight, is newer and stays. The
-      // document generation is what sees that, not the design identity: two
-      // unrelated unlinked documents both have none. An edit is judged by the
-      // guard instead, at the same instant, by whether it would be lost:
-      // nobody at the keyboard decided against it, and a rename alone loses
-      // nothing.
-      const ticket = takeDesignOpenTicket({ checkEdits: false, decidedAgainstLoad });
-      try {
-        await openCadLinkedProject(designId, ticket, {
-          loadSource: 'cad-project-switch',
-          guard: () => (replacingWouldLoseNow()
-            ? 'the design on screen had changed by then, and neither a run nor what WG last opened, exported or sent matches it'
-            : null),
-        });
-      } catch (reason) {
-        if (reason instanceof DesignOpenSupersededError) {
-          // Which check refused, so the wait can say what clears it.
-          const code: ReturnOpenCode = reason.code === 'refused_by_caller' ? 'unsaved_changes' : 'superseded_by_open';
-          const why = reason.code === 'refused_by_caller'
-            ? reason.message
-            : reason.code === 'superseded_by_newer_open'
-              ? 'another design was asked for while WG was loading it'
-              : reason.code === 'superseded_by_edit'
-                ? 'the design on screen changed while WG was loading it'
-                : 'another design was opened while WG was loading it';
-          const remedy = code === 'unsaved_changes'
-            ? `open ${name} from File → CAD-linked designs, which asks before discarding, and the request carries on; or dismiss it`
-            : `press Solve now to open ${name}, or dismiss the request`;
-          return {
-            kind: 'needs_user_input',
-            code,
-            message: `Fusion asked WG to solve a return from ${name}, but ${why}. Nothing was replaced — ${remedy}.`,
-          };
-        }
-        return classifyOpenFailure(reason, name);
-      }
-      rememberCadProject(project.lineageId);
-      setStatus(`Opened ${name} for the model Fusion sent. Preparing…`);
-      return { kind: 'ready' };
-    },
-    [],
-  );
+  /** Approve and solve: the findings the user reviewed, on the one preparation
+   * that reported them. A new preparation needs its own review. */
+  const approveOperation = useCallback((operationId: string, approvals: CadOperationApprovals) => actOnOperation(
+    () => prepareCadOperation(operationId, { approvals }),
+    'Approved the reviewed findings for this preparation. Preparing and solving the model Fusion sent.',
+  ), [actOnOperation]);
 
-  /** Run a Fusion-authored "solve in WG" command exactly once.
-   *
-   * Idempotency is the server's ledger, not this component: a coordinator
-   * remount or a second poll must surface the existing job rather than submit
-   * again. A blocked gate is parked, not discarded — the user resolves the
-   * blocker and presses Solve, which consumes the same request.
-   *
-   * What this component does own is where each command stands
-   * (`SolveCommandProgress`). A failure before the command is parked -- the
-   * return listing, the project list or the project open failing on their own
-   * -- leaves it eligible and retried on a later poll, after a growing delay.
-   * Only a finished command is never looked at again. */
-  const consumeSolveCommand = useCallback(async () => {
-    if (solveCommandInFlight.current) return;
-    solveCommandInFlight.current = true;
-    const progress = solveCommandProgress.current;
-    const settle = (commandId: string, next: Partial<SolveCommandProgress>) => {
-      progress.set(commandId, {
-        state: 'processing', attempts: 0, nextAttemptAt: 0, resumeFromStart: false, code: null,
-        ...progress.get(commandId),
-        ...next,
-      });
-    };
-    /** Park a command WG has not taken on yet, with what the user must do. */
-    const waitForUser = (command: PendingSolveCommand, blocker: string, code: ReturnOpenCode | null) => {
-      settle(command.commandId, { state: 'waiting-for-user', nextAttemptAt: 0, resumeFromStart: true, code });
-      parkedSolveCommandStore.park({
-        commandId: command.commandId,
-        bundlePath: command.bundlePath,
-        documentNativeId: bundlesRef.current
-          .find((item) => item.bundlePath === command.bundlePath)?.documentNativeId ?? null,
-        blockers: [blocker],
-        parkedAt: command.requestedAt || new Date().toISOString(),
-      });
-      setStatus(null);
-    };
-    /** Try again on a later poll, or wait for the user once retrying is spent.
-     * Nothing is reported to Fusion either way: a refusal would be permanent. */
-    const retryLater = (command: PendingSolveCommand, message: string) => {
-      const attempts = (progress.get(command.commandId)?.attempts ?? 0) + 1;
-      settle(command.commandId, { attempts });
-      if (attempts >= SOLVE_COMMAND_MAX_ATTEMPTS) {
-        waitForUser(command, `${asSentence(message)} WG stopped retrying after ${attempts} attempts; press Solve now to try again.`, null);
-        return;
-      }
-      const delayMs = solveCommandRetryDelayMs(attempts);
-      settle(command.commandId, { state: 'processing', nextAttemptAt: Date.now() + delayMs });
-      setStatus(`${asSentence(message)} WG will try again in ${Math.round(delayMs / 1_000)} s.`);
-    };
-    // The command this round is working on, and whether it got as far as
-    // being parked: a failure before that point is retried, never lost.
-    let working: PendingSolveCommand | null = null;
-    let parkedThisRound = false;
-    // Whether this round opened the project its return belongs to.
-    let openedProject = false;
-    try {
-      // Reading the marker is advisory, like the status heartbeat: an older
-      // server or a transient failure must not raise an error banner over a
-      // workflow that has not asked for anything.
-      const pending = await getSolveCommand().catch(() => null);
-      const command = pending?.command;
-      if (!pending || !command) return;
-      // Fusion asked for something: whatever cadence got us here, the rest of
-      // this round trip runs at the base rate.
-      noteCadActivity();
-      const entry = progress.get(command.commandId);
-      if (pending.outcome) {
-        settle(command.commandId, { state: 'finished' });
-        // Terminal on the server, so a parked copy of it is spent: offering it
-        // again would let Solve now act on a request nobody is waiting for.
-        if (parkedSolveCommandStore.getSnapshot().command?.commandId === command.commandId) {
-          parkedSolveCommandStore.clear();
-        }
-        // Already WG's: the outcome is its own report, or the user's through
-        // the panel, coming back -- and it was shown where it was made.
-        if (entry) return;
-        if (pending.outcome.state === 'refused') {
-          // A refusal is the user's to see, and it renders only in CAD mode.
-          enterCadWorkspace();
-          setError(pending.outcome.reason ?? 'Fusion asked WG to solve a return it could not use.');
-        } else {
-          setStatus('Fusion already asked WG to solve this geometry; its run is in the Jobs rail.');
-        }
-        return;
-      }
-      if (entry?.state === 'finished') return;
-      if (entry?.state === 'processing' && Date.now() < entry.nextAttemptAt) return;
-      if (entry?.state === 'waiting-for-user') {
-        // Whatever consumed or refused the parked command reported its outcome
-        // on the way, so a command that is no longer parked is finished.
-        if (parkedSolveCommandStore.getSnapshot().command?.commandId !== command.commandId) {
-          settle(command.commandId, { state: 'finished' });
-          return;
-        }
-        // A design that would be lost is the one blocker the poll can see
-        // clear by itself -- undone, solved, exported or reopened. Looking is
-        // cheap: the run list is read at most every few seconds, and only while
-        // the jobs socket has none; the open itself asks again before replacing.
-        // Everything else waits for the user.
-        if (entry.code !== 'unsaved_changes'
-          || await replacingWouldLose(fetch, { reuseRunsReadWithinMs: 5_000 })) return;
-        parkedSolveCommandStore.clear();
-      }
-      working = command;
-      settle(command.commandId, { state: 'processing', nextAttemptAt: 0, resumeFromStart: false, code: null });
-      setStatus('Fusion asked WG to solve this model. Preparing…');
-      // The request is only actionable from the workspace that renders it.
-      enterCadWorkspace();
-      const bundle = bundlesRef.current.find((item) => item.bundlePath === command.bundlePath)
-        ?? (await listReturns()).items.find((item) => item.bundlePath === command.bundlePath);
-      if (!bundle?.readable) {
-        const reason = 'Fusion asked WG to solve a return that is not readable in the workspace.';
-        setError(reason);
-        await reportSolveCommandOutcome({ commandId: command.commandId, state: 'refused', jobId: null, reason });
-        settle(command.commandId, { state: 'finished' });
-        return;
-      }
-      if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
-        const outcome = await openProjectForReturn(bundle);
-        if (outcome.kind !== 'ready') {
-          // The return was not taken, so an empty CAD Link must not be filled
-          // from the remembered project in its place.
-          refusedForeignReturn.current = true;
-          if (outcome.kind === 'needs_user_input') {
-            waitForUser(command, outcome.message, outcome.code);
-            return;
-          }
-          if (outcome.kind === 'retryable') {
-            retryLater(command, outcome.message);
-            return;
-          }
-          setError(outcome.message);
-          await reportSolveCommandOutcome({
-            commandId: command.commandId, state: 'refused', jobId: null, reason: outcome.message,
-          });
-          settle(command.commandId, { state: 'finished' });
-          return;
-        }
-        // The switch is the acknowledgement: the project on screen is now the
-        // one this return belongs to, so a standing refusal is spent and the
-        // remembered-project restore must not undo what was just opened.
-        refusedForeignReturn.current = false;
-        openedProject = true;
-      }
-      // Parked from here on. Everything below is either terminal or a gate the
-      // user can satisfy, and the marker survives a gate — so WG has to keep
-      // owning the request until a solve consumes it or the user dismisses it.
-      parkedSolveCommandStore.park({
-        commandId: command.commandId,
-        bundlePath: command.bundlePath,
-        documentNativeId: bundle.documentNativeId ?? null,
-        blockers: [],
-        parkedAt: command.requestedAt || new Date().toISOString(),
-      });
-      parkedThisRound = true;
-      // The parked store owns it now; the poll leaves it alone until a solve
-      // consumes it or the user refuses it, both of which report the outcome.
-      settle(command.commandId, { state: 'waiting-for-user', resumeFromStart: false, code: null });
-      autoIngestPending.current = false;
-      // Opening the project queued that project's own return listing. This
-      // request's selection is the newer one, so the listing leaves it alone
-      // (see `refresh`), and it is filed under the project just opened, as the
-      // listing would have filed it.
-      if (openedProject) selectionClaimedAfterSwitch.current = true;
-      const continuity = useCadReturnStore.getState().selectArrivedBundle(
-        bundle,
-        openedProject ? useDocumentStore.getState().identity?.lineageId ?? null : undefined,
-      );
-      // Also as the listing would have: the drivers just restored for the
-      // opened project are re-read from the library, quietly. Awaited, as a
-      // run recall awaits it: the solve below reads the drivers when it is
-      // sent, and must send the numbers the panel is about to show.
-      if (openedProject) await refreshChannelDriverBases().catch(() => undefined);
-      await ingestSelected();
-      if (continuity === 'reset') {
-        const blocker = 'Review the new source inventory and solve settings before solving.';
-        parkedSolveCommandStore.setBlockers(command.commandId, [blocker]);
-        setStatus('Prepared the model Fusion sent. Its source inventory changed — review mesh, channel, and solve settings, then press Solve.');
-        return;
-      }
-      const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
-      if (outcome === 'busy') {
-        parkedSolveCommandStore.setBlockers(command.commandId, ['a solve is already running']);
-        setStatus('Prepared the model Fusion sent. A solve is already running — start it from the CAD Link panel when that one finishes.');
-        return;
-      }
-      setStatus('Solving the model Fusion sent.');
-      // The accepted outcome is reported by the solve path itself, which is
-      // the only place that knows the job id.
-    } catch (reason) {
-      if (working && !parkedThisRound) {
-        // Nothing was taken on yet, so nothing is lost: WG still owns the
-        // request and a later poll tries it again. The return listing above is
-        // the known case; it used to latch the command until a remount.
-        const message = reason instanceof Error ? reason.message : String(reason);
-        retryLater(working, `Fusion asked WG to solve this model, but: ${message}`);
-        return;
-      }
-      if (reason instanceof SupersededError) {
-        // Newer intent replaced the return this request was preparing, and
-        // said so where it happened. The request must not then sit parked with
-        // nothing to show -- the panel offers one only with a blocker -- and
-        // Solve now takes it from the top: selects its return, prepares it,
-        // and solves it.
-        if (working && parkedSolveCommandStore.getSnapshot().command?.commandId === working.commandId) {
-          settle(working.commandId, { state: 'waiting-for-user', resumeFromStart: true, code: null });
-          parkedSolveCommandStore.setBlockers(working.commandId, [
-            'The model Fusion sent was replaced before WG had prepared it. Press Solve now to prepare and solve it, or dismiss the request.',
-          ]);
-        }
-        return;
-      }
-      const message = reason instanceof Error ? reason.message : String(reason);
-      if (mounted.current) setError(`Fusion asked WG to solve this model, but: ${message}`);
-      // Not terminal: a gate, a transient failure, or no engine here that can
-      // solve imported geometry keeps the request, and the panel offers it back
-      // once the user has dealt with the reason. A missing engine is a
-      // capability this machine lacks, not a verdict on the request, so it is
-      // never refused to Fusion; Dismiss is how the user gives it up.
-      const parked = parkedSolveCommandStore.getSnapshot().command;
-      if (parked) {
-        parkedSolveCommandStore.setBlockers(parked.commandId, [
-          reason instanceof SolveEngineUnavailableError ? capabilityBlocker(message) : message,
-        ]);
-      }
-    } finally {
-      solveCommandInFlight.current = false;
-      const parked = parkedSolveCommandStore.getSnapshot().command;
-      if (autoIngestPending.current && (!parked || heldBeforeTakenOn(progress, parked.commandId))) {
-        autoIngestSelected();
-      }
-    }
-  }, [autoIngestSelected, ingestSelected, noteCadActivity]);
-  consumeSolveCommandRef.current = consumeSolveCommand;
+  const dismissOperation = useCallback((operationId: string) => actOnOperation(
+    () => cancelCadOperation(operationId),
+    'Dismissed the solve Fusion asked for.',
+  ), [actOnOperation]);
 
-  // Faster than the returns poll, and Fusion-only: Onshape has no marker.
-  // This one reads a single small marker file rather than listing a workspace,
-  // and it sits at the head of everything the user is waiting for after they
-  // press Solve in Fusion, so the whole poll interval is dead time on the
-  // clock they are watching. That is why the base rate survives every backoff
-  // condition that could plausibly mean "using CAD": the CAD workspace being
-  // open, Fusion itself running, a send or a return in flight, a parked
-  // command. It widens only when none of those hold — and none of them can
-  // hold if Fusion is not even installed, which is the case this is for.
-  // Suspended entirely while no workspace folder is selected: the marker lives
-  // in that folder, so no Solve in Fusion can ever produce one.
+  // Fusion's solve commands are the backend's (CAD-OPERATIONS.md, "Delivery"):
+  // it collects each one, prepares it from its project's recorded setup and
+  // reports on the jobs channel. This client records that setup as the user
+  // edits it, and follows the operations.
+  useEffect(() => startCadSetupPublisher(), []);
   useEffect(() => {
-    if (onshape) return undefined;
-    if (pageIsVisible()) void consumeSolveCommand();
-    return startAdaptivePoll(
-      pollRestarts.current,
-      () => { if (pageIsVisible()) void consumeSolveCommand(); },
-      () => pollDelayMs(
-        cadPollIntervals.solveCommandMs, cadPollIntervals.solveCommandIdleMs, null,
-      ),
-    );
-  }, [consumeSolveCommand, onshape, pollDelayMs]);
+    const disconnect = connectCadOperations();
+    void useCadOperationsStore.getState().load().catch(() => undefined);
+    return disconnect;
+  }, []);
 
   // Coming back to WG is the strongest possible sign the user is about to do
   // something, so it both reconciles every Fusion-facing channel at once and
@@ -2436,7 +1917,6 @@ export function CadLinkCoordinator() {
       noteCadActivity();
       void refresh({ background: true, autoOpenNew: true });
       void refreshFusionStatus();
-      void consumeSolveCommand();
     };
     document.addEventListener('visibilitychange', resume);
     window.addEventListener('focus', resume);
@@ -2444,7 +1924,7 @@ export function CadLinkCoordinator() {
       document.removeEventListener('visibilitychange', resume);
       window.removeEventListener('focus', resume);
     };
-  }, [consumeSolveCommand, noteCadActivity, onshape, refresh, refreshFusionStatus]);
+  }, [noteCadActivity, onshape, refresh, refreshFusionStatus]);
 
   // Entering the CAD workspace is the user saying they are working in CAD now.
   // The cadence checks the mode on every tick, but a poll that is already
@@ -2470,9 +1950,8 @@ export function CadLinkCoordinator() {
       noteCadActivity();
       void refresh({ background: true, autoOpenNew: true });
       void refreshFusionStatus();
-      void consumeSolveCommand();
     });
-  }, [consumeSolveCommand, noteCadActivity, onshape, refresh, refreshFusionStatus]);
+  }, [noteCadActivity, onshape, refresh, refreshFusionStatus]);
 
   const clearFeedback = useCallback(() => { setError(null); setStatus(null); }, []);
   const reportError = useCallback((message: string) => setError(message), []);
@@ -2501,8 +1980,9 @@ export function CadLinkCoordinator() {
       ingestSelected,
       pullFromFusion,
       pullAndSolve,
-      solveParkedCommand,
-      dismissSolveCommand,
+      solveOperation,
+      approveOperation,
+      dismissOperation,
       sendWgToFusion,
       cancelFusionConflict,
       clearFeedback,
@@ -2535,8 +2015,9 @@ export function CadLinkCoordinator() {
       ingestSelected: unavailable,
       pullFromFusion: unavailable,
       pullAndSolve: unavailable,
-      solveParkedCommand: unavailable,
-      dismissSolveCommand: unavailable,
+      solveOperation: unavailable,
+      approveOperation: unavailable,
+      dismissOperation: unavailable,
       sendWgToFusion: unavailable,
       cancelFusionConflict: () => undefined,
       clearFeedback: () => undefined,
@@ -2550,7 +2031,8 @@ export function CadLinkCoordinator() {
     bundles,
     cancelFusionConflict,
     clearFeedback,
-    dismissSolveCommand,
+    approveOperation,
+    dismissOperation,
     error,
     fusionStatus,
     ingest,
@@ -2561,7 +2043,7 @@ export function CadLinkCoordinator() {
     pullFromFusion,
     pullingFromFusion,
     sendingToFusion,
-    solveParkedCommand,
+    solveOperation,
     loading,
     onshapeConnection,
     onshapeStatus,

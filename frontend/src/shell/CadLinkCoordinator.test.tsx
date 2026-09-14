@@ -3,21 +3,18 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
 import { selectCadWorkspace } from '../api/cadWorkspace';
+import type { CadOperationSummary } from '../api/cadOperations';
 import { applyOpenedDesign } from '../design/openCadProject';
-import { replacingWouldLoseNow } from '../design/replacementCheck';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { showJobModel } from '../jobs/showJobModel';
 import { preferencesStore } from '../prefs/preferences';
 import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
+import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
-import { resetCadReturnStore, useCadReturnStore, type DriverPreset } from '../stores/cadReturn';
-import { designForFamily, resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
-import { toSolveDesign } from '../jobs/actions';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
-import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
-import { durableSettings } from '../stores/durableSettings';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { documentSettingsSignature } from '../stores/designWire';
 import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -28,8 +25,10 @@ import {
   resetCadPollIntervals,
   returnBelongsToAnotherProject,
   showCadJobModel,
+  showIngestedMeshInViewport,
+  SupersededError,
 } from './CadLinkCoordinator';
-import { cadSolveBlockerNow, jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
 const initialBundle: CadReturnBundle = {
@@ -125,7 +124,7 @@ describe('CadLinkCoordinator', () => {
     resetDesignStore();
     resetDocumentStore();
     resetSolveOptionsStore();
-    parkedSolveCommandStore.clear();
+    resetCadOperationsStore();
     workspaceModeStore.setMode('parametric');
     localStorage.removeItem('wg2.workspace.mode.v1');
     localStorage.removeItem('wg2.cad.project.v1');
@@ -138,7 +137,7 @@ describe('CadLinkCoordinator', () => {
   afterEach(() => {
     act(() => root.unmount());
     importedMeshStore.clear();
-    parkedSolveCommandStore.clear();
+    resetCadOperationsStore();
     workspaceModeStore.setMode('parametric');
     resetCadPollIntervals();
     vi.restoreAllMocks();
@@ -195,13 +194,16 @@ describe('CadLinkCoordinator', () => {
       calls.push(path);
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       return json({}, 404);
     }));
 
     await renderCoordinator();
     await act(async () => { await vi.advanceTimersByTimeAsync(7_500); });
-    expect(calls).toEqual([]);
+    // Reading the CAD operations and recording the solver selection happen
+    // once at start; they are not polls.
+    expect(calls.filter((path) => (
+      !path.startsWith('/api/cadlink/operations') && !path.endsWith('/solver-selection')
+    ))).toEqual([]);
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     await act(async () => {
@@ -210,7 +212,8 @@ describe('CadLinkCoordinator', () => {
     });
     expect(calls.filter((path) => path.endsWith('/returns'))).toHaveLength(1);
     expect(calls.filter((path) => path.endsWith('/fusion-status'))).toHaveLength(1);
-    expect(calls.filter((path) => path.endsWith('/solve-command')).length).toBeGreaterThanOrEqual(1);
+    // Fusion's solve commands are the backend's to collect; nothing here reads them.
+    expect(calls.filter((path) => path.endsWith('/solve-command'))).toEqual([]);
   });
 
   /** Poll cadence. The coordinator is mounted for the whole life of the app,
@@ -225,7 +228,6 @@ describe('CadLinkCoordinator', () => {
       calls.push(path);
       if (path.endsWith('/returns')) return json(state.listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/api/cadlink/designs')) return json({ items: [] });
       if (path.endsWith('/api/cad-workspace/select')) {
         return json({ selected: true, path: 'C:/wgreturn-workspace' });
@@ -251,10 +253,10 @@ describe('CadLinkCoordinator', () => {
     await renderCoordinator();
     // The listing that reports the folder is the one that silences the rest,
     // so each channel is read exactly once before anything is known.
-    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 0 });
 
     await act(async () => { await vi.advanceTimersByTimeAsync(7_500); });
-    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 0 });
 
     // The returns listing alone keeps a heartbeat, at the idle rate: nothing
     // tells the coordinator that Settings has chosen a folder, so this is what
@@ -270,7 +272,7 @@ describe('CadLinkCoordinator', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
     const resumed = harness.counts();
     expect(resumed.fusionStatus).toBeGreaterThanOrEqual(1);
-    expect(resumed.solveCommand).toBeGreaterThanOrEqual(2);
+    expect(resumed.solveCommand).toBe(0);
   });
 
   it('resumes the moment a CAD workspace folder is chosen, without waiting for the heartbeat', async () => {
@@ -278,11 +280,11 @@ describe('CadLinkCoordinator', () => {
     const harness = cadenceHarness({ cadFolderConfigured: false });
 
     await renderCoordinator();
-    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 0 });
 
     // Sit well past the base rates. Silence here is the point of the feature.
     await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
-    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 0 });
 
     // Choosing a folder through the manual path field never moves window
     // focus, so `focus` cannot cover this one -- only the selection itself
@@ -297,12 +299,12 @@ describe('CadLinkCoordinator', () => {
     const resumed = harness.counts();
     expect(resumed.returns).toBeGreaterThanOrEqual(1);
     expect(resumed.fusionStatus).toBeGreaterThanOrEqual(1);
-    expect(resumed.solveCommand).toBeGreaterThanOrEqual(1);
+    expect(resumed.solveCommand).toBe(0);
 
     // And it holds the base rate afterwards rather than dropping back to idle.
     harness.clear();
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(harness.counts().solveCommand).toBeGreaterThanOrEqual(4);
+    expect(harness.counts()).toEqual({ returns: 2, fusionStatus: 2, solveCommand: 0 });
   });
 
   it('widens every poll once nothing has happened for the quiet window', async () => {
@@ -315,7 +317,7 @@ describe('CadLinkCoordinator', () => {
     // Base rate right up to the quiet mark: an unchanged listing and a `closed`
     // heartbeat, repeated, are the only evidence that WG is genuinely idle.
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(harness.counts()).toEqual({ returns: 2, fusionStatus: 2, solveCommand: 5 });
+    expect(harness.counts()).toEqual({ returns: 2, fusionStatus: 2, solveCommand: 0 });
 
     // Past it, nothing is due again until the idle intervals come round.
     harness.clear();
@@ -332,24 +334,24 @@ describe('CadLinkCoordinator', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
     harness.clear();
 
-    // Regaining focus reconciles all three at once rather than leaving the
+    // Regaining focus reconciles both at once rather than leaving the
     // user to wait out an interval chosen while they were in another window.
     await act(async () => {
       window.dispatchEvent(new Event('focus'));
       await Promise.resolve(); await Promise.resolve();
     });
-    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 1 });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 0 });
 
     harness.clear();
     await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
-    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 2 });
+    expect(harness.counts()).toEqual({ returns: 1, fusionStatus: 1, solveCommand: 0 });
 
     // Entering the CAD workspace holds the base rate for as long as it is open,
     // however long the user then spends reading the panel.
     await act(async () => { workspaceModeStore.setMode('cad'); await Promise.resolve(); });
     harness.clear();
     await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
-    expect(harness.counts().solveCommand).toBe(20);
+    expect(harness.counts().solveCommand).toBe(0);
     expect(harness.counts().returns).toBe(8);
   });
 
@@ -369,7 +371,6 @@ describe('CadLinkCoordinator', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
-      if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/fusion-status')) {
         const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
         requests.push(request);
@@ -834,908 +835,6 @@ describe('CadLinkCoordinator', () => {
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Solving the current Fusion geometry.');
   });
 
-  it('runs a Fusion solve command once and reports an already-accepted one instead of resubmitting', async () => {
-    const reported: unknown[] = [];
-    let command: Record<string, unknown> | null = {
-      commandId: 'cmd-1', returnId: 'wgr_1', bundlePath: initialBundle.bundlePath,
-      manifestSha256: 'sha256:m', requestedAt: '2026-08-14T12:00:00Z',
-    };
-    let outcome: Record<string, unknown> | null = null;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)));
-        return json({ state: 'accepted', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command, outcome });
-      if (path.endsWith('/ingest')) return json(ingestRecord);
-      return json({}, 404);
-    }));
-    // The real solve path retires the parked command with the job it created.
-    const solveCurrentCadImport = vi.fn(async () => {
-      await consumeParkedSolveCommand('job-1');
-      return 'submitted' as const;
-    });
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
-    });
-
-    await renderCoordinator();
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-
-    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
-    expect(reported).toEqual([{ commandId: 'cmd-1', state: 'accepted', jobId: 'job-1', reason: null }]);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Solving the model Fusion sent.');
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
-
-    // A terminal command surfaces its existing job; it never submits again.
-    outcome = { state: 'accepted', jobId: 'job-7', reason: null, at: '' };
-    command = { ...command, commandId: 'cmd-2' };
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
-  });
-
-  /** Stub the three calls opening a CAD-linked project actually makes. */
-  function projectOpenRoutes(designId: string, lineageId: string, name: string) {
-    return (path: string): Response | null => {
-      if (path.endsWith(`/designs/${designId}`)) {
-        return json({ designId, lineageId, editVersion: 2, filename: `${name}.cfg`, text: 'R = 160' });
-      }
-      if (path.endsWith('/cadlink/designs')) {
-        return json({ items: [{
-          designId, lineageId, filename: `${name}.cfg`, documentName: name,
-          archiveStem: name, exportCount: 1, editVersion: 2,
-          createdAt: '2026-09-04T00:00:00Z', updatedAt: '2026-09-04T00:00:00Z',
-        }] });
-      }
-      if (path === '/api/design/open') {
-        return json({
-          dialect: 'ath', migrationsApplied: [],
-          passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
-          design: useDesignStore.getState().design,
-          cadlink: {
-            identity: { designId, lineageId, baseEditVersion: 2 },
-            classification: 'current',
-          },
-        });
-      }
-      return null;
-    };
-  }
-
-  /** Fusion asked for this exact geometry, and the bundle names the project it
-   * belongs to. Printing that name and asking the user to go and open it by
-   * hand is a step WG can take itself; three presses of Solve to be told the
-   * same thing is not a workflow. */
-  it('opens the project a Fusion solve command names, then prepares it', async () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
-    }, 'current');
-    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
-    const reported: Array<Record<string, unknown>> = [];
-    let ingestCalls = 0;
-    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)));
-        return json({ state: 'accepted', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command: {
-        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
-        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
-      }, outcome: null });
-      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
-      return routes(path) ?? json({}, 404);
-    }));
-    const solveCurrentCadImport = vi.fn(async () => {
-      await consumeParkedSolveCommand('job-9');
-      return 'submitted' as const;
-    });
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
-    });
-
-    await renderCoordinator();
-    await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); });
-
-    // The project it named is the one now open, and the return was prepared
-    // against it rather than refused.
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expect(rememberedCadProject()).toBe('wgl_other');
-    expect(ingestCalls).toBe(1);
-    expect(reported.some((entry) => entry.state === 'refused')).toBe(false);
-  });
-
-  /** Opening the project is a load, and a load queues that project's own
-   * return listing. The listing used to select its latest return over the one
-   * the request had just selected, which superseded the request's preparation:
-   * the request then sat parked with nothing on screen, and was never solved. */
-  it('solves the model a Fusion solve command names once it has opened its project', async () => {
-    const command = foreignSolveCommand();
-
-    await renderCoordinator();
-    await act(async () => {
-      for (let i = 0; i < 5; i += 1) await new Promise((settle) => setTimeout(settle, 0));
-    });
-
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    // Filed under the project just opened, as that project's own listing
-    // would have filed it: its saved solve settings are the ones restored.
-    expect(useCadReturnStore.getState().projectLineageId).toBe('wgl_other');
-    expect(command.counts.ingest).toBe(1);
-    expect(command.solveCurrentCadImport).toHaveBeenCalledOnce();
-    expect(command.reported).toEqual([expect.objectContaining({
-      commandId: 'cmd-other', state: 'accepted', jobId: 'job-9',
-    })]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-  });
-
-  /** A project's drivers are restored with its solve settings and re-read
-   * from the library, as that project's own listing would. The solve Fusion
-   * asked for must send the re-read numbers: the ones the panel then shows. */
-  it('re-reads the opened project’s drivers before solving the model a Fusion solve command names', async () => {
-    const preset: DriverPreset = {
-      id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database', kind: 'cd', z_ohm: 8, xo_min_hz: 1_600,
-      base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, le_mh: 0.12, mms_g: 2.4, fs_hz: 620, vas_l: 0.35, qms: 3.1 },
-    };
-    const driverRead = deferred<Response>();
-    const command = foreignSolveCommand((path) => (path.startsWith('/api/drivers/') ? driverRead.promise : null));
-    // The opened project's saved solve settings name that driver, with the
-    // numbers it had when it was picked.
-    useCadReturnStore.getState().selectBundle(command.otherProject, 'wgl_other');
-    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', preset);
-    resetCadReturnStore();
-    const solvedWith: Array<number | undefined> = [];
-    command.solveCurrentCadImport.mockImplementation(async () => {
-      solvedWith.push(useCadReturnStore.getState().channelDrivers['drive-hf']?.preset?.base.re_ohm);
-      await consumeParkedSolveCommand('job-9');
-      return 'submitted' as const;
-    });
-    try {
-      await renderCoordinator();
-      await act(async () => {
-        for (let i = 0; i < 3; i += 1) await new Promise((settle) => setTimeout(settle, 0));
-      });
-      expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-      expect(solvedWith).toEqual([]);
-
-      await act(async () => {
-        driverRead.resolve(json({ spec: { ...preset.base, re_ohm: 5.4 }, xo_min_hz: 1_600 }));
-        for (let i = 0; i < 5; i += 1) await new Promise((settle) => setTimeout(settle, 0));
-      });
-      expect(solvedWith).toEqual([5.4]);
-      expectSolvedOnce(command.reported);
-    } finally {
-      // The saved profile must not reach later tests.
-      durableSettings.set('cadSolveProfiles', null);
-    }
-  });
-
-  /** Newer intent can still replace the return a taken-on request is
-   * preparing: here the user picks another return while it is prepared. The
-   * request must not then sit parked with nothing to show. It says what
-   * happened, and Solve now prepares and solves the model Fusion sent. */
-  it('keeps a taken-on Fusion solve command visible when its preparation is superseded, and Solve now prepares it again', async () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
-    }, 'current');
-    const commandBundle = { ...initialBundle, designIds: ['wgd_current'] };
-    const otherBundle = {
-      ...initialBundle, name: 'other.wgreturn', bundlePath: 'wgreturn/other.wgreturn', designIds: ['wgd_current'],
-    };
-    const firstIngest = deferred<Response>();
-    const reported: Array<Record<string, unknown>> = [];
-    let ingestCalls = 0;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [commandBundle, otherBundle] });
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)));
-        return json({ state: 'recorded', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command: {
-        commandId: 'cmd-here', returnId: 'wgr_here', bundlePath: commandBundle.bundlePath,
-        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
-      }, outcome: null });
-      if (path.endsWith('/ingest')) {
-        ingestCalls += 1;
-        return ingestCalls === 1 ? firstIngest.promise : json(ingestRecord);
-      }
-      return json({}, 404);
-    }));
-    const solveCurrentCadImport = vi.fn(async () => {
-      await consumeParkedSolveCommand('job-7');
-      return 'submitted' as const;
-    });
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
-    });
-
-    await renderCoordinator();
-    await act(async () => { await new Promise((settle) => setTimeout(settle, 0)); });
-    expect(ingestCalls).toBe(1);
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-here');
-
-    act(() => cadLinkCoordinatorBridge.getSnapshot().selectBundle(otherBundle));
-    await act(async () => {
-      firstIngest.resolve(json(ingestRecord));
-      for (let i = 0; i < 3; i += 1) await new Promise((settle) => setTimeout(settle, 0));
-    });
-
-    const parked = parkedSolveCommandStore.getSnapshot().command;
-    expect(parked?.commandId).toBe('cmd-here');
-    // Shown in the panel, which renders a parked request only with a blocker.
-    expect(parked?.blockers).toEqual([expect.stringContaining('Solve now')]);
-    expect(String(parked?.blockers[0])).not.toMatch(/save/i);
-    expect(solveCurrentCadImport).not.toHaveBeenCalled();
-    expect(reported).toEqual([]);
-
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand();
-      for (let i = 0; i < 3; i += 1) await new Promise((settle) => setTimeout(settle, 0));
-    });
-
-    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(commandBundle.bundlePath);
-    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
-    expect(reported).toEqual([expect.objectContaining({ commandId: 'cmd-here', state: 'accepted', jobId: 'job-7' })]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-  });
-
-  /** The design on screen as it was opened from its own project. */
-  function openedCurrent(r = 150) {
-    return {
-      dialect: 'ath', migrationsApplied: [],
-      passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
-      design: { ...useDesignStore.getState().design, R: r },
-      cadlink: {
-        identity: { designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2 },
-        classification: 'current',
-      },
-    } as unknown as Parameters<typeof applyOpenedDesign>[0];
-  }
-
-  /** Opening a project replaces the working design. The manual switcher asks
-   * before discarding, so the automatic one must not be the single path that
-   * discards without asking -- there is nobody at the keyboard to ask. Nor may
-   * it throw the request away: a design that exists nowhere else is a reason
-   * to wait, and once nothing would be lost the same request goes ahead. */
-  it('will not open over work that exists nowhere else, says which project it wanted, and opens it once nothing would be lost', async () => {
-    vi.useFakeTimers();
-    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
-    useDesignStore.getState().updateField('R', 321);
-    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
-    const reported: Array<Record<string, unknown>> = [];
-    let ingestCalls = 0;
-    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)));
-        return json({ state: 'recorded', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command: {
-        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
-        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
-      }, outcome: null });
-      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
-      return routes(path) ?? json({}, 404);
-    }));
-    const solveCurrentCadImport = vi.fn(async () => {
-      await consumeParkedSolveCommand('job-9');
-      return 'submitted' as const;
-    });
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
-    });
-
-    await renderCoordinator();
-    // Several polls go by while the work stays unsaved; none of them replaces it.
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-
-    expect(ingestCalls).toBe(0);
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
-    expect(useDesignStore.getState().design.R).toBe(321);
-    // Waiting, not refused: nothing went back to Fusion, and the request is
-    // held with a blocker that names the project it wants.
-    expect(reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject({
-      commandId: 'cmd-other',
-      blockers: [expect.stringContaining('Tritonia')],
-    });
-    // WG has no Save for a design, so the way on it names is opening the
-    // project through the switcher, which asks before discarding.
-    expect(String(parkedSolveCommandStore.getSnapshot().command?.blockers[0]))
-      .toContain('File → CAD-linked designs');
-    expect(String(parkedSolveCommandStore.getSnapshot().command?.blockers[0])).not.toMatch(/save/i);
-
-    // Waiting is not a retry loop: while the design still exists nowhere
-    // else, later polls go back to neither the project list nor the open.
-    const listReads = () => vi.mocked(fetch).mock.calls
-      .filter(([input]) => String(input).endsWith('/cadlink/designs')).length;
-    const readsWhileHeld = listReads();
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(listReads()).toBe(readsWhileHeld);
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-other');
-
-    // Once nothing would be lost -- here the edit is taken back to the design
-    // as it was opened -- the next poll carries on.
-    act(() => { useDesignStore.getState().updateField('R', 150); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expect(ingestCalls).toBe(1);
-    expectSolvedOnce(reported);
-  });
-
-  /** The unsaved-work check is made before two network round trips, and the
-   * document it was made about can change during either of them. The guarantee
-   * is about the instant the design is replaced, so that is where it is
-   * checked — after the last await, not before the helper that does them. A
-   * change at that instant is a reason to wait for the user, not to refuse:
-   * the request is held, it names the project, and nothing is replaced. */
-  it.each([
-    ['the design is edited while the project loads', () => {
-      useDesignStore.getState().updateField('R', 999);
-    }, () => {
-      expect(useDesignStore.getState().design.R).toBe(999);
-      expect(replacingWouldLoseNow()).toBe(true);
-    }],
-    ['solver settings change while the project loads', () => {
-      useSolveOptionsStore.setState({ symmetry: 'quarter' });
-    }, () => {
-      expect(useSolveOptionsStore.getState().symmetry).toBe('quarter');
-      expect(replacingWouldLoseNow()).toBe(true);
-    }],
-    // Nothing is dirty here: a third design was opened, and it is clean. Only
-    // an explicit document generation can see this — an unlinked document has
-    // no identity, so identity alone compares equal to the one before it.
-    ['another design is opened while the project loads', () => {
-      useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'));
-      useDocumentStore.getState().setCadLink(null, 'missing');
-      useDocumentStore.getState().markSaved(
-        useDesignStore.getState().designRevision, documentSettingsSignature(),
-      );
-    }, () => {
-      expect(useDesignStore.getState().design.formula).toBe('R-OSSE');
-      expect(useDocumentStore.getState().identity).toBeNull();
-      expect(replacingWouldLoseNow()).toBe(false);
-    }],
-  ] as const)('holds a Fusion solve command, replacing nothing, when %s', async (_label, intervene, verify) => {
-    // Opened from its project, so a settings change is work that exists
-    // nowhere else rather than the untouched default a fresh window shows.
-    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
-    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
-    const reported: Array<Record<string, unknown>> = [];
-    const pending = deferred<Response>();
-    let ingestCalls = 0;
-    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      // The *last* await of the open, deliberately: a check that ran before it
-      // would pass and the design would still be replaced afterwards.
-      if (path === '/api/design/open') return pending.promise;
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)));
-        return json({ state: 'refused', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command: {
-        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
-        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
-      }, outcome: null });
-      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
-      return routes(path) ?? json({}, 404);
-    }));
-
-    await renderCoordinator();
-    await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); });
-    act(intervene);
-    await act(async () => {
-      pending.resolve(routes('/api/design/open')!);
-      for (let i = 0; i < 8; i += 1) await Promise.resolve();
-    });
-
-    verify();
-    // Neither applied nor marked saved: the project WG was told to open is not
-    // the document, and it did not quietly become the saved baseline either.
-    expect(useDocumentStore.getState().identity?.designId).not.toBe('wgd_other');
-    expect(ingestCalls).toBe(0);
-    // Held for the user, not refused: nothing went back to Fusion, and the
-    // request names the project it wants.
-    expect(reported).toEqual([]);
-    const parked = parkedSolveCommandStore.getSnapshot().command;
-    expect(parked?.commandId).toBe('cmd-other');
-    expect(parked?.blockers).toEqual([expect.stringContaining('Tritonia')]);
-    // The user is told that nothing was thrown away.
-    expect(String(parked?.blockers[0])).toContain('Nothing was replaced');
-  });
-
-  /** The switch is decided against the design on screen before the run list
-   * is read. A design the user opens during that read is newer than the
-   * decision -- even one its own file keeps -- and the switch Fusion asked
-   * for must not replace it. */
-  it('holds a Fusion solve command when another design is opened while the run list is read', async () => {
-    const runs = deferred<Response>();
-    const command = foreignSolveCommand((path) => (path.startsWith('/api/jobs?') ? runs.promise : null));
-    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
-    // Exists nowhere else, so the decision reads the run list.
-    act(() => useDesignStore.getState().updateField('R', 321));
-
-    await renderCoordinator();
-    await act(async () => { await new Promise((settle) => setTimeout(settle, 0)); });
-    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).startsWith('/api/jobs?'))).toBe(true);
-
-    act(() => { applyOpenedDesign(openedCurrent(222), 'elsewhere.cfg'); });
-    await act(async () => {
-      runs.resolve(json({ items: [], total: 0 }));
-      for (let i = 0; i < 3; i += 1) await new Promise((settle) => setTimeout(settle, 0));
-    });
-
-    expect(useDesignStore.getState().design.R).toBe(222);
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
-    expect(command.counts.ingest).toBe(0);
-    expect(command.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command?.blockers)
-      .toEqual([expect.stringContaining('another design was opened while WG was loading it')]);
-  });
-
-  /** An edit undone back to the design as it was opened loses nothing, so it
-   * is no reason to hold the switch Fusion asked for. */
-  it('switches to the project a Fusion solve command names when an edit was undone back to the opened design', async () => {
-    vi.useFakeTimers();
-    const command = foreignSolveCommand();
-    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
-    act(() => useDesignStore.getState().updateField('R', 321));
-    act(() => useDesignStore.getState().undo());
-    expect(useDesignStore.getState().design.R).toBe(150);
-
-    await renderCoordinator();
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expect(command.counts.ingest).toBe(1);
-    expectSolvedOnce(command.reported);
-    expect(parkedSolveCommandStore.getSnapshot().command?.blockers ?? [])
-      .not.toContainEqual(expect.stringContaining('Tritonia'));
-  });
-
-  /** A run as the jobs list sends it: its snapshot, and the options it recorded. */
-  function storedRun(design: DesignDocument) {
-    const options = JSON.parse(JSON.stringify(useSolveOptionsStore.getState().options())) as Record<string, unknown>;
-    return {
-      id: 'job-kept', run_number: 4, label: 'kept', status: 'complete', config_summary: {},
-      script_snapshot: { version: 1, design: toSolveDesign(design) },
-      solve_options: { frequency_range: null, num_frequencies: null, frequencies_hz: null, stage_delay_ms: 30, ...options },
-      design_availability: { reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: null },
-    };
-  }
-
-  /** A send overwrites the registry copy the design was opened from. Once an
-   * edit has been sent, the design as opened exists nowhere any more, so
-   * taking the edit back does not make it safe to replace. */
-  it('holds a Fusion solve command over the design as opened once an edit to it was sent to Fusion', async () => {
-    vi.useFakeTimers();
-    let commandPending = false;
-    const command = foreignSolveCommand((path) => {
-      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
-      if (path === '/api/export/wglink') return sendResult();
-      if (path.endsWith('/solve-command') && !commandPending) return json({ command: null, outcome: null });
-      return null;
-    });
-    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
-    act(() => useDesignStore.getState().updateField('R', 321));
-
-    await renderCoordinator();
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_sent');
-    act(() => useDesignStore.getState().updateField('R', 150));
-    commandPending = true;
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_sent');
-    expect(useDesignStore.getState().design.R).toBe(150);
-    expect(command.counts.ingest).toBe(0);
-    expect(command.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command?.blockers)
-      .toEqual([expect.stringContaining('Tritonia')]);
-  });
-
-  /** A send can fail after the server has already committed the design to
-   * the registry, so a failed send is no proof the opened copy survived. */
-  it('holds a Fusion solve command over the design as opened once a send of an edit to it failed', async () => {
-    vi.useFakeTimers();
-    let commandPending = false;
-    const command = foreignSolveCommand((path) => {
-      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
-      if (path === '/api/export/wglink') return json({ detail: 'Could not build the bundle.' }, 500);
-      if (path.endsWith('/solve-command') && !commandPending) return json({ command: null, outcome: null });
-      return null;
-    });
-    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
-    act(() => useDesignStore.getState().updateField('R', 321));
-
-    await renderCoordinator();
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion().catch(() => undefined);
-    });
-    act(() => useDesignStore.getState().updateField('R', 150));
-    commandPending = true;
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
-    expect(useDesignStore.getState().design.R).toBe(150);
-    expect(command.counts.ingest).toBe(0);
-    expect(command.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command?.blockers)
-      .toEqual([expect.stringContaining('Tritonia')]);
-  });
-
-  /** With no jobs list from the socket, a wait on a design that exists
-   * nowhere else still clears once a run holds it: the poll re-reads the run
-   * list, at most every few seconds. */
-  it('carries on with a held Fusion solve command once a run holds the design, reading runs while the jobs socket has none', async () => {
-    vi.useFakeTimers();
-    let runs: unknown[] = [];
-    const command = foreignSolveCommand((path) => (
-      path.startsWith('/api/jobs?') ? json({ items: runs, total: runs.length }) : null
-    ));
-    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
-    act(() => useDesignStore.getState().updateField('R', 321));
-
-    await renderCoordinator();
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-    expect(parkedSolveCommandStore.getSnapshot().command?.blockers)
-      .toEqual([expect.stringContaining('Tritonia')]);
-    expect(command.counts.ingest).toBe(0);
-
-    // Solved in the meantime: a run now holds exactly this design.
-    runs = [storedRun(useDesignStore.getState().design)];
-    await act(async () => { await vi.advanceTimersByTimeAsync(7_000); });
-
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expect(command.counts.ingest).toBe(1);
-    expectSolvedOnce(command.reported);
-    const jobReads = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).startsWith('/api/jobs?')).length;
-    expect(jobReads).toBeLessThanOrEqual(4);
-  });
-
-  /** A rename alone is not a design that would be lost (the name is held
-   * constant in the comparison), so it does not hold the switch either. */
-  it('does not hold a Fusion solve command when only the name changed while the project loads', async () => {
-    const pending = deferred<Response>();
-    const command = foreignSolveCommand((path) => (path === '/api/design/open' ? pending.promise : null));
-    act(() => { applyOpenedDesign(openedCurrent(150), 'current.cfg'); });
-
-    await renderCoordinator();
-    await act(async () => { await new Promise((settle) => setTimeout(settle, 0)); });
-    act(() => useDocumentStore.getState().setDesignName('Renamed while loading'));
-    await act(async () => {
-      pending.resolve(command.routes('/api/design/open')!);
-      await new Promise((settle) => setTimeout(settle, 0));
-    });
-
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expectSolvedOnce(command.reported);
-    expect(parkedSolveCommandStore.getSnapshot().command?.blockers ?? [])
-      .not.toContainEqual(expect.stringContaining('Tritonia'));
-  });
-
-  it('refuses a Fusion solve command for a design this copy of WG does not hold', async () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
-    }, 'current');
-    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
-    const reported: Array<Record<string, unknown>> = [];
-    let ingestCalls = 0;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/cadlink/designs')) return json({ items: [] });
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)));
-        return json({ state: 'refused', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command: {
-        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
-        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
-      }, outcome: null });
-      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
-      return json({}, 404);
-    }));
-
-    await renderCoordinator();
-    await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); });
-
-    expect(ingestCalls).toBe(0);
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
-    expect(reported).toEqual([expect.objectContaining({
-      commandId: 'cmd-other', state: 'refused',
-      reason: expect.stringContaining('does not have'),
-    })]);
-    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
-  });
-
-  /** A Fusion solve command for "Tritonia" (`wgd_other`) while `wgd_current`
-   * is open, over the real open path. `override` answers a request first;
-   * returning null falls through to the ordinary routes. */
-  function foreignSolveCommand(
-    override: (path: string) => Response | Promise<Response> | null = () => null,
-  ) {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
-    }, 'current');
-    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
-    const reported: Array<Record<string, unknown>> = [];
-    const counts = { ingest: 0 };
-    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      const answered = override(path);
-      if (answered) return answered;
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)));
-        return json({ state: 'recorded', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command: {
-        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
-        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
-      }, outcome: null });
-      if (path.endsWith('/ingest')) { counts.ingest += 1; return json(ingestRecord); }
-      return routes(path) ?? json({}, 404);
-    }));
-    const solveCurrentCadImport = vi.fn(async () => {
-      await consumeParkedSolveCommand('job-9');
-      return 'submitted' as const;
-    });
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
-    });
-    return { otherProject, reported, counts, routes, solveCurrentCadImport };
-  }
-
-  /** Taken on and finished: the project is open, the return it names was
-   * prepared and solved, the solve's own acceptance is the one thing reported
-   * back to Fusion, and nothing is left parked. (These tests used to stop at
-   * "taken on", with nothing reported: the listing that opening a project
-   * queues superseded the request's preparation, so it was never solved.) */
-  function expectSolvedOnce(reported: Array<Record<string, unknown>>): void {
-    expect(reported).toEqual([expect.objectContaining({ commandId: 'cmd-other', state: 'accepted' })]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-  }
-
-  /** A project list that cannot be read right now says nothing about whether
-   * WG holds the design. It used to read as "this copy of WG does not have
-   * it", and that refusal is permanent. */
-  it('retries a Fusion solve command when the project list fails once, instead of refusing it', async () => {
-    vi.useFakeTimers();
-    let listCalls = 0;
-    const command = foreignSolveCommand((path) => {
-      if (!path.endsWith('/cadlink/designs')) return null;
-      listCalls += 1;
-      return listCalls === 1 ? json({ detail: 'The design registry is busy.' }, 500) : null;
-    });
-
-    await renderCoordinator();
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(listCalls).toBe(1);
-    expect(command.reported).toEqual([]);
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expect(command.counts.ingest).toBe(1);
-    expectSolvedOnce(command.reported);
-  });
-
-  it('backs off while the project list stays down, then waits for the user rather than refusing', async () => {
-    vi.useFakeTimers();
-    let listCalls = 0;
-    const command = foreignSolveCommand((path) => {
-      if (!path.endsWith('/cadlink/designs')) return null;
-      listCalls += 1;
-      return json({ detail: 'The design registry is busy.' }, 503);
-    });
-
-    await renderCoordinator();
-    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
-
-    // Bounded: a handful of attempts in five minutes, not one per poll.
-    expect(listCalls).toBeGreaterThan(1);
-    expect(listCalls).toBeLessThanOrEqual(7);
-    // Never refused automatically: the request waits for the user and says why.
-    expect(command.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject({
-      commandId: 'cmd-other',
-      blockers: [expect.stringContaining('list of CAD-linked projects')],
-    });
-    // And it stays put: waiting for the user is not a slower retry loop.
-    const settled = listCalls;
-    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
-    expect(listCalls).toBe(settled);
-    expect(command.reported).toEqual([]);
-  });
-
-  it.each([
-    ['the snapshot request answers 503', '/designs/wgd_other', () => json({ detail: 'The design snapshot is being written.' }, 503)],
-    ['the snapshot request cannot be reached', '/designs/wgd_other', () => Promise.reject(new TypeError('Failed to fetch'))],
-    // Its client keeps no HTTP status, so this one used to be refused for good.
-    ['the design-text request answers 500', '/api/design/open', () => json({ detail: 'Internal Server Error' }, 500)],
-  ] as const)('retries opening the project when %s once', async (_label, failing, fail) => {
-    vi.useFakeTimers();
-    let failingCalls = 0;
-    const command = foreignSolveCommand((path) => {
-      if (!path.endsWith(failing)) return null;
-      failingCalls += 1;
-      return failingCalls === 1 ? fail() : null;
-    });
-
-    await renderCoordinator();
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(failingCalls).toBe(1);
-    expect(command.reported).toEqual([]);
-    // Readable sentences, whatever the failure's own detail looked like.
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toMatch(/[.!?] WG will try again in 2 s\.$/);
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expectSolvedOnce(command.reported);
-  });
-
-  it('refuses a Fusion solve command whose project the server will not open', async () => {
-    vi.useFakeTimers();
-    const command = foreignSolveCommand((path) => (
-      path.endsWith('/designs/wgd_other') ? json({ detail: 'Design wgd_other was deleted.' }, 404) : null
-    ));
-
-    await renderCoordinator();
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_current');
-    // Once: a refusal that reached Fusion is finished, even though this stub
-    // keeps serving the marker.
-    expect(command.reported).toEqual([expect.objectContaining({
-      commandId: 'cmd-other', state: 'refused', reason: expect.stringContaining('Tritonia'),
-    })]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-  });
-
-  /** A request held because another design was opened mid-load has nothing
-   * prepared for it yet. Solve now must open the project it names, not solve
-   * whatever happens to be on screen. */
-  it('opens the named project when Solve now is pressed on a request held before it opened', async () => {
-    const pending = deferred<Response>();
-    let openCalls = 0;
-    const command = foreignSolveCommand((path) => {
-      if (path !== '/api/design/open') return null;
-      openCalls += 1;
-      return openCalls === 1 ? pending.promise : null;
-    });
-    // What was on screen each time a solve was started.
-    const solvedOn: Array<{ design: string | undefined; bundle: string | undefined }> = [];
-    command.solveCurrentCadImport.mockImplementation(async () => {
-      solvedOn.push({
-        design: useDocumentStore.getState().identity?.designId,
-        bundle: useCadReturnStore.getState().selectedBundle?.bundlePath,
-      });
-      await consumeParkedSolveCommand('job-9');
-      return 'submitted' as const;
-    });
-    useDocumentStore.getState().markSaved(
-      useDesignStore.getState().designRevision, documentSettingsSignature(),
-    );
-
-    await renderCoordinator();
-    await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); });
-    act(() => {
-      useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'));
-      useDocumentStore.getState().setCadLink(null, 'missing');
-      useDocumentStore.getState().markSaved(
-        useDesignStore.getState().designRevision, documentSettingsSignature(),
-      );
-    });
-    await act(async () => {
-      pending.resolve(command.routes('/api/design/open')!);
-      for (let i = 0; i < 8; i += 1) await Promise.resolve();
-    });
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-other');
-    expect(useDesignStore.getState().design.formula).toBe('R-OSSE');
-    expect(command.solveCurrentCadImport).not.toHaveBeenCalled();
-
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand();
-      for (let i = 0; i < 8; i += 1) await Promise.resolve();
-    });
-
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-    expect(command.counts.ingest).toBe(1);
-    // It went through the project switch first: the one solve it started was
-    // of the project and return Fusion named, not of the design that happened
-    // to be on screen.
-    expect(solvedOn).toEqual([{ design: 'wgd_other', bundle: command.otherProject.bundlePath }]);
-    expectSolvedOnce(command.reported);
-  });
-
-  /** A newer return of the open project is not a newer version of the request
-   * that is waiting on unsaved work -- that request names another project. */
-  it('keeps a request waiting on unsaved work when an unrelated return arrives', async () => {
-    let items: CadReturnBundle[] = [];
-    const command = foreignSolveCommand((path) => (
-      path.endsWith('/returns') ? json({ cadFolderConfigured: true, items }) : null
-    ));
-    items = [command.otherProject];
-    useDesignStore.getState().updateField('R', 321);
-
-    await renderCoordinator();
-    await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve(); });
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-other');
-    expect(command.counts.ingest).toBe(0);
-
-    const ownReturn: CadReturnBundle = {
-      ...initialBundle,
-      name: 'current.wgreturn',
-      bundlePath: 'wgreturn/current.wgreturn',
-      designIds: ['wgd_current'],
-      modifiedAt: '2026-08-21T00:00:00Z',
-    };
-    items = [ownReturn, command.otherProject];
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
-      for (let i = 0; i < 4; i += 1) await Promise.resolve();
-    });
-
-    expect(command.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-other');
-    expect(useDesignStore.getState().design.R).toBe(321);
-    // The open project's own return is still prepared, as it was when such a
-    // request was refused: the held one owns nothing on screen yet.
-    expect(command.counts.ingest).toBe(1);
-  });
-
-  /** A held request whose outcome was settled somewhere else is spent: it
-   * must stop being offered, and Solve now must not act on it. */
-  it('drops a held request once the server reports it finished elsewhere', async () => {
-    vi.useFakeTimers();
-    let settledElsewhere = false;
-    const command = foreignSolveCommand((path) => (
-      settledElsewhere && path.endsWith('/solve-command')
-        ? json({
-          command: {
-            commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: initialBundle.bundlePath,
-            manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
-          },
-          outcome: { state: 'refused', jobId: null, reason: 'Dismissed from another window.', at: '' },
-        })
-        : null
-    ));
-    useDesignStore.getState().updateField('R', 321);
-
-    await renderCoordinator();
-    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-other');
-
-    settledElsewhere = true;
-    await act(async () => { await vi.advanceTimersByTimeAsync(1_100); });
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand(); });
-    expect(command.solveCurrentCadImport).not.toHaveBeenCalled();
-    expect(command.reported).toEqual([]);
-    expect(useDesignStore.getState().design.R).toBe(321);
-  });
-
   /** The bundle names its target; an open model that is not it is not it.
    * A model with no CAD identity used to read as "no objection", which is how
    * a return for one design was prepared into an unrelated model. */
@@ -1766,7 +865,6 @@ describe('CadLinkCoordinator', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [foreign] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/api/cadlink/designs')) return json({ items: [] });
       if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
       return json({}, 404);
@@ -1809,7 +907,6 @@ describe('CadLinkCoordinator', () => {
         return json({ cadFolderConfigured: true, items: [foreign, remembered] });
       }
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/api/cadlink/designs')) return json({ items: [{
         designId: null, lineageId: 'wgl_partymeh', filename: null,
         documentName: 'PartyMEH', archiveStem: 'PartyMEH', exportCount: 0,
@@ -1834,309 +931,6 @@ describe('CadLinkCoordinator', () => {
     expect(rememberedCadProject()).toBe('wgl_partymeh');
   });
 
-  /** Everything a Fusion "Solve in WG" needs: a listing, a marker whose value
-   * the test controls, an ingest per command, and a viewport artifact — so the
-   * gate in `cadSolveBlockerNow` runs against real store state. */
-  const solveCommandHarness = (options: {
-    ingests: CadReturnIngestRecord[];
-    solve?: () => Promise<'submitted' | 'busy'>;
-  }) => {
-    const reported: Array<Record<string, unknown>> = [];
-    const submitted: string[] = [];
-    let pendingCommand: Record<string, unknown> | null = null;
-    let ingestIndex = 0;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        // The server retires the marker with a terminal outcome.
-        pendingCommand = null;
-        return json({ state: 'recorded', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command: pendingCommand, outcome: null });
-      if (path.endsWith('/ingest')) {
-        const record = options.ingests[Math.min(ingestIndex, options.ingests.length - 1)];
-        ingestIndex += 1;
-        return json(record);
-      }
-      if (path.includes('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
-      return json({}, 404);
-    }));
-    const solveCurrentCadImport = vi.fn(options.solve ?? (async () => {
-      // The production gate, not a stand-in: this is the assertion.
-      const blocker = cadSolveBlockerNow();
-      if (blocker) throw new Error(blocker);
-      const record = useCadReturnStore.getState().ingestRecord;
-      submitted.push(String(record?.ingest_id));
-      await consumeParkedSolveCommand(`job-${submitted.length}`);
-      return 'submitted' as const;
-    }));
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
-    });
-    return {
-      reported,
-      submitted,
-      solveCurrentCadImport,
-      issue(commandId: string) { pendingCommand = {
-        commandId, returnId: 'wgr_1', bundlePath: initialBundle.bundlePath,
-        manifestSha256: `sha256:${commandId}`, requestedAt: '2026-08-18T12:00:00Z',
-      }; },
-    };
-  };
-
-  it('solves consecutive Fusion-initiated commands instead of refusing on the previous mesh', async () => {
-    vi.useFakeTimers();
-    const harness = solveCommandHarness({
-      ingests: [
-        { ...ingestRecord, ingest_id: 'wgi_first' },
-        { ...ingestRecord, ingest_id: 'wgi_second' },
-      ],
-    });
-    await renderCoordinator();
-
-    harness.issue('cmd-1');
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
-    expect(harness.submitted).toEqual(['wgi_first']);
-    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_first');
-
-    // The second command ingests fresh geometry. Before the viewport display
-    // was awaited, the gate still saw the first ingest's mesh and refused.
-    harness.issue('cmd-2');
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
-    expect(harness.submitted).toEqual(['wgi_first', 'wgi_second']);
-    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_second');
-    expect(cadLinkCoordinatorBridge.getSnapshot().error).toBeNull();
-    expect(harness.reported).toEqual([
-      { commandId: 'cmd-1', state: 'accepted', jobId: 'job-1', reason: null },
-      { commandId: 'cmd-2', state: 'accepted', jobId: 'job-2', reason: null },
-    ]);
-  });
-
-  /** A return listing that fails once, before WG took the request on, used
-   * to latch the command until the coordinator remounted: the same command
-   * was never looked at again. */
-  it('processes the same Fusion solve command on a later poll when its return listing fails once', async () => {
-    vi.useFakeTimers();
-    const harness = solveCommandHarness({ ingests: [ingestRecord] });
-    const served = vi.mocked(fetch).getMockImplementation()!;
-    let listing: 'empty' | 'fails-once' | 'ready' = 'empty';
-    let failedListings = 0;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).endsWith('/returns')) {
-        if (listing === 'empty') return json({ cadFolderConfigured: true, items: [] });
-        if (listing === 'fails-once') {
-          listing = 'ready';
-          failedListings += 1;
-          return json({ detail: 'The workspace folder is busy.' }, 503);
-        }
-      }
-      return served(input, init);
-    }));
-
-    await renderCoordinator();
-    // Nothing listed yet, so the command's own listing is the only source.
-    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
-    listing = 'fails-once';
-    harness.issue('cmd-1');
-    await act(async () => { await vi.advanceTimersByTimeAsync(1_100); });
-    expect(failedListings).toBe(1);
-    expect(harness.solveCurrentCadImport).not.toHaveBeenCalled();
-    expect(harness.reported).toEqual([]);
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
-    expect(harness.submitted).toEqual([ingestRecord.ingest_id]);
-    expect(harness.reported).toEqual([
-      { commandId: 'cmd-1', state: 'accepted', jobId: 'job-1', reason: null },
-    ]);
-  });
-
-  it('parks a Fusion solve for settings review when its source inventory resets', async () => {
-    vi.useFakeTimers();
-    const resetIngest = { ...ingestRecord, ingest_id: 'wgi_reset_inventory' };
-    const harness = solveCommandHarness({ ingests: [resetIngest] });
-    await renderCoordinator();
-    useCadReturnStore.getState().selectBundle({
-      ...initialBundle,
-      name: 'previous.wgreturn',
-      bundlePath: 'wgreturn/previous.wgreturn',
-      sourceCount: 2,
-      sources: [
-        ...initialBundle.sources,
-        {
-          id: 'source-mf', role: 'MF', required: true,
-          suggestedResolutionMm: 8, defaultDriveChannelId: 'drive-mf',
-        },
-      ],
-    });
-
-    harness.issue('cmd-reset');
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
-
-    expect(harness.solveCurrentCadImport).not.toHaveBeenCalled();
-    expect(harness.submitted).toEqual([]);
-    expect(harness.reported).toEqual([]);
-    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_reset_inventory');
-    expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject({
-      commandId: 'cmd-reset',
-      bundlePath: initialBundle.bundlePath,
-      blockers: ['Review the new source inventory and solve settings before solving.'],
-    });
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('review mesh, channel, and solve settings');
-
-    // Clicking Solve after reviewing the reset settings consumes this request.
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand(); });
-    expect(harness.submitted).toEqual(['wgi_reset_inventory']);
-    expect(harness.reported).toEqual([
-      { commandId: 'cmd-reset', state: 'accepted', jobId: 'job-1', reason: null },
-    ]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-  });
-
-  it('drops a viewport mesh it could not replace rather than blocking the next solve', async () => {
-    vi.useFakeTimers();
-    const harness = solveCommandHarness({
-      ingests: [
-        { ...ingestRecord, ingest_id: 'wgi_first' },
-        { ...ingestRecord, ingest_id: 'wgi_second' },
-      ],
-    });
-    await renderCoordinator();
-    harness.issue('cmd-1');
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
-    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_first');
-
-    // Both display artifacts fail for the second ingestion.
-    const failing = vi.mocked(fetch).getMockImplementation()!;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
-      String(input).includes('/viewport-mesh') || String(input).endsWith('/mesh')
-        ? json({}, 500)
-        : failing(input, init)
-    )));
-    harness.issue('cmd-2');
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
-
-    expect(importedMeshStore.getSnapshot().cad).toBeNull();
-    expect(harness.submitted).toEqual(['wgi_first', 'wgi_second']);
-  });
-
-  it('parks a gated Fusion command, consumes it on the next solve, and never replays it', async () => {
-    vi.useFakeTimers();
-    // A blocking finding no longer gates the solve; the FEM exterior-only
-    // choice is a real gate a user has to make, so it is what parks here.
-    const blocking: CadReturnIngestRecord = {
-      ...ingestRecord,
-      ingest_id: 'wgi_blocked',
-      evidence: { fem_air_volumes: [{ required: true }] },
-    };
-    const harness = solveCommandHarness({ ingests: [blocking] });
-    await renderCoordinator();
-
-    harness.issue('cmd-1');
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
-
-    // Parked, not discarded: nothing was submitted and nothing was reported.
-    expect(harness.submitted).toEqual([]);
-    expect(harness.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject({
-      commandId: 'cmd-1',
-      bundlePath: initialBundle.bundlePath,
-      blockers: ['This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.'],
-    });
-    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
-
-    // The command sits still while it is parked; polling never re-submits it.
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
-    expect(harness.solveCurrentCadImport).toHaveBeenCalledOnce();
-
-    // Making the gated choice and solving consumes the very same request.
-    await act(async () => {
-      useCadReturnStore.getState().setExteriorOnly(true);
-      await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand();
-    });
-    expect(harness.submitted).toEqual(['wgi_blocked']);
-    expect(harness.reported).toEqual([
-      { commandId: 'cmd-1', state: 'accepted', jobId: 'job-1', reason: null },
-    ]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-
-    // Terminal on the server, so a later poll cannot solve it a second time.
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
-    expect(harness.submitted).toEqual(['wgi_blocked']);
-  });
-
-  it('reports a dismissed command as refused so it cannot come back', async () => {
-    vi.useFakeTimers();
-    const blocking: CadReturnIngestRecord = {
-      ...ingestRecord,
-      evidence: { fem_air_volumes: [{ required: true }] },
-    };
-    const harness = solveCommandHarness({ ingests: [blocking] });
-    await renderCoordinator();
-    harness.issue('cmd-1');
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-1');
-
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().dismissSolveCommand(); });
-
-    expect(harness.reported).toEqual([{
-      commandId: 'cmd-1',
-      state: 'refused',
-      jobId: null,
-      reason: 'Dismissed in Waveguide Generator without solving.',
-    }]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('will not be offered again');
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
-    expect(harness.submitted).toEqual([]);
-  });
-
-  // No engine here can solve imported geometry. That is a capability this
-  // machine lacks, not a verdict on the request, so the request is kept --
-  // blocked, with what would let it run -- and Dismiss still gives it up.
-  it('keeps a Fusion command blocked, not refused, when no engine here can solve imported geometry', async () => {
-    vi.useFakeTimers();
-    const unavailable = 'No solve engine on this host that supports imported geometry is available.';
-    const harness = solveCommandHarness({
-      ingests: [ingestRecord],
-      solve: async () => { throw new SolveEngineUnavailableError(unavailable); },
-    });
-    await renderCoordinator();
-    harness.issue('cmd-1');
-    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
-
-    // Nothing reaches Fusion: a refusal there is permanent.
-    expect(harness.reported).toEqual([]);
-    const parked = parkedSolveCommandStore.getSnapshot().command;
-    expect(parked?.commandId).toBe('cmd-1');
-    expect(parked?.blockers).toHaveLength(1);
-    expect(parked?.blockers[0]).toContain(unavailable);
-    expect(parked?.blockers[0]).toMatch(/press Solve now/);
-    expect(parked?.blockers[0]).toMatch(/dismiss/);
-    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain(unavailable);
-
-    // Held, not replayed: the poll does not submit it again by itself.
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
-    expect(harness.solveCurrentCadImport).toHaveBeenCalledOnce();
-
-    // Solve now asks again and, still refused, keeps the same actionable blocker.
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand(); });
-    expect(harness.solveCurrentCadImport).toHaveBeenCalledTimes(2);
-    expect(harness.reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command?.blockers).toEqual(parked?.blockers);
-
-    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().dismissSolveCommand(); });
-    expect(harness.reported).toEqual([{
-      commandId: 'cmd-1', state: 'refused', jobId: null,
-      reason: 'Dismissed in Waveguide Generator without solving.',
-    }]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-  });
-
   it('detects, selects, and automatically ingests a newly arrived return', async () => {
     let listing = { cadFolderConfigured: true, items: [initialBundle] };
     const ingestBodies: Array<Record<string, unknown>> = [];
@@ -2144,7 +938,6 @@ describe('CadLinkCoordinator', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/ingest')) {
         ingestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
         return json(ingestRecord);
@@ -2176,282 +969,6 @@ describe('CadLinkCoordinator', () => {
     expect(activate).toHaveBeenCalledWith('cadlink');
   });
 
-  it('does not double-ingest an arrival while its solve command is being consumed', async () => {
-    const solveResponse = deferred<Response>();
-    let listing = { cadFolderConfigured: true, items: [initialBundle] };
-    let ingestCalls = 0;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json(listing);
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return solveResponse.promise;
-      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
-      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
-      return json({}, 404);
-    }));
-    const solveCurrentCadImport = vi.fn(async () => 'busy' as const);
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
-    });
-    await renderCoordinator();
-
-    const arrived = { ...initialBundle, modifiedAt: '2026-08-13T12:00:00Z', documentName: 'Command arrival' };
-    listing = { cadFolderConfigured: true, items: [arrived] };
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
-      await Promise.resolve();
-    });
-    expect(ingestCalls).toBe(0);
-
-    solveResponse.resolve(json({
-      command: {
-        commandId: 'cmd-arrival', returnId: 'wgr_arrival', bundlePath: arrived.bundlePath,
-        manifestSha256: 'sha256:arrival', requestedAt: '2026-08-13T12:00:00Z',
-      },
-      outcome: null,
-    }));
-    await act(async () => {
-      await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-    });
-
-    expect(ingestCalls).toBe(1);
-    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-arrival');
-  });
-
-  it('does not auto-ingest an arrival already owned by a parked solve command', async () => {
-    let listing = { cadFolderConfigured: true, items: [initialBundle] };
-    let ingestCalls = 0;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json(listing);
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
-      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
-      return json({}, 404);
-    }));
-    await renderCoordinator();
-    const arrived = { ...initialBundle, modifiedAt: '2026-08-13T12:00:00Z' };
-    parkedSolveCommandStore.park({
-      commandId: 'cmd-parked', bundlePath: arrived.bundlePath, blockers: ['review settings'],
-      parkedAt: '2026-08-13T12:00:00Z',
-    });
-    listing = { cadFolderConfigured: true, items: [arrived] };
-
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
-      await Promise.resolve();
-    });
-
-    expect(ingestCalls).toBe(0);
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-parked');
-  });
-
-  it.each([
-    ['recorded on the command', 'fusion:doc-a'],
-    ['read from the listing', undefined],
-  ])('retires a parked solve command when a newer return of the same document arrives (document %s)', async (_label, parkedDocument) => {
-    const commanded: CadReturnBundle = { ...initialBundle, documentNativeId: 'fusion:doc-a' };
-    let listing = { cadFolderConfigured: true, items: [commanded] };
-    const reported: Array<Record<string, unknown>> = [];
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json(listing);
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return json({ state: 'refused', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command: null });
-      if (path.endsWith('/ingest')) return json({ ...ingestRecord, ingest_id: 'wgi_after_superseded_command' });
-      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
-      return json({}, 404);
-    }));
-    await renderCoordinator();
-    parkedSolveCommandStore.park({
-      commandId: 'cmd-old', bundlePath: commanded.bundlePath, documentNativeId: parkedDocument,
-      blockers: ['review settings'], parkedAt: '2026-08-12T00:00:00Z',
-    });
-    const arrived = {
-      ...commanded,
-      name: 'newer.wgreturn', bundlePath: 'wgreturn/newer.wgreturn',
-      documentName: 'Newer return', modifiedAt: '2026-08-13T12:00:00Z',
-    };
-    listing = { cadFolderConfigured: true, items: [arrived, commanded] };
-
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
-      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-    });
-
-    expect(reported).toEqual([{
-      commandId: 'cmd-old', state: 'refused', jobId: null,
-      reason: 'Superseded by a newer return of the same Fusion document.',
-    }]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
-    expect(useCadReturnStore.getState().selectedBundle).toEqual(arrived);
-    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_after_superseded_command');
-  });
-
-  /** Explicit solve requests stay separate. A return of another document --
-   * or one that does not say which document it is -- is not a newer version
-   * of the parked request, and must not take the selection it is preparing. */
-  it.each([
-    ['another document', 'fusion:doc-b'],
-    ['an unnamed document', null],
-  ])('keeps a parked solve command and its selection when a return of %s arrives', async (_label, documentNativeId) => {
-    const commanded: CadReturnBundle = { ...initialBundle, documentNativeId: 'fusion:doc-a' };
-    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = {
-      cadFolderConfigured: true, items: [commanded],
-    };
-    const reported: Array<Record<string, unknown>> = [];
-    let ingestCalls = 0;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json(listing);
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return json({ state: 'refused', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) return json({ command: null });
-      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
-      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
-      return json({}, 404);
-    }));
-    await renderCoordinator();
-    expect(useCadReturnStore.getState().selectedBundle).toEqual(commanded);
-    const parked = {
-      commandId: 'cmd-a', bundlePath: commanded.bundlePath, documentNativeId: 'fusion:doc-a',
-      blockers: ['review settings'], parkedAt: '2026-08-12T00:00:00Z',
-    };
-    parkedSolveCommandStore.park(parked);
-    ingestCalls = 0;
-    const arrived: CadReturnBundle = {
-      ...initialBundle,
-      name: 'other.wgreturn', bundlePath: 'wgreturn/other.wgreturn',
-      documentName: 'Other document', documentNativeId, modifiedAt: '2026-08-13T12:00:00Z',
-    };
-    listing = { cadFolderConfigured: true, items: [arrived, commanded] };
-
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
-      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-    });
-
-    expect(reported).toEqual([]);
-    expect(parkedSolveCommandStore.getSnapshot().command).toEqual(parked);
-    expect(useCadReturnStore.getState().selectedBundle).toEqual(commanded);
-    expect(ingestCalls).toBe(0);
-    // Not silent: the arrival is still reported, with why it waits.
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Received Other document');
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('still waiting');
-  });
-
-  /** A return the user asked Fusion for is newer intent than a parked request
-   * from another document: it takes the selection, and the request starts over
-   * from its own return instead of being solved against the one on screen. */
-  it('restarts a parked solve command from its own return after a requested return of another document', async () => {
-    const linkedFusion: FusionCadStatus = {
-      ...closedFusion,
-      state: 'current', processRunning: true, running: true,
-      documentName: 'Speaker', documentId: 'fusion:doc-1',
-      link: {
-        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
-        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
-        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
-        localBodyState: 'unmodified', bodyFingerprintHash: null,
-        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
-        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
-      },
-    };
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
-    }, 'current');
-    const commanded: CadReturnBundle = { ...initialBundle, documentNativeId: 'fusion:doc-a' };
-    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = {
-      cadFolderConfigured: true, items: [commanded],
-    };
-    const reported: Array<Record<string, unknown>> = [];
-    // The server keeps offering the command until something answers it; it
-    // is visible from the moment Solve now takes it from the top.
-    let commandVisible = false;
-    const commandA = {
-      commandId: 'cmd-a', returnId: 'wgr_a', bundlePath: commanded.bundlePath,
-      manifestSha256: 'sha256:a', requestedAt: '2026-08-12T00:00:00Z',
-    };
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-      if (path.endsWith('/returns')) return json(listing);
-      if (path.endsWith('/fusion-status')) return json(linkedFusion);
-      if (path.endsWith('/request-fusion-return')) {
-        return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
-      }
-      if (path.endsWith('/solve-command/outcome')) {
-        reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return json({ state: 'refused', cleared: true });
-      }
-      if (path.endsWith('/solve-command')) {
-        return json(commandVisible ? { command: commandA, outcome: null } : { command: null });
-      }
-      if (path.endsWith('/ingest')) return json(ingestRecord);
-      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
-      return json({}, 404);
-    }));
-    // Which return was on screen each time a solve was asked for.
-    const solvedOn: Array<string | undefined> = [];
-    const solveCurrentCadImport = vi.fn(async () => {
-      solvedOn.push(useCadReturnStore.getState().selectedBundle?.bundlePath);
-      return 'busy' as const;
-    });
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
-    });
-    await renderCoordinator();
-    // A new selection re-reads Fusion's status; let that land before pulling.
-    await act(async () => {
-      useCadReturnStore.getState().selectBundle(commanded);
-      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-    });
-    parkedSolveCommandStore.park({
-      commandId: 'cmd-a', bundlePath: commanded.bundlePath, documentNativeId: 'fusion:doc-a',
-      blockers: ['review settings'], parkedAt: '2026-08-12T00:00:00Z',
-    });
-
-    let pull!: Promise<CadReturnBundle>;
-    await act(async () => {
-      pull = cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
-      await Promise.resolve(); await Promise.resolve();
-    });
-    const pulled: CadReturnBundle = {
-      ...initialBundle,
-      name: 'pulled.wgreturn', bundlePath: 'wgreturn/pulled.wgreturn', requestId: 'req_1',
-      documentName: 'Speaker pulled', documentNativeId: 'fusion:doc-1', modifiedAt: '2026-08-13T12:00:00Z',
-    };
-    listing = { cadFolderConfigured: true, items: [pulled, commanded] };
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
-    });
-    await act(async () => { await expect(pull).resolves.toMatchObject({ requestId: 'req_1' }); });
-
-    expect(reported).toEqual([]);
-    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(pulled.bundlePath);
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-a');
-    expect(String(parkedSolveCommandStore.getSnapshot().command?.blockers[0])).toMatch(/Press Solve now/);
-
-    // Solve now takes the request from the top: its own return is selected
-    // and prepared again, and nothing is solved against the pulled one.
-    commandVisible = true;
-    await act(async () => {
-      await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand();
-      for (let i = 0; i < 20; i += 1) await Promise.resolve();
-    });
-    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(commanded.bundlePath);
-    expect(solvedOn).not.toContain(pulled.bundlePath);
-    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-a');
-    expect(reported).toEqual([]);
-  });
-
   it('automatically ingests a manually selected readable return', async () => {
     const selected = {
       ...initialBundle,
@@ -2465,7 +982,6 @@ describe('CadLinkCoordinator', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle, selected] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/ingest')) {
         ingestPaths.push(JSON.parse(String(init?.body)).bundlePath);
         return json(ingested);
@@ -2501,7 +1017,6 @@ describe('CadLinkCoordinator', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle, older, newer] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/ingest')) {
         const bundlePath = JSON.parse(String(init?.body)).bundlePath as string;
         ingestPaths.push(bundlePath);
@@ -2542,7 +1057,6 @@ describe('CadLinkCoordinator', () => {
         return listingRequest === 2 ? olderResponse.promise : newerResponse.promise;
       }
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/ingest')) return json({ ...ingestRecord, ingest_id: 'wgi_newest_listing' });
       if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
       return json({}, 404);
@@ -2818,7 +1332,6 @@ describe('CadLinkCoordinator', () => {
       if (path === '/api/export/wglink') return pending.promise;
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       return json({}, 404);
     }));
     return pending;
@@ -2900,57 +1413,6 @@ describe('CadLinkCoordinator', () => {
     expect(athPolarBlocks()).toEqual([]);
   });
 
-  /** The automatic project switch is another way into the same race: nobody
-   * pressed anything between the send and the document being replaced. */
-  it('does not adopt a send identity after a Fusion solve command opened another project', async () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
-    }, 'current');
-    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
-    const pending = deferred<Response>();
-    // Fusion asks only once the send is on the wire, so the switch is
-    // unambiguously the later event.
-    let commandPending = false;
-    const routes = projectOpenRoutes('wgd_other', 'wgl_other', 'Tritonia');
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
-      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
-      if (path === '/api/export/wglink') return pending.promise;
-      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
-      if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command/outcome')) return json({ state: 'accepted', cleared: true });
-      if (path.endsWith('/solve-command')) return json({ command: commandPending ? {
-        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
-        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
-      } : null, outcome: null });
-      if (path.endsWith('/ingest')) return json(ingestRecord);
-      return routes(path) ?? json({}, 404);
-    }));
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(),
-      solveCurrentCadImport: vi.fn(async () => {
-        await consumeParkedSolveCommand('job-9');
-        return 'submitted' as const;
-      }),
-    });
-
-    await renderCoordinator();
-    let send!: Promise<unknown>;
-    await act(async () => {
-      send = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      commandPending = true;
-      window.dispatchEvent(new Event('focus'));
-      for (let i = 0; i < 12; i += 1) await Promise.resolve();
-    });
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-
-    await act(async () => { pending.resolve(sendResult()); await send; });
-    expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
-  });
-
   it.each([
     ['loadDesign', () => useDesignStore.getState().loadDesign(designForFamily('ICW'))],
     ['replaceDesign', () => useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'))],
@@ -3012,7 +1474,6 @@ describe('CadLinkCoordinator', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle, matching] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       return json({}, 404);
     }));
     const activate = vi.spyOn(workspaceNavigation, 'activate');
@@ -3071,7 +1532,6 @@ describe('CadLinkCoordinator', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [returnA, returnB] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/api/cadlink/designs')) return json({ items: [] });
       if (path.endsWith('/ingest')) return json(recordB);
       if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh);
@@ -3375,7 +1835,6 @@ describe('CadLinkCoordinator', () => {
       }] });
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       return json({}, 404);
     }));
 
@@ -3398,7 +1857,6 @@ describe('CadLinkCoordinator', () => {
       if (path.endsWith('/api/cadlink/designs')) return json({ items: [] });
       if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path.endsWith('/solve-command')) return json({ command: null });
       return json({}, 404);
     }));
     await renderCoordinator();
@@ -3411,5 +1869,274 @@ describe('CadLinkCoordinator', () => {
     });
 
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('wgreturn/other.wgreturn');
+  });
+
+  /** Fusion's solve commands are the backend's to collect and prepare
+   * (CAD-OPERATIONS.md, "Delivery"). This client reads the operations the
+   * backend made of them, and acts on one only when the user asks. */
+  const cadOperation = (overrides: Partial<CadOperationSummary> = {}): CadOperationSummary => ({
+    operationId: 'op-1',
+    kind: 'prepare_and_solve',
+    state: 'needs_user_input',
+    stage: 'ready',
+    reason: 'ready_to_solve',
+    message: 'Prepared, and waiting for you to start the solve.',
+    jobId: null,
+    attemptGeneration: 1,
+    setupRevisionId: 'wgs_1',
+    preparationId: 'wgp_1',
+    snapshot: { manifestSha256: ingestRecord.manifest_sha256 },
+    legacy: false,
+    createdAt: '2026-09-14T10:00:00Z',
+    updatedAt: '2026-09-14T10:00:05Z',
+    ...overrides,
+  });
+
+  const operationRoutes = () => {
+    const calls: string[] = [];
+    const posted: Array<{ path: string; body: unknown }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      calls.push(path);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path === '/api/cadlink/operations') return json({ operations: [cadOperation()] });
+      if (path.endsWith('/prepare') || path.endsWith('/cancel')) {
+        posted.push({ path, body: init?.body ? JSON.parse(String(init.body)) : null });
+        return path.endsWith('/cancel')
+          ? json(cadOperation({ state: 'cancelled', reason: null, attemptGeneration: 2, updatedAt: '2026-09-14T10:00:10Z' }))
+          : json({ operation: cadOperation({
+            state: 'processing', stage: 'validating', reason: null, attemptGeneration: 2, updatedAt: '2026-09-14T10:00:09Z',
+          }) });
+      }
+      // A marker Fusion left behind: the backend's to collect, never this client's.
+      if (path.endsWith('/solve-command')) return json({ command: {
+        commandId: 'cmd-1', returnId: 'wgr_1', bundlePath: initialBundle.bundlePath,
+        manifestSha256: 'sha256:m', requestedAt: '2026-09-14T10:00:00Z',
+      }, outcome: null });
+      return json({}, 404);
+    }));
+    return { calls, posted };
+  };
+
+  it('reads the pending CAD operations and never consumes a Fusion solve command itself', async () => {
+    const { calls } = operationRoutes();
+    await renderCoordinator();
+    await vi.waitFor(() => {
+      expect(useCadOperationsStore.getState().operations['op-1']?.reason).toBe('ready_to_solve');
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(calls.filter((path) => path.includes('/solve-command'))).toEqual([]);
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  });
+
+  it('prepares an operation from its project setup on Solve now, and cancels it on Dismiss', async () => {
+    const { posted } = operationRoutes();
+    await renderCoordinator();
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().solveOperation('op-1'); });
+    // No setup revision: the backend resolves the snapshot's own project setup.
+    expect(posted).toEqual([{ path: '/api/cadlink/operations/op-1/prepare', body: { submit: true } }]);
+    expect(useCadOperationsStore.getState().operations['op-1']?.state).toBe('processing');
+
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().dismissOperation('op-1'); });
+    expect(posted[1]).toEqual({ path: '/api/cadlink/operations/op-1/cancel', body: null });
+    expect(useCadOperationsStore.getState().operations['op-1']?.state).toBe('cancelled');
+  });
+
+  it('approves reviewed findings only on the preparation that reported them', async () => {
+    const { posted } = operationRoutes();
+    await renderCoordinator();
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().approveOperation('op-1', {
+        preparationId: 'wgp_1', findingIds: ['finding-a'],
+      });
+    });
+    expect(posted).toEqual([{
+      path: '/api/cadlink/operations/op-1/prepare',
+      body: { submit: true, approvals: { preparationId: 'wgp_1', findingIds: ['finding-a'] } },
+    }]);
+  });
+
+  /** The design on screen as it was opened from its own project. */
+  function openedProject() {
+    return {
+      dialect: 'ath', migrationsApplied: [],
+      passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+      design: { ...useDesignStore.getState().design, R: 150 },
+      cadlink: {
+        identity: { designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2 },
+        classification: 'current',
+      },
+    } as unknown as Parameters<typeof applyOpenedDesign>[0];
+  }
+
+  it('leaves unsaved edits alone while a solve Fusion sent for another project runs to its job', async () => {
+    act(() => { applyOpenedDesign(openedProject(), 'current.cfg'); });
+    useDesignStore.getState().updateField('R', 321);
+    const design = useDesignStore.getState().design;
+    const revision = useDesignStore.getState().designRevision;
+    const identity = useDocumentStore.getState().identity;
+    const { calls } = operationRoutes();
+    await renderCoordinator();
+
+    const otherProject = { manifestSha256: `sha256:${'b'.repeat(64)}` };
+    await act(async () => {
+      const { apply } = useCadOperationsStore.getState();
+      apply(cadOperation({ operationId: 'op-b', state: 'received', stage: 'received', reason: null, attemptGeneration: 0, snapshot: otherProject, updatedAt: '2026-09-14T10:00:00Z' }));
+      apply(cadOperation({ operationId: 'op-b', state: 'processing', stage: 'preparing-mesh', reason: null, snapshot: otherProject, updatedAt: '2026-09-14T10:00:01Z' }));
+      apply(cadOperation({ operationId: 'op-b', state: 'accepted', stage: 'submitted', reason: null, jobId: 'job-b', snapshot: otherProject, updatedAt: '2026-09-14T10:00:06Z' }));
+      for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    });
+
+    expect(useCadOperationsStore.getState().operations['op-b']?.state).toBe('accepted');
+    expect(useDesignStore.getState().design).toBe(design);
+    expect(useDesignStore.getState().design.R).toBe(321);
+    expect(useDesignStore.getState().designRevision).toBe(revision);
+    expect(useDocumentStore.getState().identity).toEqual(identity);
+    // Nothing was opened, selected or prepared on this client's side.
+    expect(calls.filter((path) => (
+      path.startsWith('/api/cadlink/designs') || path.includes('/solve-command') || path.endsWith('/ingest')
+    ))).toEqual([]);
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  });
+
+  it('keeps the return the user picked over one Fusion was asked for before the pick', async () => {
+    const linkedFusion: FusionCadStatus = {
+      ...closedFusion,
+      state: 'current', processRunning: true, running: true,
+      documentName: 'Speaker', documentId: 'fusion:doc-1',
+      link: {
+        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
+        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
+        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+        localBodyState: 'unmodified', bodyFingerprintHash: null,
+        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
+        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
+      },
+    };
+    useDocumentStore.getState().setCadLink({ designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1 }, 'current');
+    const picked: CadReturnBundle = {
+      ...initialBundle, name: 'picked.wgreturn', bundlePath: 'wgreturn/picked.wgreturn', documentName: 'Speaker picked',
+    };
+    const pulled: CadReturnBundle = {
+      ...initialBundle, name: 'pulled.wgreturn', bundlePath: 'wgreturn/pulled.wgreturn', requestId: 'req_1',
+      documentName: 'Speaker pulled', modifiedAt: '2026-09-14T10:00:30Z',
+    };
+    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = { cadFolderConfigured: true, items: [picked] };
+    const ingested: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(linkedFusion);
+      if (path.endsWith('/request-fusion-return')) {
+        return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
+      }
+      if (path.endsWith('/ingest')) {
+        const bundlePath = String((JSON.parse(String(init?.body)) as { bundlePath: string }).bundlePath);
+        ingested.push(bundlePath);
+        return json({ ...ingestRecord, ingest_id: bundlePath === picked.bundlePath ? 'wgi_picked' : 'wgi_pulled' });
+      }
+      if (path.includes('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    let pull!: Promise<CadReturnBundle>;
+    await act(async () => {
+      pull = cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
+      pull.catch(() => undefined);
+      await Promise.resolve(); await Promise.resolve();
+    });
+    // While Fusion is still exporting, the user picks another return.
+    await act(async () => { cadLinkCoordinatorBridge.getSnapshot().selectBundle(picked); });
+    await vi.waitFor(() => expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_picked'));
+
+    listing = { cadFolderConfigured: true, items: [pulled, picked] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+    });
+    await act(async () => { await expect(pull).rejects.toBeInstanceOf(SupersededError); });
+
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(picked.bundlePath);
+    expect(ingested).toEqual([picked.bundlePath]);
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_picked');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Speaker pulled');
+  });
+
+  it('keeps the return the user picked over one Fusion wrote before the pick, and takes one written after it', async () => {
+    const picked: CadReturnBundle = {
+      ...initialBundle, name: 'picked.wgreturn', bundlePath: 'wgreturn/picked.wgreturn', documentName: 'Speaker picked',
+    };
+    const older: CadReturnBundle = {
+      ...initialBundle, name: 'older.wgreturn', bundlePath: 'wgreturn/older.wgreturn', documentName: 'Speaker older',
+      modifiedAt: '2026-01-01T00:00:00Z',
+    };
+    const newer: CadReturnBundle = {
+      ...initialBundle, name: 'newer.wgreturn', bundlePath: 'wgreturn/newer.wgreturn', documentName: 'Speaker newer',
+      modifiedAt: '2099-01-01T00:00:00Z',
+    };
+    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = { cadFolderConfigured: true, items: [picked] };
+    const ingested: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/ingest')) {
+        const bundlePath = String((JSON.parse(String(init?.body)) as { bundlePath: string }).bundlePath);
+        ingested.push(bundlePath);
+        return json({ ...ingestRecord, ingest_id: `wgi_${bundlePath.split('/')[1].split('.')[0]}` });
+      }
+      if (path.includes('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    await act(async () => { cadLinkCoordinatorBridge.getSnapshot().selectBundle(picked); });
+    await vi.waitFor(() => expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_picked'));
+
+    // Written before the pick, and only noticed after it: the pick is newer.
+    listing = { cadFolderConfigured: true, items: [older, picked] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+    });
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(picked.bundlePath);
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_picked');
+
+    // Sent from Fusion after the pick: newer intent, which takes the selection.
+    listing = { cadFolderConfigured: true, items: [newer, older, picked] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+    });
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newer.bundlePath);
+    await vi.waitFor(() => expect(ingested).toEqual([picked.bundlePath, newer.bundlePath]));
+  });
+
+  it('never lets a display mesh finishing for one model cancel the viewport load of a newer selection', async () => {
+    let displayReady = false;
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (!path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return displayReady ? new Response(viewportMesh, { status: 200 }) : new Response('', { status: 202 });
+    }) as typeof fetch;
+    const first = { ...ingestRecord, ingest_id: 'wgi_first' };
+    useCadReturnStore.getState().selectBundle(initialBundle);
+    useCadReturnStore.setState({ ingestRecord: first });
+    workspaceModeStore.setMode('cad');
+    await showIngestedMeshInViewport(first, 'Speaker', undefined, fetcher);
+    expect(importedMeshStore.getSnapshot().cad?.artifactToken).toBe('wgi_first:solver');
+
+    // The user selects another return; its viewport load begins at once and
+    // is still in flight when the first model's display tessellation lands.
+    useCadReturnStore.getState().selectBundle({
+      ...initialBundle, name: 'second.wgreturn', bundlePath: 'wgreturn/second.wgreturn',
+    });
+    const second = importedMeshStore.beginIntent();
+    displayReady = true;
+    await new Promise((resolve) => { window.setTimeout(resolve, 600); });
+
+    expect(importedMeshStore.isCurrentGeneration(second)).toBe(true);
+    expect(importedMeshStore.getSnapshot().cad?.artifactToken).toBe('wgi_first:solver');
   });
 });
