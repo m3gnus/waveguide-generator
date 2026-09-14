@@ -155,18 +155,50 @@ class TemporarySession:
             remove_tree(self.path)
 
 
+def _chmod_no_follow(path: str, mode: int) -> None:
+    """``os.chmod`` that never reaches through a symlink to what it points at.
+
+    ``lchmod`` semantics where the platform has them; elsewhere the entry is
+    ``lstat``-ed first and a symlink is left alone. CPython's ``tempfile``
+    does the same since CVE-2023-6597.
+    """
+
+    if os.chmod in os.supports_follow_symlinks:
+        os.chmod(path, mode, follow_symlinks=False)
+        return
+    if os.name != "nt" and stat.S_ISLNK(os.lstat(path).st_mode):
+        return
+    os.chmod(path, mode)
+
+
 def _retry_writable(function: Callable[..., object], path: str, error: BaseException) -> None:
     # Windows refuses to delete a file carrying FILE_ATTRIBUTE_READONLY -- what
     # ``chmod(0o400)`` sets there, and what the isolated CAD child's staged STEP
     # carries -- and ``shutil.rmtree`` does not clear it.
     # ``tempfile.TemporaryDirectory`` retries the same way for the same reason.
+    # The entry itself is made writable, never a symlink's target: on POSIX an
+    # unlink fails here when the directory holding the entry is not writable,
+    # and a plain chmod of a link in it would hand its target a new mode.
     if function not in (os.unlink, os.rmdir) or not isinstance(error, PermissionError):
         return
     try:
-        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        _chmod_no_follow(path, stat.S_IREAD | stat.S_IWRITE)
         function(path)
     except OSError:
         pass
+
+
+def _owned_by_this_user(info: os.stat_result) -> bool:
+    """Whether this process's user owns an entry of the temporary directory.
+
+    On POSIX the system temporary directory is shared. An entry another user
+    made is theirs whatever its name: this process cannot test their lock, may
+    not remove their directory, and must not change modes inside it. Windows
+    keeps one temporary directory per user and reports no owner here.
+    """
+
+    getuid = getattr(os, "getuid", None)
+    return getuid is None or info.st_uid == getuid()
 
 
 def remove_tree(path: str | os.PathLike[str]) -> None:
@@ -212,7 +244,9 @@ def sweep_stale_temporary_directories(
     """Remove what dead server processes left in ``base``; return what went.
 
     Never raises and never follows a symlink. Anything whose name it does not
-    own is left alone.
+    own is left alone, and so is anything another user owns on POSIX, where
+    ``base`` is shared: a session without a lock is judged by age, so the
+    owner check covers session names as well as the legacy prefixes.
     """
 
     current = time.time() if now is None else now
@@ -232,9 +266,12 @@ def sweep_stale_temporary_directories(
         try:
             if not entry.is_dir(follow_symlinks=False):
                 continue
-            age = current - entry.stat(follow_symlinks=False).st_mtime
+            info = entry.stat(follow_symlinks=False)
         except OSError:
             continue
+        if not _owned_by_this_user(info):
+            continue
+        age = current - info.st_mtime
         if session:
             if not _session_is_stale(path, age):
                 continue

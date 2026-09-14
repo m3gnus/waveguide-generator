@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import time
@@ -238,6 +239,73 @@ def test_the_sweep_never_follows_a_symlink(tmp_path: Path) -> None:
     sweep_stale_temporary_directories(tmp_path)
 
     assert (precious / "keep.txt").is_file()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory permissions and symlinks")
+def test_a_permission_retry_never_changes_what_a_symlink_points_at(tmp_path: Path) -> None:
+    """Removal fixes the entry it failed on, never the entry's target.
+
+    An unlink fails with ``PermissionError`` when the directory holding the
+    entry is not writable. The retry made the entry 0600 first, and a plain
+    ``os.chmod`` follows a symlink: a link in a locked directory handed its
+    target -- a file, or a home directory losing its search bit -- a new mode.
+    It is the pattern CPython fixed in ``tempfile`` as CVE-2023-6597.
+    """
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target_file = outside / "notes.txt"
+    target_file.write_text("x", encoding="utf-8")
+    target_file.chmod(0o444)
+    target_dir = outside / "home"
+    target_dir.mkdir()
+    target_dir.chmod(0o755)
+    tree = tmp_path / f"{LEGACY_PREFIXES[0]}planted"
+    locked = tree / "locked"
+    locked.mkdir(parents=True)
+    (locked / "to-file").symlink_to(target_file)
+    (locked / "to-dir").symlink_to(target_dir, target_is_directory=True)
+    locked.chmod(0o500)
+    try:
+        remove_tree(tree)
+
+        assert stat.S_IMODE(target_file.stat().st_mode) == 0o444
+        assert stat.S_IMODE(target_dir.stat().st_mode) == 0o755
+        assert target_file.read_text(encoding="utf-8") == "x"
+    finally:
+        if locked.is_dir():
+            locked.chmod(0o700)
+        target_file.chmod(0o644)
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_the_sweep_leaves_another_users_entries_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The system temporary directory is shared on POSIX.
+
+    An old directory under one of WG's names that another user made is still
+    theirs: this process cannot ask its owner, may not remove it, and must not
+    change modes inside it. That holds for a leftover from before sessions and
+    for a session directory with no lock to test alike.
+    """
+
+    legacy = tmp_path / f"{LEGACY_PREFIXES[0]}theirs"
+    session = tmp_path / f"{SESSION_PREFIX}999999-theirs"
+    for path in (legacy, session):
+        path.mkdir()
+        (path / "waveguide.msh").write_text("x", encoding="utf-8")
+        _age(path, LEGACY_MIN_AGE_SECONDS * 2)
+    real_uid = os.getuid()
+
+    with monkeypatch.context() as another_user:
+        another_user.setattr(os, "getuid", lambda: real_uid + 1)
+        assert sweep_stale_temporary_directories(tmp_path) == []
+    assert legacy.is_dir()
+    assert session.is_dir()
+
+    # The same entries, this user's own, are swept exactly as before.
+    assert sorted(sweep_stale_temporary_directories(tmp_path)) == sorted([legacy, session])
 
 
 def test_a_missing_base_sweeps_nothing(tmp_path: Path) -> None:
