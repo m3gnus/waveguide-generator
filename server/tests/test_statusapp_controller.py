@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from types import SimpleNamespace
+import venv
 
 import pytest
 
@@ -1387,3 +1388,123 @@ def test_a_restarted_child_is_diagnosed_from_its_own_output_alone(
     assert snapshot.exit_code == exit_code
     assert "no diagnostic output" in snapshot.backend.reason
     assert "first child" not in snapshot.backend.reason
+
+
+#: Records the prefix it runs under, then exits. It stands in for
+#: ``launch/serve.py`` itself, because only the command the controller builds
+#: on its own names an interpreter; every other test here passes
+#: ``server_command``.
+PREFIX_SERVER = r'''import os
+from pathlib import Path
+import sys
+
+Path(os.environ["WG2_TEST_PREFIX"]).write_text(sys.prefix, encoding="utf-8")
+'''
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="a Windows venv copies its launcher, so there is no symlink to follow"
+)
+def test_a_symlinked_venv_interpreter_starts_the_server_inside_that_venv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The server runs in the launcher's venv, not in the interpreter behind it.
+
+    A uv venv, and ``python -m venv`` on macOS and Linux, makes ``bin/python``
+    a symlink to the base interpreter. Python finds its venv from the
+    ``pyvenv.cfg`` beside the path it was started as, so a command naming the
+    symlink's target starts the base interpreter -- and the real server died
+    there with ``No module named 'uvicorn'``.
+    """
+
+    environment = tmp_path / "venv"
+    venv.EnvBuilder(symlinks=True, with_pip=False).create(environment)
+    interpreter = environment / "bin" / "python"
+    # The premise: the shape that broke, a link to an interpreter elsewhere.
+    assert interpreter.is_symlink()
+    assert not interpreter.resolve().is_relative_to(environment.resolve())
+
+    checkout = _checkout(tmp_path)
+    (checkout / "launch").mkdir()
+    (checkout / "launch" / "serve.py").write_text(PREFIX_SERVER, encoding="utf-8")
+    prefix = tmp_path / "prefix.txt"
+    monkeypatch.setattr(sys, "executable", str(interpreter))
+    controller = StatusController(
+        repo_root=checkout,
+        environ={**os.environ, "WG2_TEST_PREFIX": str(prefix)},
+        request_timeout=0.2,
+        shutdown_timeout=1.0,
+    )
+    assert controller._command(3199, tmp_path / "stop")[0] == str(interpreter)
+    try:
+        controller.start()
+        _await_attempt(controller)
+    finally:
+        controller.close()
+
+    assert Path(prefix.read_text(encoding="utf-8")).resolve() == environment.resolve()
+
+
+#: Dies the way a server does in an environment missing its dependencies --
+#: before ``setup_logging`` opens the log -- unless told to write to it first.
+DYING_SERVER = r'''import os
+from pathlib import Path
+import sys
+
+log = os.environ.get("WG2_TEST_LOG")
+if log:
+    Path(log).parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "a", encoding="utf-8") as handle:
+        handle.write("2026-09-14T12:00:00+0000 INFO wg2: this start\n")
+print("ModuleNotFoundError: No module named 'uvicorn'", file=sys.stderr, flush=True)
+raise SystemExit(1)
+'''
+
+
+@pytest.mark.parametrize(
+    ("earlier_log", "child_writes", "location"),
+    [
+        (False, False, "It stopped before it created its log at {log}"),
+        (True, False, "It stopped before it wrote to its log, so {log} holds nothing from this start"),
+        (False, True, "The full log is at {log}"),
+        (True, True, "The full log is at {log}"),
+    ],
+    ids=["no-log", "earlier-log-only", "new-log", "appended-log"],
+)
+def test_an_exit_sends_the_reader_to_the_log_only_when_this_start_wrote_to_it(
+    tmp_path: Path, earlier_log: bool, child_writes: bool, location: str
+) -> None:
+    """A server that died before logging is not reported with a log to read.
+
+    "The full log is at ..." used to follow every exit. For a server that died
+    importing its dependencies it named a file that did not exist -- or one an
+    earlier start had left, which says nothing about this one.
+    """
+
+    script = tmp_path / "dying_server.py"
+    script.write_text(DYING_SERVER, encoding="utf-8")
+    data = tmp_path / "data"
+    log = data / "logs" / "server.log"
+    if earlier_log:
+        log.parent.mkdir(parents=True)
+        log.write_text("2026-09-13T12:00:00+0000 INFO wg2: an earlier start\n", encoding="utf-8")
+    environ = {**os.environ}
+    if child_writes:
+        environ["WG2_TEST_LOG"] = str(log)
+    controller = _controller(
+        tmp_path,
+        server_command=(sys.executable, str(script)),
+        server_args=("--data-dir", str(data)),
+        environ=environ,
+    )
+    try:
+        controller.start()
+        _await_attempt(controller)
+        snapshot = controller.poll()
+    finally:
+        controller.close()
+
+    reason = snapshot.backend.reason
+    assert snapshot.exit_code == 1
+    assert "No module named 'uvicorn'" in reason
+    assert reason.endswith(location.format(log=log)), reason

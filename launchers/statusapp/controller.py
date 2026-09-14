@@ -376,7 +376,14 @@ class StatusController:
     ) -> None:
         self.environ = dict(os.environ if environ is None else environ)
         self.repo_root = Path(repo_root or app_root(environ=self.environ)).resolve()
-        self.python_executable = Path(python_executable or sys.executable).resolve()
+        # Absolute, never resolved. Python recognises a venv only by the
+        # ``pyvenv.cfg`` beside the path it was started as, and a uv venv -- or
+        # ``python -m venv`` on macOS and Linux -- makes ``bin/python`` a symlink
+        # to the base interpreter. Started through the resolved target, the
+        # server ran outside the venv and died importing uvicorn.
+        # ``absolute()`` still anchors a relative path, which matters because
+        # the child starts in ``repo_root``.
+        self.python_executable = Path(python_executable or sys.executable).absolute()
         self.server_args = tuple(server_args)
         self.server_command = tuple(server_command) if server_command is not None else None
         self.request_probe = request_probe
@@ -432,6 +439,9 @@ class StatusController:
         self._port: int | None = None
         self._frontend_source_warning: str | None = None
         self._frontend_served: LampStatus | None = None
+        #: The server log as it was before the current child could write to
+        #: it, so an exit can tell this start's log from an earlier start's.
+        self._log_before_start: tuple[int, int, int] | None = None
         self._lock_conflict_deadline: float | None = None
         self._lock_conflict_next = 0.0
         self._watcher: threading.Thread | None = None
@@ -729,6 +739,7 @@ class StatusController:
             else:
                 popen_options["start_new_session"] = True
 
+            self._log_before_start = self._server_log_contents()
             try:
                 process = subprocess.Popen(
                     self._command(preferred, self._control_path), **popen_options
@@ -822,20 +833,50 @@ class StatusController:
             detail = lines[-1] if lines else "no diagnostic output"
         return f"Server exited with code {return_code}: {detail}. {self._log_location()}"
 
-    def _log_location(self) -> str:
-        """Where the whole story is, spelled out rather than described.
-
-        A user told only that the server exited should not also have to work
-        out where their platform keeps the log that says why.
-        """
-
+    def _server_log(self) -> Path | None:
         try:
             from server.platform.logging_setup import LOG_FILENAME
             from server.platform.paths import data_paths
 
-            return f"The full log is at {data_paths(self._data_dir()).logs / LOG_FILENAME}"
-        except (ImportError, OSError, ValueError):  # pragma: no cover - unnameable path
+            return data_paths(self._data_dir()).logs / LOG_FILENAME
+        except (ImportError, OSError, RuntimeError, TypeError, ValueError):  # pragma: no cover
+            return None
+
+    def _server_log_contents(self) -> tuple[int, int, int] | None:
+        """What the server log holds now; ``None`` when it is absent or empty."""
+
+        log = self._server_log()
+        if log is None:
+            return None
+        try:
+            status = log.stat()
+        except OSError:
+            return None
+        if not status.st_size:
+            return None
+        return (status.st_ino, status.st_size, status.st_mtime_ns)
+
+    def _log_location(self) -> str:
+        """Where the whole story is, spelled out rather than described.
+
+        A user told only that the server exited should not also have to work
+        out where their platform keeps the log that says why. Nor be sent to
+        a log that cannot say: a server that dies importing its dependencies
+        -- how a broken environment shows itself -- stops before it opens its
+        log, and the line reported before this is all it wrote. Naming the
+        file anyway pointed at one that did not exist, or at one an earlier
+        start had left.
+        """
+
+        log = self._server_log()
+        if log is None:  # pragma: no cover - unnameable path
             return "The full log is in server.log in the Waveguide Generator log folder"
+        if not log.exists():
+            return f"It stopped before it created its log at {log}"
+        contents = self._server_log_contents()
+        if contents is None or contents == self._log_before_start:
+            return f"It stopped before it wrote to its log, so {log} holds nothing from this start"
+        return f"The full log is at {log}"
 
     def _already_running_url(self) -> str | None:
         for line in reversed(self._output_lines()):
