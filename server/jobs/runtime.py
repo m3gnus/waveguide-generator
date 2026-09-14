@@ -54,6 +54,7 @@ from server.jobs.store import ALLOWED_STATUSES, JobStore
 from server.integration.provenance import canonical_json_sha256, enrich_result_contract
 from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
 from server.platform.shutdown_backstop import shutdown_wait_limit
+from server.mesh.imported import verify_artifact_reduced_orientation
 from server.solver.imported import (
     ImportedMeshArtifactError,
     ImportedSymmetryUnsupportedError,
@@ -550,6 +551,45 @@ class ImportedSolveRefusal(ValueError):
         self.reason_code = reason_code
         self.details = dict(details or {})
         super().__init__(f"{reason_code}: {message}")
+
+
+def _refuse_inverted_reduced_mesh(record: Mapping[str, Any], msh_text: str) -> None:
+    """Refuse a reduced mesh wound against the model it mirrors.
+
+    Ingestion judges a reduced mesh's winding when it builds one and when it
+    serves one from its cache. A record written before that check existed
+    names a mesh nobody judged, and its digest vouches only for the bytes. An
+    inverted mesh is perfectly consistent, so nothing downstream notices, and
+    every engine would solve it inside out. The plan, the submission and the
+    job's own start therefore judge the mesh the solver will read.
+    """
+
+    planes = imported_domain_planes(record)
+    if not planes:
+        return
+    try:
+        orientation = verify_artifact_reduced_orientation(msh_text, cut_planes=planes)
+    except ValueError as exc:
+        raise ImportedSolveRefusal(
+            "ingest_mesh_unavailable",
+            f"the reduced mesh of this CAD return cannot be read to check its "
+            f"winding ({exc}). Re-import this return.",
+        ) from exc
+    inverted = int(orientation["inverted_component_count"])
+    if inverted:
+        raise ImportedSolveRefusal(
+            "imported_reduced_mesh_inverted",
+            f"{inverted} of {orientation['component_count']} component(s) of this "
+            "CAD return's reduced mesh are wound against the model they mirror, "
+            "so every engine would solve it inside out. An earlier WG build "
+            "prepared it. Re-import this return: WG prepares it again and checks "
+            "its winding.",
+            details={
+                "cut_planes": list(planes),
+                "inverted_component_count": inverted,
+                "component_count": int(orientation["component_count"]),
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -2311,6 +2351,7 @@ class JobRuntime:
             msh_text = await asyncio.to_thread(read_verified_import_mesh, record)
         except ImportedMeshArtifactError as exc:
             raise ImportedSolveRefusal("ingest_mesh_unavailable", str(exc)) from exc
+        await asyncio.to_thread(_refuse_inverted_reduced_mesh, record, msh_text)
         return await plan_imported_submission(
             request,
             self.engine_registry,
@@ -2494,6 +2535,7 @@ class JobRuntime:
                 "ingest_mesh_unavailable",
                 str(exc),
             ) from exc
+        await asyncio.to_thread(_refuse_inverted_reduced_mesh, record, msh_text)
         mesh_record = record.get("mesh")
         mesh_stats = (
             dict(mesh_record.get("stats") or {})
@@ -3255,6 +3297,12 @@ class JobRuntime:
                         "ingest_mesh_unavailable",
                         str(exc),
                     ) from exc
+                # A job queued by an earlier build carries a mesh its digest
+                # vouches for and nobody judged; it is checked here, before any
+                # engine is fetched, as every submission now is.
+                await asyncio.to_thread(
+                    _refuse_inverted_reduced_mesh, imported_record, job_msh_text
+                )
                 imported_record = {
                     **imported_record,
                     "_execution_msh_text": job_msh_text,

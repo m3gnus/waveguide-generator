@@ -1183,6 +1183,73 @@ def verify_reduced_orientation(
     return record
 
 
+def gmsh22_triangle_arrays(msh_text: str) -> tuple[np.ndarray, np.ndarray]:
+    """Node coordinates and triangle corner rows of an ASCII Gmsh 2.2 artifact.
+
+    The imported solver artifact is always written as ASCII Gmsh 2.2
+    (``build_imported_mesh``). A text without a ``$Nodes`` or ``$Elements``
+    section holds no surface, and answers empty arrays; anything else that does
+    not parse is a ``ValueError``.
+    """
+
+    lines = [line.strip() for line in msh_text.splitlines()]
+    try:
+        version = lines[lines.index("$MeshFormat") + 1].split()
+    except (ValueError, IndexError) as exc:
+        raise ValueError("the mesh artifact is not an ASCII Gmsh 2.2 mesh") from exc
+    if len(version) < 2 or not version[0].startswith("2.") or version[1] != "0":
+        raise ValueError(
+            "the mesh artifact is not an ASCII Gmsh 2.2 mesh "
+            f"(format {' '.join(version)!r})"
+        )
+    empty = (np.zeros((0, 3), dtype=float), np.zeros((0, 3), dtype=np.int64))
+    if "$Nodes" not in lines or "$Elements" not in lines:
+        return empty
+    try:
+        nodes_start = lines.index("$Nodes")
+        node_count = int(lines[nodes_start + 1])
+        rows = [line.split() for line in lines[nodes_start + 2 : nodes_start + 2 + node_count]]
+        if len(rows) != node_count:
+            raise ValueError("the mesh artifact is missing Gmsh nodes")
+        index = {row[0]: position for position, row in enumerate(rows)}
+        points = np.asarray([row[1:4] for row in rows], dtype=float).reshape(-1, 3)
+        elements_start = lines.index("$Elements")
+        element_count = int(lines[elements_start + 1])
+        corners: list[list[int]] = []
+        for line in lines[elements_start + 2 : elements_start + 2 + element_count]:
+            parts = line.split()
+            if len(parts) < 4 or parts[1] != "2":
+                continue
+            tag_count = int(parts[2])
+            corner = [index[node] for node in parts[3 + tag_count : 6 + tag_count]]
+            if len(corner) != 3:
+                raise ValueError("the mesh artifact holds a triangle without three nodes")
+            corners.append(corner)
+    except (IndexError, KeyError, ValueError) as exc:
+        raise ValueError(
+            f"the mesh artifact holds malformed Gmsh nodes or elements: {exc}"
+        ) from exc
+    if not corners:
+        return points, empty[1]
+    return points, np.asarray(corners, dtype=np.int64)
+
+
+def verify_artifact_reduced_orientation(
+    msh_text: str, *, cut_planes: Iterable[str]
+) -> dict[str, Any]:
+    """:func:`verify_reduced_orientation` on a stored solver mesh artifact.
+
+    The build judges the arrays it just made. A reduced mesh WG did not just
+    build -- one served from the ingestion cache, or named by a stored record
+    -- was made under whatever winding rule its build had, and nothing in its
+    cache key or its digest says which. This judges it from the bytes the
+    solver will read. Raises ``ValueError`` when they do not parse.
+    """
+
+    points, triangles = gmsh22_triangle_arrays(msh_text)
+    return verify_reduced_orientation(points, triangles, cut_planes=cut_planes)
+
+
 def _reduced_orientation_kwargs() -> dict[str, str]:
     """Ask the mesher to orient a reduced component from its mirrored parent.
 

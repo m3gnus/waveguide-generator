@@ -1721,6 +1721,164 @@ def test_execution_uses_job_mesh_after_import_cache_is_deleted(tmp_path: Path) -
     asyncio.run(scenario())
 
 
+def _quarter_box_mesh(*, inverted: bool) -> str:
+    """A closed box's quarter, open on x = 0 and y = 0, as an ASCII Gmsh 2.2 artifact.
+
+    Wound outward, as the whole box it mirrors is, or with every triangle
+    reversed: what a mesher that wound a reduced component from a rear-facing
+    source returned, and what an earlier build cached and recorded without
+    checking. It is closed modulo its cut planes and perfectly consistent, so
+    only its winding tells the two apart.
+    """
+
+    corners = [
+        (0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0),
+        (0, 0, 1), (1, 0, 1), (0, 1, 1), (1, 1, 1),
+    ]
+    outward = [
+        (1, 3, 7), (1, 7, 5), (2, 6, 7), (2, 7, 3),
+        (0, 2, 3), (0, 3, 1), (4, 5, 7), (4, 7, 6),
+    ]
+    nodes = [
+        f"{index + 1} {0.1 * x:g} {0.1 * y:g} {0.1 * z:g}"
+        for index, (x, y, z) in enumerate(corners)
+    ]
+    elements = []
+    for index, (a, b, c) in enumerate(outward):
+        if inverted:
+            b, c = c, b
+        tag = 101 if index == 0 else 1
+        elements.append(f"{index + 1} 2 2 {tag} {tag} {a + 1} {b + 1} {c + 1}")
+    return "\n".join(
+        [
+            "$MeshFormat", "2.2 0 8", "$EndMeshFormat",
+            "$Nodes", str(len(nodes)), *nodes, "$EndNodes",
+            "$Elements", str(len(elements)), *elements, "$EndElements", "",
+        ]
+    )
+
+
+def test_a_stored_reduced_record_wound_inside_out_is_refused_before_a_job_exists(
+    tmp_path: Path,
+) -> None:
+    """A record an earlier build prepared is checked when it is solved.
+
+    Ingestion checks the winding of a reduced mesh it builds, but a record
+    written before that check existed names a mesh nobody judged. Every engine
+    would solve it inside out, so the plan and the submission refuse it with the
+    remedy, instead of trusting the record's digest alone.
+    """
+
+    quarter = _domain_changes(["x0", "y0"])
+    registry = _DeclaredRegistry(_metal())
+
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(
+            _submit_record(
+                tmp_path / "submit",
+                registry,
+                "metal",
+                quarter,
+                mesh_text=_quarter_box_mesh(inverted=True),
+            )
+        )
+    assert caught.value.reason_code == "imported_reduced_mesh_inverted"
+    assert "Re-import this return" in str(caught.value)
+
+    async def plan() -> dict[str, Any]:
+        (tmp_path / "plan").mkdir()
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path / "plan", quarter, mesh_text=_quarter_box_mesh(inverted=True)
+        )
+        # A registry that never pauses: a plan that skipped the check would
+        # answer here, and fail this test, rather than wait on a held adapter.
+        runtime.engine_registry = _AdapterRegistry(_metal())  # type: ignore[assignment]
+        try:
+            return await runtime.plan_imported(_plan_request(ingest_id, "auto"))
+        finally:
+            await runtime.shutdown()
+
+    with pytest.raises(ImportedSolveRefusal) as planned:
+        asyncio.run(plan())
+    assert planned.value.reason_code == "imported_reduced_mesh_inverted"
+
+    # The same quarter wound outward is solved as before.
+    row = asyncio.run(
+        _submit_record(
+            tmp_path / "outward",
+            _DeclaredRegistry(_metal()),
+            "metal",
+            quarter,
+            mesh_text=_quarter_box_mesh(inverted=False),
+        )
+    )
+    assert row["config_json"]["options"]["engine"] == "metal"
+    # A full domain is not judged here: its outward winding is the mesher's
+    # own contract for a closed body, as ``verify_reduced_orientation`` says.
+    full = _domain_changes([])
+    row = asyncio.run(
+        _submit_record(
+            tmp_path / "full",
+            _DeclaredRegistry(_metal()),
+            "metal",
+            full,
+            mesh_text=_quarter_box_mesh(inverted=True),
+        )
+    )
+    assert row["config_json"]["options"]["engine"] == "metal"
+
+
+def test_a_job_queued_with_an_inverted_reduced_mesh_never_reaches_an_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job queued before the upgrade is checked again when it runs.
+
+    Its stored mesh artifact matches its record's digest, so the digest check
+    alone would hand it to the engine. The submission that queued it is played
+    here by one with no winding check, as an earlier build's was.
+    """
+
+    calls: list[str] = []
+
+    class RecordingEngine:
+        name = "metal"
+
+        async def run(self, *_args: Any, **_kwargs: Any) -> EngineRunResult:
+            calls.append("run")
+            raise AssertionError("an inverted reduced mesh reached the engine")
+
+    async def scenario() -> dict[str, Any]:
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path,
+            _domain_changes(["x0", "y0"]),
+            mesh_text=_quarter_box_mesh(inverted=True),
+        )
+        runtime.engine_registry = _AlwaysRegistry(RecordingEngine())  # type: ignore[assignment]
+        try:
+            with monkeypatch.context() as earlier_build:
+                earlier_build.setattr(
+                    "server.jobs.runtime._refuse_inverted_reduced_mesh",
+                    lambda *_args, **_kwargs: None,
+                    raising=False,
+                )
+                job_id = await runtime.submit(_request(ingest_id))
+            for _ in range(200):
+                row = runtime.store.get_job_row(job_id)
+                if row["status"] in {"complete", "error"}:
+                    break
+                await asyncio.sleep(0.01)
+            return row
+        finally:
+            await runtime.shutdown()
+
+    row = asyncio.run(scenario())
+
+    assert row["status"] == "error"
+    assert "imported_reduced_mesh_inverted" in row["error_message"]
+    assert "Re-import this return" in row["error_message"]
+    assert calls == []
+
+
 def _native_result_3f() -> SimpleNamespace:
     frequencies = np.asarray([100.0, 500.0, 1000.0])
     return SimpleNamespace(

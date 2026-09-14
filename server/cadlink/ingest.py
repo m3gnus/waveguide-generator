@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -23,12 +24,17 @@ from server.mesh.imported import (
     ImportedMeshDependencyError,
     RoleResolutionError,
     validate_imported_sizes,
+    verify_artifact_reduced_orientation,
 )
 from server.mesh.artifact import mesh_text_sha256
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
+from server.solver.imported import imported_domain_planes
 
 from .wgreturn import WgReturnBundle, WgReturnError, declared_domain_planes, read_wgreturn
+
+
+logger = logging.getLogger(__name__)
 
 
 # v4 verifies the auto-cut against the meshed boundary and recentres a
@@ -579,6 +585,49 @@ def _viewport_cache_lookup_key(
     ).hexdigest()
 
 
+def _judge_cached_reduced_winding(
+    built: Mapping[str, Any], cache_key: str
+) -> dict[str, Any] | None:
+    """Accept a cached reduced mesh only once its winding has been judged.
+
+    ``verify_reduced_orientation`` runs where a reduced mesh is built, and
+    nothing in the cache key names the rule the cached mesh was wound by: a
+    quarter an earlier build cached -- wound from a rear-facing source, inside
+    out -- sits under the very key a current build computes. Bumping the
+    contract would re-mesh every project (the 2026-08-27 decision above), so
+    the cached arrays are judged here instead. An inverted or unreadable one is
+    a miss and is rebuilt; a sound one that predates the verdict gains it.
+    """
+
+    planes = imported_domain_planes({"symmetry": built.get("symmetry")})
+    if not planes:
+        return dict(built)
+    try:
+        orientation = verify_artifact_reduced_orientation(
+            str(built["msh_text"]), cut_planes=planes
+        )
+    except ValueError as exc:
+        logger.warning("Cached imported mesh %s is unreadable (%s); rebuilding it", cache_key, exc)
+        return None
+    if orientation["inverted_component_count"]:
+        logger.warning(
+            "Cached imported mesh %s has %s of %s reduced component(s) wound against "
+            "the model they mirror; rebuilding it",
+            cache_key,
+            orientation["inverted_component_count"],
+            orientation["component_count"],
+        )
+        return None
+    accepted = dict(built)
+    verification = accepted.get("symmetry_verification")
+    if isinstance(verification, Mapping) and "reduced_orientation" not in verification:
+        accepted["symmetry_verification"] = {
+            **verification,
+            "reduced_orientation": orientation,
+        }
+    return accepted
+
+
 def _load_cached_mesh(mesh_path: Path, metadata_path: Path) -> dict[str, Any] | None:
     if not mesh_path.is_file() or not metadata_path.is_file():
         return None
@@ -967,6 +1016,8 @@ def ingest_bundle(
             # sidecar's stored geometry hash to reproduce the indexed CAS key.
             if expected_cache_key != cache_key:
                 built = None
+    if built is not None:
+        built = _judge_cached_reduced_winding(built, str(cache_key))
     cache_hit = built is not None
     if built is None:
         try:

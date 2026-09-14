@@ -1504,6 +1504,77 @@ def test_an_inverted_declared_quarter_is_refused_instead_of_solved(
     assert "Or return the whole model." in message
 
 
+_RETURN_IDS["cached-inverted"] = "wgr_01J5A8QK3M9T2XVBH0RD7NWET0"
+
+
+def _reverse_msh_triangles(msh_text: str) -> str:
+    """Wind every triangle of an ASCII Gmsh 2.2 artifact the other way."""
+
+    lines = msh_text.split("\n")
+    start = lines.index("$Elements") + 2
+    end = lines.index("$EndElements")
+    for index in range(start, end):
+        parts = lines[index].split()
+        if len(parts) > 3 and parts[1] == "2":
+            parts[-2], parts[-1] = parts[-1], parts[-2]
+            lines[index] = " ".join(parts)
+    return "\n".join(lines)
+
+
+def test_a_cached_inverted_reduced_mesh_is_rebuilt_instead_of_served(
+    tmp_path: Path,
+) -> None:
+    """The winding check guards a cache hit, not only a fresh build.
+
+    Nothing in the mesh cache key names the rule a reduced component was wound
+    by, so a quarter cached by an earlier build -- whose mesher wound it from a
+    rear-facing source -- sits under the key a current build computes. It is
+    planted here as that build left it: the same quarter wound inside out, and
+    a sidecar written before the orientation verdict existed. A re-ingest must
+    not hand it to a solver.
+    """
+
+    pytest.importorskip("gmsh")
+    bundle = _horn_bundle(tmp_path, "cached-inverted")
+    first = _ingest(tmp_path, bundle)
+    assert first["mesh_cache_hit"] is False
+    assert first["symmetry"]["cut_planes"] == ["x0", "y0"]
+
+    mesh_path = Path(first["mesh_store_path"])
+    sidecar_path = mesh_path.with_suffix(".json")
+    inverted = _reverse_msh_triangles(mesh_path.read_text(encoding="utf-8"))
+    inverted_sha256 = "sha256:" + hashlib.sha256(inverted.encode("utf-8")).hexdigest()
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar["symmetry_verification"].pop("reduced_orientation")
+    sidecar["content_sha256"] = inverted_sha256
+    mesh_path.write_text(inverted, encoding="utf-8")
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+    second = _ingest(tmp_path, bundle)
+
+    # The planted entry is judged before it is accepted, found inverted, and
+    # rebuilt: still the quarter, now wound like the model it mirrors.
+    assert second["mesh_cache_hit"] is False
+    assert second["symmetry"]["cut_planes"] == ["x0", "y0"]
+    assert second["mesh_content_sha256"] != inverted_sha256
+    orientation = second["symmetry_verification"]["reduced_orientation"]
+    assert orientation["checked"] is True
+    assert orientation["inverted_component_count"] == 0
+    points, triangles, _tags = _solver_arrays(second)
+    p0, p1, p2 = (points[triangles[:, k]] for k in range(3))
+    assert float(np.einsum("ij,ij->i", p0, np.cross(p1, p2)).sum()) > 0.0
+
+    # The rebuild replaced the planted entry, so the next ingest is a sound hit
+    # that carries the verdict it was accepted on.
+    third = _ingest(tmp_path, bundle)
+    assert third["mesh_cache_hit"] is True
+    assert third["mesh_content_sha256"] == second["mesh_content_sha256"]
+    assert (
+        third["symmetry_verification"]["reduced_orientation"]["inverted_component_count"]
+        == 0
+    )
+
+
 def _child_orients_from_parent(record: dict[str, Any]) -> bool:
     """Did the mesher in the CAD child wind reduced domains from their parent?
 
