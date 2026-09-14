@@ -98,6 +98,18 @@ export class PreviewSocketManager {
   private maxFrameBytes: number | undefined;
   /** Revision of the last discontinuous edit; older frames answer a design that no longer exists. */
   private barrierRevision = 0;
+  /**
+   * The request `seq` a `load` revision event is about to send. A frame whose
+   * `seq` predates it answers the document that load replaced.
+   *
+   * `designRevision` cannot carry this: `load` (New, Open, run recall) resets
+   * it, so a low revision on the new document does not mean "older than" a
+   * high revision still in flight for the replaced one. `seq` is never reset
+   * -- it counts requests for the life of the connection -- so it is the one
+   * field that always orders "before this load" correctly regardless of which
+   * document either side belongs to.
+   */
+  private loadFloorSeq = 0;
   private stopped = true;
   private readonly listeners = new Set<() => void>();
   private unsubscribeRevision: (() => void) | null = null;
@@ -188,6 +200,7 @@ export class PreviewSocketManager {
     this.socket = socket;
     this.seq = 0;
     this.latestOutcomeSeq = 0;
+    this.loadFloorSeq = 0;
     this.helloSeen = false;
     socket.binaryType = 'arraybuffer';
     socket.onopen = () => undefined;
@@ -296,6 +309,7 @@ export class PreviewSocketManager {
       header.v !== 1
       || header.kind !== 'preview'
       || header.epoch !== this.snapshot.epoch
+      || frameSeq < this.loadFloorSeq
       || frameRevision < this.barrierRevision
       || frameRevision < (this.snapshot.displayedRevision ?? 0)
     ) {
@@ -320,6 +334,18 @@ export class PreviewSocketManager {
 
   private onRevision(event: RevisionEvent): void {
     if (event.immediate) this.barrierRevision = event.revision;
+    if (event.reason === 'load') {
+      // A load starts a new document identity, and `New design` rewinds its
+      // revision counter to 1. A frame already in flight for the *replaced*
+      // document can carry a revision far above 1 -- accepting it on revision
+      // alone would both show the wrong design and, worse, leave that high
+      // number as the floor every subsequent frame of the new document has to
+      // clear before anything renders again. `seq` never resets, so recording
+      // the seq this load's own first request will carry, and refusing
+      // anything older in `onFrame`, tells the two documents' frames apart
+      // regardless of what either side's revision says.
+      this.loadFloorSeq = this.seq + 1;
+    }
     // Loading a document is a discontinuity, not a late frame. The rendered
     // revision is a floor that stops an older in-flight answer from replacing a
     // newer one within one editing stream, and `New design` rewinds the counter

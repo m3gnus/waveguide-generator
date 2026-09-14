@@ -35,6 +35,32 @@ function fixtureAtRevision(revision: number): ArrayBuffer {
   return buffer;
 }
 
+/**
+ * The same fixture with arbitrary header fields overridden, rebuilding the
+ * length-prefixed, 8-byte-aligned framing so the header text can change size.
+ * Unlike `fixtureAtRevision`, this can set `seq` to a value that does not
+ * share the fixture's own digit count.
+ */
+function fixtureWithHeader(overrides: Record<string, unknown>): ArrayBuffer {
+  const buffer = fixture();
+  const view = new DataView(buffer);
+  const headerLength = view.getUint32(4, true);
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 8, headerLength))) as Record<string, unknown>;
+  Object.assign(header, overrides);
+  const headerText = new TextEncoder().encode(JSON.stringify(header));
+  const payloadBase = Math.ceil((8 + headerLength) / 8) * 8;
+  const payload = new Uint8Array(buffer, payloadBase);
+  const newHeaderEnd = 8 + headerText.byteLength;
+  const newPayloadBase = Math.ceil(newHeaderEnd / 8) * 8;
+  const out = new ArrayBuffer(newPayloadBase + payload.byteLength);
+  const bytes = new Uint8Array(out);
+  bytes.set(new Uint8Array(buffer, 0, 4), 0);
+  new DataView(out).setUint32(4, headerText.byteLength, true);
+  bytes.set(headerText, 8);
+  bytes.set(payload, newPayloadBase);
+  return out;
+}
+
 describe('preview socket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); resetDesignStore(); });
   afterEach(() => vi.useRealTimers());
@@ -143,6 +169,43 @@ describe('preview socket state machine', () => {
 
     expect(manager.getSnapshot().displayedRevision).toBe(10);
     expect(manager.getSnapshot().stale).toBe(false);
+    manager.stop();
+  });
+
+  // The revision-only floor above is not enough on its own: a frame the
+  // *replaced* document's own in-flight request answers can still arrive
+  // after New, and nothing about its revision says it belongs to the wrong
+  // document. Accepting it both shows the old horn and re-creates the same
+  // floor problem for every frame the new document will ever produce.
+  it('drops a late frame from the design New already replaced, and never lets it block the new design', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(fixture());
+    expect(manager.getSnapshot().displayedRevision).toBe(57);
+    const frameBeforeReset = manager.getSnapshot().frame;
+
+    // New design rewinds the revision counter. The request sent for the old
+    // design (seq 1, above) is still outstanding; its answer arrives now.
+    resetDesignStore();
+    socket.message(fixtureWithHeader({ seq: 1, designRevision: 57 }));
+
+    // The late frame must never be shown: it belongs to the document New
+    // replaced, not the one now on screen.
+    expect(manager.getSnapshot().displayedRevision).toBeNull();
+    expect(manager.getSnapshot().frame).toBe(frameBeforeReset);
+
+    for (let i = 0; i < 9; i += 1) useDesignStore.getState().updateField('a', 40 + i);
+    expect(useDesignStore.getState().designRevision).toBe(10);
+    // seq 2 is the coarse request `resetDesignStore()` sent for the new
+    // document; its answer, at the settled revision, must render normally.
+    socket.message(fixtureWithHeader({ seq: 2, designRevision: 10 }));
+
+    expect(manager.getSnapshot().displayedRevision).toBe(10);
+    expect(manager.getSnapshot().stale).toBe(false);
+    expect(manager.getSnapshot().frame).not.toBe(frameBeforeReset);
     manager.stop();
   });
 
