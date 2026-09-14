@@ -474,9 +474,11 @@ is the operation `prepare_and_solve`, with the `commandId` as its operation ID.
      retained.
    - Not readable now (not in the WGLink folder yet, a file another process holds, a drive
      that is not mounted): the claim stays, and the next pass tries again. After 30
-     passes, about half a minute, WG goes on anyway; the operation then waits for its
-     return (`preparation_failed`), as it would have without the claim. A claim that waits
-     never holds up the files behind it.
+     passes (about half a minute while passes succeed; the loop backs off while they
+     fail), WG goes on anyway; the operation then waits for its return
+     (`preparation_failed`), as it would have without the claim. A claim that waits never
+     holds up the files behind it, and its operation is not started while it waits, even
+     by a pass that stops before it reaches the claim.
 5. **Delete** the claim. WG deletes only the file it consumed, and only after the store
    holds the operation. If the delete fails, the next poll recovers the same operation
    from the claim that is left.

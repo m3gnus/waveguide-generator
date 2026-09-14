@@ -593,3 +593,32 @@ def test_a_persisting_delivery_failure_is_logged_once_not_every_pass(
     failures = [r for r in caplog.records if r.getMessage() == "Delivering CAD solve commands failed."]
     assert len(failures) == 1
     assert harness.row("cmd-b")["state"] == "accepted"
+
+
+def test_a_waiting_claim_holds_its_operation_when_a_pass_stops_early(harness: Harness) -> None:
+    from server.cadlink.solve_command import record_outcome
+
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, _setup())
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    bundle = harness.workspace / bundle_path
+    hidden = harness.workspace / "still-syncing"
+    bundle.rename(hidden)
+    requests = _deliver(harness, "cmd-b", bundle_path, manifest)
+    assert _pass(harness) == []  # kept, and held
+    # A finished command arrives again (its acknowledgement was lost), older than
+    # cmd-b: the pass stops at its replay before it reaches cmd-b's claim.
+    record_outcome(harness.store, "cmd-0", state="accepted", job_id="job-0")
+    (requests / "cmd-0.json").write_text(json.dumps({
+        "schemaVersion": 3, "target": "waveguide-generator", "commandId": "cmd-0",
+        "returnId": "wgr_0", "bundlePath": bundle_path, "manifestSha256": manifest,
+        "requestedAt": "2026-09-13T00:00:00Z",
+    }))
+
+    assert _pass(harness) == []
+
+    assert harness.row("cmd-b")["state"] == "received"
+    hidden.rename(bundle)
+    assert _pass(harness) == ["cmd-b"]
+    row = harness.row("cmd-b")
+    assert (row["state"], row["job_id"]) == ("accepted", "job-1")

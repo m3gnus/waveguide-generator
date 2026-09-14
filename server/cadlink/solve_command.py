@@ -94,8 +94,9 @@ logger = logging.getLogger(__name__)
 # One consumer per process at a time. Files are still claimed by rename,
 # because the producer writing them is another process.
 _DELIVERY_LOCK = threading.Lock()
-# How many passes each kept claim has waited for its return, by claim name.
-_retention_waits: dict[str, int] = {}
+# Each kept claim, by claim name: the operation it names, and how many passes
+# it has waited for that operation's return.
+_retention_waits: dict[str, tuple[str, int]] = {}
 
 
 @dataclass(frozen=True)
@@ -349,9 +350,9 @@ def _persist(store: CadLinkStore, command: PendingSolveCommand) -> dict[str, Any
 def _keep_for_retention(claim: Path, command: PendingSolveCommand) -> bool:
     """Whether a claim whose return cannot be read now waits for another pass."""
 
-    waited = _retention_waits.get(claim.name, 0) + 1
+    waited = _retention_waits.get(claim.name, (command.command_id, 0))[1] + 1
     if waited < RETENTION_PASSES:
-        _retention_waits[claim.name] = waited
+        _retention_waits[claim.name] = (command.command_id, waited)
         if waited == 1:
             logger.info(
                 "The return of solve command %r cannot be read yet; its delivery is kept "
@@ -400,8 +401,9 @@ def collect_solve_deliveries(
     ``retain`` keeps the snapshot an operation names in WG's own storage before
     its delivery is acknowledged (CAD-OPERATIONS.md, "Consuming a delivery").
     When it reports ``RETAIN_TRANSIENT`` the claim is kept for the next pass,
-    up to ``RETENTION_PASSES``, and the pass goes on to the files behind it;
-    ``held`` then receives that operation's id, so nothing prepares it from a
+    up to ``RETENTION_PASSES``, and the pass goes on to the files behind it.
+    ``held`` receives the id of every operation whose claim is still waiting,
+    whether or not this pass reaches that claim, so nothing prepares it from a
     return WG does not hold yet.
 
     Returns the answer owed to one delivery on its own -- the replay of an
@@ -419,6 +421,10 @@ def collect_solve_deliveries(
         present = {delivery.path.name for delivery in deliveries if delivery.claimed}
         for name in set(_retention_waits) - present:
             del _retention_waits[name]
+        if held is not None:
+            # A pass can stop at an answer before it reaches a waiting claim;
+            # that claim's operation is held all the same.
+            held.update(operation_id for operation_id, _waited in _retention_waits.values())
         for delivery in deliveries:
             claim = delivery.path if delivery.claimed else _claim(delivery.path)
             if claim is None:
@@ -446,7 +452,9 @@ def collect_solve_deliveries(
                     if held is not None:
                         held.add(command.command_id)
                     continue
-            _retention_waits.pop(claim.name, None)
+            if _retention_waits.pop(claim.name, None) is not None and held is not None:
+                # It waits no more: retained, never retainable, or at the bound.
+                held.discard(command.command_id)
             # A delete that fails leaves the claim for the next poll, which
             # recovers the same operation and answers it then.
             if _acknowledge(claim) and answer is not None:
