@@ -113,10 +113,13 @@ INGEST_TIMEOUT_S = 900.0
 #: created by this script rather than by the workflow's shell, so no platform's
 #: quoting can drop them before the application sees them. They are escaped so
 #: the source stays ASCII and nothing can normalise them in transit: an en
-#: dash and an A-umlaut; an a-ring; an o-umlaut and A-ring, A-umlaut, O-umlaut.
+#: dash and an A-umlaut; an a-ring; an o-umlaut and A-ring, A-umlaut, O-umlaut,
+#: then a Greek capital omega and a CJK ideograph. Every character before those
+#: two fits in Windows-1252; they do not, so a Windows run has to handle a
+#: bundle path the legacy code page cannot spell.
 IMPORTED_DATA_DIR_NAME = "App Data \u2013 \u00c4rende 1"
 IMPORTED_WORKSPACE_NAME = "Kopia fr\u00e5n annan dator"
-IMPORTED_BUNDLE_NAME = "H\u00f6gtalare \u00c5\u00c4\u00d6.wgreturn"
+IMPORTED_BUNDLE_NAME = "H\u00f6gtalare \u00c5\u00c4\u00d6 \u03a9 \u97f3.wgreturn"
 #: The committed linked return the phase imports; its README says how it was made.
 DEFAULT_IMPORTED_FIXTURE = (
     Path(__file__).resolve().parent / "fixtures" / "imported-return" / "round.wgreturn"
@@ -555,8 +558,19 @@ class Server:
             raise
         return self
 
-    def __exit__(self, *_exc: object) -> None:
-        self.stop()
+    def __exit__(self, _type: object, exc: BaseException | None, _traceback: object) -> None:
+        if exc is None:
+            self.stop()
+            return
+        # The failure that ended the block is what a reader needs first.
+        # Stopping can fail too -- a non-zero exit, a stop that will not
+        # finish -- and raising that here would replace the cause with a
+        # symptom of it. It is kept as a note on the original instead, which
+        # ``main`` reports beside the error.
+        try:
+            self.stop()
+        except Exception as problem:  # noqa: BLE001 - kept as a note, not swallowed
+            exc.add_note(f"then stopping the server also failed: {problem}")
 
     def stop(self, *, force: bool = False) -> None:
         """Ask through the status-control file, then wait, then insist.
@@ -893,24 +907,63 @@ def _numbers(values: Any, where: str, bad: list[str]) -> tuple[int, int]:
     return 0, 0
 
 
-def check_axes(result: dict[str, Any]) -> dict[str, Any]:
-    """The axes exist, are aligned to the frequency axis, and are all finite."""
+#: The directivity planes every solve here asks for. The imported request names
+#: them in ``polar_config.enabled_axes``. The parametric request names none,
+#: and these are ``PolarConfig.enabled_axes``' default in
+#: ``server/jobs/models.py``, so they are what it asked for too.
+REQUESTED_PLANES = ("horizontal", "vertical", "diagonal")
+
+
+def _plane_values(plane: str, rows: list[Any], bad: list[str]) -> tuple[int, int]:
+    """Count a directivity plane's values, and never its angles.
+
+    Each row is one frequency's ``[angle, value]`` pairs, as the result builder
+    writes them. The angle is an axis -- non-zero in any plane that has one --
+    so it is held to being finite and never counted as evidence of a solve.
+    """
+
+    total = non_zero = 0
+    for index, row in enumerate(rows):
+        if not isinstance(row, list):
+            raise QualificationError(
+                f"directivity plane {plane!r} row {index} is not a list of points"
+            )
+        for point in row:
+            if not (isinstance(point, list) and len(point) == 2):
+                raise QualificationError(
+                    f"directivity plane {plane!r} row {index} holds {point!r}, not an "
+                    "[angle, value] pair"
+                )
+            _numbers(point[0], f"result.directivity.{plane}[{index}].angle", bad)
+            count, found = _numbers(point[1], f"result.directivity.{plane}[{index}].value", bad)
+            total += count
+            non_zero += found
+    return total, non_zero
+
+
+def check_axes(
+    result: dict[str, Any], planes: tuple[str, ...] = REQUESTED_PLANES
+) -> dict[str, Any]:
+    """The result's data are there, aligned to its frequencies, finite, and not all zero.
+
+    Only data count as evidence that something was solved. The frequency axis
+    and the directivity angles are axes, non-zero in any result that has them:
+    counting them, as this used to, passed a result with real frequencies and
+    nothing else. So on-axis SPL and every requested directivity plane must
+    each be present and carry a finite non-zero value, while phase and the
+    axes are held only to being finite and aligned. A ``None`` stays
+    documented absence, but a field with nothing else in it has not been solved.
+    """
 
     frequencies = result.get("frequencies")
     if not isinstance(frequencies, list) or not frequencies:
         raise QualificationError("the result carries no frequency axis")
     bad: list[str] = []
-    total, non_zero = _numbers(
-        {key: result.get(key) for key in ("frequencies", "spl_on_axis", "directivity")},
-        "result",
-        bad,
-    )
-    if bad:
-        raise QualificationError(f"the result carries non-finite numbers: {bad[:10]}")
-    if non_zero == 0:
-        raise QualificationError("every number in the result is zero; nothing was solved")
+    _numbers(frequencies, "result.frequencies", bad)
 
-    on_axis = result.get("spl_on_axis") or {}
+    on_axis = result.get("spl_on_axis")
+    if not isinstance(on_axis, dict) or not isinstance(on_axis.get("spl"), list):
+        raise QualificationError("the result carries no spl_on_axis.spl values")
     misaligned = {
         key: len(values)
         for key in ("frequencies", "spl", "phase_degrees")
@@ -920,21 +973,44 @@ def check_axes(result: dict[str, Any]) -> dict[str, Any]:
         raise QualificationError(
             f"spl_on_axis is not aligned to the {len(frequencies)} frequencies: {misaligned}"
         )
-    directivity = result.get("directivity") or {}
-    planes = {}
+    _numbers(on_axis.get("frequencies"), "result.spl_on_axis.frequencies", bad)
+    _numbers(on_axis.get("phase_degrees"), "result.spl_on_axis.phase_degrees", bad)
+    spl_total, spl_non_zero = _numbers(on_axis["spl"], "result.spl_on_axis.spl", bad)
+
+    directivity = result.get("directivity")
+    if not isinstance(directivity, dict):
+        raise QualificationError("the result carries no directivity")
+    missing = [plane for plane in planes if not isinstance(directivity.get(plane), list)]
+    if missing:
+        raise QualificationError(f"the requested directivity planes {missing} are missing")
+    counts: dict[str, tuple[int, int, int]] = {}
     for plane, rows in directivity.items():
-        if isinstance(rows, list):
-            if len(rows) != len(frequencies):
-                raise QualificationError(
-                    f"directivity plane {plane!r} has {len(rows)} rows for "
-                    f"{len(frequencies)} frequencies"
-                )
-            planes[plane] = len(rows)
+        if not isinstance(rows, list):
+            continue
+        if len(rows) != len(frequencies):
+            raise QualificationError(
+                f"directivity plane {plane!r} has {len(rows)} rows for "
+                f"{len(frequencies)} frequencies"
+            )
+        counts[plane] = (len(rows), *_plane_values(plane, rows, bad))
+
+    if bad:
+        raise QualificationError(f"the result carries non-finite numbers: {bad[:10]}")
+    if spl_non_zero == 0:
+        raise QualificationError(
+            "spl_on_axis.spl carries no finite non-zero value; nothing was solved"
+        )
+    empty = [plane for plane in planes if counts[plane][2] == 0]
+    if empty:
+        raise QualificationError(
+            f"directivity planes {empty} carry no finite non-zero value; nothing was solved"
+        )
     return {
         "frequencies": len(frequencies),
-        "numbers_checked": total,
-        "finite_non_zero": non_zero,
-        "directivity_planes": planes,
+        "numbers_checked": spl_total + sum(count[1] for count in counts.values()),
+        "finite_non_zero": spl_non_zero + sum(count[2] for count in counts.values()),
+        "spl_values": spl_total,
+        "directivity_planes": {plane: count[0] for plane, count in counts.items()},
     }
 
 
@@ -1178,7 +1254,9 @@ def blocking_acknowledgements(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def check_imported_result(result: Mapping[str, Any], requested: str) -> dict[str, Any]:
+def check_imported_result(
+    result: Mapping[str, Any], requested: str, planes: tuple[str, ...] = REQUESTED_PLANES
+) -> dict[str, Any]:
     """An imported solve ran on the engine asked for, with numbers on every channel.
 
     The parametric solve's contract, applied per channel. The job's own record
@@ -1212,7 +1290,7 @@ def check_imported_result(result: Mapping[str, Any], requested: str) -> dict[str
                 f"channel {channel!r} of the imported result on {requested!r} is not an object"
             )
         try:
-            checked[str(channel)] = check_axes(dict(payload))
+            checked[str(channel)] = check_axes(dict(payload), planes)
         except QualificationError as exc:
             raise QualificationError(
                 f"channel {channel!r} of the imported result on {requested!r}: {exc}"
@@ -1510,7 +1588,7 @@ def qualify_imported_return(
                         "polar_config": {
                             "angle_range": list(angle_range),
                             "distance": 2.0,
-                            "enabled_axes": ["horizontal", "vertical", "diagonal"],
+                            "enabled_axes": list(REQUESTED_PLANES),
                         },
                     },
                 },
@@ -1531,8 +1609,24 @@ def qualify_imported_return(
                 channels=checked["channels"],
             )
             solved.append(entry)
+        # Listed before the restart as well as after it: a job the running
+        # application does not list is one the user could not find even
+        # without closing it, and "found again" would then prove nothing.
         listed = _listed_jobs(base, "after solving")
-        section["listed_before_restart"] = [entry["job_id"] for entry in solved if entry["job_id"] in listed]
+        section["listed_before_restart"] = [
+            entry["job_id"]
+            for entry in solved
+            if (listed.get(entry["job_id"]) or {}).get("status") == "complete"
+        ]
+        unlisted = [
+            entry["job_id"]
+            for entry in solved
+            if entry["job_id"] not in section["listed_before_restart"]
+        ]
+        if unlisted:
+            raise QualificationError(
+                f"jobs {unlisted} are not listed as complete after solving, before any restart"
+            )
 
     # WG has no Save: the jobs store is what keeps a result. Stop the way the
     # product stops, start again on the same data directory, and find it.
@@ -1555,11 +1649,18 @@ def qualify_imported_return(
             _content, digest = server.stored_results(job)
             row["sha256_after"] = digest
             row["equal"] = digest == entry["results_sha256"]
-        again = api(
-            server.base,
-            f"/api/cadlink/ingest/{section['ingest']['ingest_id']}",
-            what="reading the ingestion record after the restart",
-        )
+        # A record the restarted application cannot find is this check
+        # failing, not a refused call: keep the answer and judge it below,
+        # after the other things the restart must find have been read too.
+        try:
+            again = api(
+                server.base,
+                f"/api/cadlink/ingest/{section['ingest']['ingest_id']}",
+                what="reading the ingestion record after the restart",
+            )
+        except QualificationError as exc:
+            again = None
+            reopen["ingest_record_error"] = str(exc)
         reopen["ingest_record_reopened"] = (
             isinstance(again, Mapping)
             and again.get("report_sha256") == section["ingest"]["report_sha256"]
@@ -1578,7 +1679,10 @@ def qualify_imported_return(
     if changed:
         raise QualificationError(f"the stored results of jobs {changed} changed across the restart")
     if not reopen["ingest_record_reopened"]:
-        raise QualificationError("the ingestion record did not survive the restart")
+        raise QualificationError(
+            "the ingestion record did not survive the restart: "
+            + (reopen.get("ingest_record_error") or "it came back with another report_sha256")
+        )
     if not reopen["cad_workspace_persisted"]:
         raise QualificationError("the CAD Link folder selection did not survive the restart")
 
@@ -1847,6 +1951,14 @@ def check_imported_arguments(parser: argparse.ArgumentParser, arguments: argpars
     arguments.imported_engine_when_offered = optional
 
 
+def _keep_notes(report: dict[str, Any], exc: BaseException) -> None:
+    """Report what went wrong after the failure, without letting it replace it."""
+
+    notes = [str(note) for note in getattr(exc, "__notes__", ()) or ()]
+    if notes:
+        report["additional_failures"] = notes
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
@@ -1860,9 +1972,11 @@ def main(argv: list[str] | None = None) -> int:
         qualify(arguments, report)
     except QualificationError as exc:
         failure = str(exc)
+        _keep_notes(report, exc)
     except Exception as exc:  # noqa: BLE001 - an unexpected failure is still a failure
         failure = f"{type(exc).__name__}: {exc}"
         report["traceback"] = traceback.format_exc()
+        _keep_notes(report, exc)
     finally:
         # Whatever happened -- a refused pin, a solve that never finished, an
         # exception nobody predicted -- a worker this run started must not be

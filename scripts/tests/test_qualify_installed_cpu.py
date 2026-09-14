@@ -15,6 +15,7 @@ recorded as owed rather than simulated.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
@@ -198,6 +199,26 @@ def test_a_gate_with_no_expected_pins_refuses_to_run() -> None:
 # ---------------------------------------------------------------------------
 
 
+#: Every plane a solve that names none is asked for.
+PLANES = ("horizontal", "vertical", "diagonal")
+
+
+def _plane(*per_frequency: tuple[float, float, float]) -> list[list[list[float]]]:
+    """A directivity plane as the result builder writes it.
+
+    One row per frequency, each row ``[angle, value]`` pairs. The values are
+    relative to on-axis -- 0 dB at 0 degrees, less off it -- and the angles
+    are an axis, never evidence that anything was solved.
+    """
+
+    return [
+        [[-90.0, low], [0.0, centre], [90.0, high]] for low, centre, high in per_frequency
+    ]
+
+
+DIRECTIVITY = {plane: _plane((-6.0, 0.0, -6.0), (-9.0, 0.0, -9.0)) for plane in PLANES}
+
+
 def _result(**overrides: object) -> dict[str, object]:
     result = {
         "frequencies": [500.0, 1000.0],
@@ -206,7 +227,7 @@ def _result(**overrides: object) -> dict[str, object]:
             "spl": [92.5, 94.1],
             "phase_degrees": [10.0, -20.0],
         },
-        "directivity": {"horizontal": [[90.0, 88.0], [91.0, 89.0]]},
+        "directivity": json.loads(json.dumps(DIRECTIVITY)),
         "metadata": dict(gate.CPU_RESULT_CONTRACT),
         "provenance": {"dependency_drift": [], "dependency_shas": dict(PINS)},
     }
@@ -273,7 +294,7 @@ def test_a_solve_against_other_module_commits_fails() -> None:
             id="misaligned-on-axis",
         ),
         pytest.param(
-            {"directivity": {"horizontal": [[90.0, 88.0]]}},
+            {"directivity": dict(DIRECTIVITY, horizontal=DIRECTIVITY["horizontal"][:1])},
             "directivity plane",
             id="misaligned-directivity",
         ),
@@ -295,13 +316,79 @@ def test_a_result_that_answered_without_solving_fails(
 
 
 def test_an_all_zero_result_is_not_a_solve() -> None:
+    """Real frequencies do not make zeroed data a solve.
+
+    The frequency axis and the directivity angles are axes: non-zero in any
+    result that has them, so neither can be what shows a solver produced
+    something. This test used to zero the frequencies as well, and so passed
+    against a check that counted them.
+    """
+
     zeroed = _result(
-        spl_on_axis={"frequencies": [0.0, 0.0], "spl": [0.0, 0.0], "phase_degrees": [0.0, 0.0]},
-        directivity={"horizontal": [[0.0, 0.0], [0.0, 0.0]]},
-        frequencies=[0.0, 0.0],
+        spl_on_axis={
+            "frequencies": [500.0, 1000.0], "spl": [0.0, 0.0], "phase_degrees": [0.0, 0.0],
+        },
+        directivity={plane: _plane((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)) for plane in PLANES},
     )
     with pytest.raises(gate.QualificationError, match="nothing was solved"):
         gate.check_solve(zeroed, PINS)
+
+
+_ZERO_PLANE = _plane((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    (
+        pytest.param(
+            {"spl_on_axis": {"frequencies": [500.0, 1000.0], "spl": [0.0, 0.0],
+                             "phase_degrees": [10.0, -20.0]}},
+            "spl_on_axis.*nothing was solved",
+            id="zero-spl",
+        ),
+        pytest.param(
+            {"spl_on_axis": {"frequencies": [500.0, 1000.0], "spl": [None, None],
+                             "phase_degrees": [None, None]}},
+            "spl_on_axis.*nothing was solved",
+            id="every-spl-value-absent",
+        ),
+        pytest.param(
+            {"spl_on_axis": {"frequencies": [500.0, 1000.0]}}, "spl_on_axis", id="no-spl-values",
+        ),
+        pytest.param({"spl_on_axis": None}, "spl_on_axis", id="no-spl-on-axis"),
+        pytest.param(
+            {"directivity": dict(DIRECTIVITY, vertical=_ZERO_PLANE)},
+            "'vertical'.*nothing was solved",
+            id="zero-plane-with-real-angles",
+        ),
+        pytest.param(
+            {"directivity": {"horizontal": DIRECTIVITY["horizontal"],
+                             "vertical": DIRECTIVITY["vertical"]}},
+            "diagonal",
+            id="requested-plane-missing",
+        ),
+        pytest.param({"directivity": {}}, "horizontal", id="no-planes"),
+        pytest.param({"directivity": None}, "directivity", id="no-directivity"),
+        pytest.param(
+            {"directivity": dict(DIRECTIVITY, diagonal=_plane((float("nan"), 0.0, -6.0),
+                                                              (-9.0, 0.0, -9.0)))},
+            "non-finite",
+            id="nan-directivity-value",
+        ),
+        pytest.param(
+            {"directivity": dict(DIRECTIVITY, diagonal=[[-6.0, 0.0, -6.0], [-9.0, 0.0, -9.0]])},
+            "pair",
+            id="rows-without-angles",
+        ),
+    ),
+)
+def test_real_frequencies_do_not_make_a_missing_or_zeroed_field_a_solve(
+    overrides: dict[str, object], message: str
+) -> None:
+    """On-axis SPL and every requested plane must be there, finite, and not all zero."""
+
+    with pytest.raises(gate.QualificationError, match=message):
+        gate.check_solve(_result(**overrides), PINS)
 
 
 def test_a_documented_absence_is_not_treated_as_a_bad_number() -> None:
@@ -727,6 +814,10 @@ STATE = (
     else {"starts": 0, "cad_workspace": None, "ingests": {}, "jobs": {}}
 )
 STATE["starts"] += 1
+if STATE["starts"] == 1 and SETTINGS.get("preexisting_jobs"):
+    STATE["jobs"]["job-old"] = {"engine": "beat-cpu", "frequencies": [1000.0],
+                                "ingest_id": "wgi_old"}
+RESTARTED = STATE["starts"] > 1
 IMPORTED_REQUESTS = DATA / "imported-solve-requests.json"
 
 
@@ -789,7 +880,10 @@ def imported_result(job):
         "frequencies": frequencies,
         "spl_on_axis": {"frequencies": frequencies, "spl": spl,
                         "phase_degrees": [0.0] * len(frequencies)},
-        "directivity": {"horizontal": [[88.0, 87.0] for _ in frequencies]},
+        "directivity": {
+            plane: [[[-90.0, -6.0], [0.0, 0.0], [90.0, -6.0]] for _ in frequencies]
+            for plane in ("horizontal", "vertical", "diagonal")
+        },
     }
     reported = SETTINGS.get("substitute", {}).get(job["engine"], job["engine"])
     result = {
@@ -827,18 +921,30 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/capabilities":
             self._send(capabilities())
         elif path == "/api/workspace/path":
-            self._send(WORKSPACE)
+            if SETTINGS.get("runs_workspace_elsewhere"):
+                self._send({"path": str(DATA / "elsewhere"), "selected": True})
+            else:
+                self._send(WORKSPACE)
         elif path == "/api/cad-workspace/path":
-            self._send({"path": STATE["cad_workspace"],
-                        "selected": STATE["cad_workspace"] is not None})
+            selected = STATE["cad_workspace"]
+            if SETTINGS.get("cad_workspace_elsewhere") and not RESTARTED and selected:
+                selected = str(DATA / "elsewhere")
+            if SETTINGS.get("forget_cad_workspace_on_restart") and RESTARTED:
+                selected = None
+            self._send({"path": selected, "selected": selected is not None})
         elif path == "/api/cadlink/designs":
             self._send({"items": [{"designId": "wgd_known"}] if SETTINGS.get("designs_listed") else []})
         elif path.startswith("/api/cadlink/ingest/"):
             record = STATE["ingests"].get(path.rsplit("/", 1)[-1])
+            if RESTARTED and SETTINGS.get("forget_ingest_on_restart"):
+                record = None
+            if record and RESTARTED and SETTINGS.get("ingest_report_changes_on_restart"):
+                record = dict(record, report_sha256="sha256:" + "f" * 64)
             self._send(record if record else {"detail": "unknown"}, 200 if record else 404)
         elif path == "/api/jobs":
-            forget = SETTINGS.get("forget_jobs_on_restart") and STATE["starts"] > 1
-            items = [] if forget else [
+            forget = SETTINGS.get("forget_jobs_on_restart") and RESTARTED
+            hide = SETTINGS.get("hide_jobs_before_restart") and not RESTARTED
+            items = [] if forget or hide else [
                 {"id": job, "status": "complete", "has_results": True} for job in STATE["jobs"]
             ]
             self._send({"items": items, "total": len(items), "limit": 200, "offset": 0})
@@ -850,7 +956,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(RESULT)
             else:
                 body = json.dumps(imported_result(job), sort_keys=True).encode()
-                self._send(body, headers={"X-WG-Results-SHA256": hashlib.sha256(body).hexdigest()})
+                digest = hashlib.sha256(body).hexdigest()
+                if SETTINGS.get("bad_results_digest"):
+                    digest = "0" * 64
+                self._send(body, headers={"X-WG-Results-SHA256": digest})
         else:
             self._send({})
 
@@ -912,6 +1021,8 @@ while time.monotonic() < deadline:
         break
     time.sleep(0.05)
 server.shutdown()
+# A server that stops, but reports failure doing so.
+raise SystemExit(int(SETTINGS.get("exit_code_on_stop", 0)))
 '''
 
 
@@ -1586,11 +1697,17 @@ def test_an_imported_result_from_the_requested_engine_passes() -> None:
     assert report["channels"]["drive-hf"]["finite_non_zero"] > 0
 
 
+#: Real frequencies and real angles, and nothing solved: what the check used
+#: to pass, because it counted the axes as data.
 _ZEROED_CHANNEL = {
-    "frequencies": [0.0, 0.0],
-    "spl_on_axis": {"frequencies": [0.0, 0.0], "spl": [0.0, 0.0], "phase_degrees": [0.0, 0.0]},
-    "directivity": {"horizontal": [[0.0, 0.0], [0.0, 0.0]]},
+    "frequencies": [500.0, 1000.0],
+    "spl_on_axis": {
+        "frequencies": [500.0, 1000.0], "spl": [0.0, 0.0], "phase_degrees": [0.0, 0.0],
+    },
+    "directivity": {plane: _ZERO_PLANE for plane in PLANES},
 }
+_GOOD_CHANNEL = {key: value for key, value in _result().items()
+                 if key in ("frequencies", "spl_on_axis", "directivity")}
 
 
 @pytest.mark.parametrize(
@@ -1612,6 +1729,27 @@ _ZEROED_CHANNEL = {
             "beat-cpu", "non-finite", id="nan"),
         pytest.param(_imported_result(channels={"drive-hf": _ZEROED_CHANNEL}), "beat-cpu",
                      "nothing was solved", id="all-zero"),
+        pytest.param(
+            _imported_result(channels={"drive-hf": dict(_GOOD_CHANNEL, directivity={
+                "horizontal": DIRECTIVITY["horizontal"], "vertical": DIRECTIVITY["vertical"],
+            })}),
+            "beat-cpu", "diagonal", id="requested-plane-missing",
+        ),
+        pytest.param(
+            _imported_result(channels={"drive-hf": {
+                key: value for key, value in _GOOD_CHANNEL.items() if key != "directivity"
+            }}),
+            "beat-cpu", "directivity", id="no-directivity",
+        ),
+        pytest.param(
+            _imported_result(channels={"drive-hf": dict(
+                _GOOD_CHANNEL, spl_on_axis=_ZEROED_CHANNEL["spl_on_axis"])}),
+            "beat-cpu", "spl_on_axis.*nothing was solved", id="zero-spl",
+        ),
+        pytest.param(
+            _imported_result(channels={"drive-hf": _GOOD_CHANNEL, "drive-lf": _ZEROED_CHANNEL}),
+            "beat-cpu", "drive-lf", id="one-channel-zeroed",
+        ),
     ),
 )
 def test_an_imported_result_the_contract_refuses_fails(
@@ -1883,3 +2021,163 @@ def test_without_an_imported_engine_the_gate_is_unchanged(
     assert code == 0, report.get("error")
     assert "imported_return" not in report
     assert not (tmp_path / "out" / "imported-server-1.log").exists()
+
+
+# ---------------------------------------------------------------------------
+# Every check the imported phase makes, violated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+@pytest.mark.parametrize(
+    ("settings", "message"),
+    (
+        pytest.param({"preexisting_jobs": True}, "already lists 1 jobs", id="jobs-at-start"),
+        pytest.param({"runs_workspace_elsewhere": True}, "its run workspace as",
+                     id="run-workspace-elsewhere"),
+        pytest.param({"cad_workspace_elsewhere": True}, "its CAD Link folder as",
+                     id="cad-folder-elsewhere"),
+        pytest.param({"bad_results_digest": True}, "the server declared",
+                     id="results-digest-mismatch"),
+        pytest.param({"hide_jobs_before_restart": True}, "after solving",
+                     id="unlisted-before-restart"),
+    ),
+)
+def test_the_imported_phase_fails_on_every_check_it_makes(
+    tmp_path: Path, _quick_timeouts: None, settings: dict[str, object], message: str
+) -> None:
+    """A check with no failing test is a check nobody has seen fail."""
+
+    code, report = _run_imported(tmp_path, "--imported-engine", "beat-cpu", **settings)
+
+    assert code == 1
+    assert message in report["error"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+@pytest.mark.parametrize(
+    ("settings", "message", "field"),
+    (
+        pytest.param({"forget_ingest_on_restart": True},
+                     "the ingestion record did not survive the restart",
+                     "ingest_record_reopened", id="ingest-record-gone"),
+        pytest.param({"ingest_report_changes_on_restart": True},
+                     "the ingestion record did not survive the restart",
+                     "ingest_record_reopened", id="ingest-record-changed"),
+        pytest.param({"forget_cad_workspace_on_restart": True},
+                     "the CAD Link folder selection did not survive the restart",
+                     "cad_workspace_persisted", id="cad-folder-forgotten"),
+    ),
+)
+def test_what_the_restart_must_find_again_is_checked(
+    tmp_path: Path, _quick_timeouts: None, settings: dict[str, object], message: str, field: str
+) -> None:
+    """The results survived in every case here; the failure is the one named."""
+
+    code, report = _run_imported(tmp_path, "--imported-engine", "beat-cpu", **settings)
+
+    assert code == 1
+    assert message in report["error"]
+    reopen = report["imported_return"]["reopen"]
+    assert reopen[field] is False
+    assert all(row["equal"] and row["listed"] for row in reopen["jobs"].values())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_server_that_exits_badly_does_not_replace_the_failure_that_stopped_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _quick_timeouts: None
+) -> None:
+    """The cause comes first; how the server then stopped is kept beside it.
+
+    Leaving the ``with`` block on a failure stops the server, and a server that
+    exits non-zero used to raise from ``__exit__`` -- replacing the failure
+    that caused the stop with one that only named an exit code.
+    """
+
+    payload = _stub_payload(tmp_path, ever_ready=False, exit_code_on_stop=3)
+    output = tmp_path / "out"
+    monkeypatch.setattr(gate, "CAPABILITY_POLL_S", 0.1)
+
+    code = gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+        ]
+    )
+
+    assert code == 1
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert "did not offer beat-cpu by itself" in report["error"]
+    assert "exited 3" not in report["error"]
+    assert any("exited 3" in note for note in report["additional_failures"])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
+def test_a_server_that_exits_badly_after_a_good_run_still_fails(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    """Keeping the cause first must not make a bad exit on its own a pass."""
+
+    payload = _stub_payload(tmp_path, exit_code_on_stop=3)
+    output = tmp_path / "out"
+
+    code = gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+        ]
+    )
+
+    assert code == 1
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert "exited 3" in report["error"]
+
+
+# ---------------------------------------------------------------------------
+# A name the Windows legacy code page cannot represent
+# ---------------------------------------------------------------------------
+
+
+def test_the_bundle_name_holds_characters_the_windows_legacy_code_page_cannot() -> None:
+    """Every earlier character fits in Windows-1252, so a real Windows run could
+    pass without ever handling a path that code page cannot spell."""
+
+    with pytest.raises(UnicodeEncodeError):
+        gate.IMPORTED_BUNDLE_NAME.encode("cp1252")
+
+
+def test_a_failure_naming_such_a_path_survives_a_legacy_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The report keeps the name exactly; the console line only has to survive.
+
+    A Windows runner's piped stderr uses the ANSI code page, which cannot encode
+    an omega, and a print that raised there would lose the verdict line.
+    """
+
+    omega = chr(0x3A9)
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    monkeypatch.setattr(sys, "stderr", console)
+    output = tmp_path / "out"
+
+    code = gate.main(
+        [
+            "--payload", str(tmp_path / f"missing {omega}"),
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", "hornlab-beat-bem=deadbeef",
+        ]
+    )
+    console.flush()
+
+    assert code == 1
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert omega in report["error"]
+    printed = console.buffer.getvalue().decode("cp1252")
+    assert chr(92) + "u03a9" in printed
