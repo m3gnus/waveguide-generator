@@ -612,43 +612,85 @@ def test_the_child_environment_is_an_allowlist_on_every_platform(tmp_path: Path)
 # -- a bundled interpreter ----------------------------------------------------
 
 
-def test_the_real_child_starts_under_an_interpreter_that_ignores_pythonpath(
-    step_file: Path, monkeypatch: pytest.MonkeyPatch
+def _pth_interpreter(layout: Path) -> Path:
+    """This interpreter, laid out as the Windows bundle's are: a ``._pth`` beside it.
+
+    CPython reads ``<executable>._pth`` on every platform. With one it runs
+    isolated: PYTHONPATH and the user site are ignored, safe_path keeps the
+    working directory and a script's directory off ``sys.path``, and only the
+    listed entries count. They mirror the bundled runtime's ``python._pth``
+    (``scripts/build_bundle.py``): the standard library, its extension
+    modules, site-packages and ``import site`` -- and, like it, no app
+    directory. The interpreter is linked rather than copied, so a
+    shared-library build still finds its library beside the real executable.
+    """
+
+    layout.mkdir()
+    python = layout / "python"
+    python.symlink_to(os.path.realpath(sys._base_executable))
+    entries = [
+        entry
+        for entry in sys.path
+        if entry
+        and os.path.exists(entry)
+        and not os.path.isfile(os.path.join(entry, "server", "__init__.py"))
+    ]
+    (layout / "python._pth").write_text(
+        "\n".join([*entries, "import site"]) + "\n", encoding="utf-8"
+    )
+    return python
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="the bundle's own ._pth runtime is proven by the RC gate"
+)
+def test_the_real_child_starts_under_a_pth_interpreter_that_lists_no_app(
+    step_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The Windows bundle's interpreters each carry an isolated ``._pth``.
 
-    CPython then runs in isolated mode: PYTHONPATH is ignored, and neither the
-    working directory nor a script's directory goes on ``sys.path``. The
-    runtime interpreter's ``._pth`` deliberately lists no ``app``, so a server
-    started under it (the installed RC gate does) had a child that could not
-    import ``server`` and died before writing a result. ``-I`` is the same
-    isolation for any interpreter, so this drives the production entrypoint
-    through the real harness with it added. An unknown task is the fastest
-    answer the real child gives, and a structured one: it proves the child
-    imported and ran.
+    The runtime interpreter's lists no ``app``, so a server started under it
+    (the installed RC gate does) had a child -- launched as ``-m`` with
+    PYTHONPATH -- that could not import ``server`` and died before writing a
+    result. This drives the production entrypoint and launch command through
+    the real harness under a real ``._pth`` interpreter. An unknown task is the
+    fastest answer the real child gives, and a structured one: it proves the
+    child imported and ran.
     """
 
-    # The premise: nothing but the launch may make ``server`` importable. An
-    # editable install in this interpreter would pass the check below with
-    # any launch at all.
+    python = _pth_interpreter(tmp_path / "runtime")
+    repo_root = Path(__file__).resolve().parents[2]
+    # The premise, asked of the layout itself: isolated and safe-path, and
+    # nothing but the launch makes ``server`` importable -- not PYTHONPATH,
+    # not the working directory, not an editable install in site-packages.
     premise = subprocess.run(
-        [sys.executable, "-I", "-c", "import server"],
-        cwd=step_file.parent,
+        [
+            str(python),
+            "-c",
+            "import sys; print(sys.flags.isolated, sys.flags.safe_path, flush=True); "
+            "import server",
+        ],
+        cwd=repo_root,
+        # The loader's own variables pass through, as the child's allowlist
+        # passes them; an isolated interpreter ignores every PYTHON* one.
+        env={**os.environ, "PYTHONPATH": str(repo_root)},
         capture_output=True,
+        text=True,
         check=False,
     )
-    assert premise.returncode != 0, "this interpreter imports server by itself"
+    assert premise.stdout.split() == ["1", "True"], premise.stdout + premise.stderr
+    assert "No module named 'server'" in premise.stderr, premise.stderr
 
     launch = isolation.start_child_process
     commands: list[list[str]] = []
 
-    def isolated_interpreter(
+    def under_the_pth_interpreter(
         command: list[str], popen_kwargs: dict[str, object], *, stage: str
     ) -> subprocess.Popen[bytes]:
         commands.append(command)
-        return launch([command[0], "-I", *command[1:]], popen_kwargs, stage=stage)
+        return launch([str(python), *command[1:]], popen_kwargs, stage=stage)
 
-    monkeypatch.setattr(isolation, "start_child_process", isolated_interpreter)
+    monkeypatch.setattr(isolation, "start_child_process", under_the_pth_interpreter)
     with pytest.raises(ChildRefusal) as refused:
         with isolated_step_task(
             "not-a-task",
