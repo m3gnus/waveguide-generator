@@ -519,9 +519,12 @@ def solve_imported_bempp_from_msh_text(
                 config_kwargs["on_frequency_result"] = on_frequency_result
             config = _solve_config(config_kwargs)
             holder["config"] = config
-            # The preflight already holds the rim to the record's evidence: any
-            # open edge left lies on a mirror plane.
-            config.require_closed_mesh = False
+            # The record says no open edge lies off a mirror plane; this checks
+            # the mesh actually executed, as Metal's native open-edge check
+            # does. The package applies it after mirroring, so a cut rim on a
+            # mirror plane passes and a free rim the record missed is refused
+            # rather than solved with its pressure pinned to zero.
+            config.require_closed_mesh = True
             # One cancellable process that streams; Stop kills the worker.
             config.workers = 1
             result = bempp.bempp_solve_frequencies(str(path), frequencies, config)

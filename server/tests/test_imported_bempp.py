@@ -1,11 +1,12 @@
-"""BEMPP's imported-geometry adapter, against a recording stand-in for the package.
+"""BEMPP's imported-geometry adapter, against a recording stand-in for the solve.
 
-Everything here runs without an OpenCL device. The stand-in records the frame,
-the drive and the mirror each sweep is handed, so the adapter's translations
--- one sweep per channel driving that channel's tags, the record's anchor frame,
-the record's domain planes -- are checked on exactly what BEMPP would receive.
-The numerical comparison against Metal and an analytic reference is the
-qualification suite's job, and runs only where OpenCL exists.
+Everything here runs without an OpenCL device. The package's own
+``SolveConfig``, ``ObservationConfig`` and ``ObservationFrame`` are used, so a
+misspelt or unsupported option fails here as it would in production; only the
+sweep itself is replaced, by a stand-in that records the frame, the drive and
+the mirror each sweep is handed. The numerical comparison against Metal and an
+analytic reference is the qualification suite's job, and runs only where
+OpenCL exists.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import pytest
 
 from server.engines import registry
 from server.jobs.models import SolveRequest
+from server.mesh.artifact import ImportedMeshArtifactError
 from server.mesh.imported import polar_grid_from_symmetry
 from server.solver import bempp, bempp_imported, bempp_process
 from server.solver.base import EngineRunResult
@@ -27,6 +29,8 @@ from server.solver.bempp import BemppUnavailable
 from server.solver.combine import deserialize_channel_bases
 from server.solver.imported import mesh_text_sha256
 from server.solver.result_mapping import REFERENCE_RHO_C
+
+pytest.importorskip("hornlab_bempp_bem")
 
 
 MANIFEST_SHA = "sha256:" + "1" * 64
@@ -184,11 +188,8 @@ class _RecordingBempp:
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, package: _RecordingBempp, status: dict[str, Any] | None = None) -> None:
-    monkeypatch.setattr(bempp, "_load_api", lambda: True)
-    monkeypatch.setattr(bempp, "SolveConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(bempp, "ObservationFrame", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(bempp, "BIEFormulation", SimpleNamespace(COMPLEX_K="complex_k"))
+    # The real configuration classes; only the sweep and the probe stand in.
+    assert bempp._load_api(), "hornlab-bempp-bem must import for these tests"
     monkeypatch.setattr(bempp, "bempp_solve_frequencies", package.solve_frequencies)
     monkeypatch.setattr(bempp, "bempp_status", lambda: dict(status or OPENCL))
 
@@ -229,17 +230,15 @@ def test_each_channel_is_one_sweep_driving_its_own_tags_in_the_records_frame(
         assert config.native_symmetry_plane == "yz"
         assert config.assembly_backend == "opencl"
         assert config.workers == 1
-        assert config.require_closed_mesh is False
+        # Metal re-checks the executed mesh for a free rim; so does BEMPP.
+        assert config.require_closed_mesh is True
     assert recording_bempp.solves[0]["text"] == MESH
 
     assert envelope["result_kind"] == "multi_channel"
     assert envelope["channel_order"] == ["left", "right"]
     engine = envelope["metadata"]["solver_engine"]
-    assert (engine["engine"], engine["assembly_backend"], engine["formulation"]) == (
-        "bempp",
-        "opencl",
-        "complex_k",
-    )
+    assert (engine["engine"], engine["assembly_backend"]) == ("bempp", "opencl")
+    assert "complex" in str(engine["formulation"]).lower()
     assert envelope["metadata"]["observation_frame_basis"]["axis"] == [1.0, 0.0, 0.0]
     assert envelope["metadata"]["symmetry_planes_used"] == ["x0"]
     # A multi-source channel has no single impedance; a single-source one keeps it.
@@ -346,11 +345,27 @@ def test_streamed_frames_count_each_channel_and_carry_the_axis_once(
     assert not any("frequencies" in frame for frame in by_channel["right"])
 
 
-def test_the_passive_cardioid_and_the_ground_plane_stay_refused(recording_bempp: _RecordingBempp) -> None:
+def test_the_ground_plane_stays_refused(recording_bempp: _RecordingBempp) -> None:
     grounded = _request()
     grounded.options.ground_plane.enabled = True
     with pytest.raises(BemppUnavailable, match="ground plane"):
         _solve(grounded, _record())
+    assert recording_bempp.solves == []
+
+
+def test_the_passive_cardioid_campaign_is_refused_on_bempp(recording_bempp: _RecordingBempp) -> None:
+    request = _request(
+        drive_channels=[{"id": "left", "source_ids": ["source-a", "source-b", "source-c"]}],
+        passive_cardioid_rear_volume_l=6.0,
+        passive_cardioid_port_length_mm=25.0,
+        model_port_area_m2=0.05,
+        bem_port_area_m2=0.009471859930646809,
+        port_area_source="user",
+        passive_cardioid_foam_resistance_pa_s_m3=10_000.0,
+    )
+
+    with pytest.raises(BemppUnavailable, match="passive cardioid"):
+        _solve(request, _record())
     assert recording_bempp.solves == []
 
 
@@ -389,18 +404,22 @@ def test_the_engine_routes_an_imported_request_through_the_killable_worker(
 
 
 def test_a_tampered_record_mesh_is_refused_before_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_worker(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        raise AssertionError("an unverified mesh reached the worker")
+    reached: list[str] = []
+
+    async def fake_worker(msh_text: str, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        reached.append(msh_text)
+        return {"metadata": {}}
 
     monkeypatch.setattr(bempp_process, "solve_imported_bempp_in_process", fake_worker)
     record = {**_record(), "_execution_msh_text": MESH.replace("0.01 0 0", "0.02 0 0", 1)}
 
-    with pytest.raises(Exception, match="(?i)mesh"):
+    with pytest.raises(ImportedMeshArtifactError, match="digest mismatch"):
         asyncio.run(
             bempp.BemppEngine().run(
                 _request(), cancel_cb=lambda: None, stage_cb=lambda *_: None, imported_record=record
             )
         )
+    assert reached == []
 
 
 def test_the_worker_dispatches_an_imported_payload_to_the_imported_solve(
