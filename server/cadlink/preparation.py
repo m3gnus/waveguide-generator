@@ -324,12 +324,12 @@ def dismiss_operation(ctx: PreparationContext, operation_id: str) -> dict[str, A
     """Dismiss an operation, after reconciling it with the jobs store.
 
     A solve whose submission key already made a job follows the job: it is
-    ``accepted`` with it, and the user cancels the job in the jobs list. An
-    idle solve whose request is bound -- a job may exist -- is not dismissed
-    while the jobs store cannot be read (:class:`DismissalUnconfirmed`):
-    cancelling it then could leave a job running under an operation that
-    reads "cancelled", and nothing reconciles a cancelled operation later.
-    A running attempt settles its own outcome, a job included. Otherwise as
+    ``accepted`` with it, and the user cancels the job in the jobs list. A
+    solve whose request is bound -- a job may exist -- is not dismissed while
+    the jobs store cannot be read (:class:`DismissalUnconfirmed`), whether it
+    is idle or an attempt is submitting it: a dismissal turns the attempt's
+    "interrupted" into "cancelled", whatever job it made, and nothing
+    reconciles a cancelled operation later. Otherwise as
     :meth:`CadLinkStore.request_cancel`. None for an unknown operation.
     """
 
@@ -350,11 +350,7 @@ def dismiss_operation(ctx: PreparationContext, operation_id: str) -> dict[str, A
         if reconciled is not None:
             return reconciled
         current = store.get_operation(operation_id) or row
-        if (
-            not known
-            and current.get("request_json")
-            and current["state"] in {RECEIVED, NEEDS_USER_INPUT}
-        ):
+        if not known and current.get("request_json") and current["state"] not in TERMINAL_STATES:
             raise DismissalUnconfirmed(DISMISSAL_UNCONFIRMED)
     return store.request_cancel(operation_id)
 

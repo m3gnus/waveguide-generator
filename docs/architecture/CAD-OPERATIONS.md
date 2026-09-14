@@ -303,10 +303,11 @@ blocking findings the user reviewed, and on which preparation) and observes.
 - **Dismissal.** `POST .../cancel` first reconciles a solve with the jobs store.
   - If its submission key already made a job, the operation follows the job: it is
     `accepted` with it, and the user cancels the job in the jobs list.
-  - If it is idle and its request is bound, so a job may exist, and the jobs store cannot
-    be read, the route answers 409 and dismisses nothing: WG cannot confirm yet whether a
-    job exists. A cancelled operation is never reconciled later, so dismissing it then
-    could leave a job running under an operation that reads "cancelled".
+  - If its request is bound, so a job may exist, and the jobs store cannot be read, the
+    route answers 409 and dismisses nothing: WG cannot confirm yet whether a job exists.
+    That holds whether the operation is idle or an attempt is submitting it. A cancelled
+    operation is never reconciled later, so dismissing it then could leave a job running
+    under an operation that reads "cancelled".
   - Otherwise it cancels an idle operation at once, and fences a running attempt, which
     then records `cancelled` whatever it found. The one exception is a job the attempt
     had already created: the job exists, the operation is `accepted` with it, and the

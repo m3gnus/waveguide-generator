@@ -1308,3 +1308,32 @@ def test_each_attempt_logs_its_operation_and_generation(harness: Harness, caplog
     for stage in ("validating", "preparing-mesh", "ready"):
         assert logged("cmd-1", "attempt 2", f"stage {stage}")
     assert logged("cmd-1", "attempt 2", "finished accepted", "job-1")
+
+
+def test_a_dismissal_waits_while_a_bound_attempt_runs_and_wg_cannot_read_the_jobs(
+    harness: Harness,
+) -> None:
+    from fastapi import HTTPException
+
+    _received(harness)
+    generation = harness.store.claim("cmd-1", 0)
+    assert harness.store.bind_request(
+        "cmd-1", generation, setup_revision_id="wgs_x", request_json='{"x":1}'
+    ) is not None  # an attempt is submitting this request
+    before = harness.row()
+    jobs = _JobStore(harness)
+    jobs.error = sqlite3.OperationalError("database is locked")
+
+    with pytest.raises(HTTPException) as refused:
+        _cancel(harness, jobs)
+
+    # A dismissal would turn the attempt's "interrupted" into "cancelled",
+    # whatever job its submission made.
+    assert refused.value.status_code == 409
+    assert harness.row() == before
+    # Once the jobs store answers, the dismissal fences the attempt as before,
+    # and a job it made still stands as the outcome.
+    jobs.error = None
+    assert _cancel(harness, jobs)["state"] == "cancel_requested"
+    recorded = harness.store.record_outcome("cmd-1", generation, "accepted", job_id="job-1")
+    assert recorded is not None and (recorded["state"], recorded["job_id"]) == ("accepted", "job-1")
