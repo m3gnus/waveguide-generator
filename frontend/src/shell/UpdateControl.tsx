@@ -405,6 +405,7 @@ export function updateDiagnostics(status: UpdateStatus | undefined): string {
     error: status?.error ?? null,
     lastOutcome: status?.lastOutcome ?? null,
     suppressed: status?.suppressed ?? null,
+    repairRequired: status?.repairRequired ?? null,
   }, null, 2);
 }
 
@@ -435,6 +436,8 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
   const held = !mismatch && data?.availability === 'available' ? data.suppressed ?? null : null;
   const heldVersion = held ? held.version ?? data?.release?.version ?? 'this build' : undefined;
   const lastOutcome = data?.lastOutcome ?? null;
+  // A rollback that did not finish (the updater review §3.3 "Honest outcomes").
+  const repair = !mismatch ? data?.repairRequired ?? null : null;
 
   const close = useCallback(() => {
     operationGeneration.current += 1;
@@ -594,6 +597,9 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
   if (mismatch) {
     title = 'Waveguide Generator was updated';
     summary = `This tab is ${__WG2_VERSION__}; the running application is ${data?.runningVersion}. Reload before continuing.`;
+  } else if (repair) {
+    title = 'Rollback failed, repair required';
+    summary = 'WG began restoring the version before the last update and could not finish, so this installation may be only partly restored.';
   } else if (held) {
     title = `Waveguide Generator ${heldVersion} is held back`;
     summary = `WG rolled back ${heldVersion} after it did not start, so it will not install that build again on its own.`;
@@ -675,6 +681,11 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
         {/* Not while an install is downloading or verifying: the bytes on disk
             were resolved from the channel this check answered. */}
         <UpdateChannelChoice status={data} disabled={installActive}/>
+
+        {repair && <p className="update-note error" role="alert">
+          <b>Rollback failed, repair required</b>
+          {withDetail('Review update.log in the application data log directory before changing the installation.', repair.detail)}
+        </p>}
 
         {presentation.state === 'failed' && <p className="update-note error" role="alert">
           <b>WG could not complete the check</b>

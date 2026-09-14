@@ -311,6 +311,25 @@ describe('UpdateControl', () => {
       expect(host.querySelector('footer button.primary')?.textContent).toBe('Install update');
     });
 
+    it('says a rollback that did not finish needs repair, and copies it', async () => {
+      const repair = { transaction: '5f0c', detail: 'The restored bundle failed its signature check.' };
+      act(() => root.render(<Harness value={bundleStatus({ repairRequired: repair })}/>));
+      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+      const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+
+      expect(dialog.querySelector('h2')?.textContent).toBe('Rollback failed, repair required');
+      const alert = [...dialog.querySelectorAll<HTMLElement>('[role="alert"]')]
+        .find((note) => note.textContent?.includes('Rollback failed, repair required'));
+      expect(alert?.textContent).toContain(repair.detail);
+      expect(alert?.textContent).toContain('update.log');
+
+      const copy = [...dialog.querySelectorAll<HTMLButtonElement>('button')]
+        .find((button) => button.textContent === 'Copy update diagnostics');
+      await act(async () => copy!.click());
+      const copied = JSON.parse(String((writeText.mock.calls[0] as unknown[])[0]));
+      expect(copied.repairRequired).toEqual(repair);
+    });
+
     it('copies update diagnostics that carry the last outcome', async () => {
       act(() => root.render(<Harness value={heldStatus()}/>));
       await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());

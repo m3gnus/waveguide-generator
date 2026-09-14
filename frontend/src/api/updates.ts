@@ -138,6 +138,17 @@ export interface UpdateOutcome {
   suppressedBuilds: UpdateBuildIdentity[];
 }
 
+/**
+ * A rollback of this installation that did not finish (the updater review §3.3
+ * "Honest outcomes"): its journal is still `rolling-back` while WG runs, and no
+ * completion record says so. Its counterpart is `_repair_required` in
+ * `server/updates/service.py`; the detail names the home folder as `~`.
+ */
+export interface UpdateRepair {
+  transaction: string | null;
+  detail: string;
+}
+
 export interface UpdateStatus {
   schemaVersion: 1;
   runningVersion: string;
@@ -159,6 +170,8 @@ export interface UpdateStatus {
    * It then has no action and cannot be installed until a retry lifts it.
    */
   suppressed?: UpdateBuildIdentity | null;
+  /** A rollback that did not finish, so the installation needs repair. Absent from an older server. */
+  repairRequired?: UpdateRepair | null;
   installState: UpdateInstallState;
   activeVersion: string | null;
   downloadedBytes: number;
@@ -310,6 +323,10 @@ function isUpdateOutcome(value: unknown): value is UpdateOutcome {
     && value.suppressedBuilds.every(isHeldBackBuild);
 }
 
+function isUpdateRepair(value: unknown): value is UpdateRepair {
+  return isRecord(value) && isNullableString(value.transaction) && typeof value.detail === 'string';
+}
+
 function isCheckoutStatus(value: unknown): value is CheckoutStatus {
   if (!isRecord(value)
     || !isCheckoutKind(value.kind)
@@ -370,6 +387,7 @@ function isUpdateStatus(value: unknown): value is UpdateStatus {
     && isNullableString(value.lastError)
     && (!Object.hasOwn(value, 'lastOutcome') || value.lastOutcome === null || isUpdateOutcome(value.lastOutcome))
     && (!Object.hasOwn(value, 'suppressed') || value.suppressed === null || isHeldBackBuild(value.suppressed))
+    && (!Object.hasOwn(value, 'repairRequired') || value.repairRequired === null || isUpdateRepair(value.repairRequired))
     && isInstallState(value.installState)
     && (value.installState === 'idle' ? value.activeVersion === null : isVersion(value.activeVersion))
     && isNonNegativeNumber(value.downloadedBytes)

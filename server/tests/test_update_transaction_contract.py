@@ -2973,6 +2973,53 @@ def test_the_update_status_explains_the_last_outcome_without_local_paths(
     assert str(tmp_path.resolve()) not in json.dumps(outcome)
 
 
+def test_the_update_status_says_a_rollback_that_did_not_finish_needs_repair(
+    tmp_path: Path,
+) -> None:
+    """The review §3.3 "Honest outcomes": "rollback failed, repair required".
+
+    A failed rollback leaves this installation's journal in ``rolling-back`` and
+    writes no completion record, so until now only the launcher's dialog said
+    so. The update status reads the journal, and changes nothing in it.
+    """
+
+    installation = _installation(tmp_path)
+    _stamp_build(installation.resources / "app", "9.9.8", "a" * 40, SERVICE_RUNTIME)
+    _stamp_build(installation.staged_app, "9.9.9", "b" * 40, SERVICE_RUNTIME)
+    transaction = _decided_update(installation)
+    update = _bundle_update_service(
+        installation.resources,
+        installation.data_dir,
+        _PublishedReleases("9.9.9", "b" * 40),
+        installed_version="9.9.9",
+        platform_name="linux",
+        tmp_path=tmp_path,
+    )
+
+    # An update that installed and waits for its healthy start is not a failure.
+    assert update.get_status()["repairRequired"] is None
+
+    sealed = Path.home() / "Applications" / "Waveguide Generator.app"
+    set_journal_state(
+        installation.data_dir,
+        installation.resources,
+        "rolling-back",
+        detail=f"the restored bundle {sealed} failed its signature check",
+    )
+    before = (installation.data_dir / f"update-transaction-{installation_key(installation.resources)}.json").read_bytes()
+    repair = update.get_status()["repairRequired"]
+
+    assert repair is not None and repair["transaction"] == transaction
+    assert "failed its signature check" in repair["detail"]
+    assert str(Path.home()) not in repair["detail"] and "~" in repair["detail"]
+    assert (installation.data_dir / f"update-transaction-{installation_key(installation.resources)}.json").read_bytes() == before
+
+    # Another installation's rollback is not this one's to report.
+    elsewhere = tmp_path.resolve() / "Another copy"
+    _rewrite_journal(installation, resources=str(elsewhere), bundle=str(elsewhere))
+    assert update.get_status()["repairRequired"] is None
+
+
 def test_a_build_field_nobody_recorded_is_not_evidence_of_a_different_build(
     tmp_path: Path,
 ) -> None:

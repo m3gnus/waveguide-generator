@@ -145,6 +145,12 @@ completion record only remembers what the journal decided.
   - The dialog shows the outcome as a "Last update" fact, and explains one that did not
     install. "Copy update diagnostics", in the same dialog, copies the update state
     with both fields. It leaves out the install command, which names a local folder.
+  - A failed rollback writes no record: it leaves this installation's journal in
+    `rolling-back`, which every start's recovery would otherwise have finished. The status
+    reports it as `repairRequired`, the transaction and the journal's detail with the home
+    folder as `~`, and the dialog says "Rollback failed, repair required"
+    (`_repair_required` in `server/updates/service.py`). It reads the journal and changes
+    nothing in it.
 
 To give the record its build identities, the helper adds `fromVersion`, `fromCommit` and
 `fromRuntimeId`, and the matching `to` keys, to the journal. `begin_update_transaction`
@@ -716,6 +722,7 @@ that implements it removes the marker.
 | `test_healthy_start_writes_nothing_when_there_is_nothing_to_settle` | §4.5 | An ordinary start that cannot confirm writes nothing about updates |
 | `test_a_failed_build_is_held_back_until_an_explicit_retry_lifts_only_it` | §2.2, §2.3, D6 | End to end: the rollback records the failed build, the next check holds it back and install refuses it, another commit or version stays eligible, and the retry lifts that entry only |
 | `test_the_update_status_explains_the_last_outcome_without_local_paths` | §2.2 | The status carries the normalized outcome, without the record's staging folders |
+| `test_the_update_status_says_a_rollback_that_did_not_finish_needs_repair` | §2.2 | A journal still `rolling-back` is `repairRequired`, its detail without the home folder, and the journal is unchanged; an installed transaction or another installation's rollback is not |
 | `test_a_build_field_nobody_recorded_is_not_evidence_of_a_different_build` | §2.3 | Suppression fails closed on a commit the record does not know |
 | `test_a_retry_needs_its_confirmation_and_lifts_nothing_it_does_not_name` | §2.3 | The retry needs its header, and naming a build that is not held back changes nothing |
 | `test_a_job_the_update_restart_ends_reads_as_ended_by_the_update_restart` | §4.3 | A running job the restart stops at a checkpoint names the update restart, not Quit |

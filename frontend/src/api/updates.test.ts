@@ -178,11 +178,20 @@ describe('the last update outcome and a held-back build', () => {
     expect(result.lastOutcome).toEqual(lastOutcome);
   });
 
+  it('accepts a rollback that did not finish, which needs repair', async () => {
+    const repairRequired = { transaction: '5f0c', detail: 'The restored bundle failed its signature check.' };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...bundlePayload, repairRequired })));
+    const result = await getUpdateStatus();
+    expect(result.repairRequired).toEqual(repairRequired);
+  });
+
   it.each([
     ['an unknown outcome', { lastOutcome: { ...lastOutcome, outcome: 'exploded' } }],
     ['a held-back build with no version', { suppressed: { ...heldBuild, version: 7 } }],
     ['a suppression list that is not a list', { lastOutcome: { ...lastOutcome, suppressedBuilds: heldBuild } }],
     ['a build identity with a stray field', { suppressed: { ...heldBuild, path: '/somewhere' } }],
+    ['a repair notice with no detail', { repairRequired: { transaction: '5f0c' } }],
+    ['a repair notice that is not an object', { repairRequired: 'yes' }],
   ] as [string, Record<string, unknown>][])('rejects %s', async (_label, fields) => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...bundlePayload, ...fields })));
     await expect(getUpdateStatus()).rejects.toThrow('Update status response is invalid');

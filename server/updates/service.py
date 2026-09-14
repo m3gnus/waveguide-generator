@@ -43,11 +43,14 @@ from server.updates.restart import RestartApproval, RestartRelease, revoke_reque
 # has one implementation. The app layer carries ``launchers``, and the helper
 # that writes the record is this same module.
 from launchers.apply_update import (
+    ROLLING_BACK_STATE,
     ApplyUpdateError,
     bundle_from_app_layer,
     installation_key,
+    journal_describes,
     lift_suppressed_build,
     read_completion_record,
+    read_journal,
     resources_directory,
 )
 
@@ -1152,6 +1155,32 @@ class UpdateService:
         resources = self._installed_resources(checkout)
         return read_completion_record(self.data_dir, resources) if resources is not None else None
 
+    def _repair_required(self, checkout: dict[str, Any]) -> dict[str, Any] | None:
+        """This installation's rollback that did not finish, or ``None`` (the review §3.3).
+
+        A restore writes ``rolling-back`` before it begins and a decided state
+        when it ends, and every start's recovery finishes one it finds. A journal
+        still in ``rolling-back`` while WG runs is a restore that failed and that
+        recovery could not finish: the installation may be only partly restored,
+        and no completion record says so. Read-only: the journal is the helper's.
+        """
+
+        resources = self._installed_resources(checkout)
+        if resources is None:
+            return None
+        journal = read_journal(self.data_dir, resources)
+        if (
+            journal is None
+            or journal.get("state") != ROLLING_BACK_STATE
+            or not journal_describes(journal, resources)
+        ):
+            return None
+        detail = journal.get("detail")
+        return {
+            "transaction": _recorded_text(journal.get("transaction")),
+            "detail": _without_home(detail) if isinstance(detail, str) else "",
+        }
+
     def lift_suppression(self, build: Mapping[str, Any]) -> dict[str, str | None]:
         """The explicit retry of contract §2.3: lift the one held-back entry ``build`` names.
 
@@ -1858,6 +1887,9 @@ class UpdateService:
                 if outcome is not None and availability == "available"
                 else None
             )
+            # "Rollback failed, repair required" (the review §3.3 "Honest
+            # outcomes"): a failed rollback writes no completion record.
+            repair = self._repair_required(checkout)
             action = None
             if (
                 availability == "available"
@@ -1904,6 +1936,7 @@ class UpdateService:
                 "lastError": last_error,
                 "lastOutcome": outcome,
                 "suppressed": suppressed,
+                "repairRequired": repair,
                 **install_status,
             }
 
