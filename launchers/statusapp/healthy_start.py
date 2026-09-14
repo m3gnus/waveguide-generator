@@ -31,12 +31,15 @@ import threading
 
 from launchers.apply_update import (
     ROLLBACK_MATERIAL_RETAINED,
+    TERMINAL_JOURNAL_STATES,
     ApplyUpdateError,
     append_update_log,
     bundle_from_app_layer,
     cleanup_previous_layers,
     commit_transaction,
     journal_describes,
+    journal_live_build,
+    read_build_identity,
     read_completion_record,
     read_journal,
     reclaim_committed_staging,
@@ -120,6 +123,48 @@ def unconfirmed_line(data_dir: Path, resources: Path, reason: str) -> str | None
     return (
         f"This start did not confirm the build: {reason}. Not reclaiming the previous "
         "layers yet" + (f"; {transaction} stays open" if transaction else "") + "."
+    )
+
+
+def _describe_build(identity: Mapping[str, str | None]) -> str:
+    if not any(identity.values()):
+        return "a build with no readable APP-MANIFEST.json"
+    commit = identity.get("commit")
+    return (
+        f"build {identity.get('version') or 'unknown'} (commit "
+        f"{commit[:12] if commit else 'unknown'}, runtime {identity.get('runtimeId') or 'unknown'})"
+    )
+
+
+def installed_build_mismatch(data_dir: Path, resources: Path) -> str | None:
+    """Why the installed app layer is not the build this installation's journal left, or ``None``.
+
+    Contract §4.6: a healthy start needs the *expected* build serving, not
+    merely some build. The expected build is the one the decided journal left
+    in the app layer (:func:`journal_live_build`), compared field by field with
+    the app layer's own ``APP-MANIFEST.json``; every field the journal names
+    must match. ``None`` when it does, when the journal names no build (an
+    older helper wrote it), and when there is no decided journal of this
+    installation to compare with: ``commit_transaction`` decides those.
+    """
+
+    journal = read_journal(data_dir, resources)
+    if (
+        journal is None
+        or not journal_describes(journal, resources)
+        or str(journal.get("state") or "") not in TERMINAL_JOURNAL_STATES
+    ):
+        return None
+    expected = journal_live_build(journal)
+    if expected is None:
+        return None
+    installed = read_build_identity(resources / "app")
+    if all(installed.get(field) == value for field, value in expected.items() if value is not None):
+        return None
+    transaction = str(journal.get("transaction") or "unidentified")
+    return (
+        f"the installed app layer is {_describe_build(installed)}, not "
+        f"{_describe_build(expected)}, which update transaction {transaction} left installed"
     )
 
 
@@ -220,6 +265,14 @@ class HealthyStartSettlement:
 
             if not ready:
                 line = unconfirmed_line(data_dir, resources, evidence)
+                if line is not None:
+                    log(line)
+                return False
+            # A healthy interface of some other build confirms nothing about
+            # this transaction, and nothing it would reclaim is spent.
+            mismatch = installed_build_mismatch(data_dir, resources)
+            if mismatch is not None:
+                line = unconfirmed_line(data_dir, resources, mismatch)
                 if line is not None:
                     log(line)
                 return False
@@ -390,6 +443,7 @@ __all__ = [
     "BundlePaths",
     "HealthyStartSettlement",
     "cleanup_holding_directory",
+    "installed_build_mismatch",
     "open_transaction",
     "previous_generation_paths",
     "report_unconfirmed_for_arguments",

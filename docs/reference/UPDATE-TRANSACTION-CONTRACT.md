@@ -524,8 +524,22 @@ It never depends on the internet, on Fusion, or on a solver qualification run.
 
 The evidence each mode has for these:
 
+- **The expected build.** Every mode, before it commits, compares the installed app
+  layer's `APP-MANIFEST.json` identity `(version, commit, runtimeId)` with the build the
+  decided journal left installed: the `to` build of an update that installed and of a
+  rollback that restored, and the `from` build of an update that rolled back or was
+  abandoned. Every field the journal names must match. A mismatch commits nothing,
+  reclaims nothing, and writes the "did not confirm the build" line of §4.5. A journal
+  that names no build, which an older helper wrote, is not compared. In the code:
+  `installed_build_mismatch` in `launchers/statusapp/healthy_start.py`, and
+  `journal_live_build` in `launchers/apply_update.py`.
 - The window and browser modes take the first two from a served `/health` and interface
-  route. The server refuses at start an interface stamped for a different version.
+  route. In a bundle, the controller's own server must name the installed app layer's
+  build label in `/health`. A server that names another build fails the frontend-ready
+  predicate, which the window's wait and its settle both use, and the backend lamp says
+  why. A `/health` that has not answered yet blocks nothing, so a probe that timed out
+  while the interface is served delays no start. The server refuses at start an
+  interface stamped for a different version.
 - `--no-gui` also checks that `/health` names this process's build.
 - The last two are implied rather than checked. uvicorn serves, and reports started, only
   after the application's startup handlers have run, and the job store opens there.
@@ -657,6 +671,9 @@ that implements it removes the marker.
 | `test_an_approval_waits_for_a_job_that_is_being_marked_running` | §4.3 | Marking a job running and approving a restart are ordered by one lock |
 | `test_a_retry_made_while_healthy_start_cleanup_runs_is_not_undone` | §2.3, §2.5 | Cleanup's rewrite of the record keeps a suppression lifted while it ran |
 | `test_an_outcome_detail_names_the_home_folder_as_a_problem_report_does` | §2.2 | A detail that names a folder under home reads `~` in the status |
+| `test_healthy_start_settles_only_the_build_the_journal_left_installed` | §4.6 | For an installed update, a rolled-back update and a restoring rollback: another commit, the transaction's other build or no manifest in the app layer commits and reclaims nothing and writes the line; the expected build then settles |
+| `test_a_browser_mode_start_needs_health_to_name_the_installed_build` | §4.6 | A bundle's own server naming another build is not ready and settles nothing; the same start settles once it names the installed build |
+| `test_a_no_gui_start_whose_health_names_another_build_does_not_settle` | §4.6 | Live uvicorn: a self-probe whose `/health` names another build reports once and settles nothing |
 
 The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateControl.test.tsx`
 ("a held-back build and the last outcome") and `frontend/src/api/updates.test.ts`.

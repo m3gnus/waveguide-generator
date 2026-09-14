@@ -80,6 +80,7 @@ from server.updates.service import (
     UpdateInstallUnavailable,
     UpdateService,
 )
+from shared.build_identity import build_label
 
 from _release_tags import RELEASE_TAGS, skip_or_fail_missing_tag
 
@@ -868,6 +869,8 @@ def test_a_browser_mode_start_settles_the_update_transaction(
     _with_interface(app_layer)
     fake_server = tmp_path / "fake_server.py"
     fake_server.write_text(_FAKE_SERVER, encoding="utf-8")
+    # What a server running from the installed app layer names itself (§4.6).
+    health = json.dumps({"version": "test", "build": build_label(app_layer)}).encode()
 
     controller = StatusController(
         repo_root=app_layer,
@@ -877,7 +880,7 @@ def test_a_browser_mode_start_settles_the_update_transaction(
         request_timeout=0.2,
         shutdown_timeout=1.0,
         request_probe=lambda url, _timeout: (
-            (200, b'{"version":"test"}')
+            (200, health)
             if url.endswith("/health")
             else (200, b"<!doctype html><html><body>fake SPA</body></html>")
         ),
@@ -1495,6 +1498,240 @@ def test_a_no_gui_start_that_serves_its_interface_settles_the_transaction(
     assert f"Healthy start: update transaction {transaction} committed" in written
     assert "did not confirm" not in written
     assert not (installation.resources / "app.previous").exists()
+
+
+def test_a_no_gui_start_whose_health_names_another_build_does_not_settle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.6: ``/health`` must name this process's build, or nothing is proved.
+
+    Live uvicorn and a real self-probe, as in the test above, but the server
+    that answers names another build: whatever it is, it is not evidence that
+    this start's build serves, so the transaction stays open and is reported.
+    """
+
+    from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse
+
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(serve, "HEALTHY_START_PROBE_SECONDS", 0.0)
+    installation = _installation(tmp_path, sys.platform)
+    transaction = _decided_update(installation, sys.platform)
+    before = _update_log(installation)
+    other_build = "0.0.1+gdeadbeef"
+    if other_build == serve.BUILD:
+        pytest.fail("set-up: the stand-in build must differ from this checkout's")
+
+    interface = FastAPI()
+
+    @interface.get("/health")
+    async def health() -> dict[str, object]:
+        return {"version": "0.0.1", "build": other_build}
+
+    @interface.get("/")
+    async def index() -> HTMLResponse:
+        return HTMLResponse("<!doctype html><html><body>WG</body></html>")
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    servers: list[Any] = []
+
+    class _RecordingServer(serve.uvicorn.Server):  # type: ignore[name-defined, misc]
+        def __init__(self, config: Any) -> None:
+            super().__init__(config)
+            servers.append(self)
+
+    def stop_once_decided() -> None:
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            written = _update_log(installation)[len(before) :]
+            record = _completion_record(installation.data_dir, installation.resources) or {}
+            if servers and (transaction in written or record.get("rollbackMaterial") == "reclaimed"):
+                break
+            time.sleep(0.05)
+        if servers:
+            servers[0].should_exit = True
+
+    stopper = threading.Thread(target=stop_once_decided, daemon=True)
+    stopper.start()
+    exit_code = _no_gui_start_in_this_process(
+        monkeypatch,
+        installation,
+        server_class=_RecordingServer,
+        create=lambda **_kwargs: interface,
+        reserve=lambda *_args, **_kwargs: (listener, port),
+    )
+    stopper.join(timeout=5.0)
+
+    if exit_code != 0:
+        pytest.fail(f"set-up: the --no-gui start did not run (exit {exit_code})")
+    written = _update_log(installation)[len(before) :]
+    journal = read_journal(installation.data_dir, installation.resources)
+    assert journal is not None and journal.get("state") == "installed", (
+        f"a --no-gui start whose /health named build {other_build!r} settled anyway: {written}"
+    )
+    assert (installation.resources / "app.previous").is_dir()
+    assert transaction in written and other_build in written, written
+    assert written.count("did not confirm") == 1, written
+
+
+def _rewrite_journal(installation: Installation, **changes: Any) -> dict[str, Any]:
+    journal = read_journal(installation.data_dir, installation.resources)
+    if journal is None:
+        pytest.fail("set-up: no journal to rewrite")
+    payload = {**journal, **changes}
+    apply_update_module.write_journal(installation.data_dir, installation.resources, payload)
+    return payload
+
+
+def _build_fields(side: str, identity: dict[str, str]) -> dict[str, str]:
+    return {
+        f"{side}Version": identity["version"],
+        f"{side}Commit": identity["commit"],
+        f"{side}RuntimeId": identity["runtimeId"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("operation", "state", "live"),
+    [
+        ("update", "installed", "to"),
+        ("update", "rolled-back", "from"),
+        ("rollback", "rolled-back", "to"),
+    ],
+    ids=["update-installed", "update-rolled-back", "rollback-restored"],
+)
+def test_healthy_start_settles_only_the_build_the_journal_left_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str, state: str, live: str
+) -> None:
+    """Contract §4.6: the expected build is serving, not merely some build.
+
+    An update that installed leaves its ``to`` build; one that rolled back
+    leaves its ``from`` build; a rollback leaves the build it restored, its
+    ``to``. A start of any other build in the app layer confirms nothing about
+    the transaction, so it commits nothing and reclaims nothing, and says so in
+    the line every mode uses when it cannot confirm.
+    """
+
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
+    installation = _installation(tmp_path)
+    older = _stamp_build(installation.resources / "app", "9.9.8", "a" * 40, "old0")
+    newer = _stamp_build(installation.staged_app, "9.9.9", "b" * 40, "new1")
+    transaction = _decided_update(installation)
+    if operation == "rollback":
+        # Rolling the new build back to the older one.
+        builds = {"from": newer, "to": older}
+    else:
+        builds = {"from": older, "to": newer}
+    _rewrite_journal(
+        installation,
+        operation=operation,
+        state=state,
+        **_build_fields("from", builds["from"]),
+        **_build_fields("to", builds["to"]),
+    )
+    expected = builds[live]
+    stranger = {"version": "9.9.9", "commit": "c" * 40, "runtimeId": expected["runtimeId"]}
+    paths = (installation.bundle, installation.resources, installation.data_dir)
+    app_layer = installation.resources / "app"
+
+    for installed, why in (
+        (stranger, "another commit"),
+        (builds["from" if live == "to" else "to"], "the transaction's other build"),
+        (None, "no manifest at all"),
+    ):
+        if installed is None:
+            (app_layer / "APP-MANIFEST.json").unlink()
+        else:
+            _stamp_build(app_layer, installed["version"], installed["commit"], installed["runtimeId"])
+        before = _update_log(installation)
+        settled = healthy_start.HealthyStartSettlement(lambda: paths).settle(
+            ready=True, evidence="a healthy interface", report=lambda _message: None
+        )
+        written = _update_log(installation)[len(before) :]
+        assert not settled, f"settled with {why} in the app layer"
+        assert read_journal(installation.data_dir, installation.resources) is not None
+        assert (installation.resources / "app.previous").is_dir(), "rollback material was removed"
+        assert (installation.data_dir / "updates" / "9.9.9").is_dir(), "staging was removed"
+        assert written.count("This start did not confirm the build") == 1, written
+        assert transaction in written and expected["commit"][:12] in written, written
+
+    _stamp_build(app_layer, expected["version"], expected["commit"], expected["runtimeId"])
+    assert healthy_start.HealthyStartSettlement(lambda: paths).settle(
+        ready=True, evidence="a healthy interface", report=lambda _message: None
+    ), _update_log(installation)
+    assert read_journal(installation.data_dir, installation.resources) is None
+    record = _completion_record(installation.data_dir, installation.resources) or {}
+    assert record.get("transaction") == transaction and record.get("outcome") == state
+
+
+def test_a_browser_mode_start_needs_health_to_name_the_installed_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.6: the window and browser readiness requires the installed layer's build.
+
+    A backend that answers ``/health`` with a version, and serves some HTML,
+    is not evidence that the installed build runs. The controller's own server
+    must name the installed app layer's build; until it does, the lamp is an
+    error and nothing settles. The same start then settles once it does.
+    """
+
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
+    installation = _installation(tmp_path, sys.platform)
+    transaction = _decided_update(installation, sys.platform)
+    app_layer = installation.resources / "app"
+    _with_interface(app_layer)
+    fake_server = tmp_path / "fake_server.py"
+    fake_server.write_text(_FAKE_SERVER, encoding="utf-8")
+    installed = build_label(app_layer)
+    answer = {"build": "0.0.1+gdeadbeef"}
+    if answer["build"] == installed:
+        pytest.fail("set-up: the stand-in build must differ from the installed one")
+
+    controller = StatusController(
+        repo_root=app_layer,
+        server_command=(sys.executable, str(fake_server)),
+        server_args=("--data-dir", str(installation.data_dir)),
+        environ={**os.environ, "WG2_BUNDLE": "1", "WG2_APP_ROOT": str(app_layer)},
+        request_timeout=0.2,
+        shutdown_timeout=1.0,
+        request_probe=lambda url, _timeout: (
+            (200, json.dumps({"version": "test", "build": answer["build"]}).encode())
+            if url.endswith("/health")
+            else (200, b"<!doctype html><html><body>fake SPA</body></html>")
+        ),
+    )
+    try:
+        controller.start()
+        deadline = time.monotonic() + 20.0
+        snapshot = controller.poll()
+        while "named build" not in snapshot.backend.reason:
+            if time.monotonic() > deadline:
+                pytest.fail(f"set-up: the controller never probed its server: {snapshot}")
+            time.sleep(0.05)
+            snapshot = controller.poll()
+        for _ in range(3):
+            snapshot = controller.poll()
+        assert snapshot.backend.state is ServiceState.ERROR, snapshot
+        assert answer["build"] in snapshot.backend.reason and installed in snapshot.backend.reason
+        journal = read_journal(installation.data_dir, installation.resources)
+        assert journal is not None and journal.get("state") == "installed", (
+            f"a server naming build {answer['build']!r} settled transaction {transaction}"
+        )
+        assert (installation.resources / "app.previous").is_dir()
+
+        # The same start, once its server names the installed build.
+        answer["build"] = installed
+        while read_journal(installation.data_dir, installation.resources) is not None:
+            if time.monotonic() > deadline:
+                pytest.fail(f"a server naming the installed build never settled: {snapshot}")
+            time.sleep(0.05)
+            snapshot = controller.poll()
+        assert snapshot.backend.state is ServiceState.OK
+    finally:
+        controller.close()
 
 
 def test_the_desktop_window_settles_from_its_event_loop_not_its_first_poll(

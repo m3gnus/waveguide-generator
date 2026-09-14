@@ -758,6 +758,23 @@ def _journal_build(journal: Mapping[str, Any], side: str) -> dict[str, str | Non
     return identity if any(identity.values()) else None
 
 
+def journal_live_build(journal: Mapping[str, Any]) -> dict[str, str | None] | None:
+    """The build a decided journal left in the app layer, or ``None`` when it names none.
+
+    An update that installed, and a rollback that restored, leave their ``to``
+    build. An update that rolled back or was abandoned, and a rollback that was
+    abandoned, leave their ``from`` build. A healthy start compares it with the
+    app layer before it commits (contract §4.6); a journal an older helper
+    wrote names no build and is not compared.
+    """
+
+    restored_or_installed = (journal.get("operation"), journal.get("state")) in {
+        ("update", "installed"),
+        ("rollback", "rolled-back"),
+    }
+    return _journal_build(journal, "to" if restored_or_installed else "from")
+
+
 def journal_staging_roots(journal: Mapping[str, Any]) -> list[str]:
     """The staging roots a journal names.
 

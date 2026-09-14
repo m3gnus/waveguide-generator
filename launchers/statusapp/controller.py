@@ -33,6 +33,7 @@ from launch.serve_options import UPDATE_RELEASED_FILENAME
 from launchers.apply_update import append_update_log
 from server.platform.instance import requested_port
 from server.platform.paths import app_root, resolve_data_dir
+from shared.build_identity import build_label
 from .healthy_start import BundlePaths, HealthyStartSettlement, Report, resolve_bundle_paths
 from .updater import (
     BundleUpdateRequest,
@@ -95,6 +96,9 @@ class StatusSnapshot:
     url: str
     pid: int | None
     exit_code: int | None
+    #: Why this controller's own server is not the installed app layer's build,
+    #: when its ``/health`` has said so; ``None`` otherwise (contract §4.6).
+    build_mismatch: str | None = None
 
     @property
     def running(self) -> bool:
@@ -110,12 +114,22 @@ def frontend_ready(snapshot: StatusSnapshot) -> bool:
     holding its rollback material for good. The desktop window waits on exactly
     this, and the controller settles an update transaction on it
     (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.5).
+
+    A served interface is not enough when the controller's own server has
+    named, in ``/health``, a build other than the installed app layer's
+    (``build_mismatch``, §4.6): that is not the build this start installed.
     """
 
-    return snapshot.frontend.state in {ServiceState.OK, ServiceState.WARNING}
+    return (
+        snapshot.frontend.state in {ServiceState.OK, ServiceState.WARNING}
+        and snapshot.build_mismatch is None
+    )
 
 
 RequestProbe = Callable[[str, float], tuple[int, bytes]]
+
+#: No ``/health`` of the current server process has named its build yet.
+_UNANSWERED: object = object()
 
 
 def _http_get(url: str, timeout: float) -> tuple[int, bytes]:
@@ -373,6 +387,10 @@ class StatusController:
         # then, and so a caller can replace ``bundle_paths``.
         self._healthy_start = HealthyStartSettlement(lambda: self.bundle_paths())
         self._settle_attempted = False
+        #: The installed app layer's build label, read once when first needed.
+        self._installed_build: str | None = None
+        #: The build the current server process last named in ``/health``.
+        self._served_build: object = _UNANSWERED
 
         self._lock = threading.RLock()
         self._process: subprocess.Popen[str] | None = None
@@ -465,6 +483,8 @@ class StatusController:
                 "server, which holds the instance lock, so the build this start "
                 "launched never served"
             )
+        elif snapshot.build_mismatch is not None:
+            evidence = snapshot.build_mismatch
         else:
             evidence = (
                 f"backend {snapshot.backend.state.name}, frontend {snapshot.frontend.state.name}"
@@ -611,8 +631,10 @@ class StatusController:
             self._frontend_source_warning = None if frontend_is_fresh else freshness_reason
             # The remembered SPA verdict below belongs to the server that was
             # serving it, and the freshness caveat baked into it was computed on
-            # the line above. Neither survives into a new process.
+            # the line above. Neither survives into a new process, and nor does
+            # the build its /health named.
             self._frontend_served = None
+            self._served_build = _UNANSWERED
             self._backend_lost = False
 
             serve_script = self.repo_root / "launch" / "serve.py"
@@ -803,6 +825,7 @@ class StatusController:
         if process is not None and process.stdout is not None:
             process.stdout.close()
         self._frontend_served = None
+        self._served_build = _UNANSWERED
         self._cleanup_temporary_directory()
 
     def _await_lock_release(self) -> StatusSnapshot | None:
@@ -872,6 +895,7 @@ class StatusController:
                     url=ready_url,
                     pid=self._snapshot.pid,
                     exit_code=self._snapshot.exit_code,
+                    build_mismatch=self._snapshot.build_mismatch,
                 )
             return_code = process.poll()
             observing_existing = False
@@ -903,11 +927,19 @@ class StatusController:
                     # probing an invented or empty address.
                     return self._snapshot
 
+        named: object = _UNANSWERED
         try:
             status, body = self.request_probe(url + "health", self.request_timeout)
             payload = json.loads(body)
             if status != 200 or not isinstance(payload, dict) or "version" not in payload:
                 raise RuntimeError("unexpected /health response")
+            if not observing_existing:
+                # An adopted server is never settled on, so its build is left
+                # alone; this start's own server must be the installed build.
+                named = payload.get("build")
+                mismatch = self._build_mismatch(named)
+                if mismatch is not None:
+                    raise RuntimeError(mismatch)
             suffix = " — already-running instance" if observing_existing else ""
             backend = LampStatus(ServiceState.OK, f"Healthy — v{payload['version']}{suffix}")
         except (OSError, ValueError, RuntimeError, HTTPError, URLError) as exc:
@@ -958,12 +990,19 @@ class StatusController:
                 self._lock_conflict_deadline = None
             if frontend.state in {ServiceState.OK, ServiceState.WARNING}:
                 self._frontend_served = frontend
+            if named is not _UNANSWERED:
+                # Kept for this server process: a later /health that times out
+                # does not erase what this one said.
+                self._served_build = named
             self._snapshot = StatusSnapshot(
                 backend=backend,
                 frontend=frontend,
                 url=url,
                 pid=None if observing_existing else process.pid,
                 exit_code=2 if observing_existing else None,
+                build_mismatch=(
+                    None if observing_existing else self._build_mismatch(self._served_build)
+                ),
             )
             snapshot = self._snapshot
             # The first snapshot that satisfies the frontend-ready predicate is
@@ -980,6 +1019,31 @@ class StatusController:
             # Outside the lock: settling is file work, and on macOS a re-seal.
             self.settle_update_transaction(snapshot)
         return snapshot
+
+    def _build_mismatch(self, named: object) -> str | None:
+        """Why a build this controller's own server named is not the installed one, or ``None``.
+
+        Contract §4.6: the expected build is serving. For a bundle the
+        installed app layer is ``repo_root``, and a server running from it
+        names ``build_label`` of it in ``/health``, computed the same way on
+        both sides. ``None`` also before any ``/health`` has answered: a
+        timed-out probe while the interface is served must not block a start
+        (the window's loop and its settle guard enforce the same predicate).
+        Only a bundle is checked: a source checkout has no update transaction,
+        and its git dirtiness can change between this process's look and the
+        server's.
+        """
+
+        if named is _UNANSWERED or self.environ.get("WG2_BUNDLE") != "1":
+            return None
+        if self._installed_build is None:
+            self._installed_build = build_label(self.repo_root)
+        if named == self._installed_build:
+            return None
+        return (
+            f"/health named build {named!r}, not the installed app layer's "
+            f"{self._installed_build!r}"
+        )
 
     @staticmethod
     def _is_adopted(snapshot: StatusSnapshot) -> bool:
@@ -1306,6 +1370,7 @@ class StatusController:
             self._watcher = None
             self._windows_job = None
             self._frontend_served = None
+            self._served_build = _UNANSWERED
             self._lock_conflict_deadline = None
             self._cleanup_temporary_directory()
             self._snapshot = StatusSnapshot(
