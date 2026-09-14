@@ -474,3 +474,122 @@ def test_the_loop_prepares_an_operation_once_its_return_is_retained(harness: Har
     row = harness.row("cmd-b")
     assert (row["state"], row["job_id"]) == ("accepted", "job-1")
     assert list(requests.iterdir()) == []
+
+
+# -- the delivery loop outlives a failing pass ---------------------------------------
+
+
+def _run_delivery_loop(harness: Harness, monkeypatch, done: Any, timeout: float = 10.0) -> None:
+    """Run the app's delivery loop, as mounted, until ``done()`` or the timeout."""
+
+    from dataclasses import replace
+
+    from server.cadlink import api
+
+    monkeypatch.setenv("WG2_CAD_DELIVERY", "1")
+    monkeypatch.setattr(api, "_DELIVERY_INTERVAL_S", 0.001)
+    # The loop's preparations mesh with the harness's stand-in, not the mesher.
+    monkeypatch.setattr(
+        api,
+        "_preparation_context",
+        lambda _state, *, workspace_root=None: replace(harness.context(), workspace_root=workspace_root),
+    )
+    app = SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=harness.store, data_dir=str(harness.data_dir), jobs_runtime=None,
+        cad_workspace=SimpleNamespace(selected_path=lambda: harness.workspace),
+        update_restart=None,
+    ))
+
+    async def lifecycle() -> None:
+        await api._deliver_solve_commands(app)()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while not done() and loop.time() < deadline:
+            await asyncio.sleep(0.01)
+        await asyncio.gather(*(getattr(app.state, "cad_preparations", None) or ()), return_exceptions=True)
+        await api._abandon_preparations_on_shutdown(app)()
+
+    asyncio.run(lifecycle())
+
+
+def _solved(harness: Harness, operation_id: str) -> Any:
+    def done() -> bool:
+        row = harness.store.get_operation(operation_id)
+        return row is not None and row["state"] == "accepted"
+
+    return done
+
+
+def _failing(times: int, error: BaseException, then: Any) -> Any:
+    """``then``, after raising ``error`` the first ``times`` calls."""
+
+    calls = {"n": 0}
+
+    def call(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] <= times:
+            raise error
+        return then(*args, **kwargs)
+
+    return call
+
+
+@pytest.mark.parametrize("failure", ["wglink-folder", "store"])
+def test_a_delivery_pass_that_fails_once_still_delivers_and_prepares(
+    harness: Harness, monkeypatch, caplog, failure: str
+) -> None:
+    import logging
+    import sqlite3
+
+    from server.cadlink import api
+    from server.cadlink.store import CadLinkStore
+
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, _setup())
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    requests = _deliver(harness, "cmd-b", bundle_path, manifest)
+    if failure == "wglink-folder":
+        monkeypatch.setattr(
+            api, "_selected_workspace_root",
+            _failing(1, OSError("the WGLink folder's drive is not mounted"), api._selected_workspace_root),
+        )
+    else:
+        # After the claim, before the operation is stored: the next pass finishes the claim.
+        monkeypatch.setattr(
+            CadLinkStore, "accept_operation",
+            _failing(1, sqlite3.OperationalError("database is locked"), CadLinkStore.accept_operation),
+        )
+
+    with caplog.at_level(logging.WARNING, logger="server.cadlink.api"):
+        _run_delivery_loop(harness, monkeypatch, _solved(harness, "cmd-b"))
+
+    row = harness.row("cmd-b")
+    assert (row["state"], row["job_id"], row["reason"]) == ("accepted", "job-1", None)
+    assert len(harness.submitted) == 1
+    assert list(requests.iterdir()) == []
+    failures = [r for r in caplog.records if r.getMessage() == "Delivering CAD solve commands failed."]
+    assert len(failures) == 1
+
+
+def test_a_persisting_delivery_failure_is_logged_once_not_every_pass(
+    harness: Harness, monkeypatch, caplog
+) -> None:
+    import logging
+
+    from server.cadlink import api
+
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, _setup())
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _deliver(harness, "cmd-b", bundle_path, manifest)
+    monkeypatch.setattr(
+        api, "_selected_workspace_root",
+        _failing(6, OSError("the WGLink folder's drive is not mounted"), api._selected_workspace_root),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="server.cadlink.api"):
+        _run_delivery_loop(harness, monkeypatch, _solved(harness, "cmd-b"))
+
+    failures = [r for r in caplog.records if r.getMessage() == "Delivering CAD solve commands failed."]
+    assert len(failures) == 1
+    assert harness.row("cmd-b")["state"] == "accepted"
