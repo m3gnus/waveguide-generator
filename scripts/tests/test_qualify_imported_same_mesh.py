@@ -17,6 +17,7 @@ provisioned BEAT CPU runtime, and takes minutes.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import os
@@ -277,10 +278,9 @@ def test_bempp_meets_the_analytic_sphere_on_an_opencl_device() -> None:
     solved = qual.solve("bempp", record, qual.ONE_CHANNEL)
     errors = qual.relative_error(solved.observations(), qual.analytic_observations(solved, "pulsating"))
 
-    # Twice the worst CPU engine's error on this sphere in the recorded run
-    # (BEAT-CPU, 1.35e-2 at 960 triangles), with the harness's margin: BEMPP
+    # The fixed ceiling every engine is judged against on this sphere: BEMPP
     # solves the same complex_k formulation as Metal on the same mesh.
-    assert float(np.max(errors)) <= qual.TOLERANCE_MARGIN * 2.0 * 1.35e-2
+    assert float(np.max(errors)) <= qual.ANALYTIC_CEILINGS["pulsating"][qual.REFERENCE_LEVEL]
 
 
 @pytest.mark.skipif(
@@ -291,3 +291,359 @@ def test_the_real_qualification_passes_on_this_host(tmp_path: Path) -> None:
     code = qual.main(["--json", str(tmp_path / "result.json"), "--markdown", str(tmp_path / "result.md")])
 
     assert code == 0
+
+
+# ---------------------------------------------------------------- the real run(), synthetic engines
+#
+# The real run needs Metal and a provisioned BEAT CPU runtime, so its verdicts
+# were never seen to fail: a BEAT that answered minus Metal, or 30 % high,
+# passed every row, because the same-mesh tolerance was built from the
+# engines' own analytic errors -- which nothing judged. These drive the real
+# ``run()`` with a synthetic linear solver in place of both engines, and a
+# known difference between them.
+
+
+def _mesh(text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    lines = text.split("\n")
+    start = lines.index("$Nodes")
+    count = int(lines[start + 1])
+    points = np.asarray([line.split()[1:4] for line in lines[start + 2 : start + 2 + count]], dtype=float)
+    start = lines.index("$Elements")
+    count = int(lines[start + 1])
+    rows = np.asarray([line.split() for line in lines[start + 2 : start + 2 + count]], dtype=int)
+    return points, rows[:, 5:8] - 1, rows[:, 3]
+
+
+def _radiation(motion: str, frequency: float) -> complex:
+    """The factor that makes a continuous layer on the 0.1 m sphere radiate the analytic field.
+
+    A uniform layer radiates ``a^2 j0(ka) e^{ikr}/r`` and a ``cos(theta)``
+    layer ``ik a^2 j1(ka) h1(kr) cos(theta)`` (the addition theorem keeps one
+    term of each), so dividing the analytic answers by those leaves one factor
+    per frequency. On the sphere only the quadrature then errs: second order in
+    the element size, as a boundary-element solve does.
+    """
+
+    from scipy.special import spherical_jn, spherical_yn
+
+    k = 2.0 * math.pi * frequency / qual.SOUND_SPEED
+    ka = k * qual.SPHERE_RADIUS_M
+    if motion == "normal":
+        return qual.AIR_DENSITY * np.exp(-1j * ka) / ((1.0 - 1j * ka) * spherical_jn(0, ka))
+    slope = spherical_jn(1, ka, derivative=True) + 1j * spherical_yn(1, ka, derivative=True)
+    return 1j * qual.AIR_DENSITY / (k**2 * qual.SPHERE_RADIUS_M**2 * spherical_jn(1, ka) * slope)
+
+
+_BASES: dict[str, dict[str, np.ndarray]] = {}
+
+
+def _synthetic_pressure(record: dict, channels: list[dict], frequencies: tuple[float, ...]) -> dict[str, np.ndarray]:
+    """Per channel, a source sum over vertex quadrature points: (frequency, plane, angle)."""
+
+    key = json.dumps(
+        [record["mesh_content_sha256"], record["anchor"]["throat_frame"], record["symmetry"]["domain_planes"],
+         record["source_tags"], channels, list(frequencies)],
+        sort_keys=True,
+    )
+    if key in _BASES:
+        return _BASES[key]
+    points, triangles, tags = _mesh(record["_execution_msh_text"])
+    frame = record["anchor"]["throat_frame"]
+    axis, u, v, origin = (np.asarray(frame[name], dtype=float) for name in ("axis", "u", "v", "origin_m"))
+    corners = points[triangles]
+    doubled = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+    areas = 0.5 * np.linalg.norm(doubled, axis=1)
+    normals = doubled / (2.0 * areas[:, None])
+    # A third of each triangle at each of its corners: the corners lie on the
+    # sphere, where a centroid would sit inside it.
+    nodes = corners.reshape(-1, 3)
+    weights = np.repeat(areas / 3.0, 3)
+    normals, tags = np.repeat(normals, 3, axis=0), np.repeat(tags, 3)
+    # A reduced domain is solved with its mirror images, as the engines solve
+    # it. The record fixtures cut in the identity frame.
+    for plane in record["symmetry"]["domain_planes"]:
+        flip = np.ones(3)
+        flip[{"x0": 0, "y0": 1}[plane]] = -1.0
+        nodes, normals = np.concatenate([nodes, nodes * flip]), np.concatenate([normals, normals * flip])
+        weights, tags = np.concatenate([weights, weights]), np.concatenate([tags, tags])
+    theta = np.radians(np.linspace(-180.0, 180.0, 73))[:, None]
+    sides = (u, v, (u + v) / math.sqrt(2.0))
+    targets = np.stack([origin + qual.OBSERVATION_DISTANCE_M * (np.cos(theta) * axis + np.sin(theta) * side) for side in sides])
+    pressure: dict[str, np.ndarray] = {}
+    for channel in channels:
+        driven = np.isin(tags, [record["source_tags"][source] for source in channel["source_ids"]])
+        motion = channel.get("motion", "normal")
+        strength = weights[driven] * (1.0 if motion == "normal" else normals[driven] @ axis)
+        distance = np.linalg.norm(targets[:, :, None, :] - nodes[driven][None, None], axis=-1)
+        pressure[str(channel["id"])] = np.stack(
+            [
+                _radiation(motion, frequency)
+                * np.sum(strength * np.exp(2j * math.pi * frequency / qual.SOUND_SPEED * distance) / (4.0 * math.pi * distance), axis=-1)
+                for frequency in frequencies
+            ]
+        )
+    _BASES[key] = pressure
+    return pressure
+
+
+def _synthetic_solve(engine: str, record: dict, channels: list[dict], frequencies: tuple[float, ...] = qual.FREQUENCIES_HZ) -> qual.Solved:
+    ids = [str(channel["id"]) for channel in channels]
+    pressure = _synthetic_pressure(record, list(channels), tuple(frequencies))
+    return qual.Solved(
+        engine=engine,
+        channel_ids=ids,
+        frequencies_hz=np.asarray(frequencies, dtype=float),
+        angles_deg=np.linspace(-180.0, 180.0, 73),
+        planes=["horizontal", "vertical", "diagonal"],
+        pressure={name: pressure[name].copy() for name in ids},
+        sphere={name: None for name in ids},
+        sphere_theta_deg=None,
+        sphere_phi_deg=None,
+        wall_seconds=0.0,
+        metadata={"solver_engine": {"engine": engine}},
+        impedance={name: None for name in ids},
+    )
+
+
+def _swap_twins(pressure: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    if set(pressure) != {"hf-left", "hf-right"}:
+        return pressure
+    return {"hf-left": pressure["hf-right"], "hf-right": pressure["hf-left"]}
+
+
+#: How the synthetic BEAT differs from the synthetic Metal ("both": the two
+#: engines alike, and both wrong).
+VARIANTS = {
+    "agree": ("beat-cpu", lambda pressure: pressure),
+    "beat is minus metal": ("beat-cpu", lambda pressure: {name: -value for name, value in pressure.items()}),
+    "beat is 30 % high": ("beat-cpu", lambda pressure: {name: 1.3 * value for name, value in pressure.items()}),
+    "beat swaps the repeated-HF identities": ("beat-cpu", _swap_twins),
+    "both are 30 % high": ("both", lambda pressure: {name: 1.3 * value for name, value in pressure.items()}),
+}
+ENGINES = ["metal", "beat-cpu"]
+_RUNS: dict[str, dict] = {}
+
+
+def _synthetic_run(variant: str) -> dict:
+    pytest.importorskip("scipy")
+    if variant not in _RUNS:
+        changed, change = VARIANTS[variant]
+
+        def solve(engine: str, record: dict, channels: list[dict], **kwargs: object) -> qual.Solved:
+            solved = _synthetic_solve(engine, record, channels, **kwargs)
+            if changed in (engine, "both"):
+                solved.pressure = change(solved.pressure)
+            return solved
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(qual, "solve", solve)
+            _RUNS[variant] = qual.run(ENGINES, report=lambda _line: None)
+    return _RUNS[variant]
+
+
+def _cross_engine(row: qual.Row) -> bool:
+    return {row.engine, row.compared_with} == set(ENGINES)
+
+
+def test_engines_that_agree_and_converge_pass_every_analytic_order_and_cross_engine_row() -> None:
+    """The positive control: the judging below fails what it should, not everything."""
+
+    rows = _synthetic_run("agree")["rows"]
+
+    judged = [row for row in rows if row.compared_with in ("analytic", "refinement") or _cross_engine(row)]
+    assert sum(row.compared_with == "analytic" for row in judged) >= 2 * 3 * len(qual.LADDER)
+    assert sum(row.compared_with == "refinement" for row in judged) == 2 * len(ENGINES)
+    failing = [(row.fixture, row.engine, row.compared_with, row.worst, row.tolerance, row.minimum) for row in judged if row.passed is not True]
+    assert not failing, failing
+
+
+@pytest.mark.parametrize("variant", ("beat is minus metal", "beat is 30 % high"))
+def test_a_beat_that_disagrees_with_metal_fails_the_same_mesh_rows(variant: str) -> None:
+    failed = [row for row in _synthetic_run(variant)["rows"] if row.passed is False]
+
+    assert any(_cross_engine(row) and row.fixture.startswith("same mesh") for row in failed)
+    assert any(row.engine == "beat-cpu" and row.compared_with == "analytic" for row in failed)
+    assert not any(row.engine == "metal" and row.compared_with == "analytic" for row in failed)
+
+
+def test_engines_wrong_alike_fail_their_analytic_and_order_rows() -> None:
+    """Two engines that agree prove nothing about either; only the fixed ceilings can say so."""
+
+    failed = [row for row in _synthetic_run("both are 30 % high")["rows"] if row.passed is False]
+
+    for engine in ENGINES:
+        assert any(row.engine == engine and row.compared_with == "analytic" for row in failed), engine
+        assert any(row.engine == engine and row.compared_with == "refinement" for row in failed), engine
+        # Moving the body leaves its error alone, so only the ceiling can fail
+        # the moved copy against the analytic answer.
+        assert any(
+            row.engine == engine and row.fixture == "rotated + translated oscillating sphere"
+            and row.compared_with == "analytic"
+            for row in failed
+        ), engine
+    assert not any(_cross_engine(row) for row in failed)
+
+
+def test_a_swap_of_the_repeated_hf_identities_fails() -> None:
+    """The two-channel sum cannot see it; an instance solved on its own can."""
+
+    failed = [row for row in _synthetic_run("beat swaps the repeated-HF identities")["rows"] if row.passed is False]
+
+    assert any(row.fixture.startswith("repeated HF") and row.engine == "beat-cpu" for row in failed)
+    assert not any(row.fixture.startswith("repeated HF") and row.engine == "metal" for row in failed)
+
+
+def test_every_engine_pair_is_compared_on_every_same_mesh_fixture() -> None:
+    rows = _synthetic_run("agree")["rows"]
+
+    same_mesh = [row for row in rows if row.fixture.startswith("same mesh") and (row.engine, row.compared_with) == tuple(ENGINES)]
+    # Normal and axial motion; one channel, then two channels and their sum.
+    assert len(same_mesh) == 8
+    assert any(row.fixture == "rotated + translated off-axis cap" and _cross_engine(row) for row in rows)
+
+
+def test_a_run_with_one_engine_is_refused_before_anything_is_solved(monkeypatch: pytest.MonkeyPatch) -> None:
+    def must_not_solve(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a one-engine run solved something it could compare with nothing")
+
+    monkeypatch.setattr(qual, "solve", must_not_solve)
+
+    with pytest.raises(ValueError, match="two engines"):
+        qual.run(["metal"], report=lambda _line: None)
+
+
+def test_observations_are_complex_per_channel_and_for_the_channel_sum() -> None:
+    """A magnitude-only comparison cannot see a sign flip."""
+
+    rng = np.random.default_rng(7)
+
+    def field(*shape: int) -> np.ndarray:
+        return rng.normal(size=shape) + 1j * rng.normal(size=shape)
+
+    top, bottom, top_sphere, bottom_sphere = field(2, 3, 5), field(2, 3, 5), field(2, 4), field(2, 4)
+    solved = qual.Solved(
+        engine="metal", channel_ids=["top", "bottom"], frequencies_hz=np.asarray([100.0, 200.0]),
+        angles_deg=np.linspace(-180.0, 180.0, 5), planes=["horizontal", "vertical", "diagonal"],
+        pressure={"top": top, "bottom": bottom}, sphere={"top": top_sphere, "bottom": bottom_sphere},
+        sphere_theta_deg=np.zeros(4), sphere_phi_deg=np.zeros(4), wall_seconds=0.0,
+    )
+
+    assert np.array_equal(solved.observations("top"), np.concatenate([top.reshape(2, -1), top_sphere], axis=1))
+    assert np.array_equal(
+        solved.observations(), np.concatenate([(top + bottom).reshape(2, -1), top_sphere + bottom_sphere], axis=1)
+    )
+    flipped = dataclasses.replace(
+        solved, pressure={"top": -top, "bottom": -bottom}, sphere={"top": -top_sphere, "bottom": -bottom_sphere}
+    )
+    assert qual.relative_error(flipped.observations(), solved.observations()) == pytest.approx([2.0, 2.0])
+    assert qual.relative_error(flipped.observations("top"), solved.observations("top")) == pytest.approx([2.0, 2.0])
+
+
+class _Adapter:
+    """An engine adapter that answers with *answer*'s engine, channels and frequencies."""
+
+    def __init__(self, **answer: object) -> None:
+        self.answer = answer
+
+    async def run(self, request: object, **_callbacks: object) -> object:
+        from server.solver.base import EngineRunResult
+        from server.solver.combine import serialize_channel_bases
+
+        frequencies = np.asarray(self.answer.get("frequencies", request.options.frequencies_hz), dtype=float)
+        channels = self.answer.get("channels", [channel.id for channel in request.geometry.drive_channels])
+        angles = np.linspace(-180.0, 180.0, 73)
+        bases = {
+            name: SimpleNamespace(
+                frequencies_hz=frequencies, observation_angles_deg=angles,
+                observation_planes=["horizontal", "vertical", "diagonal"],
+                pressure_complex=np.ones((len(frequencies), 3, len(angles)), dtype=complex),
+                sphere_pressure_complex=None,
+            )
+            for name in channels
+        }
+        metadata = {} if self.answer.get("engine") is None else {"solver_engine": {"engine": self.answer["engine"]}}
+        return EngineRunResult(results={"metadata": metadata, "channels": {}}, channel_bases=serialize_channel_bases(bases))
+
+
+@pytest.mark.parametrize(
+    ("answer", "message"),
+    (
+        pytest.param({"engine": "metal"}, "'metal'", id="another-engine"),
+        pytest.param({"engine": None}, "None", id="no-engine"),
+        pytest.param({"engine": "beat-cpu", "channels": ["both", "extra"]}, "channels", id="another-channel-set"),
+        pytest.param({"engine": "beat-cpu", "frequencies": qual.FREQUENCIES_HZ[:1]}, "frequencies", id="fewer-frequencies"),
+    ),
+)
+def test_solve_refuses_an_answer_from_another_engine_or_to_another_question(
+    monkeypatch: pytest.MonkeyPatch, answer: dict, message: str
+) -> None:
+    points, triangles, tags = qual.sphere_mesh(0, split=True)
+    record = qual.record_for(qual.gmsh22(points, triangles, tags), qual.HEMISPHERE_TAGS)
+
+    monkeypatch.setattr(qual, "engine_adapter", lambda _name: _Adapter(engine="beat-cpu"))
+    assert qual.solve("beat-cpu", record, qual.ONE_CHANNEL).channel_ids == ["both"]
+
+    monkeypatch.setattr(qual, "engine_adapter", lambda _name: _Adapter(**answer))
+    with pytest.raises(qual.EngineAnswerMismatch, match=message):
+        qual.solve("beat-cpu", record, qual.ONE_CHANNEL)
+
+
+def test_a_failing_row_of_either_kind_is_reported_and_fails_the_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rows = [
+        qual.Row("off-axis cap: horizontal differs from vertical", "metal", "vertical cut", "complex", [0.0], minimum=0.01),
+        qual.Row("same mesh", "metal", "beat-cpu", "complex", [0.3], tolerance=0.05),
+    ]
+    monkeypatch.setattr(qual, "available_engines", lambda: {"metal": "available", "beat-cpu": "available"})
+    monkeypatch.setattr(qual, "environment_facts", lambda: {"generated_at": "now"})
+    monkeypatch.setattr(qual, "run", lambda _engines, report=print: {"rows": rows, "timings": {}})
+
+    assert qual.main(["--skip-ingest"]) == 1
+
+    printed = capsys.readouterr().out
+    assert "FAIL: off-axis cap: horizontal differs from vertical (metal vs vertical cut): least 0.000e+00 < 1.000e-02" in printed
+    assert "FAIL: same mesh (metal vs beat-cpu): 3.000e-01 > 5.000e-02" in printed
+
+
+RECORD = Path(__file__).resolve().parents[2] / "docs" / "validation" / "2026-09" / "imported-same-mesh-qualification.json"
+
+
+def test_the_landed_record_passes_the_fixed_bounds_chosen_from_it() -> None:
+    """The ceilings come from this run's Metal ladder; the whole record must meet them.
+
+    Its numbers are not re-measured here -- that needs Metal and BEAT-CPU --
+    only re-judged: every row whose bound this judging changed.
+    """
+
+    from scripts import qualify_ingest_level as ingest
+
+    record = json.loads(RECORD.read_text(encoding="utf-8"))
+    worst = {}
+    for key, errors in record["discretisation_errors"].items():
+        engine, kind, level = key.split("/")
+        worst[(engine, kind, int(level.removeprefix("L")))] = max(errors)
+    assert sorted({engine for engine, _kind, _level in worst}) == ["beat-cpu", "metal"]
+    for (engine, kind, level), value in worst.items():
+        assert value <= qual.ANALYTIC_CEILINGS[kind][level], (engine, kind, level, value)
+    for engine in ("metal", "beat-cpu"):
+        for kind in qual.ANALYTIC_CEILINGS:
+            order = qual.observed_order([worst[(engine, kind, level)] for level in range(len(qual.LADDER))])
+            assert order >= qual.MINIMUM_ORDER, (engine, kind, order)
+
+    rows = record["rows"]
+    spheres = [row for row in rows if row["compared_with"] == "beat-cpu" and "horn" not in row["fixture"]]
+    assert len(spheres) == 10
+    for row in spheres:
+        assert row["worst"] <= qual.SAME_MESH_TOLERANCE[qual.REFERENCE_LEVEL], row["fixture"]
+    for row in rows:
+        if row["fixture"] == "rotated + translated oscillating sphere" and row["compared_with"] == "analytic":
+            assert row["worst"] <= qual.ANALYTIC_CEILINGS["oscillating"][qual.REFERENCE_LEVEL]
+    horn = [row for row in rows if row["fixture"].startswith(("same mesh: horn", "horn: quarter return"))]
+    assert len(horn) == 4
+    for row in horn:
+        assert row["worst"] <= ingest.HORN_TOLERANCE, (row["fixture"], row["engine"])
+    ladder = [row for row in rows if row["fixture"] == "horn return, reference vs fine density"]
+    assert len(ladder) == 2
+    for row in ladder:
+        assert row["worst"] <= ingest.HORN_LADDER_CEILING, row["engine"]

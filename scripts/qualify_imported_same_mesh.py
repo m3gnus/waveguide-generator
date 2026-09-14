@@ -4,8 +4,10 @@ One verified record -- the same mesh, source tags, anchor frame, excitation and
 frequencies -- goes to every engine that can run here, and the complex
 per-channel responses and channel sums are compared at every observation point
 (the horizontal, vertical and diagonal polar cuts and the DI sphere), never
-magnitudes alone. Analytic references and a refinement ladder set the
-tolerances the comparisons are judged against.
+magnitudes alone. Every engine is judged against analytic references at fixed
+ceilings, chosen from a recorded Metal refinement ladder, and must converge at
+a least order; the same-mesh tolerance follows from those ceilings, never from
+what the engines under test return.
 
 Run it on a host with Metal and a provisioned BEAT CPU runtime:
 
@@ -55,6 +57,43 @@ FREQUENCIES_HZ = (100.0, 300.0, 700.0, 1200.0, 1500.0)
 #: into hemispheres or cut to a half or a quarter on exact planes.
 LADDER = ((8, 16), (16, 32), (32, 64))
 REFERENCE_LEVEL = 1
+
+#: Fixed ceilings on the complex error against the analytic answer, per body
+#: and ladder level (224, 960 and 3,968 triangles): 1.5x the recorded Metal
+#: ladder, rounded up to two significant figures. The recorded worst error
+#: over every point and frequency (docs/validation/2026-09, WG 4dca8d33):
+#:
+#:     Metal pulsating    5.08e-02  1.24e-02  5.61e-03  ->  7.7e-02  1.9e-02  8.5e-03
+#:     Metal oscillating  6.81e-02  1.76e-02  5.27e-03  ->  1.1e-01  2.7e-02  8.0e-03
+#:     BEAT pulsating     5.41e-02  1.35e-02  3.36e-03     (0.70, 0.71, 0.40 of it)
+#:     BEAT oscillating   6.71e-02  1.72e-02  4.33e-03     (0.61, 0.64, 0.54 of it)
+#:
+#: Single precision needs almost none of the headroom: an engine against
+#: itself differs by at most 7.0e-5 (BEAT) and 8.0e-6 (Metal), under 1 % of the
+#: smallest ceiling. The headroom is for a second engine on the same mesh --
+#: BEAT read 1.07x Metal at L0 -- and for the next engine to be qualified.
+#: Nothing an engine returns moves a ceiling, so an engine that is wrong
+#: everywhere fails here, where it used to widen its own same-mesh tolerance.
+ANALYTIC_CEILINGS: dict[str, tuple[float, ...]] = {
+    "pulsating": (7.7e-2, 1.9e-2, 8.5e-3),
+    "oscillating": (1.1e-1, 2.7e-2, 8.0e-3),
+}
+
+#: The least order in element size (the longest edge) at which an engine's
+#: worst analytic error must fall from the coarsest ladder sphere to the
+#: finest, whose edges are 3.9x shorter. The recorded ladder reads 1.62
+#: (Metal, pulsating: its complex-wavenumber error levels off near 5e-3), 1.88
+#: (Metal, oscillating), and 2.04 and 2.01 (BEAT). An error that does not fall
+#: with the mesh -- a sign, a gain, a wrong constant -- reads about 0.
+MINIMUM_ORDER = 1.0
+
+#: The same-mesh tolerance per level, from the ceilings alone: two engines
+#: that each meet the ceiling C are within 2C of each other on that body (the
+#: triangle inequality), C the larger body's ceiling at that level. At the
+#: reference level, where the same-mesh fixtures run, it is 5.4e-2.
+SAME_MESH_TOLERANCE: tuple[float, ...] = tuple(
+    2.0 * max(ceilings[level] for ceilings in ANALYTIC_CEILINGS.values()) for level in range(len(LADDER))
+)
 
 
 # ---------------------------------------------------------------- geometry
@@ -346,6 +385,40 @@ class Solved:
         return np.concatenate(rows, axis=1)
 
 
+class EngineAnswerMismatch(RuntimeError):
+    """An engine's result does not answer the request it was given."""
+
+
+def verified(
+    solved: Solved, engine: str, channel_ids: Sequence[str], frequencies: Sequence[float]
+) -> Solved:
+    """``solved`` came from ``engine`` and answers the channels and frequencies asked.
+
+    Comparing whatever came back would compare an engine with itself after a
+    substitution, and would judge one frequency of five against an analytic
+    reference built from the result's own frequency axis.
+    """
+
+    block = solved.metadata.get("solver_engine")
+    reported = block.get("engine") if isinstance(block, Mapping) else None
+    if reported != engine:
+        raise EngineAnswerMismatch(
+            f"a solve asked of {engine!r} reports solver_engine.engine {reported!r}"
+        )
+    wanted = [str(name) for name in channel_ids]
+    if sorted(solved.channel_ids) != sorted(wanted):
+        raise EngineAnswerMismatch(
+            f"{engine} answered channels {solved.channel_ids}, not the requested {wanted}"
+        )
+    axis = np.asarray(frequencies, dtype=float)
+    answered = np.asarray(solved.frequencies_hz, dtype=float)
+    if answered.shape != axis.shape or not np.allclose(answered, axis, rtol=1e-9, atol=0.0):
+        raise EngineAnswerMismatch(
+            f"{engine} answered frequencies {answered.tolist()}, not the requested {axis.tolist()}"
+        )
+    return solved
+
+
 def solve(engine: str, record: Mapping[str, Any], channels: Sequence[Mapping[str, Any]], **kwargs: Any) -> Solved:
     request = request_for(record, channels, engine=engine, **kwargs)
     adapter = engine_adapter(engine)
@@ -361,7 +434,7 @@ def solve(engine: str, record: Mapping[str, Any], channels: Sequence[Mapping[str
     wall = time.perf_counter() - started
     bases = deserialize_channel_bases(outcome.channel_bases)
     first = bases["results_by_id"][bases["channel_ids"][0]]
-    return Solved(
+    solved = Solved(
         engine=engine,
         channel_ids=list(bases["channel_ids"]),
         frequencies_hz=np.asarray(bases["frequencies_hz"], dtype=float),
@@ -387,6 +460,9 @@ def solve(engine: str, record: Mapping[str, Any], channels: Sequence[Mapping[str
             channel: _channel_impedance(outcome.results["channels"].get(channel, {}))
             for channel in bases["channel_ids"]
         },
+    )
+    return verified(
+        solved, engine, [str(channel["id"]) for channel in channels], request.options.frequencies_hz
     )
 
 
@@ -513,13 +589,32 @@ def max_edge(points: np.ndarray, triangles: np.ndarray) -> float:
 #: Metal. 1e-3 is about fourteen times the larger; a sign flip reads 2.0.
 EXACT_TOLERANCE = 1.0e-3
 
-#: Margin on a same-mesh tolerance. The same-mesh bound below is
-#: already a triangle-inequality sum of two engines' errors, so the margin
-#: covers only extrapolating the sphere's envelope to another body.
-TOLERANCE_MARGIN = 1.5
+
+def ladder_edges() -> list[float]:
+    """The longest edge of each ladder sphere: the element size an order is measured in."""
+
+    return [max_edge(*uv_sphere(SPHERE_RADIUS_M, rings, segments)) for rings, segments in LADDER]
+
+
+def observed_order(worst_per_level: Sequence[float]) -> float:
+    """The order in element size at which an error falls from the first ladder level to the last.
+
+    An error of exactly zero, or not finite, has no order and reads NaN, which
+    fails any lower bound: no discretisation is exact.
+    """
+
+    first, last = float(worst_per_level[0]), float(worst_per_level[-1])
+    if not (first > 0.0 and last > 0.0 and math.isfinite(first) and math.isfinite(last)):
+        return float("nan")
+    edges = ladder_edges()
+    return math.log(first / last) / math.log(edges[0] / edges[-1])
 
 
 def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[str, Any]:
+    if len(engines) < 2:
+        # Nothing to compare: every same-mesh row would be absent, and a run
+        # that compared nothing must not report success.
+        raise ValueError(f"the same-mesh qualification needs at least two engines, got {list(engines)}")
     rows: list[Row] = []
     timings: dict[str, float] = {}
 
@@ -564,7 +659,7 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
                     timings[f"{kind}-L{level}-{label}-{engine}"] = solved.wall_seconds
                     errors = relative_error(solved.observations(), analytic_observations(solved, kind))
                     level_errors[(kind, engine, level)] = errors
-                    record_row(Row(f"{kind} sphere L{level} ({len(triangles)} tri), {label}", engine, "analytic", "complex, all points", errors.tolist()))
+                    record_row(Row(f"{kind} sphere L{level} ({len(triangles)} tri), {label}", engine, "analytic", "complex, all points", errors.tolist(), tolerance=ANALYTIC_CEILINGS[kind][level], note="fixed ceiling, from the recorded Metal ladder"))
                 if kind == "pulsating":
                     split = relative_error(
                         solved_cases["two channels"].observations(),
@@ -572,25 +667,16 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
                     )
                     record_row(Row(f"pulsating sphere L{level}, two-channel sum", engine, "one channel", "complex, all points", split.tolist(), tolerance=EXACT_TOLERANCE, note="linearity: the bases of two tags sum to their merged tag"))
 
-    # Tolerances, from the ladder above. Two engines that are each within their
-    # own discretisation error of the truth differ by at most the sum of those
-    # errors (the triangle inequality), so a same-mesh comparison at a given
-    # density is held to that sum, measured on the analytic bodies at the same
-    # density, times a margin for carrying it to another body.
-    def same_mesh_tolerance(level: int) -> float:
-        worst = 0.0
-        for kind in ("pulsating", "oscillating"):
-            summed = sum(level_errors[(kind, engine, level)] for engine in engines)
-            worst = max(worst, float(np.max(summed)))
-        return TOLERANCE_MARGIN * worst
-
-    for level in range(len(LADDER)):
-        report(f"same-mesh tolerance at L{level}: {same_mesh_tolerance(level):.3e}")
+    # Convergence, judged: each engine's worst analytic error must fall with
+    # the mesh at the least order. The ceilings bound it at each level; this
+    # catches an error that sits under them without falling.
+    last = len(LADDER) - 1
     for engine in engines:
-        for kind in ("pulsating", "oscillating"):
+        for kind in ANALYTIC_CEILINGS:
             series = [float(np.max(level_errors[(kind, engine, level)])) for level in range(len(LADDER))]
-            orders = [math.log2(a / b) for a, b in zip(series, series[1:])]
-            report(f"{engine} {kind}: worst errors {', '.join(f'{v:.3e}' for v in series)}; observed order {', '.join(f'{o:.2f}' for o in orders)}")
+            record_row(Row(f"{kind} sphere: observed order, L0 to L{last}", engine, "refinement", "order in element size", [observed_order(series)], minimum=MINIMUM_ORDER, note="worst errors " + ", ".join(f"{value:.3e}" for value in series)))
+    for level in range(len(LADDER)):
+        report(f"same-mesh tolerance at L{level}: {SAME_MESH_TOLERANCE[level]:.3e} (twice the larger fixed ceiling)")
 
     # Fixture 1 on the analytic bodies: the same record into every engine.
     level = REFERENCE_LEVEL
@@ -605,11 +691,11 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
             for a, b in pairs:
                 for channel in solved[a].channel_ids:
                     errors = relative_error(solved[a].observations(channel), solved[b].observations(channel))
-                    record_row(Row(f"same mesh: hemispheres, {motion}, {label}, {channel}", a, b, "complex per channel", errors.tolist(), tolerance=same_mesh_tolerance(level),
+                    record_row(Row(f"same mesh: hemispheres, {motion}, {label}, {channel}", a, b, "complex per channel", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level],
                                    note=("an axial hemisphere faces backwards; every engine must drive it as Metal does" if motion == "axial" else "")))
                 if len(solved[a].channel_ids) > 1:
                     errors = relative_error(solved[a].observations(), solved[b].observations())
-                    record_row(Row(f"same mesh: hemispheres, {motion}, {label}, channel sum", a, b, "complex channel sum", errors.tolist(), tolerance=same_mesh_tolerance(level)))
+                    record_row(Row(f"same mesh: hemispheres, {motion}, {label}, channel sum", a, b, "complex channel sum", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
 
     # Fixture 4: the oscillating sphere moved and turned in CAD. Its mesh and
     # its anchor frame are rotated and translated together, so every solver
@@ -633,8 +719,16 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
         # The same triangles, turned: only rounding and quadrature orientation
         # differ, so the bound is the single-precision floor, not the mesh.
         record_row(Row("rotated + translated oscillating sphere", engine, "unmoved", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="fixture 4: the frame rotation"))
+        # Moving the body must not change its error -- its own unmoved error
+        # plus the single-precision floor -- and the error must stay under the
+        # fixed ceiling. The smaller bound judges, so the engine's own error
+        # can only tighten this row, never widen it.
         errors = relative_error(turned.observations(), analytic_observations(turned, "oscillating"))
-        record_row(Row("rotated + translated oscillating sphere", engine, "analytic", "complex, all points", errors.tolist(), tolerance=float(np.max(level_errors[("oscillating", engine, level)])) + EXACT_TOLERANCE, note="fixture 4 against the analytic reference"))
+        bound = min(
+            float(np.max(level_errors[("oscillating", engine, level)])) + EXACT_TOLERANCE,
+            ANALYTIC_CEILINGS["oscillating"][level],
+        )
+        record_row(Row("rotated + translated oscillating sphere", engine, "analytic", "complex, all points", errors.tolist(), tolerance=bound, note="fixture 4 against the analytic reference"))
 
     # Fixture 4, u/v-sensitive: a sphere whose source is an off-axis cap
     # centred at 30 degrees of azimuth -- between +x and +y, nearer +x -- so
@@ -674,29 +768,43 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
         record_row(Row("off-axis cap: vertical cut differs from its mirror", engine, "mirrored", "complex, polar", handedness.tolist(), minimum=10.0 * EXACT_TOLERANCE, note="non-vacuity: a v mirror (handedness) changes the field"))
     for a, b in pairs:
         errors = relative_error(turned_by_engine[a].observations(), turned_by_engine[b].observations())
-        record_row(Row("rotated + translated off-axis cap", a, b, "complex, all points", errors.tolist(), tolerance=same_mesh_tolerance(level)))
+        record_row(Row("rotated + translated off-axis cap", a, b, "complex, all points", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
         za, zb = turned_by_engine[a].impedance["cap"], turned_by_engine[b].impedance["cap"]
         if za is not None and zb is not None:
-            record_row(Row("off-axis cap: source-average pressure (impedance)", a, b, "complex impedance", (np.abs(za - zb) / np.abs(zb)).tolist(), tolerance=same_mesh_tolerance(level)))
+            record_row(Row("off-axis cap: source-average pressure (impedance)", a, b, "complex impedance", (np.abs(za - zb) / np.abs(zb)).tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
 
     # Fixture 5: two instances of one body, apart, sources on one channel and
     # then on two. Normal motion, per the fixture's own caveat. The two-channel
-    # sum must equal the one-channel solve and the identities stay distinct.
+    # sum must equal the one-channel solve, and each instance keeps its own
+    # identity: the channel named for it must equal a solve in which it is the
+    # only source and the other instance is rigid, which is what an undriven
+    # source is. The sum cannot see a swap of the two identities, and neither
+    # can a mirror of a mirror-symmetric pair, so the right instance is also
+    # raised 0.15 m: no symmetry of the pair makes a swapped answer look right.
     points, triangles, _tags = sphere_mesh(0, split=False)
-    shift = np.asarray([0.3, 0.0, 0.0])
-    both_points = np.concatenate([points - shift, points + shift])
+    left, right = np.asarray([-0.3, 0.0, 0.0]), np.asarray([0.3, 0.0, 0.15])
+    both_points = np.concatenate([points + left, points + right])
     both_triangles = np.concatenate([triangles, triangles + len(points)])
-    both_tags = np.concatenate([np.full(len(triangles), 101), np.full(len(triangles), 102)])
-    twins = record_for(gmsh22(both_points, both_triangles, both_tags), {"left": 101, "right": 102})
+
+    def instance_tags(left_tag: int, right_tag: int) -> np.ndarray:
+        return np.concatenate([np.full(len(triangles), left_tag), np.full(len(triangles), right_tag)])
+
+    twins = record_for(gmsh22(both_points, both_triangles, instance_tags(101, 102)), {"left": 101, "right": 102})
+    alone = {
+        "hf-left": ("left", record_for(gmsh22(both_points, both_triangles, instance_tags(101, 1)), {"left": 101})),
+        "hf-right": ("right", record_for(gmsh22(both_points, both_triangles, instance_tags(1, 102)), {"right": 102})),
+    }
     for engine in engines:
         one = solve(engine, twins, [{"id": "hf", "source_ids": ["left", "right"]}])
         two = solve(engine, twins, [{"id": "hf-left", "source_ids": ["left"]}, {"id": "hf-right", "source_ids": ["right"]}])
         errors = relative_error(two.observations(), one.observations())
         record_row(Row("repeated HF: two bodies, two-channel sum", engine, "one channel", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note=f"identities kept: {two.channel_ids}"))
-        mirrored = relative_error(
-            two.pressure["hf-left"][:, :, ::-1], two.pressure["hf-right"]
-        )
-        record_row(Row("repeated HF: left mirrors right in the horizontal cut", engine, "mirror", "complex, polar", mirrored.tolist(), tolerance=EXACT_TOLERANCE))
+        for channel, (source, lone) in alone.items():
+            single = solve(engine, lone, [{"id": channel, "source_ids": [source]}])
+            errors = relative_error(two.observations(channel), single.observations(channel))
+            record_row(Row(f"repeated HF: {channel} is its own instance", engine, "that instance alone", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="the other instance rigid; a swapped identity reads as the difference below"))
+        distinct = relative_error(two.observations("hf-left"), two.observations("hf-right"))
+        record_row(Row("repeated HF: the two instances differ", engine, "each other", "complex, all points", distinct.tolist(), minimum=10.0 * EXACT_TOLERANCE, note="non-vacuity: the identity rows can see a swap"))
 
     # Fixture 6: an x0 half and an x0+y0 quarter of the same sphere, as a CAD
     # author would return them already cut, against the whole sphere.
@@ -713,7 +821,7 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
                 errors = relative_error(reduced.observations(), full.observations())
                 record_row(Row(f"{'+'.join(planes)} return vs whole, {motion}", engine, "whole", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="fixture 6: reduced domain executed natively"))
 
-    return {"rows": rows, "timings": timings, "level_errors": level_errors, "same_mesh_tolerance": {level: same_mesh_tolerance(level) for level in range(len(LADDER))}, "reference_edge_m": h_ref}
+    return {"rows": rows, "timings": timings, "level_errors": level_errors, "same_mesh_tolerance": {level: SAME_MESH_TOLERANCE[level] for level in range(len(LADDER))}, "reference_edge_m": h_ref}
 
 
 def write_markdown(path: Path, result: Mapping[str, Any], status: Mapping[str, str], environment: Mapping[str, Any]) -> None:
@@ -734,7 +842,8 @@ def write_markdown(path: Path, result: Mapping[str, Any], status: Mapping[str, s
         for kind in ("pulsating", "oscillating"):
             values = [float(np.max(result["level_errors"][(kind, engine, level)])) for level in range(len(LADDER))]
             lines.append(f"| {engine} | {kind} | " + " | ".join(f"{value:.2e}" for value in values) + " |")
-    lines += ["", "Same-mesh tolerance per level: " + ", ".join(f"L{level} {value:.2e}" for level, value in result["same_mesh_tolerance"].items()) + f"; exact-equivalence tolerance {EXACT_TOLERANCE:.0e}."]
+    lines += ["", "Fixed analytic ceilings, from the recorded Metal ladder: " + "; ".join(f"{kind} " + ", ".join(f"L{level} {value:.1e}" for level, value in enumerate(values)) for kind, values in ANALYTIC_CEILINGS.items()) + f". Least observed order across the ladder: {MINIMUM_ORDER:g}."]
+    lines += ["", "Same-mesh tolerance per level (twice the larger ceiling): " + ", ".join(f"L{level} {value:.2e}" for level, value in result["same_mesh_tolerance"].items()) + f"; exact-equivalence tolerance {EXACT_TOLERANCE:.0e}."]
     lines += ["", "## Results", "", "| Fixture | Engine | Against | Quantity | Worst | Tolerance | Verdict |", "| --- | --- | --- | --- | --- | --- | --- |"]
     for row in result["rows"]:
         verdict = "" if row.passed is None else ("pass" if row.passed else "**FAIL**")
@@ -828,6 +937,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"{engine}/{kind}/L{level}": errors.tolist()
                         for (kind, engine, level), errors in result["level_errors"].items()
                     },
+                    "analytic_ceilings": {kind: list(values) for kind, values in ANALYTIC_CEILINGS.items()},
+                    "minimum_order": MINIMUM_ORDER,
                     "same_mesh_tolerance": result["same_mesh_tolerance"],
                     "exact_tolerance": EXACT_TOLERANCE,
                     "reference_edge_m": result["reference_edge_m"],
@@ -858,7 +969,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         write_markdown(args.markdown, result, status, environment)
     failed = [row for row in result["rows"] if row.passed is False]
     for row in failed:
-        print(f"FAIL: {row.fixture} ({row.engine} vs {row.compared_with}): {row.worst:.3e} > {row.tolerance:.3e}")
+        # Either bound can be the one missed, and a lower-bound row has no
+        # tolerance to print.
+        missed = []
+        if row.tolerance is not None and not row.worst <= row.tolerance:
+            missed.append(f"{row.worst:.3e} > {row.tolerance:.3e}")
+        if row.minimum is not None and not row.least >= row.minimum:
+            missed.append(f"least {row.least:.3e} < {row.minimum:.3e}")
+        print(f"FAIL: {row.fixture} ({row.engine} vs {row.compared_with}): {'; '.join(missed)}")
     return 1 if failed else 0
 
 

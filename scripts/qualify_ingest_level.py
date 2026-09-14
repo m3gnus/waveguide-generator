@@ -10,6 +10,7 @@ and read back from the store.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 import shutil
 import time
 from pathlib import Path
@@ -18,7 +19,8 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 from scripts import imported_ingest_fixtures as fixtures
-from scripts.qualify_imported_same_mesh import EXACT_TOLERANCE, TOLERANCE_MARGIN, Row, Solved, relative_error
+from scripts.qualify_imported_same_mesh import EXACT_TOLERANCE, Row, Solved, relative_error, verified
+from scripts.qualify_installed_cpu import QualificationError, check_imported_result
 
 HORN_FREQUENCIES_HZ = (300.0, 1000.0, 3000.0)
 #: (label, surface deviation in mm). The chord deviation is what sizes an
@@ -26,17 +28,27 @@ HORN_FREQUENCIES_HZ = (300.0, 1000.0, 3000.0)
 #: WG accepts 0.1 to 0.35 mm, so this ladder spans every density a user can ask
 #: for: the coarsest, the default, and the finest.
 HORN_LADDER = (("coarse", 0.35), ("reference", 0.15), ("fine", 0.1))
-#: Convergence order in element size h, measured on the analytic spheres: the
-#: error falls about 4x per 4.3x triangles (error ~ 1/N ~ h^2). The finest horn
-#: is only ~1.3x the reference, so its distance from the reference understates
-#: the reference's own error; Richardson with this order recovers it.
-HORN_ORDER = 2.0
-
-
-def _richardson_factor(reference_triangles: int, fine_triangles: int, order: float = HORN_ORDER) -> float:
-    """``e_ref = |u_ref - u_fine| * factor`` for an error falling as h^order, h ~ N^-1/2."""
-
-    return 1.0 / (1.0 - (reference_triangles / fine_triangles) ** (order / 2.0))
+#: The most an engine's horn answer at the default density may move when the
+#: return is meshed at the finest density a user can ask for, judged per
+#: engine: 1.5x Metal's recorded reference-to-fine distance (2.00e-2; BEAT-CPU
+#: read 3.50e-3). Fixed, so an engine whose horn does not converge fails it
+#: rather than widening the bound it is judged by.
+HORN_LADDER_CEILING = 3.0e-2
+#: The stated bound on two horn answers at the default density that should
+#: agree: two engines on one mesh, or one engine on two meshes of one body (a
+#: cut and its full domain, a placed return and an unplaced one). Twice the
+#: ladder ceiling -- the spheres' step from each answer's error to the two
+#: answers' difference, with the ladder ceiling standing in for an error the
+#: horn has no formula for.
+#:
+#: It replaces a Richardson estimate at the sphere-measured order 2, which the
+#: recorded horn ladder bore out on neither engine: the coarse level sat 2.12x
+#: (Metal) and 8.42x (BEAT-CPU) as far from the finest as the default did,
+#: against 4.56x predicted. The tolerances it produced -- 0.140 same-mesh,
+#: 0.238 quarter-vs-full on Metal -- sat 8 and 21 times above the differences
+#: they judged. The recorded differences against this bound: Metal vs BEAT-CPU
+#: 1.82e-2; quarter vs full 1.13e-2 (Metal) and 1.19e-3 (BEAT-CPU).
+HORN_TOLERANCE = 2.0 * HORN_LADDER_CEILING
 
 
 def _solve_record(engine: str, ingested: fixtures.Ingested, motion: str) -> Solved:
@@ -57,7 +69,7 @@ def _solve_record(engine: str, ingested: fixtures.Ingested, motion: str) -> Solv
     )
     bases = deserialize_channel_bases(outcome.channel_bases)
     first = bases["results_by_id"][bases["channel_ids"][0]]
-    return Solved(
+    solved = Solved(
         engine=engine,
         channel_ids=list(bases["channel_ids"]),
         frequencies_hz=np.asarray(bases["frequencies_hz"], dtype=float),
@@ -69,6 +81,9 @@ def _solve_record(engine: str, ingested: fixtures.Ingested, motion: str) -> Solv
         sphere_phi_deg=first.sphere_phi_deg,
         wall_seconds=time.perf_counter() - started,
         metadata={"solver_engine": outcome.results.get("metadata", {}).get("solver_engine")},
+    )
+    return verified(
+        solved, engine, [channel.id for channel in request.geometry.drive_channels], HORN_FREQUENCIES_HZ
     )
 
 
@@ -111,16 +126,49 @@ async def _plan(data_dir: Path, store: Any, request: Any) -> dict[str, Any]:
         await runtime.shutdown()
 
 
+def _fresh_job_verdict(
+    engine: str, outcome: Mapping[str, Any], reopened: Any
+) -> tuple[bool, dict[str, Any]]:
+    """Complete, solved by *engine*, reopened unchanged, and carrying data.
+
+    Status, engine name and an identical reopen all hold for a job that stored
+    nothing but zeros. So the stored result is also held to the result
+    contract the RC gate holds an installed candidate to: every channel's
+    on-axis level and requested directivity finite and not all zero, counted
+    on the data and never on the frequency or angle axes.
+    """
+
+    results = outcome.get("results")
+    engine_block = ((results or {}).get("metadata") or {}).get("solver_engine")
+    detail: dict[str, Any] = {
+        "status": outcome["row"]["status"],
+        "error": outcome["row"].get("error_message"),
+        "engine": engine_block,
+        "reopened_equal": reopened == results,
+    }
+    try:
+        checked = check_imported_result(results if isinstance(results, Mapping) else {}, engine)
+    except QualificationError as exc:
+        detail["data"] = f"refused: {exc}"
+        carries_data = False
+    else:
+        detail["data"] = {name: channel["finite_non_zero"] for name, channel in checked["channels"].items()}
+        carries_data = True
+    ran = engine_block.get("engine") if isinstance(engine_block, Mapping) else None
+    ok = detail["status"] == "complete" and detail["reopened_equal"] and ran == engine and carries_data
+    return ok, detail
+
+
 def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[Row], Row]) -> dict[str, Any]:
     facts: dict[str, Any] = {}
     workspace = root / "workspace"
     bundle = fixtures.linked_return(workspace, "round")
 
     # Fixture 3 on a real return: three densities of the same return. The
-    # horn has no formula, so each engine's error at the reference density is
-    # estimated from its own ladder: the reference-to-finest distance, scaled
-    # by Richardson for the sphere-measured order. The coarse level checks
-    # that order -- its distance must be about what the order predicts.
+    # horn has no formula, so each engine's answer at the default density is
+    # held to its answer at the finest, at a fixed ceiling. The coarse level is
+    # recorded, and so is how much farther it sits: that ratio says how far the
+    # ladder is from its asymptotic range, and no tolerance is taken from it.
     ladder: dict[str, dict[str, Solved]] = {engine: {} for engine in engines}
     ingests: dict[str, fixtures.Ingested] = {}
     for label, deviation in HORN_LADDER:
@@ -128,32 +176,20 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
         for engine in engines:
             ladder[engine][label] = _solve_record(engine, ingests[label], "normal")
     reference = ingests["reference"]
-    triangles = {label: int(ingests[label].record["mesh"]["stats"]["triangle_count"]) for label, _ in HORN_LADDER}
-    facts["horn_triangles"] = triangles
+    facts["horn_triangles"] = {label: int(ingests[label].record["mesh"]["stats"]["triangle_count"]) for label, _ in HORN_LADDER}
     facts["horn_domain"] = reference.record["symmetry"].get("domain_planes") or reference.record["symmetry"].get("cut_planes")
-    factor = _richardson_factor(triangles["reference"], triangles["fine"])
-    half_order = HORN_ORDER / 2.0
-    predicted_ratio = (triangles["coarse"] ** -half_order - triangles["fine"] ** -half_order) / (
-        triangles["reference"] ** -half_order - triangles["fine"] ** -half_order
-    )
-    facts["horn_richardson_factor"] = factor
-    facts["horn_order_check"] = {"predicted_coarse_over_reference": predicted_ratio}
-    estimated: dict[str, np.ndarray] = {}
+    facts["horn_ladder_ceiling"] = HORN_LADDER_CEILING
+    facts["horn_coarse_over_reference"] = {}
     for engine in engines:
         distance = {
             label: relative_error(ladder[engine][label].observations(), ladder[engine]["fine"].observations())
             for label in ("coarse", "reference")
         }
-        for label in ("coarse", "reference"):
-            record_row(Row(f"horn return, {label} vs fine density", engine, "fine", "complex, all points", distance[label].tolist(), note="fixture 3 on a real return"))
-        estimated[engine] = factor * distance["reference"]
-        record_row(Row("horn return, reference error (Richardson estimate)", engine, "extrapolated", "complex, all points", estimated[engine].tolist(), note=f"{factor:.2f} x the reference-to-fine distance, order {HORN_ORDER:g}"))
-        facts["horn_order_check"][engine] = float(np.max(distance["coarse"]) / np.max(distance["reference"]))
-    discretisation = {engine: float(np.max(values)) for engine, values in estimated.items()}
-    # The same bound as the spheres': both engines' errors at this density,
-    # summed per frequency (the triangle inequality), worst frequency, margin.
-    horn_tolerance = TOLERANCE_MARGIN * float(np.max(sum(estimated.values())))
-    facts["horn_same_mesh_tolerance"] = horn_tolerance
+        record_row(Row("horn return, coarse vs fine density", engine, "fine", "complex, all points", distance["coarse"].tolist(), note="fixture 3 on a real return; recorded"))
+        record_row(Row("horn return, reference vs fine density", engine, "fine", "complex, all points", distance["reference"].tolist(), tolerance=HORN_LADDER_CEILING, note="fixture 3 on a real return: the default density against the finest"))
+        nearest = float(np.max(distance["reference"]))
+        facts["horn_coarse_over_reference"][engine] = float(np.max(distance["coarse"])) / nearest if nearest > 0.0 else None
+    facts["horn_same_mesh_tolerance"] = HORN_TOLERANCE
 
     # Fixture 1 on a real return: the same ingested record into every engine.
     pairs = [(a, b) for index, a in enumerate(engines) for b in engines[index + 1 :]]
@@ -162,24 +198,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     for motion, solved in by_motion.items():
         for a, b in pairs:
             errors = relative_error(solved[a].observations(), solved[b].observations())
-            record_row(Row(f"same mesh: horn quarter return, {motion}", a, b, "complex, all points", errors.tolist(), tolerance=horn_tolerance))
-
-    # A consistency check on the estimates, recorded rather than used: one
-    # engine's true error cannot exceed another's plus their measured
-    # difference. Feeding that bound back into the tolerance would judge the
-    # difference by itself, so it only says how far an estimate overshoots.
-    facts["horn_error_consistency"] = {}
-    for engine in engines:
-        bounds = [
-            estimated[other] + relative_error(by_motion["normal"][engine].observations(), by_motion["normal"][other].observations())
-            for other in engines
-            if other != engine
-        ]
-        if bounds:
-            facts["horn_error_consistency"][engine] = {
-                "richardson_estimate": float(np.max(estimated[engine])),
-                "bound_from_other_engines": float(np.max(np.minimum.reduce(bounds))),
-            }
+            record_row(Row(f"same mesh: horn quarter return, {motion}", a, b, "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE))
 
     # Fixture 6 on a real return: WG's quarter against the forced full domain.
     full = fixtures.ingest(bundle, root / "data-round", symmetry_mode="full")
@@ -187,7 +206,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     for engine in engines:
         whole = _solve_record(engine, full, "normal")
         errors = relative_error(ladder[engine]["reference"].observations(), whole.observations())
-        record_row(Row("horn: quarter return vs forced full domain", engine, "full", "complex, all points", errors.tolist(), tolerance=2.0 * TOLERANCE_MARGIN * discretisation[engine], note="different meshes of one body: bounded by twice the engine's discretisation error"))
+        record_row(Row("horn: quarter return vs forced full domain", engine, "full", "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE, note="two meshes of one body on one engine"))
 
     # An ingest defect, reported rather than judged: the source tagged on a
     # face that looks AWAY from the fluid (the plug's rear, which is what a
@@ -231,7 +250,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
             if inverted:
                 record_row(Row("DEFECT (ingest): source on the plug's rear -- WG's quarter vs its full domain", engine, "full", "complex, all points", errors.tolist(), note=note))
             else:
-                record_row(Row("source on the plug's rear: WG's quarter vs its full domain", engine, "full", "complex, all points", errors.tolist(), tolerance=2.0 * TOLERANCE_MARGIN * discretisation[engine], note=note))
+                record_row(Row("source on the plug's rear: WG's quarter vs its full domain", engine, "full", "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE, note=note))
 
     # Fixture 4 on a real return: the same instance moved and turned in CAD.
     # Blocked today by ingestion, not by any engine: WG normalises a placed
@@ -255,7 +274,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
         for engine in engines:
             moved = _solve_record(engine, placed, "normal")
             errors = relative_error(moved.observations(), ladder[engine]["reference"].observations())
-            record_row(Row("horn: placed in CAD (rotated + translated) vs unplaced", engine, "unplaced", "complex, all points", errors.tolist(), tolerance=2.0 * TOLERANCE_MARGIN * discretisation[engine], note="normalisation undoes the placement; OCC re-meshes the placed body"))
+            record_row(Row("horn: placed in CAD (rotated + translated) vs unplaced", engine, "unplaced", "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE, note="normalisation undoes the placement; OCC re-meshes the placed body"))
 
     # Fixture 7: a y-only half, through the real plan and detector.
     skewed = fixtures.ingest(fixtures.linked_return(workspace, "skewed", skew_mm=12.0), root / "data-skewed")
@@ -281,14 +300,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
         request = fixtures.request_for_record(fresh, engine=engine, frequencies=HORN_FREQUENCIES_HZ)
         outcome = asyncio.run(_run_job(fresh_dir, fresh.store, request))
         reopened = _reopen(fresh_dir, outcome["job_id"])
-        jobs[engine] = {
-            "status": outcome["row"]["status"],
-            "error": outcome["row"].get("error_message"),
-            "engine": ((outcome["results"] or {}).get("metadata") or {}).get("solver_engine"),
-            "reopened_equal": reopened == outcome["results"],
-        }
-        ran = (jobs[engine]["engine"] or {}).get("engine")
-        ok = outcome["row"]["status"] == "complete" and reopened == outcome["results"] and ran == engine
+        ok, jobs[engine] = _fresh_job_verdict(engine, outcome, reopened)
         record_row(Row("fresh app data dir: import, prepare, solve, store, reopen", engine, "end to end", "job", [0.0 if ok else 1.0], tolerance=0.5, note=str(jobs[engine])))
     facts["fresh_jobs"] = jobs
 
