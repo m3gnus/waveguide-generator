@@ -73,6 +73,30 @@ Still to do:
   a helper older than the flag. Today every candidate is newer than the launcher that hands
   off to it. That stops being true once anything installs an older version, such as a
   Return to Stable (§2.6).
+- destination-side staging, end to end (the updater review §2.7). Staging is still
+  `<data>/updates/<version>`, and the installer still refuses when it and the application
+  are on different volumes (`_preflight` in `server/updates/bundle.py`), so an install
+  that spans two drives cannot update in-app. The downloader, both launcher containment
+  checks, the helper, the journal, recovery and cleanup change together. Acceptance is a
+  two-drive install on native Windows through download, handoff, replace, restart and
+  rollback.
+- how long a prepared update stays valid offline, which waits on decision D3 (§5).
+- a second server of the same installation, such as a `--no-gui` start with another data
+  directory: it is not shut down with the first, and its healthy start can reclaim
+  `.previous` while the first data directory's transaction is open. The scoped shutdown
+  of §4.4 also has no test with real decoy processes yet.
+- CAD Link preparation under the restart latch (§4.2): a separate change, which also
+  edits §4.2.
+- what the Phase 1 hardening left open:
+  - staging by a release that writes no owner marker is protected by the sweep's quiet
+    period alone until its helper's journal names it (§2.5);
+  - the controller's `/health` build check applies to a bundle only, since a source
+    checkout has no transaction (§4.6);
+  - on Windows, renaming a request out of the launcher's reach can be refused while the
+    launcher has the file open; the server retries, then treats the handoff as possibly
+    under way (§4.2);
+  - the update dialog writes the fetched logs through a `ClipboardItem` so WebKit accepts
+    the write; that path has not been exercised in the desktop windows themselves.
 
 ---
 
@@ -416,8 +440,11 @@ process (`application.state.update_restart`):
   `/api/solver-mesh`, the STEP, STL and WGLink exports, and the job routes that act on a
   job that already exists (stop, delete, metadata, recombine). The graceful stop gives
   them time to finish.
-- The CAD Link solve command reaches `/api/solve` through the interface, so it is refused
-  there, and the interface keeps it parked.
+- The CAD Link solve command does not go through `/api/solve`: the backend submits it to
+  the job runtime directly (`submit=runtime.submit` in `server/cadlink/api.py`). The
+  route's refusal does not apply to it, while the job runtime still marks no job running
+  under an approved restart (§4.3). Gating CAD Link preparation itself under the latch is
+  a separate change, not made here.
 - A refused ingest leaves the return unread on disk and still listed. The interface shows
   the message as a failed CAD preparation and offers to prepare it again. Nothing is
   reported to Fusion. After the restart the return is ingested again when the user
@@ -483,9 +510,12 @@ which `mount_jobs` passes it:
   cancellation and before it waits. A job stopped at its checkpoint then reads "Ended by
   the update restart". One that the shutdown budget cuts off reads the same on the next
   start (`recover_on_startup`). A shutdown with no approval is Quit, as before.
-- **The mark sits beside the Quit mark.** A start that knows only Quit reads the job as
-  interrupted by Quit, a stop and not a crash. That start is a release older than this
-  one, which an automatic rollback reopens.
+- **The mark sits beside the Quit mark, and no released build reads either.** v0.3.2
+  and v0.3.3-rc.1 have neither mark in `server/jobs/store.py`, and their
+  `recover_on_startup` marks every job it finds running as an error, "Simulation
+  failed". So after an automatic rollback to one of them, a job the update restart cut
+  off reads as a failed simulation, as a crash does. Only a start of this release or a
+  later one reads the mark.
 - **No job is marked running once a restart is approved.** The scheduler takes no job
   from the queue while the latch is set. A job it had already taken is marked running
   through `RestartApproval.admit`, which writes the mark under the lock `approve` takes.
@@ -781,7 +811,7 @@ own report (§4.5).
 solver. The restart itself, through the launcher, is not run with real processes. §4.4
 needs real processes, and its tests belong with its implementation.
 
-The released-launcher test is the only one that runs real released code, and today it
-runs only where the tags exist. Fetching `v0.3.1` and `v0.3.2` in the server test job
-would make it run on all three CI runners; that is a follow-up, not part of this
-contract.
+The released-launcher test is the only one that runs real released code. Since
+`b19912ec` the server test job fetches the `v0.3.1` and `v0.3.2` tags and sets
+`WG_REQUIRE_RELEASE_TAGS=1` (`.github/workflows/ci.yml`), so it runs on all three CI
+runners, and a missing tag fails the run instead of skipping the test.
