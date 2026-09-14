@@ -81,7 +81,8 @@ def _radial_derivative(pressure, radius: float, step: float = 1e-6) -> complex:
 @pytest.mark.parametrize("frequency", [100.0, 700.0, 1500.0])
 def test_the_pulsating_reference_meets_its_boundary_condition(frequency: float) -> None:
     # e^{-iwt}: rho dv/dt = -grad p, so a unit outward acceleration needs
-    # dp/dr = -rho on the surface. A wrong sign or convention misses by 2 rho.
+    # dp/dr = -rho on the surface; a wrong sign reads +rho. The time
+    # convention itself is caught by the outgoing-wave test below.
     a = qual.SPHERE_RADIUS_M
 
     slope = _radial_derivative(lambda r: qual.pulsating_sphere(a, frequency, r), a)
@@ -145,6 +146,26 @@ def test_a_row_without_a_tolerance_is_reported_not_judged() -> None:
     assert failing.passed is False
 
 
+def test_a_non_vacuity_row_fails_when_the_fixture_stops_distinguishing() -> None:
+    # A lower bound is judged at the least frequency: a fixture that turned
+    # symmetric at one frequency would let the rows it guards pass vacuously.
+    distinct = qual.Row("asymmetry", "metal", "mirror", "complex", [0.2, 1.9], minimum=0.01)
+    vacuous = qual.Row("asymmetry", "metal", "mirror", "complex", [0.0005, 1.9], minimum=0.01)
+
+    assert distinct.passed is True
+    assert vacuous.passed is False
+
+
+def test_a_host_without_metal_is_refused_before_anything_is_compared(monkeypatch: pytest.MonkeyPatch) -> None:
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("the qualification ran with one engine and nothing to compare")
+
+    monkeypatch.setattr(qual, "available_engines", lambda: {"metal": "unavailable", "beat-cpu": "available"})
+    monkeypatch.setattr(qual, "run", must_not_run)
+
+    assert qual.main([]) == 2
+
+
 def test_the_markdown_record_marks_each_verdict_and_carries_no_local_path(tmp_path: Path) -> None:
     levels = range(len(qual.LADDER))
     result = {
@@ -152,6 +173,7 @@ def test_the_markdown_record_marks_each_verdict_and_carries_no_local_path(tmp_pa
             qual.Row("defect row", "metal", "full", "complex", [1.04]),
             qual.Row("passing row", "metal", "beat-cpu", "complex", [0.01], tolerance=0.05),
             qual.Row("failing row", "beat-cpu", "metal", "complex", [0.06], tolerance=0.05),
+            qual.Row("bounded row", "metal", "mirror", "complex", [0.2, 1.9], minimum=0.01),
         ],
         "level_errors": {
             (kind, "metal", level): np.asarray([0.01]) for kind in ("pulsating", "oscillating") for level in levels
@@ -167,6 +189,7 @@ def test_the_markdown_record_marks_each_verdict_and_carries_no_local_path(tmp_pa
     assert rows["defect row"].endswith("| 1.04e+00 |  |  |")
     assert rows["passing row"].endswith("| pass |")
     assert rows["failing row"].endswith("| **FAIL** |")
+    assert rows["bounded row"].endswith("| ≥ 1.00e-02 (least 2.00e-01) | pass |")
     assert str(tmp_path) not in text
 
 

@@ -132,7 +132,10 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     facts["horn_triangles"] = triangles
     facts["horn_domain"] = reference.record["symmetry"].get("domain_planes") or reference.record["symmetry"].get("cut_planes")
     factor = _richardson_factor(triangles["reference"], triangles["fine"])
-    predicted_ratio = (1.0 / triangles["coarse"] - 1.0 / triangles["fine"]) / (1.0 / triangles["reference"] - 1.0 / triangles["fine"])
+    half_order = HORN_ORDER / 2.0
+    predicted_ratio = (triangles["coarse"] ** -half_order - triangles["fine"] ** -half_order) / (
+        triangles["reference"] ** -half_order - triangles["fine"] ** -half_order
+    )
     facts["horn_richardson_factor"] = factor
     facts["horn_order_check"] = {"predicted_coarse_over_reference": predicted_ratio}
     estimated: dict[str, np.ndarray] = {}
@@ -161,6 +164,23 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
             errors = relative_error(solved[a].observations(), solved[b].observations())
             record_row(Row(f"same mesh: horn quarter return, {motion}", a, b, "complex, all points", errors.tolist(), tolerance=horn_tolerance))
 
+    # A consistency check on the estimates, recorded rather than used: one
+    # engine's true error cannot exceed another's plus their measured
+    # difference. Feeding that bound back into the tolerance would judge the
+    # difference by itself, so it only says how far an estimate overshoots.
+    facts["horn_error_consistency"] = {}
+    for engine in engines:
+        bounds = [
+            estimated[other] + relative_error(by_motion["normal"][engine].observations(), by_motion["normal"][other].observations())
+            for other in engines
+            if other != engine
+        ]
+        if bounds:
+            facts["horn_error_consistency"][engine] = {
+                "richardson_estimate": float(np.max(estimated[engine])),
+                "bound_from_other_engines": float(np.max(np.minimum.reduce(bounds))),
+            }
+
     # Fixture 6 on a real return: WG's quarter against the forced full domain.
     full = fixtures.ingest(bundle, root / "data-round", symmetry_mode="full")
     facts["horn_full_triangles"] = full.record["mesh"]["stats"]["triangle_count"]
@@ -186,10 +206,15 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
         "full_flipped_global": rear_full.record["mesh"]["metadata"]["postprocess"].get("flipped_global"),
         "orientation_valid": rear_quarter.record["mesh"]["integrity"].get("orientation_valid"),
         "warnings": rear_quarter.record["mesh"]["stats"].get("warnings"),
+        "findings": sorted({str(item["kind"]) for item in rear_quarter.record.get("findings") or []}),
     }
+    rear_facts = facts["rear_cap_quarter"]
     for engine in engines:
         errors = relative_error(_solve_record(engine, rear_quarter, "normal").observations(), _solve_record(engine, rear_full, "normal").observations())
-        record_row(Row("DEFECT (ingest): source on the plug's rear -- WG's quarter vs its full domain", engine, "full", "complex, all points", errors.tolist(), note=f"quarter re-oriented: flipped_global={postprocess.get('flipped_global')} of {facts['rear_cap_quarter']['triangles']} triangles; no warning, no finding"))
+        record_row(Row("DEFECT (ingest): source on the plug's rear -- WG's quarter vs its full domain", engine, "full", "complex, all points", errors.tolist(), note=(
+            f"quarter re-oriented: flipped_global={rear_facts['flipped_global']} of {rear_facts['triangles']} triangles; "
+            f"orientation_valid={rear_facts['orientation_valid']}; warnings={rear_facts['warnings']}; findings={rear_facts['findings']}"
+        )))
 
     # Fixture 4 on a real return: the same instance moved and turned in CAD.
     # Blocked today by ingestion, not by any engine: WG normalises a placed
@@ -203,7 +228,13 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
         placed = fixtures.ingest(fixtures.linked_return(workspace, "placed", placement=placement), root / "data-placed")
     except IngestRefusal as exc:
         facts["placed_refusal"] = str(exc)
-        record_row(Row("horn: placed in CAD (rotated + translated) -- BLOCKED at ingest", "ingest", "unplaced", "refusal", [1.0], note=str(exc)))
+        # Only the known refusal is the known block. Any other refusal is a
+        # new failure of the placed return, and is judged as one.
+        known = "anchor throat face did not resolve after placement" in str(exc)
+        record_row(Row(
+            "horn: placed in CAD (rotated + translated) -- BLOCKED at ingest" if known else "horn: placed in CAD -- UNEXPECTED ingest refusal",
+            "ingest", "unplaced", "refusal", [1.0], tolerance=None if known else 0.5, note=str(exc),
+        ))
     else:
         facts["placed_frame"] = placed.record["anchor"]["throat_frame"]
         for engine in engines:
@@ -241,18 +272,21 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
             "engine": ((outcome["results"] or {}).get("metadata") or {}).get("solver_engine"),
             "reopened_equal": reopened == outcome["results"],
         }
-        ok = outcome["row"]["status"] == "complete" and reopened == outcome["results"]
+        ran = (jobs[engine]["engine"] or {}).get("engine")
+        ok = outcome["row"]["status"] == "complete" and reopened == outcome["results"] and ran == engine
         record_row(Row("fresh app data dir: import, prepare, solve, store, reopen", engine, "end to end", "job", [0.0 if ok else 1.0], tolerance=0.5, note=str(jobs[engine])))
     facts["fresh_jobs"] = jobs
 
-    # A return whose body was edited in CAD after WG exported it: the
-    # freshness finding is acknowledged and the same geometry solves as before.
+    # A return whose body evidence says it was edited in CAD after WG exported
+    # it. The STEP is the unedited body -- only the fingerprints differ -- so
+    # the exact match is expected by construction: what this row tests is that
+    # acknowledging the blocking freshness finding leaves the solve unchanged.
     edited = fixtures.ingest(fixtures.linked_return(workspace, "edited", body_state="modified"), root / "data-edited")
     facts["edited_findings"] = [(item["kind"], item.get("verdict"), item.get("blocking")) for item in edited.record.get("findings") or []]
     for engine in engines:
         solved = _solve_record(engine, edited, "normal")
         errors = relative_error(solved.observations(), ladder[engine]["reference"].observations())
-        record_row(Row("return edited in CAD (acknowledged) vs the unedited return", engine, "unedited", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="same body, same sizes: the same mesh"))
+        record_row(Row("return edited in CAD (acknowledged) vs the unedited return", engine, "unedited", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="unedited STEP, edited body evidence: the acknowledgement must not change the solve"))
     return facts
 
 

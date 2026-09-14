@@ -477,14 +477,26 @@ class Row:
     errors: list[float]
     tolerance: float | None = None
     note: str = ""
+    #: A lower bound, for a non-vacuity row: the fixture must produce at least
+    #: this much difference at every frequency, or the rows it guards pass
+    #: without testing anything.
+    minimum: float | None = None
 
     @property
     def worst(self) -> float:
         return float(np.max(self.errors))
 
     @property
+    def least(self) -> float:
+        return float(np.min(self.errors))
+
+    @property
     def passed(self) -> bool | None:
-        return None if self.tolerance is None else self.worst <= self.tolerance
+        if self.tolerance is None and self.minimum is None:
+            return None
+        return (self.tolerance is None or self.worst <= self.tolerance) and (
+            self.minimum is None or self.least >= self.minimum
+        )
 
 
 def max_edge(points: np.ndarray, triangles: np.ndarray) -> float:
@@ -520,7 +532,11 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
             + (
                 f"  tol {row.tolerance:.2e} {'PASS' if row.passed else 'FAIL'}"
                 if row.tolerance is not None
-                else ""
+                else (
+                    f"  least {row.least:.3e} >= {row.minimum:.2e} {'PASS' if row.passed else 'FAIL'}"
+                    if row.minimum is not None
+                    else ""
+                )
             )
         )
         return row
@@ -624,15 +640,17 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
         errors = relative_error(turned.observations(), analytic_observations(turned, "oscillating"))
         record_row(Row("rotated + translated oscillating sphere", engine, "analytic", "complex, all points", errors.tolist(), tolerance=float(np.max(level_errors[("oscillating", engine, level)])) + EXACT_TOLERANCE, note="fixture 4 against the analytic reference"))
 
-    # Fixture 4, u/v-sensitive: a sphere whose source is an off-axis cap, on
-    # the +x side, so its pattern is not symmetric about the axis. A swapped
-    # or mirrored horizontal/vertical mapping, which the axisymmetric
-    # oscillating sphere cannot show, changes this field. Moved and turned in
-    # CAD, it must give the unmoved answer on each engine, and the engines
+    # Fixture 4, u/v-sensitive: a sphere whose source is an off-axis cap
+    # centred at 30 degrees of azimuth -- between +x and +y, nearer +x -- so
+    # no mirror or swap leaves its field alone. A u mirror, a v mirror (a
+    # handedness error) and a u/v swap each move the cap and change the field,
+    # which the axisymmetric oscillating sphere cannot show. Moved and turned
+    # in CAD, it must give the unmoved answer on each engine, and the engines
     # must agree with each other on the turned copy.
     points, triangles, _tags = sphere_mesh(level, split=False)
     centroids = points[triangles].mean(axis=1)
-    cap_tags = np.where(centroids[:, 0] > 0.6 * SPHERE_RADIUS_M, 101, 1)
+    toward = np.asarray([math.cos(math.radians(30.0)), math.sin(math.radians(30.0)), 0.0])
+    cap_tags = np.where(centroids @ toward > 0.6 * SPHERE_RADIUS_M, 101, 1)
     cap = [{"id": "cap", "source_ids": ["cap"]}]
     straight_cap = record_for(gmsh22(points, triangles, cap_tags), {"cap": 101})
     moved_cap = record_for(
@@ -649,8 +667,13 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
         record_row(Row("rotated + translated off-axis cap", engine, "unmoved", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="fixture 4: u and v must map as well as the axis"))
         horizontal = base.planes.index("horizontal")
         vertical = base.planes.index("vertical")
+        # Non-vacuity, judged: a mapping mistake would change the moved solve
+        # by at least these differences, so each must stand well clear of the
+        # exact-equivalence tolerance the moved-vs-unmoved rows are held to.
         asymmetry = relative_error(base.pressure["cap"][:, horizontal, :], base.pressure["cap"][:, vertical, :])
-        record_row(Row("off-axis cap: horizontal differs from vertical", engine, "vertical cut", "complex, polar", asymmetry.tolist(), note="non-vacuity: the fixture distinguishes u from v"))
+        record_row(Row("off-axis cap: horizontal differs from vertical", engine, "vertical cut", "complex, polar", asymmetry.tolist(), minimum=10.0 * EXACT_TOLERANCE, note="non-vacuity: a u/v swap changes the field"))
+        handedness = relative_error(base.pressure["cap"][:, vertical, ::-1], base.pressure["cap"][:, vertical, :])
+        record_row(Row("off-axis cap: vertical cut differs from its mirror", engine, "mirrored", "complex, polar", handedness.tolist(), minimum=10.0 * EXACT_TOLERANCE, note="non-vacuity: a v mirror (handedness) changes the field"))
     for a, b in pairs:
         errors = relative_error(turned_by_engine[a].observations(), turned_by_engine[b].observations())
         record_row(Row("rotated + translated off-axis cap", a, b, "complex, all points", errors.tolist(), tolerance=same_mesh_tolerance(level)))
@@ -717,7 +740,12 @@ def write_markdown(path: Path, result: Mapping[str, Any], status: Mapping[str, s
     lines += ["", "## Results", "", "| Fixture | Engine | Against | Quantity | Worst | Tolerance | Verdict |", "| --- | --- | --- | --- | --- | --- | --- |"]
     for row in result["rows"]:
         verdict = "" if row.passed is None else ("pass" if row.passed else "**FAIL**")
-        tolerance = "" if row.tolerance is None else f"{row.tolerance:.2e}"
+        if row.tolerance is not None:
+            tolerance = f"{row.tolerance:.2e}"
+        elif row.minimum is not None:
+            tolerance = f"≥ {row.minimum:.2e} (least {row.least:.2e})"
+        else:
+            tolerance = ""
         lines.append(f"| {row.fixture} | {row.engine} | {row.compared_with} | {row.quantity} | {row.worst:.2e} | {tolerance} | {verdict} |")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -769,8 +797,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     status = available_engines()
     engines = [name for name in ("metal", "beat-cpu", "bempp") if status.get(name) == "available"]
     print("engines:", json.dumps(status, indent=2))
-    if "beat-cpu" not in engines:
-        print("BEAT-CPU is not available here; nothing to qualify.")
+    missing = [name for name in ("metal", "beat-cpu") if name not in engines]
+    if missing:
+        # Without both there is no pair: every same-mesh row would be absent
+        # and every tolerance one engine's alone, and a run that compared
+        # nothing must not report success.
+        print(f"Not available here: {', '.join(missing)}. The qualification needs Metal and BEAT-CPU together.")
         return 2
     environment = environment_facts()
     result = run(engines)
@@ -811,6 +843,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "errors": row.errors,
                             "worst": row.worst,
                             "tolerance": row.tolerance,
+                            "minimum": row.minimum,
                             "passed": row.passed,
                             "note": row.note,
                         }
