@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { noteSolveSettingsEdit } from './solveSettingsEdits';
+import { withEditSignals } from './solveSettingsEdits';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { DEFAULT_ATH_POLAR_UI, MIN_POLAR_DISTANCE_M, athPolarOverrides } from './athPolars';
 import { durableSettings } from './durableSettings';
@@ -358,40 +358,39 @@ interface SolveOptionsStore extends PersistedSolveOptions {
   options: () => SolveOptions;
 }
 
-export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, get) => ({
+/** The setters a person drives. The engine is recorded apart, as the solver selection. */
+const SOLVE_OPTION_EDITS: ReadonlyArray<keyof SolveOptionsStore> = [
+  'setSolverMode', 'setSymmetry', 'setMeshValidationMode', 'setVerbose', 'setFrequencySpacing',
+  'setFrequencyMode', 'setFrequencyListText', 'updatePolar', 'updateGroundPlane', 'toggleAxis',
+];
+
+export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, get) => withEditSignals(get, {
   ...defaultSolveOptions(),
   setEngine: (engine) => set({ engine }),
-  setSolverMode: (solverMode) => { set({ solverMode }); noteSolveSettingsEdit(); },
-  setSymmetry: (symmetry) => { set({ symmetry }); noteSolveSettingsEdit(); },
-  setMeshValidationMode: (meshValidationMode) => { set({ meshValidationMode }); noteSolveSettingsEdit(); },
-  setVerbose: (verbose) => { set({ verbose }); noteSolveSettingsEdit(); },
-  setFrequencySpacing: (frequencySpacing) => { set({ frequencySpacing }); noteSolveSettingsEdit(); },
-  setFrequencyMode: (frequencyMode) => { set({ frequencyMode }); noteSolveSettingsEdit(); },
-  setFrequencyListText: (frequencyListText) => { set({ frequencyListText }); noteSolveSettingsEdit(); },
+  setSolverMode: (solverMode) => set({ solverMode }),
+  setSymmetry: (symmetry) => set({ symmetry }),
+  setMeshValidationMode: (meshValidationMode) => set({ meshValidationMode }),
+  setVerbose: (verbose) => set({ verbose }),
+  setFrequencySpacing: (frequencySpacing) => set({ frequencySpacing }),
+  setFrequencyMode: (frequencyMode) => set({ frequencyMode }),
+  setFrequencyListText: (frequencyListText) => set({ frequencyListText }),
   frequencyListParse: () => parseFrequencyList(get().frequencyListText),
-  updatePolar: (update) => {
-    set((state) => ({ polar: { ...state.polar, ...update } }));
-    noteSolveSettingsEdit();
-  },
-  updateGroundPlane: (update) => {
-    set((state) => ({ groundPlane: { ...state.groundPlane, ...update } }));
-    noteSolveSettingsEdit();
-  },
-  toggleAxis: (axis) => {
-    set((state) => {
-      const enabled = state.polar.enabledAxes.includes(axis);
-      if (enabled && state.polar.enabledAxes.length === 1) return state;
-      return {
-        polar: {
-          ...state.polar,
-          enabledAxes: enabled
-            ? state.polar.enabledAxes.filter((item) => item !== axis)
-            : [...state.polar.enabledAxes, axis],
-        },
-      };
-    });
-    noteSolveSettingsEdit();
-  },
+  updatePolar: (update) => set((state) => ({ polar: { ...state.polar, ...update } })),
+  updateGroundPlane: (update) => set((state) => ({
+    groundPlane: { ...state.groundPlane, ...update },
+  })),
+  toggleAxis: (axis) => set((state) => {
+    const enabled = state.polar.enabledAxes.includes(axis);
+    if (enabled && state.polar.enabledAxes.length === 1) return state;
+    return {
+      polar: {
+        ...state.polar,
+        enabledAxes: enabled
+          ? state.polar.enabledAxes.filter((item) => item !== axis)
+          : [...state.polar.enabledAxes, axis],
+      },
+    };
+  }),
   options: () => {
     const base: SolveOptions = {
       engine: get().engine,
@@ -410,7 +409,7 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
     if (frequencies === null) throw new Error(`Frequency list is not usable: ${error}`);
     return { ...base, frequencies_hz: frequencies };
   },
-}), {
+}, SOLVE_OPTION_EDITS), {
   name: 'solveOptions',
   // Reads and writes stay synchronous against the durable cache, so the store
   // still initialises during module evaluation; the server's copy arrives

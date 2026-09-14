@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getIngest, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
 import { getCadOperation, type CadOperationSummary } from '../api/cadOperations';
 import { listCadProjects } from '../api/cadProjects';
@@ -68,11 +68,15 @@ function useFindingReview(operation: CadOperationSummary): FindingReview & { ret
   return { ...(wanted ? review : NO_REVIEW), retry: () => setAttempt((count) => count + 1) };
 }
 
+type OperationAction = 'solve' | 'approve' | 'use-settings' | 'dismiss';
+
 interface Guidance {
   text: string | null;
   simulation: boolean;
   /** The action the reason calls for, offered while the operation waits. */
-  action: 'solve' | 'approve' | 'use-settings' | 'open-project' | null;
+  action: Exclude<OperationAction, 'dismiss'> | 'open-project' | null;
+  /** Solve now beside it: the backend answers from the project's recorded setup. */
+  alsoSolve?: boolean;
 }
 
 /** What the user can do about the reason an operation waits. */
@@ -88,10 +92,14 @@ function guidance(operation: CadOperationSummary, onScreen: boolean): Guidance {
         };
       }
       if (operation.snapshot?.projectLineageId) {
+        // Its return need not be the one opening the project puts on screen --
+        // a newer version, or none left in the returns folder -- so it is also
+        // solvable from here once the project's settings are recorded.
         return {
-          text: `No solve settings are recorded for ${name}’s project and sources yet. Open it to choose them; WG asks before replacing a design that exists nowhere else.`,
+          text: `No solve settings were recorded for ${name}’s project and sources when it was sent. Open it to choose them, or press Solve now if they have been recorded since.`,
           simulation: false,
           action: 'open-project',
+          alsoSolve: true,
         };
       }
       return {
@@ -129,15 +137,18 @@ function CadOperationCard({ operation, record }: {
   const coordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
   );
-  // The operation as it stood when an action was asked for. The answer is the
-  // row as it was before the backend claimed it, so the actions stay held until
-  // the operation moves on -- a newer attempt, or another state -- or the
+  // The action asked for, and the operation as it stood then. The answer is
+  // the row as it was before the backend claimed it, so that action stays held
+  // until the operation moves on -- a newer attempt, or another state -- or the
   // request fails. Re-enabling on the answer let a second press start a second
-  // attempt.
-  const [asked, setAsked] = useState<{ attemptGeneration: number; state: string } | null>(null);
-  const held = asked !== null
-    && asked.attemptGeneration === operation.attemptGeneration && asked.state === operation.state;
+  // attempt. The other actions stay available: the request can still be dismissed.
+  const [asked, setAsked] = useState<{ action: OperationAction; attemptGeneration: number; state: string } | null>(null);
+  const heldAction = asked !== null
+    && asked.attemptGeneration === operation.attemptGeneration && asked.state === operation.state
+    ? asked.action
+    : null;
   const [opening, setOpening] = useState(false);
+  const openingRef = useRef(false);
   const review = useFindingReview(operation);
   const manifest = operation.snapshot?.manifestSha256 ?? null;
   const documentName = operation.snapshot?.documentName ?? null;
@@ -150,27 +161,37 @@ function CadOperationCard({ operation, record }: {
   // Only the preparation the operation names: an approval never carries to another.
   const reviewedPreparation = review.findingIds.length > 0
     && review.preparationId === operation.preparationId ? review.preparationId : null;
-  const ask = (action: () => Promise<void>) => {
-    setAsked({ attemptGeneration: operation.attemptGeneration, state: operation.state });
-    void action().catch(() => setAsked(null));
+  const ask = (action: OperationAction, request: () => Promise<void>) => {
+    setAsked({ action, attemptGeneration: operation.attemptGeneration, state: operation.state });
+    void request().catch(() => setAsked(null));
   };
   // The project switcher's own open: it asks before discarding a design that
-  // exists nowhere else, and never opens over anything opened since.
+  // exists nowhere else, and never opens over anything opened since. What the
+  // open found is the coordinator's to say.
   const openProject = async () => {
     const lineageId = operation.snapshot?.projectLineageId;
-    if (!lineageId) return;
+    // Held from the first click, before the question, as the switcher is.
+    if (!lineageId || openingRef.current) return;
+    openingRef.current = true;
     setOpening(true);
     try {
       const project = (await listCadProjects()).find((item) => item.lineageId === lineageId);
       if (!project) throw new Error(`This copy of WG does not hold the project ${label} belongs to.`);
-      const opened = await openCadProject(project);
-      if (opened !== null) coordinator.reportStatus(`Opened ${opened}. Choose its solve settings, then use them to solve ${label}.`);
+      await openCadProject(project);
     } catch (reason) {
       coordinator.reportError(reason instanceof Error ? reason.message : String(reason));
     } finally {
+      openingRef.current = false;
       setOpening(false);
     }
   };
+  const solveNow = (primary: boolean) => <button
+    className={primary ? 'primary' : undefined}
+    disabled={heldAction === 'solve'}
+    aria-label={`Solve now: ${label}`}
+    title="Prepare this model from its project’s own solve settings and start the solve."
+    onClick={() => ask('solve', () => coordinator.solveOperation(operation.operationId))}
+  >Solve now</button>;
   const status = [
     STATE_COPY[operation.state] ?? operation.state,
     operation.stage,
@@ -200,10 +221,10 @@ function CadOperationCard({ operation, record }: {
     </div>
     <div className="cad-confirm-actions">
       {operation.state !== 'cancel_requested' && <button
-        disabled={held}
+        disabled={heldAction === 'dismiss'}
         aria-label={`Dismiss: ${label}`}
         title="Dismiss this request. Fusion will not offer it again."
-        onClick={() => ask(() => coordinator.dismissOperation(operation.operationId))}
+        onClick={() => ask('dismiss', () => coordinator.dismissOperation(operation.operationId))}
       >Dismiss</button>}
       {review.error && <button aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
       {help.simulation && <button
@@ -212,18 +233,18 @@ function CadOperationCard({ operation, record }: {
       >Open Simulation</button>}
       {waiting && help.action === 'approve' && reviewedPreparation && <button
         className="primary"
-        disabled={held}
+        disabled={heldAction === 'approve'}
         aria-label={`Approve and solve: ${label}`}
-        onClick={() => ask(() => coordinator.approveOperation(operation.operationId, {
+        onClick={() => ask('approve', () => coordinator.approveOperation(operation.operationId, {
           preparationId: reviewedPreparation, findingIds: review.findingIds,
         }))}
       >Approve and solve</button>}
       {waiting && help.action === 'use-settings' && <button
         className="primary"
-        disabled={held}
+        disabled={heldAction === 'use-settings'}
         aria-label={`Use these settings and solve: ${label}`}
         title="Record the settings on screen as this model’s project setup, then prepare and solve it."
-        onClick={() => ask(() => coordinator.solveOperationWithSettings(operation.operationId))}
+        onClick={() => ask('use-settings', () => coordinator.solveOperationWithSettings(operation.operationId))}
       >Use these settings and solve</button>}
       {waiting && help.action === 'open-project' && <button
         className="primary"
@@ -231,13 +252,8 @@ function CadOperationCard({ operation, record }: {
         aria-label={`Open ${documentName ?? 'the project'} to choose its solve settings`}
         onClick={() => void openProject()}
       >Open {documentName ?? 'its project'}</button>}
-      {waiting && help.action === 'solve' && <button
-        className="primary"
-        disabled={held}
-        aria-label={`Solve now: ${label}`}
-        title="Prepare this model from its project’s own solve settings and start the solve."
-        onClick={() => ask(() => coordinator.solveOperation(operation.operationId))}
-      >Solve now</button>}
+      {waiting && help.action === 'open-project' && help.alsoSolve && solveNow(false)}
+      {waiting && help.action === 'solve' && solveNow(true)}
     </div>
   </div>;
 }

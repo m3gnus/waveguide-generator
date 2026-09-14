@@ -19,3 +19,26 @@ export function subscribeSolveSettingsEdits(listener: Listener): () => void {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
 }
+
+/**
+ * A store's initial state with the named setters announcing themselves: each
+ * runs as written, then signals when it changed the state. A setter that
+ * changed nothing -- the last directivity plane kept on -- chose nothing.
+ */
+export function withEditSignals<S extends object>(
+  get: () => S,
+  state: S,
+  setters: ReadonlyArray<keyof S>,
+): S {
+  const announced = { ...state };
+  for (const name of setters) {
+    const setter = state[name] as unknown as (...args: unknown[]) => unknown;
+    announced[name] = ((...args: unknown[]) => {
+      const before = get();
+      const result = setter(...args);
+      if (get() !== before) noteSolveSettingsEdit();
+      return result;
+    }) as unknown as S[keyof S];
+  }
+  return announced;
+}

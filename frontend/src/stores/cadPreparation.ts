@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { noteSolveSettingsEdit } from './solveSettingsEdits';
+import { withEditSignals } from './solveSettingsEdits';
 
 export type CadSymmetryPreparationMode = 'auto' | 'full';
 
@@ -8,10 +8,10 @@ interface CadPreparationState {
   setSymmetryMode: (mode: CadSymmetryPreparationMode) => void;
 }
 
-export const useCadPreparationStore = create<CadPreparationState>((set) => ({
+export const useCadPreparationStore = create<CadPreparationState>((set, get) => withEditSignals(get, {
   symmetryMode: 'auto',
-  setSymmetryMode: (symmetryMode) => { set({ symmetryMode }); noteSolveSettingsEdit(); },
-}));
+  setSymmetryMode: (symmetryMode) => set({ symmetryMode }),
+}, ['setSymmetryMode']));
 
 export function resetCadPreparationStore(): void {
   useCadPreparationStore.setState({ symmetryMode: 'auto' });

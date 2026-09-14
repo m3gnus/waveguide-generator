@@ -28,6 +28,7 @@ import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
   DRIVER_FIELD_KEYS,
   PASSIVE_CARDIOID_DEFAULTS,
+  bundleIdentity,
   driverBaseFromSpec,
   driversForChannels,
   projectChannelDrivers,
@@ -245,6 +246,41 @@ export const cadLinkCoordinatorBridge = {
 function publishBridge(snapshot: CadLinkCoordinatorSnapshot): void {
   bridgeSnapshot = snapshot;
   bridgeListeners.forEach((listener) => listener());
+}
+
+/** The project the settings on screen may be recorded under for this
+ * operation, or why they may not.
+ *
+ * Checked when "Use these settings and solve" is pressed, not when its card
+ * rendered: the selection, the ingestion or the listing may all have moved
+ * since. The settings are the on-screen model's, so that model has to be
+ * this operation's snapshot, prepared from this very listing of its return,
+ * and filed under the project the backend names. With no project named, only
+ * the ingestion's own counts; the parametric document's lineage never does. */
+function settingsProjectFor(
+  operation: CadOperationSummary | undefined,
+  state: ReturnType<typeof useCadReturnStore.getState>,
+): string {
+  const snapshot = operation?.snapshot;
+  const record = state.ingestRecord;
+  if (!snapshot?.manifestSha256 || !record || record.manifest_sha256 !== snapshot.manifestSha256) {
+    throw new Error('This request is for a model that is not the model on screen. Select and prepare its return first.');
+  }
+  if (state.needsIngest || !state.selectedBundle
+    || bundleIdentity(state.selectedBundle) !== state.ingestedBundleIdentity) {
+    throw new Error('The model on screen has changed since it was prepared. Prepare it again, then use its settings.');
+  }
+  const filed = record.project?.lineage_id ?? null;
+  if (snapshot.projectLineageId) {
+    if (snapshot.projectLineageId !== (filed ?? state.projectLineageId)) {
+      throw new Error('The model on screen is filed under another project than this request names. Open that project first.');
+    }
+    return snapshot.projectLineageId;
+  }
+  if (!filed) {
+    throw new Error('WG does not know which project this model belongs to yet, so its settings cannot be recorded for it.');
+  }
+  return filed;
 }
 
 /** A step abandoned because newer user intent replaced what it was working on.
@@ -1900,14 +1936,10 @@ export function CadLinkCoordinator() {
    * the model's project -- the one the backend names for the snapshot, when it
    * knows -- and the operation is prepared with exactly that revision. */
   const solveOperationWithSettings = useCallback((operationId: string) => actOnOperation(async () => {
-    const operation = useCadOperationsStore.getState().operations[operationId];
-    const built = buildCadProjectSetup(
-      undefined, undefined, undefined, operation?.snapshot?.projectLineageId ?? undefined,
-    );
-    if (!built) {
-      throw new Error(importedSubmissionBlocker()
-        ?? 'WG does not know this model’s project yet. Prepare it from the return list, then try again.');
-    }
+    const state = useCadReturnStore.getState();
+    const lineageId = settingsProjectFor(useCadOperationsStore.getState().operations[operationId], state);
+    const built = buildCadProjectSetup(state, undefined, undefined, lineageId);
+    if (!built) throw new Error(importedSubmissionBlocker() ?? 'The solve settings on screen are not complete yet.');
     const recorded = await putProjectSetup(built);
     return prepareCadOperation(operationId, { setupRevisionId: recorded.revisionId });
   }, 'Recorded these settings for the model’s project. Preparing and solving it; its run appears in the Jobs rail once it is submitted.'),

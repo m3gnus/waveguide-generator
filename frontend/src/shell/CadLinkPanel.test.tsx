@@ -331,6 +331,8 @@ describe('CadLinkPanel', () => {
     // Answered with the row as it was: nothing has moved on, so a second press
     // cannot start a second attempt.
     expect(solveNow('op-ready')!.disabled).toBe(true);
+    // Only the action pressed is held: the request can still be dismissed.
+    expect(buttonIn(operationCard('op-ready'), 'Dismiss')!.disabled).toBe(false);
     await act(async () => { solveNow('op-ready')!.click(); });
     expect(posted).toHaveLength(1);
     act(() => {
@@ -366,8 +368,13 @@ describe('CadLinkPanel', () => {
     act(() => { applyOpenedDesign(openedProject(), 'current.cfg'); });
     useDesignStore.getState().updateField('R', 321);
     const opened: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const prepared: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
+      if (path === '/api/cadlink/operations/op-other/prepare') {
+        prepared.push(JSON.parse(String(init?.body)));
+        return json({ operation: useCadOperationsStore.getState().operations['op-other'] });
+      }
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.startsWith('/api/jobs')) return json({ items: [] });
@@ -395,11 +402,18 @@ describe('CadLinkPanel', () => {
       }));
     });
     const card = operationCard('op-other');
-    expect(buttonTexts(card)).toEqual(['Dismiss', 'Open Tritonia']);
+    expect(buttonTexts(card)).toEqual(['Dismiss', 'Open Tritonia', 'Solve now']);
 
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    await act(async () => { buttonIn(card, 'Open Tritonia')!.click(); });
-    await vi.waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    act(() => {
+      // A fast double click asks once.
+      const open = buttonIn(card, 'Open Tritonia')!;
+      open.click();
+      open.click();
+    });
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
+    await act(async () => { for (let i = 0; i < 12; i += 1) await Promise.resolve(); });
+    expect(confirm).toHaveBeenCalledOnce();
     // Declined: the design on screen stays, edits and all.
     expect(opened).toEqual([]);
     expect(useDesignStore.getState().design.R).toBe(321);
@@ -409,6 +423,51 @@ describe('CadLinkPanel', () => {
     await act(async () => { buttonIn(operationCard('op-other'), 'Open Tritonia')!.click(); });
     await vi.waitFor(() => expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other'));
     expect(opened).toEqual(['/api/cadlink/designs/wgd_other', '/api/design/open']);
+    // The coordinator says what the open found; the card does not talk over it.
+    await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Project design loaded'));
+    expect(host.querySelector('.cad-status-strip')?.textContent).not.toContain('Opened');
+    // Its return is not on screen, and the project may have recorded settings
+    // by now: the request is solvable from here.
+    await act(async () => { buttonIn(operationCard('op-other'), 'Solve now')!.click(); });
+    await vi.waitFor(() => expect(prepared).toEqual([{ submit: true }]));
+  });
+
+  it('lets each waiting version of one project be solved once its project’s settings are recorded', async () => {
+    // The ingestion files the model on screen under the project both versions belong to.
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json({ ...record, project: { lineage_id: 'wgl_other' } });
+    }));
+    await renderAndSelect();
+    await clickIngest();
+    const posted = recordOperationRequests();
+    const waiting = {
+      reason: 'setup_required', stage: 'received', setupRevisionId: null, preparationId: null,
+      message: 'Choose the solve settings for this model in WG, then press Solve now.',
+    };
+    act(() => {
+      const { apply } = useCadOperationsStore.getState();
+      apply(cadOperation({
+        ...waiting, operationId: 'op-v1',
+        snapshot: { manifestSha256: `sha256:${'d'.repeat(64)}`, documentName: 'Tritonia v1', projectLineageId: 'wgl_other' },
+      }));
+      apply(cadOperation({
+        ...waiting, operationId: 'op-v2', createdAt: '2026-09-14T10:00:01Z',
+        snapshot: { manifestSha256: record.manifest_sha256, documentName: 'Tritonia v2', projectLineageId: 'wgl_other' },
+      }));
+    });
+    // v2 is the model on screen: its settings are recorded, and it is solved with them.
+    await act(async () => { buttonIn(operationCard('op-v2'), 'Use these settings and solve')!.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[0]).toMatchObject({ path: '/api/cadlink/project-setups', body: { lineageId: 'wgl_other' } });
+    // v1's return is not on screen, and may have left the returns folder: it is
+    // solved from the setup its project has now.
+    expect(buttonTexts(operationCard('op-v1'))).toEqual(['Dismiss', 'Open Tritonia v1', 'Solve now']);
+    await act(async () => { buttonIn(operationCard('op-v1'), 'Solve now')!.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(3));
+    expect(posted[2]).toEqual({ path: '/api/cadlink/operations/op-v1/prepare', body: { submit: true } });
   });
 
   it('asks for the return to be selected first when its model has no project yet', async () => {
@@ -426,6 +485,12 @@ describe('CadLinkPanel', () => {
   });
 
   it('solves a stored snapshot with Fusion closed: its settings are recorded, then it is prepared', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json({ ...record, project: { lineage_id: 'wgl_speaker' } });
+    }));
     await renderAndSelect();
     await clickIngest();
     await vi.waitFor(() => expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.running).toBe(false));

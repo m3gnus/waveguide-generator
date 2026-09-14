@@ -214,6 +214,15 @@ describe('jobs panel run list', () => {
     expect(notes[0].textContent).toBe('From CAD operation op-7');
   });
 
+  it('ignores a submission key that is not a string', async () => {
+    const odd = job(15, 'Odd');
+    (odd as unknown as { client_request_id: unknown }).client_request_id = 42;
+    publishJobs([odd]);
+    await act(async () => root.render(<JobsPanel/>));
+    expect(host.querySelector('.job-card')).not.toBeNull();
+    expect(host.querySelector('.job-cad-operation')).toBeNull();
+  });
+
   it('recalls a CAD run ingestion into the CAD workspace and viewport', async () => {
     const imported = job(12, 'Returned speaker', 'cad-import');
     imported.config_summary = { geometry_type: 'imported' };

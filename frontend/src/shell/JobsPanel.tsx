@@ -191,8 +191,9 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   const rating = job.rating ?? 0;
   const [editing, setEditing] = useState(false);
   // A solve CAD Link submitted for a Fusion request is keyed by its operation.
-  const cadOperationId = job.client_request_id?.startsWith('cad-solve:')
-    ? job.client_request_id.slice('cad-solve:'.length)
+  const requestId = job.client_request_id;
+  const cadOperationId = typeof requestId === 'string' && requestId.startsWith('cad-solve:')
+    ? requestId.slice('cad-solve:'.length)
     : null;
   const [titleDraft, setTitleDraft] = useState(job.label ?? '');
   const [displayLabel, setDisplayLabel] = useState(job.label);

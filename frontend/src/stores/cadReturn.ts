@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { noteSolveSettingsEdit } from './solveSettingsEdits';
+import { withEditSignals } from './solveSettingsEdits';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import type { DriverKind } from '../api/drivers';
 import {
@@ -309,7 +309,7 @@ function initialFromBundle(bundle: CadReturnBundle | null) {
   };
 }
 
-function bundleIdentity(bundle: CadReturnBundle): string {
+export function bundleIdentity(bundle: CadReturnBundle): string {
   return JSON.stringify({
     name: bundle.name,
     bundlePath: bundle.bundlePath,
@@ -779,13 +779,6 @@ function saveSolveProfile(state: CadReturnState): void {
   selectedSolveProfileKey = key;
 }
 
-/** Save a setting the user changed, and say it was the user's choice. A
- * project's recorded setup follows these, never a selection or an ingestion. */
-function saveUserEdit(state: CadReturnState): void {
-  saveSolveProfile(state);
-  noteSolveSettingsEdit();
-}
-
 /**
  * The drivers this project has picked, for a return with this inventory.
  *
@@ -923,7 +916,16 @@ function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: stri
   return [...grouped.values()];
 }
 
-export const useCadReturnStore = create<CadReturnState>((set, get) => ({
+/** The setters a person drives. Selections, ingestions and restores change the
+ * same state without anyone choosing it, and say nothing. */
+const CAD_RETURN_EDITS: ReadonlyArray<keyof CadReturnState> = [
+  'setSourceSize', 'setRigidSize', 'setTransition', 'setSkipped', 'setSourceChannel', 'setChannelMotion',
+  'setAreaDriftOverride', 'setExteriorOnly', 'setCombineEnabled', 'setCombineSpec', 'updateCombineSpec',
+  'setCombineCrossover', 'setCombineSpecFromResult', 'setChannelDriverField', 'setChannelDriverPreset',
+  'clearChannelDriverOverrides', 'setDriveVoltage', 'setMaxDriveVoltage', 'setPassiveCardioid', 'setSweep',
+];
+
+export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSignals(get, {
   selectedBundle: null,
   ingestRecord: null,
   projectLineageId: null,
@@ -1116,17 +1118,17 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   setSourceSize: (sourceId, value) => {
     supersedeIngestIntent();
     set((state) => ({ sourceSizesMm: { ...state.sourceSizesMm, [sourceId]: value }, needsIngest: true }));
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setRigidSize: (rigidSizeMm) => {
     supersedeIngestIntent();
     set({ rigidSizeMm, needsIngest: true });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setTransition: (transitionMm) => {
     supersedeIngestIntent();
     set({ transitionMm, needsIngest: true });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setSkipped: (sourceId, skipped) => {
     supersedeIngestIntent();
@@ -1151,7 +1153,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         needsIngest: true,
       };
     });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setSourceChannel: (sourceId, channelId) => {
     set((state) => {
@@ -1163,14 +1165,14 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       const driveChannels = groupChannels(rows);
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setChannelMotion: (channelId, motion) => {
     set((state) => {
       const driveChannels = state.driveChannels.map((channel) => channel.id === channelId ? { ...channel, motion } : channel);
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setAreaDriftOverride: (sourceId, enabled) => {
     supersedeIngestIntent();
@@ -1180,18 +1182,17 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         : state.areaDriftOverrides.filter((id) => id !== sourceId),
       needsIngest: true,
     }));
-    noteSolveSettingsEdit();
   },
   flagAreaDrift: (sourceId) => set((state) => ({ areaDriftSourceIds: [...new Set([...state.areaDriftSourceIds, sourceId])] })),
-  setExteriorOnly: (exteriorOnly) => { set({ exteriorOnly }); saveUserEdit(get()); },
-  setCombineEnabled: (combineEnabled) => { set({ combineEnabled }); saveUserEdit(get()); },
-  setCombineSpec: (combineSpec) => { set({ combineSpec }); saveUserEdit(get()); },
+  setExteriorOnly: (exteriorOnly) => { set({ exteriorOnly }); saveSolveProfile(get()); },
+  setCombineEnabled: (combineEnabled) => { set({ combineEnabled }); saveSolveProfile(get()); },
+  setCombineSpec: (combineSpec) => { set({ combineSpec }); saveSolveProfile(get()); },
   updateCombineSpec: (edit) => {
     set((state) => {
       const current = combineSpecEffective(state);
       return current ? { combineSpec: edit(current) } : {};
     });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setCombineCrossover: (pairKey, hz) => {
     useCadReturnStore.getState().updateCombineSpec((spec) => withPair(spec, pairKey, { hz }));
@@ -1203,7 +1204,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         ? { combineSpec: cloneSpec(spec) }
         : {};
     });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setChannelDriverField: (channelId, field, value) => {
     set((state) => {
@@ -1215,7 +1216,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       else fields[field] = value;
       return { channelDrivers: { ...state.channelDrivers, [channelId]: { ...current, fields } } };
     });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setChannelDriverPreset: (channelId, preset, keepOverrides = false) => {
     set((state) => {
@@ -1228,7 +1229,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         },
       };
     });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   /**
    * Re-read the picked drivers' own numbers from the library.
@@ -1276,19 +1277,19 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         },
       };
     });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
-  setDriveVoltage: (driveVoltageV) => { set({ driveVoltageV }); saveUserEdit(get()); },
+  setDriveVoltage: (driveVoltageV) => { set({ driveVoltageV }); saveSolveProfile(get()); },
   setMaxDriveVoltage: (maxDriveVoltageV) => {
     set({ maxDriveVoltageV: maxDriveVoltageV && maxDriveVoltageV > 0 ? maxDriveVoltageV : null });
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
   setPassiveCardioid: (patch) => {
     set((state) => ({ passiveCardioid: normalizePassiveCardioid({ ...state.passiveCardioid, ...patch }) }));
-    saveUserEdit(get());
+    saveSolveProfile(get());
   },
-  setSweep: (update) => { set(update); saveUserEdit(get()); },
-}));
+  setSweep: (update) => { set(update); saveSolveProfile(get()); },
+}, CAD_RETURN_EDITS));
 
 /** Only WG's own installation inputs survive a driver change or a reset. */
 function retainedInstallationFields(

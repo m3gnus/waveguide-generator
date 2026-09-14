@@ -2233,4 +2233,90 @@ describe('CadLinkCoordinator', () => {
     await act(async () => { pending.resolve(sendResult()); await send; });
     expect(useDocumentStore.getState().identity?.designId).toBe('wgd_other');
   });
+
+  /** "Use these settings and solve" checks what is on screen when it is
+   * pressed, not when the card rendered: the selection, the ingestion or the
+   * listing can all have moved since, and nothing is recorded for a model
+   * the settings were not prepared with. */
+  it('records the settings on screen only for the model, ingestion and project they belong to', async () => {
+    const recorded: Array<{ lineageId: string }> = [];
+    const prepared: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path === '/api/cadlink/project-setups') {
+        const body = JSON.parse(String(init?.body)) as { lineageId: string };
+        recorded.push(body);
+        return json({ lineageId: body.lineageId, inventorySha256: 'sha256:i', revisionId: 'wgs_9' });
+      }
+      if (path.endsWith('/prepare')) {
+        prepared.push(path);
+        const operationId = decodeURIComponent(path.split('/')[4]);
+        return json({ operation: useCadOperationsStore.getState().operations[operationId] });
+      }
+      return json({}, 404);
+    }));
+    // The parametric document has a lineage of its own, which is never the
+    // CAD model's project.
+    useDocumentStore.getState().setCadLink({ designId: 'wgd_doc', lineageId: 'wgl_document', baseEditVersion: 1 }, 'current');
+    await renderCoordinator();
+
+    const prepare = (lineageId: string | null) => {
+      const store = useCadReturnStore.getState();
+      store.selectBundle(initialBundle, lineageId);
+      const record = lineageId
+        ? { ...ingestRecord, project: { lineage_id: lineageId } } as unknown as CadReturnIngestRecord
+        : ingestRecord;
+      expect(store.applyIngest(record, store.beginIngestIntent())).toBe(true);
+    };
+    const attempt = async (
+      operationId: string,
+      snapshot: { manifestSha256?: string; projectLineageId?: string | null } = {},
+    ): Promise<string | null> => {
+      act(() => {
+        useCadOperationsStore.getState().apply(cadOperation({
+          operationId, reason: 'setup_required', stage: 'received', setupRevisionId: null, preparationId: null,
+          snapshot: {
+            manifestSha256: ingestRecord.manifest_sha256, documentName: 'Speaker', projectLineageId: 'wgl_guarded_a', ...snapshot,
+          },
+        }));
+      });
+      let failure: unknown = null;
+      await act(async () => {
+        failure = await cadLinkCoordinatorBridge.getSnapshot().solveOperationWithSettings(operationId)
+          .then(() => null, (reason: unknown) => reason);
+      });
+      return failure instanceof Error ? failure.message : null;
+    };
+
+    // Another model's snapshot.
+    prepare('wgl_guarded_a');
+    expect(await attempt('op-other-model', { manifestSha256: `sha256:${'9'.repeat(64)}` })).toContain('not the model on screen');
+    // Waiting to be ingested again.
+    prepare('wgl_guarded_a');
+    act(() => { useCadReturnStore.setState({ needsIngest: true }); });
+    expect(await attempt('op-stale')).toContain('changed since it was prepared');
+    // A revised listing of the return, paired with the ingestion of the old one.
+    prepare('wgl_guarded_a');
+    act(() => {
+      useCadReturnStore.setState({ selectedBundle: { ...initialBundle, modifiedAt: '2026-09-14T12:00:00Z' } });
+    });
+    expect(await attempt('op-revised')).toContain('changed since it was prepared');
+    // Filed under another project than the one the backend names.
+    prepare('wgl_guarded_a');
+    expect(await attempt('op-other-project', { projectLineageId: 'wgl_guarded_b' })).toContain('another project');
+    // No project named, and none filed: the document's lineage is not a substitute.
+    prepare(null);
+    expect(await attempt('op-unfiled', { projectLineageId: null })).toContain('which project');
+    expect(recorded).toEqual([]);
+    expect(prepared).toEqual([]);
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('which project');
+
+    // No project named: the ingestion's own is the one recorded for.
+    prepare('wgl_guarded_a');
+    expect(await attempt('op-filed', { projectLineageId: null })).toBeNull();
+    expect(recorded.map(({ lineageId }) => lineageId)).toEqual(['wgl_guarded_a']);
+    expect(prepared).toEqual(['/api/cadlink/operations/op-filed/prepare']);
+  });
 });
