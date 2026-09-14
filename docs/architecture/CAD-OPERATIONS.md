@@ -260,9 +260,11 @@ whatever project is open. Nothing on the backend reads the live UI:
   recording is the project's. The solver selection is recorded the same way
   (`PUT /api/cadlink/solver-selection`, `{engine}`).
 - **Resolved from the snapshot.** A preparation that names no setup revision takes the
-  snapshot's project -- the lineage of the WG design it was exported from, or the one its
-  Fusion document already has, never a new claim -- and that project's setup for exactly
-  the snapshot's sources (id, role, required).
+  snapshot's project as ingestion files it -- the lineage of the solver anchor instance's
+  WG design or, when the anchor names no design, the one its Fusion document already has;
+  never a new claim -- and that project's setup for exactly the snapshot's sources (id,
+  role and required, as the manifest states them). A recorded setup this build cannot use
+  is `setup_required` too.
 - **The engine is the one selected in WG.** A recorded setup keeps its engine only until
   the selection says otherwise; the setup actually used is itself a setup revision, which
   the operation names.
@@ -327,10 +329,15 @@ blocking findings the user reviewed, and on which preparation) and observes.
 - **Delivery.** The backend is the one consumer of Fusion's solve commands. About once a
   second it collects the delivered commands (retaining each snapshot before the delivery
   is acknowledged) and starts preparing every operation no attempt has touched, from its
-  project's setup, submitting when it is ready. An operation waiting for the user is not
-  retried unasked; the UI issues `prepare`, `approvals` and `cancel` and observes. The
-  browser no longer consumes `GET /api/cadlink/solve-command`, which stays for
-  diagnostics. `WG2_CAD_DELIVERY=0` turns the loop off (the test suite does).
+  project's setup, submitting when it is ready. It starts only an operation still
+  untouched at the generation it listed, so it never takes over the user's own attempt,
+  and an operation waiting for the user is not retried unasked; the UI issues `prepare`,
+  `approvals` and `cancel` and observes. Without a WGLink folder nothing is collected,
+  because nothing could be retained. A failing pass is logged once per distinct error and
+  the loop backs off to half a minute while it persists. Operations an older build left
+  untouched are prepared at the first start after the upgrade, as the user asked when
+  sending them. The browser no longer consumes `GET /api/cadlink/solve-command`, which
+  stays for diagnostics. `WG2_CAD_DELIVERY=0` turns the loop off (the test suite does).
 - **Events.** Every committed change is published on the jobs channel as
   `{"v": 1, "kind": "cadOperation", "operation": {...}}`, after it is stored. It carries
   no cursor: a client that misses one reads `GET /api/cadlink/operations` (the unfinished

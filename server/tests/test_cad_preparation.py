@@ -128,6 +128,7 @@ class FakeIngest:
         self.findings = findings or []
         self.during: Callable[[], object] | None = None
         self.error: BaseException | None = None
+        self.polar_grid_derivation: dict[str, Any] | None = None
 
     def __call__(
         self, bundle_path, mesh, skipped, store, data_dir, *, prep_options, commit_guard,
@@ -152,6 +153,8 @@ class FakeIngest:
                 "created_at": now,
                 "document": {"return_state_hash": "sha256:" + "5" * 64},
             }
+            if self.polar_grid_derivation is not None:
+                payload["polar_grid_derivation"] = self.polar_grid_derivation
             payload["report_sha256"] = "sha256:" + hashlib.sha256(
                 json.dumps(payload, sort_keys=True).encode()
             ).hexdigest()
@@ -917,12 +920,24 @@ def test_a_malformed_return_never_blocks_the_deliveries_behind_it(harness: Harne
 
 def test_an_unexpected_failure_never_strands_the_operation(harness: Harness) -> None:
     _received(harness)
+    revision = _revision(harness.store, _setup())
+    harness.ingest.error = KeyError("an unexpected failure")
+
+    summary = harness.prepare(setup_revision_id=revision)
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+    harness.ingest.error = None
+    assert harness.prepare(setup_revision_id=revision)["state"] == "accepted"
+
+
+def test_a_setup_this_build_cannot_read_asks_for_the_settings_again(harness: Harness) -> None:
+    _received(harness)
     # A setup revision a different build stored, which this one cannot read.
     unreadable = harness.store.create_setup_revision('{"geometry": {}}', "sha256:" + "0" * 64)
 
     summary = harness.prepare(setup_revision_id=str(unreadable["revision_id"]))
 
-    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
     assert harness.prepare(setup_revision_id=_revision(harness.store, _setup()))["state"] == "accepted"
 
 

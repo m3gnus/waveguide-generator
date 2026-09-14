@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from server.cadlink.identity import SaveIdentity, design_hash
 from server.design.schema import DesignConfig
@@ -1731,8 +1731,21 @@ class PrepareOperationRequest(BaseModel):
 _PENDING_STATES = frozenset(STATES - TERMINAL_STATES)
 
 
-def _preparation_context(state: Any) -> PreparationContext:
-    """What a preparation needs from this application."""
+def _selected_workspace_root(state: Any) -> Path | None:
+    workspace = getattr(state, "cad_workspace", None)
+    selected = workspace.selected_path() if workspace is not None else None
+    return selected.resolve() if selected is not None else None
+
+
+_UNRESOLVED = object()
+
+
+def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> PreparationContext:
+    """What a preparation needs from this application.
+
+    ``workspace_root``, when given, is the WGLink folder already resolved off
+    the event loop (the delivery loop resolves it in a thread every pass).
+    """
 
     from server.jobs.runtime import (
         EngineUnavailableError,
@@ -1741,8 +1754,8 @@ def _preparation_context(state: Any) -> PreparationContext:
         UnknownEngineError,
     )
 
-    workspace = getattr(state, "cad_workspace", None)
-    selected = workspace.selected_path() if workspace is not None else None
+    if workspace_root is _UNRESOLVED:
+        workspace_root = _selected_workspace_root(state)
     runtime = getattr(state, "jobs_runtime", None)
     job_store = getattr(runtime, "store", None)
     restart = getattr(state, "update_restart", None)
@@ -1770,7 +1783,7 @@ def _preparation_context(state: Any) -> PreparationContext:
     return PreparationContext(
         store=state.cadlink_store,
         data_dir=Path(state.data_dir),
-        workspace_root=selected.resolve() if selected is not None else None,
+        workspace_root=workspace_root,
         submit=runtime.submit if runtime is not None else None,
         job_for_submission=job_for_submission if job_store is not None else None,
         publish=publish,
@@ -1967,12 +1980,22 @@ async def post_cancel_cad_operation(operation_id: str, request: Request) -> dict
     return operation_summary(row)
 
 
+class SourceInventoryItem(BaseModel):
+    """One source of a return, as its manifest states it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    role: str
+    required: StrictBool
+
+
 class ProjectSetupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     lineage_id: str = Field(alias="lineageId", min_length=1)
-    #: The sources the setup is for, ``{id, role, required}`` each.
-    inventory: list[dict[str, Any]] = Field(min_length=1)
+    #: The sources the setup is for, with the roles the manifest states.
+    inventory: list[SourceInventoryItem] = Field(min_length=1)
     setup: dict[str, Any]
 
 
@@ -1980,6 +2003,15 @@ class SolverSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     engine: str = Field(min_length=1)
+
+    @field_validator("engine")
+    @classmethod
+    def normalized_engine(cls, value: str) -> str:
+        # As SolveOptions normalises it, so "Metal" and "metal" are one choice.
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("engine must not be empty")
+        return normalized
 
 
 @router.put("/project-setups")
@@ -1995,7 +2027,7 @@ async def put_project_setup(payload: ProjectSetupRequest, request: Request) -> d
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     store: CadLinkStore = request.app.state.cadlink_store
-    inventory = inventory_sha256(payload.inventory)
+    inventory = inventory_sha256([item.model_dump() for item in payload.inventory])
 
     def record() -> dict[str, Any]:
         revision = store.create_setup_revision(setup_content(setup), setup_digest(setup))
@@ -2043,16 +2075,28 @@ def _deliver_solve_commands(application: FastAPI):
             _track(state, task)
 
         async def deliver() -> None:
+            failures = 0
+            reported: str | None = None
             while True:
                 try:
+                    workspace_root = await asyncio.to_thread(_selected_workspace_root, state)
                     await run_delivery_pass(
-                        _preparation_context(state), spawn=spawn, running=running
+                        _preparation_context(state, workspace_root=workspace_root),
+                        spawn=spawn,
+                        running=running,
                     )
+                    failures, reported = 0, None
                 except asyncio.CancelledError:
                     raise
-                except Exception:  # noqa: BLE001 - the next pass tries again
-                    logger.warning("Delivering CAD solve commands failed.", exc_info=True)
-                await asyncio.sleep(_DELIVERY_INTERVAL_S)
+                except Exception as exc:  # noqa: BLE001 - the next pass tries again
+                    failures += 1
+                    error = f"{type(exc).__name__}: {exc}"
+                    if error != reported:
+                        # Each distinct failure once, not every second.
+                        logger.warning("Delivering CAD solve commands failed.", exc_info=True)
+                        reported = error
+                # Backs off to half a minute while a failure persists.
+                await asyncio.sleep(min(_DELIVERY_INTERVAL_S * 2 ** min(failures, 5), 30.0))
 
         state.cad_delivery_task = asyncio.create_task(deliver())
 

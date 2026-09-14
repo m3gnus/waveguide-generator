@@ -819,3 +819,77 @@ def test_connection_reports_an_unreachable_account_without_failing(tmp_path: Pat
     result = asyncio.run(onshape_api.connection(_request(store, tmp_path, transport)))
     assert result["reachable"] is False
     assert "My account > Developer > API keys" in result["detail"]
+
+
+def test_return_exports_the_linked_part_studio_and_ingests_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The return route's own sequence -- translate, fetch, ingest -- with Onshape faked."""
+
+    store = _store(tmp_path)
+    identity = _saved(store, _design())["identity"]
+    store.save_onshape_link(
+        design_id=identity.design_id,
+        account_id="ACC",
+        document_id="DID",
+        workspace_id="WID",
+        blob_element_id="BLOB",
+        part_studio_element_id="PART",
+        variable_studio_element_id=None,
+        document_name="Demo Horn",
+        is_public=False,
+        last_export_id="wge_1",
+        last_sequence=1,
+        last_design_hash="hash-1",
+        last_geometry_hash=None,
+    )
+    monkeypatch.setattr(
+        onshape_api, "load_credentials", lambda: OnshapeCredentials(access_key="A", secret_key="B")
+    )
+    monkeypatch.setattr(
+        store, "get_export", lambda export_id: {"manifest_json": json.dumps({"export": export_id})}
+    )
+    monkeypatch.setattr(onshape_api, "source_contract_from_export", lambda manifest: None)
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    class Adapter:
+        def __init__(self, client: object) -> None:
+            self.client = client
+
+        def create_step_export(self, *args: object) -> str:
+            calls.append(("create_step_export", args))
+            return "TRANSLATION"
+
+        def await_step_export(self, translation_id: str) -> tuple[dict[str, str], str]:
+            calls.append(("await_step_export", (translation_id,)))
+            return {"id": translation_id}, "FOREIGN"
+
+        def download_external_data(self, *args: object) -> bytes:
+            calls.append(("download_external_data", args))
+            return b"STEP"
+
+    async def on_worker(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    def write_and_ingest(step_bytes, *, link, export_row, store, data_dir):
+        calls.append(("write_and_ingest_return", (step_bytes, link["document_id"])))
+        return tmp_path / "Demo Horn.wgreturn", {"ingest_id": "wgi_1"}
+
+    monkeypatch.setattr(onshape_api, "OnshapeAdapter", Adapter)
+    monkeypatch.setattr(onshape_api, "run_on_gmsh_worker", on_worker)
+    monkeypatch.setattr(onshape_api, "write_and_ingest_return", write_and_ingest)
+    transport = FakeTransport()
+    transport.route("GET", "/users/sessioninfo", 200, {"id": "ACC", "name": "Tester"})
+    payload = onshape_api.OnshapeReturnRequest.model_validate({"designId": identity.design_id})
+
+    answer = asyncio.run(onshape_api.return_to_wg(payload, _request(store, tmp_path, transport)))
+
+    assert answer["translationId"] == "TRANSLATION"
+    assert answer["bundle"]["bundlePath"] == "Demo Horn.wgreturn"
+    assert answer["bundle"]["bundleOrigin"] == "onshape"
+    assert answer["ingest"] == {"ingest_id": "wgi_1"}
+    assert [name for name, _args in calls] == [
+        "create_step_export", "await_step_export", "download_external_data",
+        "write_and_ingest_return",
+    ]
+    assert calls[0][1] == ("DID", "WID", "PART")

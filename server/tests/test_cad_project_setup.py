@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from server.cadlink.identity import design_hash
-from server.cadlink.preparation import run_delivery_pass
+from server.cadlink.preparation import PreparationInput, prepare_operation, run_delivery_pass
 from server.cadlink.project_setup import (
     inventory_sha256,
     snapshot_project,
@@ -159,28 +159,49 @@ def test_a_model_with_no_recorded_setup_waits_for_its_settings(harness: Harness)
     assert harness.submitted == []
 
 
-def test_a_stored_snapshot_is_solvable_with_fusion_closed(harness: Harness, tmp_path: Path) -> None:
-    from server.cadlink.api import _pending_solve_command
+def _deliver(harness: Harness, command_id: str, bundle_path: str, manifest: str) -> Path:
+    """A solve command as Fusion delivers it."""
 
-    b_design, b_lineage = _project(harness, 60.0)
-    _record_setup(harness, b_lineage, _setup())
-    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
     requests = harness.data_dir / "ipc" / "wglink" / ".wg-solve-requests"
-    requests.mkdir(parents=True)
-    (requests / "cmd-b.json").write_text(json.dumps({
-        "schemaVersion": 3, "target": "waveguide-generator", "commandId": "cmd-b",
+    requests.mkdir(parents=True, exist_ok=True)
+    (requests / f"{command_id}.json").write_text(json.dumps({
+        "schemaVersion": 3, "target": "waveguide-generator", "commandId": command_id,
         "returnId": "wgr_1", "bundlePath": bundle_path, "manifestSha256": manifest,
         "requestedAt": "2026-09-13T01:00:00Z",
     }))
-    _pending_solve_command(harness.data_dir, harness.workspace.resolve(), harness.store)
-    # Fusion is closed: no heartbeat, no exchange folder, and WG restarted.
+    return requests
+
+
+def _pass(harness: Harness, running: set[str] | frozenset[str] = frozenset()) -> list[str]:
+    """One pass of the backend's delivery loop, waiting for what it started."""
+
+    async def one_pass() -> list[str]:
+        started: list[asyncio.Future[Any]] = []
+        ids = await run_delivery_pass(
+            harness.context(),
+            spawn=lambda _operation_id, coroutine: started.append(asyncio.ensure_future(coroutine)),
+            running=running,
+        )
+        await asyncio.gather(*started)
+        return ids
+
+    return asyncio.run(one_pass())
+
+
+def test_a_stored_snapshot_is_solvable_with_fusion_closed(harness: Harness) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _deliver(harness, "cmd-b", bundle_path, manifest)
+    assert _pass(harness) == ["cmd-b"]  # retained, then waits: no settings yet
+    assert harness.row("cmd-b")["reason"] == "setup_required"
+    # Fusion is closed: no heartbeat and no exchange folder.
     shutil.rmtree(harness.workspace)
     assert not (harness.data_dir / "ipc" / "wglink" / ".fusion-status.json").exists()
+    _record_setup(harness, b_lineage, _setup())
 
-    summary = harness.prepare("cmd-b")
+    summary = harness.prepare("cmd-b")  # the user's Solve now
 
     assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
-
 
 # -- the request the backend composes ------------------------------------------------
 
@@ -245,3 +266,151 @@ def test_the_backend_collects_and_prepares_solve_commands_itself(harness: Harnes
     # Nothing is prepared twice, and a waiting operation is not retried unasked.
     assert asyncio.run(one_pass()) == []
     assert len(harness.submitted) == 1
+
+
+def test_the_loop_never_retries_an_operation_waiting_for_the_user(harness: Harness) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _deliver(harness, "cmd-b", bundle_path, manifest)
+
+    assert _pass(harness) == ["cmd-b"]
+    assert harness.row("cmd-b")["reason"] == "setup_required"
+    assert _pass(harness) == []  # it waits for the user, not for the next second
+    assert harness.ingest.calls == []
+
+
+def test_the_loop_skips_what_it_already_started(harness: Harness) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, _setup())
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _deliver(harness, "cmd-b", bundle_path, manifest)
+
+    assert _pass(harness, running={"cmd-b"}) == []
+    assert harness.row("cmd-b")["state"] == "received"
+
+
+def test_the_loop_never_takes_over_the_users_own_attempt(harness: Harness) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, _setup())
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _accept(harness.store, "cmd-b", bundle_path, manifest)
+    listed = int(harness.row("cmd-b")["attempt_generation"])
+    # The user's Solve now claims it between the loop's listing and its start.
+    users = harness.store.claim("cmd-b", listed)
+
+    summary = asyncio.run(prepare_operation(
+        harness.context(), "cmd-b", PreparationInput(), expected_generation=listed
+    ))
+
+    assert summary["attemptGeneration"] == users
+    assert harness.ingest.calls == [] and harness.submitted == []
+
+
+def test_without_a_wglink_folder_nothing_is_collected(harness: Harness) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    requests = _deliver(harness, "cmd-b", bundle_path, manifest)
+    shutil.rmtree(harness.workspace)
+
+    assert _pass(harness) == []
+    # Left where it is, for when its snapshot can be retained.
+    assert [path.name for path in requests.iterdir()] == ["cmd-b.json"]
+    assert harness.store.get_operation("cmd-b") is None
+
+
+def test_a_return_with_several_designs_belongs_to_its_solver_anchor_project(
+    harness: Harness,
+) -> None:
+    a_design, _a_lineage = _project(harness, 45.0)
+    b_design, b_lineage = _project(harness, 60.0)
+    manifest = copy.deepcopy(_manifest(b"STEP"))
+    first = manifest["instances"][0]
+    first["design_id"] = a_design
+    manifest["instances"].append({**copy.deepcopy(first), "instance_id": "instance-2", "design_id": b_design})
+    manifest["coordinate_system"]["solver_anchor_instance_id"] = "instance-2"
+
+    assert snapshot_project(harness.store, manifest) == b_lineage
+
+
+def test_the_request_the_backend_composes_is_widened_before_it_is_bound(harness: Harness) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, {
+        **_setup(),
+        "options": {
+            "frequencies_hz": [1000.0],
+            "polar_config": {"angle_range": [0, 90, 19], "enabled_axes": ["vertical"]},
+        },
+    })
+    harness.ingest.polar_grid_derivation = {"axes": {
+        "horizontal": {"minimum_deg": -180, "maximum_deg": 180},
+        "vertical": {"minimum_deg": 0, "maximum_deg": 180},
+        "diagonal": {"minimum_deg": 0, "maximum_deg": 180},
+    }}
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _accept(harness.store, "cmd-b", bundle_path, manifest)
+
+    assert harness.prepare("cmd-b")["state"] == "accepted"
+
+    assert harness.submitted[-1].options.polar_config.enabled_axes == ["horizontal", "vertical"]
+    bound = json.loads(harness.row("cmd-b")["request_json"])
+    assert bound["options"]["polar_config"]["angle_range"][:2] == [-180.0, 180.0]
+
+
+def test_the_routes_take_only_well_formed_settings(harness: Harness) -> None:
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+
+    from server.cadlink.api import ProjectSetupRequest, SolverSelectionRequest
+
+    for inventory in ([], [{"id": "source-hf", "role": "HF", "required": "false"}]):
+        with pytest.raises(ValidationError):
+            ProjectSetupRequest.model_validate(
+                {"lineageId": "wgl_1", "inventory": inventory, "setup": _setup()}
+            )
+    with pytest.raises(ValidationError):
+        SolverSelectionRequest.model_validate({"engine": "   "})
+    assert SolverSelectionRequest.model_validate({"engine": " Metal "}).engine == "metal"
+    with pytest.raises(HTTPException) as refused:
+        _record_setup(harness, "wgl_1", {"geometry": {}})
+    assert refused.value.status_code == 422
+
+
+def test_the_delivery_loop_runs_only_when_enabled_and_stops_at_shutdown(
+    harness: Harness, monkeypatch
+) -> None:
+    from server.cadlink.api import _abandon_preparations_on_shutdown, _deliver_solve_commands
+
+    app = SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=harness.store, data_dir=str(harness.data_dir), jobs_runtime=None,
+        cad_workspace=None, update_restart=None,
+    ))
+
+    async def lifecycle() -> Any:
+        await _deliver_solve_commands(app)()
+        started = getattr(app.state, "cad_delivery_task", None)
+        await _abandon_preparations_on_shutdown(app)()
+        return started
+
+    assert asyncio.run(lifecycle()) is None  # the suite turns it off
+    monkeypatch.setenv("WG2_CAD_DELIVERY", "1")
+    task = asyncio.run(lifecycle())
+    assert task is not None and task.cancelled()
+
+
+def test_a_waiver_on_project_a_does_not_carry_to_project_b(harness: Harness) -> None:
+    a_design, a_lineage = _project(harness, 45.0)
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, a_lineage, _setup())
+    _record_setup(harness, b_lineage, _setup())
+    harness.ingest.findings = [{"id": "healing-1", "kind": "healing-performed", "blocking": True}]
+    for name, design, lineage in (("a", a_design, a_lineage), ("b", b_design, b_lineage)):
+        bundle_path, manifest = _project_return(harness, name, design, lineage)
+        _accept(harness.store, f"cmd-{name}", bundle_path, manifest)
+    first_a = harness.prepare("cmd-a")
+    assert first_a["reason"] == "findings_need_review"
+    waived = {"approve_preparation_id": first_a["preparationId"], "approve_finding_ids": ("healing-1",)}
+
+    assert harness.prepare("cmd-a", **waived)["state"] == "accepted"
+    # The same finding on B is B's own to review, even with A's waiver sent along.
+    b = harness.prepare("cmd-b", **waived)
+    assert (b["state"], b["reason"]) == ("needs_user_input", "findings_need_review")

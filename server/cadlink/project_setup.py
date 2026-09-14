@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import hashlib
 import json
+import math
 from typing import Any
 
 from server.jobs.models import SolveRequest
@@ -46,21 +47,25 @@ def inventory_sha256(sources: Sequence[Mapping[str, Any]]) -> str:
 def snapshot_project(store: CadLinkStore, manifest: Mapping[str, Any]) -> str | None:
     """The project lineage a snapshot belongs to, without claiming one.
 
-    A return exported from a WG design belongs to that design's lineage; one
-    authored in CAD belongs to the lineage its Fusion document already has.
-    None when WG has never seen that document, or the return names more than
-    one design: such a snapshot has no recorded setup to be prepared with.
+    The same project ingestion files the return under (``ingest._resolve_project``):
+    the lineage of the solver anchor instance's WG design, or, when the anchor
+    names no design, the lineage its Fusion document already has. None when WG
+    has never seen that document: such a snapshot has no recorded setup yet.
     """
 
-    design_ids = {
-        str(instance["design_id"])
-        for instance in manifest.get("instances") or []
-        if isinstance(instance, Mapping) and instance.get("design_id")
-    }
-    if len(design_ids) > 1:
-        return None
-    if design_ids:
-        row = store.get_design(next(iter(design_ids)))
+    instances = [
+        instance for instance in manifest.get("instances") or [] if isinstance(instance, Mapping)
+    ]
+    frame = manifest.get("coordinate_system")
+    anchor_id = frame.get("solver_anchor_instance_id") if isinstance(frame, Mapping) else None
+    anchor = next(
+        (instance for instance in instances if instance.get("instance_id") == anchor_id), None
+    )
+    if anchor is None and len(instances) == 1:
+        anchor = instances[0]
+    design_id = str((anchor or {}).get("design_id") or "").strip()
+    if design_id:
+        row = store.get_design(design_id)
         return str((row or {}).get("lineage_id") or "").strip() or None
     document = manifest.get("document") if isinstance(manifest.get("document"), Mapping) else {}
     native_id = str(document.get("native_id") or "").strip()
@@ -109,8 +114,9 @@ def widen_polar_to_derivation(request: SolveRequest, derivation: Any) -> SolveRe
 
     The runtime refuses a narrower one (``polar_grid_narrowing``). This is the
     server's copy of the frontend's ``widenPolarToDerivation``: the range grows
-    to cover every axis's derived extent at the requested step, and an axis
-    pinned over the full circle is enabled.
+    to cover every axis's derived extent at the requested step, rounding as
+    JavaScript does, and an axis pinned over the full circle is enabled. An
+    axis that states no extent is read as the runtime reads it: pinned.
     """
 
     axes = derivation.get("axes") if isinstance(derivation, Mapping) else None
@@ -128,13 +134,15 @@ def widen_polar_to_derivation(request: SolveRequest, derivation: Any) -> SolveRe
     low, high = start, end
     for axis, spec in axes.items():
         spec = spec if isinstance(spec, Mapping) else {}
-        minimum = float(spec.get("minimum_deg", 0.0))
+        minimum = float(spec.get("minimum_deg", -180.0))
         maximum = float(spec.get("maximum_deg", 180.0))
         if minimum <= -180.0 and maximum >= 180.0:
             enabled.add(str(axis))
         low, high = min(low, minimum), max(high, maximum)
     if (low, high) != (start, end):
-        polar["angle_range"] = [low, high, max(count, round((high - low) / step) + 1)]
+        # Math.round, not Python's half-to-even: the same request as the frontend's.
+        samples = math.floor((high - low) / step + 0.5) + 1
+        polar["angle_range"] = [low, high, max(count, samples)]
     polar["enabled_axes"] = [axis for axis in _POLAR_AXIS_ORDER if axis in enabled]
     if "diagonal" in enabled and "diagonal" not in requested:
         # A diagonal the user never enabled carries no inclination intent; the

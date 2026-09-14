@@ -408,7 +408,19 @@ def _prepare_sync(
             )
         _advance(ctx, operation_id, generation, snapshot=_snapshot_record(retained))
 
-    loaded = _load_setup(ctx, request.setup_revision_id, retained)
+    try:
+        loaded = _load_setup(ctx, request.setup_revision_id, retained)
+    except WgReturnError as exc:
+        return "done", _finish(
+            ctx, operation_id, generation, REJECTED, reason="snapshot_invalid", message=str(exc)
+        )
+    except ValueError as exc:
+        # A recorded setup, or the selected engine, this build cannot take.
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="setup_required",
+            message=f"The solve settings recorded for this model cannot be used: {exc}. "
+            "Choose them again in WG, then press Solve now.",
+        )
     if loaded is None:
         # A first-time CAD-authored model never borrows settings from whatever
         # project is open: it waits for the user to choose them.
@@ -646,12 +658,19 @@ def _abandon(
 
 
 async def prepare_operation(
-    ctx: PreparationContext, operation_id: str, request: PreparationInput
+    ctx: PreparationContext,
+    operation_id: str,
+    request: PreparationInput,
+    *,
+    expected_generation: int | None = None,
 ) -> dict[str, Any]:
     """Prepare one solve operation, and submit it when asked. Returns its summary.
 
     A new call takes over an attempt still holding the operation: the claim
     moves the generation on, and the older attempt's next write is refused.
+    ``expected_generation`` is the delivery loop's: it starts only an
+    operation still untouched at the generation it listed, so it never takes
+    over the user's own attempt or retries one waiting for the user.
     """
 
     store = ctx.store
@@ -662,7 +681,18 @@ async def prepare_operation(
         raise ValueError(f"operation {operation_id!r} is not a solve")
     if row["state"] in TERMINAL_STATES or row["state"] in {CANCEL_REQUESTED, RECOVERY_REQUIRED}:
         return operation_summary(row)
-    reconciled = await asyncio.to_thread(reconcile_with_jobs, ctx, operation_id)
+    if expected_generation is not None and (
+        row["state"] != RECEIVED or int(row["attempt_generation"]) != expected_generation
+    ):
+        return operation_summary(row)
+    try:
+        reconciled = await asyncio.to_thread(reconcile_with_jobs, ctx, operation_id)
+    except Exception:  # noqa: BLE001 - the jobs system dedupes by key on submission
+        logger.warning(
+            "Could not read the jobs for CAD operation %s before preparing it.",
+            operation_id, exc_info=True,
+        )
+        reconciled = None
     if reconciled is not None:
         _publish(ctx, reconciled)
         return operation_summary(reconciled)
@@ -703,10 +733,13 @@ async def run_delivery_pass(
     "Delivery"): each is retained, recorded and acknowledged, then prepared
     from its project's setup and submitted. Only an operation no attempt has
     touched (``received``) is started, so one waiting for the user is never
-    retried unasked; ``running`` names the ones already started. Returns the
-    operations this pass started.
+    retried unasked; ``running`` names the ones already started. Without a
+    WGLink folder nothing is collected, because nothing could be retained.
+    Returns the operations this pass started.
     """
 
+    if ctx.workspace_root is None:
+        return []
     await asyncio.to_thread(
         collect_solve_deliveries,
         ctx.data_dir,
@@ -725,7 +758,13 @@ async def run_delivery_pass(
         if row.get("legacy") or operation_id in running:
             continue
         started.append(operation_id)
-        spawn(operation_id, prepare_operation(ctx, operation_id, PreparationInput()))
+        spawn(
+            operation_id,
+            prepare_operation(
+                ctx, operation_id, PreparationInput(),
+                expected_generation=int(row["attempt_generation"]),
+            ),
+        )
     return started
 
 

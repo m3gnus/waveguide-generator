@@ -6365,8 +6365,7 @@
         "properties": {
           "inventory": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/SourceInventoryItem"
             },
             "minItems": 1,
             "title": "Inventory",
@@ -7465,6 +7464,32 @@
           }
         },
         "title": "SourceConfig",
+        "type": "object"
+      },
+      "SourceInventoryItem": {
+        "additionalProperties": false,
+        "description": "One source of a return, as its manifest states it.",
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "required"
+        ],
+        "title": "SourceInventoryItem",
         "type": "object"
       },
       "StopResponse": {

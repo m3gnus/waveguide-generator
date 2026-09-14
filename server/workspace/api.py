@@ -565,8 +565,12 @@ class WorkspaceState:
         if not self._loaded:
             self._load()
         if self._selected is not None and not self._selected.is_dir():
-            logger.warning("Selected workspace path is unavailable: %s", self._selected)
+            # Said once per path, not on every poll that asks while it is gone.
+            if getattr(self, "_reported_unavailable", None) != self._selected:
+                logger.warning("Selected workspace path is unavailable: %s", self._selected)
+                self._reported_unavailable = self._selected
             return None
+        self._reported_unavailable = None
         return self._selected
 
     def _load(self) -> None:
