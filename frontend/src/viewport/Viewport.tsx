@@ -4,7 +4,8 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { runContext, runMatchesContext, useRunContext, type RunContext } from '../results/runCoherence';
-import { postSolvePlan, postSymmetry, solvePlanRequestBody, toSolveDesign } from '../jobs/actions';
+import { postSolvePlan, postSymmetry, solvePlanRequestBody, toSolveDesign, type PlanAdjustment } from '../jobs/actions';
+import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { postSolverMesh, solverMeshArtifactToken, solverMeshScene } from '../api/solverMesh';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -495,6 +496,7 @@ export function Viewport() {
     building: false, stale: false, staleReason: null, error: null,
   });
   const [axisymPlanned, setAxisymPlanned] = useState(false);
+  const [planAdjustments, setPlanAdjustments] = useState<PlanAdjustment[]>([]);
   // Created once: the build reads the design, symmetry mode, and job list at
   // call time, so the latest design always wins without re-instantiating.
   const solverRefreshRef = useRef<SolverMeshRefreshController | null>(null);
@@ -785,10 +787,14 @@ export function Viewport() {
   }, [cadIngestId, cadName, cadSolverMesh, cadSolverRetry, cadSolverViewSelected]);
 
   // The axisymmetric formulation never integrates over this 3D mesh, so say so
-  // while it is what the solve plan resolves to.
+  // while it is what the solve plan resolves to. The same response is where a
+  // BEMPP wall-thickness override first becomes visible, so it is read here
+  // too, before the user ever submits: the plan and the job log agree, but
+  // only the job log said so until now.
   useEffect(() => {
     if (!solverViewSelected) {
       setAxisymPlanned(false);
+      setPlanAdjustments([]);
       return undefined;
     }
     const controller = new AbortController();
@@ -798,14 +804,19 @@ export function Viewport() {
         body = solvePlanRequestBody(design);
       } catch {
         setAxisymPlanned(false);
+        setPlanAdjustments([]);
         return;
       }
       void postSolvePlan(body, fetch, controller.signal)
         .then((plan) => {
-          if (!controller.signal.aborted) setAxisymPlanned(plan.formulation === 'axisymmetric');
+          if (controller.signal.aborted) return;
+          setAxisymPlanned(plan.formulation === 'axisymmetric');
+          setPlanAdjustments(plan.adjustments ?? []);
         })
         .catch(() => {
-          if (!controller.signal.aborted) setAxisymPlanned(false);
+          if (controller.signal.aborted) return;
+          setAxisymPlanned(false);
+          setPlanAdjustments([]);
         });
     }, SYMMETRY_TINT_DEBOUNCE_MS);
     return () => {
@@ -1001,6 +1012,12 @@ export function Viewport() {
     {solverViewSelected && axisymPlanned && <div className="solver-axisym-note" role="note">
       Axisymmetric solve planned: the solver uses a meridian discretisation of the profile, not these 3D triangles.
     </div>}
+    {solverViewSelected && planAdjustments.flatMap((adjustment) => {
+      const notice = planAdjustmentNotice(adjustment);
+      return notice === null ? [] : [notice];
+    }).map((notice) => (
+      <div className="solver-plan-adjustment-note" role="note" key={notice}>{notice}</div>
+    ))}
     {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
       <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
         <i />{geometryWarnings.length} warning{geometryWarnings.length === 1 ? '' : 's'}

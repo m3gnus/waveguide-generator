@@ -709,6 +709,93 @@ describe('Viewport geometry warnings', () => {
   });
 });
 
+describe('BEMPP wall plan-adjustment note', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  function solvePlanWithAdjustments(adjustments: unknown[]) {
+    return {
+      engine: 'bempp',
+      formulation: 'full-3d',
+      reason: 'free-standing BEMPP solve',
+      eligibility_reasons: [],
+      adjustments,
+    };
+  }
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    resetDesignStore();
+    resetCadReturnStore();
+    workspaceModeStore.setMode('parametric');
+    // Either solver slot may be selected while empty; the mesh view is what
+    // makes the effect that reads `/api/solve/plan` active.
+    importedMeshStore.showSolver();
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    importedMeshStore.clear();
+    workspaceModeStore.setMode('parametric');
+    vi.restoreAllMocks();
+  });
+
+  async function renderWithAdjustments(adjustments: unknown[]) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) === '/api/solve/plan') {
+        return new Response(JSON.stringify(solvePlanWithAdjustments(adjustments)), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      // The solver-mesh build the same view activates is not under test here.
+      return new Response('not found', { status: 404 });
+    });
+    act(() => root.render(<Viewport />));
+    // The plan request is debounced (`SYMMETRY_TINT_DEBOUNCE_MS`), then awaited.
+    await act(async () => {
+      await new Promise((resolve) => { setTimeout(resolve, 450); });
+    });
+  }
+
+  it('shows the override sentence for an explicit-zero wall', async () => {
+    await renderWithAdjustments([{
+      kind: 'bempp_wall_default',
+      requested: 'explicit_zero',
+      effective_mm: 5,
+      reason_code: 'bempp_wall_default',
+      policy_version: 1,
+    }]);
+    const note = host.querySelector('.solver-plan-adjustment-note');
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toContain('0 mm wall thickness is overridden');
+    expect(note?.textContent).toContain('5 mm closed wall');
+  });
+
+  it('shows the default sentence for an omitted wall', async () => {
+    await renderWithAdjustments([{
+      kind: 'bempp_wall_default',
+      requested: 'omitted',
+      effective_mm: 5,
+      reason_code: 'bempp_wall_default',
+      policy_version: 1,
+    }]);
+    const note = host.querySelector('.solver-plan-adjustment-note');
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toContain('No wall thickness is set');
+    expect(note?.textContent).toContain('5 mm closed-wall default');
+  });
+
+  it('shows nothing when the plan has no adjustments', async () => {
+    await renderWithAdjustments([]);
+    expect(host.querySelector('.solver-plan-adjustment-note')).toBeNull();
+  });
+});
+
 describe('camera refit', () => {
   const scene = (source: 'cad' | 'solver' | 'file', ingestId: string | null) =>
     createImportedMeshScene('Speaker', parseMSH(meshFixture), source, ingestId);
