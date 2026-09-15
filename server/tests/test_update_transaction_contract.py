@@ -1814,7 +1814,6 @@ def test_a_cad_return_ingested_after_restart_approval_is_refused(tmp_path: Path)
     assert error["retryable"] is True
 
 
-
 def test_a_cad_preparation_requested_after_restart_approval_is_refused(tmp_path: Path) -> None:
     """Contract §4.2: a CAD preparation copies and meshes a return, so it refuses too.
 
@@ -1848,6 +1847,7 @@ def test_a_cad_preparation_requested_after_restart_approval_is_refused(tmp_path:
     assert (body["error"]["code"], body["error"]["retryable"]) == ("update_restart_pending", True)
     assert "v2.0.1" in body["detail"]
     assert (row["state"], row["attempt_generation"]) == ("received", 0)
+
 
 # ---------------------------------------------------------------------------
 # Contract §3: an old release's launcher runs this checkout's helper

@@ -693,3 +693,27 @@ def test_a_solve_the_update_restart_held_is_queued_again_without_a_wglink_folder
 
     # Received again, like any operation the loop prepares once a folder is there.
     assert harness.row("cmd-b")["state"] == "received"
+
+
+def test_a_solve_now_an_update_restart_overtakes_waits_for_it_and_then_runs(
+    harness: Harness,
+) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, _setup())
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _accept(harness.store, "cmd-b", bundle_path, manifest)
+    assert harness.prepare("cmd-b", submit=False)["reason"] == "ready_to_solve"
+    # The route let the user's Solve now through, then the restart was approved
+    # before the preparation began: the click is kept, and nothing is meshed.
+    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+
+    held = harness.prepare("cmd-b")
+
+    assert (held["state"], held["reason"]) == ("needs_user_input", "update_restart_pending")
+    assert held["message"] == harness.blocked
+    assert len(harness.ingest.calls) == 1 and harness.submitted == []
+    harness.blocked = None  # released, expired, or the restart happened
+    assert _pass(harness) == ["cmd-b"]
+    row = harness.row("cmd-b")
+    assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+    assert len(harness.ingest.calls) == 1

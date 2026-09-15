@@ -792,6 +792,30 @@ def requeue_restart_parked(ctx: PreparationContext) -> list[str]:
     return queued
 
 
+def _hold_for_restart(
+    ctx: PreparationContext, operation_id: str, listed_generation: int, refusal: str
+) -> dict[str, Any]:
+    """Park an operation the user asked for while an update restart is approved.
+
+    Nothing is prepared: the attempt claims the operation and records that it
+    waits for the restart (``update_restart_pending``), so it is queued again
+    like any solve the latch held. Approvals sent with this request are not
+    kept; ones already recorded on the preparation still apply.
+    """
+
+    generation = ctx.store.claim(operation_id, listed_generation)
+    if generation is None:
+        return ctx.store.get_operation(operation_id) or {}
+    logger.info("CAD operation %s: attempt %d holds it for the update restart.", operation_id, generation)
+    try:
+        return _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT,
+            reason=REASON_UPDATE_RESTART_PENDING, message=refusal,
+        )
+    except _Fenced:
+        return _settle_fenced(ctx, operation_id, generation)
+
+
 def _settle_fenced(ctx: PreparationContext, operation_id: str, generation: int) -> dict[str, Any]:
     row = ctx.store.get_operation(operation_id)
     if row is not None and row["state"] == CANCEL_REQUESTED:
@@ -860,11 +884,18 @@ async def prepare_operation(
     if reconciled is not None:
         _publish(ctx, reconciled)
         return operation_summary(reconciled)
-    if _restart_pending(ctx):
+    refusal = _restart_pending(ctx)
+    if refusal:
         # An update restart was approved after this was asked for: after the
-        # route let it through, or after the loop listed it. Nothing starts,
-        # and the operation stays exactly as it is.
-        return operation_summary(row)
+        # route let it through, or after the loop listed it. Nothing is
+        # prepared. An operation the loop listed stays received, for its next
+        # pass; one the user asked for waits for the restart, so it is queued
+        # again by itself instead of being dropped.
+        if row["state"] == RECEIVED:
+            return operation_summary(row)
+        return operation_summary(await asyncio.to_thread(
+            _hold_for_restart, ctx, operation_id, int(row["attempt_generation"]), refusal
+        ))
     generation = await asyncio.to_thread(
         store.claim, operation_id, int(row["attempt_generation"])
     )

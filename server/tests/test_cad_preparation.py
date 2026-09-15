@@ -1513,3 +1513,23 @@ def test_a_requeue_after_an_update_restart_changes_only_what_it_read(harness: Ha
     assert harness.store.request_cancel("cmd-1")["state"] == "cancelled"
     assert harness.store.requeue_operation("cmd-1", newer, reason=HELD) is None
     assert harness.row()["state"] == "cancelled"
+
+
+def test_a_solve_dismissed_while_an_update_restart_held_it_is_never_queued_again(
+    harness: Harness,
+) -> None:
+    from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING as HELD
+    from server.cadlink.preparation import requeue_restart_parked
+
+    _received(harness)
+    generation = harness.store.claim("cmd-1", 0)
+    assert harness.store.record_outcome("cmd-1", generation, "needs_user_input", reason=HELD) is not None
+    # Dismissed while held: its reason and generation are unchanged; only the state moves.
+    dismissed = harness.store.request_cancel("cmd-1")
+    assert (dismissed["state"], dismissed["reason"], dismissed["attempt_generation"]) == (
+        "cancelled", HELD, generation,
+    )
+
+    assert harness.store.requeue_operation("cmd-1", generation, reason=HELD) is None
+    assert requeue_restart_parked(harness.context()) == []
+    assert harness.row() == dismissed
