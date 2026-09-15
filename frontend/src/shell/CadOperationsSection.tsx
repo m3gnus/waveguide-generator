@@ -6,6 +6,7 @@ import { pendingCadOperations, useCadOperationsStore } from '../stores/cadOperat
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { openCadProject } from './CadProjectPanel';
 import { workspaceNavigation } from './workspaceNavigation';
+import { CadSolveInputs } from './CadSolveInputs';
 
 /** The hash of a `sha256:` digest, cut to what a person can read and compare. */
 export function shortSha256(digest: string | null | undefined): string {
@@ -220,12 +221,11 @@ function CadOperationCard({ operation, record }: {
       </ul>}
       {review.error && <span>Could not read the findings to review: {review.error}</span>}
       {help.text && <span>{help.text}</span>}
-      <span className="cad-operation-ids">
-        Operation <code>{operation.operationId}</code>
-        {' · '}Setup revision <code>{operation.setupRevisionId ?? 'none yet'}</code>
-        {' · '}Preparation <code>{operation.preparationId ?? 'none yet'}</code>
-        {manifest && <>{' · '}Snapshot <code>{shortSha256(manifest)}</code></>}
-      </span>
+      <CadSolveInputs
+        operationId={operation.operationId}
+        operation={operation}
+        engineSource="setup-revision"
+      />
     </div>
     <div className="cad-confirm-actions">
       {operation.state !== 'cancel_requested' && <button

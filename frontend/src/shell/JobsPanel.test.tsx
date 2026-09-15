@@ -201,17 +201,96 @@ describe('jobs panel run list', () => {
     expect(host.querySelector('.job-card .pill')).toBeNull();
   });
 
-  it('names the CAD operation a run was submitted for', async () => {
+  it('keeps collapsed CAD runs to one line and only reads operation detail after expansion', async () => {
     const fromFusion = job(14, 'Speaker', 'cad-import');
     fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
     fromFusion.client_request_id = 'cad-solve:op-7';
     const byHand = job(13, 'Parametric');
     byHand.client_request_id = 'something-else';
+    const fetcher = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
+      operationId: 'op-7', kind: 'prepare_and_solve', state: 'accepted', stage: 'submitted',
+      reason: null, message: null, jobId: fromFusion.id, attemptGeneration: 1,
+      setupRevisionId: null, preparationId: null, snapshot: null, legacy: true,
+      createdAt: '2026-09-14T10:00:00Z', updatedAt: '2026-09-14T10:00:05Z',
+      approvals: [], preparation: null,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetcher);
     publishJobs([fromFusion, byHand]);
     await act(async () => root.render(<JobsPanel/>));
+
+    expect(host.querySelector('.job-cad-operation')).toBeNull();
+    expect(fetcher.mock.calls.map(([input]) => String(input)))
+      .not.toContain('/api/cadlink/operations/op-7');
+
+    act(() => compareSelection.setPrimary(fromFusion.id));
+    await vi.waitFor(() => expect(host.querySelector('.job-cad-operation')).not.toBeNull());
     const notes = [...host.querySelectorAll('.job-cad-operation')];
     expect(notes).toHaveLength(1);
-    expect(notes[0].textContent).toBe('From CAD operation op-7');
+    expect(notes[0].textContent).toContain('Solve inputs');
+    expect(notes[0].textContent).toContain('Operationop-7');
+    expect(fetcher.mock.calls.map(([input]) => String(input))
+      .filter((path) => path === '/api/cadlink/operations/op-7')).toHaveLength(1);
+  });
+
+  it('names every bound input of a CAD-created solve from its operation and job', async () => {
+    const fromFusion = job(16, 'Bound speaker', 'cad-import');
+    fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
+    fromFusion.client_request_id = 'cad-solve:op-bound';
+    fromFusion.solve_options = { ...fromFusion.solve_options, engine: 'beat-cpu' };
+    const manifest = `sha256:${'a'.repeat(64)}`;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/cadlink/operations/op-bound') {
+        return new Response(JSON.stringify({
+          operationId: 'op-bound', kind: 'prepare_and_solve', state: 'accepted', stage: 'submitted',
+          reason: null, message: null, jobId: fromFusion.id, attemptGeneration: 1,
+          setupRevisionId: 'wgs_bound', preparationId: 'wgp_bound',
+          snapshot: { manifestSha256: manifest, documentName: 'Bound speaker', projectLineageId: 'wgl_bound' },
+          legacy: false, createdAt: '2026-09-14T10:00:00Z', updatedAt: '2026-09-14T10:00:05Z',
+          approvals: [], preparation: null,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ path: null }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }));
+    publishJobs([fromFusion]);
+    compareSelection.setPrimary(fromFusion.id);
+
+    await act(async () => root.render(<JobsPanel/>));
+
+    await vi.waitFor(() => expect(host.querySelector('.cad-solve-inputs')).not.toBeNull());
+    const inputs = host.querySelector<HTMLElement>('.cad-solve-inputs')!;
+    expect(inputs.textContent).toContain(`SnapshotBound speaker${manifest}`);
+    expect(inputs.textContent).toContain('Preparationwgp_bound');
+    expect(inputs.textContent).toContain('Setup revisionwgs_bound');
+    expect(inputs.textContent).toContain('Enginebeat-cpu');
+  });
+
+  it('does not infer a historical job engine from its bound setup revision', async () => {
+    const fromFusion = job(17, 'Old speaker', 'cad-import');
+    fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
+    fromFusion.client_request_id = 'cad-solve:op-old';
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe('/api/cadlink/operations/op-old');
+      return new Response(JSON.stringify({
+        operationId: 'op-old', kind: 'prepare_and_solve', state: 'accepted', stage: 'submitted',
+        reason: null, message: null, jobId: fromFusion.id, attemptGeneration: 1,
+        setupRevisionId: 'wgs_old', preparationId: 'wgp_old', snapshot: null, legacy: false,
+        createdAt: '2026-09-14T10:00:00Z', updatedAt: '2026-09-14T10:00:05Z',
+        approvals: [], preparation: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    publishJobs([fromFusion]);
+    compareSelection.setPrimary(fromFusion.id);
+
+    await act(async () => root.render(<JobsPanel/>));
+    await vi.waitFor(() => expect(host.textContent).toContain('Preparationwgp_old'));
+
+    expect(host.textContent).toContain('Enginenot recorded');
+    const requests = fetcher.mock.calls.map(([input]) => String(input));
+    expect(requests.filter((path) => path === '/api/cadlink/operations/op-old')).toHaveLength(1);
+    expect(requests.some((path) => path.includes('/setup-revisions/'))).toBe(false);
   });
 
   it('ignores a submission key that is not a string', async () => {

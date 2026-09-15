@@ -22,6 +22,7 @@ import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
 import { LogDialog } from './LogDialog';
 import { middleEllipsis } from './ResultsPanel';
+import { CadSolveInputs } from './CadSolveInputs';
 
 /**
  * The output folder, stated where runs are read rather than buried in settings.
@@ -294,7 +295,12 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     </header>
     {renameError && <div className="job-error job-rename-error" role="alert">{renameError}</div>}
     {job.results_discarded_at && <div className="job-retention-note">Results were cleaned up to save space.</div>}
-    {cadOperationId && <div className="job-retention-note job-cad-operation" title="Fusion asked for this solve; CAD Link prepared and submitted it as this operation.">From CAD operation {cadOperationId}</div>}
+    {expanded && cadOperationId && <CadSolveInputs
+      className="job-cad-operation"
+      operationId={cadOperationId}
+      engineSource="job"
+      resolvedEngine={job.solve_options.engine}
+    />}
     {running ? <>
       <p>{metrics(job, now)}</p>
       <div className="job-stage"><span>{job.stage_message ?? job.stage ?? 'waiting…'}</span><b>{Math.round(job.progress * 100)}%</b></div>

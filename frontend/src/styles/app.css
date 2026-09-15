@@ -683,6 +683,15 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .score { display: flex; gap: 6px; margin-top: 6px; }.score span { color: var(--amber); font-size: var(--text-micro); letter-spacing: 1px; }.score em { color: var(--fg4); font-style: normal; }.score b { color: var(--fg1); font: var(--text-micro) var(--mono); }
 .job-error { margin-top: 7px; padding: 4px 6px; border: 1px solid rgba(var(--red-rgb), .2); border-radius: var(--r3); background: rgba(var(--red-rgb), .07); color: var(--red); font-size: var(--text-micro); }
 .job-retention-note { margin-top: 5px; color: var(--fg3); font-size: var(--text-micro); }
+.cad-solve-inputs { margin-top: 5px; color: var(--fg3); font-size: var(--text-micro); }
+.cad-solve-inputs summary { width: fit-content; cursor: pointer; color: var(--fg2); }
+.cad-solve-inputs dl { display: grid; gap: 2px; margin: 5px 0 0; }
+.cad-solve-inputs dl > div { display: grid; grid-template-columns: minmax(88px, auto) minmax(0, 1fr); gap: 6px; }
+.cad-solve-inputs dt { color: var(--fg3); }
+.cad-solve-inputs dd { min-width: 0; margin: 0; color: var(--fg2); }
+.cad-solve-inputs dd span { margin-right: 5px; }
+.cad-solve-inputs code { overflow-wrap: anywhere; }
+.cad-solve-inputs-error { display: block; margin-top: 4px; color: var(--red); }
 /* Unselected finished runs are a single line: name, stars if rated, time. The
    selected one keeps the full card, so the rail reads as one open run in a
    list of names rather than a stack of competing cards. */

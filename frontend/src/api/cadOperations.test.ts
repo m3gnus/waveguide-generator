@@ -6,6 +6,7 @@ import {
   createCadOperation,
   createSetupRevision,
   getCadOperation,
+  getSetupRevision,
   isPendingCadOperation,
   listCadOperations,
   prepareCadOperation,
@@ -62,6 +63,16 @@ describe('CAD operations client', () => {
       .resolves.toMatchObject({ operationId: 'op-1', state: 'received' });
     expect(operationRequest.calls[0]).toMatchObject({ url: '/api/cadlink/operations', init: { method: 'POST' } });
     expect(JSON.parse(String(operationRequest.calls[0].init?.body))).toEqual({ operationId: 'manual-solve:1', ingestId: 'wgi_1' });
+  });
+
+  it('reads the immutable content of a setup revision', async () => {
+    const setup = { schema_version: 1 as const, geometry: { drive_channels: [] }, options: { engine: 'beat-cpu' } };
+    const request = recorder({ revisionId: 'wgs/1', contentSha256: 'sha256:s', createdAt: 'now', setup });
+
+    await expect(getSetupRevision('wgs/1', request.fetcher)).resolves.toMatchObject({
+      revisionId: 'wgs/1', setup: { options: { engine: 'beat-cpu' } },
+    });
+    expect(request.calls[0].url).toBe('/api/cadlink/setup-revisions/wgs%2F1');
   });
   it('records a project setup for its source inventory', async () => {
     const { calls, fetcher } = recorder({ lineageId: 'wgl_a', inventorySha256: 'sha256:i', revisionId: 'wgs_1' });

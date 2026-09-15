@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
-import { jobsSocket } from '../api/jobsSocket';
+import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { applyOpenedDesign } from '../design/openCadProject';
 import type { OnshapeLink } from '../api/onshape';
 import { preferencesStore } from '../prefs/preferences';
@@ -190,6 +190,7 @@ describe('CadLinkPanel', () => {
     detailFailures?: number;
     failPrepare?: string[];
     reconcileAccepted?: string[];
+    setupEngine?: string;
   } = {}) => {
     const posted: Array<{ path: string; body: unknown }> = [];
     let detailFailures = options.detailFailures ?? 0;
@@ -200,6 +201,13 @@ describe('CadLinkPanel', () => {
         const body = JSON.parse(String(init?.body)) as { lineageId: string };
         posted.push({ path, body });
         return json({ lineageId: body.lineageId, inventorySha256: 'sha256:i', revisionId: 'wgs_9' });
+      }
+      if (path.startsWith('/api/cadlink/setup-revisions/')) {
+        const revisionId = decodeURIComponent(path.split('/').at(-1)!);
+        return json({
+          revisionId, contentSha256: 'sha256:setup', createdAt: '2026-09-14T10:00:00Z',
+          setup: { schema_version: 1, geometry: {}, options: { engine: options.setupEngine ?? 'auto' } },
+        });
       }
       if (path.startsWith('/api/cadlink/operations/')) {
         const operationId = decodeURIComponent(path.split('/')[4]);
@@ -355,8 +363,15 @@ describe('CadLinkPanel', () => {
   it('shows each pending CAD operation with its state, reason, identity and the action it needs', async () => {
     await renderAndSelect();
     await clickIngest();
-    const posted = recordOperationRequests();
+    const posted = recordOperationRequests({ setupEngine: 'metal' });
     const engineBefore = useSolveOptionsStore.getState().engine;
+    const jobManager = jobsSocket as unknown as { snapshot: JobsSnapshot; listeners: Set<() => void> };
+    const previousJobs = jobManager.snapshot;
+    jobManager.snapshot = {
+      ...previousJobs,
+      jobs: [{ id: 'job-1', solve_options: { engine: 'beat-cpu' } } as JobItem],
+    };
+    act(() => jobManager.listeners.forEach((listener) => listener()));
     act(() => {
       const { apply } = useCadOperationsStore.getState();
       apply(cadOperation({ operationId: 'op-ready' }));
@@ -383,6 +398,8 @@ describe('CadLinkPanel', () => {
     expect(ready.textContent).toContain('Fusion asked for a solve');
     expect(ready.textContent).toContain('Prepared, and waiting for you to start the solve.');
     for (const id of ['op-ready', 'wgs_1', 'wgp_1']) expect(ready.textContent).toContain(id);
+    await vi.waitFor(() => expect(ready.textContent).toContain('Enginemetal'));
+    expect(ready.textContent).not.toContain('beat-cpu');
     expect(buttonTexts(ready)).toEqual(['Dismiss', 'Solve now']);
     // Each action names what it acts on: the document when known.
     expect(buttonLabels(ready)).toEqual(['Dismiss: Speaker', 'Solve now: Speaker']);
@@ -402,6 +419,7 @@ describe('CadLinkPanel', () => {
       { path: '/api/cadlink/operations/op-ready/prepare', body: { submit: true } },
       { path: '/api/cadlink/operations/op-engine/cancel', body: null },
     ]);
+    jobManager.snapshot = previousJobs;
     expect(useSolveOptionsStore.getState().engine).toBe(engineBefore);
   });
 

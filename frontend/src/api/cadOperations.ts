@@ -91,6 +91,10 @@ export interface SetupRevisionSummary {
   createdAt: string;
 }
 
+export interface SetupRevisionDetail extends SetupRevisionSummary {
+  setup: CadSolveSetup;
+}
+
 const TERMINAL_STATES: ReadonlySet<string> = new Set(['accepted', 'rejected', 'cancelled']);
 
 export function isPendingCadOperation(operation: Pick<CadOperationSummary, 'state'>): boolean {
@@ -110,6 +114,14 @@ export function createSetupRevision(
   fetcher: typeof fetch = fetch,
 ): Promise<SetupRevisionSummary> {
   return jsonRequest('/api/cadlink/setup-revisions', jsonBody('POST', { setup }), fetcher);
+}
+
+/** Read the immutable inputs a named setup revision bound. */
+export function getSetupRevision(
+  revisionId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<SetupRevisionDetail> {
+  return jsonRequest(`/api/cadlink/setup-revisions/${encodeURIComponent(revisionId)}`, undefined, fetcher);
 }
 
 /** Create or recover a backend-owned solve for one retained ingestion. */
