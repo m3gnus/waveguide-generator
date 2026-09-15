@@ -855,8 +855,8 @@ The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateCont
 Destination staging outside this file: `server/tests/test_bundle_update_installer.py`
 (staging beside the application across two volumes, a linked staging root refused, free
 space checked on the destination volume, an unwritable folder beside the application or
-one on another filesystem falling back to the data directory on one volume and refused
-across two, and a failed
+one on another filesystem falling back to the data directory when that is on the
+application's volume and refused otherwise, and a failed
 request never removing the spent download folder again) and
 `server/tests/test_update_handoff.py` (the
 launcher accepts its own root and refuses any other root or link, and the handoff runs

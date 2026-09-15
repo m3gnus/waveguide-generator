@@ -926,14 +926,10 @@ class BundleUpdateInstaller:
         # staged. On one volume, the two add up.
         needs: dict[object, tuple[Path, int, str]] = {}
         if staging_parent is not None and staging_volume != destination_volume:
-            if data_volume != destination_volume:
-                raise BundleInstallError(
-                    "The update staging folder beside the application is on a different "
-                    "filesystem from the application, so the update cannot be installed safely."
-                )
             # A bundle that is its own mount point: the folder beside it is on
-            # another filesystem, and the data directory on the application's
-            # volume serves, as it did before destination staging.
+            # another filesystem. The data directory serves when it is on the
+            # application's volume, as it did before destination staging, and
+            # is refused just below when it is not.
             staging_parent = None
         if staging_parent is None:
             if data_volume != destination_volume:

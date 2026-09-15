@@ -599,7 +599,7 @@ def test_a_bundle_that_is_its_own_mount_point_stages_in_the_data_directory(
         volume_probe=apart,
         staging_root=staging_root,
     )
-    with pytest.raises(BundleInstallError, match="different filesystem"):
+    with pytest.raises(BundleInstallError, match="choose a data directory on the same volume"):
         _start(refused, "2.0.2", [_asset("update-app-2.0.2.zip", app, "app", version="2.0.2")])
     assert not staging_root.exists()
 
