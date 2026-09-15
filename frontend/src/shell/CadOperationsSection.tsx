@@ -28,6 +28,7 @@ const REASON_COPY: Record<string, string> = {
   submission_refused: 'the jobs system refused it',
   interrupted: 'interrupted',
   ready_to_solve: 'ready to solve',
+  update_restart_pending: 'held for the update restart',
 };
 
 interface FindingReview {
@@ -124,6 +125,13 @@ function guidance(operation: CadOperationSummary, onScreen: boolean): Guidance {
         text: 'Approving applies to this preparation only; a new preparation needs its own review.',
         simulation: false,
         action: 'approve',
+      };
+    case 'update_restart_pending':
+      // The backend queues it again by itself; Solve now would only be refused until then.
+      return {
+        text: 'WG is about to restart to install an update, so it starts nothing now. It prepares this again by itself once it has restarted, or once the restart is called off.',
+        simulation: false,
+        action: null,
       };
     default:
       return { text: null, simulation: false, action: 'solve' };

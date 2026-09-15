@@ -220,6 +220,23 @@ describe('CadLinkPanel', () => {
     return posted;
   };
 
+  it('shows a solve the update restart holds as resuming by itself, with only Dismiss to press', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: 'op-restart', reason: 'update_restart_pending',
+        message: 'Waveguide Generator is about to restart to install 0.3.4, so it is not starting new solves. Submit this again after the restart.',
+      }));
+    });
+
+    const card = host.querySelector<HTMLElement>('.cad-operation[data-operation-id="op-restart"]')!;
+    expect(card.querySelector('[role="status"]')?.textContent).toContain('held for the update restart');
+    expect(card.textContent).toContain('again by itself');
+    // Solve now would only be refused until the restart; nothing is needed from the user.
+    expect(buttonTexts(card)).toEqual(['Dismiss']);
+  });
+
   it('shows each pending CAD operation with its state, reason, identity and the action it needs', async () => {
     await renderAndSelect();
     await clickIngest();

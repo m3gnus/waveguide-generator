@@ -1900,12 +1900,13 @@ export function CadLinkCoordinator() {
    * when asked, merged like any other update. */
   const actOnOperation = useCallback(async (
     action: () => Promise<CadOperationSummary>,
-    done: string,
+    done: string | ((summary: CadOperationSummary) => string),
   ): Promise<void> => {
     setError(null);
     try {
-      useCadOperationsStore.getState().apply(await action());
-      if (mounted.current) setStatus(done);
+      const summary = await action();
+      useCadOperationsStore.getState().apply(summary);
+      if (mounted.current) setStatus(typeof done === 'string' ? done : done(summary));
     } catch (reason) {
       if (mounted.current) setError(reason instanceof Error ? reason.message : String(reason));
       // The card that asked offers its action again.
@@ -1927,9 +1928,13 @@ export function CadLinkCoordinator() {
     'Approved the reviewed findings for this preparation. Preparing and solving the model Fusion sent.',
   ), [actOnOperation]);
 
+  /** Dismiss: the backend reconciles with the jobs first, so a solve whose job
+   * already exists follows its job instead of being dismissed. */
   const dismissOperation = useCallback((operationId: string) => actOnOperation(
     () => cancelCadOperation(operationId),
-    'Dismissed the solve Fusion asked for.',
+    (summary) => (summary.state === 'accepted'
+      ? 'Its solve had already started, so it now follows its job in the Jobs rail. Cancel the job there to stop it.'
+      : 'Dismissed the solve Fusion asked for.'),
   ), [actOnOperation]);
 
   /** Use these settings and solve: the settings on screen become the setup of

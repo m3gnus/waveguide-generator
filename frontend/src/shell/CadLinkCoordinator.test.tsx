@@ -1947,6 +1947,26 @@ describe('CadLinkCoordinator', () => {
     await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().dismissOperation('op-1'); });
     expect(posted[1]).toEqual({ path: '/api/cadlink/operations/op-1/cancel', body: null });
     expect(useCadOperationsStore.getState().operations['op-1']?.state).toBe('cancelled');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Dismissed the solve Fusion asked for.');
+  });
+
+  it('says a dismissed solve follows its job when the job already exists, not that it was dismissed', async () => {
+    operationRoutes();
+    const routed = vi.mocked(fetch).getMockImplementation()!;
+    // The backend reconciles before it dismisses: the job exists, so the operation follows it.
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
+      String(input).endsWith('/cancel')
+        ? json(cadOperation({ state: 'accepted', stage: 'submitted', reason: null, message: null, jobId: 'job-7' }))
+        : routed(input, init)
+    )));
+    await renderCoordinator();
+
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().dismissOperation('op-1'); });
+
+    expect(useCadOperationsStore.getState().operations['op-1']).toMatchObject({ state: 'accepted', jobId: 'job-7' });
+    const status = cadLinkCoordinatorBridge.getSnapshot().status ?? '';
+    expect(status).not.toContain('Dismissed');
+    expect(status).toContain('Jobs rail');
   });
 
   it('approves reviewed findings only on the preparation that reported them', async () => {
