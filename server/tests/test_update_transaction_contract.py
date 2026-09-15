@@ -823,12 +823,22 @@ def test_cleanup_finishes_after_an_interrupted_start_and_never_runs_twice(
 
 
 def _age(root: Path, seconds: float) -> None:
-    """Make everything under ``root`` look untouched for ``seconds``."""
+    """Make everything under ``root`` look untouched for ``seconds``.
+
+    A link is aged itself, never through. Windows cannot set a link's own
+    times (``os.utime`` has no ``follow_symlinks`` there), so it leaves links
+    as they are; no test ages a tree with a link inside it.
+    """
 
     when = time.time() - seconds
+    own_times = os.utime in os.supports_follow_symlinks
     for current, directories, files in os.walk(root):
         for name in [*files, *directories]:
-            os.utime(Path(current) / name, (when, when), follow_symlinks=False)
+            path = Path(current) / name
+            if own_times:
+                os.utime(path, (when, when), follow_symlinks=False)
+            elif not path.is_symlink():
+                os.utime(path, (when, when))
     os.utime(root, (when, when))
 
 
