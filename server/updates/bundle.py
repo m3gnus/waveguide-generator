@@ -925,6 +925,16 @@ class BundleUpdateInstaller:
         # the download in the data directory, the staged layers where they are
         # staged. On one volume, the two add up.
         needs: dict[object, tuple[Path, int, str]] = {}
+        if staging_parent is not None and staging_volume != destination_volume:
+            if data_volume != destination_volume:
+                raise BundleInstallError(
+                    "The update staging folder beside the application is on a different "
+                    "filesystem from the application, so the update cannot be installed safely."
+                )
+            # A bundle that is its own mount point: the folder beside it is on
+            # another filesystem, and the data directory on the application's
+            # volume serves, as it did before destination staging.
+            staging_parent = None
         if staging_parent is None:
             if data_volume != destination_volume:
                 raise BundleInstallError(
@@ -934,11 +944,6 @@ class BundleUpdateInstaller:
                 )
             needs[data_volume] = (self.data_dir, archives + extracted, "download and extract")
         else:
-            if staging_volume != destination_volume:
-                raise BundleInstallError(
-                    "The update staging folder beside the application is on a different "
-                    "filesystem from the application, so the update cannot be installed safely."
-                )
             if data_volume == staging_volume:
                 needs[data_volume] = (self.data_dir, archives + extracted, "download and extract")
             else:
@@ -959,7 +964,7 @@ class BundleUpdateInstaller:
                     f"There is not enough free disk space to {purpose} this update "
                     f"safely ({required} bytes required, {available} bytes available)."
                 )
-        if self.staging_root is None:
+        if self.staging_root is None or staging_parent is None:
             return None
         problem = _unwritable(self.staging_root)
         if problem is None:

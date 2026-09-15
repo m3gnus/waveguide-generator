@@ -33,7 +33,7 @@ the release owner that this contract records but does not design.
 | `--browser` and `--no-gui` run through `status_main`. Linux falls back to browser mode when Qt cannot open a window. | `desktop.py:1778-1780`, `:1812-1818` |
 | Browser mode settles on the controller's first poll of its own server whose interface is served, and reports a start it cannot confirm. `--no-gui` runs the server in-process with no controller, settles after a self-probe, and reports every exit that leaves a transaction open. | `launchers/statusapp/controller.py` `poll`, `settle_update_transaction`; `launchers/statusapp/view.py`; `launch/serve.py` `_NoGuiHealthyStart` |
 | Staging is keyed by version. The download is `<data>/updates/<version>/downloads`. The verified layers go to `<data>/updates/<version>/staged`, or, when the launcher accepts it, to `.<bundle name>.update-staging/<version>/staged` beside the bundle (§2.5; the updater review §2.7). | `server/updates/bundle.py` `_run` |
-| Staging in the data directory is refused when it and the app are on different volumes, and v0.3.2 does the same. Staging beside the bundle needs that folder on the app's volume and writable. Where it cannot be written, staging falls back to the data directory on one volume and is refused across two. Free space is checked on every volume the update uses. | `bundle.py` `_preflight` |
+| Staging in the data directory is refused when it and the app are on different volumes, and v0.3.2 does the same. Staging beside the bundle needs that folder on the app's volume and writable. Where it cannot be written, or is on another filesystem (a bundle that is its own mount point), staging falls back to the data directory when that is on the app's volume, and is refused otherwise. Free space is checked on every volume the update uses. | `bundle.py` `_preflight` |
 | The server writes the schema-1 handoff request at the end of staging, then reports `ready`. | `bundle.py:940-953` |
 | The launcher accepts the request only with exactly its five keys and staged paths inside the data directory. It deletes the request as it consumes it. | `launchers/statusapp/updater.py:108-175` |
 | The launcher runs the **staged** helper, `<staged app>/launchers/apply_update.py`, with `cwd` at the data directory. It checks containment again. | `updater.py:562-566`, `:571`, `:587-604`, `:611-616` |
@@ -76,13 +76,16 @@ Still to do:
 - the acceptance of destination-side staging (the updater review §2.7, built as §2.5 and
   §3.2 describe). That is a two-drive install on native Windows through download,
   handoff, replace, restart and rollback, and staging beside a signed macOS bundle.
-  Neither can run on a development machine. Two limits stand:
+  Neither can run on a development machine. Three limits stand:
   - a v0.3.1 or v0.3.2 install that spans two drives stays blocked in-app: its own
     server refuses before any code of this build runs. It needs a one-time full
     installer;
   - an automatic rollback to a release older than this change leaves the staging beside
     the bundle in place. That release knows only `<data>/updates`, so the next start of a
-    build with this change removes it.
+    build with this change removes it;
+  - no uninstaller removes `.<bundle name>.update-staging`. A staged update that was
+    never applied survives an uninstall beside where the application was, until it is
+    removed by hand. Whether uninstall should remove it is open.
 - how long a prepared update stays valid offline, which waits on decision D3 (§5).
 - a second server of the same installation, such as a `--no-gui` start with another data
   directory: it is not shut down with the first, and its healthy start can reclaim
@@ -395,10 +398,11 @@ unchanged between v0.3.2 and `8bccff0c`.
     inherits it. It stages beside the bundle only when the root is also its own
     derivation. A v0.3.x launcher sets no root, and its own server stages in the data
     directory as before.
-  - The server stages beside the bundle only where it can write. When the folder beside
-    the bundle cannot be written (an admin-owned `/Applications` or `/opt`), it stages
-    in the data directory as before if that is on the application's volume. Otherwise it
-    refuses before downloading, and names the folder.
+  - The server stages beside the bundle only where it can write, on the application's own
+    filesystem. When the folder beside the bundle cannot be written (an admin-owned
+    `/Applications` or `/opt`), or is on another filesystem (a bundle that is its own
+    mount point), it stages in the data directory as before if that is on the
+    application's volume. Otherwise it refuses before downloading, and says why.
 - **The oldest supported interpreter.** For an app-only update the interpreter is the
   old installation's runtime (Python 3.13 today). The launcher puts the staged app first
   on `PYTHONPATH` (`updater.py:567-570`), so the helper imports WG code only from its
@@ -850,8 +854,9 @@ The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateCont
 
 Destination staging outside this file: `server/tests/test_bundle_update_installer.py`
 (staging beside the application across two volumes, a linked staging root refused, free
-space checked on the destination volume, an unwritable folder beside the application
-falling back to the data directory on one volume and refused across two, and a failed
+space checked on the destination volume, an unwritable folder beside the application or
+one on another filesystem falling back to the data directory on one volume and refused
+across two, and a failed
 request never removing the spent download folder again) and
 `server/tests/test_update_handoff.py` (the
 launcher accepts its own root and refuses any other root or link, and the handoff runs

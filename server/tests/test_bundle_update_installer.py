@@ -400,7 +400,14 @@ def test_a_staging_root_that_is_a_link_is_refused(tmp_path: Path) -> None:
 
 
 def test_the_destination_volume_needs_room_for_the_staged_layers(tmp_path: Path) -> None:
-    """§2.7: free space is probed on every affected volume, not just the data one."""
+    """§2.7: free space is probed on every affected volume, not just the data one.
+
+    The application's volume needs room for the extracted layers and the
+    headroom, and not for the download, which stays on the data volume: one
+    byte short is refused, exactly enough is not.
+    """
+
+    from server.updates import bundle as bundle_module
 
     app = _app_zip()
     name = "update-app-2.0.1.zip"
@@ -408,19 +415,30 @@ def test_the_destination_volume_needs_room_for_the_staged_layers(tmp_path: Path)
     staging_root = tmp_path / "installed" / ".Waveguide Generator.update-staging"
     staging_root.parent.mkdir(parents=True)
     volume = _two_volumes(tmp_path)
+    needed = (
+        bundle_module.LAYER_LIMITS["app"].extracted_bytes
+        + bundle_module.DISK_SPACE_HEADROOM_BYTES
+    )
+    room = {"app": needed - 1}
     installer = _installer(
         tmp_path,
         downloader=download,
         small_fetcher=fetch,
         volume_probe=volume,
-        free_space_probe=lambda path: 10**12 if volume(path) == "data" else 0,
+        free_space_probe=lambda path: 10**12 if volume(path) == "data" else room["app"],
         staging_root=staging_root,
     )
 
-    with pytest.raises(BundleInstallError, match="not enough free disk space"):
+    with pytest.raises(
+        BundleInstallError, match="not enough free disk space to stage beside the application"
+    ):
         _start(installer, "2.0.1", [_asset(name, app, "app")])
-
     assert not staging_root.exists()
+
+    room["app"] = needed
+    _start(installer, "2.0.1", [_asset(name, app, "app")])
+    installer.wait(2)
+    assert installer.status()["installState"] == "ready", installer.status()
 
 
 def _read_only(folder: Path) -> None:
@@ -527,6 +545,63 @@ def test_a_failed_request_never_removes_the_download_folder_a_second_time(
 
     assert installer.status()["installState"] == "failed"
     assert other.is_file(), "a failed request removed a folder it no longer owned"
+
+
+def test_a_bundle_that_is_its_own_mount_point_stages_in_the_data_directory(
+    tmp_path: Path,
+) -> None:
+    """The review of §2.7: the folder beside such a bundle is on another filesystem.
+
+    With its data directory on the application's volume, that installation
+    updated in-app before destination staging existed, and it still does. With
+    the data directory on a third filesystem there is no volume to stage on,
+    and it is refused before anything is written.
+    """
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, fetch = _fakes({name: app})
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    staging_root = installed / ".Waveguide Generator.update-staging"
+    beside = installed.resolve()
+    data = (tmp_path / "data").resolve()
+
+    def mounted(path: Path) -> str:
+        return "outer" if Path(path).resolve() == beside else "app"
+
+    installer = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=fetch,
+        volume_probe=mounted,
+        staging_root=staging_root,
+    )
+    _start(installer, "2.0.1", [_asset(name, app, "app")])
+    installer.wait(2)
+
+    state = installer.status()
+    assert state["installState"] == "ready", state
+    payload = json.loads((tmp_path / "control" / "update.json").read_text(encoding="utf-8"))
+    assert Path(payload["stagedAppDir"]).is_relative_to(data)
+    assert not staging_root.exists()
+
+    def apart(path: Path) -> str:
+        resolved = Path(path).resolve()
+        if resolved == beside:
+            return "outer"
+        return "data" if resolved.is_relative_to(data) else "app"
+
+    refused = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=fetch,
+        volume_probe=apart,
+        staging_root=staging_root,
+    )
+    with pytest.raises(BundleInstallError, match="different filesystem"):
+        _start(refused, "2.0.2", [_asset("update-app-2.0.2.zip", app, "app", version="2.0.2")])
+    assert not staging_root.exists()
 
 
 def test_digest_failure_is_reported_and_never_writes_a_request(tmp_path: Path) -> None:
