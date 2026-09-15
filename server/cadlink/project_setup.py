@@ -53,13 +53,12 @@ def inventory_sha256(sources: Sequence[Mapping[str, Any]]) -> str:
     return "sha256:" + hashlib.sha256(canonical_json(entries).encode("utf-8")).hexdigest()
 
 
-def snapshot_project(store: CadLinkStore, manifest: Mapping[str, Any]) -> str | None:
-    """The project lineage a snapshot belongs to, without claiming one.
+def solver_anchor(manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """A snapshot's solver anchor instance: the one its frame names, else its only one.
 
-    The same project ingestion files the return under (``ingest._resolve_project``):
-    the lineage of the solver anchor instance's WG design, or, when the anchor
-    names no design, the lineage its Fusion document already has. None when WG
-    has never seen that document: such a snapshot has no recorded setup yet.
+    The project a snapshot belongs to (``snapshot_project``) and the design that
+    backend preparation names to the ingest's project gate
+    (``preparation._project_gate``) both come from this, so they cannot disagree.
     """
 
     instances = [
@@ -72,6 +71,19 @@ def snapshot_project(store: CadLinkStore, manifest: Mapping[str, Any]) -> str | 
     )
     if anchor is None and len(instances) == 1:
         anchor = instances[0]
+    return anchor
+
+
+def snapshot_project(store: CadLinkStore, manifest: Mapping[str, Any]) -> str | None:
+    """The project lineage a snapshot belongs to, without claiming one.
+
+    The same project ingestion files the return under (``ingest._resolve_project``):
+    the lineage of the solver anchor instance's WG design, or, when the anchor
+    names no design, the lineage its Fusion document already has. None when WG
+    has never seen that document: such a snapshot has no recorded setup yet.
+    """
+
+    anchor = solver_anchor(manifest)
     design_id = str((anchor or {}).get("design_id") or "").strip()
     if design_id:
         row = store.get_design(design_id)

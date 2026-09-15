@@ -325,6 +325,11 @@ blocking findings the user reviewed, and on which preparation) and observes.
   restart. The copy leaves out the captured CAD document, which is not geometry. An
   operation whose return has no copy and is not in the folder waits
   (`preparation_failed`).
+- **The snapshot's own project.** The backend prepares into the project the snapshot
+  belongs to, never a model that is open, so the ingest's project gate is given the
+  solver anchor instance's WG design and that exact instance, resolved as
+  `snapshot_project` resolves them (see "Project setups"). A snapshot whose anchor names
+  no design, authored in CAD, names none, as before.
 - **Approvals.** A blocking finding is approved on one preparation
   (`POST .../approvals`, `{preparationId, findingIds}`, or `approvals` on the prepare
   request), and submitted as `<report_sha256>:<finding_id>`. Only findings that

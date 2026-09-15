@@ -67,7 +67,12 @@ from .operations import (
     TERMINAL_STATES,
     canonical_json,
 )
-from .project_setup import project_setup, snapshot_project, widen_polar_to_derivation
+from .project_setup import (
+    project_setup,
+    snapshot_project,
+    solver_anchor,
+    widen_polar_to_derivation,
+)
 from .setup import CadSolveSetup, solve_request_for, validate_setup
 from .solve_command import (
     CAD_SOLVE_SUBMISSION_PREFIX,
@@ -473,6 +478,29 @@ def _resumable(
     return json.loads(ingest["record_json"]) if ingest is not None else None
 
 
+def _project_gate(retained: Mapping[str, Any]) -> dict[str, str]:
+    """The design and instance the ingest's project gate is given for a snapshot.
+
+    The backend prepares into the snapshot's own project -- the lineage of its
+    solver anchor instance's WG design, as ``snapshot_project`` resolves it --
+    never into a model that is open. So the gate is told that design and that
+    exact instance. A snapshot whose anchor names no design, authored in CAD,
+    names nothing, as before.
+    """
+
+    anchor = solver_anchor(_retained_manifest(retained) or {})
+    if anchor is None:
+        return {}
+    design_id = anchor.get("design_id")
+    if not isinstance(design_id, str) or not design_id.strip():
+        return {}
+    gate = {"expected_design_id": design_id}
+    instance_id = anchor.get("instance_id")
+    if isinstance(instance_id, str) and instance_id:
+        gate["expected_instance_id"] = instance_id
+    return gate
+
+
 def _prepare_sync(
     ctx: PreparationContext, operation_id: str, generation: int, request: PreparationInput
 ) -> tuple[str, Any]:
@@ -575,6 +603,7 @@ def _prepare_sync(
                 },
                 commit_guard=lambda conn: store.attempt_is_current(conn, operation_id, generation),
                 retained_copy=True,
+                **_project_gate(retained),
             )
         except StaleAttempt as exc:
             raise _Fenced() from exc

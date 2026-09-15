@@ -133,10 +133,16 @@ class FakeIngest:
 
     def __call__(
         self, bundle_path, mesh, skipped, store, data_dir, *, prep_options, commit_guard,
-        retained_copy=False,
+        retained_copy=False, expected_design_id=None, expected_instance_id=None,
     ):
         self.calls.append(
-            {"bundle_path": str(bundle_path), "mesh": dict(mesh), "retained_copy": retained_copy}
+            {
+                "bundle_path": str(bundle_path),
+                "mesh": dict(mesh),
+                "retained_copy": retained_copy,
+                "expected_design_id": expected_design_id,
+                "expected_instance_id": expected_instance_id,
+            }
         )
         # Stage 1 exactly as ingest_bundle reads it.
         bundle = ingest_module.read_snapshot(bundle_path, retained=retained_copy)
