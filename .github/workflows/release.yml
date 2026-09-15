@@ -926,6 +926,12 @@ jobs:
             on macOS re-signs and clears quarantine, so an update will not put you back
             behind the first-launch dialog.
 
+            **Updating from 0.3.1 or 0.3.2 with the application and its data on
+            different drives stays blocked in-app**, as it was: those releases stage an
+            update in the data folder, and the swap has to stay on one drive. Install
+            this release once with the full installer. From here on an update is staged
+            beside the application, on its own drive.
+
             <details><summary>Where the in-app updater's files went</summary>
 
             This page holds one file per platform and nothing else. Everything
