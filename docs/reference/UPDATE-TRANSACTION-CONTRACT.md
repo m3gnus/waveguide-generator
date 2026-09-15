@@ -32,8 +32,8 @@ the release owner that this contract records but does not design.
 | An uncommitted transaction keeps `.previous`, and the next update then refuses to start. | `apply_update.py:948-950` ("A previous update has not completed its healthy-start check") |
 | `--browser` and `--no-gui` run through `status_main`. Linux falls back to browser mode when Qt cannot open a window. | `desktop.py:1778-1780`, `:1812-1818` |
 | Browser mode settles on the controller's first poll of its own server whose interface is served, and reports a start it cannot confirm. `--no-gui` runs the server in-process with no controller, settles after a self-probe, and reports every exit that leaves a transaction open. | `launchers/statusapp/controller.py` `poll`, `settle_update_transaction`; `launchers/statusapp/view.py`; `launch/serve.py` `_NoGuiHealthyStart` |
-| Staging is keyed by version: `<data>/updates/<version>/{downloads,staged}`. | `server/updates/bundle.py:866-869` |
-| The installer refuses when staging and the app are on different volumes, and v0.3.2 does the same. | `bundle.py:774-786` |
+| Staging is keyed by version. The download is `<data>/updates/<version>/downloads`. The verified layers go to `<data>/updates/<version>/staged`, or, when the launcher accepts it, to `.<bundle name>.update-staging/<version>/staged` beside the bundle (§2.5; the updater review §2.7). | `server/updates/bundle.py` `_run` |
+| Staging in the data directory is refused when it and the app are on different volumes, and v0.3.2 does the same. Staging beside the bundle needs that folder on the app's volume, and free space is checked on every volume the update uses. | `bundle.py` `_preflight` |
 | The server writes the schema-1 handoff request at the end of staging, then reports `ready`. | `bundle.py:940-953` |
 | The launcher accepts the request only with exactly its five keys and staged paths inside the data directory. It deletes the request as it consumes it. | `launchers/statusapp/updater.py:108-175` |
 | The launcher runs the **staged** helper, `<staged app>/launchers/apply_update.py`, with `cwd` at the data directory. It checks containment again. | `updater.py:562-566`, `:571`, `:587-604`, `:611-616` |
@@ -73,13 +73,16 @@ Still to do:
   a helper older than the flag. Today every candidate is newer than the launcher that hands
   off to it. That stops being true once anything installs an older version, such as a
   Return to Stable (§2.6).
-- destination-side staging, end to end (the updater review §2.7). Staging is still
-  `<data>/updates/<version>`, and the installer still refuses when it and the application
-  are on different volumes (`_preflight` in `server/updates/bundle.py`), so an install
-  that spans two drives cannot update in-app. The downloader, both launcher containment
-  checks, the helper, the journal, recovery and cleanup change together. Acceptance is a
-  two-drive install on native Windows through download, handoff, replace, restart and
-  rollback.
+- the acceptance of destination-side staging (the updater review §2.7, built as §2.5 and
+  §3.2 describe). That is a two-drive install on native Windows through download,
+  handoff, replace, restart and rollback, and staging beside a signed macOS bundle.
+  Neither can run on a development machine. Two limits stand:
+  - a v0.3.1 or v0.3.2 install that spans two drives stays blocked in-app: its own
+    server refuses before any code of this build runs. It needs a one-time full
+    installer;
+  - an automatic rollback to a release older than this change leaves the staging beside
+    the bundle in place. That release knows only `<data>/updates`, so the next start of a
+    build with this change removes it.
 - how long a prepared update stays valid offline, which waits on decision D3 (§5).
 - a second server of the same installation, such as a `--no-gui` start with another data
   directory: it is not shut down with the first, and its healthy start can reclaim
@@ -278,9 +281,14 @@ today's layout, that is the `<data>/updates/<version>/` above `staged/`.
 - A commit that finds another installation's journal reclaims nothing under
   `<data>/updates/`.
 - The same rule applies on both paths: `desktop.py:705-713` and `:822`.
-- When destination-side staging moves `staged/` next to the installation, the rule
-  applies to every root the journal names. Downloads left in a different root are
-  removed only when that root is this transaction's.
+- A staging root may also lie in the staging folder beside the bundle,
+  `.<bundle name>.update-staging` (`destination_staging_root` in
+  `launchers/apply_update.py`). An update is staged there when the launcher accepts it
+  (the updater review §2.7; §3.2). Cleanup uses that folder only when it is a real folder
+  beside the bundle, never through a link or junction. It never removes the bundle, and
+  it removes the folder itself once it is empty. The sweep covers its version folders by
+  the same rules. The download stays in `<data>/updates/<version>`, and the server
+  removes it once the layers are staged beside the bundle, since the swap never uses it.
 
 While staging is keyed by version (`bundle.py:866`), two transactions for one version
 share a root. Keying staging by build identity is part of D2. Until then, one version
@@ -363,9 +371,20 @@ unchanged between v0.3.2 and `8bccff0c`.
 - **That exact command line.** New behaviour arrives through new optional flags. A flag
   an old launcher does not pass is never required.
 - **The version-keyed staging layout under the data directory.** Destination-side
-  staging may add accepted roots. It never rejects the old layout while a supported
-  release still stages there, and it never drops a path check just so a new location
-  passes.
+  staging (§2.5; the updater review §2.7) adds one accepted root: the staging folder the
+  launcher derives beside its own bundle, never one a request names.
+  - Both launcher checks, `consume_update_request` and `launch_bundle_update_handoff`,
+    accept the data directory or that root. They resolve links first, and refuse a link
+    at the root. The old layout stays accepted, because a v0.3.x launcher and server
+    stage there. No path check was dropped.
+  - The helper needs no new flag. It installs from whatever staged directories the
+    launcher passes, and its working directory stays the data directory, outside the
+    staging folder and every layer it renames.
+  - Only a launcher of this build knows the new root, so only it tells its server, with
+    `--update-staging-root` beside `--status-control`. That server runs from the
+    launcher's own app layer, so it is the same build. It stages beside the bundle only
+    when the root is also its own derivation. A v0.3.x launcher passes no root, and its
+    own server stages in the data directory as before.
 - **The oldest supported interpreter.** For an app-only update the interpreter is the
   old installation's runtime (Python 3.13 today). The launcher puts the staged app first
   on `PYTHONPATH` (`updater.py:567-570`), so the helper imports WG code only from its
@@ -798,12 +817,26 @@ that implements it removes the marker.
 | `test_cleanup_spares_another_installations_staging_before_its_journal_exists` | §2.5 | The review's U2, inverted, on both paths: another installation's live owner marker keeps a root the committed transaction named |
 | `test_healthy_start_cleanup_leaves_a_pending_wglink_activation` | §2.4, §2.5 | A pending WGLink activation and the add-in it displaced survive both paths, however old |
 | `test_the_sweep_spares_the_staging_of_a_handoff_request_that_is_present` | §2.5 | The controller's present request keeps the staging it names; once it is gone, the same staging is swept |
+| `test_an_update_staged_beside_the_bundle_installs_and_its_staging_is_reclaimed` | §2.5, §3.2 | On both paths: the helper installs from the staging folder beside the bundle, and the healthy start removes it after the commit, never the bundle |
+| `test_cleanup_never_follows_a_linked_destination_staging_root` | §2.5 | A linked staging folder beside the bundle is refused, on both paths |
+| `test_the_sweep_covers_the_destination_staging_root_too` | §2.5 | Unowned staging beside the bundle is swept; staging in use is kept |
+| `test_a_failed_start_rolls_back_an_update_staged_beside_the_bundle` | §2.5 | Rollback after a failed start, then the restored build's healthy start reclaims the staging |
+| `test_an_interrupted_handoff_staged_beside_the_bundle_is_recovered_and_reclaimed` | §2.5 | A helper killed before its first rename: recovery aborts the transaction, and the staging is reclaimed |
+| `test_a_swap_restored_from_an_unreadable_journal_leaves_its_staging_to_the_sweep` | §2.5 | Recovery that cannot trust the journal restores the old layers, and the sweep takes the staging |
+| `test_the_launcher_tells_its_own_server_where_it_accepts_staging` | §3.2 | The launcher passes its derived root to its own server and accepts a request naming it; outside a bundle there is none |
+| `test_the_server_stages_beside_the_bundle_only_where_its_launcher_accepts_it` | §3.2 | Only a root that is also the server's own derivation is used; `create_app` and the server's options carry it |
 | `test_healthy_start_settles_only_the_build_the_journal_left_installed` | §4.6 | For an installed update, a rolled-back update and a restoring rollback: another commit, the transaction's other build or no manifest in the app layer commits and reclaims nothing and writes the line; the expected build then settles |
 | `test_a_browser_mode_start_needs_health_to_name_the_installed_build` | §4.6 | A bundle's own server naming another build is not ready and settles nothing; the same start settles once it names the installed build |
 | `test_a_no_gui_start_whose_health_names_another_build_does_not_settle` | §4.6 | Live uvicorn: a self-probe whose `/health` names another build reports once and settles nothing |
 
 The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateControl.test.tsx`
 ("a held-back build and the last outcome") and `frontend/src/api/updates.test.ts`.
+
+Destination staging outside this file: `server/tests/test_bundle_update_installer.py`
+(staging beside the application across two volumes, a linked staging root refused, free
+space checked on the destination volume) and `server/tests/test_update_handoff.py` (the
+launcher accepts its own root and refuses any other root or link, and the handoff runs
+from the data directory).
 
 Outside this file: `server/tests/test_bundle_update_installer.py`
 `test_a_staging_that_fails_before_its_request_removes_the_folder_it_created` and
