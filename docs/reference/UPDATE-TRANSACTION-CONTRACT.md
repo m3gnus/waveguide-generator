@@ -96,7 +96,18 @@ Still to do:
     launcher has the file open; the server retries, then treats the handoff as possibly
     under way (§4.2);
   - the update dialog writes the fetched logs through a `ClipboardItem` so WebKit accepts
-    the write; that path has not been exercised in the desktop windows themselves.
+    the write; that path has not been exercised in the desktop windows themselves;
+  - a start whose app layer is not the build the decided journal left, for example after
+    the application was reinstalled by hand over an update, declines to commit on every
+    start and keeps `.previous`, so in-app updates stay refused until a person resolves
+    it. The `update.log` line names the transaction and both builds (§4.6);
+  - an app layer inside an enclosing git work tree, whose git probe timed out on the
+    controller's side only, can still read as another build to the `/health` check (§4.6);
+  - an approval that expires after the launcher took the request counts as a handoff under
+    way. If the launcher then discards the request anyway, the dialog says nothing, and
+    the staging's owner marker ages out (§4.2);
+  - taking a request back holds the bundle installer's lock while the rename is retried,
+    up to about half a second on Windows.
 
 ---
 
@@ -297,11 +308,15 @@ leaking:
   - nothing in it has changed for an hour.
 
   A marker speaks for its folder for an hour whatever its process, and after that, up
-  to a day old, only while its process runs. The launcher stops the server before the
+  to a day old, only while its process runs. One dated more than an hour ahead of this
+  clock is not believed. The launcher stops the server before the
   helper writes its journal, which is why a marker outlives its process. Another
   installation's unreadable journal stops the sweep, as it stops the scoped cleanup.
   Links are never followed, only folders directly inside `<data>/updates` are
-  considered, and `<data>/updates` itself is never removed.
+  considered, and `<data>/updates` itself is never removed. Neither the sweep nor the
+  scoped cleanup removes anything when `<data>/updates` is itself a link or junction, or
+  is not a folder inside `<data>`: the server refuses to stage through such a link, so
+  nothing it leads to is the updater's.
 
 Another installation's marker that still speaks for a root also stops the scoped cleanup
 from removing that root. That covers another copy staging the same version before its
@@ -639,7 +654,9 @@ The evidence each mode has for these:
   `journal_live_build` in `launchers/apply_update.py`.
 - The window and browser modes take the first two from a served `/health` and interface
   route. In a bundle, the controller's own server must name the installed app layer's
-  build label in `/health`. A server that names another build fails the frontend-ready
+  build label in `/health`. A `.dirty` suffix is ignored, and the label the layer's own
+  manifest gives is accepted too, since an app layer inside an enclosing git work tree
+  takes that tree's commit, and a git probe that timed out takes the manifest's. A server that names another build fails the frontend-ready
   predicate, which the window's wait and its settle both use, and the backend lamp says
   why. A `/health` that has not answered yet blocks nothing, so a probe that timed out
   while the interface is served delays no start. The server refuses at start an
