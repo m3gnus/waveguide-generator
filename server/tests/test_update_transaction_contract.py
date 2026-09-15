@@ -1012,6 +1012,92 @@ def test_the_sweep_spares_the_staging_of_a_handoff_request_that_is_present(
     assert not staging.exists(), "set-up: unowned, quiet staging with no request was not swept"
 
 
+@CLEANUP_PATHS
+def test_cleanup_never_follows_a_linked_updates_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.5: links are never followed, including ``<data>/updates`` itself.
+
+    Someone may point ``<data>/updates`` at another drive. Neither the scoped
+    cleanup nor the sweep may then remove anything where the link points: the
+    server refuses to stage through such a link, so nothing there is the
+    updater's.
+    """
+
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    updates = installation.data_dir / "updates"
+    elsewhere = tmp_path.resolve() / "another drive"
+    updates.rename(elsewhere)
+    try:
+        updates.symlink_to(elsewhere, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"this host cannot create a directory link: {exc}")
+    kept = elsewhere / "someone else's folder" / "notes.txt"
+    kept.parent.mkdir()
+    kept.write_text("not the updater's", encoding="utf-8")
+    _age(kept.parent, 2 * 3600)
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    assert kept.is_file(), "cleanup followed <data>/updates to where it points"
+    assert (elsewhere / "9.9.9").is_dir(), "cleanup removed staging through a linked <data>/updates"
+    assert "is a link" in _update_log(installation)
+
+
+def test_a_staging_owner_dated_in_the_future_protects_nothing(tmp_path: Path) -> None:
+    """Contract §2.5: a marker more than an hour ahead of this clock is not believed.
+
+    Otherwise a clock that was once far ahead would leave a marker that speaks
+    for its folder for as long as that took to come round again.
+    """
+
+    installation = _installation(tmp_path)
+    staging = installation.data_dir / "updates" / "9.9.9"
+    _staging_owner(staging, installation="3" * 16, pid=_a_pid_that_has_exited(), age=-3 * 24 * 3600)
+    _age(staging, 2 * 3600)
+
+    removed = apply_update_module.sweep_unowned_staging(
+        installation.data_dir, installation.resources
+    )
+
+    assert not staging.exists(), "a marker dated days in the future kept its folder"
+    assert [path.name for path in removed] == ["9.9.9"]
+
+
+def test_the_controllers_build_check_is_not_fooled_by_how_a_label_was_computed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract §4.6: the server's label and the controller's may differ without another build.
+
+    An app layer inside some enclosing git work tree takes its label from
+    that tree, so a tracked file changed between the server's look and the
+    controller's gives one of them ``.dirty``, and a git probe that timed out on
+    one side gives the layer's own manifest commit there. Neither is another
+    build, and treating it as one would hold the window closed and roll back
+    a good update. A foreign build is still refused.
+    """
+
+    app_layer = tmp_path / "app"
+    (app_layer / "shared").mkdir(parents=True)
+    (app_layer / "shared" / "version.json").write_text(
+        json.dumps({"version": "9.9.9"}), encoding="utf-8"
+    )
+    (app_layer / "APP-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "version": "9.9.9", "commit": "c" * 40, "runtimeId": "rt"}),
+        encoding="utf-8",
+    )
+    # The enclosing tree's commit, and dirty at the controller's look.
+    monkeypatch.setattr(controller_module, "build_label", lambda _root: "9.9.9+g" + "e" * 8 + ".dirty")
+    controller = StatusController(repo_root=app_layer, environ={**os.environ, "WG2_BUNDLE": "1"})
+
+    assert controller._build_mismatch("9.9.9+g" + "e" * 8) is None
+    assert controller._build_mismatch("9.9.9+g" + "e" * 8 + ".dirty") is None
+    assert controller._build_mismatch("9.9.9+g" + "c" * 8) is None
+    assert controller._build_mismatch("0.0.1+gdeadbeef") is not None
+    assert controller._build_mismatch("9.9.9+g" + "d" * 8) is not None
+
+
 # ---------------------------------------------------------------------------
 # Contract §4.5: every launch mode settles its transaction
 # ---------------------------------------------------------------------------

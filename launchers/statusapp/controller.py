@@ -132,6 +132,23 @@ RequestProbe = Callable[[str, float], tuple[int, bytes]]
 _UNANSWERED: object = object()
 
 
+def _without_dirty(label: str) -> str:
+    return label.removesuffix(".dirty")
+
+
+def _manifest_build_label(app_layer: Path) -> str | None:
+    """``<version>+g<commit[:8]>`` from the layer's own files, as ``build_label`` renders a manifest."""
+
+    try:
+        version = json.loads((app_layer / "shared" / "version.json").read_text(encoding="utf-8")).get("version")
+        commit = json.loads((app_layer / "APP-MANIFEST.json").read_text(encoding="utf-8")).get("commit")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(version, str) or not version or not isinstance(commit, str) or not commit.strip():
+        return None
+    return f"{version}+g{commit.strip()[:8]}"
+
+
 def _http_get(url: str, timeout: float) -> tuple[int, bytes]:
     request = Request(url, headers={"User-Agent": "WaveguideGenerator-StatusApp"})
     with urlopen(request, timeout=timeout) as response:
@@ -392,8 +409,9 @@ class StatusController:
             requests=lambda: [path for path in (self.update_request_path,) if path is not None],
         )
         self._settle_attempted = False
-        #: The installed app layer's build label, read once when first needed.
-        self._installed_build: str | None = None
+        #: The labels a server running the installed app layer may name, read
+        #: once when first needed (``_build_mismatch``).
+        self._installed_builds: tuple[str, ...] | None = None
         #: The build the current server process last named in ``/health``.
         self._served_build: object = _UNANSWERED
 
@@ -1041,13 +1059,23 @@ class StatusController:
 
         if named is _UNANSWERED or self.environ.get("WG2_BUNDLE") != "1":
             return None
-        if self._installed_build is None:
-            self._installed_build = build_label(self.repo_root)
-        if named == self._installed_build:
+        if self._installed_builds is None:
+            # ``build_label`` asks git first, so an app layer inside some
+            # enclosing work tree takes that tree's commit, and its dirtiness
+            # can change between the server's look and this one; a git probe
+            # that timed out on one side gives the layer's manifest commit
+            # there. Neither is another build, so dirtiness is ignored and the
+            # manifest's label is accepted too.
+            labels = [_without_dirty(build_label(self.repo_root))]
+            manifest = _manifest_build_label(self.repo_root)
+            if manifest is not None and manifest not in labels:
+                labels.append(manifest)
+            self._installed_builds = tuple(labels)
+        if isinstance(named, str) and _without_dirty(named) in self._installed_builds:
             return None
         return (
             f"/health named build {named!r}, not the installed app layer's "
-            f"{self._installed_build!r}"
+            f"{self._installed_builds[0]!r}"
         )
 
     @staticmethod

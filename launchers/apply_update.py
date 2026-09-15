@@ -990,10 +990,10 @@ def reclaim_committed_staging(
     if refusal is not None:
         _emit_log(log, f"Not removing any update downloads: {refusal}.")
         return []
-    try:
-        updates: Path | None = (directory / "updates").resolve(strict=True)
-    except OSError:
-        updates = None
+    updates, unusable = _updates_directory(directory)
+    if unusable is not None:
+        _emit_log(log, f"Not removing any update downloads: {unusable}.")
+        return []
     roots = record.get("stagingRoots")
     removed: list[Path] = []
     for text in roots if isinstance(roots, list) and updates is not None else []:
@@ -1185,6 +1185,10 @@ def _live_staging_owner(
     except (TypeError, ValueError, OverflowError, OSError):
         return None
     age = now - created
+    if age < -STAGING_OWNER_GRACE_SECONDS:
+        # Dated well ahead of this clock: not a marker this clock can believe,
+        # or it would speak for its folder until the time came round again.
+        return None
     if age >= STAGING_OWNER_MAX_AGE_SECONDS:
         return None
     if age < STAGING_OWNER_GRACE_SECONDS:
@@ -1243,6 +1247,31 @@ def _is_link_or_junction(path: Path) -> bool:
     return path.is_symlink() or (is_junction is not None and bool(is_junction(path)))
 
 
+def _updates_directory(data_dir: Path) -> tuple[Path | None, str | None]:
+    """``<data>/updates``, resolved, only when it is a real folder directly inside ``<data>``.
+
+    Returns ``(folder, None)``, ``(None, None)`` when there is none, or ``(None,
+    why not)``. Cleanup never follows a link, and that includes ``<data>/updates``
+    itself: one pointed at another drive would take the cleanup wherever it
+    points. The server refuses to stage through such a link, so nothing there
+    is the updater's.
+    """
+
+    candidate = Path(data_dir) / "updates"
+    if not os.path.lexists(candidate):
+        return None, None
+    if _is_link_or_junction(candidate):
+        return None, f"{candidate} is a link, and cleanup never follows one"
+    try:
+        resolved = candidate.resolve(strict=True)
+        data = Path(data_dir).resolve(strict=True)
+    except OSError as exc:
+        return None, f"{candidate} could not be resolved: {exc}"
+    if resolved.parent != data or not resolved.is_dir():
+        return None, f"{candidate} is not a folder inside {data}"
+    return resolved, None
+
+
 def sweep_unowned_staging(
     data_dir: Path,
     resources: Path,
@@ -1280,9 +1309,11 @@ def sweep_unowned_staging(
     if refusal is not None:
         _emit_log(log, f"Not sweeping update staging no transaction names: {refusal}.")
         return []
-    try:
-        updates = (directory / "updates").resolve(strict=True)
-    except OSError:
+    updates, unusable = _updates_directory(directory)
+    if unusable is not None:
+        _emit_log(log, f"Not sweeping update staging no transaction names: {unusable}.")
+        return []
+    if updates is None:
         return []
     record = read_completion_record(directory, resources)
     if record is not None and record.get("rollbackMaterial") == ROLLBACK_MATERIAL_RETAINED:

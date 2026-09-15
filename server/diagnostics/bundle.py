@@ -161,13 +161,17 @@ def update_log_tails(logs_dir: Path, rules: ScrubRules) -> dict[str, str | None]
 
     tails: dict[str, str | None] = {}
     for name in UPDATE_LOG_NAMES:
+        # Only the tail is read: update.log is appended to for the life of an
+        # installation, and each "Copy update diagnostics" reads it.
         try:
-            raw = (Path(logs_dir) / name).read_bytes()
+            with (Path(logs_dir) / name).open("rb") as handle:
+                start = max(0, handle.seek(0, io.SEEK_END) - MAX_UPDATE_LOG_BYTES)
+                handle.seek(start)
+                raw = handle.read(MAX_UPDATE_LOG_BYTES)
         except (OSError, ValueError):
             tails[name] = None
             continue
-        if len(raw) > MAX_UPDATE_LOG_BYTES:
-            raw = raw[-MAX_UPDATE_LOG_BYTES:]
+        if start > 0:
             newline = raw.find(b"\n")
             raw = raw[newline + 1 :] if newline >= 0 else b""
         tails[name] = scrub_text(raw.decode("utf-8", errors="replace"), rules)
