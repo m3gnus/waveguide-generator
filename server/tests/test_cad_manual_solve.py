@@ -74,6 +74,7 @@ def test_a_manual_solve_prepares_from_the_retained_copy_with_the_folder_gone(
     ingest_id, retained = _ingest(harness)
     created = _create(harness, ingest_id)
     shutil.rmtree(harness.workspace)
+    replayed = _create(harness, ingest_id)
 
     solved = harness.prepare(
         "manual-1", setup_revision_id=_revision(harness.store, _setup(engine="metal"))
@@ -81,6 +82,7 @@ def test_a_manual_solve_prepares_from_the_retained_copy_with_the_folder_gone(
 
     assert created["operation"]["state"] == "received"
     assert harness.store.get_operation("manual-1")["snapshot_json"] is not None
+    assert replayed == created
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1")
     assert Path(harness.ingest.calls[0]["bundle_path"]) == retained
 

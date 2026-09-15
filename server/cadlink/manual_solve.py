@@ -47,6 +47,25 @@ def create_manual_solve(
     manifest_sha256 = str(ingest.get("manifest_sha256") or "")
     artifact_sha256 = str(ingest.get("artifact_sha256") or "")
     return_id = str(record.get("return_id") or "")
+    target, inputs = prepare_and_solve_request(
+        return_id=return_id,
+        bundle_path=f"ingest/{ingest_id}",
+        manifest_sha256=manifest_sha256,
+    )
+    digest = request_digest(PREPARE_AND_SOLVE, target, inputs)
+    existing = store.get_operation(operation_id)
+    if existing is not None:
+        if (
+            existing.get("kind") != PREPARE_AND_SOLVE
+            or int(existing.get("legacy") or 0) == 1
+            or existing.get("request_digest") != digest
+        ):
+            raise OperationConflict(f"CAD operation {operation_id} already names another request")
+        # Replay recovers the durable operation itself. Its retained artifact may
+        # have been pruned or damaged since acceptance; preparation reports that
+        # separately, but it cannot turn an identical request into a new refusal.
+        return existing, "recovered"
+
     try:
         retained = retained_snapshot_path(data_dir, manifest_sha256)
         bundle = read_snapshot(retained, retained=True)
@@ -59,21 +78,6 @@ def create_manual_solve(
             "The selected CAD import's retained snapshot no longer matches its ingestion record."
         )
 
-    # This identity binds the digest to the exact immutable ingest. Preparation
-    # reads the snapshot recorded below and never resolves it as an exchange path.
-    target, inputs = prepare_and_solve_request(
-        return_id=return_id,
-        bundle_path=f"ingest/{ingest_id}",
-        manifest_sha256=manifest_sha256,
-    )
-    digest = request_digest(PREPARE_AND_SOLVE, target, inputs)
-    existing = store.get_operation(operation_id)
-    if existing is not None and (
-        existing.get("kind") != PREPARE_AND_SOLVE
-        or int(existing.get("legacy") or 0) == 1
-        or existing.get("request_digest") != digest
-    ):
-        raise OperationConflict(f"CAD operation {operation_id} already names another request")
     document = record.get("document") if isinstance(record.get("document"), Mapping) else {}
     project = record.get("project") if isinstance(record.get("project"), Mapping) else {}
     snapshot = {
