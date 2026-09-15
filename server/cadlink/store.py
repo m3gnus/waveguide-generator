@@ -642,6 +642,8 @@ class CadLinkStore:
         digest: str,
         target: Mapping[str, Any] | None,
         inputs: Mapping[str, Any] | None = None,
+        *,
+        snapshot: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str]:
         """Persist a delivered request, or recover the operation it repeats.
 
@@ -671,8 +673,8 @@ class CadLinkStore:
                     INSERT INTO cad_operations (
                       operation_id, kind, request_digest, digest_version,
                       target_json, inputs_json, attempt_generation, state,
-                      legacy, created_at, updated_at, stage
-                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?)
+                      legacy, created_at, updated_at, stage, snapshot_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?)
                     """,
                     (
                         operation_id,
@@ -685,6 +687,7 @@ class CadLinkStore:
                         now,
                         now,
                         STAGE_RECEIVED,
+                        canonical_json(dict(snapshot)) if snapshot is not None else None,
                     ),
                 )
                 row = conn.execute(
@@ -695,6 +698,15 @@ class CadLinkStore:
                 result = "conflict"
             elif int(row["legacy"]) == 1 or row["request_digest"] == digest:
                 result = "recovered"
+                if snapshot is not None and row["snapshot_json"] is None:
+                    conn.execute(
+                        "UPDATE cad_operations SET snapshot_json = ?, updated_at = ? "
+                        "WHERE operation_id = ? AND snapshot_json IS NULL",
+                        (canonical_json(dict(snapshot)), now, operation_id),
+                    )
+                    row = conn.execute(
+                        "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                    ).fetchone()
             else:
                 result = "conflict"
         return dict(row), result

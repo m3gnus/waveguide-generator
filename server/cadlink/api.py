@@ -59,6 +59,12 @@ from .ingest import (
     ingest_bundle,
     resolve_deferred_viewport,
 )
+from .manual_solve import (
+    OperationConflict,
+    SnapshotNotRetained,
+    UnknownIngest,
+    create_manual_solve,
+)
 # The Onshape leg publishes its bundles under WG's own data directory rather
 # than a user-chosen WGLink folder, so re-ingesting one has to be anchored to
 # that directory. Only the location constant is needed here; the Onshape
@@ -1567,6 +1573,13 @@ class SetupRevisionRequest(BaseModel):
     setup: dict[str, Any]
 
 
+class ManualSolveOperationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    operation_id: str = Field(alias="operationId", min_length=1)
+    ingest_id: str = Field(alias="ingestId", min_length=1)
+
+
 class OperationApprovalsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -1726,6 +1739,58 @@ async def list_cad_operations(
         store.list_operations, states=_PENDING_STATES if pending else None, limit=limit
     )
     return {"operations": [operation_summary(row) for row in rows]}
+
+
+@router.post("/operations")
+async def post_cad_operation(
+    payload: ManualSolveOperationRequest, request: Request
+) -> dict[str, Any]:
+    """Create or recover a manual solve from an immutable retained CAD ingest."""
+
+    state = request.app.state
+    restart = getattr(state, "update_restart", None)
+    refusal = restart.refusal() if restart is not None else None
+    if refusal is not None:
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                code=UPDATE_RESTART_PENDING,
+                stage="submission",
+                message=refusal,
+                retryable=True,
+            ),
+        )
+    try:
+        row, _outcome = await asyncio.to_thread(
+            create_manual_solve,
+            state.cadlink_store,
+            Path(state.data_dir),
+            payload.operation_id,
+            payload.ingest_id,
+        )
+    except UnknownIngest as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except OperationConflict as exc:
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                code="operation_conflict",
+                stage="submission",
+                message=str(exc),
+                retryable=False,
+            ),
+        )
+    except SnapshotNotRetained as exc:
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                code="snapshot_not_retained",
+                stage="submission",
+                message=str(exc),
+                retryable=False,
+            ),
+        )
+    return {"operation": operation_summary(row)}
 
 
 @router.get("/operations/{operation_id}")

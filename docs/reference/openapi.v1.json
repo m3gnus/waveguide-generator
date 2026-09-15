@@ -5026,6 +5026,27 @@
         "type": "object"
       },
       "JsonValue": {},
+      "ManualSolveOperationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "ingestId": {
+            "minLength": 1,
+            "title": "Ingestid",
+            "type": "string"
+          },
+          "operationId": {
+            "minLength": 1,
+            "title": "Operationid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operationId",
+          "ingestId"
+        ],
+        "title": "ManualSolveOperationRequest",
+        "type": "object"
+      },
       "MeshConfig": {
         "additionalProperties": false,
         "properties": {
@@ -8373,6 +8394,48 @@
           }
         },
         "summary": "List Cad Operations",
+        "tags": [
+          "cadlink"
+        ]
+      },
+      "post": {
+        "description": "Create or recover a manual solve from an immutable retained CAD ingest.",
+        "operationId": "post_cad_operation_api_cadlink_operations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualSolveOperationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Cad Operation Api Cadlink Operations Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Cad Operation",
         "tags": [
           "cadlink"
         ]

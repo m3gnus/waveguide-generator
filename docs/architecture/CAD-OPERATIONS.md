@@ -286,6 +286,16 @@ A solve operation is prepared by the backend, in stages. The UI issues
 `POST /api/cadlink/operations/{id}/prepare` (a setup revision; whether to submit; the
 blocking findings the user reviewed, and on which preparation) and observes.
 
+A manual Solve starts with `POST /api/cadlink/operations` and
+`{operationId, ingestId}`. The backend resolves that immutable ingestion record to its
+content-addressed `.wgreturn`, refuses `snapshot_not_retained` when the copy is gone,
+and accepts a `prepare_and_solve` operation with its snapshot recorded immediately.
+The request's internal `bundle_path` is `ingest/<ingestId>`: it binds the digest to the
+exact ingest rather than naming an exchange folder that can disappear. Repeating the
+same pair recovers the operation; reusing the id for another ingest is
+`operation_conflict`. A UI then stores its setup revision and prepares the operation
+through the same route and stages as a solve requested by Fusion.
+
 | Stage | What is done | Committed as |
 | --- | --- | --- |
 | `received` | Accepted. The snapshot is retained in WG's storage before the delivery is acknowledged; a return that cannot be read yet keeps its delivery for a while (see "Consuming a delivery") | the operation row, `snapshot_json` |
