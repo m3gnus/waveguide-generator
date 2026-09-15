@@ -311,6 +311,28 @@ describe('CadLinkPanel', () => {
     }).action).toBeNull();
   });
 
+  it('does not claim Fusion reported an interruption when reconciliation finds no current evidence', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    const posted = recordOperationRequests();
+    act(() => useCadOperationsStore.getState().apply(cadOperation({
+      operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
+    })));
+
+    await act(async () => {
+      buttonIn(operationCard('op-update'), 'Check Fusion again')!.click();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(posted).toContainEqual({ path: '/api/cadlink/operations/op-update/reconcile', body: null });
+    expect(operationCard('op-update')).not.toBeNull();
+    expect(useCadOperationsStore.getState().operations['op-update'].state).toBe('recovery_required');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe(
+      'WG found no current Fusion evidence that the update completed. Use Undo in Fusion or repair the link before continuing.',
+    );
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).not.toContain('Fusion still reports');
+  });
+
   it('dismisses the durable card without claiming that Fusion was repaired', async () => {
     await renderAndSelect();
     await clickIngest();

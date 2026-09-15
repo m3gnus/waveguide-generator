@@ -1950,7 +1950,7 @@ export function CadLinkCoordinator() {
       () => reconcileCadOperation(operationId),
       (summary) => summary.state === 'accepted'
         ? 'Fusion evidence confirms that the update completed.'
-        : 'Fusion still reports an interrupted update that needs Undo or repair.',
+        : 'WG found no current Fusion evidence that the update completed. Use Undo in Fusion or repair the link before continuing.',
     );
     await refreshFusionStatus();
   }, [actOnOperation, refreshFusionStatus]);
