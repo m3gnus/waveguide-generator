@@ -32,6 +32,16 @@ from pathlib import Path
 UPDATE_RELEASED_FILENAME = "update-released.json"
 
 
+#: The staging folder beside the bundle that the status window accepts a
+#: request naming (the updater review §2.7). The window puts it in the
+#: environment of the server it starts, never on its command line: that server
+#: can be an older release's, restored by the window's own recovery, and a
+#: released server's parser refuses any option it does not know, while it
+#: ignores an unknown variable. Set by ``launchers/statusapp/controller.py``,
+#: read (and removed) by ``launch/serve.py``.
+UPDATE_STAGING_ROOT_ENV = "WG2_UPDATE_STAGING_ROOT"
+
+
 #: What users type, on every platform: the installed command, the ``~/.local/bin``
 #: symlink and the macOS/Windows launchers all present this name. argparse would
 #: otherwise derive ``prog`` from ``sys.argv[0]`` and title the help
@@ -54,7 +64,4 @@ def add_server_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     )
     parser.add_argument("--status-control", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
-    # The staging folder beside the bundle that the launcher accepts a request
-    # naming (the updater review §2.7). Only the launcher passes it.
-    parser.add_argument("--update-staging-root", type=Path, help=argparse.SUPPRESS)
     return parser

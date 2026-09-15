@@ -33,7 +33,7 @@ the release owner that this contract records but does not design.
 | `--browser` and `--no-gui` run through `status_main`. Linux falls back to browser mode when Qt cannot open a window. | `desktop.py:1778-1780`, `:1812-1818` |
 | Browser mode settles on the controller's first poll of its own server whose interface is served, and reports a start it cannot confirm. `--no-gui` runs the server in-process with no controller, settles after a self-probe, and reports every exit that leaves a transaction open. | `launchers/statusapp/controller.py` `poll`, `settle_update_transaction`; `launchers/statusapp/view.py`; `launch/serve.py` `_NoGuiHealthyStart` |
 | Staging is keyed by version. The download is `<data>/updates/<version>/downloads`. The verified layers go to `<data>/updates/<version>/staged`, or, when the launcher accepts it, to `.<bundle name>.update-staging/<version>/staged` beside the bundle (§2.5; the updater review §2.7). | `server/updates/bundle.py` `_run` |
-| Staging in the data directory is refused when it and the app are on different volumes, and v0.3.2 does the same. Staging beside the bundle needs that folder on the app's volume, and free space is checked on every volume the update uses. | `bundle.py` `_preflight` |
+| Staging in the data directory is refused when it and the app are on different volumes, and v0.3.2 does the same. Staging beside the bundle needs that folder on the app's volume and writable. Where it cannot be written, staging falls back to the data directory on one volume and is refused across two. Free space is checked on every volume the update uses. | `bundle.py` `_preflight` |
 | The server writes the schema-1 handoff request at the end of staging, then reports `ready`. | `bundle.py:940-953` |
 | The launcher accepts the request only with exactly its five keys and staged paths inside the data directory. It deletes the request as it consumes it. | `launchers/statusapp/updater.py:108-175` |
 | The launcher runs the **staged** helper, `<staged app>/launchers/apply_update.py`, with `cwd` at the data directory. It checks containment again. | `updater.py:562-566`, `:571`, `:587-604`, `:611-616` |
@@ -285,7 +285,9 @@ today's layout, that is the `<data>/updates/<version>/` above `staged/`.
   `.<bundle name>.update-staging` (`destination_staging_root` in
   `launchers/apply_update.py`). An update is staged there when the launcher accepts it
   (the updater review §2.7; §3.2). Cleanup uses that folder only when it is a real folder
-  beside the bundle, never through a link or junction. It never removes the bundle, and
+  beside the bundle, never through a link or junction. A folder refused there is refused
+  on its own: the cleanup and the sweep of `<data>/updates` go on, and a root inside the
+  refused folder is left in place. Cleanup never removes the bundle, and
   it removes the folder itself once it is empty. The sweep covers its version folders by
   the same rules. The download stays in `<data>/updates/<version>`, and the server
   removes it once the layers are staged beside the bundle, since the swap never uses it.
@@ -306,6 +308,8 @@ leaking:
   cleanup in `launchers/apply_update.py`.
 - **A failed staging cleans up after itself.** One that fails before its request is
   written removes the folder if that run created it, and otherwise only its own marker.
+  A download folder it already removed, once the layers were staged beside the bundle,
+  is not its own any more, and a later failure leaves that path alone.
 - **A sweep.** After the scoped cleanup, every healthy start sweeps the
   `<data>/updates/<version>` folders nothing owns (`sweep_unowned_staging`). A folder goes
   only when all of these hold:
@@ -380,11 +384,21 @@ unchanged between v0.3.2 and `8bccff0c`.
   - The helper needs no new flag. It installs from whatever staged directories the
     launcher passes, and its working directory stays the data directory, outside the
     staging folder and every layer it renames.
-  - Only a launcher of this build knows the new root, so only it tells its server, with
-    `--update-staging-root` beside `--status-control`. That server runs from the
-    launcher's own app layer, so it is the same build. It stages beside the bundle only
-    when the root is also its own derivation. A v0.3.x launcher passes no root, and its
-    own server stages in the data directory as before.
+  - Only a launcher of this build knows the new root, so only it tells its server, in
+    the server's environment as `WG2_UPDATE_STAGING_ROOT`, never on its command line.
+    The server it starts is not always its own build. The desktop window's in-process
+    recovery can restore an older release's layers and start that release's server,
+    whose parser refuses any option it does not know (v0.3.2 exits 2). An older server
+    ignores the variable and stages in the data directory, which the launcher still
+    accepts. The launcher drops a value it inherited. The server reads the variable only
+    beside `--status-control` and removes it from its own environment, so no child
+    inherits it. It stages beside the bundle only when the root is also its own
+    derivation. A v0.3.x launcher sets no root, and its own server stages in the data
+    directory as before.
+  - The server stages beside the bundle only where it can write. When the folder beside
+    the bundle cannot be written (an admin-owned `/Applications` or `/opt`), it stages
+    in the data directory as before if that is on the application's volume. Otherwise it
+    refuses before downloading, and names the folder.
 - **The oldest supported interpreter.** For an app-only update the interpreter is the
   old installation's runtime (Python 3.13 today). The launcher puts the staged app first
   on `PYTHONPATH` (`updater.py:567-570`), so the helper imports WG code only from its
@@ -823,8 +837,10 @@ that implements it removes the marker.
 | `test_a_failed_start_rolls_back_an_update_staged_beside_the_bundle` | §2.5 | Rollback after a failed start, then the restored build's healthy start reclaims the staging |
 | `test_an_interrupted_handoff_staged_beside_the_bundle_is_recovered_and_reclaimed` | §2.5 | A helper killed before its first rename: recovery aborts the transaction, and the staging is reclaimed |
 | `test_a_swap_restored_from_an_unreadable_journal_leaves_its_staging_to_the_sweep` | §2.5 | Recovery that cannot trust the journal restores the old layers, and the sweep takes the staging |
-| `test_the_launcher_tells_its_own_server_where_it_accepts_staging` | §3.2 | The launcher passes its derived root to its own server and accepts a request naming it; outside a bundle there is none |
-| `test_the_server_stages_beside_the_bundle_only_where_its_launcher_accepts_it` | §3.2 | Only a root that is also the server's own derivation is used; `create_app` and the server's options carry it |
+| `test_an_unusable_staging_folder_beside_the_bundle_does_not_stop_other_cleanup` | §2.5 | On both paths: something at the folder's name that is not a folder is left and named in the log, and `<data>/updates` is still cleaned up and swept |
+| `test_the_launcher_tells_its_own_server_where_it_accepts_staging` | §3.2 | The launcher passes its derived root in its server's environment, not its command line, and accepts a request naming it; outside a bundle there is none, and an inherited value is dropped |
+| `test_the_server_stages_beside_the_bundle_only_where_its_launcher_accepts_it` | §3.2 | Only a root that is also the server's own derivation is used; `serve.py` reads it only beside `--status-control`, and the command line takes no such option |
+| `test_a_released_server_accepts_the_command_this_launcher_starts_it_with` | §3.2 | The latest release's own server parser accepts the command this build's launcher starts a server with, as after an in-process recovery to that release |
 | `test_healthy_start_settles_only_the_build_the_journal_left_installed` | §4.6 | For an installed update, a rolled-back update and a restoring rollback: another commit, the transaction's other build or no manifest in the app layer commits and reclaims nothing and writes the line; the expected build then settles |
 | `test_a_browser_mode_start_needs_health_to_name_the_installed_build` | §4.6 | A bundle's own server naming another build is not ready and settles nothing; the same start settles once it names the installed build |
 | `test_a_no_gui_start_whose_health_names_another_build_does_not_settle` | §4.6 | Live uvicorn: a self-probe whose `/health` names another build reports once and settles nothing |
@@ -834,7 +850,10 @@ The dialog's side of §2.2 and §2.3 is tested in `frontend/src/shell/UpdateCont
 
 Destination staging outside this file: `server/tests/test_bundle_update_installer.py`
 (staging beside the application across two volumes, a linked staging root refused, free
-space checked on the destination volume) and `server/tests/test_update_handoff.py` (the
+space checked on the destination volume, an unwritable folder beside the application
+falling back to the data directory on one volume and refused across two, and a failed
+request never removing the spent download folder again) and
+`server/tests/test_update_handoff.py` (the
 launcher accepts its own root and refuses any other root or link, and the handoff runs
 from the data directory).
 

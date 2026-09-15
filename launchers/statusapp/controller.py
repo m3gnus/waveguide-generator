@@ -29,7 +29,7 @@ from scripts.frontend_freshness import (
     installer_hint,
     refresh_hint,
 )
-from launch.serve_options import UPDATE_RELEASED_FILENAME
+from launch.serve_options import UPDATE_RELEASED_FILENAME, UPDATE_STAGING_ROOT_ENV
 from launchers.apply_update import append_update_log, destination_staging_root
 from server.platform.instance import requested_port
 from server.platform.paths import app_root, resolve_data_dir
@@ -602,12 +602,6 @@ class StatusController:
                 str(os.getpid()),
             )
         )
-        staging_root = self.update_staging_root()
-        if staging_root is not None:
-            # The server runs from this launcher's own app layer, so it is the
-            # same build, and it is told the one staging root this launcher
-            # accepts a request naming (the updater review §2.7).
-            command.extend(("--update-staging-root", str(staging_root)))
         return command
 
     def update_staging_root(self) -> Path | None:
@@ -615,6 +609,33 @@ class StatusController:
 
         paths = self.bundle_paths()
         return destination_staging_root(paths[0]) if paths is not None else None
+
+    def _server_environment(self) -> dict[str, str]:
+        """The environment the owned server starts with.
+
+        In a bundle it names the one staging root this launcher accepts a
+        request naming (the updater review §2.7). The root travels here, not on
+        the command line, because the server this launcher starts is not
+        always its own build: the desktop window's in-process recovery can
+        restore an older release's layers and start that release's server,
+        whose parser refuses an option it does not know. An older server
+        ignores the variable and stages in the data directory, which this
+        launcher still accepts. A value inherited from this launcher's own
+        environment is never passed on.
+        """
+
+        environment = dict(self.environ)
+        environment.pop(UPDATE_STAGING_ROOT_ENV, None)
+        environment["WG2_NO_BROWSER"] = "1"
+        # stdout and stderr are merged into one pipe, where stdout is block
+        # buffered and stderr is not, so a dependency's start-up print
+        # otherwise lands after the logging that explains a failure. This
+        # keeps the collected output in the order it was written.
+        environment["PYTHONUNBUFFERED"] = "1"
+        staging_root = self.update_staging_root()
+        if staging_root is not None:
+            environment[UPDATE_STAGING_ROOT_ENV] = str(staging_root)
+        return environment
 
     def _collect_output(self, stream: IO[str], output: deque[str]) -> None:
         try:
@@ -691,13 +712,7 @@ class StatusController:
             self._control_path = Path(self._temporary_directory.name) / "stop"
             self._ready_path = Path(self._temporary_directory.name) / "ready.json"
             self._update_request_path = Path(self._temporary_directory.name) / "update.json"
-            environment = dict(self.environ)
-            environment["WG2_NO_BROWSER"] = "1"
-            # stdout and stderr are merged into one pipe, where stdout is block
-            # buffered and stderr is not, so a dependency's start-up print
-            # otherwise lands after the logging that explains a failure. This
-            # keeps the collected output in the order it was written.
-            environment["PYTHONUNBUFFERED"] = "1"
+            environment = self._server_environment()
             popen_options: dict[str, object] = {
                 "cwd": str(self.repo_root),
                 "env": environment,

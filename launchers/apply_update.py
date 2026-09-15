@@ -1002,8 +1002,11 @@ def reclaim_committed_staging(
         return []
     staging, staging_unusable = _staging_directory(bundle) if bundle is not None else (None, None)
     if staging_unusable is not None:
-        _emit_log(log, f"Not removing any update staging: {staging_unusable}.")
-        return []
+        # Refused on its own: the downloads in ``<data>/updates`` still go, and
+        # a root inside the refused folder is left in place below.
+        _emit_log(
+            log, f"Not removing any update staging beside the application: {staging_unusable}."
+        )
     containers = [container for container in (updates, staging) if container is not None]
     try:
         application = Path(bundle).resolve() if bundle is not None else None
@@ -1395,8 +1398,10 @@ def sweep_unowned_staging(
         return []
     staging, staging_unusable = _staging_directory(bundle) if bundle is not None else (None, None)
     if staging_unusable is not None:
-        _emit_log(log, f"Not sweeping update staging no transaction names: {staging_unusable}.")
-        return []
+        # Refused on its own: ``<data>/updates`` is still swept.
+        _emit_log(
+            log, f"Not sweeping the update staging beside the application: {staging_unusable}."
+        )
     containers = [container for container in (updates, staging) if container is not None]
     if not containers:
         return []

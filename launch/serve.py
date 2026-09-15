@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from contextlib import contextmanager
 import json
 import logging
@@ -31,6 +31,7 @@ import uvicorn  # noqa: E402 - the checkout root must be importable first
 from launch.serve_options import (  # noqa: E402
     PROGRAM_NAME,
     UPDATE_RELEASED_FILENAME,
+    UPDATE_STAGING_ROOT_ENV,
     add_server_arguments,
 )
 from server.app import BUILD, create_app  # noqa: E402
@@ -173,6 +174,24 @@ def _solver_warmup_enabled() -> bool:
     """
 
     return os.environ.get("WG2_SOLVER_WARMUP") == "1"
+
+
+def _update_staging_root(
+    args: argparse.Namespace, environ: MutableMapping[str, str]
+) -> Path | None:
+    """The staging folder beside the bundle that this server's launcher accepts, if any.
+
+    The status window puts it in this process's environment
+    (``UPDATE_STAGING_ROOT_ENV``); it is taken out again whatever it says, so
+    no child of the server inherits it. It counts only with a launcher to hand
+    off to (``--status-control``), and the update service still checks it
+    against its own derivation (the updater review §2.7).
+    """
+
+    value = environ.pop(UPDATE_STAGING_ROOT_ENV, None)
+    if args.status_control is None or not value:
+        return None
+    return Path(value)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -770,11 +789,7 @@ def main(argv: list[str] | None = None) -> int:
                 else None
             ),
             # Only with a launcher to hand off to: the staging root it accepts.
-            update_staging_root=(
-                getattr(args, "update_staging_root", None)
-                if args.status_control is not None
-                else None
-            ),
+            update_staging_root=_update_staging_root(args, os.environ),
         )
         # ``getattr`` twice: an embedder's or a test's stand-in app need not
         # carry Starlette's ``state`` at all.

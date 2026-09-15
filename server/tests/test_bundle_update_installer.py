@@ -423,6 +423,112 @@ def test_the_destination_volume_needs_room_for_the_staged_layers(tmp_path: Path)
     assert not staging_root.exists()
 
 
+def _read_only(folder: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("folder permissions are not POSIX modes on Windows")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root writes through read-only modes")
+    folder.chmod(0o555)
+
+
+def test_an_unwritable_folder_beside_the_application_falls_back_to_the_data_directory(
+    tmp_path: Path,
+) -> None:
+    """The review of §2.7: an install whose bundle's folder cannot be written still updates.
+
+    Such an installation updated in-app before destination staging existed. On
+    one volume it still does, staging in the data directory as before.
+    """
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, fetch = _fakes({name: app})
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    staging_root = installed / ".Waveguide Generator.update-staging"
+    _read_only(installed)
+    try:
+        installer = _installer(
+            tmp_path, downloader=download, small_fetcher=fetch, staging_root=staging_root
+        )
+        _start(installer, "2.0.1", [_asset(name, app, "app")])
+        installer.wait(2)
+        state = installer.status()
+        assert state["installState"] == "ready", state
+        payload = json.loads((tmp_path / "control" / "update.json").read_text(encoding="utf-8"))
+        assert Path(payload["stagedAppDir"]).is_relative_to((tmp_path / "data").resolve())
+        assert not staging_root.exists()
+    finally:
+        installed.chmod(0o755)
+
+
+def test_an_unwritable_folder_beside_the_application_is_refused_across_volumes(
+    tmp_path: Path,
+) -> None:
+    """With the data directory on another volume there is no fallback: say why, before downloading."""
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, fetch = _fakes({name: app})
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    staging_root = installed / ".Waveguide Generator.update-staging"
+    _read_only(installed)
+    try:
+        installer = _installer(
+            tmp_path,
+            downloader=download,
+            small_fetcher=fetch,
+            volume_probe=_two_volumes(tmp_path),
+            staging_root=staging_root,
+        )
+        with pytest.raises(BundleInstallError, match="staging folder beside the application"):
+            _start(installer, "2.0.1", [_asset(name, app, "app")])
+        assert installer.status()["installState"] == "idle"
+    finally:
+        installed.chmod(0o755)
+
+
+def test_a_failed_request_never_removes_the_download_folder_a_second_time(
+    tmp_path: Path,
+) -> None:
+    """The review of §2.7: once the spent download is removed, its path is not this run's.
+
+    Another installation sharing the data directory may begin staging the same
+    version there, and an older release writes no owner marker. A failure after
+    that point must not remove what is at the path by then.
+    """
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, fetch = _fakes({name: app})
+    staging_root = tmp_path / "installed" / ".Waveguide Generator.update-staging"
+    staging_root.parent.mkdir(parents=True)
+    (tmp_path / "control" / "update.json").mkdir(parents=True)  # the request cannot be written
+    other = tmp_path / "data" / "updates" / "2.0.1" / "staged" / "app" / "marker.txt"
+    installer = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=fetch,
+        volume_probe=_two_volumes(tmp_path),
+        staging_root=staging_root,
+    )
+    approve = installer.restart_approval.approve
+
+    def approve_while_another_stages(target: str) -> int:
+        other.parent.mkdir(parents=True)
+        other.write_text("another installation's staging", encoding="utf-8")
+        return approve(target)
+
+    installer.restart_approval.approve = approve_while_another_stages  # type: ignore[method-assign]
+
+    _start(installer, "2.0.1", [_asset(name, app, "app")])
+    installer.wait(2)
+
+    assert installer.status()["installState"] == "failed"
+    assert other.is_file(), "a failed request removed a folder it no longer owned"
+
+
 def test_digest_failure_is_reported_and_never_writes_a_request(tmp_path: Path) -> None:
     app = _app_zip()
     name = "update-app-2.0.1.zip"

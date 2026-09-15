@@ -1303,10 +1303,13 @@ def test_a_swap_restored_from_an_unreadable_journal_leaves_its_staging_to_the_sw
 def test_the_launcher_tells_its_own_server_where_it_accepts_staging(tmp_path: Path) -> None:
     """§2.7: the launcher derives the staging root from the installation it owns.
 
-    It hands that root to the server it starts, which is always its own build's,
-    and accepts a request naming it. Outside a bundle there is no root.
+    It hands that root to the server it starts through the server's environment
+    (``WG2_UPDATE_STAGING_ROOT``), never its command line, and accepts a request
+    naming it. Outside a bundle there is no root, and one inherited from the
+    launcher's own environment is not passed on.
     """
 
+    from launch.serve_options import UPDATE_STAGING_ROOT_ENV
     from launchers.statusapp.updater import BundleUpdateRequest
 
     installation = _installation(tmp_path, sys.platform)
@@ -1318,14 +1321,17 @@ def test_the_launcher_tells_its_own_server_where_it_accepts_staging(tmp_path: Pa
         repo_root=app_layer, server_args=server_args, environ={**os.environ, "WG2_BUNDLE": "1"}
     )
 
-    command = controller._command(3100, control)
-    assert command[command.index("--update-staging-root") + 1] == str(root)
+    assert controller._server_environment()[UPDATE_STAGING_ROOT_ENV] == str(root)
+    assert "--update-staging-root" not in controller._command(3100, control)
     checkout = StatusController(
         repo_root=app_layer,
         server_args=server_args,
-        environ={name: value for name, value in os.environ.items() if name != "WG2_BUNDLE"},
+        environ={
+            **{name: value for name, value in os.environ.items() if name != "WG2_BUNDLE"},
+            UPDATE_STAGING_ROOT_ENV: str(tmp_path / "somewhere else"),
+        },
     )
-    assert "--update-staging-root" not in checkout._command(3100, control)
+    assert UPDATE_STAGING_ROOT_ENV not in checkout._server_environment()
 
     staged_app = root / "2.0.1" / "staged" / "app"
     staged_app.mkdir(parents=True)
@@ -1384,10 +1390,104 @@ def test_the_server_stages_beside_the_bundle_only_where_its_launcher_accepts_it(
         update_staging_root=root,
     )
     assert app.state.update_service.requested_staging_root == root
-    parsed = add_server_arguments(argparse.ArgumentParser()).parse_args(
-        ["--update-staging-root", str(root)]
+
+    # serve.py reads the root from its launcher's environment, and only when it
+    # has a launcher to hand off to; its command line takes no such option.
+    from launch.serve_options import UPDATE_STAGING_ROOT_ENV
+
+    with_launcher = SimpleNamespace(status_control=tmp_path / "control" / "stop")
+    alone = SimpleNamespace(status_control=None)
+    assert serve._update_staging_root(with_launcher, {UPDATE_STAGING_ROOT_ENV: str(root)}) == root
+    assert serve._update_staging_root(alone, {UPDATE_STAGING_ROOT_ENV: str(root)}) is None
+    assert serve._update_staging_root(with_launcher, {}) is None
+    with pytest.raises(SystemExit):
+        add_server_arguments(argparse.ArgumentParser()).parse_args(
+            ["--update-staging-root", str(root)]
+        )
+
+
+def test_a_released_server_accepts_the_command_this_launcher_starts_it_with(
+    tmp_path: Path,
+) -> None:
+    """The review of §2.7: this build's launcher can start an older release's server.
+
+    The desktop window recovers an interrupted update in-process: it can
+    restore an older release's layers and then start that server, while this
+    build's launcher is still the one in memory. A released server's parser
+    refuses any option it does not know (v0.3.1's and v0.3.2's both call
+    ``parse_args``), so the command carries none of this build's own. The
+    staging root travels in the environment, which an older server ignores.
+    """
+
+    import argparse
+    import importlib.util
+
+    from _release_tags import LATEST_RELEASE_TAG
+
+    installation = _installation(tmp_path, sys.platform)
+    controller = StatusController(
+        repo_root=installation.resources / "app",
+        server_args=("--data-dir", str(installation.data_dir)),
+        environ={**os.environ, "WG2_BUNDLE": "1"},
     )
-    assert parsed.update_staging_root == root
+    command = controller._command(3100, tmp_path / "control" / "stop")
+    shown = subprocess.run(  # noqa: S603 - fixed program and arguments
+        [  # noqa: S607 - git from PATH, as every repository script finds it
+            "git", "-C", str(REPOSITORY_ROOT), "show", f"{LATEST_RELEASE_TAG}:launch/serve_options.py",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shown.returncode != 0:
+        skip_or_fail_missing_tag(
+            f"{LATEST_RELEASE_TAG}:launch/serve_options.py is not reachable from this checkout"
+        )
+    source = tmp_path / "released_serve_options.py"
+    source.write_text(shown.stdout, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("released_serve_options", source)
+    if spec is None or spec.loader is None:
+        pytest.fail("set-up: the released server options could not be loaded")
+    released = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(released)
+    parser = released.add_server_arguments(argparse.ArgumentParser(prog="serve"))
+
+    arguments = command[2:]  # after the interpreter and serve.py
+    try:
+        parser.parse_args(arguments)
+    except SystemExit as exc:
+        pytest.fail(
+            f"{LATEST_RELEASE_TAG}'s server refuses the command this launcher starts it "
+            f"with (exit {exc.code}): {arguments}"
+        )
+
+
+@CLEANUP_PATHS
+def test_an_unusable_staging_folder_beside_the_bundle_does_not_stop_other_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """The review of §2.7: the folder beside the bundle is refused on its own.
+
+    Something at its name that is not a folder is left alone and named in
+    ``update.log``, and the cleanup of ``<data>/updates`` goes on without it.
+    """
+
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    blocker = _destination_root(installation.bundle)
+    blocker.write_text("not a folder", encoding="utf-8")
+    abandoned = installation.data_dir / "updates" / "9.9.8" / "downloads" / "update-runtime.zip"
+    abandoned.parent.mkdir(parents=True)
+    abandoned.write_bytes(b"x" * 64)
+    _age(installation.data_dir / "updates" / "9.9.8", 2 * 3600)
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    written = _update_log(installation)
+    assert not (installation.data_dir / "updates" / "9.9.9").exists(), written
+    assert not (installation.data_dir / "updates" / "9.9.8").exists(), written
+    assert blocker.is_file()
+    assert "not a folder beside the application" in written
 
 
 # ---------------------------------------------------------------------------

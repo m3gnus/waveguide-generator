@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import tempfile
 import threading
 from typing import Any
 import urllib.error
@@ -36,6 +37,30 @@ from launchers.apply_update import (
 def _is_link_or_junction(path: Path) -> bool:
     is_junction = getattr(os.path, "isjunction", None)
     return os.path.islink(path) or (is_junction is not None and bool(is_junction(path)))
+
+
+def _unwritable(folder: Path) -> str | None:
+    """Why nothing can be staged in ``folder``, or ``None``; a probe file is written and removed.
+
+    The folder is created when absent, and removed again if the probe then fails.
+    """
+
+    created = False
+    try:
+        if not os.path.lexists(folder):
+            folder.mkdir()
+            created = True
+        descriptor, probe = tempfile.mkstemp(prefix=".write-probe-", dir=folder)
+        os.close(descriptor)
+        os.unlink(probe)
+    except OSError as exc:
+        if created:
+            try:
+                folder.rmdir()
+            except OSError:
+                pass
+        return str(exc) or type(exc).__name__
+    return None
 
 
 DEFAULT_UPDATES_API_BASE = "https://api.github.com"
@@ -740,7 +765,7 @@ class BundleUpdateInstaller:
                     f"Update {active_version} is already active. Wait for it to be consumed "
                     "or reset before installing a different release."
                 )
-            self._preflight(normalized)
+            staging_root = self._preflight(normalized)
             total = sum(int(asset["bytes"]) for asset in normalized)
             self._active_job_key = job_key
             self._state = {
@@ -757,6 +782,7 @@ class BundleUpdateInstaller:
                     normalized,
                     expected_runtime_id,
                     installed_runtime_id,
+                    staging_root,
                 ),
                 name="wg-bundle-update",
                 daemon=True,
@@ -871,7 +897,13 @@ class BundleUpdateInstaller:
         )
         return (version, expected_runtime_id, installed_runtime_id, asset_identity)
 
-    def _preflight(self, assets: Sequence[Mapping[str, object]]) -> None:
+    def _preflight(self, assets: Sequence[Mapping[str, object]]) -> Path | None:
+        """Refuse an update this installation cannot take; return where to stage it.
+
+        The staging folder beside the application when the launcher accepts
+        one and it can be written, otherwise ``None``: the data directory.
+        """
+
         archives = sum(int(asset["bytes"]) for asset in assets)
         extracted = sum(LAYER_LIMITS[str(asset["layer"])].extracted_bytes for asset in assets)
         staging_parent: Path | None = None
@@ -927,6 +959,22 @@ class BundleUpdateInstaller:
                     f"There is not enough free disk space to {purpose} this update "
                     f"safely ({required} bytes required, {available} bytes available)."
                 )
+        if self.staging_root is None:
+            return None
+        problem = _unwritable(self.staging_root)
+        if problem is None:
+            return self.staging_root
+        if data_volume == destination_volume:
+            # An application in a folder this user cannot write (an admin-owned
+            # /Applications, /opt) updated in-app before destination staging
+            # existed, and it still does: on one volume the data directory
+            # serves as well, and it needs the same free space.
+            return None
+        raise BundleInstallError(
+            f"The update staging folder beside the application, {self.staging_root}, cannot "
+            f"be written ({problem}), and the data directory is on a different filesystem "
+            "from the application, so the update cannot be installed safely."
+        )
 
     @staticmethod
     def _validated_assets(
@@ -990,10 +1038,14 @@ class BundleUpdateInstaller:
         assets: Sequence[Mapping[str, object]],
         expected_runtime_id: str,
         installed_runtime_id: str,
+        staging_root: Path | None,
     ) -> None:
         update_dir: Path | None = None
         owner: dict[str, Any] | None = None
         created = False
+        # Set once the spent download folder is removed: from then on its path
+        # is not this run's, and another installation may be staging there.
+        downloads_released = False
         # Where the verified layers go: the same folder, or one beside the
         # application (§2.7), with its own owner marker.
         stage_dir: Path | None = None
@@ -1010,18 +1062,18 @@ class BundleUpdateInstaller:
             # says it is in use, and by which installation (contract §2.5).
             owner = write_staging_owner(update_dir, self.installation)
             downloads = update_dir / "downloads"
-            if self.staging_root is None:
+            if staging_root is None:
                 stage_dir, stage_owner, stage_created = update_dir, owner, created
             else:
                 # On the application's own filesystem, so the swap is a rename
                 # there, and outside the bundle (§2.7).
-                if _is_link_or_junction(self.staging_root):
+                if _is_link_or_junction(staging_root):
                     raise BundleInstallError(
-                        f"The update staging folder {self.staging_root} is a link, so nothing "
+                        f"The update staging folder {staging_root} is a link, so nothing "
                         "is staged through it."
                     )
-                self.staging_root.mkdir(exist_ok=True)
-                beside = self.staging_root.resolve(strict=True)
+                staging_root.mkdir(exist_ok=True)
+                beside = staging_root.resolve(strict=True)
                 stage_dir = (beside / version).resolve()
                 if stage_dir == beside or not stage_dir.is_relative_to(beside):
                     raise BundleInstallError(
@@ -1105,6 +1157,7 @@ class BundleUpdateInstaller:
                 # the download they came from is spent, and it sits on the
                 # data volume, which the swap never uses.
                 self._abandon_staging(update_dir, owner, created=created)
+                downloads_released = True
             payload = {
                 "schemaVersion": 1,
                 "kind": "apply_bundle",
@@ -1151,11 +1204,11 @@ class BundleUpdateInstaller:
                 # No request names this staging, so no journal ever will.
                 if stage_dir is not None and stage_dir != update_dir:
                     self._abandon_staging(stage_dir, stage_owner, created=stage_created)
-                    if self.staging_root is not None:
+                    if staging_root is not None:
                         try:
-                            self.staging_root.rmdir()
+                            staging_root.rmdir()
                         except OSError:
                             pass
-                if update_dir is not None:
+                if update_dir is not None and not downloads_released:
                     self._abandon_staging(update_dir, owner, created=created)
             self._set_state(installState="failed", error=str(exc) or type(exc).__name__)
