@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import threading
 from types import SimpleNamespace
 
@@ -829,11 +830,11 @@ def test_an_identical_copy_elsewhere_starts_nothing_either(tmp_path, monkeypatch
         state=_ready_state(tmp_path / "installed-app" / "julia", _julia(tmp_path)),
         detect_gpu_backend=lambda: None,
     )
-    monkeypatch.setattr(
-        beat_cpu_runtime, "_provision_worker", lambda: pytest.fail("must not run")
-    )
+    started: list[bool] = []
+    monkeypatch.setattr(beat_cpu_runtime, "_provision_worker", lambda: started.append(True))
 
     assert beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin") is None
+    assert started == []
 
 
 def test_an_older_package_provisions_nothing(tmp_path, monkeypatch) -> None:
@@ -941,11 +942,14 @@ def test_the_real_package_record_proves_an_identical_copy_elsewhere(
 ) -> None:
     """End to end against the installed package: its reader, file layout and hash.
 
-    The stubs above state the contract; this holds the real package to it. The
-    record goes where the real ``read_state`` looks, in the per-backend file,
-    naming another install's path and this package's real content fingerprint
-    -- the shape a second install on one machine actually reads. The same
-    record with other content must not count, or the first half proves nothing.
+    The stubs above state the contract; this holds the real package to it. A
+    real copy of the package goes to another path and its fingerprint is taken
+    *there*, which is what proves the one assumption the content identity rests
+    on: the hash names files relative to the package, so the same files hash the
+    same wherever they are installed. The record goes where the real
+    ``read_state`` looks, in the per-backend file, naming that copy -- the shape
+    a second install on one machine actually reads. The same record with other
+    content must not count, or the first half proves nothing.
     """
 
     package = pytest.importorskip("hornlab_beat_bem")
@@ -958,9 +962,21 @@ def test_the_real_package_record_proves_an_identical_copy_elsewhere(
     monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(runtime_dir))
     julia = _julia(tmp_path)
     here = runtime.default_project("cpu")
-    elsewhere = tmp_path / "installed-app" / "hornlab_beat_bem" / "julia"
+    copy = tmp_path / "installed-app" / "hornlab_beat_bem"
+    shutil.copytree(
+        runtime.PACKAGE_DIR, copy, ignore=shutil.ignore_patterns("__pycache__")
+    )
+    elsewhere = copy / here.relative_to(runtime.PACKAGE_DIR)
     assert str(elsewhere) != str(here)
-    record = _ready_state(elsewhere, julia, fingerprint=runtime.package_fingerprint(here))
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(runtime, "PACKAGE_DIR", copy)
+            runtime.package_fingerprint.cache_clear()
+            copy_fingerprint = runtime.package_fingerprint(elsewhere)
+    finally:
+        runtime.package_fingerprint.cache_clear()
+    assert copy_fingerprint == runtime.package_fingerprint(here)
+    record = _ready_state(elsewhere, julia, fingerprint=copy_fingerprint)
     record_path = provision.backend_state_path(runtime_dir, "cpu")
 
     record_path.write_text(json.dumps(record), encoding="utf-8")
