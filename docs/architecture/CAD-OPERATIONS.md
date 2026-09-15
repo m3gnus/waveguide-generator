@@ -154,7 +154,8 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
 | `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout, a return that is not in the WGLink folder and has no retained copy |
 | `engine_unavailable` | `needs_user_input` | The engine the setup names cannot take this record; the message names the capable engines |
-| `submission_refused` | `needs_user_input` | The jobs system refused the request, submitting it failed without creating a job, or no solve may start now (an update restart is pending) |
+| `submission_refused` | `needs_user_input` | The jobs system refused the request, or submitting it failed without creating a job |
+| `update_restart_pending` | `needs_user_input` | An update restart was approved while the preparation ran, so nothing was submitted. Queued again once no restart is pending (see "Preparation", "Update restart") |
 | `interrupted` | `needs_user_input` | The backend stopped, or the answer was lost, while an attempt held the operation |
 | `ready_to_solve` | `needs_user_input` | Prepared, and waiting for the user to start the solve |
 
@@ -357,6 +358,22 @@ blocking findings the user reviewed, and on which preparation) and observes.
   sending them. Nothing else consumes them: `GET /api/cadlink/solve-command` answers that
   nothing is pending (see "Solve-command compatibility"). `WG2_CAD_DELIVERY=0` turns the
   loop off (the test suite does).
+- **Update restart.** Once an update restart is approved, WG starts no new CAD
+  preparation until it happens (docs/reference/UPDATE-TRANSACTION-CONTRACT.md §4.2). The
+  latch is the one the solve, retry, install and ingest routes read.
+  - `POST .../prepare` answers 409 `update_restart_pending`, with the envelope those
+    routes use, and starts nothing. The operation stays as it is.
+  - The delivery loop does nothing while it is set: it starts no preparation, and
+    collects no delivered file, so a received operation stays `received` and a
+    delivered file stays on disk as it was.
+  - A preparation already running when the restart is approved stops at submission and
+    waits as `update_restart_pending`, with nothing bound.
+  - Such a solve is queued again (`received`, at its own generation) by the next start's
+    recovery, or by this process's delivery loop once the latch comes down without a
+    restart (released, or expired). The loop then prepares it by itself, resuming the
+    preparation it had made, with the approvals given on it. Its setup is still the
+    project's, because nothing was bound: a setup changed meanwhile is picked up, as the
+    binding-point rule says.
 - **Events.** Every committed change is published on the jobs channel as
   `{"v": 1, "kind": "cadOperation", "operation": {...}}`, after it is stored. It carries
   no cursor: a client that misses one reads `GET /api/cadlink/operations` (the unfinished

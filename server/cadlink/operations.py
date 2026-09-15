@@ -70,6 +70,11 @@ CLAIMABLE_STATES = frozenset({RECEIVED, PROCESSING, NEEDS_USER_INPUT})
 # is an outcome.
 RECORDABLE_STATES = STATES - {RECEIVED, PROCESSING, CANCEL_REQUESTED}
 
+# The reason a solve waits when an approved update restart held it at submission
+# (docs/architecture/CAD-OPERATIONS.md, "Preparation"). The same string as the
+# jobs system's refusal code, ``server.updates.restart.UPDATE_RESTART_PENDING``.
+REASON_UPDATE_RESTART_PENDING = "update_restart_pending"
+
 # Reason code -> the only state it may accompany. Both are rejections because a
 # refreshed baseline or target is a new operation, never a retry of this one.
 REASON_CODES: Mapping[str, str] = {
@@ -84,6 +89,8 @@ REASON_CODES: Mapping[str, str] = {
     "engine_unavailable": NEEDS_USER_INPUT,
     "submission_refused": NEEDS_USER_INPUT,
     "interrupted": NEEDS_USER_INPUT,
+    # Held by an approved update restart; re-queued once the latch is down.
+    REASON_UPDATE_RESTART_PENDING: NEEDS_USER_INPUT,
     # Prepared, and waiting for the user to start the solve.
     "ready_to_solve": NEEDS_USER_INPUT,
 }
@@ -317,6 +324,7 @@ def fusion_mutation_precheck(
 
 
 __all__ = [
+    "REASON_UPDATE_RESTART_PENDING",
     "ACCEPTED",
     "BASELINE_KINDS",
     "CANCELLED",

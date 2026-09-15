@@ -634,7 +634,9 @@ def test_no_solve_is_submitted_while_an_update_restart_is_pending(harness: Harne
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
-    assert (summary["state"], summary["reason"]) == ("needs_user_input", "submission_refused")
+    # Its own reason, so it is re-queued after the restart rather than left waiting.
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "update_restart_pending")
+    assert summary["message"] == "An update restart is pending."
     assert harness.submitted == [] and harness.row()["request_json"] is None
 
 
@@ -1337,3 +1339,91 @@ def test_a_dismissal_waits_while_a_bound_attempt_runs_and_wg_cannot_read_the_job
     assert _cancel(harness, jobs)["state"] == "cancel_requested"
     recorded = harness.store.record_outcome("cmd-1", generation, "accepted", job_id="job-1")
     assert recorded is not None and (recorded["state"], recorded["job_id"]) == ("accepted", "job-1")
+
+
+# -- the update restart latch --------------------------------------------------------
+#
+# After a restart is approved WG starts no new installation-owned work
+# (UPDATE-TRANSACTION-CONTRACT.md 4.2; CAD-OPERATIONS.md, "Preparation"). These go
+# through the latch as the app wires it (``_preparation_context``).
+
+
+def _latched_state(harness: Harness, approval: Any) -> SimpleNamespace:
+    return SimpleNamespace(
+        cadlink_store=harness.store,
+        data_dir=str(harness.data_dir),
+        jobs_runtime=None,
+        update_restart=approval,
+        cad_workspace=SimpleNamespace(selected_path=lambda: harness.workspace),
+    )
+
+
+def test_the_prepare_route_refuses_while_an_update_restart_is_pending(
+    harness: Harness, monkeypatch
+) -> None:
+    from server.cadlink import api
+    from server.updates.restart import RestartApproval
+
+    _received(harness)
+    before = harness.row()
+    approval = RestartApproval()
+    approval.approve("0.3.4")
+    started: list[Any] = []
+
+    async def prepare_stand_in(_ctx: Any, operation_id: str, _request: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"operationId": operation_id}
+
+    monkeypatch.setattr(api, "prepare_operation", prepare_stand_in)
+    monkeypatch.setattr(api, "_track", lambda _state, task: started.append(task))
+    request = SimpleNamespace(app=SimpleNamespace(state=_latched_state(harness, approval)))
+
+    response = asyncio.run(api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(), request))
+
+    # Refused before anything starts, with the envelope every latched route uses.
+    assert started == []
+    assert response.status_code == 409
+    body = json.loads(response.body)
+    assert (body["error"]["code"], body["error"]["retryable"]) == ("update_restart_pending", True)
+    assert "about to restart to install 0.3.4" in body["detail"]
+    assert harness.row() == before
+    approval.release("the launcher discarded the request")
+    asyncio.run(api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(), request))
+    assert len(started) == 1
+
+
+def test_the_delivery_loop_starts_nothing_while_an_update_restart_is_pending(
+    harness: Harness,
+) -> None:
+    from server.cadlink.api import _preparation_context
+    from server.cadlink.preparation import run_delivery_pass
+    from server.updates.restart import RestartApproval
+
+    first_path, first_manifest = _write_return(harness.workspace, "first.wgreturn")
+    _accept(harness.store, "cmd-1", first_path, first_manifest)  # received before the approval
+    second_path, second_manifest = _write_return(harness.workspace, "second.wgreturn", step=b"STEP 2")
+    requests = _deliver_file(harness, second_path, second_manifest, "cmd-2")
+    approval = RestartApproval()
+    approval.approve("0.3.4")
+    state = _latched_state(harness, approval)
+
+    def one_pass() -> list[str]:
+        async def go() -> list[str]:
+            started: list[asyncio.Future[Any]] = []
+            ids = await run_delivery_pass(
+                _preparation_context(state, workspace_root=harness.workspace.resolve()),
+                spawn=lambda _operation_id, coroutine: started.append(asyncio.ensure_future(coroutine)),
+            )
+            await asyncio.gather(*started)
+            return ids
+
+        return asyncio.run(go())
+
+    assert one_pass() == []
+
+    assert harness.row("cmd-1")["state"] == "received"
+    # A delivery waits on disk, untouched, as a refused ingest leaves its return.
+    assert [path.name for path in requests.iterdir()] == ["cmd-2.json"]
+    assert harness.store.get_operation("cmd-2") is None
+    # Called off without a restart: what the latch held proceeds.
+    approval.release("the launcher discarded the request")
+    assert one_pass() == ["cmd-1", "cmd-2"]

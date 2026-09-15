@@ -622,3 +622,56 @@ def test_a_waiting_claim_holds_its_operation_when_a_pass_stops_early(harness: Ha
     assert _pass(harness) == ["cmd-b"]
     row = harness.row("cmd-b")
     assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+
+
+# -- a solve the update restart latch parked -----------------------------------------
+
+
+def _parked_by_the_latch(harness: Harness) -> None:
+    """A solve whose preparation reached submission after a restart was approved."""
+
+    b_design, b_lineage = _project(harness, 60.0)
+    _record_setup(harness, b_lineage, _setup())
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _accept(harness.store, "cmd-b", bundle_path, manifest)
+    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+    parked = harness.prepare("cmd-b")
+    assert (parked["state"], parked["reason"]) == ("needs_user_input", "update_restart_pending")
+    assert harness.submitted == []
+
+
+def test_a_solve_parked_by_an_update_restart_runs_by_itself_after_the_restart(
+    harness: Harness, tmp_path: Path
+) -> None:
+    from server.cadlink.preparation import recover_operations
+    from server.cadlink.store import CadLinkStore
+
+    _parked_by_the_latch(harness)
+    # The restart: a new process, and no latch.
+    harness.store.close()
+    harness.store = CadLinkStore(tmp_path / "cadlink.db")
+    harness.blocked = None
+
+    assert recover_operations(harness.context()) == 1
+
+    assert harness.row("cmd-b")["state"] == "received"
+    assert _pass(harness) == ["cmd-b"]
+    row = harness.row("cmd-b")
+    assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+    # It resumed the preparation it had made: one mesh, not two.
+    assert len(harness.ingest.calls) == 1
+
+
+def test_a_solve_parked_by_an_update_restart_proceeds_when_the_restart_is_called_off(
+    harness: Harness,
+) -> None:
+    _parked_by_the_latch(harness)
+    # Still latched: the loop leaves it parked.
+    assert _pass(harness) == []
+    assert harness.row("cmd-b")["reason"] == "update_restart_pending"
+
+    harness.blocked = None  # the approval expired, or the launcher discarded the request
+
+    assert _pass(harness) == ["cmd-b"]
+    row = harness.row("cmd-b")
+    assert (row["state"], row["job_id"]) == ("accepted", "job-1")

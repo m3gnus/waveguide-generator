@@ -17,17 +17,19 @@ import threading
 from typing import Any, Awaitable, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from server.cadlink.identity import SaveIdentity, design_hash
 from server.design.schema import DesignConfig
+from server.integration.contracts import error_envelope
 from server.mesh.artifact import (
     ImportedMeshArtifactError,
     read_verified_import_mesh,
     read_verified_import_viewport_mesh,
 )
 from server.platform.process import background_process_kwargs
+from server.updates.restart import UPDATE_RESTART_PENDING
 from server.workspace.api import (
     CadWorkspaceState,
     WorkspaceState,
@@ -1759,7 +1761,9 @@ async def post_prepare_cad_operation(
     """Prepare a solve operation from its retained snapshot, and submit it when asked.
 
     A preparation already running for the operation is taken over: its next
-    write is refused, and this one's result stands.
+    write is refused, and this one's result stands. While an update restart is
+    approved nothing starts: 409 ``update_restart_pending``, with the envelope
+    every latched route uses, and the operation stays as it is.
     """
 
     store: CadLinkStore = request.app.state.cadlink_store
@@ -1776,6 +1780,17 @@ async def post_prepare_cad_operation(
         )
     approvals = payload.approvals
     context = _preparation_context(request.app.state)
+    refusal = context.submission_blocked() if context.submission_blocked is not None else None
+    if refusal is not None:
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                code=UPDATE_RESTART_PENDING,
+                stage="submission",
+                message=refusal,
+                retryable=True,
+            ),
+        )
     task = asyncio.create_task(
         prepare_operation(
             context,

@@ -8524,7 +8524,7 @@
     },
     "/api/cadlink/operations/{operation_id}/prepare": {
       "post": {
-        "description": "Prepare a solve operation from its retained snapshot, and submit it when asked.\n\nA preparation already running for the operation is taken over: its next\nwrite is refused, and this one's result stands.",
+        "description": "Prepare a solve operation from its retained snapshot, and submit it when asked.\n\nA preparation already running for the operation is taken over: its next\nwrite is refused, and this one's result stands. While an update restart is\napproved nothing starts: 409 ``update_restart_pending``, with the envelope\nevery latched route uses, and the operation stays as it is.",
         "operationId": "post_prepare_cad_operation_api_cadlink_operations__operation_id__prepare_post",
         "parameters": [
           {

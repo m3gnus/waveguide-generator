@@ -31,6 +31,7 @@ from .operations import (
     CLAIMABLE_STATES,
     DIGEST_VERSION,
     MUTATING_KINDS,
+    NEEDS_USER_INPUT,
     PREPARE_AND_SOLVE,
     PROCESSING,
     RECEIVED,
@@ -1019,6 +1020,36 @@ class CadLinkStore:
                 "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
             ).fetchone()
         return self._row(row)
+
+    def requeue_operation(
+        self, operation_id: str, generation: int, *, reason: str
+    ) -> dict[str, Any] | None:
+        """Put an operation that waits for ``reason`` back to ``received``.
+
+        Conditional on the generation the caller read and on the operation
+        still waiting for exactly that reason, so a user who acted on it
+        meanwhile keeps what they started. The generation is kept, so the
+        delivery loop starts it as an untouched operation; its snapshot,
+        preparation and approvals are kept, so that attempt resumes them.
+        Returns the row, or None when nothing changed.
+        """
+
+        attempt = _require_generation(generation)
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_operations SET state = ?, stage = ?, reason = NULL, "
+                "outcome_json = NULL, updated_at = ? "
+                "WHERE operation_id = ? AND attempt_generation = ? AND state = ? AND reason = ?",
+                (
+                    RECEIVED, STAGE_RECEIVED, utc_now(), operation_id, attempt,
+                    NEEDS_USER_INPUT, reason,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return self._row(row) if cursor.rowcount == 1 else None
 
     def settle_cancel(self, operation_id: str, generation: int) -> dict[str, Any] | None:
         """The attempt a dismissal fenced records the dismissal."""

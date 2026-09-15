@@ -57,6 +57,7 @@ from .operations import (
     NEEDS_USER_INPUT,
     PREPARE_AND_SOLVE,
     PROCESSING,
+    REASON_UPDATE_RESTART_PENDING,
     RECEIVED,
     RECOVERY_REQUIRED,
     REJECTED,
@@ -118,7 +119,8 @@ class PreparationContext:
     #: The jobs system's own refusals of a request: a capability it lacks, a
     #: request it cannot accept. They release the binding.
     submission_refusals: tuple[type[BaseException], ...] = ()
-    #: A reason no solve may be submitted now (an update restart pending).
+    #: Why no CAD preparation may start and no solve may be submitted now:
+    #: an approved update restart (UPDATE-TRANSACTION-CONTRACT.md 4.2).
     submission_blocked: Callable[[], str | None] | None = None
     ingest: Callable[..., dict[str, Any]] = ingest_bundle
 
@@ -678,11 +680,14 @@ async def _submit(
     revision_id: str | None,
 ) -> dict[str, Any]:
     store = ctx.store
-    blocked = ctx.submission_blocked() if ctx.submission_blocked is not None else None
+    blocked = _restart_pending(ctx)
     if blocked:
+        # A restart was approved while this attempt prepared. It waits under a
+        # reason of its own, so the next start -- or this process, once the
+        # latch is down without a restart -- queues it again by itself.
         return await asyncio.to_thread(
             _finish, ctx, operation_id, generation, NEEDS_USER_INPUT,
-            reason="submission_refused", message=blocked,
+            reason=REASON_UPDATE_RESTART_PENDING, message=blocked,
         )
     if ctx.submit is None:
         return await asyncio.to_thread(
@@ -748,6 +753,43 @@ async def _submit(
     return await asyncio.to_thread(
         _finish, ctx, operation_id, generation, ACCEPTED, job_id=job_id, stage=STAGE_SUBMITTED,
     )
+
+
+def _restart_pending(ctx: PreparationContext) -> str | None:
+    """The approved update restart's refusal, or None when none is pending."""
+
+    return ctx.submission_blocked() if ctx.submission_blocked is not None else None
+
+
+def requeue_restart_parked(ctx: PreparationContext) -> list[str]:
+    """Queue again the solves an update restart held at submission.
+
+    Each goes back to ``received`` at its own generation, so the delivery
+    loop starts it as it starts any untouched operation, and that attempt
+    resumes its preparation. Nothing is queued while a restart is still
+    pending. Returns the operations queued.
+    """
+
+    if _restart_pending(ctx):
+        return []
+    queued: list[str] = []
+    for row in ctx.store.list_operations(
+        kind=PREPARE_AND_SOLVE, states={NEEDS_USER_INPUT}, oldest_first=True, limit=1000,
+    ):
+        if row.get("reason") != REASON_UPDATE_RESTART_PENDING:
+            continue
+        operation_id = str(row["operation_id"])
+        requeued = ctx.store.requeue_operation(
+            operation_id, int(row["attempt_generation"]), reason=REASON_UPDATE_RESTART_PENDING
+        )
+        if requeued is not None:
+            logger.info(
+                "CAD operation %s: queued again now that no update restart is pending.",
+                operation_id,
+            )
+            queued.append(operation_id)
+            _publish(ctx, requeued)
+    return queued
 
 
 def _settle_fenced(ctx: PreparationContext, operation_id: str, generation: int) -> dict[str, Any]:
@@ -864,12 +906,18 @@ async def run_delivery_pass(
     retried unasked; ``running`` names the ones already started. One whose
     delivery is kept because its return cannot be read yet is started once the
     return is retained, or once the delivery is given up. Without a WGLink
-    folder nothing is collected, because nothing could be retained. Returns
-    the operations this pass started.
+    folder nothing is collected, because nothing could be retained. While an
+    update restart is approved the pass does nothing at all: no preparation
+    starts, and delivered files stay on disk for after the restart. Once the
+    latch is down, the solves it held at submission are queued again first.
+    Returns the operations this pass started.
     """
 
     if ctx.workspace_root is None:
         return []
+    if _restart_pending(ctx):
+        return []
+    await asyncio.to_thread(requeue_restart_parked, ctx)
     held: set[str] = set()
     await asyncio.to_thread(
         collect_solve_deliveries,
@@ -906,11 +954,13 @@ def recover_operations(ctx: PreparationContext) -> int:
     An operation whose submission key made a job is ``accepted`` with it.
     One an attempt still held when the backend stopped is taken over and waits
     for the user (``interrupted``); a bound request is kept, so the next
-    preparation submits exactly it. Returns how many operations changed.
+    preparation submits exactly it. One an update restart held at submission
+    is queued again (``received``), so the delivery loop prepares it by
+    itself. Returns how many operations changed.
     """
 
     store = ctx.store
-    changed = 0
+    changed = len(requeue_restart_parked(ctx))
     for row in store.list_operations(
         kind=PREPARE_AND_SOLVE, states={RECEIVED, PROCESSING, NEEDS_USER_INPUT, CANCEL_REQUESTED},
         oldest_first=True, limit=1000,
@@ -963,6 +1013,7 @@ __all__ = [
     "prepare_operation",
     "reconcile_with_jobs",
     "recover_operations",
+    "requeue_restart_parked",
     "retain_operation_snapshot",
     "run_delivery_pass",
     "submission_key",
