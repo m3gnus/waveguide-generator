@@ -24,7 +24,8 @@ settles what an interrupted session left. The backend owns a solve operation end
 its fenced preparation stages, its approvals and its bound request. A later step adds a
 field to a request only under a new digest version.
 WG-produced return and handoff files are now accepted into this store before
-publication; their later Fusion outcomes are added by the next cut.
+publication. Fresh version-3 heartbeats now settle their document evidence,
+applying marks, recent outcomes, and exact last-request trace durably.
 
 ## Operation kinds
 
@@ -170,6 +171,8 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `expired` | `cancelled` | An insert remained unclaimed for 30 minutes |
 | `session_changed` | `cancelled` | A return request named a Fusion session that is no longer current |
 | `publication_failed` | `cancelled` | The operation was stored but its request file could not be published |
+| `adapter_refused` | `rejected` | Fusion explicitly refused this exact request and no document evidence says it applied |
+| `adapter_not_started` | `cancelled` | Fusion discarded a leftover claim with neither evidence nor an applying mark |
 
 The three rejections are final because a refreshed baseline, target or snapshot is a new
 operation. Every `needs_user_input` code keeps the operation, and another
@@ -754,6 +757,30 @@ claim, if any, already owns delivery, and a terminal operation must never run tw
 3. **Run it at most once** per request ID, in the order "Fusion-bound mutations" gives,
    then delete the claim, whatever the outcome.
 4. **A return request runs only in the session it names** (`sessionId`).
+
+**Heartbeat outcome mapping.** WG reads only a fresh heartbeat with
+`deliveryVersion >= 3`. Document link evidence is considered before every reported
+outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
+`accepted`. `document.applyingOperation.operationId` settles only Insert/Update as
+`recovery_required`. A missing observation stays `processing`.
+
+| Add-in field/value at pinned add-in `49a8e743` | WG result |
+| --- | --- |
+| `recentOutcomes: superseded` (`WGLink.py:1774`) | `cancelled` / `superseded` |
+| `recentOutcomes: discarded` (`WGLink.py:2161,2179`) | `cancelled` / `adapter_not_started` |
+| `recentOutcomes: reconciled` (`WGLink.py:2171,2179`) | reconciled `accepted`, using the operation's export identity |
+| `recentOutcomes: recoveryRequired` (`WGLink.py:2173,2179`) | `recovery_required` for Insert/Update only |
+| `recentOutcomes: wgOutdated` (`WGLink.py:2195`) | logged and ignored |
+| `recentOutcomes: notTaken` (`WGLink.py:913`, solve channel) | ignored for Fusion-bound rows |
+| `lastRequest: refused` (`WGLink.py:1866,2002,2121`) | `rejected` / `adapter_refused`, unless document evidence already accepted it |
+| `lastRequest: applied` (`WGLink.py:1864,2108`) | accepts a return request; a mutation still requires document evidence |
+| `lastRequest: failed` (`WGLink.py:2027`) | logged and left `processing` |
+| `lastRequest: running` (`WGLink.py:239`) | left `processing` |
+| `lastRequest: requested` (`WGLink.py:892`, solve channel) | ignored for Fusion-bound rows |
+
+`recentOutcomes` is a 16-item ring. `lastRequest` is one overwritten slot, matched by
+`correlationId` (the operation ID for WG-produced requests); WG logs its correlation
+and attempt IDs once per change. Missing that slot never authorizes a guessed outcome.
 
 **What can be lost.** A request withdrawn as superseded never runs, by design. A power
 loss keeps a later write but not an earlier one, because WG does not flush the folders

@@ -135,6 +135,37 @@ def _string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def read_live_fusion_heartbeat(
+    data_dir: Path, *, now: datetime | None = None
+) -> Mapping[str, Any] | None:
+    """Return a fresh version-3 heartbeat, or None without guessing."""
+
+    checked_at = now or datetime.now(timezone.utc)
+    marker = data_dir.resolve() / IPC_SUBDIRECTORY / FUSION_STATUS_FILENAME
+    try:
+        if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > _MAX_STATUS_BYTES:
+            return None
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("schemaVersion") != 1
+        or payload.get("cadApplication") != "fusion360"
+        or addin_delivery_version(payload) is None
+        or int(addin_delivery_version(payload) or 0) < DELIVERY_VERSION
+    ):
+        return None
+    updated_at = _timestamp(payload.get("updatedAt"))
+    if (
+        updated_at is None
+        or checked_at - updated_at > FUSION_STATUS_TTL
+        or updated_at - checked_at > timedelta(minutes=1)
+    ):
+        return None
+    return payload
+
+
 def _fingerprint_hash(value: object) -> str | None:
     if not isinstance(value, (Mapping, list)):
         return None
@@ -539,5 +570,6 @@ __all__ = [
     "FUSION_UNKNOWN",
     "fusion_process_running",
     "fusion_process_state",
+    "read_live_fusion_heartbeat",
     "read_fusion_status",
 ]

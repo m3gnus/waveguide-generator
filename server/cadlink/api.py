@@ -49,9 +49,12 @@ from server.workspace.archive import (
 
 from .addin_update import last_refresh, poll_activation
 from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
+from .fusion_status import read_live_fusion_heartbeat
+from .fusion_outcomes import FUSION_KINDS, settle_from_heartbeat
 from .fusion_delivery import (
     advertise_fusion_delivery,
     expire_unstarted_insert_handoffs,
+    ipc_folder,
     recover_staged_fusion_requests,
 )
 from .fusion_return import publish_return_request
@@ -824,6 +827,16 @@ async def fusion_status(
         Path(request.app.state.data_dir),
         record_expired=lambda operation_id: _record_expired_insert(store, operation_id),
     )
+    heartbeat = await asyncio.to_thread(
+        read_live_fusion_heartbeat, Path(request.app.state.data_dir)
+    )
+    if heartbeat is not None:
+        await asyncio.to_thread(
+            settle_from_heartbeat,
+            store,
+            heartbeat,
+            ipc_folder(Path(request.app.state.data_dir)),
+        )
     status = await asyncio.to_thread(
         read_fusion_status,
         Path(request.app.state.data_dir),
@@ -1910,6 +1923,65 @@ async def get_cad_operation(operation_id: str, request: Request) -> dict[str, An
     return await asyncio.to_thread(_operation_detail, store, row)
 
 
+@router.post(
+    "/operations/{operation_id}/reconcile",
+    response_model=ManualSolveOperationResponse,
+    responses={404: {"model": ErrorEnvelope}, 409: {"model": ErrorEnvelope}},
+)
+async def post_reconcile_cad_operation(
+    operation_id: str, request: Request
+) -> ManualSolveOperationResponse | JSONResponse:
+    """Re-read Fusion evidence for an unsettled WG-produced request."""
+
+    state = request.app.state
+    store: CadLinkStore = state.cadlink_store
+    row = await asyncio.to_thread(store.get_operation, operation_id)
+    if row is None:
+        return JSONResponse(
+            status_code=404,
+            content=error_envelope(
+                code="unknown_operation",
+                stage="reconciliation",
+                message=f"Unknown CAD operation {operation_id}",
+                retryable=False,
+            ),
+        )
+    if row.get("kind") not in FUSION_KINDS:
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                code="operation_not_reconcilable",
+                stage="reconciliation",
+                message="This operation is not a Fusion request.",
+                retryable=False,
+            ),
+        )
+    if row.get("state") not in {"processing", "recovery_required"}:
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                code="operation_not_reconcilable",
+                stage="reconciliation",
+                message=(
+                    "Only a processing or recovery-required Fusion request can be reconciled."
+                ),
+                retryable=False,
+            ),
+        )
+    heartbeat = await asyncio.to_thread(read_live_fusion_heartbeat, Path(state.data_dir))
+    if heartbeat is not None:
+        await asyncio.to_thread(
+            settle_from_heartbeat,
+            store,
+            heartbeat,
+            ipc_folder(Path(state.data_dir)),
+            only_operation_id=operation_id,
+        )
+    current = await asyncio.to_thread(store.get_operation, operation_id)
+    assert current is not None
+    return ManualSolveOperationResponse(operation=operation_summary(current))
+
+
 def _track(state: Any, task: asyncio.Task[Any]) -> None:
     running = getattr(state, "cad_preparations", None)
     if running is None:
@@ -2200,6 +2272,16 @@ def mount_cadlink(application: FastAPI) -> None:
             Path(application.state.data_dir),
             lookup_operation=application.state.cadlink_store.get_operation,
         )
+        heartbeat = await asyncio.to_thread(
+            read_live_fusion_heartbeat, Path(application.state.data_dir)
+        )
+        if heartbeat is not None:
+            await asyncio.to_thread(
+                settle_from_heartbeat,
+                application.state.cadlink_store,
+                heartbeat,
+                ipc_folder(Path(application.state.data_dir)),
+            )
         await asyncio.to_thread(
             expire_unstarted_insert_handoffs,
             Path(application.state.data_dir),

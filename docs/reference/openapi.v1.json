@@ -8857,6 +8857,69 @@
         ]
       }
     },
+    "/api/cadlink/operations/{operation_id}/reconcile": {
+      "post": {
+        "description": "Re-read Fusion evidence for an unsettled WG-produced request.",
+        "operationId": "post_reconcile_cad_operation_api_cadlink_operations__operation_id__reconcile_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualSolveOperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Reconcile Cad Operation",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
     "/api/cadlink/project-setups": {
       "put": {
         "description": "Record a project's solve settings for its sources (CAD-OPERATIONS.md, \"Project setups\").\n\nA solve Fusion sends for that project is prepared from them, whatever\nproject the editor has open. The latest recording is the project's.",

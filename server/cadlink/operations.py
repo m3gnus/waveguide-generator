@@ -98,6 +98,8 @@ REASON_CODES: Mapping[str, str] = {
     "expired": CANCELLED,
     "session_changed": CANCELLED,
     "publication_failed": CANCELLED,
+    "adapter_refused": REJECTED,
+    "adapter_not_started": CANCELLED,
 }
 BASELINE_KINDS = frozenset({"document_signature_hash"})
 OUTCOME_FIELDS = frozenset({"message", "reconciled", "evidence"})
