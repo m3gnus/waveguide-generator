@@ -367,10 +367,12 @@ blocking findings the user reviewed, and on which preparation) and observes.
     collects no delivered file, so a received operation stays `received` and a
     delivered file stays on disk as it was.
   - A preparation asked for before the approval but not yet started starts nothing
-    either: it reads the latch again before it claims the operation. One the delivery
-    loop listed stays `received`, for its next pass. One the user asked for waits as
-    `update_restart_pending`, so it is queued again like the others instead of being
-    dropped; approvals sent with that request are not kept, and are asked for again.
+    either: it reads the latch again before it claims the operation. An operation still
+    `received` stays so, for the delivery loop's next pass. Any other, such as a Solve
+    now on a solve that waits for the user, waits as `update_restart_pending`, so it is
+    queued again like the others instead of being dropped. The request itself is not
+    kept: the queued attempt prepares and submits from the project's setup, as the
+    delivery loop does, and approvals sent with it are asked for again.
   - A preparation already running when the restart is approved stops at submission and
     waits as `update_restart_pending`, if it gets there before WG stops. One the shutdown
     ends first is taken over at the next start and waits as `interrupted`, as any

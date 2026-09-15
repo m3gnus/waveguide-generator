@@ -799,8 +799,10 @@ def _hold_for_restart(
 
     Nothing is prepared: the attempt claims the operation and records that it
     waits for the restart (``update_restart_pending``), so it is queued again
-    like any solve the latch held. Approvals sent with this request are not
-    kept; ones already recorded on the preparation still apply.
+    like any solve the latch held. The request itself is not kept: the queued
+    attempt prepares and submits from the project's setup, as the delivery
+    loop does, and approvals sent with this request are asked for again. Ones
+    already recorded on the preparation still apply.
     """
 
     generation = ctx.store.claim(operation_id, listed_generation)
@@ -888,9 +890,9 @@ async def prepare_operation(
     if refusal:
         # An update restart was approved after this was asked for: after the
         # route let it through, or after the loop listed it. Nothing is
-        # prepared. An operation the loop listed stays received, for its next
-        # pass; one the user asked for waits for the restart, so it is queued
-        # again by itself instead of being dropped.
+        # prepared. A received operation stays so, for the loop's next pass;
+        # any other waits for the restart, so it is queued again by itself
+        # instead of being dropped.
         if row["state"] == RECEIVED:
             return operation_summary(row)
         return operation_summary(await asyncio.to_thread(
