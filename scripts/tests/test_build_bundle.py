@@ -1054,10 +1054,19 @@ def test_windows_uninstaller_removes_the_update_staging_folder_beside_the_app() 
     staging_root_fn = script.split("function UpdateStagingRoot(): String;", 1)[1].split(
         "function IsReparsePoint(", 1
     )[0]
+    # Built from {app} itself -- never from a sub-layer such as {app}\app,
+    # which would compute a path one directory too deep and never match what
+    # the server staged.
+    assert "AppDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));" in staging_root_fn
     # Built from {app}'s own name, both directions -- never a hardcoded
-    # "Waveguide Generator" and never a wildcard character.
-    assert "ExtractFileDir(AppDir)" in staging_root_fn
-    assert "ExtractFileName(AppDir)" in staging_root_fn
+    # "Waveguide Generator" and never a wildcard character. The literal
+    # "'.'" between them is the hidden-folder prefix
+    # destination_staging_root() also writes; dropping it would compute a
+    # name that never matches the folder the server actually staged, so the
+    # uninstaller would silently remove nothing -- a full regression to the
+    # bug this test exists to catch, and one a looser substring check would
+    # not notice.
+    assert "ExtractFileDir(AppDir)) + '.' + ExtractFileName(AppDir)" in staging_root_fn
     assert "*" not in staging_root_fn
 
     # A reparse point at the staging path must be refused, never followed.

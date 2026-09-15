@@ -174,7 +174,7 @@ function SetEnvironmentVariable(Name, Value: String): Boolean;
 function GetFileAttributesW(lpFileName: String): Integer;
   { Pascal Script has no built-in reparse-point check. A junction or symlink
     left at the staging path -- deliberately or by another program -- must
-    never be followed and deleted; this is how DeleteUpdateStagingRoot below
+    never be followed and deleted; this is how RemoveUpdateStagingRoot below
     tells one apart from an ordinary directory before touching it. }
   external 'GetFileAttributesW@kernel32.dll stdcall';
 
