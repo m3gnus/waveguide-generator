@@ -2,14 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CadLinkApiError,
   getFusionCadStatus,
-  getIngest,
   ingestReturn,
-  listReturns,
   type CadReturnBundle,
   type CadReturnIngestRecord,
   type FusionCadStatus,
 } from '../api/cadlink';
-import type { CadSetup, JobItem } from '../api/jobsSocket';
+import type { JobItem } from '../api/jobsSocket';
 import {
   cancelCadOperation,
   prepareCadOperation,
@@ -18,54 +16,26 @@ import {
   type CadOperationApprovals,
   type CadOperationSummary,
 } from '../api/cadOperations';
-import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
+import type { WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
-import { fromResult, parseWire } from '../results/crossoverSpec';
-import { preferencesStore, usePreferences } from '../prefs/preferences';
-import { getDriver } from '../api/drivers';
+import { usePreferences } from '../prefs/preferences';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
-  DRIVER_FIELD_KEYS,
-  PASSIVE_CARDIOID_DEFAULTS,
   bundleIdentity,
-  driverBaseFromSpec,
-  driversForChannels,
-  projectChannelDrivers,
   useCadReturnStore,
-  type CadDriveChannel,
-  type ChannelDriverForm,
-  type DriverBaseUpdate,
-  type DriverPreset,
-  type PassiveCardioidForm,
 } from '../stores/cadReturn';
-import {
-  currentDocumentLoad,
-  isCurrentDocumentLoad,
-  recordCommittedAthPolars,
-  subscribeRevision,
-  useDesignStore,
-} from '../stores/design';
-import { useDriverLibraryStore } from '../stores/driverLibrary';
+import { useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
 import { connectCadOperations, useCadOperationsStore } from '../stores/cadOperations';
-import {
-  polarConfigFromUi,
-  polarUiFromConfig,
-  useSolveOptionsStore,
-  type SymmetryMode,
-} from '../stores/solveOptions';
-import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
-import { cadProjectName, listCadProjects, newestReturnForProject } from '../api/cadProjects';
-import { keptContentKeyOf, rememberSentCopy } from '../design/replacementCheck';
+import { useSolveOptionsStore } from '../stores/solveOptions';
+import { rememberCadProject } from '../stores/cadProjectMemory';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
-import { designNameSlug } from '../stores/designName';
-import { fusionWorkflowView } from './cadWorkflowView';
 import { buildCadProjectSetup, startCadSetupPublisher } from './cadSetupPublisher';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -76,6 +46,12 @@ import {
   useCadReturnArrivals,
   type RefreshOptions,
 } from './cadlink/arrivals';
+import { useCadSend } from './cadlink/send';
+import {
+  refreshChannelDriverBases,
+  restoreCadJobModel,
+  useCadRestores,
+} from './cadlink/restores';
 
 export {
   SupersededError,
@@ -83,6 +59,7 @@ export {
   returnBelongsToAnotherProject,
   returnBelongsToProject,
 } from './cadlink/arrivals';
+export { cadHistorySetup, refreshChannelDriverBases } from './cadlink/restores';
 
 interface CadLinkCoordinatorSnapshot {
   bundles: CadReturnBundle[];
@@ -292,205 +269,6 @@ function settingsProjectFor(
     throw new Error('WG does not know which project this model belongs to yet, so its settings cannot be recorded for it.');
   }
   return filed;
-}
-
-/** Whether the directivity settings are still the ones a send committed.
- *
- * Recording committed polars writes them into the design's ATH blocks, which
- * is what the next freshness check hashes. Doing that for settings the user has
- * since changed would report the document as current with a directivity Fusion
- * has never been sent — so a send that lost that race records nothing, and the
- * next one commits the newer settings. */
-function polarConfigStillCommitted(committed: unknown): boolean {
-  try {
-    return JSON.stringify(polarConfigFromUi(useSolveOptionsStore.getState().polar))
-      === JSON.stringify(committed);
-  } catch {
-    // An unsendable directivity grid is by definition not the one just sent.
-    return false;
-  }
-}
-
-type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
-  'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds'
-  | 'driveChannels' | 'exteriorOnly' | 'combineEnabled' | 'combineSpec'
-  | 'channelDrivers' | 'passiveCardioid'
-  | 'driveVoltageV' | 'maxDriveVoltageV'
-  | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
-
-function object(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function finite(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function finiteRecord(value: unknown): Record<string, number> | null {
-  const record = object(value);
-  if (!record) return null;
-  const entries = Object.entries(record);
-  if (entries.some(([key, item]) => !key || finite(item) === null)) return null;
-  return Object.fromEntries(entries) as Record<string, number>;
-}
-
-function savedDriveChannels(
-  setup: CadSetup | null | undefined,
-  record: CadReturnIngestRecord,
-): CadDriveChannel[] {
-  const knownSources = new Set(record.sources.map((source) => source.id));
-  const raw = setup?.drive_channels;
-  if (!Array.isArray(raw) || raw.length === 0) return [];
-  const assigned = new Set<string>();
-  const channels = raw.flatMap((channel): CadDriveChannel[] => {
-    if (!channel || typeof channel.id !== 'string' || !channel.id.trim()
-      || !Array.isArray(channel.source_ids) || channel.source_ids.length === 0
-      || (channel.motion !== undefined && channel.motion !== 'normal' && channel.motion !== 'axial')
-      || channel.source_ids.some((id) => (
-        typeof id !== 'string' || !knownSources.has(id) || assigned.has(id)
-      ))) return [];
-    channel.source_ids.forEach((id) => assigned.add(id));
-    return [{
-      id: channel.id,
-      source_ids: [...channel.source_ids],
-      motion: channel.motion ?? 'normal',
-    }];
-  });
-  return channels.length === raw.length ? channels : [];
-}
-
-function savedChannelDrivers(
-  setup: CadSetup | null | undefined,
-  channels: CadDriveChannel[],
-): Record<string, ChannelDriverForm> {
-  const rawById = new Map((setup?.drive_channels ?? []).map((channel) => [channel.id, channel]));
-  return Object.fromEntries(channels.flatMap((channel): Array<[string, ChannelDriverForm]> => {
-    const driver = object(rawById.get(channel.id)?.driver);
-    if (!driver) return [];
-    const fields = Object.fromEntries(DRIVER_FIELD_KEYS.flatMap((key) => {
-      const value = finite(driver[key]);
-      return value === null ? [] : [[key, value]];
-    }));
-    // A stored setup carries the submitted numbers, not which library row they
-    // came from. When it names the driver, the numbers become that driver's
-    // base so the name survives the next submission; otherwise this is exactly
-    // the hand-entered form it has always been.
-    const label = typeof driver.label === 'string' && driver.label.trim() ? driver.label.trim() : null;
-    const preset: DriverPreset | null = label
-      ? { id: `manual:${channel.id}`, label, source: 'manual', kind: 'unknown', z_ohm: null, xo_min_hz: null, base: fields }
-      : null;
-    return [[channel.id, { fields: preset ? {} : fields, preset }]];
-  }));
-}
-
-function savedPassiveCardioid(setup: CadSetup | null | undefined): PassiveCardioidForm {
-  const rearVolumeL = finite(setup?.passive_cardioid_rear_volume_l);
-  if (rearVolumeL === null) return { ...PASSIVE_CARDIOID_DEFAULTS };
-  const portAreaSource = setup?.port_area_source === 'bem_aperture'
-    ? 'bem_aperture'
-    : 'user';
-  return {
-    enabled: true,
-    rearVolumeL,
-    portLengthMm: finite(setup?.passive_cardioid_port_length_mm),
-    modelPortAreaM2: finite(setup?.model_port_area_m2),
-    bemPortAreaM2: finite(setup?.bem_port_area_m2),
-    portAreaSource,
-    foamResistancePaSM3: finite(setup?.passive_cardioid_foam_resistance_pa_s_m3),
-    invertPort: setup?.passive_cardioid_invert_port !== false,
-    coupled: setup?.passive_cardioid_coupled === true,
-  };
-}
-
-/** Translate the exact persisted imported request into the editable CAD rail.
- * Missing/malformed legacy pieces fall back to the immutable ingestion, never
- * to values left behind by whichever project happened to be open before it. */
-export function cadHistorySetup(
-  job: JobItem,
-  record: CadReturnIngestRecord,
-): CadHistorySetup {
-  const setup = job.cad_setup;
-  const mesh = object(setup?.mesh);
-  const channels = savedDriveChannels(setup, record);
-  const skippedSourceIds = Array.isArray(setup?.skipped_source_ids)
-    && setup.skipped_source_ids.every((id) => typeof id === 'string')
-    ? [...setup.skipped_source_ids]
-    : [...record.skipped_source_ids];
-  const fallbackChannels = (() => {
-    const skipped = new Set(skippedSourceIds);
-    const grouped = new Map<string, CadDriveChannel>();
-    record.sources.filter((source) => !skipped.has(source.id)).forEach((source) => {
-      const channel = grouped.get(source.default_drive_channel_id) ?? {
-        id: source.default_drive_channel_id,
-        source_ids: [],
-        motion: 'normal' as const,
-      };
-      channel.source_ids.push(source.id);
-      grouped.set(channel.id, channel);
-    });
-    return [...grouped.values()];
-  })();
-  const driveChannels = channels.length ? channels : fallbackChannels;
-  // Both crossover generations come back here, in the submitted form rather
-  // than a resolved one. `parseWire` keeps a manual gain manual and an
-  // explicit polarity explicit; `fromResult` is the fallback that expands a
-  // job old enough to carry only `crossovers_hz`, because reading that as "no
-  // crossover" would silently drop the setting the run was solved with.
-  const combine = object(setup?.combine);
-  const combineSpec = parseWire(combine) ?? fromResult(combine ?? undefined);
-  const validCombine = combineSpec !== null;
-  const explicitFrequencies = Array.isArray(job.solve_options.frequencies_hz)
-    ? job.solve_options.frequencies_hz.filter((value) => finite(value) !== null)
-    : [];
-  const range = job.solve_options.frequency_range;
-  const fallbackRange = Array.isArray(range) && range.length === 2
-    ? range.map(Number)
-    : [200, 20_000];
-  const sourceSizes = finiteRecord(mesh?.source_size_mm)
-    ?? { ...record.mesh_sizes.source_size_mm };
-  return {
-    sourceSizesMm: sourceSizes,
-    rigidSizeMm: finite(mesh?.rigid_size_mm) ?? record.mesh_sizes.rigid_size_mm,
-    transitionMm: finite(mesh?.transition_mm) ?? record.mesh_sizes.transition_mm,
-    skippedSourceIds,
-    driveChannels,
-    exteriorOnly: typeof setup?.exterior_only === 'boolean' ? setup.exterior_only : false,
-    combineEnabled: setup ? validCombine : null,
-    combineSpec,
-    channelDrivers: savedChannelDrivers(setup, driveChannels),
-    passiveCardioid: savedPassiveCardioid(setup),
-    driveVoltageV: finite(setup?.drive_voltage_v) ?? 2.83,
-    maxDriveVoltageV: finite(setup?.max_drive_voltage_v) ?? null,
-    frequencyStartHz: explicitFrequencies[0] ?? fallbackRange[0],
-    frequencyEndHz: explicitFrequencies.at(-1) ?? fallbackRange[1],
-    frequencyCount: explicitFrequencies.length || Number(job.solve_options.num_frequencies) || 1,
-  };
-}
-
-function restoreCadJobSolveOptions(job: JobItem): void {
-  const options = job.solve_options;
-  const explicit = Array.isArray(options.frequencies_hz) && options.frequencies_hz.length > 0
-    ? options.frequencies_hz
-    : null;
-  const polar = polarUiFromConfig(options.polar_config);
-  // The engine is the user's choice in the solver selector, never the run's:
-  // recalling a run must not change what the next solve uses. The run keeps
-  // its own engine on its record.
-  useSolveOptionsStore.setState((state) => ({
-    symmetry: ['auto', 'full', 'half_xz', 'half_yz', 'quarter'].includes(options.symmetry)
-      ? options.symmetry as SymmetryMode
-      : state.symmetry,
-    meshValidationMode: ['warn', 'strict', 'off'].includes(options.mesh_validation_mode)
-      ? options.mesh_validation_mode
-      : state.meshValidationMode,
-    verbose: options.verbose,
-    frequencySpacing: options.frequency_spacing === 'linear' ? 'linear' : 'log',
-    frequencyMode: explicit ? 'list' : 'range',
-    frequencyListText: explicit ? explicit.join('\n') : '',
-    polar: polar ?? state.polar,
-  }));
 }
 
 /** Show the CAD workspace and focus its panel.
@@ -756,168 +534,18 @@ export async function showIngestedSolverMeshInViewport(
   }
 }
 
-/**
- * Recall the immutable ingestion behind an archived CAD run.
- *
- * The job carries only provenance, so the ingestion record is fetched before
- * it becomes the active CAD context. A synthetic, read-only bundle gives the
- * CAD input surfaces the recalled document name and source inventory without
- * pretending the original return bundle is still available for rebuilding.
- */
-/**
- * Re-read every picked driver's own numbers from the library it came from.
- *
- * A preset carries a copy of the row it was picked from, so a library row that
- * gains its T/S later never reaches the channel already naming that driver:
- * the form stays incomplete and the channel solves undriven. This is what
- * makes "I filled in the compression drivers' T/S" reach a project that picked
- * them before, whether its settings were just restored or a run was recalled.
- *
- * Advisory throughout. A library that cannot be read, or a row that is no
- * longer there, leaves the stored numbers exactly as they are: they are what
- * the last solve used, and losing them would be worse than not refreshing.
- */
-export async function refreshChannelDriverBases(
-  fetcher: typeof fetch = fetch,
-): Promise<string[]> {
-  const forms = useCadReturnStore.getState().channelDrivers;
-  const saved = new Map(useDriverLibraryStore.getState().saved.map((driver) => [driver.id, driver]));
-  const updates: Record<string, DriverBaseUpdate> = {};
-  await Promise.all(Object.entries(forms).map(async ([channelId, form]) => {
-    const preset = form.preset;
-    if (!preset || preset.source === 'manual') return;
-    if (preset.source === 'mine') {
-      const driver = saved.get(preset.id);
-      if (driver) {
-        updates[channelId] = {
-          presetId: preset.id,
-          base: { ...driver.base, ...driver.overrides },
-          xo_min_hz: driver.xo_min_hz,
-        };
-      }
-      return;
-    }
-    const hit = await getDriver(preset.id, fetcher).catch(() => null);
-    if (!hit) return;
-    updates[channelId] = {
-      presetId: preset.id,
-      base: driverBaseFromSpec(hit.spec),
-      xo_min_hz: typeof hit.xo_min_hz === 'number' && Number.isFinite(hit.xo_min_hz) ? hit.xo_min_hz : null,
-    };
-  }));
-  return useCadReturnStore.getState().refreshChannelDriverBases(updates);
-}
-
-export async function showCadJobModel(
+/** Restore the immutable model and setup behind an archived CAD run. */
+export function showCadJobModel(
   job: JobItem,
   fetcher: typeof fetch = fetch,
 ): Promise<boolean> {
-  if (job.config_summary.geometry_type !== 'imported') return false;
-  const ingestId = job.cad_source?.ingest_id;
-  const displayName = job.cad_source?.document_name || job.label || `run #${job.run_number}`;
-  enterCadWorkspace();
   const coordinator = cadLinkCoordinatorBridge.getSnapshot();
-  coordinator.reportViewportNotice(null);
-  if (!ingestId) {
-    coordinator.reportStatus(`Cannot show ${displayName}: this CAD run has no ingestion identity.`);
-    return false;
-  }
-  coordinator.reportStatus(`Loading ${displayName} from run #${job.run_number}…`);
-  // Captured before the first await, and re-checked after every one of them.
-  // Two archived runs can be picked while the first record request is still
-  // out, and the ingestion fetch is the slowest step here -- so an older
-  // response must never be the one that restores the CAD rail, repaints the
-  // viewport, or hands itself a fresh viewport generation on its way past.
-  // Between them the three tokens cover every way this choice is superseded: a
-  // later CAD selection advances the ingest intent, a later viewport choice
-  // advances the mesh intent, and showing a parametric run or opening a
-  // project replaces the document.
-  const selection = useCadReturnStore.getState().beginIngestIntent();
-  const viewportGeneration = importedMeshStore.beginIntent();
-  const documentLoad = currentDocumentLoad();
-  const superseded = () => !useCadReturnStore.getState().isCurrentIngestIntent(selection)
-    || !importedMeshStore.isCurrentGeneration(viewportGeneration)
-    || !isCurrentDocumentLoad(documentLoad);
-  try {
-    const record = await getIngest(ingestId, fetcher);
-    if (superseded()) return false;
-    const bundle: CadReturnBundle = {
-      name: `${displayName}.wgreturn`,
-      bundlePath: '',
-      modifiedAt: record.created_at,
-      readable: true,
-      documentName: displayName,
-      requestId: null,
-      sourceCount: record.sources.length,
-      instanceCount: null,
-      sources: record.sources.map((source) => ({
-        id: source.id,
-        role: source.role,
-        required: source.required,
-        suggestedResolutionMm: source.suggested_resolution_mm,
-        defaultDriveChannelId: source.default_drive_channel_id,
-      })),
-    };
-    const savedSetup = cadHistorySetup(job, record);
-    const project = record.project?.lineage_id
-      ?? useCadReturnStore.getState().projectLineageId
-      ?? rememberedCadProject();
-    // The mesh, channels and sweep are the run's own -- they describe the
-    // geometry being put back on screen. The drivers are not: they are the
-    // project's, and the project's are newer. A run stores the numbers it was
-    // submitted with rather than which library row they came from, so replaying
-    // its own would re-solve with the T/S the library held that day and could
-    // never pick up values filled in since.
-    const projectDrivers = projectChannelDrivers(bundle, project);
-    // Keep the archived source inventory visible, but disable actions that need
-    // the original return bundle path.
-    useCadReturnStore.setState({
-      selectedBundle: {
-        ...bundle,
-        readable: false,
-        reason: 'Recalled from an archived run; the original return bundle is not active.',
-      },
-      ingestRecord: record,
-      projectLineageId: project,
-      ...savedSetup,
-      ...(projectDrivers ? { channelDrivers: driversForChannels(projectDrivers, savedSetup.driveChannels) } : {}),
-      areaDriftOverrides: [],
-      areaDriftSourceIds: [...new Set((record.role_findings ?? [])
-        .filter((finding) => String(finding.kind).includes('area-drift'))
-        .map((finding) => String(finding.source_id)))],
-      needsIngest: false,
-      ingestedBundleIdentity: null,
-      ingestStaleReason: null,
-    });
-    restoreCadJobSolveOptions(job);
-    // The project's drivers are now on the channels; this is what makes their
-    // T/S the library's current numbers rather than the ones they were picked
-    // with, which is the whole of re-solving an old run with updated drivers.
-    const rereadDrivers = await refreshChannelDriverBases(fetcher);
-    // Deliberately not a fresh viewport generation: the driver refresh is a
-    // network round trip of its own, and minting one here would hand this
-    // response ownership of a viewport a newer choice had already taken.
-    if (superseded()) return false;
-    await showIngestedMeshInViewport(record, displayName, coordinator.reportViewportNotice, fetcher, viewportGeneration);
-    if (superseded()) return false;
-    const shown = importedMeshStore.getSnapshot().cad?.ingestId === ingestId;
-    if (!shown) {
-      coordinator.reportStatus(`Cannot show ${displayName}: the archived CAD mesh artifacts are no longer available.`);
-      return false;
-    }
-    coordinator.reportStatus(`Showing ${displayName} from run #${job.run_number}.${
-      rereadDrivers.length ? ` Re-read ${rereadDrivers.length} driver${rereadDrivers.length === 1 ? '' : 's'} from the library.` : ''
-    }`);
-    return true;
-  } catch (reason) {
-    // A superseded request's failure is not news about what is on screen.
-    if (superseded()) return false;
-    const missing = reason instanceof CadLinkApiError && reason.status === 404;
-    coordinator.reportStatus(missing
-      ? `Cannot show ${displayName}: the archived CAD ingestion and mesh artifacts are no longer available.`
-      : `Could not show ${displayName}: ${reason instanceof Error ? reason.message : String(reason)}`);
-    return false;
-  }
+  return restoreCadJobModel(job, {
+    enterCadWorkspace,
+    reportStatus: coordinator.reportStatus,
+    reportViewportNotice: coordinator.reportViewportNotice,
+    showIngestedMesh: showIngestedMeshInViewport,
+  }, fetcher);
 }
 
 export function CadLinkCoordinator() {
@@ -933,8 +561,6 @@ export function CadLinkCoordinator() {
   const selectedBundlePath = useCadReturnStore((state) => state.selectedBundle?.bundlePath ?? null);
   const [ingesting, setIngesting] = useState(false);
   const [ingestError, setIngestError] = useState<string | null>(null);
-  const [sendingToFusion, setSendingToFusion] = useState(false);
-  const [pendingFusionConflict, setPendingFusionConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [viewportNotice, setViewportNotice] = useState<string | null>(null);
@@ -959,7 +585,6 @@ export function CadLinkCoordinator() {
   const refusedForeignReturn = useRef(false);
   const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(unavailable);
   const returnListRequest = useRef(0);
-  const fusionSendRequest = useRef(0);
   const ingestRequest = useRef(0);
   const ingestAbortController = useRef<AbortController | null>(null);
   const fusionStatusRequest = useRef(0);
@@ -1045,7 +670,6 @@ export function CadLinkCoordinator() {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      fusionSendRequest.current += 1;
       ingestRequest.current += 1;
       ingestAbortController.current?.abort();
     };
@@ -1094,42 +718,37 @@ export function CadLinkCoordinator() {
     startAdaptivePoll,
   });
 
-  useEffect(() => subscribeRevision((event) => {
-    if (event.reason !== 'load') return;
-    if (event.loadSource === 'cad-project-switch') {
-      // A registry project is a CAD workflow, even before it has a prepared
-      // return. Drop the previous project's geometry and make the latest
-      // positively-linked return eligible for selection on the next listing.
-      projectOpenPending.current = true;
-      manualSelectionAt.current = null;
-      // Opening a project is exactly what a foreign-return refusal asks for,
-      // so it is what lifts the restore hold.
-      refusedForeignReturn.current = false;
-      seenReturnRevisions.current = null;
-      returnListRequest.current += 1;
-      // Explicitly no project, rather than "keep whichever one we were on".
-      // The document that owned those settings has just been replaced, and the
-      // previous owner surviving the replacement is how one project's drivers
-      // and voltage came to be restored into the next one -- and then saved
-      // over its own settings by the ingestion that followed.
-      useCadReturnStore.getState().selectBundle(null, null);
-      importedMeshStore.beginIntent();
-      importedMeshStore.clear('cad');
-      setError(null);
-      setStatus('Project design loaded. Looking for its latest CAD return…');
-      enterCadWorkspace();
-      queueMicrotask(() => { void refreshRef.current(); });
-      return;
-    }
-    projectOpenPending.current = false;
-    workspaceModeStore.setMode('parametric');
-    // A replacement may be the document this return belongs to, so retain the
-    // evidence and channel work for the freshness verdict instead of guessing
-    // ownership here. The stale gate makes the old geometry unsendable now.
-    useCadReturnStore.getState().markIngestStale(
-      'The design was replaced after this CAD return was ingested. Re-ingest before solving.',
-    );
-  }), []);
+  const { restoringCadProject } = useCadRestores({
+    enterCadWorkspace,
+    manualSelectionAt,
+    projectOpenPending,
+    refreshRef,
+    refusedForeignReturn,
+    returnListRequest,
+    seenReturnRevisions,
+    selectBundleRef,
+    setError,
+    setStatus,
+  });
+
+  const {
+    sendingToFusion,
+    pendingFusionConflict,
+    sendWgToFusion,
+    cancelFusionConflict,
+  } = useCadSend({
+    design,
+    designRevision,
+    designName,
+    identity,
+    setCadLink,
+    fusionStatus,
+    mounted,
+    noteCadActivity,
+    refresh,
+    setError,
+    setStatus,
+  });
 
   const refreshFusionStatus = useCallback(async () => {
     if (preferences.cadApplication !== 'fusion360') return;
@@ -1234,147 +853,6 @@ export function CadLinkCoordinator() {
       .then((next) => { if (mounted.current) setOnshapeConnection(next); })
       .catch(() => { /* the status card already reports an unconfigured link */ });
   }, [onshape]);
-
-
-  // Entering CAD Link with nothing on screen reopens the project that was
-  // there last: the remembered lineage's newest return, selected exactly as
-  // the project switcher would, which prepares it and names the project.
-  // Anything already selected -- including the initial listing's own pick --
-  // wins; this only fills an otherwise empty mode.
-  const restoringCadProject = useRef(false);
-  useEffect(() => {
-    const maybeRestore = () => {
-      if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
-      if (preferencesStore.getSnapshot().cadApplication === 'onshape') return;
-      if (restoringCadProject.current) return;
-      // The mode was entered to show a refusal, not because the user came back
-      // to an empty CAD Link. Filling it here is how a return WG had just
-      // declined became a build of a different project.
-      if (refusedForeignReturn.current) return;
-      const lineage = rememberedCadProject();
-      if (!lineage) return;
-      const current = useCadReturnStore.getState();
-      if (current.selectedBundle || current.ingestRecord) return;
-      restoringCadProject.current = true;
-      void (async () => {
-        try {
-          const [projects, returns] = await Promise.all([listCadProjects(), listReturns()]);
-          const project = projects.find((item) => item.lineageId === lineage);
-          if (!project) return;
-          const bundle = newestReturnForProject(returns.items, project);
-          if (!bundle) return;
-          const latest = useCadReturnStore.getState();
-          if (latest.selectedBundle || latest.ingestRecord) return;
-          if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
-          selectBundleRef.current(bundle, project.lineageId);
-          setStatus(`Reopened ${cadProjectName(project)}.`);
-        } catch {
-          // Restoring is a convenience; the empty-mode guidance stays the
-          // honest fallback when the listing cannot be read.
-        } finally {
-          restoringCadProject.current = false;
-        }
-      })();
-    };
-    maybeRestore();
-    return workspaceModeStore.subscribe(maybeRestore);
-  }, []);
-
-  /** One outbound Fusion action for every surface. The rail card and CAD Link
-   * panel both call this bridge so identity adoption, feedback, and return-list
-   * refresh cannot drift into subtly different send paths. */
-  const sendToFusion = useCallback(async (target?: { documentId: string; instanceId: string; returnStateHash: string | null }) => {
-    const request = ++fusionSendRequest.current;
-    // Which document this export describes. An export is slow, and opening a
-    // project, recalling a run or starting a new design while it is in flight
-    // replaces the document without starting a send of its own -- so request
-    // ordering and the mounted flag both say this response is still the newest,
-    // and the registry identity it carries would be pinned onto a model that
-    // was never exported. A later *edit* to the same document is a different
-    // thing: that document did ask for this link, so it keeps it.
-    const documentLoad = currentDocumentLoad();
-    setSendingToFusion(true); setError(null); setStatus(null);
-    // A send is the start of a CAD round trip; every poll downstream of it is
-    // now on the user's clock.
-    noteCadActivity();
-    try {
-      const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
-      // What the registry holds once this commits, taken before the awaits.
-      const sentKey = keptContentKeyOf(design);
-      const result = await sendDesignToCad(
-        design,
-        designRevision,
-        designNameSlug(designName),
-        identity,
-        fetch,
-        undefined,
-        target ?? null,
-        polarConfig,
-      );
-      rememberSentCopy(
-        sentKey,
-        result.identity?.designId,
-        request === fusionSendRequest.current && mounted.current && isCurrentDocumentLoad(documentLoad),
-      );
-      if (request === fusionSendRequest.current && mounted.current) {
-        if (!isCurrentDocumentLoad(documentLoad)) {
-          // The export itself is fine and Fusion has it; only the store writes
-          // are refused, because they would land on somebody else's document.
-          setStatus(`Sent to Fusion 360 · sequence ${result.sequence}. Another design was opened while it was sending, so its CAD link stayed with the design that was exported.`);
-          return result;
-        }
-        if (polarConfigStillCommitted(polarConfig)) recordCommittedAthPolars(polarConfig);
-        if (result.identity) setCadLink(result.identity, 'current');
-        // Supersession is recorded where the user looks: an earlier update of
-        // this link that Fusion had not started was replaced by this one.
-        const superseded = result.cadHandoffSuperseded?.length
-          ? ' It replaced an earlier update Fusion had not started yet.'
-          : '';
-        const waiting = result.cadHandoffWaiting ? ` ${result.cadHandoffWaiting}` : '';
-        setStatus(target
-          ? `Update sent to Fusion 360 · sequence ${result.sequence}.${superseded}${waiting}`
-          : `Opening in Fusion 360 · sequence ${result.sequence}.${waiting}`);
-        await refresh();
-      }
-      return result;
-    } catch (reason) {
-      // The server commits the design to the registry before steps that can
-      // still fail, so a failed send may have overwritten the copy this design
-      // was opened from. Nothing sent is known to be kept: forget both.
-      rememberSentCopy(null, identity?.designId, mounted.current && isCurrentDocumentLoad(documentLoad));
-      if (request === fusionSendRequest.current && mounted.current) {
-        setError(reason instanceof Error ? reason.message : String(reason));
-      }
-      throw reason;
-    } finally {
-      if (request === fusionSendRequest.current && mounted.current) setSendingToFusion(false);
-    }
-  }, [design, designRevision, designName, identity, noteCadActivity, refresh, setCadLink]);
-
-  // The one Fusion outbound entry point (menu, rail, and panel). Deriving the
-  // action and the expected-document guard here means no call site can send an
-  // update without them — the drift that let the file menu bypass the two-way
-  // conflict confirmation.
-  const sendWgToFusion = useCallback(async (options?: { confirmed?: boolean }) => {
-    const current = fusionStatus;
-    if (current?.state === 'instance_selection_required') {
-      const reason = new Error('Choose which linked Fusion instance to update.');
-      setError(reason.message);
-      throw reason;
-    }
-    const action = fusionWorkflowView(current).action;
-    if (action === 'update' && current?.fusionChangesAvailable && !options?.confirmed) {
-      setPendingFusionConflict(true);
-      return null;
-    }
-    setPendingFusionConflict(false);
-    return sendToFusion(action === 'update' && current?.documentId && current.link
-      ? { documentId: current.documentId, instanceId: current.link.instanceId, returnStateHash: current.link.documentSignatureHash }
-      : undefined);
-  }, [fusionStatus, sendToFusion]);
-
-  const cancelFusionConflict = useCallback(() => setPendingFusionConflict(false), []);
-
 
   const reportViewportNotice = useCallback((message: string | null) => setViewportNotice(message), []);
 
