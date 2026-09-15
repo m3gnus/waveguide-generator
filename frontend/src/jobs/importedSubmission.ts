@@ -19,6 +19,83 @@ import { parseFrequencyList, polarValidationError, useSolveOptionsStore } from '
 const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
 /** The only diagonal inclination Phase 2 imported solves accept. */
 const DEFAULT_DIAGONAL_INCLINATION_DEG = 45;
+const MANUAL_SOLVE_OPERATION_PREFIX = 'wg2.cad.manual-solve.v1:';
+
+interface ManualSolveIdentity {
+  operationId: string;
+  prepareAcknowledged: boolean;
+}
+
+function readManualSolveIdentity(
+  ingestId: string,
+  storage: Pick<Storage, 'getItem'> | null,
+): ManualSolveIdentity | null {
+  const held = storage?.getItem(`${MANUAL_SOLVE_OPERATION_PREFIX}${ingestId}`);
+  if (!held) return null;
+  try {
+    const parsed = JSON.parse(held) as Partial<ManualSolveIdentity>;
+    if (typeof parsed.operationId === 'string' && parsed.operationId) {
+      return { operationId: parsed.operationId, prepareAcknowledged: parsed.prepareAcknowledged === true };
+    }
+  } catch { /* Legacy plain ids are unfinished and therefore unacknowledged. */ }
+  return { operationId: held, prepareAcknowledged: false };
+}
+
+/**
+ * Keep one manual-solve identity per retained ingest across retries and reloads.
+ *
+ * The backend makes this idempotent: if a response is lost at any of the three
+ * route boundaries, the next click names the same operation instead of making
+ * another job. Session storage deliberately scopes the identity to this WG
+ * window; selecting another ingest gets another identity.
+ */
+export function manualCadSolveOperationId(
+  ingestId: string,
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof sessionStorage === 'undefined' ? null : sessionStorage,
+): string {
+  const key = `${MANUAL_SOLVE_OPERATION_PREFIX}${ingestId}`;
+  const held = readManualSolveIdentity(ingestId, storage);
+  if (held) return held.operationId;
+  const random = globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const operationId = `manual-solve:${random}`;
+  storage?.setItem(key, JSON.stringify({ operationId, prepareAcknowledged: false }));
+  return operationId;
+}
+
+/** The client received the prepare response, so a later terminal row is old work. */
+export function acknowledgeManualCadSolvePreparation(
+  ingestId: string,
+  operationId: string,
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof sessionStorage === 'undefined' ? null : sessionStorage,
+): void {
+  const held = readManualSolveIdentity(ingestId, storage);
+  if (held?.operationId === operationId) {
+    storage?.setItem(
+      `${MANUAL_SOLVE_OPERATION_PREFIX}${ingestId}`,
+      JSON.stringify({ operationId, prepareAcknowledged: true }),
+    );
+  }
+}
+
+export function manualCadSolvePreparationAcknowledged(
+  ingestId: string,
+  operationId: string,
+  storage: Pick<Storage, 'getItem'> | null = typeof sessionStorage === 'undefined' ? null : sessionStorage,
+): boolean {
+  const held = readManualSolveIdentity(ingestId, storage);
+  return held?.operationId === operationId && held.prepareAcknowledged;
+}
+
+/** Forget an operation only after the backend says it is terminal. */
+export function forgetManualCadSolveOperationId(
+  ingestId: string,
+  operationId: string,
+  storage: Pick<Storage, 'getItem' | 'removeItem'> | null = typeof sessionStorage === 'undefined' ? null : sessionStorage,
+): void {
+  const key = `${MANUAL_SOLVE_OPERATION_PREFIX}${ingestId}`;
+  if (readManualSolveIdentity(ingestId, storage)?.operationId === operationId) storage?.removeItem(key);
+}
 
 /** The ingestion record's derivation may be widened but never narrowed, so the
  * submission starts FROM it: pinned axes (rejected mirror planes) force a full

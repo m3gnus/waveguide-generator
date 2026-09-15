@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
+import { createCadOperation, createSetupRevision, getCadOperation, isPendingCadOperation, prepareCadOperation } from '../api/cadOperations';
+import { CadLinkApiError } from '../api/cadlink';
 import { planSolveDesign, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import {
   useCapabilities,
@@ -11,7 +13,7 @@ import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
-import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { acknowledgeManualCadSolvePreparation, forgetManualCadSolveOperationId, importedSubmissionBlocker, manualCadSolveOperationId, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -22,9 +24,11 @@ import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
+import { useCadOperationsStore } from '../stores/cadOperations';
 import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
+import { buildCadProjectSetup } from './cadSetupPublisher';
 
 /**
  * A line of text rendered beside the Solve button, not inside its `title`.
@@ -328,15 +332,66 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, [now, preferences]);
 
-  // Nothing awaits between the mutex read and runImported's own claim of it,
-  // so a busy report here cannot race a submission into existence.
+  // The manual CAD solve is a durable backend operation. Its id is retained
+  // before the first request, so retrying after any lost response recovers the
+  // same row and cannot create a second job.
   const solveCurrentCadImport = useCallback(async () => {
     if (submissionInFlight.current) return 'busy' as const;
     const blocker = cadSolveBlockerNow();
     if (blocker) throw new Error(blocker);
-    await runImported(buildImportedSubmission(useCadReturnStore.getState()));
-    return 'submitted' as const;
-  }, [runImported]);
+    const cad = useCadReturnStore.getState();
+    const ingestId = cad.ingestRecord?.ingest_id;
+    if (!ingestId) throw new Error('Ingest a CAD return before solving.');
+    // A first-time CAD document has no project lineage yet. The manual solve
+    // still binds the setup on screen; the lineage is only filing metadata in
+    // buildCadProjectSetup and is not sent on the setup-revision route.
+    const built = buildCadProjectSetup(
+      cad, undefined, undefined,
+      cad.ingestRecord?.project?.lineage_id ?? cad.projectLineageId ?? 'manual-solve',
+    );
+    if (!built) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
+    submissionInFlight.current = true;
+    try {
+      setSubmitting(true);
+      setActionError(null);
+      const setup = {
+        ...built.setup,
+        options: { ...built.setup.options, solver_mode: 'full_3d', symmetry: 'auto' },
+      };
+      const revision = await createSetupRevision(setup);
+      let operationId = manualCadSolveOperationId(ingestId);
+      // The storage entry survives a reload. Ask the authoritative store
+      // whether it still names unfinished work: 404 means the first create
+      // never committed, pending means recover it, terminal means this click
+      // is a new explicit solve and therefore needs a fresh identity.
+      try {
+        const held = await getCadOperation(operationId);
+        if (!isPendingCadOperation(held)) {
+          if (!manualCadSolvePreparationAcknowledged(ingestId, operationId)) {
+            // A lost prepare response can race the backend all the way to a
+            // terminal outcome. Observing that row completes the retry; it
+            // must not turn the retry into a second explicit solve.
+            useCadOperationsStore.getState().apply(held);
+            acknowledgeManualCadSolvePreparation(ingestId, operationId);
+            return 'submitted' as const;
+          }
+          forgetManualCadSolveOperationId(ingestId, operationId);
+          operationId = manualCadSolveOperationId(ingestId);
+        }
+      } catch (reason) {
+        if (!(reason instanceof CadLinkApiError && reason.status === 404)) throw reason;
+      }
+      const created = await createCadOperation({ operationId, ingestId });
+      useCadOperationsStore.getState().apply(created);
+      const prepared = await prepareCadOperation(operationId, { setupRevisionId: revision.revisionId, submit: true });
+      acknowledgeManualCadSolvePreparation(ingestId, operationId);
+      useCadOperationsStore.getState().apply(prepared);
+      return 'submitted' as const;
+    } finally {
+      submissionInFlight.current = false;
+      setSubmitting(false);
+    }
+  }, []);
 
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;

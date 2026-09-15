@@ -3,6 +3,8 @@ import { CadLinkApiError } from './cadlink';
 import {
   approveCadOperationFindings,
   cancelCadOperation,
+  createCadOperation,
+  createSetupRevision,
   getCadOperation,
   isPendingCadOperation,
   listCadOperations,
@@ -47,6 +49,19 @@ function recorder(body: unknown, status = 200) {
 }
 
 describe('CAD operations client', () => {
+  it('records a setup revision and creates a manual solve operation', async () => {
+    const setup = { schema_version: 1 as const, geometry: { drive_channels: [] }, options: { engine: 'auto' } };
+    const setupRequest = recorder({ revisionId: 'wgs_1', contentSha256: 'sha256:s', createdAt: 'now' });
+    await expect(createSetupRevision(setup, setupRequest.fetcher)).resolves.toMatchObject({ revisionId: 'wgs_1' });
+    expect(setupRequest.calls[0]).toMatchObject({ url: '/api/cadlink/setup-revisions', init: { method: 'POST' } });
+    expect(JSON.parse(String(setupRequest.calls[0].init?.body))).toEqual({ setup });
+
+    const operationRequest = recorder({ operation: summary({ state: 'received' }) });
+    await expect(createCadOperation({ operationId: 'manual-solve:1', ingestId: 'wgi_1' }, operationRequest.fetcher))
+      .resolves.toMatchObject({ operationId: 'op-1', state: 'received' });
+    expect(operationRequest.calls[0]).toMatchObject({ url: '/api/cadlink/operations', init: { method: 'POST' } });
+    expect(JSON.parse(String(operationRequest.calls[0].init?.body))).toEqual({ operationId: 'manual-solve:1', ingestId: 'wgi_1' });
+  });
   it('records a project setup for its source inventory', async () => {
     const { calls, fetcher } = recorder({ lineageId: 'wgl_a', inventorySha256: 'sha256:i', revisionId: 'wgs_1' });
     const setup = { schema_version: 1 as const, geometry: { drive_channels: [] }, options: { engine: 'auto' } };

@@ -85,6 +85,12 @@ export interface PrepareCadOperationRequest {
   approvals?: CadOperationApprovals;
 }
 
+export interface SetupRevisionSummary {
+  revisionId: string;
+  contentSha256: string;
+  createdAt: string;
+}
+
 const TERMINAL_STATES: ReadonlySet<string> = new Set(['accepted', 'rejected', 'cancelled']);
 
 export function isPendingCadOperation(operation: Pick<CadOperationSummary, 'state'>): boolean {
@@ -96,6 +102,25 @@ const operationPath = (operationId: string): string =>
 
 function jsonBody(method: string, body: unknown): RequestInit {
   return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+}
+
+/** Store the exact setup a manual CAD solve will bind. */
+export function createSetupRevision(
+  setup: CadSolveSetup,
+  fetcher: typeof fetch = fetch,
+): Promise<SetupRevisionSummary> {
+  return jsonRequest('/api/cadlink/setup-revisions', jsonBody('POST', { setup }), fetcher);
+}
+
+/** Create or recover a backend-owned solve for one retained ingestion. */
+export async function createCadOperation(
+  request: { operationId: string; ingestId: string },
+  fetcher: typeof fetch = fetch,
+): Promise<CadOperationSummary> {
+  const response = await jsonRequest<{ operation: CadOperationSummary }>(
+    '/api/cadlink/operations', jsonBody('POST', request), fetcher,
+  );
+  return response.operation;
 }
 
 /** Record a project's solve settings for its source inventory. */

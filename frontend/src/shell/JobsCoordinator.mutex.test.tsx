@@ -2,9 +2,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
+import { resetCadOperationsStore } from '../stores/cadOperations';
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
-import type { CadReturnIngestRecord } from '../api/cadlink';
+import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
 import { SolveSubmissionRefused, type ImportedSolveSubmission } from '../jobs/actions';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resolveOuterBodyMode } from '../design/ParamPanel';
@@ -29,6 +31,10 @@ const mocks = vi.hoisted(() => ({
   planSolveDesign: vi.fn(),
   submitDesign: vi.fn(),
   submitImported: vi.fn(),
+  createSetupRevision: vi.fn(),
+  createCadOperation: vi.fn(),
+  prepareCadOperation: vi.fn(),
+  getCadOperation: vi.fn(),
   solvePlan: {
     engine: 'metal', formulation: 'full-3d' as const,
     reason: "explicit solver_mode='full_3d'", eligibility_reasons: [] as string[],
@@ -53,6 +59,17 @@ const mocks = vi.hoisted(() => ({
     },
   },
 }));
+
+vi.mock('../api/cadOperations', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api/cadOperations')>();
+  return {
+    ...actual,
+    createSetupRevision: mocks.createSetupRevision,
+    createCadOperation: mocks.createCadOperation,
+    prepareCadOperation: mocks.prepareCadOperation,
+    getCadOperation: mocks.getCadOperation,
+  };
+});
 
 vi.mock('../jobs/actions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/actions')>();
@@ -141,6 +158,37 @@ function importedSubmission(ingestId: string): ImportedSolveSubmission {
   };
 }
 
+function operation(operationId: string, state = 'received'): CadOperationSummary {
+  return {
+    operationId, kind: 'prepare_and_solve', state, stage: 'received', reason: null, message: null,
+    jobId: null, attemptGeneration: 0, setupRevisionId: null, preparationId: null,
+    snapshot: { manifestSha256: `sha256:${'1'.repeat(64)}` }, legacy: false,
+    createdAt: '2026-09-15T10:00:00Z', updatedAt: '2026-09-15T10:00:00Z',
+  };
+}
+
+function readyCad(ingestId: string): CadReturnIngestRecord {
+  const record = {
+    ingest_id: ingestId,
+    manifest_sha256: `sha256:${'1'.repeat(64)}`,
+    artifact_sha256: `sha256:${'2'.repeat(64)}`,
+    report_sha256: `sha256:${'3'.repeat(64)}`,
+    findings: [], evidence: { fem_air_volumes: [] }, polar_grid_derivation: {},
+  } as unknown as CadReturnIngestRecord;
+  useCadReturnStore.setState({
+    selectedBundle: {
+      name: 'speaker.wgreturn', bundlePath: 'returns/speaker.wgreturn', modifiedAt: '2026-09-15T10:00:00Z',
+      readable: true, documentName: 'Speaker', requestId: null, sourceCount: 1, instanceCount: 1,
+      designIds: [], sources: [{ id: 'source-hf', role: 'source', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-hf' }],
+    },
+    projectLineageId: 'wgl_test', ingestRecord: record, needsIngest: false,
+    driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+    sourceSizesMm: { 'source-hf': 4 }, rigidSizeMm: 8, transitionMm: 12, skippedSourceIds: [],
+  });
+  importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
+  return record;
+}
+
 function MainSolveButton() {
   const solve = useSolveControl();
   return <button disabled={solve.disabled} title={solve.title} onClick={solve.solve}>{solve.label}</button>;
@@ -157,7 +205,9 @@ describe('solve invocation mutex', () => {
     useDocumentStore.getState().setDesignName('horn');
     resetDesignStore();
     resetCadReturnStore();
+    resetCadOperationsStore();
     resetSolveOptionsStore();
+    sessionStorage.clear();
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
     mocks.capabilities.engines = [
@@ -176,6 +226,10 @@ describe('solve invocation mutex', () => {
     mocks.solvePlanError = null;
     mocks.solvePlanPending = false;
     mocks.planSolveDesign.mockResolvedValue(mocks.solvePlan);
+    mocks.createSetupRevision.mockResolvedValue({ revisionId: 'wgs_manual', contentSha256: 'sha256:setup', createdAt: 'now' });
+    mocks.createCadOperation.mockImplementation(async ({ operationId }: { operationId: string }) => operation(operationId));
+    mocks.prepareCadOperation.mockImplementation(async (operationId: string) => operation(operationId, 'processing'));
+    mocks.getCadOperation.mockRejectedValue(new CadLinkApiError('Unknown CAD operation', [], 404));
     compareSelection.clear();
     publishJobs([]);
     resetCadReturnStore();
@@ -612,26 +666,7 @@ describe('solve invocation mutex', () => {
 
   it('submits a full CAD solve from the main control without mounting CadLinkPanel', async () => {
     const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
-    const record = {
-      ingest_id: ingestId,
-      manifest_sha256: `sha256:${'1'.repeat(64)}`,
-      artifact_sha256: `sha256:${'2'.repeat(64)}`,
-      report_sha256: `sha256:${'3'.repeat(64)}`,
-      findings: [],
-      evidence: { fem_air_volumes: [] },
-      polar_grid_derivation: {},
-    } as unknown as CadReturnIngestRecord;
-    useCadReturnStore.setState({
-      ingestRecord: record,
-      needsIngest: false,
-      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-      sourceSizesMm: { 'source-hf': 4 },
-      rigidSizeMm: 8,
-      transitionMm: 12,
-      skippedSourceIds: [],
-    });
-    importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
-    mocks.submitImported.mockResolvedValue('job-cad');
+    readyCad(ingestId);
 
     await act(async () => {
       root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
@@ -643,8 +678,12 @@ describe('solve invocation mutex', () => {
     expect(solve.title).toContain('displayed CAD Link model');
     await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
 
-    expect(mocks.submitImported).toHaveBeenCalledOnce();
-    expect(mocks.submitImported.mock.calls[0][0].geometry.ingest_id).toBe(ingestId);
+    expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
+    expect(mocks.createCadOperation).toHaveBeenCalledWith(expect.objectContaining({ ingestId }));
+    expect(mocks.prepareCadOperation).toHaveBeenCalledWith(
+      expect.any(String), { setupRevisionId: 'wgs_manual', submit: true },
+    );
+    expect(mocks.submitImported).not.toHaveBeenCalled();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
 
@@ -653,26 +692,9 @@ describe('solve invocation mutex', () => {
   // the browser chose on their behalf.
   it.each(['beat-cpu', 'auto'])('submits the engine selected in the solver selector (%s) for a CAD solve', async (engine) => {
     const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
-    useCadReturnStore.setState({
-      ingestRecord: {
-        ingest_id: ingestId,
-        manifest_sha256: `sha256:${'1'.repeat(64)}`,
-        artifact_sha256: `sha256:${'2'.repeat(64)}`,
-        report_sha256: `sha256:${'3'.repeat(64)}`,
-        findings: [],
-        evidence: { fem_air_volumes: [] },
-        polar_grid_derivation: {},
-      } as unknown as CadReturnIngestRecord,
-      needsIngest: false,
-      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-      sourceSizesMm: { 'source-hf': 4 },
-      rigidSizeMm: 8,
-      transitionMm: 12,
-      skippedSourceIds: [],
-    });
-    importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
+    readyCad(ingestId);
     act(() => useSolveOptionsStore.getState().setEngine(engine));
-    mocks.submitImported.mockResolvedValue('job-cad');
+    act(() => useSolveOptionsStore.getState().setSolverMode('circsym'));
 
     await act(async () => {
       root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
@@ -682,47 +704,27 @@ describe('solve invocation mutex', () => {
     expect(solve.textContent).toBe('Solve CAD Link');
     await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
 
-    expect(mocks.submitImported).toHaveBeenCalledOnce();
-    expect(mocks.submitImported.mock.calls[0][0].options.engine).toBe(engine);
+    const setup = mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup;
+    expect(setup.options.engine).toBe(engine);
+    expect(setup.options.solver_mode).toBe('full_3d');
+    expect(mocks.submitImported).not.toHaveBeenCalled();
     // Submitting leaves the selection alone.
     expect(useSolveOptionsStore.getState().engine).toBe(engine);
   });
 
-  it('labels a CAD Link run from the Fusion document rather than the design left open behind it', async () => {
-    // The parametric design is `horn` here, and it is not the geometry being
-    // solved. Naming CAD runs from it is how a Fusion return used to be filed
-    // under whichever `.cfg` the autosave draft restored.
+  it('binds the same request fields as the old imported submission builder', async () => {
     const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
-    useCadReturnStore.setState({
-      selectedBundle: {
-        name: 'Tritonia V-req7.wgreturn', bundlePath: '/cad/Tritonia V-req7.wgreturn',
-        modifiedAt: '2026-08-19T12:00:00Z', readable: true, documentName: 'Tritonia V',
-        requestId: 'req7', sourceCount: 1, instanceCount: 1, sources: [],
-      },
-      ingestRecord: {
-        ingest_id: ingestId,
-        manifest_sha256: `sha256:${'1'.repeat(64)}`,
-        artifact_sha256: `sha256:${'2'.repeat(64)}`,
-        report_sha256: `sha256:${'3'.repeat(64)}`,
-        findings: [],
-        evidence: { fem_air_volumes: [] },
-        polar_grid_derivation: {},
-      } as unknown as CadReturnIngestRecord,
-      needsIngest: false,
-      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-      sourceSizesMm: { 'source-hf': 4 },
-      skippedSourceIds: [],
-    });
-    mocks.submitImported.mockResolvedValue('job-cad');
+    readyCad(ingestId);
     act(() => workspaceModeStore.setMode('cad'));
-
+    const old = (await import('../jobs/importedSubmission')).buildImportedSubmission(useCadReturnStore.getState());
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
-    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
-
-    expect(mocks.submitImported.mock.calls.map((call) => call[2]))
-      .toEqual(['Tritonia V1', 'Tritonia V2']);
-    // The design keeps its own name and its own numbering.
-    expect(useDocumentStore.getState().designName).toBe('horn');
+    const setup = mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup;
+    const {
+      type: _type, ingest_id: _ingest, manifest_sha256: _manifest,
+      artifact_sha256: _artifact, acknowledged_findings: _findings, ...oldGeometry
+    } = old.geometry;
+    expect(setup.geometry).toEqual(oldGeometry);
+    expect(setup.options).toEqual(old.options);
   });
 
   it('gates solveCurrentCadImport on readiness and reports a busy solve instead of dropping it', async () => {
@@ -733,23 +735,9 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitImported).not.toHaveBeenCalled();
 
     const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
-    useCadReturnStore.setState({
-      ingestRecord: {
-        ingest_id: ingestId,
-        manifest_sha256: `sha256:${'1'.repeat(64)}`,
-        artifact_sha256: `sha256:${'2'.repeat(64)}`,
-        report_sha256: `sha256:${'3'.repeat(64)}`,
-        findings: [],
-        evidence: { fem_air_volumes: [] },
-        polar_grid_derivation: {},
-      } as unknown as CadReturnIngestRecord,
-      needsIngest: false,
-      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-      sourceSizesMm: { 'source-hf': 4 },
-      skippedSourceIds: [],
-    });
-    const pending = deferred<string>();
-    mocks.submitImported.mockReturnValue(pending.promise);
+    readyCad(ingestId);
+    const pending = deferred<CadOperationSummary>();
+    mocks.prepareCadOperation.mockReturnValue(pending.promise);
 
     let first!: Promise<'submitted' | 'busy'>;
     let second!: 'submitted' | 'busy';
@@ -758,8 +746,85 @@ describe('solve invocation mutex', () => {
       second = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
     });
     expect(second).toBe('busy');
-    expect(mocks.submitImported).toHaveBeenCalledOnce();
-    await act(async () => { pending.resolve('job-cad'); await expect(first).resolves.toBe('submitted'); });
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+    expect(mocks.submitImported).not.toHaveBeenCalled();
+    await act(async () => { pending.resolve(operation('manual', 'processing')); await expect(first).resolves.toBe('submitted'); });
+  });
+
+  it('reuses the manual operation id when a click is retried after prepare fails', async () => {
+    readyCad('wgi_retry');
+    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('temporary prepare failure'));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('temporary prepare failure');
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+    expect(mocks.createCadOperation).toHaveBeenCalledTimes(2);
+    expect(mocks.createCadOperation.mock.calls[0][0].operationId)
+      .toBe(mocks.createCadOperation.mock.calls[1][0].operationId);
+    expect(mocks.submitImported).not.toHaveBeenCalled();
+  });
+
+  it('rotates the operation id after the authoritative row is terminal', async () => {
+    readyCad('wgi_repeat');
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+    const first = mocks.createCadOperation.mock.calls[0][0].operationId as string;
+    mocks.getCadOperation.mockResolvedValueOnce(operation(first, 'accepted'));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+    expect(mocks.createCadOperation.mock.calls[1][0].operationId).not.toBe(first);
+  });
+
+  it('does not rotate when a lost prepare response already became terminal', async () => {
+    readyCad('wgi_lost_prepare');
+    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('connection closed'));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed');
+    });
+    const first = mocks.createCadOperation.mock.calls[0][0].operationId as string;
+    mocks.getCadOperation.mockResolvedValueOnce(operation(first, 'accepted'));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+    expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
+    mocks.getCadOperation.mockResolvedValueOnce(operation(first, 'accepted'));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+    expect(mocks.createCadOperation).toHaveBeenCalledTimes(2);
+    expect(mocks.createCadOperation.mock.calls[1][0].operationId).not.toBe(first);
+  });
+
+  it.each([
+    ['setup revision', 'createSetupRevision'],
+    ['operation lookup', 'getCadOperation'],
+    ['operation creation', 'createCadOperation'],
+    ['operation preparation', 'prepareCadOperation'],
+  ] as const)('shows a 409 from %s instead of swallowing it', async (_label, route) => {
+    readyCad(`wgi_${route}`);
+    act(() => workspaceModeStore.setMode('cad'));
+    const refusal = new Error(`${route} refused with 409`);
+    mocks[route].mockRejectedValueOnce(refusal);
+    await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button')!.click();
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(refusal.message);
+    expect(mocks.submitImported).not.toHaveBeenCalled();
+  });
+
+  it('keeps a standalone msh import inspection-only', async () => {
+    importedMeshStore.setFile({ name: 'inspection.msh', source: 'file' } as ImportedMeshScene);
+    await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toContain('viewport-only');
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.submitImported).not.toHaveBeenCalled();
   });
 
   it('makes the Fusion pull the primary action when Fusion moved past the prepared geometry', async () => {
