@@ -83,9 +83,13 @@ Still to do:
   - an automatic rollback to a release older than this change leaves the staging beside
     the bundle in place. That release knows only `<data>/updates`, so the next start of a
     build with this change removes it;
-  - no uninstaller removes `.<bundle name>.update-staging`. A staged update that was
-    never applied survives an uninstall beside where the application was, until it is
-    removed by hand. Whether uninstall should remove it is open.
+  - every uninstaller now removes `.<bundle name>.update-staging` beside the bundle
+    (decided 2026-09-15): the Windows Inno Setup uninstaller
+    (`installers/windows/bundle-setup.iss`) and the Linux bundle uninstaller
+    (`installers/linux/bundle-uninstall.sh`) each compute the exact path the same way
+    `destination_staging_root()` does, and refuse a reparse point or symlink there rather
+    than follow it. macOS ships no bundle uninstaller at all -- the user removes the
+    `.app` by hand -- so there was nothing to add there.
 - how long a prepared update stays valid offline, which waits on decision D3 (§5).
 - a second server of the same installation, such as a `--no-gui` start with another data
   directory: it is not shut down with the first, and its healthy start can reclaim

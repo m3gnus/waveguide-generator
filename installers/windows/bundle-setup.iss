@@ -156,6 +156,11 @@ const
   WgLinkMarkerName = 'wglink_install.json';
   WgLinkDeveloperMarkerName = 'wglink_dev.json';
   WgLinkTransactionJournalName = '.WGLink-install-transaction.json';
+  { launchers/apply_update.py STAGING_ROOT_SUFFIX: kept identical so this
+    installer and the server name the same folder. }
+  UpdateStagingRootSuffix = '.update-staging';
+  FILE_ATTRIBUTE_REPARSE_POINT = $400;
+  INVALID_FILE_ATTRIBUTES = -1;
 
 var
   WgLinkStatus: String;
@@ -165,6 +170,13 @@ function SetEnvironmentVariable(Name, Value: String): Boolean;
     required by both setup and CurUninstallStepChanged. Inno imports an
     unqualified external into both the setup and uninstaller executables. }
   external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+
+function GetFileAttributesW(lpFileName: String): Integer;
+  { Pascal Script has no built-in reparse-point check. A junction or symlink
+    left at the staging path -- deliberately or by another program -- must
+    never be followed and deleted; this is how DeleteUpdateStagingRoot below
+    tells one apart from an ordinary directory before touching it. }
+  external 'GetFileAttributesW@kernel32.dll stdcall';
 
 procedure WgLinkOutput(const S: String; const Error, FirstLine: Boolean);
 begin
@@ -453,13 +465,69 @@ begin
   end;
 end;
 
+{ launchers/apply_update.py destination_staging_root(): "<the bundle's own
+  parent directory>\.<the bundle's own directory name>.update-staging" --
+  beside {app}, never inside it. {app} is the installed bundle
+  (launchers/apply_update.py bundle_from_app_layer treats {app}\app's own
+  parent as the bundle on Windows), and its directory name is whatever the
+  user chose on the wizard's directory page, so the path is computed here
+  from {app} itself rather than assumed to be the default. Never a wildcard:
+  only this one exact path is ever named. }
+function UpdateStagingRoot(): String;
+var
+  AppDir: String;
+begin
+  AppDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
+  Result := AddBackslash(ExtractFileDir(AppDir)) + '.' + ExtractFileName(AppDir) +
+    UpdateStagingRootSuffix;
+end;
+
+function IsReparsePoint(const Path: String): Boolean;
+var
+  Attributes: Integer;
+begin
+  Attributes := GetFileAttributesW(Path);
+  Result := (Attributes <> INVALID_FILE_ATTRIBUTES) and
+    ((Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0);
+end;
+
+procedure RemoveUpdateStagingRoot();
+var
+  Target: String;
+begin
+  Target := UpdateStagingRoot();
+  if not DirExists(Target) then
+  begin
+    Log('Update staging: nothing to remove at ' + Target + '.');
+    exit;
+  end;
+  { A staging folder is where a downloaded update lands; a reparse point left
+    there could point anywhere the uninstalling account can reach, so it is
+    left alone rather than followed and deleted -- the same refusal
+    server/updates/bundle.py applies with _is_link_or_junction(). }
+  if IsReparsePoint(Target) then
+  begin
+    Log('Update staging: left ' + Target + ' alone because it is a reparse point.');
+    exit;
+  end;
+  if DelTree(Target, True, True, True) then
+    Log('Update staging: removed ' + Target + '.')
+  else
+    Log('Update staging: could not remove ' + Target + '.');
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   { usUninstall runs before [UninstallDelete], while both the app script and
     bundled runtime still exist. Keep the managed Fusion cleanup ahead of the
-    app/runtime deletion below; external targets are preserved above. }
+    app/runtime deletion below; external targets are preserved above. The
+    staging folder lives outside {app} and does not depend on either, so its
+    order relative to them does not matter. }
   if CurUninstallStep = usUninstall then
+  begin
     UninstallWGLink();
+    RemoveUpdateStagingRoot();
+  end;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

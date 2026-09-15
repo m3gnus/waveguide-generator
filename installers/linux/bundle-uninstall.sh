@@ -6,9 +6,10 @@
 # checkout and removes a .venv from a Git clone.
 #
 # It removes exactly what install.sh created and nothing else: the application
-# directory, the menu entry, the icon, and the PATH symlink -- and the symlink
-# only when it still points into the directory being removed, so an uninstall
-# cannot take a command belonging to a second installation with it.
+# directory, the menu entry, the icon, the PATH symlink, and the update
+# staging folder beside the installation -- and the symlink only when it
+# still points into the directory being removed, so an uninstall cannot take
+# a command belonging to a second installation with it.
 #
 # Designs, job history, meshes and logs live outside the installation and are
 # kept unless --data says otherwise, because reinstalling is the common reason
@@ -25,6 +26,13 @@ DESKTOP_OWNER_NAME=".waveguide-generator.owner"
 ICON_OWNER_NAME=".waveguide-generator.owner"
 #: server/platform/paths.py: the XDG data directory the application itself uses.
 DATA_DIRECTORY="WaveguideGenerator"
+#: launchers/apply_update.py STAGING_ROOT_SUFFIX / destination_staging_root():
+#: the folder beside the installed bundle where an in-app update is staged.
+#: Computed here the same way -- the bundle's own parent directory, plus
+#: "." + the bundle's own directory name + this suffix -- so an uninstall
+#: removes exactly the one staging folder this installation could have
+#: created, never a wildcard, and never one belonging to another install.
+STAGING_ROOT_SUFFIX=".update-staging"
 
 HERE="$(cd -- "$(dirname -- "$0")" && pwd)"
 HOME_DIRECTORY="${HOME:-}"
@@ -122,6 +130,7 @@ RESOLVED="$(canonical_path "$DATA_HOME")" || fail "Could not resolve XDG_DATA_HO
 DATA_HOME="$RESOLVED"
 case "$TARGET" in /*) ;; *) fail "--prefix must be an absolute path: ${TARGET%/$BUNDLE_DIRECTORY}" "Nothing has been removed." ;; esac
 TARGET="$(canonical_path "$TARGET")" || fail "Could not resolve the installation path."
+STAGING_ROOT="$(dirname -- "$TARGET")/.$(basename -- "$TARGET")$STAGING_ROOT_SUFFIX"
 
 case "$TARGET$DATA_HOME$HOME_DIRECTORY" in
     *$'\n'*|*$'\r'*) fail "Removal paths cannot contain a newline." "Nothing has been removed." ;;
@@ -187,6 +196,18 @@ if ! rm -rf "$TARGET"; then
          "Quit Waveguide Generator if it is running, then try again."
 fi
 printf 'Removed the application: %s\n' "$TARGET"
+
+# Never through a link: a staging folder is where an update lands its
+# downloaded bytes, and a symlink there could point anywhere on the system.
+if [ -L "$STAGING_ROOT" ]; then
+    printf 'Left the update staging folder alone: %s is a link.\n' "$STAGING_ROOT"
+elif [ -d "$STAGING_ROOT" ]; then
+    if rm -rf -- "$STAGING_ROOT"; then
+        printf 'Removed the update staging folder: %s\n' "$STAGING_ROOT"
+    else
+        printf 'WARNING: could not remove the update staging folder: %s\n' "$STAGING_ROOT"
+    fi
+fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$DATA_HOME/applications" >/dev/null 2>&1 || true

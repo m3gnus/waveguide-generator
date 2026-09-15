@@ -19,6 +19,7 @@ import zipfile
 
 import pytest
 
+from launchers.apply_update import STAGING_ROOT_SUFFIX, destination_staging_root
 from launchers.macos import generate_icon
 from scripts import build_bundle, fetch_spa
 from shared import release_assets
@@ -1029,6 +1030,62 @@ def test_installer_script_pins_the_per_user_install_that_the_updater_needs() -> 
     # The budget is supplied by the build, never written here.
     assert "#ifndef MaxPayloadDepth" in script
     assert "#error MaxPayloadDepth must be defined by the build" in script
+
+
+def test_windows_uninstaller_removes_the_update_staging_folder_beside_the_app() -> None:
+    """UPDATE-TRANSACTION-CONTRACT.md §6: no uninstaller removed the staging
+    folder an in-app update stages beside the bundle, so a staged-but-never-
+    applied update survived an uninstall. Setup's own [UninstallDelete] entries
+    cannot name it -- the folder name depends on {app}'s own directory name,
+    which the wizard's directory page lets the user change -- so it has to be
+    computed in [Code], the same way launchers/apply_update.py's
+    destination_staging_root() computes it, and it must never be a wildcard.
+    """
+
+    script = (
+        Path(__file__).resolve().parents[2] / "installers" / "windows" / "bundle-setup.iss"
+    ).read_text(encoding="utf-8")
+
+    # The suffix must be the one the server itself uses, not a copy that can
+    # drift from it silently.
+    assert f"UpdateStagingRootSuffix = '{STAGING_ROOT_SUFFIX}';" in script
+
+    assert "function UpdateStagingRoot(): String;" in script
+    staging_root_fn = script.split("function UpdateStagingRoot(): String;", 1)[1].split(
+        "function IsReparsePoint(", 1
+    )[0]
+    # Built from {app}'s own name, both directions -- never a hardcoded
+    # "Waveguide Generator" and never a wildcard character.
+    assert "ExtractFileDir(AppDir)" in staging_root_fn
+    assert "ExtractFileName(AppDir)" in staging_root_fn
+    assert "*" not in staging_root_fn
+
+    # A reparse point at the staging path must be refused, never followed.
+    assert "function IsReparsePoint(const Path: String): Boolean;" in script
+    assert "FILE_ATTRIBUTE_REPARSE_POINT" in script
+
+    assert "procedure RemoveUpdateStagingRoot();" in script
+    remove_fn = script.split("procedure RemoveUpdateStagingRoot();", 1)[1].split(
+        "procedure CurUninstallStepChanged", 1
+    )[0]
+    assert "UpdateStagingRoot()" in remove_fn
+    assert "IsReparsePoint(Target)" in remove_fn
+    # Deletes exactly the computed Target -- a bare wildcard delete would not
+    # reference the variable this function derived from {app} at all.
+    assert "DelTree(Target," in remove_fn
+    assert "*" not in remove_fn
+
+    # And the removal must actually run during an uninstall, not merely exist.
+    assert "procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);" in script
+    uninstall_step_fn = script.split(
+        "procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);", 1
+    )[1].split("procedure CurPageChanged", 1)[0]
+    assert "RemoveUpdateStagingRoot();" in uninstall_step_fn
+
+    # [UninstallDelete] is static and cannot express this dynamic path; make
+    # sure nobody "simplified" it back into a wildcard entry there.
+    uninstall_delete_section = script.split("[UninstallDelete]", 1)[1].split("[Code]", 1)[0]
+    assert "update-staging" not in uninstall_delete_section
 
 
 def test_windows_readme_is_deterministic_like_the_rest_of_the_archive(
@@ -2962,6 +3019,84 @@ def test_the_linux_uninstaller_removes_exactly_what_the_installer_added(
     # this, and a workspace lost to it is unrecoverable.
     assert (workspace / "design.mwg").read_text(encoding="utf-8") == "a design"
     assert "--data" in result.stdout
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_uninstaller_removes_the_update_staging_folder_beside_the_app(
+    tmp_path: Path,
+) -> None:
+    """UPDATE-TRANSACTION-CONTRACT.md §6: no uninstaller removed the staging
+    folder an in-app update stages beside the bundle, so an update staged but
+    never applied survived an uninstall. The expected path is computed with
+    the same helper the server uses (``destination_staging_root``), not
+    retyped, so this test would fail if the two naming rules ever disagreed.
+    """
+
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    installed = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    share = home / ".local" / "share"
+    bundle = share / LINUX_BUNDLE_DIRECTORY
+    staging_root = destination_staging_root(bundle)
+    assert staging_root.name == f".{LINUX_BUNDLE_DIRECTORY}{STAGING_ROOT_SUFFIX}"
+    (staging_root / "2.0.0" / "staged").mkdir(parents=True)
+    (staging_root / "2.0.0" / "staged" / "app.txt").write_text("staged", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(bundle / LINUX_UNINSTALLER_NAME)],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", ""),
+            "XDG_DATA_HOME": str(share),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not staging_root.exists()
+    assert f"Removed the update staging folder: {staging_root}" in result.stdout
+
+
+@_NEEDS_POSIX_BASH
+def test_the_linux_uninstaller_does_not_follow_a_linked_staging_root(tmp_path: Path) -> None:
+    """A staging root is where an update lands downloaded bytes; a symlink
+    there could point anywhere the uninstalling user can reach, so it must be
+    left alone rather than followed and deleted (mirrors the server's own
+    ``_is_link_or_junction`` refusal in ``server/updates/bundle.py``)."""
+
+    _linux_payload(tmp_path)
+    home = tmp_path / "home"
+    installed = _install_linux(tmp_path, arguments=["--no-launch", "--skip-checks"], home=home)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    share = home / ".local" / "share"
+    bundle = share / LINUX_BUNDLE_DIRECTORY
+    staging_root = destination_staging_root(bundle)
+    elsewhere = tmp_path / "elsewhere-should-survive"
+    elsewhere.mkdir()
+    (elsewhere / "keep.txt").write_text("do not delete me", encoding="utf-8")
+    staging_root.symlink_to(elsewhere, target_is_directory=True)
+
+    result = subprocess.run(
+        ["bash", str(bundle / LINUX_UNINSTALLER_NAME)],
+        capture_output=True,
+        text=True,
+        check=False,
+        stdin=subprocess.DEVNULL,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", ""),
+            "XDG_DATA_HOME": str(share),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert staging_root.is_symlink()
+    assert (elsewhere / "keep.txt").is_file()
+    assert f"Left the update staging folder alone: {staging_root} is a link." in result.stdout
 
 
 @_NEEDS_POSIX_BASH
