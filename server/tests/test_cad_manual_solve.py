@@ -104,6 +104,16 @@ def test_the_same_operation_id_recovers_and_a_different_ingest_conflicts(
     assert row is not None and first in json.loads(row["inputs_json"])["bundle_path"]
 
 
+def test_an_exact_replay_recovers_after_the_retained_cas_is_removed(harness: Harness) -> None:
+    ingest_id, retained = _ingest(harness)
+    created = _create(harness, ingest_id)
+    shutil.rmtree(retained)
+
+    replayed = _create(harness, ingest_id)
+
+    assert replayed == created
+
+
 def test_it_submits_under_cad_solve_key_with_the_selected_engine(harness: Harness) -> None:
     ingest_id, _retained = _ingest(harness)
     _create(harness, ingest_id)
@@ -129,9 +139,9 @@ def test_an_ingest_without_a_retained_copy_is_refused_409(harness: Harness) -> N
 
 
 def test_an_unknown_ingest_is_404(harness: Harness) -> None:
-    with pytest.raises(api.HTTPException) as refused:
-        _create(harness, "wgi_missing")
-    assert refused.value.status_code == 404
+    refused = _create(harness, "wgi_missing")
+    assert refused.status_code == 404
+    assert json.loads(refused.body)["error"]["code"] == "unknown_ingest"
 
 
 def test_an_update_restart_latch_creates_no_manual_operation(harness: Harness) -> None:
@@ -153,3 +163,23 @@ def test_an_update_restart_latch_creates_no_manual_operation(harness: Harness) -
     assert response.status_code == 409
     assert json.loads(response.body)["error"]["code"] == "update_restart_pending"
     assert harness.store.list_operations() == []
+
+
+def test_an_exact_replay_recovers_while_an_update_restart_is_pending(harness: Harness) -> None:
+    from server.updates.restart import RestartApproval
+
+    ingest_id, _retained = _ingest(harness)
+    created = _create(harness, ingest_id)
+    approval = RestartApproval()
+    approval.approve("0.3.4")
+    request = _request(harness)
+    request.app.state.update_restart = approval
+
+    replayed = asyncio.run(
+        api.post_cad_operation(
+            api.ManualSolveOperationRequest(operationId="manual-1", ingestId=ingest_id),
+            request,
+        )
+    )
+
+    assert replayed == created

@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from server.cadlink.identity import SaveIdentity, design_hash
 from server.design.schema import DesignConfig
-from server.integration.contracts import error_envelope
+from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.mesh.artifact import (
     ImportedMeshArtifactError,
     read_verified_import_mesh,
@@ -64,6 +64,7 @@ from .manual_solve import (
     SnapshotNotRetained,
     UnknownIngest,
     create_manual_solve,
+    recover_manual_solve,
 )
 # The Onshape leg publishes its bundles under WG's own data directory rather
 # than a user-chosen WGLink folder, so re-ingesting one has to be anchored to
@@ -1741,13 +1742,54 @@ async def list_cad_operations(
     return {"operations": [operation_summary(row) for row in rows]}
 
 
-@router.post("/operations")
+@router.post(
+    "/operations",
+    responses={
+        404: {"model": ErrorEnvelope, "description": "CAD ingest not found"},
+        409: {
+            "model": ErrorEnvelope,
+            "description": (
+                "Update restart pending, operation id conflict, or retained snapshot unavailable"
+            ),
+        },
+    },
+)
 async def post_cad_operation(
     payload: ManualSolveOperationRequest, request: Request
 ) -> dict[str, Any]:
     """Create or recover a manual solve from an immutable retained CAD ingest."""
 
     state = request.app.state
+    try:
+        recovered, _ingest, _record, _inputs = await asyncio.to_thread(
+            recover_manual_solve,
+            state.cadlink_store,
+            payload.operation_id,
+            payload.ingest_id,
+        )
+    except UnknownIngest as exc:
+        return JSONResponse(
+            status_code=404,
+            content=error_envelope(
+                code="unknown_ingest",
+                stage="submission",
+                message=str(exc),
+                retryable=False,
+            ),
+        )
+    except OperationConflict as exc:
+        return JSONResponse(
+            status_code=409,
+            content=error_envelope(
+                code="operation_conflict",
+                stage="submission",
+                message=str(exc),
+                retryable=False,
+            ),
+        )
+    if recovered is not None:
+        return {"operation": operation_summary(recovered)}
+
     restart = getattr(state, "update_restart", None)
     refusal = restart.refusal() if restart is not None else None
     if refusal is not None:
@@ -1768,8 +1810,16 @@ async def post_cad_operation(
             payload.operation_id,
             payload.ingest_id,
         )
-    except UnknownIngest as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except UnknownIngest as exc:  # an ingest deleted between the two reads
+        return JSONResponse(
+            status_code=404,
+            content=error_envelope(
+                code="unknown_ingest",
+                stage="submission",
+                message=str(exc),
+                retryable=False,
+            ),
+        )
     except OperationConflict as exc:
         return JSONResponse(
             status_code=409,

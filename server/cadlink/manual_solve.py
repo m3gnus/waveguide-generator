@@ -35,20 +35,23 @@ def _record(row: Mapping[str, Any]) -> dict[str, Any]:
     return value
 
 
-def create_manual_solve(
-    store: CadLinkStore, data_dir: str | Path, operation_id: str, ingest_id: str
-) -> tuple[dict[str, Any], str]:
-    """Accept or recover one solve bound to an existing retained ingest."""
+def recover_manual_solve(
+    store: CadLinkStore, operation_id: str, ingest_id: str
+) -> tuple[dict[str, Any] | None, dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Recover an exact durable request, or return what a new one will bind.
+
+    This lookup intentionally needs no retained file. A replay identifies the
+    operation already accepted; mutable conditions such as artifact retention
+    and an update-restart latch apply only when accepting new work.
+    """
 
     ingest = store.get_ingest(ingest_id)
     if ingest is None:
         raise UnknownIngest(f"Unknown CAD ingest {ingest_id}")
     record = _record(ingest)
     manifest_sha256 = str(ingest.get("manifest_sha256") or "")
-    artifact_sha256 = str(ingest.get("artifact_sha256") or "")
-    return_id = str(record.get("return_id") or "")
     target, inputs = prepare_and_solve_request(
-        return_id=return_id,
+        return_id=str(record.get("return_id") or ""),
         bundle_path=f"ingest/{ingest_id}",
         manifest_sha256=manifest_sha256,
     )
@@ -61,11 +64,22 @@ def create_manual_solve(
             or existing.get("request_digest") != digest
         ):
             raise OperationConflict(f"CAD operation {operation_id} already names another request")
-        # Replay recovers the durable operation itself. Its retained artifact may
-        # have been pruned or damaged since acceptance; preparation reports that
-        # separately, but it cannot turn an identical request into a new refusal.
-        return existing, "recovered"
+        return existing, ingest, record, inputs
+    return None, ingest, record, inputs
 
+
+def create_manual_solve(
+    store: CadLinkStore, data_dir: str | Path, operation_id: str, ingest_id: str
+) -> tuple[dict[str, Any], str]:
+    """Accept or recover one solve bound to an existing retained ingest."""
+
+    existing, ingest, record, inputs = recover_manual_solve(store, operation_id, ingest_id)
+    if existing is not None:
+        return existing, "recovered"
+    manifest_sha256 = str(ingest.get("manifest_sha256") or "")
+    artifact_sha256 = str(ingest.get("artifact_sha256") or "")
+    target: dict[str, Any] = {}
+    digest = request_digest(PREPARE_AND_SOLVE, target, inputs)
     try:
         retained = retained_snapshot_path(data_dir, manifest_sha256)
         bundle = read_snapshot(retained, retained=True)
@@ -94,4 +108,10 @@ def create_manual_solve(
     return row, outcome
 
 
-__all__ = ["OperationConflict", "SnapshotNotRetained", "UnknownIngest", "create_manual_solve"]
+__all__ = [
+    "OperationConflict",
+    "SnapshotNotRetained",
+    "UnknownIngest",
+    "create_manual_solve",
+    "recover_manual_solve",
+]
