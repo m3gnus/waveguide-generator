@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 
 from server.cadlink.fusion_return import RETURN_REQUESTS_DIRECTORY, publish_return_request
+from server.cadlink.store import CadLinkStore
 
 
 def test_return_request_is_machine_local_and_targets_the_addin_session(tmp_path) -> None:
     path, request_id = publish_return_request(
         tmp_path,
+        CadLinkStore.for_data_dir(tmp_path),
         session_id="session-a",
         design_id="wgd_a",
         document_id="fusion:doc-a",
@@ -33,6 +35,7 @@ def test_a_published_request_logs_its_request_id(tmp_path, caplog) -> None:
     with caplog.at_level(logging.INFO, logger="server.cadlink.fusion_delivery"):
         _path, request_id = publish_return_request(
             tmp_path,
+            CadLinkStore.for_data_dir(tmp_path),
             session_id="session-a",
             design_id="wgd_a",
             document_id="fusion:doc-a",

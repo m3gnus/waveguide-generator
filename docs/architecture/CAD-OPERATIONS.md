@@ -23,6 +23,8 @@ settles what an interrupted session left. The backend owns a solve operation end
 (see "Setup revisions" and "Preparation"): its retained snapshot, its setup revision,
 its fenced preparation stages, its approvals and its bound request. A later step adds a
 field to a request only under a new digest version.
+WG-produced return and handoff files are now accepted into this store before
+publication; their later Fusion outcomes are added by the next cut.
 
 ## Operation kinds
 
@@ -31,7 +33,7 @@ field to a request only under a new digest version.
 | `receive_snapshot` | `{}` | `{bundle_path, manifest_sha256}` | No |
 | `prepare_and_solve` | `{}` | `{return_id, bundle_path, manifest_sha256}` | No |
 | `request_return` | `{document_id, design_id, instance_id, expected_baseline}` | `{}` | Yes |
-| `insert_link` | `{document_id, export_id}` | `{}` | Yes |
+| `insert_link` | `{destination, export_id}` | `{}` | No; it can request a new document |
 | `update_link` | `{document_id, design_id, instance_id, expected_baseline}` | `{export_id}` | Yes |
 
 - **Fields.** Every field is a required string. All must be non-empty except
@@ -41,6 +43,10 @@ field to a request only under a new digest version.
   `requestedAt` is refused rather than silently hashed.
 - **`expected_baseline`** is `{kind: "document_signature_hash", value}`: the
   document-wide signature the adapter reported when WG prepared the request.
+- **`destination`** is exactly `{kind, value}`. Its kind is `document`, whose
+  value is the active document ID from a live version-3 heartbeat, or
+  `new_document`, whose value is the request ID. With no live heartbeat WG
+  requests a new document rather than guessing a stale destination.
 - **Exact targets.** A request that addresses an existing instance (`request_return`,
   `update_link`) names that instance exactly. "The one matching link in this design" is
   not a target. That resolution survives only for legacy single-slot markers, whose rows
@@ -48,6 +54,8 @@ field to a request only under a new digest version.
 - **Inserts.** `insert_link` has no instance yet. Its target is the destination
   document plus the export identity. A redelivered insert is recognised by that export
   identity already stamped on a link.
+  No `insert_link` row existed before this cut, so replacing its former
+  `{document_id, export_id}` shape does not reinterpret a stored digest-version-1 row.
 - **Solves and snapshots** address nothing in CAD, so their target is empty and
   everything they need is an input. Later inputs join under a new digest version: a
   snapshot id and a setup revision for a solve, and the import intent for a received
@@ -158,6 +166,10 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `update_restart_pending` | `needs_user_input` | An update restart was approved while the preparation ran, so nothing was submitted. Queued again once no restart is pending (see "Preparation", "Update restart") |
 | `interrupted` | `needs_user_input` | The backend stopped, or the answer was lost, while an attempt held the operation |
 | `ready_to_solve` | `needs_user_input` | Prepared, and waiting for the user to start the solve |
+| `superseded` | `cancelled` | A newer unstarted update for the same exact link replaced this request |
+| `expired` | `cancelled` | An insert remained unclaimed for 30 minutes |
+| `session_changed` | `cancelled` | A return request named a Fusion session that is no longer current |
+| `publication_failed` | `cancelled` | The operation was stored but its request file could not be published |
 
 The three rejections are final because a refreshed baseline, target or snapshot is a new
 operation. Every `needs_user_input` code keeps the operation, and another
@@ -695,6 +707,14 @@ one file under `<data dir>/ipc/wglink/`:
 | Return request | `.fusion-return-requests/<requestId>.json` |
 | Handoff | `.fusion-handoffs/<requestId>.json` |
 
+WG commits the operation row before renaming the request file into place. A registry
+failure publishes no file. The complete hidden staged file is fsynced first; if the
+rename and its compensating cancellation both fail, startup finishes that staged
+publication. Otherwise a file-write failure cancels the newly created row as
+`publication_failed`, so no request is left waiting for a file that never existed.
+A recovered same-ID operation is never republished: its visible file or hidden Fusion
+claim, if any, already owns delivery, and a terminal operation must never run twice.
+
 - **Fields.** `schemaVersion: 3`, `target: "fusion360"`, `requestId`, `operationId`
   (equal to `requestId`), `deliverySequence`, and the request's own fields.
   - A return request names `sessionId`, `designId`, `documentId`, `instanceId` and
@@ -703,7 +723,8 @@ one file under `<data dir>/ipc/wglink/`:
   - A handoff names the bundle and its export identity. An update also names
     `expectedDocumentId`, `expectedInstanceId` and `expectedReturnStateHash`, all three
     or WG refuses it (HTTP 422, before anything is built). A handoff with no instance is
-    an insert.
+    an insert and adds its durable `destination` object. The version-3 required keys are
+    unchanged; readers ignore this additive transport field.
 - **`deliverySequence`** is a positive integer, one higher than any request of that kind
   still on disk. It orders the requests without a clock. It is not unique across
   requests the add-in has taken, so a reader identifies a request by its `requestId`,
@@ -716,6 +737,12 @@ one file under `<data dir>/ipc/wglink/`:
   session, because no add-in will run them; and an unstarted update of the same exact
   link (see "Ordering"). Only a file still on disk under its own name is withdrawn: one
   the add-in has claimed has started.
+  WG first renames a withdrawable file to a hidden holding name, records its durable
+  cancellation, then deletes it. If recording fails, WG restores the visible file.
+- **Insert expiry.** On startup and every `/fusion-status` poll, WG removes an insert
+  still under its own name after 30 minutes and records `cancelled`/`expired`. Losing
+  the removal race means Fusion claimed it, so WG leaves its operation unsettled for
+  the heartbeat outcome pass.
 
 **The add-in** handles each kind in this order:
 

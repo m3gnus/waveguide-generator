@@ -23,6 +23,7 @@ no add-in this WG talks to reads them. Then it writes ``wg-capabilities.json``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -52,6 +53,7 @@ _REQUEST_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 # On Windows a replace fails while a reader holds the target open.
 _WRITE_ATTEMPTS = 10
 _WRITE_RETRY_SECONDS = 0.02
+INSERT_HANDOFF_TTL = timedelta(minutes=30)
 
 logger = logging.getLogger(__name__)
 # One publisher per process at a time; the add-in is another process.
@@ -77,6 +79,7 @@ class PublishedRequest:
     request_id: str
     path: Path
     withdrawn: tuple[str, ...] = ()
+    recovered: bool = False
 
 
 def ipc_folder(data_dir: Path, *, create: bool = False) -> Path:
@@ -104,32 +107,103 @@ def addin_delivery_version(heartbeat: Mapping[str, Any]) -> int | None:
     return value
 
 
-def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+def _write_json(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    before_replace: Callable[[Mapping[str, Any]], object] | None = None,
+    should_replace: Callable[[object], bool] | None = None,
+    replace_failed: Callable[[object, BaseException], None] | None = None,
+) -> tuple[object, bool]:
     """Replace ``path`` atomically; retry briefly while another process holds it.
 
     The staging name starts with "." and ends in .tmp. Only PermissionError is
     retried: that is what Windows raises while a reader has the file open.
     """
 
-    for attempt in range(_WRITE_ATTEMPTS):
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name.lstrip('.')}.", suffix=".tmp", dir=path.parent
-        )
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                json.dump(payload, stream, indent=2, sort_keys=True)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-            return
-        except PermissionError:
-            if attempt + 1 == _WRITE_ATTEMPTS:
-                raise
-        finally:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name.lstrip('.')}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    keep_for_recovery = False
+    receipt: object = None
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        receipt = before_replace(payload) if before_replace is not None else None
+        if should_replace is not None and not should_replace(receipt):
+            return receipt, False
+        for attempt in range(_WRITE_ATTEMPTS):
+            try:
+                os.replace(temporary, path)
+                return receipt, True
+            except PermissionError:
+                if attempt + 1 == _WRITE_ATTEMPTS:
+                    raise
+                time.sleep(_WRITE_RETRY_SECONDS)
+    except Exception as exc:
+        if replace_failed is not None:
+            try:
+                replace_failed(receipt, exc)
+            except Exception:
+                # The staged document is durable recovery evidence. If the
+                # compensating store write also fails, startup finishes this
+                # publication instead of stranding a received row with no file.
+                keep_for_recovery = True
+                logger.warning(
+                    "Could not compensate failed Fusion request publication %s.",
+                    path.name,
+                    exc_info=True,
+                )
+        raise
+    finally:
+        if not keep_for_recovery:
             temporary.unlink(missing_ok=True)
-        time.sleep(_WRITE_RETRY_SECONDS)
+
+
+def _withdraw_and_record(
+    path: Path,
+    operation_id: str,
+    record: Callable[[str], None],
+) -> Literal["removed", "gone", "failed"]:
+    """Hide a pending request, record cancellation, then delete it.
+
+    If the durable write fails, restore the runnable file. A missing source
+    means the add-in won the claim race and no cancellation is recorded.
+    """
+
+    held = path.with_name(
+        f".wg-withdraw-{path.name}.{os.getpid()}-{time.monotonic_ns()}.tmp"
+    )
+    try:
+        os.rename(path, held)
+    except FileNotFoundError:
+        return "gone"
+    except OSError as exc:
+        logger.warning("Could not hide Fusion request %s for withdrawal: %s", path.name, exc)
+        return "failed"
+    try:
+        record(operation_id)
+    except Exception:
+        try:
+            os.replace(held, path)
+        except OSError:
+            logger.error(
+                "Could not restore Fusion request %s after its cancellation failed.",
+                path.name,
+                exc_info=True,
+            )
+        logger.warning(
+            "Did not withdraw Fusion request %s because its cancellation was not stored.",
+            path.name,
+            exc_info=True,
+        )
+        return "failed"
+    held.unlink(missing_ok=True)
+    return "removed"
 
 
 def _read_json(path: Path) -> Any:
@@ -195,6 +269,9 @@ def publish_fusion_request(
     request_id: str,
     *,
     withdraw: Callable[[Mapping[str, Any]], bool] | None = None,
+    before_publish: Callable[[Mapping[str, Any]], object] | None = None,
+    publish_failed: Callable[[object, BaseException], None] | None = None,
+    after_withdraw: Callable[[str], None] | None = None,
 ) -> PublishedRequest:
     """Publish one request as its own file.
 
@@ -213,25 +290,44 @@ def publish_fusion_request(
         directory.mkdir(exist_ok=True)
         withdrawn: list[str] = []
         sequences = [0]
+        withdrawable: list[tuple[Path, str]] = []
         for path in _request_files(directory):
             existing = _read_json(path)
             if withdraw is not None and isinstance(existing, Mapping) and withdraw(existing):
-                outcome = _remove(path)
-                if outcome == "removed":
-                    withdrawn.append(_operation_id(existing) or path.stem)
-                    continue
-                if outcome == "gone":
-                    continue
+                withdrawable.append((path, _operation_id(existing) or path.stem))
             sequences.append(_sequence(existing) or 0)
         own = directory / f"{request_id}.json"
         sequence = max(sequences) + 1
-        _write_json(own, {
+        document = {
             **payload,
             "schemaVersion": SCHEMA_VERSION,
             "requestId": request_id,
             "operationId": request_id,
             SEQUENCE_FIELD: sequence,
-        })
+        }
+        _receipt, replaced = _write_json(
+            own,
+            document,
+            before_replace=before_publish,
+            should_replace=lambda value: not (
+                isinstance(value, tuple) and len(value) >= 2 and value[1] == "recovered"
+            ),
+            replace_failed=publish_failed,
+        )
+        if not replaced:
+            return PublishedRequest(request_id=request_id, path=own, recovered=True)
+        # Publish the replacement first. If recording or writing it fails, an
+        # older runnable request is left untouched. While this lock is held the
+        # add-in may still claim an older file; "gone" then correctly means it
+        # started and must not be classified as withdrawn.
+        for path, operation_id in withdrawable:
+            if after_withdraw is None:
+                outcome = _remove(path)
+            else:
+                outcome = _withdraw_and_record(path, operation_id, after_withdraw)
+            if outcome != "removed":
+                continue
+            withdrawn.append(operation_id)
     # The request id is the operation id: it follows the request through the
     # add-in's heartbeat and outcomes (CAD-OPERATIONS.md, "WG-produced Fusion requests").
     logger.info(
@@ -239,6 +335,93 @@ def publish_fusion_request(
         request_id, channel.directory, sequence,
     )
     return PublishedRequest(request_id=request_id, path=own, withdrawn=tuple(withdrawn))
+
+
+def expire_unstarted_insert_handoffs(
+    data_dir: Path,
+    *,
+    record_expired: Callable[[str], None],
+    now: datetime | None = None,
+) -> tuple[str, ...]:
+    """Withdraw unclaimed insert requests older than their delivery TTL."""
+
+    checked_at = now or datetime.now(timezone.utc)
+    directory = ipc_folder(data_dir) / HANDOFFS.directory
+    expired: list[str] = []
+    with _LOCK:
+        for path in _request_files(directory):
+            payload = _read_json(path)
+            if not isinstance(payload, Mapping) or payload.get("expectedInstanceId"):
+                continue
+            try:
+                requested_at = datetime.fromisoformat(
+                    str(payload.get("requestedAt") or "").replace("Z", "+00:00")
+                )
+            except ValueError:
+                continue
+            if requested_at.tzinfo is None or checked_at - requested_at <= INSERT_HANDOFF_TTL:
+                continue
+            operation_id = _operation_id(payload) or path.stem
+            if _withdraw_and_record(path, operation_id, record_expired) != "removed":
+                continue
+            expired.append(operation_id)
+            logger.info(
+                "Expired unstarted Fusion insert %s after %s minutes.",
+                operation_id,
+                int(INSERT_HANDOFF_TTL.total_seconds() // 60),
+            )
+    return tuple(expired)
+
+
+def recover_staged_fusion_requests(
+    data_dir: Path,
+    *,
+    lookup_operation: Callable[[str], Mapping[str, Any] | None],
+) -> tuple[str, ...]:
+    """Finish files staged before a backend interruption.
+
+    The JSON is durable before its operation is accepted. A received row plus
+    this hidden file proves the interruption happened between acceptance and
+    publication. Existing visible requests and add-in claims always win.
+    """
+
+    recovered: list[str] = []
+    folder = ipc_folder(data_dir)
+    with _LOCK:
+        for channel in CHANNELS:
+            directory = folder / channel.directory
+            try:
+                staged = [
+                    path
+                    for path in directory.iterdir()
+                    if path.name.startswith(".") and path.name.endswith(".tmp")
+                ]
+            except OSError:
+                continue
+            for temporary in staged:
+                payload = _read_json(temporary)
+                operation_id = _operation_id(payload)
+                if (
+                    not isinstance(payload, Mapping)
+                    or payload.get("schemaVersion") != SCHEMA_VERSION
+                    or operation_id is None
+                ):
+                    continue
+                row = lookup_operation(operation_id)
+                own = directory / f"{operation_id}.json"
+                claimed = any(directory.glob(f".wglink-claim-{operation_id}-*.json"))
+                if (
+                    own.exists()
+                    or claimed
+                    or row is None
+                    or row.get("state") != "received"
+                ):
+                    temporary.unlink(missing_ok=True)
+                    continue
+                os.replace(temporary, own)
+                recovered.append(operation_id)
+                logger.info("Recovered staged Fusion request %s at startup.", operation_id)
+    return tuple(recovered)
 
 
 def _remove_older_delivery(folder: Path) -> list[str]:
@@ -296,6 +479,7 @@ __all__ = [
     "FUSION_REQUEST_DELIVERY",
     "FusionRequestChannel",
     "HANDOFFS",
+    "INSERT_HANDOFF_TTL",
     "LEGACY_RECORD_FILENAME",
     "LEGACY_SLOT_FILENAMES",
     "PublishedRequest",
@@ -306,5 +490,7 @@ __all__ = [
     "addin_delivery_version",
     "advertise_fusion_delivery",
     "capabilities",
+    "expire_unstarted_insert_handoffs",
     "publish_fusion_request",
+    "recover_staged_fusion_requests",
 ]

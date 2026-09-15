@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from server.cadlink.store import CadLinkStore
+
 from server.exports.cad_handoff import (
     HANDOFFS_DIRECTORY,
     UPDATE_TARGET_REQUIRED,
@@ -33,6 +35,7 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
     published = publish_fusion_handoff(
         data_dir,
         workspace,
+        CadLinkStore.for_data_dir(data_dir),
         _result(bundle),
         expected_document_id="fusion:doc-a",
         expected_instance_id="instance-b",
@@ -71,9 +74,16 @@ def test_two_inserts_are_two_requests(tmp_path: Path) -> None:
     bundle = workspace / "wglink" / "horn.wglink"
     bundle.mkdir(parents=True)
     first = _result(bundle)
-    earlier = publish_fusion_handoff(data_dir, workspace, first)
+    earlier = publish_fusion_handoff(
+        data_dir, workspace, CadLinkStore.for_data_dir(data_dir), first
+    )
 
-    later = publish_fusion_handoff(data_dir, workspace, {**first, "exportId": "wge_new", "sequence": 5})
+    later = publish_fusion_handoff(
+        data_dir,
+        workspace,
+        CadLinkStore.for_data_dir(data_dir),
+        {**first, "exportId": "wge_new", "sequence": 5},
+    )
 
     assert earlier.path.exists() and later.path.exists()
     assert json.loads(later.path.read_text())["deliverySequence"] == 2
@@ -89,6 +99,7 @@ def test_an_update_without_its_document_or_baseline_is_refused(tmp_path: Path) -
             publish_fusion_handoff(
                 tmp_path / "data",
                 workspace,
+                CadLinkStore.for_data_dir(tmp_path / "data"),
                 _result(bundle),
                 expected_document_id=document_id,
                 expected_instance_id="instance-b",
@@ -107,7 +118,12 @@ def test_handoff_refuses_a_bundle_outside_the_selected_workspace(
     outside.mkdir()
 
     with pytest.raises(ValueError, match="outside the selected workspace"):
-        publish_fusion_handoff(tmp_path / "data", workspace, _result(outside))
+        publish_fusion_handoff(
+            tmp_path / "data",
+            workspace,
+            CadLinkStore.for_data_dir(tmp_path / "data"),
+            _result(outside),
+        )
     assert not (tmp_path / "data" / "ipc" / "wglink" / HANDOFFS_DIRECTORY).exists()
 
 
@@ -144,6 +160,7 @@ def test_a_published_handoff_logs_its_request_and_export(tmp_path: Path, caplog)
         published = publish_fusion_handoff(
             data_dir,
             workspace,
+            CadLinkStore.for_data_dir(data_dir),
             _result(bundle),
             expected_document_id="fusion:doc-a",
             expected_instance_id="instance-b",

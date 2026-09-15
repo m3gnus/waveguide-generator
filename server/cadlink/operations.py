@@ -93,6 +93,11 @@ REASON_CODES: Mapping[str, str] = {
     REASON_UPDATE_RESTART_PENDING: NEEDS_USER_INPUT,
     # Prepared, and waiting for the user to start the solve.
     "ready_to_solve": NEEDS_USER_INPUT,
+    # A WG-produced Fusion request that never started can finish locally.
+    "superseded": CANCELLED,
+    "expired": CANCELLED,
+    "session_changed": CANCELLED,
+    "publication_failed": CANCELLED,
 }
 BASELINE_KINDS = frozenset({"document_signature_hash"})
 OUTCOME_FIELDS = frozenset({"message", "reconciled", "evidence"})
@@ -105,7 +110,7 @@ _SHAPES: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     RECEIVE_SNAPSHOT: ((), ("bundle_path", "manifest_sha256")),
     PREPARE_AND_SOLVE: ((), ("return_id", "bundle_path", "manifest_sha256")),
     REQUEST_RETURN: (_EXACT_CAD_TARGET, ()),
-    INSERT_LINK: (("document_id", "export_id"), ()),
+    INSERT_LINK: (("destination", "export_id"), ()),
     UPDATE_LINK: (_EXACT_CAD_TARGET, ("export_id",)),
 }
 # A legacy single-slot solve marker may omit its return id.
@@ -134,6 +139,22 @@ def _baseline(kind: str, value: object) -> dict[str, str]:
     return {"kind": str(baseline_kind), "value": baseline_value}
 
 
+def _destination(kind: str, value: object) -> dict[str, str]:
+    if not isinstance(value, Mapping) or set(value) != {"kind", "value"}:
+        raise ValueError(
+            f"{kind} target field 'destination' must be exactly {{kind, value}}"
+        )
+    destination_kind = value["kind"]
+    destination_value = value["value"]
+    if destination_kind not in {"document", "new_document"}:
+        raise ValueError(
+            f"{kind} target field 'destination' has unknown kind {destination_kind!r}"
+        )
+    if not isinstance(destination_value, str) or not destination_value:
+        raise ValueError(f"{kind} target field 'destination' needs a non-empty value")
+    return {"kind": str(destination_kind), "value": destination_value}
+
+
 def _fields(
     kind: str, part: str, value: object, required: tuple[str, ...]
 ) -> dict[str, Any]:
@@ -151,6 +172,9 @@ def _fields(
         item = value[field]
         if field == "expected_baseline":
             normalized[field] = _baseline(kind, item)
+            continue
+        if field == "destination":
+            normalized[field] = _destination(kind, item)
             continue
         if not isinstance(item, str):
             raise ValueError(f"{kind} {part} field '{field}' must be a string")

@@ -30,6 +30,7 @@ from .operations import (
     CANCEL_REQUESTED,
     CLAIMABLE_STATES,
     DIGEST_VERSION,
+    INSERT_LINK,
     MUTATING_KINDS,
     NEEDS_USER_INPUT,
     PREPARE_AND_SOLVE,
@@ -657,6 +658,16 @@ class CadLinkStore:
 
         _require_operation_id(operation_id)
         normalized_target, normalized_inputs = normalize_request(kind, target, inputs)
+        destination = normalized_target.get("destination")
+        if (
+            kind == INSERT_LINK
+            and isinstance(destination, Mapping)
+            and destination.get("kind") == "new_document"
+            and destination.get("value") != operation_id
+        ):
+            raise ValueError(
+                "insert_link new_document destination value must equal its operation id"
+            )
         if digest != request_digest(kind, normalized_target, normalized_inputs):
             raise ValueError(
                 "request digest does not match the kind, target and inputs it names"

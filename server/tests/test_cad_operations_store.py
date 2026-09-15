@@ -163,7 +163,10 @@ def test_every_kind_has_exactly_one_shape() -> None:
             {"return_id": "", "bundle_path": "wgreturn/a.wgreturn", "manifest_sha256": "sha256:a"},
         ),
         "request_return": (_update(), {}),
-        "insert_link": ({"document_id": "urn:doc", "export_id": "wge_1"}, {}),
+        "insert_link": (
+            {"destination": {"kind": "document", "value": "urn:doc"}, "export_id": "wge_1"},
+            {},
+        ),
         "update_link": (_update(), UPDATE_INPUTS),
     }
     for kind, (target, inputs) in shapes.items():
@@ -171,7 +174,11 @@ def test_every_kind_has_exactly_one_shape() -> None:
     with pytest.raises(ValueError, match="kind"):
         request_digest("solve", {}, {})
     with pytest.raises(ValueError, match="export_id"):
-        request_digest("insert_link", {"document_id": "urn:doc"}, {})
+        request_digest(
+            "insert_link",
+            {"destination": {"kind": "document", "value": "urn:doc"}},
+            {},
+        )
 
 
 @pytest.mark.parametrize(

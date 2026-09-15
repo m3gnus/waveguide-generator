@@ -27,6 +27,14 @@ from server.cadlink.fusion_delivery import (
     PublishedRequest,
     publish_fusion_request,
 )
+from server.cadlink.fusion_status import read_fusion_status
+from server.cadlink.operations import (
+    CANCELLED,
+    INSERT_LINK,
+    UPDATE_LINK,
+    request_digest,
+)
+from server.cadlink.store import CadLinkStore
 
 
 HANDOFFS_DIRECTORY = HANDOFFS.directory
@@ -42,11 +50,13 @@ logger = logging.getLogger(__name__)
 def publish_fusion_handoff(
     data_dir: Path,
     workspace_root: Path,
+    store: CadLinkStore,
     result: Mapping[str, object],
     *,
     expected_document_id: str | None = None,
     expected_instance_id: str | None = None,
     expected_return_state_hash: str | None = None,
+    request_id: str | None = None,
 ) -> PublishedRequest:
     """Atomically announce one completed bundle to the Fusion add-in."""
 
@@ -63,6 +73,20 @@ def publish_fusion_handoff(
     bundle_id = str(result.get("bundleId") or "")
     if not export_id or not bundle_id:
         raise ValueError("CAD handoff is missing its export identity.")
+    request_id = request_id or str(uuid.uuid4())
+    destination = None
+    if not expected_instance_id:
+        status = read_fusion_status(
+            data_dir, current_design_hash="", current_formula="", design_id=None
+        )
+        document_id = str(status.get("documentId") or "")
+        destination = (
+            {"kind": "document", "value": document_id}
+            if status.get("running")
+            and int(status.get("addinDeliveryVersion") or 0) >= 3
+            and document_id
+            else {"kind": "new_document", "value": request_id}
+        )
     payload = {
         "target": "fusion360",
         "bundlePath": str(bundle_path),
@@ -77,6 +101,59 @@ def publish_fusion_handoff(
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
     }
+    if destination is not None:
+        payload["destination"] = destination
+
+    kind = UPDATE_LINK if expected_instance_id else INSERT_LINK
+    target = (
+        {
+            "document_id": expected_document_id,
+            "design_id": str(payload.get("designId") or ""),
+            "instance_id": expected_instance_id,
+            "expected_baseline": {
+                "kind": "document_signature_hash",
+                "value": expected_return_state_hash,
+            },
+        }
+        if expected_instance_id
+        else {"destination": destination, "export_id": export_id}
+    )
+    inputs = {"export_id": export_id} if expected_instance_id else {}
+
+    def accept(_document: Mapping[str, object]) -> tuple[dict[str, object], str]:
+        row, result = store.accept_operation(
+            request_id,
+            kind,
+            request_digest(kind, target, inputs),
+            target,
+            inputs,
+        )
+        if result == "conflict":
+            raise ValueError(f"Fusion request id {request_id!r} names another operation.")
+        return row, result
+
+    def publication_failed(receipt: object, _exc: BaseException) -> None:
+        if not isinstance(receipt, tuple) or receipt[1] != "created":
+            return
+        row = receipt[0]
+        store.record_outcome(
+            request_id,
+            int(row["attempt_generation"]),
+            CANCELLED,
+            reason="publication_failed",
+            outcome={"message": "The Fusion handoff request file could not be published."},
+        )
+
+    def superseded(operation_id: str) -> None:
+        row = store.get_operation(operation_id)
+        if row is not None:
+            store.record_outcome(
+                operation_id,
+                int(row["attempt_generation"]),
+                CANCELLED,
+                reason="superseded",
+                outcome={"message": f"Superseded by newer Fusion request {request_id}."},
+            )
 
     def supersedes(existing: Mapping[str, object]) -> bool:
         # Only an update of the same exact link: an insert, or an update of
@@ -87,7 +164,14 @@ def publish_fusion_handoff(
         )
 
     published = publish_fusion_request(
-        data_dir, HANDOFFS, payload, str(uuid.uuid4()), withdraw=supersedes
+        data_dir,
+        HANDOFFS,
+        payload,
+        request_id,
+        withdraw=supersedes,
+        before_publish=accept,
+        publish_failed=publication_failed,
+        after_withdraw=superseded,
     )
     logger.info(
         "Fusion %s %s published for export %s%s.",

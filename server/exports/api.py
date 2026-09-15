@@ -809,6 +809,7 @@ async def export_wglink(
             publish_fusion_handoff,
             Path(request.app.state.data_dir),
             selected.resolve(),
+            store,
             result,
             expected_document_id=payload.expected_fusion_document_id,
             expected_instance_id=payload.expected_fusion_instance_id,

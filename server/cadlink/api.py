@@ -49,7 +49,11 @@ from server.workspace.archive import (
 
 from .addin_update import last_refresh, poll_activation
 from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
-from .fusion_delivery import advertise_fusion_delivery
+from .fusion_delivery import (
+    advertise_fusion_delivery,
+    expire_unstarted_insert_handoffs,
+    recover_staged_fusion_requests,
+)
 from .fusion_return import publish_return_request
 from .ingest import (
     IngestRefusal,
@@ -71,7 +75,7 @@ from .manual_solve import (
 # that directory. Only the location constant is needed here; the Onshape
 # routes and their credentials stay in ``server/cadlink/onshape/``.
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
-from .operations import PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
+from .operations import CANCELLED, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
 from .preparation import (
     DismissalUnconfirmed,
     PreparationContext,
@@ -814,6 +818,12 @@ async def fusion_status(
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     current_hash = design_hash(payload.design)
+    store: CadLinkStore = request.app.state.cadlink_store
+    await asyncio.to_thread(
+        expire_unstarted_insert_handoffs,
+        Path(request.app.state.data_dir),
+        record_expired=lambda operation_id: _record_expired_insert(store, operation_id),
+    )
     status = await asyncio.to_thread(
         read_fusion_status,
         Path(request.app.state.data_dir),
@@ -854,7 +864,6 @@ async def fusion_status(
                     status["cadConnectionIssue"] = "folder_mismatch"
             except (OSError, ValueError):
                 status["cadConnectionIssue"] = "folder_mismatch"
-    store: CadLinkStore = request.app.state.cadlink_store
     status["realizedDimensions"] = await asyncio.to_thread(
         _realized_dimensions_payload,
         status,
@@ -862,6 +871,19 @@ async def fusion_status(
         current_design_hash=current_hash,
     )
     return status
+
+
+def _record_expired_insert(store: CadLinkStore, operation_id: str) -> None:
+    row = store.get_operation(operation_id)
+    if row is None:
+        return
+    store.record_outcome(
+        operation_id,
+        int(row["attempt_generation"]),
+        CANCELLED,
+        reason="expired",
+        outcome={"message": "The unstarted Fusion insert expired after 30 minutes."},
+    )
 
 
 @router.post("/request-fusion-return")
@@ -911,6 +933,8 @@ async def request_fusion_return(
     _marker, request_id = await asyncio.to_thread(
         publish_return_request,
         Path(request.app.state.data_dir),
+        getattr(request.app.state, "cadlink_store", None)
+        or CadLinkStore.for_data_dir(Path(request.app.state.data_dir)),
         session_id=session_id,
         design_id=payload.design_id,
         document_id=payload.document_id,
@@ -2171,6 +2195,18 @@ def mount_cadlink(application: FastAPI) -> None:
         # Removes what a WG older than delivery version 3 left for its add-in,
         # then advertises version 3.
         await asyncio.to_thread(advertise_fusion_delivery, Path(application.state.data_dir))
+        await asyncio.to_thread(
+            recover_staged_fusion_requests,
+            Path(application.state.data_dir),
+            lookup_operation=application.state.cadlink_store.get_operation,
+        )
+        await asyncio.to_thread(
+            expire_unstarted_insert_handoffs,
+            Path(application.state.data_dir),
+            record_expired=lambda operation_id: _record_expired_insert(
+                application.state.cadlink_store, operation_id
+            ),
+        )
 
     application.router.add_event_handler("startup", advertise_fusion_delivery_on_startup)
     application.router.add_event_handler("startup", _recover_on_startup(application))

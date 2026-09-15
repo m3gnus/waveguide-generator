@@ -152,6 +152,7 @@ def _publish(
     if kind == RETURNS:
         _path, request_id = publish_return_request(
             data_dir,
+            CadLinkStore.for_data_dir(data_dir),
             session_id=session,
             design_id="wgd_a",
             document_id="fusion:doc-a",
@@ -164,6 +165,7 @@ def _publish(
     return publish_fusion_handoff(
         data_dir,
         workspace,
+        CadLinkStore.for_data_dir(data_dir),
         {
             "bundlePath": str(bundle),
             "bundleId": f"wgb_{n}",
@@ -380,6 +382,7 @@ def test_an_update_must_name_its_document_and_baseline(
         publish_fusion_handoff(
             data_dir,
             workspace,
+            CadLinkStore.for_data_dir(data_dir),
             {"bundlePath": str(bundle), "bundleId": "wgb_1", "exportId": "wge_1"},
             expected_document_id="fusion:doc-a",
             expected_instance_id="instance-a",
@@ -394,6 +397,7 @@ def test_a_return_request_must_name_its_baseline(data_dir: Path) -> None:
     with pytest.raises(ValueError, match="has not reported the model's state"):
         publish_return_request(
             data_dir,
+            CadLinkStore.for_data_dir(data_dir),
             session_id=SESSION,
             design_id="wgd_a",
             document_id="fusion:doc-a",
