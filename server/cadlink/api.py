@@ -1581,6 +1581,39 @@ class ManualSolveOperationRequest(BaseModel):
     ingest_id: str = Field(alias="ingestId", min_length=1)
 
 
+class CadOperationSnapshotSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    manifest_sha256: str | None = Field(alias="manifestSha256")
+    document_name: str | None = Field(alias="documentName")
+    project_lineage_id: str | None = Field(alias="projectLineageId")
+
+
+class CadOperationSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    operation_id: str = Field(alias="operationId")
+    kind: str
+    state: str
+    stage: str | None
+    reason: str | None
+    message: str | None
+    job_id: str | None = Field(alias="jobId")
+    attempt_generation: int = Field(alias="attemptGeneration")
+    setup_revision_id: str | None = Field(alias="setupRevisionId")
+    preparation_id: str | None = Field(alias="preparationId")
+    snapshot: CadOperationSnapshotSummary | None
+    legacy: bool
+    created_at: str | None = Field(alias="createdAt")
+    updated_at: str | None = Field(alias="updatedAt")
+
+
+class ManualSolveOperationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: CadOperationSummary
+
+
 class OperationApprovalsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -1744,6 +1777,7 @@ async def list_cad_operations(
 
 @router.post(
     "/operations",
+    response_model=ManualSolveOperationResponse,
     responses={
         404: {"model": ErrorEnvelope, "description": "CAD ingest not found"},
         409: {
@@ -1756,7 +1790,7 @@ async def list_cad_operations(
 )
 async def post_cad_operation(
     payload: ManualSolveOperationRequest, request: Request
-) -> dict[str, Any]:
+) -> ManualSolveOperationResponse | JSONResponse:
     """Create or recover a manual solve from an immutable retained CAD ingest."""
 
     state = request.app.state
@@ -1788,7 +1822,7 @@ async def post_cad_operation(
             ),
         )
     if recovered is not None:
-        return {"operation": operation_summary(recovered)}
+        return ManualSolveOperationResponse(operation=operation_summary(recovered))
 
     restart = getattr(state, "update_restart", None)
     refusal = restart.refusal() if restart is not None else None
@@ -1840,7 +1874,7 @@ async def post_cad_operation(
                 retryable=False,
             ),
         )
-    return {"operation": operation_summary(row)}
+    return ManualSolveOperationResponse(operation=operation_summary(row))
 
 
 @router.get("/operations/{operation_id}")

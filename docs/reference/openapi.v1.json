@@ -198,6 +198,192 @@
         "title": "CadIdentityProvenance",
         "type": "object"
       },
+      "CadOperationSnapshotSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "documentName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentname"
+          },
+          "manifestSha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifestsha256"
+          },
+          "projectLineageId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projectlineageid"
+          }
+        },
+        "required": [
+          "manifestSha256",
+          "documentName",
+          "projectLineageId"
+        ],
+        "title": "CadOperationSnapshotSummary",
+        "type": "object"
+      },
+      "CadOperationSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptGeneration": {
+            "title": "Attemptgeneration",
+            "type": "integer"
+          },
+          "createdAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Createdat"
+          },
+          "jobId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jobid"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "legacy": {
+            "title": "Legacy",
+            "type": "boolean"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "operationId": {
+            "title": "Operationid",
+            "type": "string"
+          },
+          "preparationId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preparationid"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "setupRevisionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setuprevisionid"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadOperationSnapshotSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "required": [
+          "operationId",
+          "kind",
+          "state",
+          "stage",
+          "reason",
+          "message",
+          "jobId",
+          "attemptGeneration",
+          "setupRevisionId",
+          "preparationId",
+          "snapshot",
+          "legacy",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "CadOperationSummary",
+        "type": "object"
+      },
       "CadReturnIngestRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5047,6 +5233,19 @@
         "title": "ManualSolveOperationRequest",
         "type": "object"
       },
+      "ManualSolveOperationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "$ref": "#/components/schemas/CadOperationSummary"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "title": "ManualSolveOperationResponse",
+        "type": "object"
+      },
       "MeshConfig": {
         "additionalProperties": false,
         "properties": {
@@ -8416,9 +8615,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Post Cad Operation Api Cadlink Operations Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ManualSolveOperationResponse"
                 }
               }
             },
