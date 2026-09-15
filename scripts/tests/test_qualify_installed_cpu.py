@@ -880,7 +880,9 @@ class StubApplication:
         }
 
     def imported_result(self, job: dict) -> dict:
-        frequencies = job["frequencies"]
+        # A result may answer fewer frequencies, or another channel, than asked.
+        frequencies = job["frequencies"][: self.settings.get("result_frequency_count", len(job["frequencies"]))]
+        channel_id = self.settings.get("result_channel_id", "drive-hf")
         spl = [90.0 + index for index in range(len(frequencies))]
         if self.settings.get("imported_nan"):
             spl[0] = float("nan")
@@ -897,8 +899,8 @@ class StubApplication:
         result = {
             "result_kind": "multi_channel",
             "result_contract_version": 2,
-            "channels": {"drive-hf": channel},
-            "channel_order": ["drive-hf"],
+            "channels": {channel_id: channel},
+            "channel_order": [channel_id],
             "frequencies": frequencies,
             "metadata": {"geometry_type": "imported", "ingest_id": job["ingest_id"],
                          "solver_engine": {"engine": reported}},
@@ -949,6 +951,8 @@ class StubApplication:
             job = state["jobs"].get(path.rsplit("/", 1)[-1])
             if job is None:
                 return 200, settings["result"], {}
+            if self.restarted and settings.get("forget_job_results_on_restart"):
+                return 404, {"detail": "unknown job"}, {}
             body = json.dumps(self.imported_result(job), sort_keys=True).encode()
             digest = hashlib.sha256(body).hexdigest()
             if settings.get("bad_results_digest"):
@@ -978,6 +982,8 @@ class StubApplication:
             record = self.imported_record()
             state["ingests"][record["ingest_id"]] = record
             self.save()
+            if self.settings.get("ingest_without_id"):
+                return 200, {key: value for key, value in record.items() if key != "ingest_id"}, {}
             return 200, record, {}
         if path == "/api/solve":
             geometry = body.get("geometry") or {}
@@ -996,6 +1002,8 @@ class StubApplication:
                       for item in record["findings"] if item["blocking"]}
             if set(geometry.get("acknowledged_findings") or []) != wanted:
                 return 422, {"error": {"message": "unacknowledged blocking findings"}}, {}
+            if self.settings.get("solve_without_job_id"):
+                return 200, {"status": "queued"}, {}
             job = f"job-imported-{len(state['jobs']) + 1}"
             state["jobs"][job] = {"engine": body["options"]["engine"],
                                   "frequencies": body["options"]["frequencies_hz"],
@@ -1744,7 +1752,9 @@ def _imported_result(engine: str = "beat-cpu", **overrides: object) -> dict[str,
 
 
 def test_an_imported_result_from_the_requested_engine_passes() -> None:
-    report = gate.check_imported_result(_imported_result("metal"), "metal")
+    report = gate.check_imported_result(
+        _imported_result("metal"), "metal", channels=["drive-hf"], frequencies=[500.0, 1000.0]
+    )
 
     assert report["solver_engine"]["engine"] == "metal"
     assert report["channels"]["drive-hf"]["frequencies"] == 2
@@ -1809,8 +1819,12 @@ _GOOD_CHANNEL = {key: value for key, value in _result().items()
 def test_an_imported_result_the_contract_refuses_fails(
     result: dict[str, object], requested: str, message: str
 ) -> None:
+    # Asked for exactly the channels it carries, so each case fails on its own
+    # check and not on the channel match.
     with pytest.raises(gate.QualificationError, match=message):
-        gate.check_imported_result(result, requested)
+        gate.check_imported_result(
+            result, requested, channels=list(result.get("channels") or {}), frequencies=[500.0, 1000.0]
+        )
 
 
 def test_an_optional_imported_engine_needs_a_required_one(
@@ -2316,3 +2330,179 @@ def test_a_failure_naming_such_a_path_survives_a_legacy_console(
     assert omega in report["error"]
     printed = console.buffer.getvalue().decode("cp1252")
     assert chr(92) + "u03a9" in printed
+
+
+# ---------------------------------------------------------------------------
+# Every check the imported phase makes has a test that sees it fail
+# ---------------------------------------------------------------------------
+#
+# Eleven of its checks had none: removing any one of them left every test
+# green. The result check never asked whether the solve answered the channels
+# and frequencies it was asked, and a job the restarted application had
+# forgotten failed on fetching its results, not on the listing that says so.
+# Everything here runs in this process, like the failure modes above.
+
+
+def _fixture_copy(tmp_path: Path) -> Path:
+    copy = tmp_path / "round.wgreturn"
+    shutil.copytree(FIXTURE, copy)
+    return copy
+
+
+def _rewrite_manifest(bundle: Path, change) -> None:
+    path = bundle / "wgreturn.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    change(manifest)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("damage", "message"),
+    (
+        pytest.param(lambda bundle: (bundle / "wgreturn.json").unlink(), "holds no wgreturn.json", id="no-manifest"),
+        pytest.param(lambda bundle: _rewrite_manifest(bundle, lambda manifest: manifest.update(files={})),
+                     "lists no files", id="no-files"),
+        pytest.param(lambda bundle: (bundle / "assembly.step").unlink(), "which is missing", id="listed-file-missing"),
+        pytest.param(lambda bundle: _rewrite_manifest(bundle, lambda manifest: manifest["instances"][0].pop("design_id")),
+                     "names no design", id="no-design"),
+        pytest.param(lambda bundle: _rewrite_manifest(bundle, lambda manifest: manifest.update(sources=[])),
+                     "declares no sources", id="no-sources"),
+    ),
+)
+def test_a_return_bundle_its_own_manifest_does_not_describe_is_refused(
+    tmp_path: Path, damage, message: str
+) -> None:
+    bundle = _fixture_copy(tmp_path)
+    damage(bundle)
+
+    with pytest.raises(gate.QualificationError, match=message):
+        gate.verify_return_bundle(bundle)
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        pytest.param({"sources": []}, id="no-sources"),
+        pytest.param({"sources": [{"id": "source-hf"}], "skipped_source_ids": ["source-hf"]}, id="every-source-skipped"),
+        pytest.param({"sources": [{"role": "HF"}]}, id="sources-without-ids"),
+    ),
+)
+def test_a_record_with_no_source_to_drive_is_refused(record: dict[str, object]) -> None:
+    with pytest.raises(gate.QualificationError, match="names no source to drive"):
+        gate._drive_channels(record)
+
+
+def test_each_default_channel_drives_the_sources_that_name_it() -> None:
+    record = {
+        "sources": [
+            {"id": "a", "default_drive_channel_id": "drive-main"},
+            {"id": "b", "default_drive_channel_id": "drive-main"},
+            {"id": "c"},
+            {"id": "d", "default_drive_channel_id": "drive-main"},
+        ],
+        "skipped_source_ids": ["d"],
+    }
+
+    assert gate._drive_channels(record) == [
+        {"id": "drive-main", "source_ids": ["a", "b"], "motion": "normal"},
+        {"id": "drive-c", "source_ids": ["c"], "motion": "normal"},
+    ]
+
+
+def test_a_blocking_finding_without_an_id_cannot_be_acknowledged() -> None:
+    with pytest.raises(gate.QualificationError, match="carries no id"):
+        gate.blocking_acknowledgements({"report_sha256": REPORT_SHA, "findings": [FRESH, dict(PAINT, id="")]})
+
+
+def test_a_channel_that_is_not_an_object_fails() -> None:
+    result = _imported_result(channels={"drive-hf": [1.0, 2.0]})
+
+    with pytest.raises(gate.QualificationError, match="is not an object"):
+        gate.check_imported_result(result, "beat-cpu", channels=["drive-hf"], frequencies=[500.0, 1000.0])
+
+
+#: A channel solved at one frequency, aligned to it: the axes check alone passes it.
+_ONE_FREQUENCY = {
+    "frequencies": [500.0],
+    "spl_on_axis": {"frequencies": [500.0], "spl": [92.5], "phase_degrees": [10.0]},
+    "directivity": {plane: _plane((-6.0, 0.0, -6.0)) for plane in PLANES},
+}
+_OTHER_FREQUENCIES = dict(
+    _GOOD_CHANNEL,
+    frequencies=[500.0, 1500.0],
+    spl_on_axis=dict(_GOOD_CHANNEL["spl_on_axis"], frequencies=[500.0, 1500.0]),
+)
+
+
+@pytest.mark.parametrize(
+    ("channels", "message"),
+    (
+        pytest.param({"not-the-requested-channel": _GOOD_CHANNEL}, "not-the-requested-channel", id="another-channel"),
+        pytest.param({"drive-hf": _GOOD_CHANNEL, "drive-extra": _GOOD_CHANNEL}, "drive-extra", id="an-extra-channel"),
+        pytest.param({"drive-hf": _ONE_FREQUENCY}, "frequencies", id="one-frequency"),
+        pytest.param({"drive-hf": _OTHER_FREQUENCIES}, "frequencies", id="other-frequencies"),
+    ),
+)
+def test_an_imported_result_must_answer_the_channels_and_frequencies_asked(
+    channels: dict[str, object], message: str
+) -> None:
+    with pytest.raises(gate.QualificationError, match=message):
+        gate.check_imported_result(
+            _imported_result(channels=channels), "beat-cpu", channels=["drive-hf"], frequencies=[500.0, 1000.0]
+        )
+
+
+@pytest.mark.parametrize(
+    ("settings", "message"),
+    (
+        pytest.param({"result_channel_id": "not-the-requested-channel"}, "not-the-requested-channel",
+                     id="result-on-another-channel"),
+        pytest.param({"result_frequency_count": 1}, "frequencies", id="result-at-one-frequency"),
+        pytest.param({"ingest_without_id": True}, "without an ingest_id", id="ingest-without-id"),
+        pytest.param({"solve_without_job_id": True}, "returned no job id", id="solve-without-job-id"),
+    ),
+)
+def test_the_imported_phase_fails_on_an_answer_that_is_not_to_its_request(
+    tmp_path: Path, _in_process: None, settings: dict[str, object], message: str
+) -> None:
+    failure, _section = _imported_phase(tmp_path, **settings)
+
+    assert failure is not None
+    assert message in failure
+
+
+def test_a_job_the_restarted_application_forgot_fails_as_not_listed(
+    tmp_path: Path, _in_process: None
+) -> None:
+    """Its results are gone as well; the failure names what the user would see."""
+
+    failure, section = _imported_phase(
+        tmp_path, forget_jobs_on_restart=True, forget_job_results_on_restart=True
+    )
+
+    assert failure is not None
+    assert "not listed" in failure
+    assert "could not be fetched" not in failure
+    assert [row["sha256_after"] for row in section["reopen"]["jobs"].values()] == [None]
+
+
+def test_a_copy_that_differs_from_the_fixture_is_refused_before_it_is_ingested(
+    tmp_path: Path, _in_process: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_copytree = shutil.copytree
+
+    def copy_then_damage(source: Path, destination: Path, *args: object, **kwargs: object) -> object:
+        copied = real_copytree(source, destination, *args, **kwargs)
+        step = Path(destination) / "assembly.step"
+        step.write_bytes(step.read_bytes() + b"\n")
+        return copied
+
+    monkeypatch.setattr(gate.shutil, "copytree", copy_then_damage)
+
+    failure, section = _imported_phase(tmp_path)
+
+    assert failure is not None
+    assert gate.IMPORTED_BUNDLE_NAME in failure
+    assert "bytes" in failure
+    assert "ingest" not in section
+    assert not (tmp_path / "work" / gate.IMPORTED_DATA_DIR_NAME / "ingest-request.json").exists()

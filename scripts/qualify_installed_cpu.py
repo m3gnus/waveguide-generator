@@ -1262,15 +1262,34 @@ def blocking_acknowledgements(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _same_frequencies(axis: list[Any], wanted: list[float]) -> bool:
+    if len(axis) != len(wanted):
+        return False
+    for value, expected in zip(axis, wanted):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        if not math.isclose(float(value), float(expected), rel_tol=1e-6):
+            return False
+    return True
+
+
 def check_imported_result(
-    result: Mapping[str, Any], requested: str, planes: tuple[str, ...] = REQUESTED_PLANES
+    result: Mapping[str, Any],
+    requested: str,
+    planes: tuple[str, ...] = REQUESTED_PLANES,
+    *,
+    channels: list[str],
+    frequencies: list[float],
 ) -> dict[str, Any]:
-    """An imported solve ran on the engine asked for, with numbers on every channel.
+    """An imported solve ran on the engine asked for, answered what was asked, and has numbers.
 
     The parametric solve's contract, applied per channel. The job's own record
     of the engine that ran, ``metadata.solver_engine.engine``, must be the one
     requested, so a substitution fails instead of qualifying the wrong
-    backend; and every channel's axes must be finite and not all zero.
+    backend. The result must answer exactly the drive *channels* submitted,
+    and every channel the *frequencies* submitted: checking only the numbers
+    accepted one channel nobody asked for, at one frequency of two. And every
+    channel's data must be finite and not all zero.
     """
 
     metadata = result.get("metadata")
@@ -1288,11 +1307,18 @@ def check_imported_result(
             f"an imported solve on {requested!r} reported geometry_type "
             f"{metadata.get('geometry_type')!r}, not imported"
         )
-    channels = result.get("channels")
-    if not isinstance(channels, Mapping) or not channels:
+    payloads = result.get("channels")
+    if not isinstance(payloads, Mapping) or not payloads:
         raise QualificationError(f"the imported result on {requested!r} carries no channels")
+    answered = sorted(str(name) for name in payloads)
+    wanted = sorted(str(name) for name in channels)
+    if answered != wanted:
+        raise QualificationError(
+            f"the imported result on {requested!r} answers channels {answered}, not the "
+            f"submitted drive channels {wanted}"
+        )
     checked: dict[str, Any] = {}
-    for channel, payload in channels.items():
+    for channel, payload in payloads.items():
         if not isinstance(payload, Mapping):
             raise QualificationError(
                 f"channel {channel!r} of the imported result on {requested!r} is not an object"
@@ -1303,6 +1329,11 @@ def check_imported_result(
             raise QualificationError(
                 f"channel {channel!r} of the imported result on {requested!r}: {exc}"
             ) from exc
+        if not _same_frequencies(payload["frequencies"], list(frequencies)):
+            raise QualificationError(
+                f"channel {channel!r} of the imported result on {requested!r} answers "
+                f"frequencies {payload['frequencies']}, not the submitted {list(frequencies)}"
+            )
     return {
         "solver_engine": dict(solver_engine),
         "geometry_type": metadata.get("geometry_type"),
@@ -1610,7 +1641,12 @@ def qualify_imported_return(
             content, digest = server.stored_results(job)
             (output / f"imported-result-{engine}.json").write_bytes(content)
             entry["results_sha256"] = digest
-            checked = check_imported_result(json.loads(content), engine)
+            checked = check_imported_result(
+                json.loads(content),
+                engine,
+                channels=[str(channel["id"]) for channel in geometry["drive_channels"]],
+                frequencies=list(IMPORTED_FREQUENCIES),
+            )
             entry.update(
                 decision="solved",
                 solver_engine=checked["solver_engine"],
@@ -1654,6 +1690,11 @@ def qualify_imported_return(
                 "sha256_after": None,
             }
             reopen["jobs"][job] = row
+            if not row["listed"]:
+                # Judged below as not listed, which is what the user would
+                # see. Fetching its results first failed on the fetch, and
+                # named a missing file instead of a forgotten job.
+                continue
             _content, digest = server.stored_results(job)
             row["sha256_after"] = digest
             row["equal"] = digest == entry["results_sha256"]

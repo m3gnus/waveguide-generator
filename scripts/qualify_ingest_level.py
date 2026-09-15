@@ -127,15 +127,16 @@ async def _plan(data_dir: Path, store: Any, request: Any) -> dict[str, Any]:
 
 
 def _fresh_job_verdict(
-    engine: str, outcome: Mapping[str, Any], reopened: Any
+    engine: str, request: Any, outcome: Mapping[str, Any], reopened: Any
 ) -> tuple[bool, dict[str, Any]]:
     """Complete, solved by *engine*, reopened unchanged, and carrying data.
 
     Status, engine name and an identical reopen all hold for a job that stored
     nothing but zeros. So the stored result is also held to the result
-    contract the RC gate holds an installed candidate to: every channel's
-    on-axis level and requested directivity finite and not all zero, counted
-    on the data and never on the frequency or angle axes.
+    contract the RC gate holds an installed candidate to: the *request*'s
+    drive channels and frequencies, and every channel's on-axis level and
+    requested directivity finite and not all zero, counted on the data and
+    never on the frequency or angle axes.
     """
 
     results = outcome.get("results")
@@ -147,7 +148,12 @@ def _fresh_job_verdict(
         "reopened_equal": reopened == results,
     }
     try:
-        checked = check_imported_result(results if isinstance(results, Mapping) else {}, engine)
+        checked = check_imported_result(
+            results if isinstance(results, Mapping) else {},
+            engine,
+            channels=[str(channel.id) for channel in request.geometry.drive_channels],
+            frequencies=list(request.options.frequencies_hz),
+        )
     except QualificationError as exc:
         detail["data"] = f"refused: {exc}"
         carries_data = False
@@ -300,7 +306,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
         request = fixtures.request_for_record(fresh, engine=engine, frequencies=HORN_FREQUENCIES_HZ)
         outcome = asyncio.run(_run_job(fresh_dir, fresh.store, request))
         reopened = _reopen(fresh_dir, outcome["job_id"])
-        ok, jobs[engine] = _fresh_job_verdict(engine, outcome, reopened)
+        ok, jobs[engine] = _fresh_job_verdict(engine, request, outcome, reopened)
         record_row(Row("fresh app data dir: import, prepare, solve, store, reopen", engine, "end to end", "job", [0.0 if ok else 1.0], tolerance=0.5, note=str(jobs[engine])))
     facts["fresh_jobs"] = jobs
 
