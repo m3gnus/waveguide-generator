@@ -32,6 +32,8 @@ ANGLES = np.linspace(-180.0, 180.0, 73)
 FREQUENCIES = list(ingest.HORN_FREQUENCIES_HZ)
 FRESH = "fresh app data dir: import, prepare, solve, store, reopen"
 Y_ONLY = "y-only half: BEAT-CPU refused at submission with the reason"
+REAR_CAP = "source on the plug's rear: WG's quarter vs its full domain"
+PLACED = "horn: placed in CAD (rotated + translated) vs unplaced"
 
 
 def _field(seed: int) -> np.ndarray:
@@ -70,28 +72,35 @@ def _solved(engine: str, field: np.ndarray) -> qual.Solved:
     )
 
 
-def _job_results(reported: str, *, zero: bool = False) -> dict[str, Any]:
-    """A stored imported result, shaped as the job runtime stores one."""
+def _job_results(
+    reported: str, *, zero: bool = False, channel: str = "drive-hf", count: int | None = None
+) -> dict[str, Any]:
+    """A stored imported result, shaped as the job runtime stores one.
 
+    *channel* and *count* let it answer another channel, or fewer of the
+    frequencies asked, with every axis still aligned and every number sound.
+    """
+
+    frequencies = list(FREQUENCIES)[:count]
     level, off_axis = (0.0, 0.0) if zero else (91.5, -6.0)
-    channel = {
-        "frequencies": list(FREQUENCIES),
+    payload = {
+        "frequencies": frequencies,
         "spl_on_axis": {
-            "frequencies": list(FREQUENCIES),
-            "spl": [level] * len(FREQUENCIES),
-            "phase_degrees": [0.0] * len(FREQUENCIES),
+            "frequencies": frequencies,
+            "spl": [level] * len(frequencies),
+            "phase_degrees": [0.0] * len(frequencies),
         },
         "directivity": {
-            plane: [[[-90.0, off_axis], [0.0, 0.0], [90.0, off_axis]] for _ in FREQUENCIES]
+            plane: [[[-90.0, off_axis], [0.0, 0.0], [90.0, off_axis]] for _ in frequencies]
             for plane in PLANES
         },
     }
     return {
         "result_kind": "multi_channel",
         "result_contract_version": 2,
-        "channels": {"drive-hf": channel},
-        "channel_order": ["drive-hf"],
-        "frequencies": list(FREQUENCIES),
+        "channels": {channel: payload},
+        "channel_order": [channel],
+        "frequencies": frequencies,
         "metadata": {"geometry_type": "imported", "solver_engine": {"engine": reported}},
     }
 
@@ -101,6 +110,8 @@ class Stubs:
 
     def __init__(self) -> None:
         self.factors = copy.deepcopy(NOMINAL)
+        #: (return, density) -> an extra factor on every engine's answer there.
+        self.shifts: dict[tuple[str, str], float] = {}
         self.plan_beat: dict[str, Any] | None = {
             "name": "beat-cpu",
             "solves": False,
@@ -111,6 +122,8 @@ class Stubs:
         self.job_status: dict[str, str] = {}
         self.zero_results: set[str] = set()
         self.reported: dict[str, str] = {}
+        self.result_channel: dict[str, str] = {}
+        self.result_count: dict[str, int] = {}
         self.reopen_changes: set[str] = set()
         self.stored: dict[str, dict[str, Any]] = {}
 
@@ -164,6 +177,7 @@ class Stubs:
         else:
             field = FIELDS["round"]
             factor = self.factors[engine][label if name == "round" else "reference"]
+        factor = factor * self.shifts.get((name, label), 1.0)
         if motion == "axial":
             factor = factor * 0.5j
         return _solved(engine, factor * field)
@@ -175,7 +189,12 @@ class Stubs:
     async def run_job(self, _data_dir: Path, _store: Any, request: Any) -> dict[str, Any]:
         engine = request.options.engine
         job = f"job-{engine}"
-        self.stored[job] = _job_results(self.reported.get(engine, engine), zero=engine in self.zero_results)
+        self.stored[job] = _job_results(
+            self.reported.get(engine, engine),
+            zero=engine in self.zero_results,
+            channel=self.result_channel.get(engine, "drive-hf"),
+            count=self.result_count.get(engine),
+        )
         return {
             "job_id": job,
             "row": {"status": self.job_status.get(engine, "complete"), "error_message": None},
@@ -232,7 +251,8 @@ def test_engines_that_agree_on_a_converged_horn_pass_every_judged_row(
     for fixture in ("same mesh: horn quarter return, normal", "same mesh: horn quarter return, axial"):
         assert _row(rows, fixture).tolerance == ingest.HORN_TOLERANCE
     for engine in ENGINES:
-        assert _row(rows, "horn: quarter return vs forced full domain", engine).tolerance == ingest.HORN_TOLERANCE
+        for fixture in ("horn: quarter return vs forced full domain", REAR_CAP, PLACED):
+            assert _row(rows, fixture, engine).tolerance == ingest.HORN_TOLERANCE, fixture
     assert facts["horn_same_mesh_tolerance"] == ingest.HORN_TOLERANCE
     assert _row(rows, FRESH, "beat-cpu").passed is True
     assert _row(rows, Y_ONLY).passed is True
@@ -270,8 +290,36 @@ def test_a_horn_ladder_that_does_not_converge_fails_on_its_own(stubs: Stubs, tmp
 
 
 @pytest.mark.parametrize(
+    ("shifted", "fixture"),
+    (
+        pytest.param(("rearcap", "reference"), REAR_CAP, id="rear-cap-quarter-differs-from-its-full-domain"),
+        pytest.param(("placed", "reference"), PLACED, id="placed-return-differs-from-the-unplaced-one"),
+        pytest.param(("round", "full"), "horn: quarter return vs forced full domain", id="quarter-differs-from-the-full-domain"),
+    ),
+)
+def test_two_meshes_of_one_horn_that_disagree_fail(
+    stubs: Stubs, tmp_path: Path, shifted: tuple[str, str], fixture: str
+) -> None:
+    """Every engine's answer on one of the two meshes is 20 % off the other."""
+
+    stubs.shifts[shifted] = 1.2
+
+    rows, _facts = _run(tmp_path)
+
+    for engine in ENGINES:
+        assert _row(rows, fixture, engine).passed is False, engine
+
+
+@pytest.mark.parametrize(
     "change",
-    ("all-zero-results", "another-engine-ran", "job-ended-in-error", "reopened-results-differ"),
+    (
+        "all-zero-results",
+        "another-engine-ran",
+        "job-ended-in-error",
+        "reopened-results-differ",
+        "result-on-another-channel",
+        "result-at-fewer-frequencies",
+    ),
 )
 def test_a_fresh_install_job_is_judged_on_its_data_not_only_its_status(
     stubs: Stubs, tmp_path: Path, change: str
@@ -284,8 +332,12 @@ def test_a_fresh_install_job_is_judged_on_its_data_not_only_its_status(
         stubs.reported = {"beat-cpu": "metal"}
     elif change == "job-ended-in-error":
         stubs.job_status = {"beat-cpu": "error"}
-    else:
+    elif change == "reopened-results-differ":
         stubs.reopen_changes = {"job-beat-cpu"}
+    elif change == "result-on-another-channel":
+        stubs.result_channel = {"beat-cpu": "drive-other"}
+    else:
+        stubs.result_count = {"beat-cpu": 2}
 
     rows, _facts = _run(tmp_path)
 

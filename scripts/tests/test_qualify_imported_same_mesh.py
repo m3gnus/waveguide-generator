@@ -433,6 +433,9 @@ def _synthetic_run(variant: str) -> dict:
             solved = _synthetic_solve(engine, record, channels, **kwargs)
             if changed in (engine, "both"):
                 solved.pressure = change(solved.pressure)
+            # A source-average pressure per channel, from the answer itself, so
+            # the impedance row is emitted and compared as well.
+            solved.impedance = {name: value.mean(axis=(1, 2)) for name, value in solved.pressure.items()}
             return solved
 
         with pytest.MonkeyPatch.context() as patch:
@@ -450,29 +453,49 @@ def test_engines_that_agree_and_converge_pass_every_analytic_order_and_cross_eng
 
     rows = _synthetic_run("agree")["rows"]
 
-    judged = [row for row in rows if row.compared_with in ("analytic", "refinement") or _cross_engine(row)]
-    assert sum(row.compared_with == "analytic" for row in judged) >= 2 * 3 * len(qual.LADDER)
-    assert sum(row.compared_with == "refinement" for row in judged) == 2 * len(ENGINES)
-    failing = [(row.fixture, row.engine, row.compared_with, row.worst, row.tolerance, row.minimum) for row in judged if row.passed is not True]
+    assert sum(row.compared_with == "analytic" for row in rows) >= 2 * 3 * len(qual.LADDER)
+    assert sum(row.compared_with == "refinement" for row in rows) == 2 * len(ENGINES)
+    assert sum(_cross_engine(row) for row in rows) == 10
+    # Every row is judged and passes, except the reduced domains against the
+    # whole: the synthetic solver sums quadrature points, and a mirrored half
+    # splits each quad along the other diagonal. The engines do not.
+    failing = [
+        (row.fixture, row.engine, row.compared_with, row.worst, row.tolerance, row.minimum)
+        for row in rows
+        if row.passed is not True and not row.fixture.startswith(("x0 return", "x0+y0 return"))
+    ]
     assert not failing, failing
+
+
+def _ladder_rows(rows: list[qual.Row], engine: str) -> list[qual.Row]:
+    return [row for row in rows if row.engine == engine and row.compared_with == "analytic" and " sphere L" in row.fixture]
 
 
 @pytest.mark.parametrize("variant", ("beat is minus metal", "beat is 30 % high"))
 def test_a_beat_that_disagrees_with_metal_fails_the_same_mesh_rows(variant: str) -> None:
-    failed = [row for row in _synthetic_run(variant)["rows"] if row.passed is False]
+    rows = _synthetic_run(variant)["rows"]
 
-    assert any(_cross_engine(row) and row.fixture.startswith("same mesh") for row in failed)
-    assert any(row.engine == "beat-cpu" and row.compared_with == "analytic" for row in failed)
-    assert not any(row.engine == "metal" and row.compared_with == "analytic" for row in failed)
+    # Every comparison of the two engines, not just one of them.
+    cross = [row for row in rows if _cross_engine(row)]
+    assert len(cross) == 10
+    assert all(row.passed is False for row in cross), [row.fixture for row in cross if row.passed is not False]
+    # And every ladder row of the wrong engine, at every level; Metal's pass.
+    ladder = _ladder_rows(rows, "beat-cpu")
+    assert len(ladder) == 3 * len(qual.LADDER)
+    assert all(row.passed is False for row in ladder), [row.fixture for row in ladder if row.passed is not False]
+    assert all(row.passed is True for row in _ladder_rows(rows, "metal"))
 
 
 def test_engines_wrong_alike_fail_their_analytic_and_order_rows() -> None:
     """Two engines that agree prove nothing about either; only the fixed ceilings can say so."""
 
-    failed = [row for row in _synthetic_run("both are 30 % high")["rows"] if row.passed is False]
+    rows = _synthetic_run("both are 30 % high")["rows"]
+    failed = [row for row in rows if row.passed is False]
 
     for engine in ENGINES:
-        assert any(row.engine == engine and row.compared_with == "analytic" for row in failed), engine
+        ladder = _ladder_rows(rows, engine)
+        assert len(ladder) == 3 * len(qual.LADDER)
+        assert all(row.passed is False for row in ladder), [row.fixture for row in ladder if row.passed is not False]
         assert any(row.engine == engine and row.compared_with == "refinement" for row in failed), engine
         # Moving the body leaves its error alone, so only the ceiling can fail
         # the moved copy against the analytic answer.
