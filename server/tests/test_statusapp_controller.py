@@ -914,6 +914,43 @@ def test_close_cannot_orphan_a_descendant_process(tmp_path: Path) -> None:
     assert heartbeat.read_text(encoding="utf-8") == stopped_heartbeat
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Win32 scope is proved by its Job Object platform gate")
+def test_close_leaves_unrelated_python_and_another_installation_running(
+    tmp_path: Path,
+) -> None:
+    """POSIX shutdown targets the owned session, never names or interpreters."""
+
+    unrelated = subprocess.Popen(
+        (sys.executable, "-c", "import time; time.sleep(120)"),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    owned = _controller(tmp_path / "owned")
+    other_installation = _controller(tmp_path / "other-installation")
+    try:
+        owned.start()
+        other_installation.start()
+        _settled(owned)
+        _settled(other_installation)
+        owned_process = owned.process
+        other_process = other_installation.process
+        assert owned_process is not None and other_process is not None
+
+        owned.close()
+
+        assert owned_process.poll() is not None
+        assert unrelated.poll() is None, "shutdown killed an unrelated Python process"
+        assert other_process.poll() is None, "shutdown killed another installation's server"
+    finally:
+        owned.close()
+        other_installation.close()
+        if unrelated.poll() is None:
+            unrelated.terminate()
+        unrelated.wait(timeout=10)
+
+
 def test_a_dependency_print_is_not_reported_as_the_reason_the_server_died(
     tmp_path: Path,
 ) -> None:

@@ -334,6 +334,15 @@ def sync_file(path: Path, *, log: LogCallable | None = None) -> bool:
 JOURNAL_PREFIX = "update-transaction"
 JOURNAL_SCHEMA = 1
 
+#: Bundle-local evidence that one of this installation's data-directory
+#: instances still owns rollback material. Journals cannot provide this view:
+#: they deliberately live in the selected data directory, so a second
+#: ``--data-dir`` sees no journal at all. The marker contains no paths that are
+#: ever acted on; its data-directory value is only an ownership comparison.
+TRANSACTION_OPEN_MARKER_NAME = ".update-transaction-open.json"
+TRANSACTION_OPEN_MARKER_TEMP_NAME = ".update-transaction-open.json.new"
+TRANSACTION_OPEN_MARKER_SCHEMA = 1
+
 #: States that mean the transaction has reached a decided end. Only these permit
 #: ``.previous`` to be reclaimed. Anything else -- including a journal that
 #: cannot be parsed -- means "still in flight, keep the rollback material".
@@ -385,6 +394,243 @@ def journal_path(data_dir: Path, resources: Path) -> Path:
 
 def journal_temp_path(data_dir: Path, resources: Path) -> Path:
     return Path(data_dir) / f"{JOURNAL_PREFIX}-{installation_key(resources)}.json.new"
+
+
+def transaction_open_marker_path(resources: Path) -> Path:
+    return Path(resources) / TRANSACTION_OPEN_MARKER_NAME
+
+
+def transaction_open_marker_temp_path(resources: Path) -> Path:
+    return Path(resources) / TRANSACTION_OPEN_MARKER_TEMP_NAME
+
+
+def _normalized_data_dir(data_dir: Path) -> str:
+    return os.path.normcase(os.path.normpath(str(Path(data_dir).resolve())))
+
+
+def _invalid_open_marker(detail: str) -> dict[str, Any]:
+    return {"state": "invalid", "detail": detail}
+
+
+def read_transaction_open_marker(resources: Path) -> dict[str, Any] | None:
+    """Read the bundle-local open marker, conservatively.
+
+    A malformed or interrupted marker is still evidence that a transaction
+    may be open. Callers therefore receive an invalid marker rather than
+    ``None`` and must keep rollback material.
+    """
+
+    path = transaction_open_marker_path(resources)
+    temporary = transaction_open_marker_temp_path(resources)
+    if temporary.exists() or temporary.is_symlink():
+        return _invalid_open_marker(
+            f"an installation marker was being published when the process stopped: {temporary}"
+        )
+    if path.is_symlink():
+        return _invalid_open_marker("the installation marker is a symbolic link")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        return _invalid_open_marker(f"{type(exc).__name__}: {exc}")
+    if not isinstance(payload, dict) or payload.get("schema") != TRANSACTION_OPEN_MARKER_SCHEMA:
+        return _invalid_open_marker("the installation marker has an unsupported schema")
+    if payload.get("installation") != installation_key(resources):
+        return _invalid_open_marker("the installation marker names another installation")
+    for field in ("transaction", "dataDir"):
+        if not isinstance(payload.get(field), str) or not payload[field]:
+            return _invalid_open_marker(f"the installation marker records no {field}")
+    return dict(payload)
+
+
+def write_transaction_open_marker(
+    data_dir: Path,
+    resources: Path,
+    transaction: str,
+    *,
+    supersedes: str | None = None,
+    log: LogCallable | None = None,
+) -> JournalDurability:
+    """Publish the installation-wide owner of rollback material atomically."""
+
+    directory = Path(resources)
+    target = transaction_open_marker_path(directory)
+    temporary = transaction_open_marker_temp_path(directory)
+    contents_fully_synced = True
+    payload = {
+        "schema": TRANSACTION_OPEN_MARKER_SCHEMA,
+        "installation": installation_key(directory),
+        "transaction": transaction,
+        "dataDir": _normalized_data_dir(data_dir),
+    }
+    if supersedes:
+        payload["supersedes"] = supersedes
+    try:
+        body = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(body)
+            handle.flush()
+            contents_fully_synced = _fsync_descriptor(handle.fileno(), log=log)
+        os.replace(temporary, target)
+    except OSError as exc:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise ApplyUpdateError(
+            f"Could not record the installation's open update transaction at {target}: {exc}"
+        ) from exc
+    name_synced = sync_directory(directory, log=log)
+    return JournalDurability(
+        published=True,
+        name_synced=name_synced,
+        contents_fully_synced=contents_fully_synced,
+    )
+
+
+def remove_transaction_open_marker(
+    resources: Path, *, log: LogCallable | None = None
+) -> bool:
+    """Durably remove the installation marker after its owner commits."""
+
+    removed = True
+    for path in (
+        transaction_open_marker_temp_path(resources),
+        transaction_open_marker_path(resources),
+    ):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _emit_log(log, f"Could not remove the resolved update transaction marker {path}: {exc}")
+            removed = False
+    name_synced = sync_directory(Path(resources), log=log)
+    return removed and (not DIRECTORY_SYNC_SUPPORTED or name_synced)
+
+
+def _open_marker_mismatch(
+    marker: Mapping[str, Any],
+    data_dir: Path,
+    resources: Path,
+    *,
+    transaction: str | None = None,
+) -> str | None:
+    if marker.get("state") == "invalid":
+        return f"the installation marker cannot be trusted ({marker.get('detail')})"
+    if marker.get("installation") != installation_key(resources):
+        return "the installation marker names another installation"
+    if marker.get("dataDir") != _normalized_data_dir(data_dir):
+        return "the installation marker names another data directory"
+    if transaction is not None and marker.get("transaction") != transaction:
+        return (
+            f"the installation marker names transaction {marker.get('transaction')!r}, "
+            f"not journal transaction {transaction!r}"
+        )
+    return None
+
+
+def _publish_transaction_open_marker(
+    data_dir: Path,
+    resources: Path,
+    transaction: str,
+    *,
+    platform_name: str,
+    supersedes: str | None = None,
+    reseal: Callable[[], None] | None = None,
+    log: LogCallable | None = None,
+) -> None:
+    """Publish, durably where supported, and restore the macOS bundle seal."""
+
+    # Refuse before touching a signed bundle if the caller cannot restore its
+    # seal. Removing the just-written file would not undo the seal mutation.
+    if platform_name == "darwin" and reseal is None:
+        raise ApplyUpdateError(
+            "Could not safely publish the open update transaction marker: "
+            "no macOS bundle reseal was provided"
+        )
+    previous = read_transaction_open_marker(resources)
+    durability = write_transaction_open_marker(
+        data_dir, resources, transaction, supersedes=supersedes, log=log
+    )
+    publication_error: str | None = None
+    if not durability.published or not durability.contents_fully_synced:
+        publication_error = "its contents could not be durably flushed"
+    elif DIRECTORY_SYNC_SUPPORTED and not durability.name_synced:
+        publication_error = "its directory entry could not be durably flushed"
+    if publication_error is None and reseal is not None:
+        try:
+            reseal()
+        except ApplyUpdateError as exc:
+            publication_error = f"the macOS bundle could not be resealed: {exc}"
+    if publication_error is None:
+        return
+
+    restored_marker = False
+    marker_restore_error: str | None = None
+    if previous is not None and previous.get("state") != "invalid":
+        try:
+            restored_durability = write_transaction_open_marker(
+                Path(str(previous["dataDir"])),
+                resources,
+                str(previous["transaction"]),
+                supersedes=(str(previous["supersedes"]) if previous.get("supersedes") else None),
+                log=log,
+            )
+            restored_marker = (
+                restored_durability.published
+                and restored_durability.contents_fully_synced
+                and (not DIRECTORY_SYNC_SUPPORTED or restored_durability.name_synced)
+            )
+            if not restored_marker:
+                marker_restore_error = "the prior marker could not be durably restored"
+        except (ApplyUpdateError, KeyError) as exc:
+            marker_restore_error = str(exc)
+    else:
+        removed = remove_transaction_open_marker(resources, log=log)
+        if not removed:
+            marker_restore_error = "the new marker could not be removed"
+    restore_error: str | None = None
+    if reseal is not None:
+        try:
+            reseal()
+        except ApplyUpdateError as exc:
+            restore_error = str(exc)
+    detail = publication_error
+    if marker_restore_error is not None:
+        detail += f"; {marker_restore_error}"
+    elif restored_marker:
+        detail += "; the prior marker was restored"
+    if restore_error is not None:
+        detail += f"; the original macOS seal could not be restored: {restore_error}"
+    raise ApplyUpdateError(f"Could not safely publish the open update transaction marker: {detail}")
+
+
+def _restore_journal_after_marker_failure(
+    data_dir: Path,
+    resources: Path,
+    previous: Mapping[str, Any] | None,
+) -> str | None:
+    """Undo the journal half of a journal/installation-marker publication."""
+
+    try:
+        if previous is None:
+            removed = remove_journal(data_dir, resources)
+            name_synced = sync_directory(Path(data_dir))
+            if removed and (not DIRECTORY_SYNC_SUPPORTED or name_synced):
+                return None
+            return "the just-written journal could not be durably removed"
+        durability = write_journal(data_dir, resources, previous)
+        if (
+            durability.published
+            and durability.contents_fully_synced
+            and (not DIRECTORY_SYNC_SUPPORTED or durability.name_synced)
+        ):
+            return None
+        return "the prior journal could not be durably restored"
+    except ApplyUpdateError as exc:
+        return f"the prior journal could not be restored: {exc}"
 
 
 def _invalid_journal(state: str, detail: str) -> dict[str, Any]:
@@ -1811,6 +2057,7 @@ def begin_update_transaction(
     resources: Path,
     layers: Sequence[tuple[Path, Path]],
     platform_name: str = sys.platform,
+    reseal: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Record what is about to be renamed, durably, before renaming any of it.
 
@@ -1831,6 +2078,20 @@ def begin_update_transaction(
             f"({existing.get('transaction', 'unidentified')}) is still unresolved in state "
             f"{existing.get('state')!r}; refusing to start another before it is recovered."
         )
+    open_marker = read_transaction_open_marker(resources)
+    if open_marker is not None:
+        mismatch = _open_marker_mismatch(open_marker, data_dir, resources)
+        if mismatch is not None or existing is not None:
+            raise ApplyUpdateError(
+                "An update transaction is still marked open for this installation "
+                f"({open_marker.get('transaction', 'unidentified')}; "
+                f"{mismatch or 'its journal still exists'}); refusing to replace its "
+                "rollback ownership before a healthy start commits it."
+            )
+        # A released pre-marker helper can commit the journal but cannot know
+        # to remove this new marker. A later update from the same data
+        # directory is itself healthy-start evidence from that owner, so it may
+        # replace the stale marker. Another data directory was refused above.
     now = datetime.now().isoformat(timespec="seconds")
     payload: dict[str, Any] = {
         "schema": JOURNAL_SCHEMA,
@@ -1863,6 +2124,21 @@ def begin_update_transaction(
     if existing is not None:
         payload["supersedes"] = existing.get("transaction")
     write_journal(data_dir, resources, payload)
+    try:
+        _publish_transaction_open_marker(
+            data_dir,
+            resources,
+            str(payload["transaction"]),
+            platform_name=platform_name,
+            reseal=reseal,
+        )
+    except ApplyUpdateError as exc:
+        restore_error = _restore_journal_after_marker_failure(
+            data_dir, resources, existing
+        )
+        if restore_error is not None:
+            raise ApplyUpdateError(f"{exc}; {restore_error}") from exc
+        raise
     return payload
 
 
@@ -1873,6 +2149,7 @@ def begin_rollback_transaction(
     resources: Path,
     platform_name: str = sys.platform,
     reason: str,
+    reseal: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Record a restore before it starts, superseding whatever it is undoing.
 
@@ -1883,6 +2160,23 @@ def begin_rollback_transaction(
     """
 
     existing = read_journal(data_dir, resources)
+    open_marker = read_transaction_open_marker(resources)
+    if open_marker is not None:
+        mismatch = _open_marker_mismatch(open_marker, data_dir, resources)
+        existing_transaction = (
+            str(existing.get("transaction"))
+            if existing is not None and existing.get("transaction")
+            else None
+        )
+        if mismatch is None and existing_transaction is not None:
+            mismatch = _open_marker_mismatch(
+                open_marker, data_dir, resources, transaction=existing_transaction
+            )
+        if mismatch is not None:
+            raise ApplyUpdateError(
+                "The update rollback cannot replace the installation marker because "
+                f"{mismatch}."
+            )
     now = datetime.now().isoformat(timespec="seconds")
     payload: dict[str, Any] = {
         "schema": JOURNAL_SCHEMA,
@@ -1922,6 +2216,22 @@ def begin_rollback_transaction(
     if existing is not None:
         payload["supersedes"] = existing.get("transaction")
     write_journal(data_dir, resources, payload)
+    try:
+        _publish_transaction_open_marker(
+            data_dir,
+            resources,
+            str(payload["transaction"]),
+            platform_name=platform_name,
+            supersedes=(str(payload["supersedes"]) if payload.get("supersedes") else None),
+            reseal=reseal,
+        )
+    except ApplyUpdateError as exc:
+        restore_error = _restore_journal_after_marker_failure(
+            data_dir, resources, existing
+        )
+        if restore_error is not None:
+            raise ApplyUpdateError(f"{exc}; {restore_error}") from exc
+        raise
     return payload
 
 
@@ -2862,6 +3172,8 @@ def commit_transaction(
     data_dir: Path,
     *,
     resources: Path,
+    platform_name: str | None = None,
+    reseal: Callable[[], None] | None = None,
     log: LogCallable | None = None,
 ) -> tuple[bool, str]:
     """Close a decided transaction so its ``.previous`` may be reclaimed.
@@ -2876,14 +3188,110 @@ def commit_transaction(
     """
 
     journal = read_journal(data_dir, resources)
+    open_marker = read_transaction_open_marker(resources)
+    journal_platform = journal.get("platform") if journal is not None else None
+    effective_platform = (
+        platform_name
+        if platform_name is not None
+        else (str(journal_platform) if isinstance(journal_platform, str) else sys.platform)
+    )
+
+    def restore_open_marker(marker: Mapping[str, Any], identifier: str) -> str | None:
+        try:
+            _publish_transaction_open_marker(
+                data_dir,
+                resources,
+                identifier,
+                platform_name=effective_platform,
+                supersedes=(str(marker["supersedes"]) if marker.get("supersedes") else None),
+                reseal=reseal,
+                log=log,
+            )
+        except ApplyUpdateError as exc:
+            return str(exc)
+        return None
+
+    def close_open_marker(marker: Mapping[str, Any], identifier: str) -> tuple[bool, str]:
+        if effective_platform == "darwin" and reseal is None:
+            return False, "no macOS bundle reseal was provided"
+        if not remove_transaction_open_marker(resources, log=log):
+            restore_error = restore_open_marker(marker, identifier)
+            if restore_error is not None:
+                return False, (
+                    "the installation marker could not be durably removed, and restoring it "
+                    f"also failed: {restore_error}"
+                )
+            return False, (
+                "the installation marker could not be durably removed; the open marker "
+                "was restored"
+            )
+        if reseal is None:
+            return True, ""
+        try:
+            reseal()
+            return True, ""
+        except ApplyUpdateError as exc:
+            restore_error = restore_open_marker(marker, identifier)
+            if restore_error is not None:
+                return False, (
+                    f"removing the marker left a macOS bundle that could not be resealed: {exc}; "
+                    f"restoring the marker and seal also failed: {restore_error}"
+                )
+            return False, (
+                f"removing the marker left a macOS bundle that could not be resealed: {exc}; "
+                "the marker and prior seal were restored"
+            )
+
     if journal is None:
+        if open_marker is not None:
+            identifier = str(open_marker.get("transaction") or "unidentified")
+            owner = open_marker.get("dataDir")
+            if open_marker.get("state") == "invalid":
+                return False, (
+                    "the installation's open transaction marker cannot be trusted "
+                    f"({open_marker.get('detail')}); the rollback material was kept"
+                )
+            if owner != _normalized_data_dir(data_dir):
+                return False, (
+                    f"update transaction {identifier} is still open for another data directory; "
+                    "the rollback material was kept"
+                )
+            # Recovery can deliberately remove an unreadable journal after it
+            # restores the layers and records an unverified outcome. Its later
+            # healthy start still has to close this bundle-wide marker. The
+            # owner comparison is the evidence that distinguishes that case
+            # from the second-instance refusal above.
+            marker_closed, marker_detail = close_open_marker(open_marker, identifier)
+            if not marker_closed:
+                return False, (
+                    f"update transaction {identifier} has no readable journal, but its "
+                    f"installation marker could not be committed ({marker_detail}); "
+                    "the rollback material was kept"
+                )
+            return True, (
+                f"update transaction {identifier} was recovered without a readable journal "
+                "and its installation marker was committed"
+            )
         return True, "no update transaction was recorded"
     state = str(journal.get("state") or "")
     identifier = str(journal.get("transaction") or "unidentified")
+    if open_marker is not None:
+        mismatch = _open_marker_mismatch(
+            open_marker, data_dir, resources, transaction=identifier
+        )
+        if mismatch is not None:
+            return False, f"{mismatch}; the rollback material was kept"
     if not journal_describes(journal, resources):
         # Another copy's transaction. It says nothing about this installation,
         # and this installation has just started healthily, so its own rollback
-        # material is spent -- but the record stays for its owner.
+        # material is spent only when no bundle-local marker says otherwise.
+        # The journal may have been replaced under its filename while this
+        # installation's transaction stayed open.
+        if open_marker is not None:
+            return False, (
+                f"update transaction {identifier} is recorded for another installation while "
+                "this installation's matching marker is still open; the rollback material was kept"
+            )
         return True, "the recorded update transaction belongs to another installation"
     if state not in TERMINAL_JOURNAL_STATES:
         return False, (
@@ -2907,6 +3315,14 @@ def commit_transaction(
             f"update transaction {identifier} ended {state!r}, but its outcome could not be "
             "recorded, so its journal was kept and the rollback material may not be reclaimed"
         )
+    if open_marker is not None:
+        marker_closed, marker_detail = close_open_marker(open_marker, identifier)
+        if not marker_closed:
+            return False, (
+                f"update transaction {identifier} ended {state!r}, but its installation marker "
+                f"could not be committed ({marker_detail}), so its journal was kept and the "
+                "rollback material may not be reclaimed"
+            )
     remove_journal(data_dir, resources, log=log)
     return True, f"update transaction {identifier} committed from state {state!r}"
 
@@ -3478,6 +3894,15 @@ def apply_update(
             resources=resources,
             layers=planned,
             platform_name=platform_name,
+            reseal=(
+                (
+                    lambda: repair_bundle(
+                        resolved_bundle, platform_name=platform_name, runner=runner, log=log
+                    )
+                )
+                if platform_name == "darwin"
+                else None
+            ),
         )
         # After the record, before the renames: from here on there is a copy of
         # this module outside the bundle whatever the swap leaves behind.
@@ -3605,6 +4030,15 @@ def rollback_bundle(
             resources=resources,
             platform_name=platform_name,
             reason=f"the application that failed to start (pid {parent_pid}) was rolled back",
+            reseal=(
+                (
+                    lambda: repair_bundle(
+                        bundle.resolve(), platform_name=platform_name, runner=runner, log=log
+                    )
+                )
+                if platform_name == "darwin"
+                else None
+            ),
         )
     except ApplyUpdateError as exc:
         # Nothing has moved yet, so refusing costs only this attempt -- and a

@@ -174,6 +174,7 @@ def _decided_update(installation: Installation, platform_name: str = "linux") ->
         resources=installation.resources,
         layers=planned,
         platform_name=platform_name,
+        reseal=(lambda: None) if platform_name == "darwin" else None,
     )
     swap_staged_layers(
         installation.resources,
@@ -246,6 +247,408 @@ def test_a_committed_update_leaves_a_completion_record_when_its_journal_goes(
     assert payload.get("transaction") == transaction
     assert payload.get("outcome") == "installed"
     assert payload.get("installation") == key
+
+
+def test_an_update_transaction_marks_the_installation_open_until_commit(tmp_path: Path) -> None:
+    """One bundle-wide marker covers every data directory used with this install."""
+
+    installation = _installation(tmp_path)
+    transaction = _decided_update(installation)
+    marker = installation.resources / ".update-transaction-open.json"
+
+    assert json.loads(marker.read_text(encoding="utf-8")) == {
+        "schema": 1,
+        "installation": installation_key(installation.resources),
+        "transaction": transaction,
+        "dataDir": str(installation.data_dir.resolve()),
+    }
+
+    allowed, detail = commit_transaction(
+        installation.data_dir, resources=installation.resources
+    )
+
+    assert allowed, detail
+    assert not marker.exists(), "a committed transaction still marks the installation open"
+
+
+def test_a_healthy_second_instance_keeps_another_data_dirs_rollback_material(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second ``--data-dir`` cannot spend the first instance's rollback copy."""
+
+    monkeypatch.setattr(healthy_start, "repair_bundle", lambda *_args, **_kwargs: None)
+    installation = _installation(tmp_path)
+    transaction = _decided_update(installation)
+    second_data_dir = tmp_path / "second-instance-data"
+    (second_data_dir / "logs").mkdir(parents=True)
+    paths = (installation.bundle, installation.resources, second_data_dir)
+
+    settled = healthy_start.HealthyStartSettlement(lambda: paths).settle(
+        ready=True, evidence="a healthy interface", report=lambda _message: None
+    )
+
+    assert not settled, "the second instance treated another instance's transaction as absent"
+    assert (installation.resources / "app.previous").is_dir(), (
+        "the second instance reclaimed the first instance's rollback material"
+    )
+    assert read_journal(installation.data_dir, installation.resources) is not None
+    written = (second_data_dir / "logs" / "update.log").read_text(encoding="utf-8")
+    assert transaction in written and "another data directory" in written
+
+
+def test_a_pre_marker_release_cannot_leave_the_next_update_permanently_blocked(
+    tmp_path: Path,
+) -> None:
+    """An old healthy-start reader removes only the journal, not the new marker."""
+
+    installation = _installation(tmp_path)
+    first = _decided_update(installation)
+    apply_update_module.remove_journal(installation.data_dir, installation.resources)
+    marker = installation.resources / ".update-transaction-open.json"
+    assert marker.is_file(), "set-up: the candidate helper wrote no marker for the old reader"
+
+    staged = installation.data_dir / "updates" / "10.0.0" / "staged" / "app"
+    _write_layer(staged, "new2")
+    journal = begin_update_transaction(
+        data_dir=installation.data_dir,
+        bundle=installation.bundle,
+        resources=installation.resources,
+        layers=[(installation.resources / "app", staged)],
+        platform_name="linux",
+    )
+
+    assert journal["transaction"] != first
+    assert json.loads(marker.read_text(encoding="utf-8"))["transaction"] == journal["transaction"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("schema", 99), ("installation", "0" * 16)],
+    ids=["malformed", "another-installation"],
+)
+def test_an_invalid_installation_marker_keeps_rollback_material(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    marker = installation.resources / ".update-transaction-open.json"
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    payload[field] = value
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+
+    allowed, detail = commit_transaction(
+        installation.data_dir, resources=installation.resources
+    )
+
+    assert not allowed and "marker" in detail
+    assert (installation.resources / "app.previous").is_dir()
+    assert read_journal(installation.data_dir, installation.resources) is not None
+
+
+def test_a_terminal_journal_cannot_commit_another_transactions_marker(tmp_path: Path) -> None:
+    installation = _installation(tmp_path)
+    transaction = _decided_update(installation)
+    marker = installation.resources / ".update-transaction-open.json"
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    payload["transaction"] = "b" * 32
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+
+    allowed, detail = commit_transaction(
+        installation.data_dir, resources=installation.resources
+    )
+
+    assert not allowed and transaction in detail and "b" * 32 in detail
+    assert marker.is_file() and (installation.resources / "app.previous").is_dir()
+
+
+def test_a_foreign_installation_journal_cannot_bypass_this_installations_marker(
+    tmp_path: Path,
+) -> None:
+    installation = _installation(tmp_path)
+    transaction = _decided_update(installation)
+    journal = read_journal(installation.data_dir, installation.resources) or {}
+    elsewhere = tmp_path / "another-installation"
+    apply_update_module.write_journal(
+        installation.data_dir,
+        installation.resources,
+        {**journal, "resources": str(elsewhere), "bundle": str(elsewhere)},
+    )
+
+    allowed, detail = commit_transaction(
+        installation.data_dir, resources=installation.resources
+    )
+
+    assert not allowed and transaction in detail and "another installation" in detail
+    assert (installation.resources / ".update-transaction-open.json").is_file()
+    assert (installation.resources / "app.previous").is_dir()
+
+
+def test_a_rollback_moves_the_installation_marker_to_its_new_transaction(tmp_path: Path) -> None:
+    installation = _installation(tmp_path)
+    update_transaction = _decided_update(installation)
+    rollback = apply_update_module.begin_rollback_transaction(
+        data_dir=installation.data_dir,
+        bundle=installation.bundle,
+        resources=installation.resources,
+        platform_name="linux",
+        reason="the candidate did not start",
+    )
+    marker = json.loads(
+        (installation.resources / ".update-transaction-open.json").read_text(encoding="utf-8")
+    )
+
+    assert marker["transaction"] == rollback["transaction"]
+    assert marker["supersedes"] == update_transaction
+    apply_update_module.set_journal_state(
+        installation.data_dir, installation.resources, "rolled-back"
+    )
+    allowed, detail = commit_transaction(
+        installation.data_dir, resources=installation.resources
+    )
+    assert allowed, detail
+    assert not (installation.resources / ".update-transaction-open.json").exists()
+
+
+def test_a_terminal_pre_marker_journal_still_commits(tmp_path: Path) -> None:
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    (installation.resources / ".update-transaction-open.json").unlink()
+
+    allowed, detail = commit_transaction(
+        installation.data_dir, resources=installation.resources
+    )
+
+    assert allowed, detail
+
+
+def test_a_marker_that_cannot_be_removed_keeps_its_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation = _installation(tmp_path)
+    transaction = _decided_update(installation)
+    monkeypatch.setattr(apply_update_module, "remove_transaction_open_marker", lambda *_a, **_k: False)
+
+    allowed, detail = commit_transaction(
+        installation.data_dir, resources=installation.resources
+    )
+
+    assert not allowed and "could not be committed" in detail
+    assert (read_journal(installation.data_dir, installation.resources) or {}).get(
+        "transaction"
+    ) == transaction
+
+
+def test_marker_publication_refuses_a_posix_directory_sync_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(apply_update_module, "DIRECTORY_SYNC_SUPPORTED", True)
+    installation = _installation(tmp_path)
+    planned = plan_layer_swap(
+        installation.resources, installation.staged_app, installation.staged_runtime
+    )
+    real_write = apply_update_module.write_transaction_open_marker
+
+    def weak_write(*args: object, **kwargs: object) -> object:
+        real_write(*args, **kwargs)
+        return apply_update_module.JournalDurability(True, False, True)
+
+    monkeypatch.setattr(apply_update_module, "write_transaction_open_marker", weak_write)
+
+    with pytest.raises(apply_update_module.ApplyUpdateError, match="durably flushed"):
+        begin_update_transaction(
+            data_dir=installation.data_dir,
+            bundle=installation.bundle,
+            resources=installation.resources,
+            layers=planned,
+            platform_name="linux",
+        )
+    assert not (installation.resources / ".update-transaction-open.json").exists()
+    assert read_journal(installation.data_dir, installation.resources) is None, (
+        "a refused marker publication left its just-written journal behind"
+    )
+
+
+def test_failed_rollback_marker_publication_restores_the_superseded_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation = _installation(tmp_path)
+    update_transaction = _decided_update(installation)
+    marker = installation.resources / ".update-transaction-open.json"
+    real_write = apply_update_module.write_transaction_open_marker
+    writes = 0
+
+    def fail_new_marker_once(*args: object, **kwargs: object) -> object:
+        nonlocal writes
+        writes += 1
+        durability = real_write(*args, **kwargs)
+        if writes == 1:
+            return apply_update_module.JournalDurability(True, False, True)
+        return durability
+
+    monkeypatch.setattr(
+        apply_update_module, "write_transaction_open_marker", fail_new_marker_once
+    )
+    with pytest.raises(apply_update_module.ApplyUpdateError, match="durably flushed"):
+        apply_update_module.begin_rollback_transaction(
+            data_dir=installation.data_dir,
+            bundle=installation.bundle,
+            resources=installation.resources,
+            platform_name="linux",
+            reason="the candidate did not start",
+        )
+
+    restored = read_journal(installation.data_dir, installation.resources) or {}
+    assert restored.get("transaction") == update_transaction
+    assert restored.get("operation") == "update"
+    assert json.loads(marker.read_text(encoding="utf-8"))["transaction"] == update_transaction
+
+
+def test_marker_removal_directory_sync_failure_restores_the_open_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(apply_update_module, "DIRECTORY_SYNC_SUPPORTED", True)
+    installation = _installation(tmp_path)
+    transaction = _decided_update(installation)
+    marker = installation.resources / ".update-transaction-open.json"
+    real_sync = apply_update_module.sync_directory
+    failed_once = False
+
+    def fail_first_resource_sync(path: Path, **kwargs: object) -> bool:
+        nonlocal failed_once
+        if Path(path) == installation.resources and not failed_once:
+            failed_once = True
+            return False
+        if Path(path) == installation.resources:
+            return True
+        return real_sync(path, **kwargs)
+
+    monkeypatch.setattr(apply_update_module, "sync_directory", fail_first_resource_sync)
+    allowed, detail = commit_transaction(
+        installation.data_dir,
+        resources=installation.resources,
+        platform_name="linux",
+    )
+
+    assert not allowed and "durably removed" in detail
+    assert json.loads(marker.read_text(encoding="utf-8"))["transaction"] == transaction
+    assert (read_journal(installation.data_dir, installation.resources) or {}).get(
+        "transaction"
+    ) == transaction
+
+
+def test_commit_derives_the_platform_from_the_journal_when_not_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation = _installation(tmp_path)
+    _decided_update(installation, "linux")
+    monkeypatch.setattr(apply_update_module.sys, "platform", "darwin")
+
+    allowed, detail = commit_transaction(
+        installation.data_dir, resources=installation.resources
+    )
+
+    assert allowed, detail
+
+
+def test_macos_marker_add_and_remove_are_each_resealed(tmp_path: Path) -> None:
+    installation = _installation(tmp_path, "darwin")
+    marker = installation.resources / ".update-transaction-open.json"
+    seals: list[bool] = []
+    planned = plan_layer_swap(
+        installation.resources, installation.staged_app, installation.staged_runtime
+    )
+    journal = begin_update_transaction(
+        data_dir=installation.data_dir,
+        bundle=installation.bundle,
+        resources=installation.resources,
+        layers=planned,
+        platform_name="darwin",
+        reseal=lambda: seals.append(marker.exists()),
+    )
+    set_journal_state(installation.data_dir, installation.resources, "installed")
+
+    allowed, detail = commit_transaction(
+        installation.data_dir,
+        resources=installation.resources,
+        platform_name="darwin",
+        reseal=lambda: seals.append(marker.exists()),
+    )
+
+    assert allowed, detail
+    assert seals == [True, False]
+    assert journal["transaction"]
+
+
+def test_a_failed_macos_marker_reseal_restores_the_prior_sealed_shape(tmp_path: Path) -> None:
+    installation = _installation(tmp_path, "darwin")
+    marker = installation.resources / ".update-transaction-open.json"
+    planned = plan_layer_swap(
+        installation.resources, installation.staged_app, installation.staged_runtime
+    )
+    seen: list[bool] = []
+
+    def reseal() -> None:
+        seen.append(marker.exists())
+        if len(seen) == 1:
+            raise apply_update_module.ApplyUpdateError("codesign refused")
+
+    with pytest.raises(apply_update_module.ApplyUpdateError, match="could not be resealed"):
+        begin_update_transaction(
+            data_dir=installation.data_dir,
+            bundle=installation.bundle,
+            resources=installation.resources,
+            layers=planned,
+            platform_name="darwin",
+            reseal=reseal,
+        )
+
+    assert seen == [True, False]
+    assert not marker.exists()
+    assert read_journal(installation.data_dir, installation.resources) is None
+
+
+def test_macos_begin_without_a_reseal_does_not_mutate_the_bundle(tmp_path: Path) -> None:
+    installation = _installation(tmp_path, "darwin")
+    marker = installation.resources / ".update-transaction-open.json"
+    planned = plan_layer_swap(
+        installation.resources, installation.staged_app, installation.staged_runtime
+    )
+
+    with pytest.raises(apply_update_module.ApplyUpdateError, match="no macOS bundle reseal"):
+        begin_update_transaction(
+            data_dir=installation.data_dir,
+            bundle=installation.bundle,
+            resources=installation.resources,
+            layers=planned,
+            platform_name="darwin",
+        )
+
+    assert not marker.exists()
+    assert read_journal(installation.data_dir, installation.resources) is None
+
+
+def test_a_failed_macos_commit_reseal_restores_the_open_marker(tmp_path: Path) -> None:
+    installation = _installation(tmp_path, "darwin")
+    transaction = _decided_update(installation, "darwin")
+    marker = installation.resources / ".update-transaction-open.json"
+    seen: list[bool] = []
+
+    def reseal() -> None:
+        seen.append(marker.exists())
+        if len(seen) == 1:
+            raise apply_update_module.ApplyUpdateError("codesign refused")
+
+    allowed, detail = commit_transaction(
+        installation.data_dir,
+        resources=installation.resources,
+        platform_name="darwin",
+        reseal=reseal,
+    )
+
+    assert not allowed and "prior seal were restored" in detail
+    assert seen == [False, True]
+    assert json.loads(marker.read_text(encoding="utf-8"))["transaction"] == transaction
+    assert read_journal(installation.data_dir, installation.resources) is not None
 
 
 def test_healthy_start_cleanup_removes_only_the_committed_transactions_files(

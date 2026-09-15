@@ -931,6 +931,11 @@ def test_the_external_recovery_helper_runs_with_no_application_layer_at_all(
         resources=resources,
         layers=planned,
         platform_name=sys.platform,
+        reseal=(
+            (lambda: apply_update_module.repair_bundle(bundle, platform_name=sys.platform))
+            if sys.platform == "darwin"
+            else None
+        ),
     )
     # Interrupted with the app layer moved aside and not yet replaced.
     (resources / "runtime").rename(resources / "runtime.previous")
@@ -1027,6 +1032,11 @@ def test_recovery_runs_before_the_mode_branch_for_browser_and_terminal_starts(
         resources=resources,
         layers=planned,
         platform_name=sys.platform,
+        reseal=(
+            (lambda: apply_update_module.repair_bundle(bundle, platform_name=sys.platform))
+            if sys.platform == "darwin"
+            else None
+        ),
     )
     (resources / "runtime").rename(resources / "runtime.previous")
     staged_runtime.rename(resources / "runtime")
@@ -1209,7 +1219,9 @@ def test_an_unreadable_record_does_not_block_the_installation_for_ever(
     assert outcome.action == "rolled-back"
     assert _generations(resources) == {"app": "old0", "runtime": "old0"}
     assert read_journal(data_dir, resources) is None, "a decided transaction must stop blocking"
-    allowed, _detail = commit_transaction(data_dir, resources=resources)
+    allowed, _detail = commit_transaction(
+        data_dir, resources=resources, platform_name="linux"
+    )
     assert allowed is True
     # And the next update is not refused by the leftover: an unresolved record
     # blocks `begin_update_transaction`, which is the second way a permanently
@@ -1381,6 +1393,11 @@ def test_the_staged_helper_recovers_a_missing_runtime_without_the_bundle(
         resources=resources,
         layers=planned,
         platform_name=sys.platform,
+        reseal=(
+            (lambda: apply_update_module.repair_bundle(bundle, platform_name=sys.platform))
+            if sys.platform == "darwin"
+            else None
+        ),
     )
     helper = apply_update_module.stage_recovery_helper(data_dir)
     assert helper is not None and helper.is_file()
@@ -1461,7 +1478,12 @@ def test_the_native_launchers_reach_recovery_without_an_app_layer() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _recording_runner(failing: str | None = None, observe: Callable[[], object] | None = None):
+def _recording_runner(
+    failing: str | None = None,
+    observe: Callable[[], object] | None = None,
+    *,
+    fail_codesign_at: int | None = None,
+):
     """A `subprocess.run` double that records commands and can fail one.
 
     ``observe`` is called at the moment `codesign` is invoked, which is the
@@ -1474,12 +1496,18 @@ def _recording_runner(failing: str | None = None, observe: Callable[[], object] 
 
     commands: list[list[str]] = []
     observations: list[object] = []
+    codesign_calls = 0
 
     def run(command, **_kwargs):  # type: ignore[no-untyped-def]
+        nonlocal codesign_calls
         commands.append(list(command))
         if observe is not None and "codesign" in command[0]:
             observations.append(observe())
+        if "codesign" in command[0]:
+            codesign_calls += 1
         code = 1 if failing is not None and failing in command[0] else 0
+        if fail_codesign_at is not None and codesign_calls == fail_codesign_at:
+            code = 1
         return subprocess.CompletedProcess(list(command), code, "", "boom" if code else "")
 
     run.observations = observations  # type: ignore[attr-defined]
@@ -1584,6 +1612,7 @@ def test_a_rollback_transaction_whose_layers_are_already_back_is_resealed_too(
         resources=resources,
         platform_name="darwin",
         reason="the updated version would not start",
+        reseal=lambda: None,
     )
     assert rollback_previous_layers(resources) is True
     commands, run = _recording_runner()
@@ -1626,7 +1655,7 @@ def test_a_failed_update_whose_reseal_fails_leaves_a_transaction_to_retry(
         record = read_journal(data_dir, resources)
         return None if record is None else record.get("state")
 
-    _commands, failing_run = _recording_runner(failing="codesign", observe=state_now)
+    _commands, failing_run = _recording_runner(observe=state_now, fail_codesign_at=5)
     reported: list[str] = []
 
     # A relaunch that never confirms drives apply_update into its post-mutation
@@ -1690,7 +1719,7 @@ def test_the_rollback_helper_does_not_publish_an_end_it_did_not_reach(
         record = read_journal(data_dir, resources)
         return None if record is None else record.get("state")
 
-    _commands, failing_run = _recording_runner(failing="codesign", observe=state_now)
+    _commands, failing_run = _recording_runner(observe=state_now, fail_codesign_at=3)
 
     result = apply_update_module.rollback_bundle(
         bundle=bundle,
@@ -1749,7 +1778,12 @@ def test_a_successful_rollback_helper_publishes_the_end_after_the_seal(
     ), "even the successful path must not publish its end before the seal"
     assert read_journal(data_dir, resources)["state"] == "rolled-back"
     assert "/usr/bin/codesign" in [command[0] for command in commands]
-    assert commit_transaction(data_dir, resources=resources)[0] is True
+    assert commit_transaction(
+        data_dir,
+        resources=resources,
+        platform_name="darwin",
+        reseal=lambda: None,
+    )[0] is True
 
 
 def test_the_desktop_in_process_rollback_uses_the_same_ordering(

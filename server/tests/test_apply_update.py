@@ -305,6 +305,9 @@ def test_successful_swap_keeps_previous_layers_and_uses_injected_relauncher(
         "/usr/bin/xattr",
         "/usr/bin/codesign",
         "/usr/bin/codesign",
+        "/usr/bin/xattr",
+        "/usr/bin/codesign",
+        "/usr/bin/codesign",
     ]
     assert "--verify" in commands[-1]
     # macOS keeps its argv route: LaunchServices passes no environment at all.
@@ -337,6 +340,7 @@ def test_failed_second_rename_restores_the_old_layout_and_does_not_relaunch(
         parent_pid=123,
         platform_name="darwin",
         renamer=fail_new_app,
+        runner=lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
         relauncher=lambda command, _platform, **_kwargs: relaunched.append(list(command)),
         waiter=lambda _pid: True,
         failure_reporter=lambda _message: None,
@@ -1059,13 +1063,16 @@ def test_failed_required_codesign_verification_rolls_back_resigns_and_reopens_ol
 ) -> None:
     bundle, resources, staged_app, staged_runtime = _layout(tmp_path)
     commands: list[list[str]] = []
-    failed_verification = False
+    verification_count = 0
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        nonlocal failed_verification
+        nonlocal verification_count
         commands.append(command)
-        if "--verify" in command and not failed_verification:
-            failed_verification = True
+        if "--verify" in command:
+            verification_count += 1
+        # The first verification seals the transaction-open marker before any
+        # layer moves. Fail the second, which verifies the swapped candidate.
+        if "--verify" in command and verification_count == 2:
             return subprocess.CompletedProcess(command, 1, "", "injected verification failure")
         return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -1088,8 +1095,8 @@ def test_failed_required_codesign_verification_rolls_back_resigns_and_reopens_ol
     assert (resources / "app" / "marker.txt").read_text() == "old app"
     assert (resources / "runtime" / "marker.txt").read_text() == "old runtime"
     assert not list(resources.glob("*.previous"))
-    assert ["--sign" in command for command in commands].count(True) == 2
-    assert ["--verify" in command for command in commands].count(True) == 2
+    assert ["--sign" in command for command in commands].count(True) == 3
+    assert ["--verify" in command for command in commands].count(True) == 3
     assert relaunched == [["/usr/bin/open", "-n", str(bundle)]]
     assert "previous version was restored and reopened" in reported[0]
 

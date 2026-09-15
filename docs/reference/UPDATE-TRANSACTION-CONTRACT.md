@@ -91,10 +91,9 @@ Still to do:
     than follow it. macOS ships no bundle uninstaller at all -- the user removes the
     `.app` by hand -- so there was nothing to add there.
 - how long a prepared update stays valid offline, which waits on decision D3 (§5).
-- a second server of the same installation, such as a `--no-gui` start with another data
-  directory: it is not shut down with the first, and its healthy start can reclaim
-  `.previous` while the first data directory's transaction is open. The scoped shutdown
-  of §4.4 also has no test with real decoy processes yet.
+- a second server of the same installation is still not shut down with the first. Its
+  healthy start can no longer reclaim the first data directory's `.previous` (§4.4),
+  but replacing layers while that second process is live remains platform work.
 - what the Phase 1 hardening left open:
   - staging by a release that writes no owner marker is protected by the sweep's quiet
     period alone until its helper's journal names it (§2.5);
@@ -116,6 +115,9 @@ Still to do:
     the staging's owner marker ages out (§4.2);
   - taking a request back holds the bundle installer's lock while the rename is retried,
     up to about half a second on Windows.
+  - the Windows Job Object is still platform evidence: the unit contract proves its
+    owned-handle behavior, while a packaged Windows run must prove the process tree is
+    ended and unrelated processes survive.
 
 ---
 
@@ -599,6 +601,37 @@ started and its solver workers. The helper already waits for `--parent-pid`. Shu
 never stops by process-name pattern, never stops another WG installation, and never
 stops an unrelated Python process.
 
+On POSIX the controller starts its owned server in a new session and signals only that
+process group. The process-level regression starts an unrelated Python process and a
+second installation's server in separate sessions; both remain live after the first
+controller closes. Windows uses the controller's kill-on-close Job Object; packaged
+platform proof remains required there.
+
+Process ownership and rollback ownership have different scopes. A single installation
+can be started with two data directories, but only one of them has the transaction
+journal. `begin_update_transaction` therefore also writes
+`<resources>/.update-transaction-open.json`, schema 1, with the installation key,
+transaction id and normalized owning data directory. A healthy start with no local
+journal keeps `.previous` when that marker names another data directory. The owning
+data directory removes the marker as part of `commit_transaction`, but only when its
+installation, data directory and transaction id all match the journal. A rollback
+transaction replaces the update marker with its own id and names the superseded id,
+so the same check applies after rollback. An invalid, mismatched or unremovable marker
+keeps rollback material; so does a foreign-installation journal while this bundle's
+marker remains open.
+
+Marker publication uses the journal's flush/atomic-replace discipline. Where directory
+sync is supported, a failed content or directory flush refuses the update, restores the
+prior marker (or removes the new one), and restores the superseded journal (or removes
+the just-written one). Marker removal likewise has to flush its directory entry; a weak
+removal restores the open marker and keeps the journal. On macOS, adding, replacing and
+removing the file each changes the signed bundle: every such mutation is followed
+immediately by a sign-and-verify pass. A failed pass restores the prior marker shape,
+journal and seal before the operation refuses. This includes commit paths with no
+`.previous`. A pre-marker released reader can remove the journal without knowing this
+marker, so a later update from the same data directory may replace that stale marker; on
+macOS replacement is resealed. It still refuses a marker owned by another data directory.
+
 ### 4.5 Every launch mode settles its transaction
 
 **Settling** means two things, with the same log lines in every mode:
@@ -791,6 +824,15 @@ that implements it removes the marker.
 | Test | Section | What it keeps |
 | --- | --- | --- |
 | `test_a_committed_update_leaves_a_completion_record_when_its_journal_goes` | §2.2 | The healthy-start commit records the outcome before it deletes the journal |
+| `test_an_update_transaction_marks_the_installation_open_until_commit` | §4.4, §4.5 | Begin publishes the bundle-wide owner marker and the owning healthy commit removes it |
+| `test_a_healthy_second_instance_keeps_another_data_dirs_rollback_material` | §4.4, §4.5 | A healthy second data-directory instance cannot reclaim another instance's `.previous` |
+| `test_a_pre_marker_release_cannot_leave_the_next_update_permanently_blocked` | §3.3, §4.4 | A later update by the same data-directory owner can replace the marker an old healthy-start reader could not remove |
+| `test_a_terminal_journal_cannot_commit_another_transactions_marker` | §4.4 | Commit requires transaction, installation and data-directory lineage |
+| `test_a_rollback_moves_the_installation_marker_to_its_new_transaction` | §4.4 | Rollback transaction B explicitly supersedes update transaction A |
+| `test_failed_rollback_marker_publication_restores_the_superseded_journal` | §4.4 | Refusing marker B restores both marker A and journal A |
+| `test_marker_publication_refuses_a_posix_directory_sync_failure` | §4.4 | Weak publication removes the marker and its just-written journal |
+| `test_marker_removal_directory_sync_failure_restores_the_open_transaction` | §4.4 | Weak removal restores the marker and keeps its journal |
+| `test_macos_marker_add_and_remove_are_each_resealed` | §4.4 | Both resource mutations reseal, including commit with no `.previous` |
 | `test_a_committed_record_names_both_builds_and_the_transactions_staging` | §2.2 | The field list, with the build identities the journal carries |
 | `test_an_automatic_rollback_is_recorded_before_an_older_release_deletes_the_journal` | §2.2, §2.3 | The helper records a rollback as it decides it, and suppresses the failed build |
 | `test_an_abandoned_update_is_recorded_before_an_older_release_deletes_the_journal` | §2.2 | The helper records `aborted` as it decides it, and suppresses nothing |

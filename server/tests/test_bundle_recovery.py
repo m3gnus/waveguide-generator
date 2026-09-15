@@ -455,6 +455,7 @@ def _interrupted_installation(resources: Path, data_dir: Path, platform_name: st
         resources=resources,
         layers=plan_layer_swap(resources, staged / "app", staged / "runtime"),
         platform_name=platform_name,
+        reseal=(lambda: None) if platform_name == "darwin" else None,
     )
     # The kill point: the first rename happened, the second never did.
     (resources / "app").rename(resources / "app.previous")
@@ -955,6 +956,7 @@ def _interrupted_runtime_swap(resources: Path, data_dir: Path, platform_name: st
         resources=resources,
         layers=plan_layer_swap(resources, staged / "app", staged / "runtime"),
         platform_name=platform_name,
+        reseal=(lambda: None) if platform_name == "darwin" else None,
     )
     # The app layer's turn completed; the runtime's was killed between its two
     # renames.

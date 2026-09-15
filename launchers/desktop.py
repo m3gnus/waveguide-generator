@@ -854,6 +854,11 @@ class DesktopWindow:
                 resources=resources,
                 platform_name=sys.platform,
                 reason="the updated version could not open its window",
+                reseal=(
+                    (lambda: repair_bundle(bundle, platform_name=sys.platform, log=log))
+                    if sys.platform == "darwin"
+                    else None
+                ),
             )
         except ApplyUpdateError as exc:
             log(f"The rollback could not be recorded, and was not started: {exc}")

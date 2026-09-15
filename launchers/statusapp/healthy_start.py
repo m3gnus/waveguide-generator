@@ -299,7 +299,17 @@ class HealthyStartSettlement:
             # one is still open: a ``.previous`` removed under an undecided
             # transaction is the rollback material for a failure nobody has
             # ruled out yet.
-            committed, commit_detail = commit_transaction(data_dir, resources=resources, log=log)
+            committed, commit_detail = commit_transaction(
+                data_dir,
+                resources=resources,
+                platform_name=sys.platform,
+                reseal=(
+                    (lambda: repair_bundle(bundle, platform_name=sys.platform, log=log))
+                    if sys.platform == "darwin"
+                    else None
+                ),
+                log=log,
+            )
             if not committed:
                 log(f"Not reclaiming the previous layers: {commit_detail}.")
                 return False
