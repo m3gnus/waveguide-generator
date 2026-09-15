@@ -46,6 +46,7 @@ from launchers.apply_update import (
     ROLLING_BACK_STATE,
     ApplyUpdateError,
     bundle_from_app_layer,
+    destination_staging_root,
     installation_key,
     journal_describes,
     lift_suppressed_build,
@@ -987,6 +988,7 @@ class UpdateService:
         platform_name: str = sys.platform,
         checkout_probe: Callable[[Path, str], dict[str, Any]] = checkout_status,
         update_request_path: Path | None = None,
+        update_staging_root: Path | None = None,
         bundle_installer: BundleUpdateInstaller | None = None,
         settings: SettingsStore | None = None,
         restart_approval: RestartApproval | None = None,
@@ -1044,6 +1046,10 @@ class UpdateService:
         self._pending_handoff: tuple[int, threading.Timer, Path] | None = None
         self.checkout_handoff_delay = CHECKOUT_HANDOFF_DELAY
         self.restart_approval.add_release_observer(self._restart_called_off)
+        #: The staging root the launcher said it accepts, as it said it.
+        self.requested_staging_root = (
+            Path(update_staging_root) if update_staging_root is not None else None
+        )
         if self.bundle_installer is None and self.update_request_path is not None:
             self.bundle_installer = BundleUpdateInstaller(
                 data_dir=self.data_dir,
@@ -1051,7 +1057,38 @@ class UpdateService:
                 request_path=self.update_request_path,
                 restart_approval=self.restart_approval,
                 installation=self._installation_key(),
+                staging_root=self._accepted_staging_root(),
             )
+
+    def _accepted_staging_root(self) -> Path | None:
+        """The launcher's staging root, when it is this installation's own (the updater review §2.7).
+
+        The launcher derives it beside the bundle it owns and passes it to the
+        server it starts, which runs from that launcher's own app layer, so is
+        the same build. The server stages there only when it is also the root
+        the server derives from its own app layer. Otherwise it stages in the
+        data directory, where an install spanning two volumes is refused, as
+        every earlier release does.
+        """
+
+        requested = self.requested_staging_root
+        if requested is None:
+            return None
+        try:
+            own = destination_staging_root(
+                bundle_from_app_layer(self.repo_root, self.platform_name)
+            )
+        except (ApplyUpdateError, OSError, RuntimeError, ValueError):
+            return None
+        # Compared as written, never through a link at either end.
+        if Path(os.path.abspath(requested)) != own:
+            log.warning(
+                "Not staging updates in %s: this installation stages beside its bundle in %s",
+                requested,
+                own,
+            )
+            return None
+        return own
 
     def _installation_key(self) -> str | None:
         """The key this installation's journal and records carry, or ``None`` outside a bundle."""

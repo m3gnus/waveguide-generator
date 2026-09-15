@@ -955,8 +955,14 @@ def reclaim_committed_staging(
     log: LogCallable | None = None,
     pid_alive: Callable[[int], bool] | None = None,
     now: float | None = None,
+    bundle: Path | None = None,
 ) -> list[Path]:
-    """Remove what the committed transaction staged under ``<data>/updates``, only that.
+    """Remove what the committed transaction staged, only that.
+
+    Its staging roots are under ``<data>/updates``, or, when the update was
+    staged beside the application (the updater review §2.7), under
+    ``destination_staging_root(bundle)``. A root elsewhere is never removed,
+    and nor is the bundle.
 
     Healthy-start cleanup, scoped to one transaction. ``<data>/updates`` is
     shared by every transaction and every installation using this data
@@ -994,13 +1000,22 @@ def reclaim_committed_staging(
     if unusable is not None:
         _emit_log(log, f"Not removing any update downloads: {unusable}.")
         return []
+    staging, staging_unusable = _staging_directory(bundle) if bundle is not None else (None, None)
+    if staging_unusable is not None:
+        _emit_log(log, f"Not removing any update staging: {staging_unusable}.")
+        return []
+    containers = [container for container in (updates, staging) if container is not None]
+    try:
+        application = Path(bundle).resolve() if bundle is not None else None
+    except OSError:
+        application = None
     roots = record.get("stagingRoots")
     removed: list[Path] = []
-    for text in roots if isinstance(roots, list) and updates is not None else []:
+    for text in roots if isinstance(roots, list) and containers else []:
         if _text_or_none(text) is None:
             continue
         root = Path(text)
-        target, reason = _removable_staging_root(root, updates, protected)
+        target, reason = _removable_staging_root(root, containers, protected, application)
         if reason is not None:
             _emit_log(log, f"Left {root} in place: {reason}.")
             continue
@@ -1023,6 +1038,8 @@ def reclaim_committed_staging(
             continue
         removed.append(root)
         _emit_log(log, f"Removed the update downloads: {root}")
+    if staging is not None:
+        _remove_if_empty(staging, log)
     # Read again before recording it. Removing a runtime layer's staging can
     # take seconds, and the update service may have lifted a suppression
     # meanwhile (§2.3). Only ``rollbackMaterial`` changes here, and a record
@@ -1039,9 +1056,16 @@ def reclaim_committed_staging(
 
 
 def _removable_staging_root(
-    root: Path, updates: Path, protected: Sequence[Path]
+    root: Path,
+    containers: Sequence[Path],
+    protected: Sequence[Path],
+    application: Path | None = None,
 ) -> tuple[Path | None, str | None]:
-    """``(path to remove, None)``, ``(None, None)`` when it is gone, or ``(None, why not)``."""
+    """``(path to remove, None)``, ``(None, None)`` when it is gone, or ``(None, why not)``.
+
+    ``containers`` are the folders a staging root may sit strictly inside:
+    ``<data>/updates``, and the staging folder beside the application.
+    """
 
     if not root.is_absolute():
         return None, "a staging root must be an absolute path"
@@ -1053,8 +1077,12 @@ def _removable_staging_root(
         return None, None
     except OSError as exc:
         return None, f"it could not be resolved: {exc}"
-    if resolved == updates or updates not in resolved.parents:
-        return None, f"it is not inside {updates}"
+    if not any(resolved != container and container in resolved.parents for container in containers):
+        return None, "it is not inside " + " or ".join(str(container) for container in containers)
+    if application is not None and (
+        resolved == application or application in resolved.parents or resolved in application.parents
+    ):
+        return None, "it is the application, or holds it"
     for other in protected:
         if other == resolved or other in resolved.parents or resolved in other.parents:
             return None, "another installation's update transaction names it"
@@ -1272,6 +1300,53 @@ def _updates_directory(data_dir: Path) -> tuple[Path | None, str | None]:
     return resolved, None
 
 
+#: The folder beside an installed bundle where its updates are staged (the
+#: updater review §2.7): on the application's own filesystem, so the swap is a
+#: rename there, and outside the bundle, never inside a signed macOS ``.app``.
+#: The launcher derives it from the bundle it owns and tells only its own
+#: server; nothing trusts a staging root because a request names it.
+STAGING_ROOT_SUFFIX = ".update-staging"
+
+
+def destination_staging_root(bundle: Path) -> Path:
+    """``<the bundle's folder>/.<bundle name>.update-staging``: beside the bundle, never in it."""
+
+    bundle = Path(bundle)
+    return bundle.with_name(f".{bundle.name}{STAGING_ROOT_SUFFIX}")
+
+
+def _staging_directory(bundle: Path) -> tuple[Path | None, str | None]:
+    """The staging root beside ``bundle``, resolved, only when it is a real folder there.
+
+    ``(folder, None)``, ``(None, None)`` when there is none, or ``(None, why
+    not)``. As with ``<data>/updates``, a link or junction is never followed.
+    """
+
+    candidate = destination_staging_root(bundle)
+    if not os.path.lexists(candidate):
+        return None, None
+    if _is_link_or_junction(candidate):
+        return None, f"{candidate} is a link, and cleanup never follows one"
+    try:
+        resolved = candidate.resolve(strict=True)
+        beside = Path(bundle).resolve(strict=True).parent
+    except OSError as exc:
+        return None, f"{candidate} could not be resolved: {exc}"
+    if resolved.parent != beside or not resolved.is_dir():
+        return None, f"{candidate} is not a folder beside the application"
+    return resolved, None
+
+
+def _remove_if_empty(folder: Path, log: LogCallable | None) -> None:
+    """Remove the staging folder beside the bundle once nothing is staged in it."""
+
+    try:
+        folder.rmdir()
+    except OSError:
+        return
+    _emit_log(log, f"Removed the empty update staging folder: {folder}")
+
+
 def sweep_unowned_staging(
     data_dir: Path,
     resources: Path,
@@ -1280,8 +1355,13 @@ def sweep_unowned_staging(
     pid_alive: Callable[[int], bool] | None = None,
     now: float | None = None,
     log: LogCallable | None = None,
+    bundle: Path | None = None,
 ) -> list[Path]:
     """Remove the ``<data>/updates/<version>`` folders that nothing owns, and only those.
+
+    With ``bundle``, the version folders in the staging folder beside it
+    (``destination_staging_root``) are swept by the same rules, and that
+    folder goes once it is empty.
 
     Healthy-start cleanup, after :func:`reclaim_committed_staging` (contract
     §2.5). A staging that failed or was abandoned before any helper wrote a
@@ -1313,7 +1393,12 @@ def sweep_unowned_staging(
     if unusable is not None:
         _emit_log(log, f"Not sweeping update staging no transaction names: {unusable}.")
         return []
-    if updates is None:
+    staging, staging_unusable = _staging_directory(bundle) if bundle is not None else (None, None)
+    if staging_unusable is not None:
+        _emit_log(log, f"Not sweeping update staging no transaction names: {staging_unusable}.")
+        return []
+    containers = [container for container in (updates, staging) if container is not None]
+    if not containers:
         return []
     record = read_completion_record(directory, resources)
     if record is not None and record.get("rollbackMaterial") == ROLLBACK_MATERIAL_RETAINED:
@@ -1328,39 +1413,42 @@ def sweep_unowned_staging(
     for request in requests:
         protected.extend(_request_staging_roots(request))
     clock = time.time() if now is None else now
-    try:
-        entries = sorted(updates.iterdir())
-    except OSError as exc:
-        _emit_log(log, f"Could not list the update staging in {updates}: {exc}")
-        return []
     removed: list[Path] = []
-    for entry in entries:
+    for container in containers:
         try:
-            if _is_link_or_junction(entry) or not entry.is_dir():
-                continue
-            resolved = entry.resolve(strict=True)
-        except OSError:
-            continue
-        if resolved.parent != updates:
-            continue
-        if any(
-            other == resolved or other in resolved.parents or resolved in other.parents
-            for other in protected
-        ):
-            continue
-        if _live_staging_owner(resolved, now=clock, pid_alive=pid_alive) is not None:
-            continue
-        if not _quiet_since(resolved, clock - STAGING_QUIET_SECONDS):
-            continue
-        try:
-            shutil.rmtree(resolved)
-        except FileNotFoundError:
-            continue
+            entries = sorted(container.iterdir())
         except OSError as exc:
-            _emit_log(log, f"Could not remove update staging no transaction owns {entry}: {exc}")
+            _emit_log(log, f"Could not list the update staging in {container}: {exc}")
             continue
-        removed.append(entry)
-        _emit_log(log, f"Removed update staging no transaction owns: {entry}")
+        for entry in entries:
+            try:
+                if _is_link_or_junction(entry) or not entry.is_dir():
+                    continue
+                resolved = entry.resolve(strict=True)
+            except OSError:
+                continue
+            if resolved.parent != container:
+                continue
+            if any(
+                other == resolved or other in resolved.parents or resolved in other.parents
+                for other in protected
+            ):
+                continue
+            if _live_staging_owner(resolved, now=clock, pid_alive=pid_alive) is not None:
+                continue
+            if not _quiet_since(resolved, clock - STAGING_QUIET_SECONDS):
+                continue
+            try:
+                shutil.rmtree(resolved)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                _emit_log(log, f"Could not remove update staging no transaction owns {entry}: {exc}")
+                continue
+            removed.append(entry)
+            _emit_log(log, f"Removed update staging no transaction owns: {entry}")
+    if staging is not None:
+        _remove_if_empty(staging, log)
     return removed
 
 

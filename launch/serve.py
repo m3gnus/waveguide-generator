@@ -769,6 +769,12 @@ def main(argv: list[str] | None = None) -> int:
                 if args.status_control is not None
                 else None
             ),
+            # Only with a launcher to hand off to: the staging root it accepts.
+            update_staging_root=(
+                getattr(args, "update_staging_root", None)
+                if args.status_control is not None
+                else None
+            ),
         )
         # ``getattr`` twice: an embedder's or a test's stand-in app need not
         # carry Starlette's ``state`` at all.

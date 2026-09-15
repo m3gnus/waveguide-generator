@@ -33,6 +33,11 @@ from launchers.apply_update import (
 )
 
 
+def _is_link_or_junction(path: Path) -> bool:
+    is_junction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or (is_junction is not None and bool(is_junction(path)))
+
+
 DEFAULT_UPDATES_API_BASE = "https://api.github.com"
 UPDATES_API_BASE_ENV = "WG2_UPDATES_API_BASE"
 GITHUB_REPOSITORY = "m3gnus/waveguide-generator"
@@ -649,7 +654,13 @@ class BundleUpdateInstaller:
         free_space_probe: FreeSpaceProbe = free_disk_bytes,
         restart_approval: RestartApproval | None = None,
         installation: str | None = None,
+        staging_root: str | Path | None = None,
     ) -> None:
+        #: Where the verified layers are staged beside the application, when its
+        #: launcher accepts that (the updater review §2.7); otherwise ``None``,
+        #: and they are staged in ``<data>/updates/<version>`` as before. Kept
+        #: as given, not resolved, so a link at it is seen and refused.
+        self.staging_root = Path(staging_root) if staging_root is not None else None
         self.data_dir = Path(data_dir).resolve()
         self.destination_app_dir = Path(destination_app_dir).resolve()
         self.request_path = Path(request_path).resolve()
@@ -861,32 +872,61 @@ class BundleUpdateInstaller:
         return (version, expected_runtime_id, installed_runtime_id, asset_identity)
 
     def _preflight(self, assets: Sequence[Mapping[str, object]]) -> None:
+        archives = sum(int(asset["bytes"]) for asset in assets)
+        extracted = sum(LAYER_LIMITS[str(asset["layer"])].extracted_bytes for asset in assets)
+        staging_parent: Path | None = None
+        if self.staging_root is not None and _is_link_or_junction(self.staging_root):
+            raise BundleInstallError(
+                f"The update staging folder {self.staging_root} is a link, so nothing is "
+                "staged through it."
+            )
         try:
             self.data_dir.mkdir(parents=True, exist_ok=True)
-            staging_volume = self.volume_probe(self.data_dir)
+            data_volume = self.volume_probe(self.data_dir)
             destination_volume = self.volume_probe(self.destination_app_dir)
+            if self.staging_root is not None:
+                staging_parent = self.staging_root.parent
+                staging_volume = self.volume_probe(staging_parent)
         except OSError as exc:
             raise BundleInstallError(f"Could not inspect update destination storage: {exc}") from exc
-        if staging_volume != destination_volume:
-            raise BundleInstallError(
-                "The update staging directory and installed application are on different "
-                "filesystems, so the update cannot be installed safely. Move the application "
-                "or choose a data directory on the same volume."
-            )
-        required = (
-            sum(int(asset["bytes"]) for asset in assets)
-            + sum(LAYER_LIMITS[str(asset["layer"])].extracted_bytes for asset in assets)
-            + DISK_SPACE_HEADROOM_BYTES
-        )
-        try:
-            available = self.free_space_probe(self.data_dir)
-        except OSError as exc:
-            raise BundleInstallError(f"Could not inspect free disk space: {exc}") from exc
-        if available < required:
-            raise BundleInstallError(
-                "There is not enough free disk space to download and extract this update "
-                f"safely ({required} bytes required, {available} bytes available)."
-            )
+        # Where each part goes, and so which volume needs room for it (§2.7):
+        # the download in the data directory, the staged layers where they are
+        # staged. On one volume, the two add up.
+        needs: dict[object, tuple[Path, int, str]] = {}
+        if staging_parent is None:
+            if data_volume != destination_volume:
+                raise BundleInstallError(
+                    "The update staging directory and installed application are on different "
+                    "filesystems, so the update cannot be installed safely. Move the application "
+                    "or choose a data directory on the same volume."
+                )
+            needs[data_volume] = (self.data_dir, archives + extracted, "download and extract")
+        else:
+            if staging_volume != destination_volume:
+                raise BundleInstallError(
+                    "The update staging folder beside the application is on a different "
+                    "filesystem from the application, so the update cannot be installed safely."
+                )
+            if data_volume == staging_volume:
+                needs[data_volume] = (self.data_dir, archives + extracted, "download and extract")
+            else:
+                needs[data_volume] = (self.data_dir, archives, "download")
+                needs[staging_volume] = (
+                    staging_parent,
+                    extracted,
+                    "stage beside the application",
+                )
+        for location, required, purpose in needs.values():
+            required += DISK_SPACE_HEADROOM_BYTES
+            try:
+                available = self.free_space_probe(location)
+            except OSError as exc:
+                raise BundleInstallError(f"Could not inspect free disk space: {exc}") from exc
+            if available < required:
+                raise BundleInstallError(
+                    f"There is not enough free disk space to {purpose} this update "
+                    f"safely ({required} bytes required, {available} bytes available)."
+                )
 
     @staticmethod
     def _validated_assets(
@@ -954,6 +994,11 @@ class BundleUpdateInstaller:
         update_dir: Path | None = None
         owner: dict[str, Any] | None = None
         created = False
+        # Where the verified layers go: the same folder, or one beside the
+        # application (§2.7), with its own owner marker.
+        stage_dir: Path | None = None
+        stage_owner: dict[str, Any] | None = None
+        stage_created = False
         requested = False
         try:
             update_dir = (self.data_dir / "updates" / version).resolve()
@@ -965,7 +1010,27 @@ class BundleUpdateInstaller:
             # says it is in use, and by which installation (contract §2.5).
             owner = write_staging_owner(update_dir, self.installation)
             downloads = update_dir / "downloads"
-            staged_root = update_dir / "staged"
+            if self.staging_root is None:
+                stage_dir, stage_owner, stage_created = update_dir, owner, created
+            else:
+                # On the application's own filesystem, so the swap is a rename
+                # there, and outside the bundle (§2.7).
+                if _is_link_or_junction(self.staging_root):
+                    raise BundleInstallError(
+                        f"The update staging folder {self.staging_root} is a link, so nothing "
+                        "is staged through it."
+                    )
+                self.staging_root.mkdir(exist_ok=True)
+                beside = self.staging_root.resolve(strict=True)
+                stage_dir = (beside / version).resolve()
+                if stage_dir == beside or not stage_dir.is_relative_to(beside):
+                    raise BundleInstallError(
+                        "The update staging directory escaped its folder beside the application."
+                    )
+                stage_created = not os.path.lexists(stage_dir)
+                stage_dir.mkdir(exist_ok=True)
+                stage_owner = write_staging_owner(stage_dir, self.installation)
+            staged_root = stage_dir / "staged"
             completed = 0
             archives: dict[str, Path] = {}
             for asset in assets:
@@ -1035,6 +1100,11 @@ class BundleUpdateInstaller:
                     "The installed runtime does not match the staged app layer's runtime id."
                 )
 
+            if stage_dir != update_dir:
+                # The layers are staged and verified beside the application;
+                # the download they came from is spent, and it sits on the
+                # data volume, which the swap never uses.
+                self._abandon_staging(update_dir, owner, created=created)
             payload = {
                 "schemaVersion": 1,
                 "kind": "apply_bundle",
@@ -1051,7 +1121,7 @@ class BundleUpdateInstaller:
             # appearing and the latch being set. If the request is never
             # written, nothing will restart, and the latch comes down again.
             self._handoff_target = f"v{version}"
-            self._handoff_staging = (update_dir, owner)
+            self._handoff_staging = (stage_dir, stage_owner)
             approval = self.restart_approval.approve(self._handoff_target)
             with self._lock:
                 self._handoff_approval = approval
@@ -1077,7 +1147,15 @@ class BundleUpdateInstaller:
                 )
                 raise
         except Exception as exc:  # noqa: BLE001 - all worker failures become API state
-            if not requested and update_dir is not None:
+            if not requested:
                 # No request names this staging, so no journal ever will.
-                self._abandon_staging(update_dir, owner, created=created)
+                if stage_dir is not None and stage_dir != update_dir:
+                    self._abandon_staging(stage_dir, stage_owner, created=stage_created)
+                    if self.staging_root is not None:
+                        try:
+                            self.staging_root.rmdir()
+                        except OSError:
+                            pass
+                if update_dir is not None:
+                    self._abandon_staging(update_dir, owner, created=created)
             self._set_state(installState="failed", error=str(exc) or type(exc).__name__)

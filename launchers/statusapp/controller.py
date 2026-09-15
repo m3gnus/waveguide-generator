@@ -30,7 +30,7 @@ from scripts.frontend_freshness import (
     refresh_hint,
 )
 from launch.serve_options import UPDATE_RELEASED_FILENAME
-from launchers.apply_update import append_update_log
+from launchers.apply_update import append_update_log, destination_staging_root
 from server.platform.instance import requested_port
 from server.platform.paths import app_root, resolve_data_dir
 from shared.build_identity import build_label
@@ -602,7 +602,19 @@ class StatusController:
                 str(os.getpid()),
             )
         )
+        staging_root = self.update_staging_root()
+        if staging_root is not None:
+            # The server runs from this launcher's own app layer, so it is the
+            # same build, and it is told the one staging root this launcher
+            # accepts a request naming (the updater review §2.7).
+            command.extend(("--update-staging-root", str(staging_root)))
         return command
+
+    def update_staging_root(self) -> Path | None:
+        """The staging folder beside this installation's bundle; ``None`` outside a bundle."""
+
+        paths = self.bundle_paths()
+        return destination_staging_root(paths[0]) if paths is not None else None
 
     def _collect_output(self, stream: IO[str], output: deque[str]) -> None:
         try:
@@ -1252,7 +1264,9 @@ class StatusController:
         if path is None:
             return None
         try:
-            return consume_update_request(path, data_dir=self._data_dir())
+            return consume_update_request(
+                path, data_dir=self._data_dir(), staging_root=self.update_staging_root()
+            )
         except UpdateHandoffError as exc:
             # Recorded against the child running now, and only that one: a
             # restarted child starts with its own buffer (see ``start()``).

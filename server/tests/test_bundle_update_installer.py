@@ -317,6 +317,112 @@ def test_storage_preflight_refuses_before_any_download(
     assert installer.status()["installState"] == "idle"
 
 
+def _two_volumes(tmp_path: Path) -> Callable[[Path], str]:
+    """The data directory on one filesystem, everything else on another."""
+
+    data = (tmp_path / "data").resolve()
+    return lambda path: "data" if Path(path).resolve().is_relative_to(data) else "app"
+
+
+def test_staging_goes_next_to_the_application_when_the_launcher_accepts_it(
+    tmp_path: Path,
+) -> None:
+    """The updater review §2.7: an install spanning two drives updates in-app.
+
+    The verified layers are staged on the destination filesystem, in the folder
+    beside the application that its launcher accepts, so the swap stays a rename
+    on one volume. Only the download uses the data directory, and once the
+    layers are staged it is spent. Free space is checked on both volumes.
+    """
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, fetch = _fakes({name: app})
+    staging_root = tmp_path / "installed" / ".Waveguide Generator.update-staging"
+    staging_root.parent.mkdir(parents=True)
+    volume = _two_volumes(tmp_path)
+    probed: list[Path] = []
+
+    def free(path: Path) -> int:
+        probed.append(Path(path))
+        return 10**12
+
+    installer = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=fetch,
+        volume_probe=volume,
+        free_space_probe=free,
+        staging_root=staging_root,
+    )
+
+    _start(installer, "2.0.1", [_asset(name, app, "app")])
+    installer.wait(2)
+
+    state = installer.status()
+    assert state["installState"] == "ready", state
+    payload = json.loads((tmp_path / "control" / "update.json").read_text(encoding="utf-8"))
+    staged_app = Path(payload["stagedAppDir"])
+    assert staged_app.is_dir()
+    assert staged_app.is_relative_to(staging_root.resolve())
+    assert volume(staged_app) == "app"
+    assert not (tmp_path / "data" / "updates" / "2.0.1").exists(), "the spent download stayed"
+    assert {volume(path) for path in probed} == {"data", "app"}
+
+
+def test_a_staging_root_that_is_a_link_is_refused(tmp_path: Path) -> None:
+    """§2.7: nothing is staged through a link, wherever it leads."""
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, fetch = _fakes({name: app})
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    staging_root = tmp_path / "installed" / ".Waveguide Generator.update-staging"
+    staging_root.parent.mkdir(parents=True)
+    try:
+        staging_root.symlink_to(elsewhere, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"this host cannot create a directory link: {exc}")
+    installer = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=fetch,
+        volume_probe=_two_volumes(tmp_path),
+        staging_root=staging_root,
+    )
+
+    with pytest.raises(BundleInstallError, match="link"):
+        _start(installer, "2.0.1", [_asset(name, app, "app")])
+
+    assert list(elsewhere.iterdir()) == []
+    assert installer.status()["installState"] == "idle"
+
+
+def test_the_destination_volume_needs_room_for_the_staged_layers(tmp_path: Path) -> None:
+    """§2.7: free space is probed on every affected volume, not just the data one."""
+
+    app = _app_zip()
+    name = "update-app-2.0.1.zip"
+    download, fetch = _fakes({name: app})
+    staging_root = tmp_path / "installed" / ".Waveguide Generator.update-staging"
+    staging_root.parent.mkdir(parents=True)
+    volume = _two_volumes(tmp_path)
+    installer = _installer(
+        tmp_path,
+        downloader=download,
+        small_fetcher=fetch,
+        volume_probe=volume,
+        free_space_probe=lambda path: 10**12 if volume(path) == "data" else 0,
+        staging_root=staging_root,
+    )
+
+    with pytest.raises(BundleInstallError, match="not enough free disk space"):
+        _start(installer, "2.0.1", [_asset(name, app, "app")])
+
+    assert not staging_root.exists()
+
+
 def test_digest_failure_is_reported_and_never_writes_a_request(tmp_path: Path) -> None:
     app = _app_zip()
     name = "update-app-2.0.1.zip"

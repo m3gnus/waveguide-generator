@@ -1099,6 +1099,298 @@ def test_the_controllers_build_check_is_not_fooled_by_how_a_label_was_computed(
 
 
 # ---------------------------------------------------------------------------
+# The updater review §2.7: installation staging on the destination filesystem
+# ---------------------------------------------------------------------------
+
+
+def _destination_root(bundle: Path) -> Path:
+    """Where this build stages an update: beside the bundle, never inside it."""
+
+    return bundle.with_name(f".{bundle.name}.update-staging")
+
+
+def _installation_at_destination(tmp_path: Path, platform_name: str = "linux") -> Installation:
+    """``_installation``, with the update staged beside the bundle, not in the data directory."""
+
+    installation = _installation(tmp_path, platform_name)
+    root = _destination_root(installation.bundle)
+    root.mkdir()
+    (installation.data_dir / "updates" / "9.9.9").rename(root / "9.9.9")
+    staged = root / "9.9.9" / "staged"
+    return installation._replace(staged_app=staged / "app", staged_runtime=staged / "runtime")
+
+
+@CLEANUP_PATHS
+def test_an_update_staged_beside_the_bundle_installs_and_its_staging_is_reclaimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """§2.7 and contract §2.5: the helper installs from the destination root.
+
+    The healthy start then removes that root, and the empty staging folder
+    beside the bundle, after the commit. It never touches the bundle.
+    """
+
+    installation = _installation_at_destination(tmp_path)
+    root = _destination_root(installation.bundle)
+    _decided_update(installation)
+    journal = read_journal(installation.data_dir, installation.resources) or {}
+    if apply_update_module.journal_staging_roots(journal) != [str(root / "9.9.9")]:
+        pytest.fail(f"set-up: the journal names other staging: {journal!r}")
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    written = _update_log(installation)
+    assert read_journal(installation.data_dir, installation.resources) is None, written
+    assert not (installation.resources / "app.previous").exists(), written
+    assert not (root / "9.9.9").exists(), "the destination staging outlived the commit: " + written
+    assert not root.exists(), "the empty staging folder beside the bundle was left behind"
+    for layer in ("app", "runtime"):
+        assert (installation.resources / layer / "marker.txt").read_text(encoding="utf-8") == "new1"
+
+
+@CLEANUP_PATHS
+def test_cleanup_never_follows_a_linked_destination_staging_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.5: the staging folder beside the bundle is used only as a real folder."""
+
+    installation = _installation_at_destination(tmp_path)
+    root = _destination_root(installation.bundle)
+    _decided_update(installation)
+    elsewhere = tmp_path.resolve() / "another place"
+    root.rename(elsewhere)
+    try:
+        root.symlink_to(elsewhere, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"this host cannot create a directory link: {exc}")
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    assert (elsewhere / "9.9.9").is_dir(), "cleanup followed the staging link to where it points"
+    assert "is a link" in _update_log(installation)
+
+
+@CLEANUP_PATHS
+def test_the_sweep_covers_the_destination_staging_root_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Contract §2.5: staging beside the bundle that nothing owns is swept like the rest."""
+
+    installation = _installation(tmp_path)
+    _decided_update(installation)
+    root = _destination_root(installation.bundle)
+    abandoned = root / "9.9.7" / "staged" / "app"
+    abandoned.mkdir(parents=True)
+    live = root / "9.9.6" / "staged" / "app"
+    live.mkdir(parents=True)
+    _staging_owner(
+        root / "9.9.6", installation=installation_key(installation.resources), pid=os.getpid()
+    )
+    for folder in (root / "9.9.7", root / "9.9.6"):
+        _age(folder, 2 * 3600)
+
+    _healthy_start(installation, monkeypatch, platform_name)
+
+    assert not (root / "9.9.7").exists(), "unowned staging beside the bundle was kept"
+    assert live.is_dir(), "staging beside the bundle that is in use was removed"
+
+
+def test_a_failed_start_rolls_back_an_update_staged_beside_the_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§2.7: rollback works, and the restored build's healthy start reclaims the staging."""
+
+    install = _released_client_install(tmp_path)
+    root = _destination_root(install.bundle)
+    root.mkdir()
+    (install.data_dir / "updates" / "2.0.1").rename(root / "2.0.1")
+    staged = root / "2.0.1" / "staged"
+    install = install._replace(staged_app=staged / "app", staged_runtime=staged / "runtime")
+
+    journal, _failed = _roll_back_an_update(install)
+
+    assert apply_update_module.journal_staging_roots(journal) == [str(root / "2.0.1")]
+    record = _completion_record(install.data_dir, install.resources) or {}
+    assert record.get("outcome") == "rolled-back"
+    assert record.get("stagingRoots") == [str(root / "2.0.1")]
+
+    _healthy_start(install, monkeypatch, "darwin")  # type: ignore[arg-type]
+
+    assert (install.resources / "app" / "marker.txt").read_text(encoding="utf-8") == "old app"
+    assert not (root / "2.0.1").exists(), "the rolled-back update's staging was kept: " + (
+        (install.data_dir / "logs" / "update.log").read_text(encoding="utf-8")
+        if (install.data_dir / "logs" / "update.log").is_file()
+        else ""
+    )
+
+
+def test_an_interrupted_handoff_staged_beside_the_bundle_is_recovered_and_reclaimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§2.7: a helper killed before its first rename leaves a journal naming the staging.
+
+    Recovery decides it, the installation stays as it was, and the next healthy
+    start removes the staging beside the bundle.
+    """
+
+    installation = _installation_at_destination(tmp_path)
+    root = _destination_root(installation.bundle)
+    planned = plan_layer_swap(
+        installation.resources, installation.staged_app, installation.staged_runtime
+    )
+    begin_update_transaction(
+        data_dir=installation.data_dir,
+        bundle=installation.bundle,
+        resources=installation.resources,
+        layers=planned,
+        platform_name="linux",
+    )
+
+    apply_update_module.recover_transaction(
+        data_dir=installation.data_dir, resources=installation.resources, platform_name="linux"
+    )
+    journal = read_journal(installation.data_dir, installation.resources) or {}
+    if journal.get("state") != "aborted":
+        pytest.fail(f"set-up: recovery did not decide the transaction: {journal!r}")
+
+    _healthy_start(installation, monkeypatch, "linux")
+
+    assert not (root / "9.9.9").exists(), _update_log(installation)
+    for layer in ("app", "runtime"):
+        assert (installation.resources / layer / "marker.txt").read_text(encoding="utf-8") == "old0"
+
+
+def test_a_swap_restored_from_an_unreadable_journal_leaves_its_staging_to_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§2.7: recovery that cannot trust the journal names no staging, so the sweep takes it."""
+
+    installation = _installation_at_destination(tmp_path)
+    root = _destination_root(installation.bundle)
+    planned = plan_layer_swap(
+        installation.resources, installation.staged_app, installation.staged_runtime
+    )
+    begin_update_transaction(
+        data_dir=installation.data_dir,
+        bundle=installation.bundle,
+        resources=installation.resources,
+        layers=planned,
+        platform_name="linux",
+    )
+    swap_staged_layers(
+        installation.resources,
+        installation.staged_app,
+        installation.staged_runtime,
+        journal_dir=installation.data_dir,
+    )
+    apply_update_module.journal_path(installation.data_dir, installation.resources).write_text(
+        "{ truncated", encoding="utf-8"
+    )
+    outcome = apply_update_module.recover_transaction(
+        data_dir=installation.data_dir, resources=installation.resources, platform_name="linux"
+    )
+    if outcome.action != "rolled-back":
+        pytest.fail(f"set-up: recovery did not restore: {outcome}")
+    _age(root / "9.9.9", 2 * 3600)
+
+    _healthy_start(installation, monkeypatch, "linux")
+
+    assert not root.exists(), _update_log(installation)
+    for layer in ("app", "runtime"):
+        assert (installation.resources / layer / "marker.txt").read_text(encoding="utf-8") == "old0"
+
+
+def test_the_launcher_tells_its_own_server_where_it_accepts_staging(tmp_path: Path) -> None:
+    """§2.7: the launcher derives the staging root from the installation it owns.
+
+    It hands that root to the server it starts, which is always its own build's,
+    and accepts a request naming it. Outside a bundle there is no root.
+    """
+
+    from launchers.statusapp.updater import BundleUpdateRequest
+
+    installation = _installation(tmp_path, sys.platform)
+    app_layer = installation.resources / "app"
+    root = _destination_root(installation.bundle)
+    server_args = ("--data-dir", str(installation.data_dir))
+    control = tmp_path / "control" / "stop"
+    controller = StatusController(
+        repo_root=app_layer, server_args=server_args, environ={**os.environ, "WG2_BUNDLE": "1"}
+    )
+
+    command = controller._command(3100, control)
+    assert command[command.index("--update-staging-root") + 1] == str(root)
+    checkout = StatusController(
+        repo_root=app_layer,
+        server_args=server_args,
+        environ={name: value for name, value in os.environ.items() if name != "WG2_BUNDLE"},
+    )
+    assert "--update-staging-root" not in checkout._command(3100, control)
+
+    staged_app = root / "2.0.1" / "staged" / "app"
+    staged_app.mkdir(parents=True)
+    request = control.with_name("update.json")
+    request.parent.mkdir(parents=True)
+    request.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "apply_bundle",
+                "version": "2.0.1",
+                "stagedAppDir": str(staged_app),
+                "stagedRuntimeDir": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    controller._update_request_path = request
+
+    assert controller.take_update_request() == BundleUpdateRequest("2.0.1", staged_app.resolve(), None)
+
+
+def test_the_server_stages_beside_the_bundle_only_where_its_launcher_accepts_it(
+    tmp_path: Path,
+) -> None:
+    """§2.7: the root comes from the launcher, and must be the server's own derivation too.
+
+    No root, or any other root, leaves the installer on the data directory,
+    where the refusal of an install spanning two volumes still stands.
+    """
+
+    import argparse
+
+    from launch.serve_options import add_server_arguments
+
+    installation = _installation(tmp_path, sys.platform)
+    root = _destination_root(installation.bundle)
+
+    def service(staging_root: Path | None) -> UpdateService:
+        return UpdateService(
+            running_version="9.9.9",
+            data_dir=installation.data_dir,
+            repo_root=installation.resources / "app",
+            platform_name=sys.platform,
+            update_request_path=tmp_path / "control" / "update.json",
+            update_staging_root=staging_root,
+        )
+
+    assert service(root).bundle_installer.staging_root == root.resolve()
+    assert service(None).bundle_installer.staging_root is None
+    assert service(tmp_path / "somewhere else").bundle_installer.staging_root is None
+
+    app = create_app(
+        data_dir=tmp_path / "server data",
+        update_request_path=tmp_path / "control" / "update.json",
+        update_staging_root=root,
+    )
+    assert app.state.update_service.requested_staging_root == root
+    parsed = add_server_arguments(argparse.ArgumentParser()).parse_args(
+        ["--update-staging-root", str(root)]
+    )
+    assert parsed.update_staging_root == root
+
+
+# ---------------------------------------------------------------------------
 # Contract §4.5: every launch mode settles its transaction
 # ---------------------------------------------------------------------------
 

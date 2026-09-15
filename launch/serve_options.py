@@ -54,4 +54,7 @@ def add_server_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     )
     parser.add_argument("--status-control", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
+    # The staging folder beside the bundle that the launcher accepts a request
+    # naming (the updater review §2.7). Only the launcher passes it.
+    parser.add_argument("--update-staging-root", type=Path, help=argparse.SUPPRESS)
     return parser

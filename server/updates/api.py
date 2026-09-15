@@ -38,6 +38,7 @@ def mount_updates(
     data_dir: Path,
     repo_root: Path,
     update_request_path: Path | None = None,
+    update_staging_root: Path | None = None,
     service: UpdateService | None = None,
     settings: SettingsStore | None = None,
     restart_approval: RestartApproval | None = None,
@@ -54,6 +55,7 @@ def mount_updates(
         data_dir=data_dir,
         repo_root=repo_root,
         update_request_path=update_request_path,
+        update_staging_root=update_staging_root,
         settings=settings,
         restart_approval=restart_approval,
     )

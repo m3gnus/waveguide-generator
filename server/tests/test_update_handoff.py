@@ -164,6 +164,144 @@ def test_bundle_request_accepts_only_existing_staged_paths_inside_the_data_dir(
     assert not request.exists()
 
 
+def _bundle_request(request: Path, staged_app: Path, version: str = "2.0.1") -> None:
+    request.parent.mkdir(parents=True, exist_ok=True)
+    request.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "apply_bundle",
+                "version": version,
+                "stagedAppDir": str(staged_app),
+                "stagedRuntimeDir": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_bundle_request_may_name_the_launchers_own_destination_staging(
+    tmp_path: Path,
+) -> None:
+    """The updater review §2.7: the launcher accepts the staging root it derives itself.
+
+    The root comes from the launcher's own installation, never from the
+    request. A caller that names no root accepts only the data directory, as
+    every release before this one does.
+    """
+
+    data = tmp_path / "data"
+    data.mkdir()
+    root = tmp_path / ".Waveguide Generator.update-staging"
+    staged_app = root / "2.0.1" / "staged" / "app"
+    staged_app.mkdir(parents=True)
+    request = tmp_path / "control" / "update.json"
+
+    _bundle_request(request, staged_app)
+    assert consume_update_request(request, data_dir=data, staging_root=root) == (
+        BundleUpdateRequest("2.0.1", staged_app.resolve(), None)
+    )
+    assert not request.exists()
+
+    _bundle_request(request, staged_app)
+    with pytest.raises(UpdateHandoffError, match="invalid"):
+        consume_update_request(request, data_dir=data)
+    assert not request.exists()
+
+
+@pytest.mark.parametrize("layout", ["another-root", "a-link-inside-the-root", "a-linked-root"])
+def test_a_bundle_request_naming_any_other_root_is_refused(tmp_path: Path, layout: str) -> None:
+    """§2.7: never trust a directory because a request names it; links are resolved first."""
+
+    data = tmp_path / "data"
+    data.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "2.0.1" / "staged" / "app").mkdir(parents=True)
+    root = tmp_path / ".Waveguide Generator.update-staging"
+    try:
+        if layout == "another-root":
+            root.mkdir()
+            staged_app = elsewhere / "2.0.1" / "staged" / "app"
+        elif layout == "a-link-inside-the-root":
+            root.mkdir()
+            (root / "2.0.1").symlink_to(elsewhere / "2.0.1", target_is_directory=True)
+            staged_app = root / "2.0.1" / "staged" / "app"
+        else:
+            root.symlink_to(elsewhere, target_is_directory=True)
+            staged_app = root / "2.0.1" / "staged" / "app"
+    except OSError as exc:
+        pytest.skip(f"this host cannot create a directory link: {exc}")
+    request = tmp_path / "control" / "update.json"
+    _bundle_request(request, staged_app)
+
+    with pytest.raises(UpdateHandoffError, match="invalid"):
+        consume_update_request(request, data_dir=data, staging_root=root)
+    assert not request.exists()
+
+
+def test_the_bundle_handoff_runs_a_helper_staged_next_to_the_application(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§2.7: the handoff accepts the staging root beside its own bundle.
+
+    The helper still runs from the data directory, which is outside the staging
+    root and outside every directory the swap renames.
+    """
+
+    data = tmp_path / "data"
+    data.mkdir()
+    bundle = tmp_path / "Waveguide Generator.app"
+    app_layer = bundle / "Contents" / "Resources" / "app"
+    app_layer.mkdir(parents=True)
+    root = tmp_path / ".Waveguide Generator.app.update-staging"
+    staged_app = root / "2.0.1" / "staged" / "app"
+    (staged_app / "launchers").mkdir(parents=True)
+    (staged_app / "launchers" / "apply_update.py").write_text("# updater\n", encoding="utf-8")
+    started: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda command, **options: started.append((command, options)) or object(),
+    )
+
+    launch_bundle_update_handoff(
+        app_layer,
+        BundleUpdateRequest("2.0.1", staged_app.resolve(), None),
+        4321,
+        environ={"WG2_DATA_DIR": str(data)},
+        platform_name="darwin",
+    )
+
+    command, options = started[0]
+    assert command[command.index("--staged-app-dir") + 1] == str(staged_app.resolve())
+    assert options["cwd"] == str(data.resolve())
+    assert not Path(str(options["cwd"])).is_relative_to(root.resolve())
+
+
+def test_the_bundle_handoff_refuses_staging_beside_another_application(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    app_layer = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources" / "app"
+    app_layer.mkdir(parents=True)
+    staged_app = tmp_path / ".Another.app.update-staging" / "2.0.1" / "staged" / "app"
+    (staged_app / "launchers").mkdir(parents=True)
+    (staged_app / "launchers" / "apply_update.py").write_text("# updater\n", encoding="utf-8")
+    started: list[object] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: started.append(args))
+
+    with pytest.raises(UpdateHandoffError, match="Refusing staged bundle paths"):
+        launch_bundle_update_handoff(
+            app_layer,
+            BundleUpdateRequest("2.0.1", staged_app.resolve(), None),
+            4321,
+            environ={"WG2_DATA_DIR": str(data)},
+            platform_name="darwin",
+        )
+    assert started == []
+
+
 @pytest.mark.parametrize("version", ["0.4.0-main.7", "0.4.0-beta.1"])
 def test_a_prerelease_bundle_request_survives_the_handoff(
     tmp_path: Path, version: str

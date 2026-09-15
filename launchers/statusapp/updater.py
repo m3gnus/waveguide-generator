@@ -35,9 +35,29 @@ from launchers.apply_update import (
     RecoveryOutcome,
     append_update_log,
     bundle_from_app_layer,
+    destination_staging_root,
     recover_transaction,
     resources_directory,
 )
+
+
+def _accepted_staging_root(staging_root: Path | None) -> Path | None:
+    """The staging folder beside the bundle, resolved, or ``None`` when it may not be used.
+
+    The caller derives it from the installation it owns (the updater review
+    §2.7). A link or junction there is refused rather than followed.
+    """
+
+    if staging_root is None:
+        return None
+    candidate = Path(staging_root)
+    is_junction = getattr(os.path, "isjunction", None)
+    if os.path.islink(candidate) or (is_junction is not None and is_junction(candidate)):
+        return None
+    try:
+        return candidate.resolve()
+    except OSError:
+        return None
 
 
 #: The one version vocabulary, borrowed rather than restated.
@@ -110,8 +130,15 @@ def consume_update_request(
     *,
     now: float | None = None,
     data_dir: Path | None = None,
+    staging_root: Path | None = None,
 ) -> UpdateRequest | None:
-    """Consume a ready, schema-valid request; retain a request whose delay is active."""
+    """Consume a ready, schema-valid request; retain a request whose delay is active.
+
+    A bundle request's staged layers must lie inside ``data_dir``, or inside
+    ``staging_root`` when the caller passes the one it derived beside its own
+    bundle (the updater review §2.7); both paths are resolved first, and a
+    link at the staging root is not accepted.
+    """
 
     try:
         raw = path.read_text(encoding="utf-8")
@@ -133,15 +160,21 @@ def consume_update_request(
         version = payload.get("version")
         raw_app = payload.get("stagedAppDir")
         raw_runtime = payload.get("stagedRuntimeDir")
-        root = data_dir.resolve() if data_dir is not None else None
+        roots = [
+            allowed
+            for allowed in (
+                data_dir.resolve() if data_dir is not None else None,
+                _accepted_staging_root(staging_root),
+            )
+            if allowed is not None
+        ]
         try:
             staged_app = Path(raw_app).resolve() if isinstance(raw_app, str) else None
             staged_runtime = Path(raw_runtime).resolve() if isinstance(raw_runtime, str) else None
-            inside = (
-                root is not None
-                and staged_app is not None
-                and staged_app.is_relative_to(root)
+            inside = staged_app is not None and any(
+                staged_app.is_relative_to(root)
                 and (staged_runtime is None or staged_runtime.is_relative_to(root))
+                for root in roots
             )
         except OSError:
             inside = False
@@ -559,11 +592,29 @@ def launch_bundle_update_handoff(
         _data_dir_override(server_args),
         environ=environment,
     ).resolve()
-    if not request.staged_app_dir.is_relative_to(data_dir) or (
-        request.staged_runtime_dir is not None
-        and not request.staged_runtime_dir.is_relative_to(data_dir)
+    try:
+        bundle = bundle_from_app_layer(app_layer, selected_platform)
+    except Exception as exc:  # noqa: BLE001 - translate into the handoff contract
+        raise UpdateHandoffError(str(exc)) from exc
+    # The data directory, or the staging folder this launcher derives beside
+    # its own bundle (the updater review §2.7) -- never one a request names.
+    roots = [
+        root
+        for root in (data_dir, _accepted_staging_root(destination_staging_root(bundle)))
+        if root is not None
+    ]
+    if not any(
+        request.staged_app_dir.is_relative_to(root)
+        and (
+            request.staged_runtime_dir is None
+            or request.staged_runtime_dir.is_relative_to(root)
+        )
+        for root in roots
     ):
-        raise UpdateHandoffError("Refusing staged bundle paths outside the data directory.")
+        raise UpdateHandoffError(
+            "Refusing staged bundle paths outside the data directory and the staging "
+            "folder beside the application."
+        )
     inherited_pythonpath = environment.get("PYTHONPATH")
     environment["PYTHONPATH"] = os.pathsep.join(
         part for part in (str(request.staged_app_dir), inherited_pythonpath) if part
@@ -580,10 +631,6 @@ def launch_bundle_update_handoff(
         python = Path(sys.executable).resolve()
     if not python.is_file():
         raise UpdateHandoffError(f"The bundle updater Python is missing: {python}")
-    try:
-        bundle = bundle_from_app_layer(app_layer, selected_platform)
-    except Exception as exc:  # noqa: BLE001 - translate into the handoff contract
-        raise UpdateHandoffError(str(exc)) from exc
     command = [
         str(python),
         str(script),

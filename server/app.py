@@ -418,6 +418,7 @@ def create_app(
     workspace_dir: str | Path | None = None,
     solver_warmup: bool = False,
     update_request_path: str | Path | None = None,
+    update_staging_root: str | Path | None = None,
 ) -> FastAPI:
     """Assemble an app instance without creating persistent directories.
 
@@ -799,6 +800,11 @@ def create_app(
         repo_root=APP_ROOT,
         update_request_path=(
             Path(update_request_path) if update_request_path is not None else None
+        ),
+        # Where the launcher accepts staging beside its bundle (the updater
+        # review §2.7); the update service checks it against its own.
+        update_staging_root=(
+            Path(update_staging_root) if update_staging_root is not None else None
         ),
         # The update channel is remembered here rather than in the browser
         # because it has to survive the update it controls.
