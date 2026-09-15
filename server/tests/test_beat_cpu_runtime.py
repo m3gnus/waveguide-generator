@@ -208,7 +208,6 @@ def test_a_provisioned_and_probed_runtime_is_available(tmp_path, monkeypatch) ->
     "field, value, expectation",
     [
         ("backend", "cuda", "a GPU runtime does not satisfy a CPU request"),
-        ("project", "/somewhere/else/julia", "a package that moved is not ready"),
         ("package_fingerprint", "different", "an updated package must be re-probed"),
     ],
 )
@@ -227,6 +226,87 @@ def test_a_ready_record_for_something_else_is_not_readiness(
 
     assert readiness.ready is False, expectation
     assert readiness.state == "unprovisioned"
+
+
+def test_a_ready_record_from_an_identical_copy_elsewhere_is_readiness(
+    tmp_path, monkeypatch
+) -> None:
+    """The regression that kept BEAT · CPU grey in a second install for good.
+
+    A source checkout's virtual environment beside the installed application
+    holds the same package, byte for byte, at another path. The per-user record
+    names the application's copy. Comparing paths made that record proof of
+    nothing here, and the second install never provisions
+    (``WG2_SKIP_BEAT_CPU_PROVISION``), so nothing could ever turn the row on.
+    Same content fingerprint, same Julia, same depot: the probe the
+    application's copy passed is this copy's probe too.
+    """
+
+    project = _cpu_project(tmp_path)
+    julia = _julia(tmp_path)
+    elsewhere = tmp_path / "installed-app" / "hornlab_beat_bem" / "julia"
+    package = _install_stub_package(
+        monkeypatch,
+        project=project,
+        state=_ready_state(elsewhere, julia),
+        julia_on_path=None,
+    )
+
+    readiness = beat_cpu_runtime.cpu_runtime_readiness(package)
+
+    assert readiness.ready is True
+    assert readiness.state == "ready"
+    assert "identical copy" in readiness.reason
+    assert str(elsewhere) in readiness.reason
+    assert str(julia) in readiness.reason
+    assert "--backend cpu" not in readiness.reason
+
+
+def test_a_copy_elsewhere_with_other_content_is_not_readiness(
+    tmp_path, monkeypatch
+) -> None:
+    """Content, not location, is the identity -- so other content still fails it."""
+
+    project = _cpu_project(tmp_path)
+    julia = _julia(tmp_path)
+    package = _install_stub_package(
+        monkeypatch,
+        project=project,
+        state=_ready_state(tmp_path / "older-app" / "julia", julia, fingerprint="older"),
+        julia_on_path=str(julia),
+    )
+
+    readiness = beat_cpu_runtime.cpu_runtime_readiness(package)
+
+    assert readiness.ready is False
+    assert readiness.state == "unprovisioned"
+
+
+def test_another_installs_failure_is_not_reported_as_this_ones(
+    tmp_path, monkeypatch
+) -> None:
+    """Only a ready record is shared. A failure stays with the install that saw it."""
+
+    project = _cpu_project(tmp_path)
+    julia = _julia(tmp_path)
+    package = _install_stub_package(
+        monkeypatch,
+        project=project,
+        state={
+            "status": "failed",
+            "backend": "cpu",
+            "project": str(tmp_path / "other-install" / "julia"),
+            "package_fingerprint": "abc123",
+            "error": "Not enough free disk space for the CPU runtime",
+        },
+        julia_on_path=str(julia),
+    )
+
+    readiness = beat_cpu_runtime.cpu_runtime_readiness(package)
+
+    assert readiness.ready is False
+    assert readiness.state == "unprovisioned"
+    assert "disk space" not in readiness.reason
 
 
 def test_a_recorded_failure_is_reported_verbatim_with_a_retry(
@@ -739,6 +819,23 @@ def test_an_already_provisioned_runtime_starts_nothing(tmp_path, monkeypatch) ->
     assert beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Windows") is None
 
 
+def test_an_identical_copy_elsewhere_starts_nothing_either(tmp_path, monkeypatch) -> None:
+    """Otherwise two installs would take the one record from each other on every launch."""
+
+    project = _cpu_project(tmp_path)
+    _install_stub_package(
+        monkeypatch,
+        project=project,
+        state=_ready_state(tmp_path / "installed-app" / "julia", _julia(tmp_path)),
+        detect_gpu_backend=lambda: None,
+    )
+    monkeypatch.setattr(
+        beat_cpu_runtime, "_provision_worker", lambda: pytest.fail("must not run")
+    )
+
+    assert beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin") is None
+
+
 def test_an_older_package_provisions_nothing(tmp_path, monkeypatch) -> None:
     _provisioning_host(
         tmp_path, monkeypatch, provision_cpu=None, detect_gpu_backend=lambda: None
@@ -835,6 +932,49 @@ def test_the_state_file_the_package_writes_is_the_one_this_reads(tmp_path) -> No
     assert not beat_cpu_runtime._matches_cpu_request(
         recorded, tmp_path / "julia", "other"
     )
+    assert beat_cpu_runtime._proves_cpu_runtime(recorded, "0123456789abcdef")
+    assert not beat_cpu_runtime._proves_cpu_runtime(recorded, "other")
+
+
+def test_the_real_package_record_proves_an_identical_copy_elsewhere(
+    tmp_path, monkeypatch
+) -> None:
+    """End to end against the installed package: its reader, file layout and hash.
+
+    The stubs above state the contract; this holds the real package to it. The
+    record goes where the real ``read_state`` looks, in the per-backend file,
+    naming another install's path and this package's real content fingerprint
+    -- the shape a second install on one machine actually reads. The same
+    record with other content must not count, or the first half proves nothing.
+    """
+
+    package = pytest.importorskip("hornlab_beat_bem")
+    provision = pytest.importorskip("hornlab_beat_bem.provision")
+    runtime = pytest.importorskip("hornlab_beat_bem.runtime")
+    if not hasattr(provision, "backend_state_path"):
+        pytest.skip("the pinned hornlab-beat-bem predates per-backend records")
+    runtime_dir = tmp_path / "beat-runtime"
+    runtime_dir.mkdir()
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(runtime_dir))
+    julia = _julia(tmp_path)
+    here = runtime.default_project("cpu")
+    elsewhere = tmp_path / "installed-app" / "hornlab_beat_bem" / "julia"
+    assert str(elsewhere) != str(here)
+    record = _ready_state(elsewhere, julia, fingerprint=runtime.package_fingerprint(here))
+    record_path = provision.backend_state_path(runtime_dir, "cpu")
+
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    readiness = beat_cpu_runtime.cpu_runtime_readiness(package)
+    assert readiness.ready is True, readiness.reason
+    assert str(elsewhere) in readiness.reason
+
+    record_path.write_text(
+        json.dumps({**record, "package_fingerprint": "0000000000000000"}),
+        encoding="utf-8",
+    )
+    readiness = beat_cpu_runtime.cpu_runtime_readiness(package)
+    assert readiness.ready is False
+    assert readiness.state == "unprovisioned"
 
 
 # --------------------------------------------------------------------------

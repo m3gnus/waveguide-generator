@@ -11,9 +11,12 @@ names, and an offline host discovers that inside the user's job rather than in
 a capability row. ``hornlab_beat_bem.provision`` answers the real question --
 its CPU path instantiates the project and then *solves a 1 kHz probe* through
 the precompiled engine bundle before it records ``ready`` -- so readiness here
-is that record, matched against the backend, project and package fingerprint it
-was recorded for. Anything else is reported unavailable with the reason and the
-command that fixes it.
+is that record, matched against the backend and the package content fingerprint
+it was recorded for. Not the install path: a second install of the same package,
+such as a source checkout's virtual environment beside the packaged
+application, is proved by the same record (see ``_proves_cpu_runtime``).
+Anything else is reported unavailable with the reason and the command that
+fixes it.
 
 **Provisioning.** ``scripts/bootstrap.py`` covers the source install, where an
 installer run is the natural place to spend the download. The packaged
@@ -211,13 +214,13 @@ def _notify_readiness_listeners() -> None:
 def _matches_cpu_request(
     state: Mapping[str, Any], project: Path, fingerprint: str | None
 ) -> bool:
-    """Whether a recorded state describes *this* package's CPU runtime.
+    """Whether a failed or interrupted record is *this* install's own attempt.
 
-    The same three fields ``provision._ready_for`` compares, for the same
-    reasons: a CUDA-ready runtime does not satisfy a CPU request, a package
-    reinstalled into a different prefix leaves the recorded project behind, and
-    a content fingerprint is what notices an in-place update of the solver
-    underneath an unchanged version string.
+    The same three fields ``provision._ready_for`` compares: backend, project
+    path and content fingerprint. It decides whose failure a row reports, and a
+    failure another install recorded is not one this install has seen, so the
+    path stays in it. A *ready* record is judged by content alone; see
+    ``_proves_cpu_runtime``.
     """
 
     if state.get("backend") != CPU_BACKEND:
@@ -227,6 +230,40 @@ def _matches_cpu_request(
     if fingerprint is not None and state.get("package_fingerprint") != fingerprint:
         return False
     return True
+
+
+def _proves_cpu_runtime(state: Mapping[str, Any], fingerprint: str) -> bool:
+    """Whether a record proves the CPU runtime for this package's content.
+
+    Wherever it was recorded. The record is one per user and per backend, and a
+    machine can hold more than one install of the same ``hornlab-beat-bem`` --
+    the packaged application and a source checkout's virtual environment, say
+    -- while only the install that provisioned wrote it. What its probe proved
+    is a property of the Julia it names, the depot that Julia instantiated
+    into, and the project content it loaded. A solve from another install runs
+    *its own* project on that same Julia and depot and reads nothing at the
+    recorded path, and the content fingerprint covers every ``Project.toml``,
+    ``Manifest.toml`` and Julia source that decides what gets loaded. So a
+    matching fingerprint proves this install as well.
+
+    Comparing the path too left the second install's row grey for good. A
+    source checkout run beside the installed application sets
+    ``WG2_SKIP_BEAT_CPU_PROVISION`` so it never provisions, and the command its
+    reason offered would have re-pointed the one record at itself, taking the
+    row away from the install that wrote it. ``provision._ready_for`` keeps the
+    path, which is right for its own question -- *should provisioning run
+    again* -- where a re-run costs one probe and no download.
+
+    The record does not name the depot. Neither did the path comparison: both
+    rely on the process not setting its own ``JULIA_DEPOT_PATH``, which neither
+    the application nor its launchers do.
+    """
+
+    return (
+        state.get("status") == "ready"
+        and state.get("backend") == CPU_BACKEND
+        and state.get("package_fingerprint") == fingerprint
+    )
 
 
 def records_state_per_backend(provision: Any) -> bool:
@@ -354,8 +391,20 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
 
     state = _read_cpu_state(provision)
     status = state.get("status")
-    if status == "ready" and _matches_cpu_request(state, project, fingerprint):
+    if _proves_cpu_runtime(state, fingerprint):
         julia = _provisioned_julia(provision)
+        recorded_project = state.get("project")
+        if julia is not None and recorded_project != str(project):
+            return CpuRuntimeReadiness(
+                True,
+                "ready",
+                "The BEAT CPU runtime is provisioned: an identical copy of this "
+                f"package (same content fingerprint) at {recorded_project} "
+                "instantiated its Julia project and proved it with a 1 kHz solve "
+                f"through the precompiled engine bundle ({julia}). This copy "
+                "shares that Julia and its packages; its first solve may compile "
+                "the engine bundle for this location once. No accelerator needed.",
+            )
         if julia is not None:
             return CpuRuntimeReadiness(
                 True,
