@@ -764,19 +764,19 @@ outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 `accepted`. `document.applyingOperation.operationId` settles only Insert/Update as
 `recovery_required`. A missing observation stays `processing`.
 
-| Add-in field/value at pinned add-in `49a8e743` | WG result |
+| Add-in field/value at pinned add-in `18619b633` | WG result |
 | --- | --- |
-| `recentOutcomes: superseded` (`WGLink.py:1774`) | `cancelled` / `superseded` |
-| `recentOutcomes: discarded` (`WGLink.py:2161,2179`) | `cancelled` / `adapter_not_started` |
-| `recentOutcomes: reconciled` (`WGLink.py:2171,2179`) | reconciled `accepted`, using the operation's export identity |
-| `recentOutcomes: recoveryRequired` (`WGLink.py:2173,2179`) | `recovery_required` for Insert/Update only |
-| `recentOutcomes: wgOutdated` (`WGLink.py:2195`) | logged and ignored |
-| `recentOutcomes: notTaken` (`WGLink.py:913`, solve channel) | ignored for Fusion-bound rows |
-| `lastRequest: refused` (`WGLink.py:1866,2002,2121`) | `rejected` / `adapter_refused`, unless document evidence already accepted it |
-| `lastRequest: applied` (`WGLink.py:1864,2108`) | accepts a return request; a mutation still requires document evidence |
-| `lastRequest: failed` (`WGLink.py:2027`) | logged and left `processing` |
-| `lastRequest: running` (`WGLink.py:239`) | left `processing` |
-| `lastRequest: requested` (`WGLink.py:892`, solve channel) | ignored for Fusion-bound rows |
+| `recentOutcomes: superseded` (`_pending_handoff`) | `cancelled` / `superseded` |
+| `recentOutcomes: discarded` (`_sweep_leftover_claims`) | `cancelled` / `adapter_not_started` |
+| `recentOutcomes: reconciled` (`_apply_pending_handoff`, `_sweep_leftover_claims`) | reconciled `accepted`, using the operation's export identity |
+| `recentOutcomes: recoveryRequired` (`_apply_pending_handoff`, `_sweep_leftover_claims`) | `recovery_required` for Insert/Update only |
+| `recentOutcomes: wgOutdated` (`_notice_outdated_wg`) | logged and ignored |
+| `recentOutcomes: notTaken` (`_notice_untaken_solves`, solve channel) | ignored for Fusion-bound rows |
+| `lastRequest: refused` (`_apply_pending_return_request`, `_apply_pending_handoff`) | `rejected` / `adapter_refused`, unless document evidence already accepted it |
+| `lastRequest: applied` (`_apply_pending_return_request`, `_apply_pending_handoff`) | accepts a return request; a mutation still requires document evidence |
+| `lastRequest: failed` (`_apply_pending_return_request`, `_apply_pending_handoff`) | logged and left `processing` |
+| `lastRequest: running` (`_begin_request`) | left `processing` |
+| `lastRequest: requested` (`_request_wg_solve`, solve channel) | ignored for Fusion-bound rows |
 
 `recentOutcomes` is a 16-item ring. `lastRequest` is one overwritten slot, matched by
 `correlationId` (the operation ID for WG-produced requests); WG logs its correlation
