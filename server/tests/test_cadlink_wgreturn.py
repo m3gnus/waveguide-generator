@@ -90,6 +90,84 @@ def test_multi_instance_identity_refuses_body_and_channel_aliases() -> None:
         validate_manifest(manifest)
 
 
+def _two_instance_manifest() -> dict:
+    """A manifest with a valid anchor plus a second, distinct instance.
+
+    Mirrors ``test_multi_instance_identity_refuses_body_and_channel_aliases``
+    but gives the second instance its own ``object_id`` and drive channel so
+    the whole manifest validates cleanly -- the fixture M1 needs to prove
+    that chirality is checked for *every* instance, not only the anchor.
+    """
+
+    manifest = _manifest(b"STEP")
+    second = deepcopy(manifest["instances"][0])
+    second["instance_id"] = "instance-2"
+    second["occurrence_path"] = "Speaker/WGLink 2"
+    manifest["instances"].append(second)
+    manifest["scope"]["included"].append(
+        {
+            **manifest["scope"]["included"][0],
+            "object_id": "speaker-2",
+            "wglink_instance_id": "instance-2",
+        }
+    )
+    source = deepcopy(manifest["sources"][0])
+    source["id"] = "source-hf-2"
+    source["instance_id"] = "instance-2"
+    source["default_drive_channel_id"] = "drive-hf-2"
+    source["selectors"]["linked_throat"]["instance_id"] = "instance-2"
+    manifest["sources"].append(source)
+    return manifest
+
+
+def test_a_mirrored_non_anchor_instance_is_refused_and_named() -> None:
+    # A reflection through the XY plane: orthonormal, determinant -1. The
+    # anchor (instances[0]) stays a proper rotation; only the second,
+    # non-anchor instance is mirrored. Only checking the anchor -- the bug
+    # M1 describes -- would let this manifest validate.
+    manifest = _two_instance_manifest()
+    manifest["instances"][1]["assembly_from_link"] = [
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, -1, 0],
+        [0, 0, 0, 1],
+    ]
+    with pytest.raises(WgReturnError, match=r"\$\.instances\[1\]\.assembly_from_link") as excinfo:
+        validate_manifest(manifest)
+    message = str(excinfo.value)
+    assert "mirrored placement; chirality is unsupported" in message
+    assert "instance-2" in message
+
+
+def test_two_proper_rotations_validate() -> None:
+    # A 90 degree rotation about Z: orthonormal, determinant +1. Both the
+    # anchor and the second instance are proper rotations, so the manifest
+    # validates like any other multi-instance return.
+    manifest = _two_instance_manifest()
+    manifest["instances"][1]["assembly_from_link"] = [
+        [0, -1, 0, 0],
+        [1, 0, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+    ]
+    validate_manifest(manifest)
+
+
+def test_a_non_orthonormal_instance_matrix_is_refused() -> None:
+    # A pure axial scale: determinant +2, not orthonormal. This is refused
+    # independently of the mirror check -- it is not a rigid placement at all.
+    manifest = _two_instance_manifest()
+    manifest["instances"][1]["assembly_from_link"] = [
+        [2, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+    ]
+    with pytest.raises(WgReturnError, match=r"\$\.instances\[1\]\.assembly_from_link") as excinfo:
+        validate_manifest(manifest)
+    assert "orthonormal" in str(excinfo.value)
+
+
 def test_reader_streams_step_hashing_and_refuses_over_limit_before_hashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

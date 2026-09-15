@@ -345,6 +345,46 @@ def _matrix(value: Any, path: str) -> list[list[float]]:
     return matrix
 
 
+# The same rigid-placement tolerance ``rigid_inverse`` uses
+# (server/mesh/imported.py), kept in sync deliberately: this module refuses a
+# mirrored or non-rigid instance at manifest validation, before mesh
+# normalisation ever runs, and for every instance -- not only whichever one
+# ends up the solver anchor.
+_RIGID_TOLERANCE = 1.0e-6
+
+
+def _validate_rotation_chirality(matrix: list[list[float]], path: str, instance_id: str) -> None:
+    rotation = [row[:3] for row in matrix[:3]]
+    product = [
+        [sum(rotation[k][i] * rotation[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    orthonormal = all(
+        abs(product[i][j] - (1.0 if i == j else 0.0)) <= _RIGID_TOLERANCE
+        for i in range(3)
+        for j in range(3)
+    )
+    if not orthonormal:
+        _fail(
+            path,
+            f"rotation is not orthonormal within 1e-6 (instance_id={instance_id!r})",
+        )
+    a, b, c = rotation[0]
+    d, e, f = rotation[1]
+    g, h, i = rotation[2]
+    determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    if determinant < 0.0:
+        _fail(
+            path,
+            f"mirrored placement; chirality is unsupported (instance_id={instance_id!r})",
+        )
+    if abs(determinant - 1.0) > _RIGID_TOLERANCE:
+        _fail(
+            path,
+            f"determinant {determinant:.9g} is not +1 within 1e-6 (instance_id={instance_id!r})",
+        )
+
+
 def _portable_member_name(raw: str, path: str) -> tuple[str, tuple[str, ...]]:
     if raw.startswith(("/", "\\")) or _WINDOWS_DRIVE.match(raw):
         _fail(path, "must be a relative bundle member path")
@@ -396,7 +436,8 @@ def _validate_instance(value: Any, path: str) -> str:
     if mode not in {"enclosure", "freestanding"}:
         _fail(f"{path}.build_mode", "must be 'enclosure' or 'freestanding'")
     _string(_required(obj, "parameter_prefix", path), f"{path}.parameter_prefix")
-    _matrix(_required(obj, "assembly_from_link", path), f"{path}.assembly_from_link")
+    assembly_from_link = _matrix(_required(obj, "assembly_from_link", path), f"{path}.assembly_from_link")
+    _validate_rotation_chirality(assembly_from_link, f"{path}.assembly_from_link", instance_id)
     chirality = _string(_required(obj, "chirality", path), f"{path}.chirality")
     if chirality != "original":
         _fail(f"{path}.chirality", "Phase 2 accepts only 'original'")
