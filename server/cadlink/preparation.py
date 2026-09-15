@@ -860,6 +860,11 @@ async def prepare_operation(
     if reconciled is not None:
         _publish(ctx, reconciled)
         return operation_summary(reconciled)
+    if _restart_pending(ctx):
+        # An update restart was approved after this was asked for: after the
+        # route let it through, or after the loop listed it. Nothing starts,
+        # and the operation stays exactly as it is.
+        return operation_summary(row)
     generation = await asyncio.to_thread(
         store.claim, operation_id, int(row["attempt_generation"])
     )
@@ -909,15 +914,15 @@ async def run_delivery_pass(
     folder nothing is collected, because nothing could be retained. While an
     update restart is approved the pass does nothing at all: no preparation
     starts, and delivered files stay on disk for after the restart. Once the
-    latch is down, the solves it held at submission are queued again first.
-    Returns the operations this pass started.
+    latch is down, the solves it held at submission are queued again first,
+    with or without a WGLink folder. Returns the operations this pass started.
     """
 
-    if ctx.workspace_root is None:
-        return []
     if _restart_pending(ctx):
         return []
     await asyncio.to_thread(requeue_restart_parked, ctx)
+    if ctx.workspace_root is None:
+        return []
     held: set[str] = set()
     await asyncio.to_thread(
         collect_solve_deliveries,
@@ -928,6 +933,9 @@ async def run_delivery_pass(
         ),
         held=held,
     )
+    if _restart_pending(ctx):
+        # Approved while this pass collected: nothing starts.
+        return []
     rows = await asyncio.to_thread(
         ctx.store.list_operations,
         kind=PREPARE_AND_SOLVE, states={RECEIVED}, oldest_first=True, limit=100,

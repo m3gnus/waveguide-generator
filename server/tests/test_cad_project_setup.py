@@ -634,7 +634,12 @@ def _parked_by_the_latch(harness: Harness) -> None:
     _record_setup(harness, b_lineage, _setup())
     bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
     _accept(harness.store, "cmd-b", bundle_path, manifest)
-    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+
+    def approve_while_meshing() -> None:
+        harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+        harness.ingest.during = None
+
+    harness.ingest.during = approve_while_meshing
     parked = harness.prepare("cmd-b")
     assert (parked["state"], parked["reason"]) == ("needs_user_input", "update_restart_pending")
     assert harness.submitted == []
@@ -675,3 +680,16 @@ def test_a_solve_parked_by_an_update_restart_proceeds_when_the_restart_is_called
     assert _pass(harness) == ["cmd-b"]
     row = harness.row("cmd-b")
     assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+
+
+def test_a_solve_the_update_restart_held_is_queued_again_without_a_wglink_folder(
+    harness: Harness,
+) -> None:
+    _parked_by_the_latch(harness)
+    shutil.rmtree(harness.workspace)  # no WGLink folder selected, or its drive is gone
+    harness.blocked = None  # the restart was called off
+
+    _pass(harness)
+
+    # Received again, like any operation the loop prepares once a folder is there.
+    assert harness.row("cmd-b")["state"] == "received"

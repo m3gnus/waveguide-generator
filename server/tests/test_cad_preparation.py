@@ -628,9 +628,19 @@ def test_a_refused_submission_releases_the_binding_for_a_new_choice(harness: Har
     assert harness.submitted[-1].options.engine == "bempp"
 
 
+def _approve_restart_while_meshing(harness: Harness, message: str) -> None:
+    """The update restart is approved while this attempt meshes, once."""
+
+    def approve() -> None:
+        harness.blocked = message
+        harness.ingest.during = None
+
+    harness.ingest.during = approve
+
+
 def test_no_solve_is_submitted_while_an_update_restart_is_pending(harness: Harness) -> None:
     _received(harness)
-    harness.blocked = "An update restart is pending."
+    _approve_restart_while_meshing(harness, "An update restart is pending.")
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
@@ -1427,3 +1437,79 @@ def test_the_delivery_loop_starts_nothing_while_an_update_restart_is_pending(
     # Called off without a restart: what the latch held proceeds.
     approval.release("the launcher discarded the request")
     assert one_pass() == ["cmd-1", "cmd-2"]
+
+
+def test_a_preparation_an_update_restart_overtakes_before_its_claim_changes_nothing(
+    harness: Harness,
+) -> None:
+    _received(harness)
+    before = harness.row()
+    # Approved after the loop listed it, or after the route let it through.
+    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+
+    summary = asyncio.run(prepare_operation(
+        harness.context(), "cmd-1", PreparationInput(), expected_generation=0
+    ))
+
+    assert (summary["state"], summary["attemptGeneration"]) == ("received", 0)
+    assert harness.row() == before
+    assert harness.ingest.calls == [] and harness.submitted == []
+    harness.blocked = None
+    assert harness.prepare(setup_revision_id=_revision(harness.store, _setup()))["state"] == "accepted"
+
+
+def test_an_update_restart_approved_while_a_pass_collects_starts_nothing(
+    harness: Harness, monkeypatch
+) -> None:
+    from server.cadlink import preparation
+
+    bundle_path, manifest = _write_return(harness.workspace)
+    _deliver_file(harness, bundle_path, manifest)
+    real_collect = preparation.collect_solve_deliveries
+
+    def collect_then_approve(*args: Any, **kwargs: Any) -> Any:
+        answer = real_collect(*args, **kwargs)
+        harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+        return answer
+
+    monkeypatch.setattr(preparation, "collect_solve_deliveries", collect_then_approve)
+
+    async def one_pass() -> list[str]:
+        started: list[asyncio.Future[Any]] = []
+        ids = await preparation.run_delivery_pass(
+            harness.context(),
+            spawn=lambda _operation_id, coroutine: started.append(asyncio.ensure_future(coroutine)),
+        )
+        await asyncio.gather(*started)
+        return ids
+
+    assert asyncio.run(one_pass()) == []
+    row = harness.row()
+    assert (row["state"], row["attempt_generation"]) == ("received", 0)
+    assert harness.ingest.calls == []
+
+
+def test_a_requeue_after_an_update_restart_changes_only_what_it_read(harness: Harness) -> None:
+    from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING as HELD
+
+    _received(harness)
+    generation = harness.store.claim("cmd-1", 0)
+    assert harness.store.record_outcome("cmd-1", generation, "needs_user_input", reason=HELD) is not None
+    parked = harness.row()
+
+    # A generation the caller did not read, or a reason it does not wait for: nothing changes.
+    assert harness.store.requeue_operation("cmd-1", generation - 1, reason=HELD) is None
+    assert harness.store.requeue_operation("cmd-1", generation, reason="interrupted") is None
+    assert harness.row() == parked
+    # The user's own attempt took it over meanwhile: the older read changes nothing.
+    newer = harness.store.claim("cmd-1", generation)
+    assert harness.store.record_outcome("cmd-1", newer, "needs_user_input", reason=HELD) is not None
+    assert harness.store.requeue_operation("cmd-1", generation, reason=HELD) is None
+    # The generation it read, and the reason it waits for: received again, at that generation.
+    requeued = harness.store.requeue_operation("cmd-1", newer, reason=HELD)
+    assert requeued is not None
+    assert (requeued["state"], requeued["attempt_generation"], requeued["reason"]) == ("received", newer, None)
+    # Dismissed meanwhile: a cancelled solve is never queued again.
+    assert harness.store.request_cancel("cmd-1")["state"] == "cancelled"
+    assert harness.store.requeue_operation("cmd-1", newer, reason=HELD) is None
+    assert harness.row()["state"] == "cancelled"

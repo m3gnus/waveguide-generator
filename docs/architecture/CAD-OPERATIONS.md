@@ -366,14 +366,20 @@ blocking findings the user reviewed, and on which preparation) and observes.
   - The delivery loop does nothing while it is set: it starts no preparation, and
     collects no delivered file, so a received operation stays `received` and a
     delivered file stays on disk as it was.
+  - A preparation asked for before the approval but not yet started starts nothing
+    either: it reads the latch again before it claims the operation.
   - A preparation already running when the restart is approved stops at submission and
-    waits as `update_restart_pending`, with nothing bound.
-  - Such a solve is queued again (`received`, at its own generation) by the next start's
-    recovery, or by this process's delivery loop once the latch comes down without a
-    restart (released, or expired). The loop then prepares it by itself, resuming the
-    preparation it had made, with the approvals given on it. Its setup is still the
-    project's, because nothing was bound: a setup changed meanwhile is picked up, as the
-    binding-point rule says.
+    waits as `update_restart_pending`, if it gets there before WG stops. One the shutdown
+    ends first is taken over at the next start and waits as `interrupted`, as any
+    interrupted attempt does.
+  - A solve waiting as `update_restart_pending` is queued again (`received`, at its own
+    generation) by the next start's recovery, or by this process's delivery loop once the
+    latch comes down without a restart (released, or expired), whether or not a WGLink
+    folder is selected. The loop prepares it, as any received operation, while a folder is
+    selected. It resumes the preparation it had made, with the approvals given on it. A
+    request an earlier attempt already bound is submitted exactly. Otherwise nothing was
+    bound, so the setup is the project's current one: a setup changed meanwhile is picked
+    up, as the binding-point rule says.
 - **Events.** Every committed change is published on the jobs channel as
   `{"v": 1, "kind": "cadOperation", "operation": {...}}`, after it is stored. It carries
   no cursor: a client that misses one reads `GET /api/cadlink/operations` (the unfinished

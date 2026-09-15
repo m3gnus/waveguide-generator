@@ -1814,6 +1814,41 @@ def test_a_cad_return_ingested_after_restart_approval_is_refused(tmp_path: Path)
     assert error["retryable"] is True
 
 
+
+def test_a_cad_preparation_requested_after_restart_approval_is_refused(tmp_path: Path) -> None:
+    """Contract §4.2: a CAD preparation copies and meshes a return, so it refuses too.
+
+    It is refused through the app before anything starts, with the envelope
+    the other latched routes use, and the operation stays as it was.
+    """
+
+    from server.cadlink.operations import (
+        PREPARE_AND_SOLVE,
+        prepare_and_solve_request,
+        request_digest,
+    )
+
+    async def scenario() -> tuple[int, bytes, dict[str, Any]]:
+        app = create_app(data_dir=tmp_path / "data")
+        store = app.state.cadlink_store
+        target, inputs = prepare_and_solve_request(
+            return_id="wgr_1", bundle_path="wgreturn/x.wgreturn", manifest_sha256="sha256:" + "a" * 64
+        )
+        store.accept_operation(
+            "cmd-1", PREPARE_AND_SOLVE, request_digest(PREPARE_AND_SOLVE, target, inputs), target, inputs
+        )
+        app.state.update_restart.approve("v2.0.1")
+        status, raw = await _post(app, "/api/cadlink/operations/cmd-1/prepare", {})
+        return status, raw, store.get_operation("cmd-1")
+
+    status, raw, row = asyncio.run(scenario())
+
+    assert status == 409, raw[:200]
+    body = json.loads(raw)
+    assert (body["error"]["code"], body["error"]["retryable"]) == ("update_restart_pending", True)
+    assert "v2.0.1" in body["detail"]
+    assert (row["state"], row["attempt_generation"]) == ("received", 0)
+
 # ---------------------------------------------------------------------------
 # Contract §3: an old release's launcher runs this checkout's helper
 # ---------------------------------------------------------------------------
