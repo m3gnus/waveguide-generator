@@ -270,7 +270,8 @@ function CadOperationCard({ operation, record }: {
  * the backend prepares from each project's own setup. */
 export function CadOperationsSection({ record }: { record: CadReturnIngestRecord | null }) {
   const operations = useCadOperationsStore((state) => state.operations);
-  const pending = pendingCadOperations(operations);
+  const pending = pendingCadOperations(operations)
+    .filter((operation) => operation.kind === 'prepare_and_solve');
   if (!pending.length) return null;
   return <div className="cad-operations">
     {pending.map((operation) => <CadOperationCard key={operation.operationId} operation={operation} record={record}/>)}

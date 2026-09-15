@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
-import { createCadOperation, createSetupRevision, getCadOperation, isPendingCadOperation, prepareCadOperation } from '../api/cadOperations';
+import { createCadOperation, createSetupRevision, getCadOperation, isPendingCadOperation, prepareCadOperation, type CadOperationSummary } from '../api/cadOperations';
 import { CadLinkApiError } from '../api/cadlink';
 import { planSolveDesign, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import {
@@ -13,7 +13,7 @@ import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
-import { acknowledgeManualCadSolvePreparation, forgetManualCadSolveOperationId, importedSubmissionBlocker, manualCadSolveOperationId, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
+import { acknowledgeManualCadSolveCompletion, acknowledgeManualCadSolvePreparation, forgetManualCadSolveOperationId, importedSubmissionBlocker, manualCadSolveIdentity, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -197,8 +197,33 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const [actionError, setActionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
+  const cadOperations = useCadOperationsStore((state) => state.operations);
 
   useEffect(() => { jobsSocket.start(); return () => jobsSocket.stop(); }, []);
+
+  const completeManualCadSolve = useCallback((ingestId: string, operation: CadOperationSummary) => {
+    if (operation.state !== 'accepted' || !operation.jobId) return;
+    const identity = acknowledgeManualCadSolveCompletion(ingestId, operation.operationId);
+    if (!identity) return;
+    acceptSubmittedLabel(identity.designName);
+    compareSelection.awaitRun(operation.jobId);
+    void jobsSocket.refresh().catch((reason: unknown) => {
+      setActionError(reason instanceof Error ? reason.message : String(reason));
+    });
+  }, []);
+
+  // A prepare request returns before the backend finishes. The jobs-channel
+  // operation event owns the one-time effects that used to happen in
+  // submitImported's response path, with session storage fencing reloads and
+  // duplicate events.
+  useEffect(() => {
+    const ingestId = cadReturn.ingestRecord?.ingest_id;
+    if (!ingestId) return;
+    for (const operation of Object.values(cadOperations)) {
+      if (operation.kind !== 'prepare_and_solve' || operation.state !== 'accepted' || !operation.jobId) continue;
+      completeManualCadSolve(ingestId, operation);
+    }
+  }, [cadOperations, cadReturn.ingestRecord?.ingest_id, completeManualCadSolve]);
 
   let currentOptions: SolveOptions | null = null;
   let solveOptionsError: string | null = null;
@@ -354,12 +379,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     try {
       setSubmitting(true);
       setActionError(null);
-      const setup = {
-        ...built.setup,
-        options: { ...built.setup.options, solver_mode: 'full_3d', symmetry: 'auto' },
-      };
-      const revision = await createSetupRevision(setup);
-      let operationId = manualCadSolveOperationId(ingestId);
+      let identity = manualCadSolveIdentity(ingestId, () => {
+        const designName = currentRunNameSource().name;
+        return { designName, label: nextRunLabel(designName, preferencesStore.getSnapshot(), now()) };
+      });
+      let operationId = identity.operationId;
       // The storage entry survives a reload. Ask the authoritative store
       // whether it still names unfinished work: 404 means the first create
       // never committed, pending means recover it, terminal means this click
@@ -373,14 +397,30 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
             // must not turn the retry into a second explicit solve.
             useCadOperationsStore.getState().apply(held);
             acknowledgeManualCadSolvePreparation(ingestId, operationId);
+            if (held.state !== 'accepted') {
+              throw new Error(held.message || `CAD solve operation was ${held.state}.`);
+            }
+            completeManualCadSolve(ingestId, held);
             return 'submitted' as const;
           }
+          useCadOperationsStore.getState().apply(held);
+          completeManualCadSolve(ingestId, held);
           forgetManualCadSolveOperationId(ingestId, operationId);
-          operationId = manualCadSolveOperationId(ingestId);
+          identity = manualCadSolveIdentity(ingestId, () => {
+            const designName = currentRunNameSource().name;
+            return { designName, label: nextRunLabel(designName, preferencesStore.getSnapshot(), now()) };
+          });
+          operationId = identity.operationId;
         }
       } catch (reason) {
         if (!(reason instanceof CadLinkApiError && reason.status === 404)) throw reason;
       }
+      const setup = {
+        ...built.setup,
+        label: identity.label,
+        options: { ...built.setup.options, solver_mode: 'full_3d', symmetry: 'auto' },
+      };
+      const revision = await createSetupRevision(setup);
       const created = await createCadOperation({ operationId, ingestId });
       useCadOperationsStore.getState().apply(created);
       const prepared = await prepareCadOperation(operationId, { setupRevisionId: revision.revisionId, submit: true });
@@ -391,7 +431,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, []);
+  }, [completeManualCadSolve, now]);
 
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;

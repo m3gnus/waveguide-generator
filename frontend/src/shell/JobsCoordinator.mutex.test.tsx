@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
-import { resetCadOperationsStore } from '../stores/cadOperations';
+import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
@@ -158,12 +158,17 @@ function importedSubmission(ingestId: string): ImportedSolveSubmission {
   };
 }
 
-function operation(operationId: string, state = 'received'): CadOperationSummary {
+function operation(
+  operationId: string,
+  state = 'received',
+  overrides: Partial<CadOperationSummary> = {},
+): CadOperationSummary {
   return {
     operationId, kind: 'prepare_and_solve', state, stage: 'received', reason: null, message: null,
     jobId: null, attemptGeneration: 0, setupRevisionId: null, preparationId: null,
     snapshot: { manifestSha256: `sha256:${'1'.repeat(64)}` }, legacy: false,
     createdAt: '2026-09-15T10:00:00Z', updatedAt: '2026-09-15T10:00:00Z',
+    ...overrides,
   };
 }
 
@@ -687,6 +692,35 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
 
+  it('labels the durable setup from the CAD document, not the open parametric design', async () => {
+    readyCad('wgi_label');
+    act(() => workspaceModeStore.setMode('cad'));
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect((mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup).label).toBe('Speaker1');
+    expect(useDocumentStore.getState().designName).toBe('horn');
+  });
+
+  it('selects an accepted durable job, refreshes jobs, and advances its CAD label once', async () => {
+    readyCad('wgi_completed');
+    act(() => workspaceModeStore.setMode('cad'));
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
+    await act(async () => {
+      useCadOperationsStore.getState().apply(operation(operationId, 'accepted', { jobId: 'job-cad' }));
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(compareSelection.getSnapshot().awaiting).toBe('job-cad');
+    expect(jobsSocket.refresh).toHaveBeenCalled();
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Speaker', runSequenceNext: 2 });
+    await act(async () => {
+      useCadOperationsStore.getState().apply(operation(operationId, 'accepted', {
+        jobId: 'job-cad', updatedAt: '2026-09-15T10:00:01Z',
+      }));
+      await Promise.resolve();
+    });
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Speaker', runSequenceNext: 2 });
+  });
+
   // What the selector holds is what a CAD solve sends: the user's pick as they
   // left it -- AUTO stays AUTO for the server to resolve -- and never an engine
   // the browser chose on their behalf.
@@ -766,15 +800,18 @@ describe('solve invocation mutex', () => {
 
   it('rotates the operation id after the authoritative row is terminal', async () => {
     readyCad('wgi_repeat');
+    act(() => workspaceModeStore.setMode('cad'));
     await act(async () => {
       await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
     });
     const first = mocks.createCadOperation.mock.calls[0][0].operationId as string;
-    mocks.getCadOperation.mockResolvedValueOnce(operation(first, 'accepted'));
+    mocks.getCadOperation.mockResolvedValueOnce(operation(first, 'accepted', { jobId: 'job-first' }));
     await act(async () => {
       await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
     });
     expect(mocks.createCadOperation.mock.calls[1][0].operationId).not.toBe(first);
+    expect((mocks.createSetupRevision.mock.calls[1][0] as CadSolveSetup).label).toBe('Speaker2');
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Speaker', runSequenceNext: 2 });
   });
 
   it('does not rotate when a lost prepare response already became terminal', async () => {
@@ -796,6 +833,39 @@ describe('solve invocation mutex', () => {
     });
     expect(mocks.createCadOperation).toHaveBeenCalledTimes(2);
     expect(mocks.createCadOperation.mock.calls[1][0].operationId).not.toBe(first);
+  });
+
+  it('advances a lost-response solve label once when terminal recovery finds it accepted', async () => {
+    readyCad('wgi_lost_label');
+    act(() => workspaceModeStore.setMode('cad'));
+    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('connection closed'));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed');
+    });
+    const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
+    mocks.getCadOperation.mockResolvedValueOnce(operation(operationId, 'accepted', { jobId: 'job-lost' }));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+      await Promise.resolve();
+    });
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Speaker', runSequenceNext: 2 });
+    expect(compareSelection.getSnapshot().awaiting).toBe('job-lost');
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+  });
+
+  it.each(['rejected', 'cancelled'])('surfaces a recovered %s operation instead of reporting submitted', async (state) => {
+    readyCad(`wgi_${state}`);
+    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('connection closed'));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed');
+    });
+    const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
+    mocks.getCadOperation.mockResolvedValueOnce(operation(operationId, state, { message: `${state} by backend` }));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport())
+        .rejects.toThrow(`${state} by backend`);
+    });
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
   });
 
   it.each([

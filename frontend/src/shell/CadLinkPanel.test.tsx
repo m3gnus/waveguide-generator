@@ -237,6 +237,19 @@ describe('CadLinkPanel', () => {
     expect(buttonTexts(card)).toEqual(['Dismiss']);
   });
 
+  it('does not offer generic Dismiss for outgoing file-backed operations', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    act(() => {
+      const { apply } = useCadOperationsStore.getState();
+      for (const kind of ['request_return', 'insert_link', 'update_link']) {
+        apply(cadOperation({ operationId: `op-${kind}`, kind, state: 'received', stage: 'received' }));
+      }
+    });
+    expect(host.querySelectorAll('.cad-operation')).toHaveLength(0);
+    expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Dismiss')).toBe(false);
+  });
+
   it('shows each pending CAD operation with its state, reason, identity and the action it needs', async () => {
     await renderAndSelect();
     await clickIngest();

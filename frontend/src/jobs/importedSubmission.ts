@@ -21,9 +21,12 @@ const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
 const DEFAULT_DIAGONAL_INCLINATION_DEG = 45;
 const MANUAL_SOLVE_OPERATION_PREFIX = 'wg2.cad.manual-solve.v1:';
 
-interface ManualSolveIdentity {
+export interface ManualSolveIdentity {
   operationId: string;
   prepareAcknowledged: boolean;
+  completionAcknowledged: boolean;
+  designName: string;
+  label: string;
 }
 
 function readManualSolveIdentity(
@@ -35,10 +38,39 @@ function readManualSolveIdentity(
   try {
     const parsed = JSON.parse(held) as Partial<ManualSolveIdentity>;
     if (typeof parsed.operationId === 'string' && parsed.operationId) {
-      return { operationId: parsed.operationId, prepareAcknowledged: parsed.prepareAcknowledged === true };
+      return {
+        operationId: parsed.operationId,
+        prepareAcknowledged: parsed.prepareAcknowledged === true,
+        completionAcknowledged: parsed.completionAcknowledged === true,
+        designName: typeof parsed.designName === 'string' ? parsed.designName : '',
+        label: typeof parsed.label === 'string' ? parsed.label : '',
+      };
     }
   } catch { /* Legacy plain ids are unfinished and therefore unacknowledged. */ }
-  return { operationId: held, prepareAcknowledged: false };
+  return {
+    operationId: held, prepareAcknowledged: false, completionAcknowledged: false,
+    designName: '', label: '',
+  };
+}
+
+export function manualCadSolveIdentity(
+  ingestId: string,
+  createRun: () => { designName: string; label: string },
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof sessionStorage === 'undefined' ? null : sessionStorage,
+): ManualSolveIdentity {
+  const key = `${MANUAL_SOLVE_OPERATION_PREFIX}${ingestId}`;
+  const held = readManualSolveIdentity(ingestId, storage);
+  if (held?.designName && held.label) return held;
+  const random = globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const created = {
+    operationId: held?.operationId ?? `manual-solve:${random}`,
+    prepareAcknowledged: held?.prepareAcknowledged ?? false,
+    completionAcknowledged: held?.completionAcknowledged ?? false,
+    ...createRun(),
+  };
+  storage?.setItem(key, JSON.stringify(created));
+  return created;
 }
 
 /**
@@ -59,7 +91,10 @@ export function manualCadSolveOperationId(
   const random = globalThis.crypto?.randomUUID?.()
     ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   const operationId = `manual-solve:${random}`;
-  storage?.setItem(key, JSON.stringify({ operationId, prepareAcknowledged: false }));
+  storage?.setItem(key, JSON.stringify({
+    operationId, prepareAcknowledged: false, completionAcknowledged: false,
+    designName: '', label: '',
+  }));
   return operationId;
 }
 
@@ -73,9 +108,24 @@ export function acknowledgeManualCadSolvePreparation(
   if (held?.operationId === operationId) {
     storage?.setItem(
       `${MANUAL_SOLVE_OPERATION_PREFIX}${ingestId}`,
-      JSON.stringify({ operationId, prepareAcknowledged: true }),
+      JSON.stringify({ ...held, prepareAcknowledged: true }),
     );
   }
+}
+
+/** Mark completion before applying its one-shot run-list side effects. */
+export function acknowledgeManualCadSolveCompletion(
+  ingestId: string,
+  operationId: string,
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof sessionStorage === 'undefined' ? null : sessionStorage,
+): ManualSolveIdentity | null {
+  const held = readManualSolveIdentity(ingestId, storage);
+  if (!held || held.operationId !== operationId || held.completionAcknowledged) return null;
+  storage?.setItem(
+    `${MANUAL_SOLVE_OPERATION_PREFIX}${ingestId}`,
+    JSON.stringify({ ...held, completionAcknowledged: true }),
+  );
+  return held;
 }
 
 export function manualCadSolvePreparationAcknowledged(
