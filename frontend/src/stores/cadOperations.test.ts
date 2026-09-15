@@ -53,6 +53,14 @@ describe('CAD operations store', () => {
     expect(pendingCadOperations(operations).map((operation) => operation.operationId)).toEqual(['op-2']);
   });
 
+  it('restores a recovery-required Fusion update from the durable listing after reload', async () => {
+    const recovery = summary({ operationId: 'update-7', kind: 'update_link', state: 'recovery_required' });
+    await useCadOperationsStore.getState().load(
+      vi.fn(async () => json({ operations: [recovery] })) as unknown as typeof fetch,
+    );
+    expect(pendingCadOperations(useCadOperationsStore.getState().operations)).toEqual([recovery]);
+  });
+
   it('keeps an update that arrives while a load is in flight', async () => {
     const { apply, load } = useCadOperationsStore.getState();
     let answer!: (response: Response) => void;

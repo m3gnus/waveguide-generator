@@ -11,6 +11,7 @@ import {
   prepareCadOperation,
   putProjectSetup,
   putSolverSelection,
+  reconcileCadOperation,
   type CadOperationSummary,
 } from './cadOperations';
 
@@ -138,6 +139,16 @@ describe('CAD operations client', () => {
     expect((await cancelCadOperation('op-1', cancel.fetcher)).state).toBe('cancelled');
     expect(cancel.calls[0].url).toBe('/api/cadlink/operations/op-1/cancel');
     expect(cancel.calls[0].init?.method).toBe('POST');
+  });
+
+  it('asks the backend to reconcile a Fusion operation from current evidence', async () => {
+    const request = recorder({ operation: summary({ kind: 'update_link', state: 'accepted' }) });
+    await expect(reconcileCadOperation('op/1', request.fetcher)).resolves.toMatchObject({
+      operationId: 'op-1', state: 'accepted',
+    });
+    expect(request.calls[0]).toMatchObject({
+      url: '/api/cadlink/operations/op%2F1/reconcile', init: { method: 'POST' },
+    });
   });
 
   it('raises the server detail with its status', async () => {

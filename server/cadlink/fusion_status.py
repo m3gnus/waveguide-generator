@@ -295,6 +295,7 @@ def _recovery_required(value: object) -> dict[str, Any] | None:
         "kind": _string(value.get("kind")),
         "instanceId": _string(value.get("instanceId")),
         "exportId": _string(value.get("exportId")),
+        "phase": _string(value.get("phase")),
     }
 
 

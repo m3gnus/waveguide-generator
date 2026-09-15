@@ -190,3 +190,14 @@ export function cancelCadOperation(
 ): Promise<CadOperationSummary> {
   return jsonRequest(`${operationPath(operationId)}/cancel`, { method: 'POST' }, fetcher);
 }
+
+/** Re-read Fusion's heartbeat and link evidence for an interrupted mutation. */
+export async function reconcileCadOperation(
+  operationId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<CadOperationSummary> {
+  const response = await jsonRequest<{ operation: CadOperationSummary }>(
+    `${operationPath(operationId)}/reconcile`, { method: 'POST' }, fetcher,
+  );
+  return response.operation;
+}

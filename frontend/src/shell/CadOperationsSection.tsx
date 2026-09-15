@@ -266,14 +266,53 @@ function CadOperationCard({ operation, record }: {
   </div>;
 }
 
+function RecoveryOperationCard({ operation }: { operation: CadOperationSummary }) {
+  const coordinator = useSyncExternalStore(
+    cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
+  );
+  const [asked, setAsked] = useState<'dismiss' | 'reconcile' | null>(null);
+  const reported = coordinator.fusionStatus?.recoveryRequired;
+  const phase = reported?.operationId === operation.operationId ? reported.phase : null;
+  const ask = (action: 'dismiss' | 'reconcile', request: () => Promise<void>) => {
+    setAsked(action);
+    void request().then(() => setAsked(null), () => setAsked(null));
+  };
+  return <div className="cad-direction-alert cad-operation cad-operation-recovery" data-operation-id={operation.operationId}>
+    <div>
+      <b>Update interrupted — recovery required</b>
+      <span role="status">Journal phase: {phase ?? 'not reported'}</span>
+      <span>Fusion has no transaction covering these edits. Use Undo in Fusion to recover the document, or repair the link; do not continue modelling on a partially failed rebuild.</span>
+      <span>Dismissing this card retires WG’s durable operation notice. It does not repair Fusion, and WGLink will not repeat the operation.</span>
+      <span className="cad-operation-ids">Operation <code>{operation.operationId}</code></span>
+    </div>
+    <div className="cad-confirm-actions">
+      <button
+        disabled={asked !== null}
+        aria-label={`Dismiss recovery notice: ${operation.operationId}`}
+        onClick={() => ask('dismiss', () => coordinator.dismissOperation(operation.operationId))}
+      >Dismiss</button>
+      <button
+        className="primary"
+        disabled={asked !== null}
+        aria-label={`Check Fusion again: ${operation.operationId}`}
+        onClick={() => ask('reconcile', () => coordinator.reconcileOperation(operation.operationId))}
+      >Check Fusion again</button>
+    </div>
+  </div>;
+}
+
 /** The CAD operations still waiting or running: the solves Fusion sent, which
  * the backend prepares from each project's own setup. */
 export function CadOperationsSection({ record }: { record: CadReturnIngestRecord | null }) {
   const operations = useCadOperationsStore((state) => state.operations);
   const pending = pendingCadOperations(operations)
-    .filter((operation) => operation.kind === 'prepare_and_solve');
+    .filter((operation) => operation.kind === 'prepare_and_solve'
+      || (operation.state === 'recovery_required'
+        && (operation.kind === 'insert_link' || operation.kind === 'update_link')));
   if (!pending.length) return null;
   return <div className="cad-operations">
-    {pending.map((operation) => <CadOperationCard key={operation.operationId} operation={operation} record={record}/>)}
+    {pending.map((operation) => operation.kind === 'prepare_and_solve'
+      ? <CadOperationCard key={operation.operationId} operation={operation} record={record}/>
+      : <RecoveryOperationCard key={operation.operationId} operation={operation}/>)}
   </div>;
 }

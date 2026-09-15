@@ -197,8 +197,8 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   if (status.recoveryRequired) return {
     state: 'recovery-required',
     headline: `Update interrupted — recovery required${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: `A WG ${status.recoveryRequired.kind === 'insert' ? 'insert' : 'update'} started changing this Fusion model and did not finish, so WGLink will not repeat it. In Fusion, undo the partial change or repair the link${status.link ? ', then send the update from WG again' : ''}.`,
-    action: status.link ? 'update' : null,
+    detail: `A WG ${status.recoveryRequired.kind === 'insert' ? 'insert' : 'update'} started changing this Fusion model and did not finish, so WGLink will not repeat it. Fusion has no transaction covering these edits. Use Undo in Fusion to recover the document, or repair the link; do not continue modelling on a partially failed rebuild. Dismissing WG's recovery notice does not repair Fusion.`,
+    action: null,
   };
   if (status.state === 'closed') return {
     state: 'closed',

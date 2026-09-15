@@ -189,6 +189,7 @@ describe('CadLinkPanel', () => {
     detail?: Record<string, unknown>;
     detailFailures?: number;
     failPrepare?: string[];
+    reconcileAccepted?: string[];
   } = {}) => {
     const posted: Array<{ path: string; body: unknown }> = [];
     let detailFailures = options.detailFailures ?? 0;
@@ -212,6 +213,9 @@ describe('CadLinkPanel', () => {
         posted.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
         const held = useCadOperationsStore.getState().operations[operationId] ?? cadOperation({ operationId });
         if (path.endsWith('/cancel')) return json({ ...held, state: 'cancelled', updatedAt: '2026-09-14T11:00:00Z' });
+        if (path.endsWith('/reconcile') && options.reconcileAccepted?.includes(operationId)) {
+          return json({ operation: { ...held, state: 'accepted', updatedAt: '2026-09-14T11:00:00Z' } });
+        }
         if (options.failPrepare?.includes(operationId)) return json({ detail: 'The jobs system is not answering.' }, 503);
         return json({ operation: held });
       }
@@ -248,6 +252,82 @@ describe('CadLinkPanel', () => {
     });
     expect(host.querySelectorAll('.cad-operation')).toHaveLength(0);
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Dismiss')).toBe(false);
+  });
+
+  it('shows only durable interrupted mutations with their journal phase and recovery actions', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
+      String(input).endsWith('/fusion-status')
+        ? json({
+          ...currentFusion,
+          recoveryRequired: {
+            operationId: 'op-update', kind: 'update', instanceId: 'instance-a', exportId: 'wge_2', phase: 'applied',
+          },
+        })
+        : base(input, init)
+    )));
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+    act(() => {
+      const { apply } = useCadOperationsStore.getState();
+      apply(cadOperation({ operationId: 'op-return', kind: 'request_return', state: 'recovery_required' }));
+      apply(cadOperation({ operationId: 'op-insert', kind: 'insert_link', state: 'processing' }));
+      apply(cadOperation({ operationId: 'op-update', kind: 'update_link', state: 'recovery_required' }));
+    });
+    const card = operationCard('op-update');
+    expect(host.querySelectorAll('.cad-operation')).toHaveLength(1);
+    expect(card.textContent).toContain('Update interrupted — recovery required');
+    expect(card.textContent).toContain('Journal phase: applied');
+    expect(card.textContent).toContain('Fusion has no transaction covering these edits');
+    expect(buttonTexts(card)).toEqual(['Dismiss', 'Check Fusion again']);
+  });
+
+  it('settles a recovery card from Fusion evidence without offering the update again', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    const posted = recordOperationRequests({ reconcileAccepted: ['op-update'] });
+    act(() => useCadOperationsStore.getState().apply(cadOperation({
+      operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
+    })));
+
+    await act(async () => {
+      buttonIn(operationCard('op-update'), 'Check Fusion again')!.click();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(posted).toContainEqual({ path: '/api/cadlink/operations/op-update/reconcile', body: null });
+    expect(operationCard('op-update')).toBeNull();
+    expect(useCadOperationsStore.getState().operations['op-update'].state).toBe('accepted');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('evidence confirms');
+    expect(fusionWorkflowView({
+      ...currentFusion,
+      recoveryRequired: {
+        operationId: 'op-update', kind: 'update', instanceId: 'instance-a', exportId: 'wge_2', phase: 'verified',
+      },
+    }).action).toBeNull();
+  });
+
+  it('dismisses the durable card without claiming that Fusion was repaired', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    const posted = recordOperationRequests();
+    act(() => useCadOperationsStore.getState().apply(cadOperation({
+      operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
+    })));
+
+    await act(async () => {
+      buttonIn(operationCard('op-update'), 'Dismiss')!.click();
+      await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(posted).toContainEqual({ path: '/api/cadlink/operations/op-update/cancel', body: null });
+    expect(operationCard('op-update')).toBeNull();
+    expect(useCadOperationsStore.getState().operations['op-update'].state).toBe('cancelled');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Fusion still needs Undo or repair');
   });
 
   it('shows each pending CAD operation with its state, reason, identity and the action it needs', async () => {
@@ -826,11 +906,12 @@ describe('CadLinkPanel', () => {
   it('says an interrupted update needs recovery before anything else about the link', () => {
     expect(fusionWorkflowView({
       ...currentFusion,
-      recoveryRequired: { operationId: 'req-9', kind: 'update', instanceId: 'instance-a', exportId: 'wge_4' },
+      recoveryRequired: { operationId: 'req-9', kind: 'update', instanceId: 'instance-a', exportId: 'wge_4', phase: 'applied' },
     })).toMatchObject({
       state: 'recovery-required',
       headline: expect.stringContaining('Update interrupted — recovery required'),
-      action: 'update',
+      detail: expect.stringContaining('Fusion has no transaction covering these edits'),
+      action: null,
     });
   });
 

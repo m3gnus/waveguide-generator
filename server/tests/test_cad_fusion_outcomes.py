@@ -339,6 +339,20 @@ def test_dismissal_does_not_guess_an_outcome_after_fusion_claims_the_request(
     assert dismissed["state"] == "processing"
 
 
+def test_dismissal_retires_a_recovery_required_mutation_as_cancelled(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _accept(store)
+    generation = store.claim("update-1", 0)
+    assert generation == 1
+    recovery = store.record_outcome("update-1", generation, "recovery_required")
+    assert recovery is not None and recovery["state"] == "recovery_required"
+
+    dismissed = store.request_cancel("update-1")
+
+    assert dismissed is not None
+    assert (dismissed["state"], dismissed["reason"]) == ("cancelled", None)
+
+
 def test_applying_never_marks_a_return_as_recovery_required(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _accept(store, operation_id="return-1", kind="request_return")

@@ -118,6 +118,8 @@ export interface FusionRecoveryRequired {
   kind: string | null;
   instanceId: string | null;
   exportId: string | null;
+  /** The add-in journal step at which the update stopped. */
+  phase: string | null;
 }
 
 /** How Fusion's own registry lists WGLink, read-only (server/cadlink/addin_update.py). */

@@ -906,7 +906,7 @@ def test_an_interrupted_operation_in_the_heartbeat_is_reported_as_recovery_requi
         links=[],
         applying_operation={
             "operationId": "req-9", "kind": "update",
-            "instanceId": "instance-a", "exportId": "wge_4",
+            "instanceId": "instance-a", "exportId": "wge_4", "phase": "applied",
         },
     )
 
@@ -917,7 +917,7 @@ def test_an_interrupted_operation_in_the_heartbeat_is_reported_as_recovery_requi
 
     assert status["recoveryRequired"] == {
         "operationId": "req-9", "kind": "update",
-        "instanceId": "instance-a", "exportId": "wge_4",
+        "instanceId": "instance-a", "exportId": "wge_4", "phase": "applied",
     }
     _write_status(tmp_path, links=[])
     assert read_fusion_status(

@@ -15,6 +15,7 @@ import {
   cancelCadOperation,
   prepareCadOperation,
   putProjectSetup,
+  reconcileCadOperation,
   type CadOperationApprovals,
   type CadOperationSummary,
 } from '../api/cadOperations';
@@ -105,6 +106,8 @@ interface CadLinkCoordinatorSnapshot {
    * that reported them, and solve. */
   approveOperation(operationId: string, approvals: CadOperationApprovals): Promise<void>;
   dismissOperation(operationId: string): Promise<void>;
+  /** Re-read Fusion evidence for a mutation that stopped after it began. */
+  reconcileOperation(operationId: string): Promise<void>;
   /** Record the settings on screen as the model's project setup, then
    * prepare the operation with exactly that revision. */
   solveOperationWithSettings(operationId: string): Promise<void>;
@@ -148,6 +151,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   solveOperation: unavailable,
   approveOperation: unavailable,
   dismissOperation: unavailable,
+  reconcileOperation: unavailable,
   solveOperationWithSettings: unavailable,
   sendWgToFusion: unavailable,
   cancelFusionConflict: () => undefined,
@@ -1934,8 +1938,22 @@ export function CadLinkCoordinator() {
     () => cancelCadOperation(operationId),
     (summary) => (summary.state === 'accepted'
       ? 'Its solve had already started, so it now follows its job in the Jobs rail. Cancel the job there to stop it.'
-      : 'Dismissed the solve Fusion asked for.'),
+      : summary.kind === 'insert_link' || summary.kind === 'update_link'
+        ? 'Dismissed this recovery notice. Fusion still needs Undo or repair before you continue modelling.'
+        : 'Dismissed the solve Fusion asked for.'),
   ), [actOnOperation]);
+
+  /** Check Fusion again: settle only from document evidence, then refresh the
+   * physical-document warning independently of the durable operation card. */
+  const reconcileOperation = useCallback(async (operationId: string): Promise<void> => {
+    await actOnOperation(
+      () => reconcileCadOperation(operationId),
+      (summary) => summary.state === 'accepted'
+        ? 'Fusion evidence confirms that the update completed.'
+        : 'Fusion still reports an interrupted update that needs Undo or repair.',
+    );
+    await refreshFusionStatus();
+  }, [actOnOperation, refreshFusionStatus]);
 
   /** Use these settings and solve: the settings on screen become the setup of
    * the model's project -- the one the backend names for the snapshot, when it
@@ -2045,6 +2063,7 @@ export function CadLinkCoordinator() {
       solveOperation,
       approveOperation,
       dismissOperation,
+      reconcileOperation,
       solveOperationWithSettings,
       sendWgToFusion,
       cancelFusionConflict,
@@ -2081,6 +2100,7 @@ export function CadLinkCoordinator() {
       solveOperation: unavailable,
       approveOperation: unavailable,
       dismissOperation: unavailable,
+      reconcileOperation: unavailable,
       solveOperationWithSettings: unavailable,
       sendWgToFusion: unavailable,
       cancelFusionConflict: () => undefined,
@@ -2097,6 +2117,7 @@ export function CadLinkCoordinator() {
     clearFeedback,
     approveOperation,
     dismissOperation,
+    reconcileOperation,
     solveOperationWithSettings,
     error,
     fusionStatus,
