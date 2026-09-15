@@ -5,7 +5,6 @@ import {
   getIngest,
   ingestReturn,
   listReturns,
-  requestFusionReturn,
   type CadReturnBundle,
   type CadReturnIngestRecord,
   type FusionCadStatus,
@@ -71,11 +70,19 @@ import { buildCadProjectSetup, startCadSetupPublisher } from './cadSetupPublishe
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 import { useModalDialogFocus } from './dialogFocus';
+import {
+  SupersededError,
+  returnBelongsToAnotherProject,
+  useCadReturnArrivals,
+  type RefreshOptions,
+} from './cadlink/arrivals';
 
-interface RefreshOptions {
-  background?: boolean;
-  autoOpenNew?: boolean;
-}
+export {
+  SupersededError,
+  newestReturnArrival,
+  returnBelongsToAnotherProject,
+  returnBelongsToProject,
+} from './cadlink/arrivals';
 
 interface CadLinkCoordinatorSnapshot {
   bundles: CadReturnBundle[];
@@ -287,10 +294,6 @@ function settingsProjectFor(
   return filed;
 }
 
-/** A step abandoned because newer user intent replaced what it was working on.
- * Its feedback is already on screen, so a composed action stops silently. */
-export class SupersededError extends Error {}
-
 /** Whether the directivity settings are still the ones a send committed.
  *
  * Recording committed polars writes them into the design's ATH blocks, which
@@ -306,48 +309,6 @@ function polarConfigStillCommitted(committed: unknown): boolean {
     // An unsendable directivity grid is by definition not the one just sent.
     return false;
   }
-}
-
-/** Whether a return names a design other than the one that is open.
- *
- * A return exported from a WG design names that design, and nothing else here
- * can say where its geometry belongs. This used to answer "no" whenever the
- * open document had no CAD identity, which read as permission: a return for
- * design A was adopted, prepared and built into whatever unlinked model
- * happened to be open. A bundle that names a design belongs to that design, so
- * an open document that is not it -- including one that is nothing -- is
- * another project. Returns that name no design at all are CAD-authored and
- * still adoptable anywhere, which is the whole of that workflow. */
-export function returnBelongsToAnotherProject(
-  bundle: CadReturnBundle,
-  designId: string | null | undefined,
-): boolean {
-  const returned = bundle.designIds ?? [];
-  if (returned.length === 0) return false;
-  return !designId || !returned.includes(designId);
-}
-
-/** Whether a return is positively linked to the open registry project.
- * Unlinked returns remain available for manual adoption, but must not be
- * guessed into every project merely because they name no other project. */
-export function returnBelongsToProject(
-  bundle: CadReturnBundle,
-  designId: string | null | undefined,
-): boolean {
-  return Boolean(designId && (bundle.designIds ?? []).includes(designId));
-}
-
-export function newestReturnArrival(
-  items: CadReturnBundle[],
-  previous: Map<string, string> | null,
-  nowMs = Date.now(),
-): CadReturnBundle | null {
-  const recentThreshold = nowMs - 60_000;
-  return items.find((item) => item.readable && (
-    previous
-      ? previous.get(item.bundlePath) !== item.modifiedAt
-      : Date.parse(item.modifiedAt) >= recentThreshold
-  )) ?? null;
 }
 
 type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
@@ -970,12 +931,9 @@ export function CadLinkCoordinator() {
   const designName = useDocumentStore((state) => state.designName);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const selectedBundlePath = useCadReturnStore((state) => state.selectedBundle?.bundlePath ?? null);
-  const [bundles, setBundles] = useState<CadReturnBundle[]>([]);
-  const [loading, setLoading] = useState(true);
   const [ingesting, setIngesting] = useState(false);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [sendingToFusion, setSendingToFusion] = useState(false);
-  const [pullingFromFusion, setPullingFromFusion] = useState(false);
   const [pendingFusionConflict, setPendingFusionConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -1098,6 +1056,43 @@ export function CadLinkCoordinator() {
   const autoIngestSelected = useCallback(() => {
     void ingestSelectedRef.current().catch(() => undefined);
   }, []);
+
+  const {
+    bundles,
+    setBundles,
+    loading,
+    pullingFromFusion,
+    refresh,
+    pullFromFusion,
+  } = useCadReturnArrivals({
+    autoIngestSelected,
+    cadFolderConfigured,
+    enterCadWorkspace,
+    fusionStatus,
+    identityDesignId: identity?.designId,
+    manualSelectionAt,
+    mounted,
+    noteCadActivity,
+    onshape,
+    pageIsVisible,
+    pollDelayMs,
+    pollRestarts,
+    projectOpenPending,
+    refreshChannelDriverBases,
+    refusedForeignReturn,
+    refreshRef,
+    returnListRequest,
+    seenReturnRevisions,
+    pendingReturnRequestId,
+    pendingReturnRequestedAt,
+    pendingReturnWaiter,
+    fusionPullPromise,
+    returnsIdleMs: cadPollIntervals.returnsIdleMs,
+    returnsMs: cadPollIntervals.returnsMs,
+    setError,
+    setStatus,
+    startAdaptivePoll,
+  });
 
   useEffect(() => subscribeRevision((event) => {
     if (event.reason !== 'load') return;
@@ -1240,202 +1235,6 @@ export function CadLinkCoordinator() {
       .catch(() => { /* the status card already reports an unconfigured link */ });
   }, [onshape]);
 
-  const refresh = useCallback(async (options: RefreshOptions = {}) => {
-    const background = options.background === true;
-    const request = ++returnListRequest.current;
-    // The wgreturn folder belongs exclusively to the Fusion add-in. Keeping
-    // the guard inside the command also prevents callers from accidentally
-    // reading it while the always-mounted coordinator is in Onshape mode.
-    if (preferencesStore.getSnapshot().cadApplication === 'onshape') {
-      if (projectOpenPending.current) {
-        projectOpenPending.current = false;
-        setStatus('Project design loaded. Return it from Onshape to prepare Simulation geometry.');
-      }
-      setLoading(false);
-      return;
-    }
-    if (!background) { setLoading(true); setError(null); }
-    try {
-      const response = await listReturns();
-      // Poll, manual refresh, and the post-send refresh may overlap. Only the
-      // newest request may revise evidence or auto-select a return; otherwise a
-      // slow old directory snapshot can roll the whole CAD state backwards.
-      if (request !== returnListRequest.current) return;
-      setBundles(response.items);
-      const previous = seenReturnRevisions.current;
-      const next = new Map(response.items.map((item) => [item.bundlePath, item.modifiedAt]));
-      // This listing is also how the coordinator learns whether CAD Link is
-      // set up at all, and it is the only poll that keeps running when it is
-      // not — so a folder chosen in Settings resumes the other two from here
-      // rather than on the next app start.
-      const wasConfigured = cadFolderConfigured.current;
-      cadFolderConfigured.current = response.cadFolderConfigured;
-      // A listing that differs from the last one is the reason to keep polling
-      // quickly. An identical one, over and over, is the evidence for widening.
-      const listingChanged = previous === null
-        || previous.size !== next.size
-        || [...next].some(([path, modifiedAt]) => previous.get(path) !== modifiedAt);
-      if (listingChanged || response.cadFolderConfigured !== wasConfigured) noteCadActivity();
-      const requested = pendingReturnRequestId.current
-        ? response.items.find((item) => (
-            item.readable && item.requestId === pendingReturnRequestId.current
-          )) ?? null
-        : null;
-      if (
-        pendingReturnRequestId.current
-        && pendingReturnRequestedAt.current !== null
-        && Date.now() - pendingReturnRequestedAt.current > 60_000
-      ) {
-        pendingReturnRequestId.current = null;
-        pendingReturnRequestedAt.current = null;
-        const timeout = 'Fusion did not return the requested model within 60 seconds. Check Fusion for a WGLink message, then retry.';
-        const waiter = pendingReturnWaiter.current;
-        pendingReturnWaiter.current = null;
-        // A composed caller owns the message: let it decide how to report.
-        if (waiter) waiter.fail(new Error(timeout));
-        else setError(timeout);
-      }
-      const arrived = options.autoOpenNew
-        ? requested ?? (
-            pendingReturnRequestId.current
-              ? null
-              : newestReturnArrival(response.items, previous)
-          )
-        : null;
-      seenReturnRevisions.current = next;
-      const currentDesignId = useDocumentStore.getState().identity?.designId;
-      const initial = previous === null
-        ? response.items.find((item) => (
-            item.readable && (
-              currentDesignId
-                ? returnBelongsToProject(item, currentDesignId)
-                : (item.designIds ?? []).length === 0
-            )
-          )) ?? null
-        : null;
-      const opened = arrived ?? initial;
-      const projectMismatch = Boolean(
-        opened && returnBelongsToAnotherProject(opened, currentDesignId),
-      );
-      // A selection made because a project was just opened belongs to that
-      // project, and its lineage is knowable before any ingestion: the registry
-      // states it as the opened document's own, and the ingestion will state
-      // the same one. Resolving it here is what lets `restoreSolveProfile` read
-      // the destination's saved settings instead of the previous project's.
-      // (This listing is queued by the load event, so the open has finished
-      // assigning the identity by the time it runs.) `undefined` everywhere
-      // else keeps a same-project iteration on the project it is already on.
-      const destination = projectOpenPending.current
-        ? useDocumentStore.getState().identity?.lineageId ?? null
-        : undefined;
-      // Only while still awaited: a pull that has just timed out has already
-      // reported its failure, so its return arriving now is background news.
-      const requestedArrival = arrived !== null && arrived === requested
-        && pendingReturnRequestId.current === arrived.requestId;
-      // A return the user picked from the list is newer intent than any return
-      // Fusion wrote, or was asked for, before that pick: such an arrival never
-      // takes the selection, or the viewport, from it. One sent after the pick
-      // is newer still, and does.
-      const selected = useCadReturnStore.getState().selectedBundle;
-      const arrivalRequestedAt = arrived
-        ? (requestedArrival ? pendingReturnRequestedAt.current : Date.parse(arrived.modifiedAt))
-        : null;
-      const heldForManualPick = Boolean(
-        arrived && !projectMismatch && selected && selected.bundlePath !== arrived.bundlePath
-        && manualSelectionAt.current !== null
-        && arrivalRequestedAt !== null && Number.isFinite(arrivalRequestedAt)
-        && arrivalRequestedAt <= manualSelectionAt.current,
-      );
-      let continuity: 'initial' | 'carried' | 'reset' = 'initial';
-      if (opened && !projectMismatch && !heldForManualPick) {
-        // A compatible current or saved source inventory keeps the user's solve
-        // setup; a genuinely first listing starts clean without being a reset.
-        continuity = arrived
-          ? useCadReturnStore.getState().selectArrivedBundle(arrived, destination)
-          : (useCadReturnStore.getState().selectBundle(opened, destination), 'initial');
-        // Quietly here: these drivers were just restored, so the user has not
-        // seen the numbers this replaces, and the arrival owns the status line.
-        void refreshChannelDriverBases().catch(() => undefined);
-        // Selecting evidence invalidates a load for the previous return, but
-        // mode—not return discovery—decides what the viewport displays.
-        importedMeshStore.beginIntent();
-      }
-      if (projectOpenPending.current) {
-        projectOpenPending.current = false;
-        setStatus(initial
-          ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; prepare it to restore Simulation geometry.`
-          : 'Project design loaded. No matching CAD return is available yet; return the project from Fusion or Onshape to prepare Simulation geometry.');
-      }
-      if (arrived) {
-        if (projectMismatch) {
-          refusedForeignReturn.current = true;
-          const reason = `Received ${arrived.documentName ?? arrived.name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`;
-          if (arrived.requestId === pendingReturnRequestId.current) {
-            pendingReturnRequestId.current = null;
-            pendingReturnRequestedAt.current = null;
-          }
-          const waiter = pendingReturnWaiter.current;
-          if (waiter && arrived.requestId === waiter.requestId) {
-            pendingReturnWaiter.current = null;
-            waiter.fail(new Error(reason));
-          } else {
-            setError(reason);
-          }
-          enterCadWorkspace();
-          return;
-        }
-        if (arrived.requestId === pendingReturnRequestId.current) {
-          pendingReturnRequestId.current = null;
-          pendingReturnRequestedAt.current = null;
-        }
-        const arrivedName = arrived.documentName ?? arrived.name;
-        const keptName = selected ? selected.documentName ?? selected.name : null;
-        const waiter = pendingReturnWaiter.current;
-        if (waiter && arrived.requestId === waiter.requestId) {
-          pendingReturnWaiter.current = null;
-          // A composed pull must not go on to prepare and solve a model the
-          // user did not keep on screen.
-          if (heldForManualPick) {
-            waiter.fail(new SupersededError(`Received ${arrivedName} from Fusion 360, but you selected ${keptName} after asking for it.`));
-          } else {
-            waiter.settle(arrived);
-          }
-        }
-        setStatus(heldForManualPick
-          ? `Received ${arrivedName} from Fusion 360. You selected ${keptName} after it was sent, so ${keptName} stays selected; select ${arrivedName} from the return list to use it.`
-          : `Received ${arrivedName} from Fusion 360.${
-            continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''
-          }`);
-        // An arrival is news the user has to be able to see, so it owns the
-        // workspace the same way an Onshape return does. A first listing does
-        // not: nothing arrived, and stealing the mode on load would be wrong.
-        enterCadWorkspace();
-        if (!heldForManualPick) autoIngestSelected();
-      } else if (!initial) {
-        const selected = useCadReturnStore.getState().selectedBundle;
-        if (!selected) return;
-        // An unconfigured listing is not evidence the bundle is gone -- a
-        // server that is still starting up answers exactly that, and one such
-        // poll used to latch the ingest stale until a manual re-ingest.
-        if (!response.cadFolderConfigured) return;
-        const current = response.items.find((bundle) => bundle.bundlePath === selected.bundlePath);
-        useCadReturnStore.getState().refreshSelectedBundle(current ?? null);
-      }
-    } catch (reason) {
-      if (request === returnListRequest.current && !background) {
-        if (projectOpenPending.current) {
-          projectOpenPending.current = false;
-          setStatus('Project design loaded, but its CAD returns could not be read. Refresh CAD Link to try again.');
-        }
-        setError(reason instanceof Error ? reason.message : String(reason));
-      }
-    } finally {
-      // A background poll can supersede the initial foreground listing. The
-      // latest completion owns the loading flag even when it did not raise it.
-      if (request === returnListRequest.current) setLoading(false);
-    }
-  }, [autoIngestSelected, noteCadActivity]);
-  refreshRef.current = refresh;
 
   // Entering CAD Link with nothing on screen reopens the project that was
   // there last: the remembered lineage's newest return, selected exactly as
@@ -1576,84 +1375,6 @@ export function CadLinkCoordinator() {
 
   const cancelFusionConflict = useCallback(() => setPendingFusionConflict(false), []);
 
-  // Returns arrive in the workspace's wgreturn folder, which only the Fusion
-  // add-in writes. Onshape bundles use WG's data directory and never enter this
-  // lifecycle, so there is deliberately no returns poll in Onshape mode.
-  useEffect(() => {
-    if (onshape) { setLoading(false); return undefined; }
-    if (pageIsVisible()) void refresh({ autoOpenNew: true });
-    else setLoading(false);
-    // The one poll that never suspends. With no workspace folder selected it
-    // answers `{items: [], cadFolderConfigured: false}` for a few bytes, and
-    // it is the only thing that can notice a folder being chosen — Settings
-    // writes it on the server, and nothing tells the coordinator. At the idle
-    // rate that is one request every thirty seconds, which is the price of not
-    // making the user restart WG after setting CAD Link up.
-    const stop = startAdaptivePoll(
-      pollRestarts.current,
-      () => { if (pageIsVisible()) void refresh({ background: true, autoOpenNew: true }); },
-      () => pollDelayMs(
-        cadPollIntervals.returnsMs,
-        cadPollIntervals.returnsIdleMs,
-        cadPollIntervals.returnsIdleMs,
-      ),
-    );
-    return () => {
-      stop();
-      returnListRequest.current += 1;
-    };
-  }, [onshape, pollDelayMs, refresh]);
-
-  const expectFusionReturn = useCallback((requestId: string, requestedAt = Date.now()) => {
-    pendingReturnRequestId.current = requestId;
-    pendingReturnRequestedAt.current = requestedAt;
-    // The listing poll is the only thing that discovers the arrival, and the
-    // user is watching for it: it must not still be on an idle delay.
-    noteCadActivity();
-  }, [noteCadActivity]);
-
-  /** Ask Fusion for the active document and resolve with the exact correlated
-   * return. Composable: the caller decides whether to ingest and solve. */
-  const pullFromFusion = useCallback((): Promise<CadReturnBundle> => {
-    if (fusionPullPromise.current) return fusionPullPromise.current;
-    setPullingFromFusion(true);
-    // Failures are reported here as well as thrown, so a fire-and-forget
-    // caller still shows them and a composed caller can still stop.
-    const fail = (reason: unknown): never => {
-      const error = reason instanceof Error ? reason : new Error(String(reason));
-      if (!(error instanceof SupersededError) && mounted.current) setError(error.message);
-      throw error;
-    };
-    const operation = (async () => {
-      if (!identity?.designId || !fusionStatus?.documentId || !fusionStatus.link) {
-        return fail(new Error('Fusion changed documents. Refresh CAD Link and try again.'));
-      }
-      setError(null);
-      // When the user asked, not when Fusion acknowledged: a return picked
-      // in between is newer than this request (see `refresh`).
-      const askedAt = Date.now();
-      const result = await requestFusionReturn({
-        designId: identity.designId,
-        documentId: fusionStatus.documentId,
-        instanceId: fusionStatus.link.instanceId,
-        expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
-      }).catch(fail);
-      expectFusionReturn(result.requestId, askedAt);
-      setStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
-      const arrival = new Promise<CadReturnBundle>((settle, reject) => {
-        pendingReturnWaiter.current = { requestId: result.requestId, settle, fail: reject };
-      });
-      void refresh({ background: true, autoOpenNew: true });
-      return arrival.catch(fail);
-    })();
-    const tracked = operation.finally(() => {
-      if (fusionPullPromise.current !== tracked) return;
-      fusionPullPromise.current = null;
-      if (mounted.current) setPullingFromFusion(false);
-    });
-    fusionPullPromise.current = tracked;
-    return tracked;
-  }, [expectFusionReturn, fusionStatus, identity?.designId, refresh]);
 
   const reportViewportNotice = useCallback((message: string | null) => setViewportNotice(message), []);
 
