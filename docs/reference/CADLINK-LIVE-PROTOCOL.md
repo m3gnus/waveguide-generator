@@ -1,11 +1,11 @@
 # CAD Link live protocol
 
-Status: protocol version 1. Sections 2-5 (endpoint discovery, registration, sessions and
-tokens, origin and validation rules) are **implemented in WG** (`server/cadlink/live/`).
-Sections 6-8 (heartbeat over HTTP, Fusion-bound requests, WG-bound deliveries) are the
+Status: protocol version 1. Sections 2-6 (endpoint discovery, registration, sessions and
+tokens, origin and validation rules, heartbeat over HTTP) are **implemented in WG**
+(`server/cadlink/live/`). Sections 7-8 (Fusion-bound requests, WG-bound deliveries) are the
 agreed contract for work that is **not implemented yet**; until it is, those routes do not
-exist and the add-in uses the v3 files for everything. No released WGLink speaks this
-protocol yet.
+exist and the add-in uses the v3 files for them. No released WGLink speaks this protocol
+yet.
 
 The live protocol changes how CAD Link operations travel between WG and its Fusion add-in,
 not what they mean. The operation contract, digests and states are those of
@@ -196,7 +196,7 @@ when `sourceCommit` is not null and equals the WGLink commit this WG pins.
   type of each error only, never the input values; an unknown key is reported at its parent
   object, since its name is input too. Every other route keeps FastAPI's 422.
 - **Body limit.** A live request body over 64 KiB answers `413 request_too_large` (a route
-  may set its own limit, as the heartbeat's 256 KiB will).
+  may set its own limit, as the heartbeat's 256 KiB does).
 - **Order of checks:** Host guard → body size limit → Origin refusal → installation header →
   authentication → body validation → restart latch (routes that start work check it
   themselves, answering `409 update_restart_pending`) → handler. The checks before the body
@@ -206,19 +206,48 @@ when `sourceCommit` is not null and equals the WGLink commit this WG pins.
   `503 store_busy` (retryable).
 - **Client:** only `baseUrl`, proxies bypassed, no redirects followed.
 
-## 6. Heartbeat over HTTP (not implemented yet)
+## 6. Heartbeat over HTTP
 
-`POST /api/cadlink/live/heartbeat` with exactly the file heartbeat object; 204; body limit
-256 KiB (`413 request_too_large`).
+`POST /api/cadlink/live/heartbeat` with a session token, carrying exactly the object the
+add-in writes to `.fusion-status.json`; `204` with no body when recorded. Body limit
+256 KiB, the file reader's own limit (`413 request_too_large`).
 
-- Validation is the file heartbeat's (schema, application, `deliveryVersion` of at least 3).
-  A heartbeat whose `updatedAt` is already outside the freshness window when posted is
-  `409 heartbeat_stale` and not recorded; a `sessionId` other than the session's
-  `adapterSessionId` is `409 session_mismatch`.
-- The add-in keeps writing `.fusion-status.json` while live.
-- Selection: the registry's live heartbeat if its session is current and it is fresh, else a
-  fresh file heartbeat, else none; one selection per status call. The status reports
-  `heartbeatTransport` `"live"|"file"|null`.
+- **Validation is the file heartbeat's**, one implementation for both transports
+  (`fusion_status.heartbeat_problem`): `schemaVersion` 1, `cadApplication` `"fusion360"`,
+  an `updatedAt` with a time zone no more than 20 s old and no more than 1 min in the
+  future. Unknown fields are kept, as the file reader keeps them.
+- **Checks, in order, after the session checks (section 5):**
+  1. a body that is not a JSON object, or an unusable `schemaVersion`, `cadApplication` or
+     `updatedAt` → `400 invalid_request` (field and type only, never a value);
+  2. `deliveryVersion` missing, not an integer, or below 3 → `409 addin_outdated`;
+  3. `updatedAt` already outside the freshness window → `409 heartbeat_stale`;
+  4. `sessionId` other than the session's registered `adapterSessionId` →
+     `409 session_mismatch`.
+  Nothing is recorded on a refusal. A recorded heartbeat replaces the previous one, unless
+  that one has a later `updatedAt`: a request that arrives late is ignored and still answers
+  `204`, so an older heartbeat never replaces a newer one.
+- **Kept in memory only**, in this data directory's live registry, bound to the session that
+  posted it. Ending the session, a registration that supersedes it, and its expiry drop the
+  heartbeat at once; a WG restart forgets it. Every authenticated request, a heartbeat
+  included, is activity for the 60 s idle timeout.
+- **The add-in keeps writing `.fusion-status.json` while live**, so a WG that restarts, or
+  a reader without a live session, still has the file.
+- **Selection** (`fusion_status.select_heartbeat`), used by every heartbeat reader in the WG
+  server:
+  the live heartbeat if the session that posted it is current in this data directory's
+  registry and the heartbeat is fresh; else a fresh file heartbeat; else none. The same
+  freshness window applies to both. A WG that has not started or has stopped has no
+  registry, so only the file is read. The evidence collector (`scripts/cadlink_evidence.py`)
+  still collects only the file heartbeat; collecting the live one is owed.
+- **One selection per status answer.** `POST /api/cadlink/fusion-status` reads the clock
+  once, selects once, and gives that same heartbeat and instant to operation settlement and
+  to the status it reports, so the two cannot disagree when the file changes, or the
+  heartbeat ages out, in between. Settlement uses the selection only
+  at `deliveryVersion` 3 or later, whichever transport it came by; a `recovery_required`
+  mark recorded from a live heartbeat is durable exactly as one from the file.
+- **The status reports `heartbeatTransport`**: `"live"`, `"file"`, or `null` when no
+  heartbeat was selected. For the same heartbeat object the status is otherwise identical
+  on either transport.
 
 ## 7. Fusion-bound requests (not implemented yet)
 
@@ -283,10 +312,11 @@ Every refusal is an error envelope with `stage: "cadlink-live"`.
 | 401 | `session_unknown`, `token_expired`, `session_superseded`, `installation_mismatch` | register again | implemented |
 | 403 | `origin_not_allowed` (plus the global Host/Origin 403) | no | implemented |
 | 409 | `addin_outdated`, `protocol_unsupported` | no (file mode) | implemented |
-| 413 | `request_too_large` (64 KiB unless a route sets its own) | no | implemented |
+| 409 | `session_mismatch`, `heartbeat_stale` (heartbeat) | no | implemented |
+| 413 | `request_too_large` (64 KiB; the heartbeat 256 KiB) | no | implemented |
 | 503 | `store_busy` | yes | implemented (WG not started or stopping) |
 | 404 | `operation_unknown` | no | planned |
-| 409 | `session_mismatch`, `heartbeat_stale` | no | planned |
+| 409 | `session_mismatch` (Fusion-bound requests) | no | planned |
 | 409 | `claimed_elsewhere`, `already_claimed`, `stale_attempt`, `outcome_conflict` | no | planned |
 | 409 | `operation_conflict` | no | planned |
 | 409 | `wglink_folder_not_selected`, `update_restart_pending` | yes | planned |

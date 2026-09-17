@@ -948,7 +948,7 @@ def test_every_live_route_runs_the_pre_body_checks(tmp_path: Path) -> None:
         route for route in create_app(data_dir=tmp_path).routes
         if getattr(route, "path", "").startswith(LIVE)
     ]
-    assert len(live) == 4
+    assert len(live) == 5
     assert all(isinstance(route, APIRoute) and isinstance(route, LiveRoute) for route in live)
 
 
@@ -1029,6 +1029,7 @@ def test_live_routes_are_in_the_openapi_document_without_examples(tmp_path: Path
     live_paths = {path: item for path, item in schema["paths"].items() if path.startswith(LIVE)}
     assert set(live_paths) == {
         f"{LIVE}/endpoint", f"{LIVE}/sessions", f"{LIVE}/sessions/refresh", f"{LIVE}/sessions/current",
+        f"{LIVE}/heartbeat",
     }
     rendered = json.dumps(live_paths) + json.dumps(schema.get("components", {}))
     assert '"example"' not in rendered and '"examples"' not in rendered

@@ -5,7 +5,8 @@ An additive transport beside the v3 files (docs/reference/CADLINK-LIVE-PROTOCOL.
 - ``endpoint``: ``wg-endpoint.json``, where this start serves and its secret;
 - ``proof``: the mutual registration proofs;
 - ``registry``: the in-memory sessions of one start, per data directory;
-- ``api``: the ``/api/cadlink/live`` routes and their check order.
+- ``api``: the ``/api/cadlink/live`` routes and their check order;
+- ``heartbeat``: the heartbeat posted over HTTP.
 
 Deliberately imports nothing here: ``server.cadlink.addin_update`` reads the
 registry, and ``api`` imports ``addin_update``.

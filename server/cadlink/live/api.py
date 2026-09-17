@@ -1,5 +1,8 @@
 """``/api/cadlink/live``: endpoint hello, registration, refresh and end of a session.
 
+The heartbeat route lives in :mod:`server.cadlink.live.heartbeat`, on
+:data:`session_router`.
+
 Check order on every live route (docs/reference/CADLINK-LIVE-PROTOCOL.md,
 "Loopback, origin, validation and ordering"): the global Host/Origin guard and
 the body size limit (middleware), then here any ``Origin`` header at all
@@ -349,6 +352,10 @@ async def end_live_session(
 
 def mount_live(application: FastAPI) -> None:
     """Add the live routes and the per-start registry and endpoint file."""
+
+    # Route modules that add to the routers above, imported here because they
+    # import this module.
+    from . import heartbeat  # noqa: F401
 
     application.state.live_registry = None
     for router in (public_router, registration_router, session_router):

@@ -8498,6 +8498,64 @@
         ]
       }
     },
+    "/api/cadlink/live/heartbeat": {
+      "post": {
+        "description": "The add-in's heartbeat for its live session; 204 when recorded.",
+        "operationId": "post_live_heartbeat_api_cadlink_live_heartbeat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "description": "Exactly the object WGLink writes to .fusion-status.json (heartbeat schema 1).",
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "store_busy: the live session service is not running"
+          }
+        },
+        "summary": "Post Live Heartbeat",
+        "tags": [
+          "cadlink-live"
+        ]
+      }
+    },
     "/api/cadlink/live/sessions": {
       "post": {
         "description": "Register the add-in after it proves it read this start's secret.",

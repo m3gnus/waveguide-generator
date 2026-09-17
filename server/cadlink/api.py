@@ -49,7 +49,7 @@ from server.workspace.archive import (
 
 from .addin_update import last_refresh, loaded_addin_identity, poll_activation
 from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
-from .fusion_status import read_live_fusion_heartbeat
+from .fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
 from .fusion_outcomes import FUSION_KINDS, settle_from_heartbeat
 from .fusion_delivery import (
     advertise_fusion_delivery,
@@ -828,9 +828,14 @@ async def fusion_status(
         Path(request.app.state.data_dir),
         record_expired=lambda operation_id: _record_expired_insert(store, operation_id),
     )
-    heartbeat = await asyncio.to_thread(
-        read_live_fusion_heartbeat, Path(request.app.state.data_dir)
+    # One selection at one instant for this answer: settlement and the status
+    # below see the same heartbeat, whichever transport it came by, even if the
+    # file changes or the heartbeat ages out while settlement runs.
+    checked_at = heartbeat_now()
+    selected_heartbeat = await asyncio.to_thread(
+        select_heartbeat, Path(request.app.state.data_dir), checked_at
     )
+    heartbeat = settleable_heartbeat(selected_heartbeat)
     if heartbeat is not None:
         await asyncio.to_thread(
             settle_from_heartbeat,
@@ -848,6 +853,8 @@ async def fusion_status(
         process_running=await asyncio.to_thread(fusion_process_running),
         returned_bundle=returned_bundle,
         returned_manifest=returned_manifest,
+        now=checked_at,
+        heartbeat=selected_heartbeat,
     )
     # WGLink activation waits for Fusion to close, and while WG runs this poll
     # is what finishes it (server/cadlink/addin_update.py). Once WG has decided,
@@ -1973,7 +1980,7 @@ async def post_reconcile_cad_operation(
                 retryable=False,
             ),
         )
-    heartbeat = await asyncio.to_thread(read_live_fusion_heartbeat, Path(state.data_dir))
+    heartbeat = settleable_heartbeat(await asyncio.to_thread(select_heartbeat, Path(state.data_dir)))
     if heartbeat is not None:
         await asyncio.to_thread(
             settle_from_heartbeat,
@@ -2277,8 +2284,8 @@ def mount_cadlink(application: FastAPI) -> None:
             Path(application.state.data_dir),
             lookup_operation=application.state.cadlink_store.get_operation,
         )
-        heartbeat = await asyncio.to_thread(
-            read_live_fusion_heartbeat, Path(application.state.data_dir)
+        heartbeat = settleable_heartbeat(
+            await asyncio.to_thread(select_heartbeat, Path(application.state.data_dir))
         )
         if heartbeat is not None:
             await asyncio.to_thread(

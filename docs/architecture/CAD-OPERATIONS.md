@@ -783,7 +783,9 @@ claim, if any, already owns delivery, and a terminal operation must never run tw
 4. **A return request runs only in the session it names** (`sessionId`).
 
 **Heartbeat outcome mapping.** WG reads only a fresh heartbeat with
-`deliveryVersion >= 3`. Document link evidence is considered before every reported
+`deliveryVersion >= 3`, live or file: the one `fusion_status.select_heartbeat` chooses
+(`docs/reference/CADLINK-LIVE-PROTOCOL.md`, section 6), and in a status poll the same one
+the status reports. Document link evidence is considered before every reported
 outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 `accepted`. `document.applyingOperation.operationId` settles only Insert/Update as
 `recovery_required`. A missing observation stays `processing`.

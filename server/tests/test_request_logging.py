@@ -123,7 +123,10 @@ def test_a_quietened_route_that_starts_failing_is_still_logged_at_info(
 def test_the_quiet_list_names_the_measured_idle_traffic() -> None:
     """Method as well as path, so chatter one way cannot quieten action the other."""
 
-    assert QUIET_REQUEST_ROUTES == frozenset(IDLE_POLLS)
+    # The live add-in's heartbeat is idle traffic too: presence every 4 s while a
+    # session is up. It needs a session to answer 204, so its quiet success is
+    # exercised in ``test_cadlink_live_heartbeat.py``; a refusal still logs at INFO.
+    assert QUIET_REQUEST_ROUTES == frozenset(IDLE_POLLS) | {("POST", "/api/cadlink/live/heartbeat")}
     # Nothing that changes state is on the list -- including the sibling route
     # a CAD client posts a solve's outcome back to.
     assert ("POST", "/api/cadlink/solve-command/outcome") not in QUIET_REQUEST_ROUTES

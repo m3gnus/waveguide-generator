@@ -84,7 +84,7 @@ _WORKSPACE_EXPORT_PATH = "/api/workspace/write-export"
 #: lines somebody opened the log to find under megabytes of the ones they did
 #: not. None of the five says anything after the first time it is read: the
 #: health probe, the shell document, and the three CAD-link pollers all mean
-#: "still here".
+#: "still here" -- as does the live add-in's heartbeat, added since.
 #:
 #: Keyed by method as well as path so a route that is idle chatter one way and
 #: a real action the other keeps its voice. The chatter itself is being fixed
@@ -96,6 +96,8 @@ QUIET_REQUEST_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/cadlink/solve-command"),
         ("GET", "/api/cadlink/returns"),
         ("POST", "/api/cadlink/fusion-status"),
+        # The add-in's live heartbeat, every 4 s while a session is up.
+        ("POST", "/api/cadlink/live/heartbeat"),
     }
 )
 
@@ -440,6 +442,10 @@ LIVE_VALIDATION_PREFIX = "/api/cadlink/live/"
 #: The body ceiling of every live route (a route may set its own exact-path
 #: limit). Registration is a few kilobytes; nothing live needs megabytes.
 MAX_LIVE_REQUEST_BODY_BYTES = 64 * 1024
+#: The heartbeat posted over HTTP is the file heartbeat's object, so it gets
+#: the file reader's ceiling (``fusion_status._MAX_STATUS_BYTES``).
+LIVE_HEARTBEAT_PATH = LIVE_VALIDATION_PREFIX + "heartbeat"
+MAX_LIVE_HEARTBEAT_BODY_BYTES = 256 * 1024
 
 
 async def _request_validation_error(request: Request, exc: Exception) -> Response:
@@ -528,6 +534,7 @@ def create_app(
         path_limits={
             _WORKSPACE_EXPORT_PATH: MAX_EXPORT_REQUEST_BODY_BYTES,
             CLIENT_LOG_PATH: MAX_CLIENT_LOG_BODY_BYTES,
+            LIVE_HEARTBEAT_PATH: MAX_LIVE_HEARTBEAT_BODY_BYTES,
         },
         prefix_limits={LIVE_VALIDATION_PREFIX: MAX_LIVE_REQUEST_BODY_BYTES},
         envelope_prefixes={LIVE_VALIDATION_PREFIX: "cadlink-live"},

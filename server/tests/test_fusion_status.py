@@ -482,6 +482,7 @@ def test_status_endpoint_hashes_the_design_and_reports_wglink_folder_setup(
         "staleDetectionExplanation": None,
         "addinDeliveryVersion": None,
         "recoveryRequired": None,
+        "heartbeatTransport": None,
         "realizedDimensions": {
             "state": "link_unavailable",
             "instanceId": None,

@@ -1,5 +1,13 @@
 """Read the short-lived document heartbeat published by WGLink in Fusion.
 
+The heartbeat arrives on two transports: the ``.fusion-status.json`` file
+WGLink always writes, and, while the add-in holds a live session, the same
+object posted over HTTP (``docs/reference/CADLINK-LIVE-PROTOCOL.md``, section
+6). :func:`select_heartbeat` is the one place that chooses between them, and
+every reader goes through it: a fresh live heartbeat of a current session,
+else a fresh file heartbeat, else none. Both are held to the same validation
+and the same freshness window.
+
 The heartbeat is presence information, not a source of CAD geometry or design
 truth.  WG still computes the current design hash itself and only uses the
 reported link identity to decide whether the active Fusion document contains
@@ -18,6 +26,7 @@ import subprocess
 from typing import Any, Mapping
 
 from server.cadlink.fusion_delivery import DELIVERY_VERSION, addin_delivery_version
+from server.cadlink.live.registry import registry_for
 from server.platform.process import background_process_kwargs
 
 
@@ -119,6 +128,12 @@ def fusion_process_state(*, system: str | None = None) -> str:
     return FUSION_CLOSED if completed.returncode == 1 else FUSION_UNKNOWN
 
 
+def _utc_now() -> datetime:
+    """The wall clock heartbeat freshness is measured against; a test moves it."""
+
+    return datetime.now(timezone.utc)
+
+
 def _timestamp(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
@@ -135,35 +150,112 @@ def _string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def read_live_fusion_heartbeat(
-    data_dir: Path, *, now: datetime | None = None
-) -> Mapping[str, Any] | None:
-    """Return a fresh version-3 heartbeat, or None without guessing."""
+#: How far in the future ``updatedAt`` may be. A minute of clock skew is much
+#: more than these two processes on one machine should ever need.
+FUSION_STATUS_MAX_SKEW = timedelta(minutes=1)
 
-    checked_at = now or datetime.now(timezone.utc)
+HEARTBEAT_LIVE = "live"
+HEARTBEAT_FILE = "file"
+
+#: Why a heartbeat object is not usable (:func:`heartbeat_problem`).
+HEARTBEAT_INVALID = "invalid"
+HEARTBEAT_STALE = "stale"
+
+#: What :func:`select_heartbeat` returns: the payload and its transport, or
+#: ``(None, None)``.
+SelectedHeartbeat = tuple[Mapping[str, Any] | None, str | None]
+
+
+def heartbeat_now() -> datetime:
+    """The instant one answer measures heartbeat freshness at.
+
+    A caller that selects a heartbeat and then reports a status from it reads
+    this once and passes it to both, so a heartbeat that ages out in between
+    cannot settle operations and then be reported as absent.
+    """
+
+    return _utc_now()
+
+
+def heartbeat_updated_at(payload: Mapping[str, Any]) -> datetime | None:
+    """A heartbeat's ``updatedAt`` as an aware UTC time, or None."""
+
+    return _timestamp(payload.get("updatedAt"))
+
+
+def heartbeat_problem(payload: object, checked_at: datetime | None = None) -> tuple[str, str] | None:
+    """Why a heartbeat object is unusable at ``checked_at`` (default: now), or None.
+
+    The validation both transports share: heartbeat schema 1 from Fusion with
+    an ``updatedAt`` inside the freshness window (``FUSION_STATUS_TTL`` old at
+    most, ``FUSION_STATUS_MAX_SKEW`` in the future at most). Returns
+    ``(HEARTBEAT_INVALID | HEARTBEAT_STALE, field)``. The delivery version is
+    not checked here: a fresh file heartbeat of an older add-in is still a
+    status (``addin_outdated``).
+    """
+
+    checked_at = checked_at or _utc_now()
+    if not isinstance(payload, Mapping):
+        return HEARTBEAT_INVALID, ""
+    if payload.get("schemaVersion") != 1:
+        return HEARTBEAT_INVALID, "schemaVersion"
+    if payload.get("cadApplication") != "fusion360":
+        return HEARTBEAT_INVALID, "cadApplication"
+    updated_at = _timestamp(payload.get("updatedAt"))
+    if updated_at is None:
+        return HEARTBEAT_INVALID, "updatedAt"
+    if checked_at - updated_at > FUSION_STATUS_TTL or updated_at - checked_at > FUSION_STATUS_MAX_SKEW:
+        return HEARTBEAT_STALE, "updatedAt"
+    return None
+
+
+def _read_file_heartbeat(data_dir: Path) -> object:
     marker = data_dir.resolve() / IPC_SUBDIRECTORY / FUSION_STATUS_FILENAME
     try:
         if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > _MAX_STATUS_BYTES:
             return None
-        payload = json.loads(marker.read_text(encoding="utf-8"))
+        return json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
         return None
-    if (
-        not isinstance(payload, Mapping)
-        or payload.get("schemaVersion") != 1
-        or payload.get("cadApplication") != "fusion360"
-        or addin_delivery_version(payload) is None
-        or int(addin_delivery_version(payload) or 0) < DELIVERY_VERSION
-    ):
-        return None
-    updated_at = _timestamp(payload.get("updatedAt"))
-    if (
-        updated_at is None
-        or checked_at - updated_at > FUSION_STATUS_TTL
-        or updated_at - checked_at > timedelta(minutes=1)
-    ):
+
+
+def select_heartbeat(data_dir: Path, now: datetime | None = None) -> SelectedHeartbeat:
+    """The heartbeat every reader uses, and which transport it came by.
+
+    The live heartbeat of a session that is current in this data directory's
+    registry wins while it is fresh; otherwise a fresh file heartbeat; otherwise
+    none. A data directory without a running WG has no registry, so only its
+    file is read. One status answer selects once and hands the result to every
+    step that needs it.
+    """
+
+    checked_at = now or _utc_now()
+    registry = registry_for(data_dir)
+    if registry is not None:
+        live = registry.current_heartbeat()
+        if live is not None and heartbeat_problem(live, checked_at) is None:
+            return live, HEARTBEAT_LIVE
+    payload = _read_file_heartbeat(data_dir)
+    if payload is not None and heartbeat_problem(payload, checked_at) is None:
+        return payload, HEARTBEAT_FILE  # type: ignore[return-value]
+    return None, None
+
+
+def settleable_heartbeat(selected: SelectedHeartbeat) -> Mapping[str, Any] | None:
+    """The selected heartbeat when it may settle operations: version 3 or later."""
+
+    payload = selected[0]
+    if payload is None or int(addin_delivery_version(payload) or 0) < DELIVERY_VERSION:
         return None
     return payload
+
+
+def read_live_fusion_heartbeat(
+    data_dir: Path, *, now: datetime | None = None
+) -> Mapping[str, Any] | None:
+    """Return a fresh version-3 heartbeat from either transport, or None without guessing."""
+
+    return settleable_heartbeat(select_heartbeat(data_dir, now))
 
 
 def _fingerprint_hash(value: object) -> str | None:
@@ -367,11 +459,16 @@ def read_fusion_status(
     returned_bundle: Path | None = None,
     returned_manifest: Mapping[str, Any] | None = None,
     now: datetime | None = None,
+    heartbeat: SelectedHeartbeat | None = None,
 ) -> dict[str, Any]:
-    """Classify the active Fusion document against the design on screen."""
+    """Classify the active Fusion document against the design on screen.
 
-    checked_at = now or datetime.now(timezone.utc)
-    marker = workspace_root.resolve() / IPC_SUBDIRECTORY / FUSION_STATUS_FILENAME
+    ``workspace_root`` is WG's data directory. ``heartbeat`` is a selection a
+    caller already made with :func:`select_heartbeat` for this same answer;
+    without it this selects for itself. It is never read twice.
+    """
+
+    checked_at = now or _utc_now()
     closed: dict[str, Any] = {
         "cadApplication": "fusion360",
         "state": "addin_offline" if process_running else "closed",
@@ -394,33 +491,20 @@ def read_fusion_status(
         "staleDetectionExplanation": None,
         "addinDeliveryVersion": None,
         "recoveryRequired": None,
+        "heartbeatTransport": None,
     }
-    try:
-        if marker.is_symlink() or not marker.is_file():
-            return closed
-        if marker.stat().st_size > _MAX_STATUS_BYTES:
-            return closed
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
-        return closed
-    if not isinstance(payload, Mapping):
-        return closed
-    if payload.get("schemaVersion") != 1 or payload.get("cadApplication") != "fusion360":
+    payload, transport = heartbeat if heartbeat is not None else select_heartbeat(workspace_root, checked_at)
+    # A future timestamp is not trusted either (``FUSION_STATUS_MAX_SKEW``).
+    if payload is None or heartbeat_problem(payload, checked_at) is not None:
         return closed
     updated_at = _timestamp(payload.get("updatedAt"))
-    # A future timestamp is not trusted either. A minute of clock skew is much
-    # more than these two processes on one machine should ever need.
-    if (
-        updated_at is None
-        or checked_at - updated_at > FUSION_STATUS_TTL
-        or updated_at - checked_at > timedelta(minutes=1)
-    ):
-        return closed
+    assert updated_at is not None
 
     base = {
         **closed,
         "running": True,
         "processRunning": True,
+        "heartbeatTransport": transport,
         "sessionId": _string(payload.get("sessionId")),
         "adapterVersion": _string(payload.get("adapterVersion")),
         "workspaceRoot": _string(payload.get("workspaceRoot")),
@@ -565,12 +649,23 @@ def read_fusion_status(
 __all__ = [
     "ADDIN_OUTDATED_MESSAGE",
     "FUSION_STATUS_FILENAME",
+    "FUSION_STATUS_MAX_SKEW",
     "FUSION_STATUS_TTL",
+    "HEARTBEAT_FILE",
+    "HEARTBEAT_INVALID",
+    "HEARTBEAT_LIVE",
+    "HEARTBEAT_STALE",
+    "SelectedHeartbeat",
     "FUSION_CLOSED",
     "FUSION_RUNNING",
     "FUSION_UNKNOWN",
     "fusion_process_running",
     "fusion_process_state",
+    "heartbeat_now",
+    "heartbeat_problem",
+    "heartbeat_updated_at",
     "read_live_fusion_heartbeat",
     "read_fusion_status",
+    "select_heartbeat",
+    "settleable_heartbeat",
 ]

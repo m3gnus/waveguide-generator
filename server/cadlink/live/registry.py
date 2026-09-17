@@ -7,7 +7,12 @@ Every reader goes through :func:`registry_for`, so two applications on
 different data directories never see each other's sessions, and an
 application that has not started, or has stopped, has no live state at all.
 
-Nothing here is persisted: a WG restart forgets every session, token and nonce.
+The registry also keeps the latest heartbeat the add-in posted over HTTP,
+bound to the session that posted it: a session that ends, is superseded or
+expires takes its heartbeat with it.
+
+Nothing here is persisted: a WG restart forgets every session, token, nonce
+and live heartbeat.
 A session token is never stored. The registry keeps ``sha256(token)``, finds a
 session by that digest, and confirms the match with ``hmac.compare_digest``.
 (docs/reference/CADLINK-LIVE-PROTOCOL.md, "Live registry, sessions and tokens")
@@ -15,7 +20,9 @@ session by that digest, and confirms the match with ``hmac.compare_digest``.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
+from datetime import datetime
 import hashlib
 import hmac
 from pathlib import Path
@@ -37,6 +44,9 @@ SESSION_UNKNOWN = "session_unknown"
 TOKEN_EXPIRED = "token_expired"
 SESSION_SUPERSEDED = "session_superseded"
 INSTALLATION_MISMATCH = "installation_mismatch"
+
+HEARTBEAT_RECORDED = "recorded"
+HEARTBEAT_OLDER = "older"
 
 #: Monotonic seconds for every validity decision (lifetime, refresh grace,
 #: idle), so a wall-clock change cannot extend or cut a session. Module-level so
@@ -92,6 +102,8 @@ class LiveRegistry:
     #: digests of superseded sessions' tokens -> when they would have expired.
     _superseded: dict[bytes, float] = field(default_factory=dict, repr=False)
     _used_nonces: set[bytes] = field(default_factory=set, repr=False)
+    #: (live session id, its ``updatedAt``, payload) of the latest live heartbeat, or None.
+    _heartbeat: tuple[str, datetime, dict[str, Any]] | None = field(default=None, repr=False)
 
     @classmethod
     def create(cls) -> "LiveRegistry":
@@ -218,6 +230,48 @@ class LiveRegistry:
             if self._sessions.get(session.live_session_id) is session:
                 self._drop(session, superseded=False)
 
+    # -- heartbeat ------------------------------------------------------------
+
+    def record_heartbeat(
+        self, session: LiveSession, payload: Mapping[str, Any], updated_at: datetime
+    ) -> str | None:
+        """Keep ``payload`` (whose ``updatedAt`` is ``updated_at``) as the live heartbeat.
+
+        Returns :data:`HEARTBEAT_RECORDED`; :data:`HEARTBEAT_OLDER` when the
+        heartbeat kept already has a later ``updatedAt`` (a request that arrived
+        late; the newer one stays, nothing is kept); ``None`` when the session is
+        no longer current here (it ended, was superseded or expired after it
+        authenticated), and nothing is kept.
+        """
+
+        now = _now()
+        kept = copy.deepcopy(dict(payload))
+        with self._lock:
+            if self._sessions.get(session.live_session_id) is not session or self._expired(session, now):
+                return None
+            if self._heartbeat is not None and updated_at < self._heartbeat[1]:
+                return HEARTBEAT_OLDER
+            self._heartbeat = (session.live_session_id, updated_at, kept)
+            return HEARTBEAT_RECORDED
+
+    def current_heartbeat(self) -> dict[str, Any] | None:
+        """The latest live heartbeat, while the session that posted it is current.
+
+        Freshness of the payload itself is the reader's check
+        (``fusion_status.select_heartbeat``), the same as for the file.
+        """
+
+        now = _now()
+        with self._lock:
+            if self._heartbeat is None:
+                return None
+            session_id, _updated_at, payload = self._heartbeat
+            session = self._sessions.get(session_id)
+            if session is None or self._expired(session, now):
+                return None
+        # A copy: no reader can change what the registry holds.
+        return copy.deepcopy(payload)
+
     def loaded_identity(self) -> dict[str, Any] | None:
         """What the most recently registered session that is still valid loaded."""
 
@@ -237,6 +291,8 @@ class LiveRegistry:
 
     def _drop(self, session: LiveSession, *, superseded: bool) -> None:
         self._sessions.pop(session.live_session_id, None)
+        if self._heartbeat is not None and self._heartbeat[0] == session.live_session_id:
+            self._heartbeat = None
         if self._by_installation.get(session.installation_id) == session.live_session_id:
             self._by_installation.pop(session.installation_id, None)
         for digest in (session.token_digest, session.previous_digest):
@@ -287,6 +343,8 @@ def registry_for(data_dir: Path | str | None) -> LiveRegistry | None:
 
 __all__ = [
     "HEARTBEAT_INTERVAL_SECONDS",
+    "HEARTBEAT_OLDER",
+    "HEARTBEAT_RECORDED",
     "IDLE_TIMEOUT_SECONDS",
     "INSTALLATION_MISMATCH",
     "LONG_POLL_SECONDS",
