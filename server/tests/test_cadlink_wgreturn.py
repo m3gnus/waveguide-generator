@@ -13,7 +13,12 @@ import pytest
 
 from server.cadlink.fusion_status import FUSION_STATUS_FILENAME, read_fusion_status
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES
-from server.cadlink.wgreturn import WgReturnError, read_wgreturn, validate_manifest
+from server.cadlink.wgreturn import (
+    WgReturnError,
+    read_wgreturn,
+    source_physical_name,
+    validate_manifest,
+)
 
 
 def _manifest(step: bytes) -> dict:
@@ -159,6 +164,80 @@ def test_source_identity_v1_refuses_an_ambiguous_duplicate_identity() -> None:
         ),
     ):
         validate_manifest(manifest)
+
+
+def _rename_instance(manifest: dict, instance_id: str) -> dict:
+    manifest["instances"][0]["instance_id"] = instance_id
+    manifest["coordinate_system"]["solver_anchor_instance_id"] = instance_id
+    manifest["scope"]["included"][0]["wglink_instance_id"] = instance_id
+    source = manifest["sources"][0]
+    source["instance_id"] = instance_id
+    source["selectors"]["linked_throat"]["instance_id"] = instance_id
+    return manifest
+
+
+def _name_bytes_without_role(manifest: dict) -> int:
+    source = manifest["sources"][0]
+    return len(source_physical_name(9999, source["id"], source["instance_id"], "").encode("utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("tag", "source_id", "instance_id", "role"),
+    [
+        (101, "source-hf", None, "HF"),
+        (9999, "s" * 25, "3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e8f43", "PASSIVE_CARDIOID"),
+        (102, "\u00e9t\u00e9", "wgo_01J4Y2WZQK8Z3TFD3E7V9XKQ4M", "PORT_EXIT"),
+    ],
+)
+def test_the_reader_formats_physical_names_exactly_as_the_mesher_does(
+    tag: int, source_id: str, instance_id: str | None, role: str
+) -> None:
+    from server.mesh.imported import _physical_name
+
+    assert source_physical_name(tag, source_id, instance_id, role) == _physical_name(
+        tag, source_id, instance_id, role
+    )
+
+
+def test_source_identity_v1_accepts_a_role_that_exactly_fills_the_physical_name() -> None:
+    manifest = _identity_manifest()
+    manifest["sources"][0]["role"] = "R" * (128 - _name_bytes_without_role(manifest))
+
+    validate_manifest(manifest)
+
+
+def test_source_identity_v1_refuses_a_role_that_overflows_the_physical_name(tmp_path: Path) -> None:
+    manifest = _identity_manifest()
+    manifest["sources"][0]["role"] = "R" * (129 - _name_bytes_without_role(manifest))
+    expected = (
+        f"$.sources[0]: {SOURCE_IDENTITY} source 'cad-authored-source-17' would need a "
+        "129-byte mesh physical name"
+    )
+
+    with pytest.raises(WgReturnError, match=re.escape(expected)):
+        validate_manifest(manifest)
+    with pytest.raises(WgReturnError, match=re.escape(expected)):
+        read_wgreturn(write_bundle(tmp_path, manifest))
+
+
+def test_source_identity_v1_refuses_an_instance_id_that_overflows_the_physical_name() -> None:
+    manifest = _identity_manifest()
+    fixed = len(source_physical_name(9999, "cad-authored-source-17", "", "HF").encode("utf-8"))
+    _rename_instance(manifest, "i" * (129 - fixed))
+
+    with pytest.raises(WgReturnError, match=re.escape("would need a 129-byte mesh physical name")):
+        validate_manifest(manifest)
+    _rename_instance(manifest, "i" * (128 - fixed))
+    validate_manifest(manifest)
+
+
+def test_a_legacy_source_keeps_accepting_a_name_longer_than_the_mesh_keeps(tmp_path: Path) -> None:
+    manifest = _rename_instance(_manifest(b"STEP"), "i" * 100)
+    manifest["sources"][0]["role"] = "R" * 100
+
+    result = read_wgreturn(write_bundle(tmp_path, manifest))
+
+    assert result.manifest["sources"][0]["role"] == "R" * 100
 
 
 def test_an_unknown_source_identity_version_is_still_refused() -> None:

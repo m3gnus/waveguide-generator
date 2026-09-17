@@ -65,22 +65,45 @@ REDUCED_DOMAIN_FEATURE = "reduced-domain-v1"
 # opaque string cannot show WG which face it should have been, so WG never picks.
 # Without the feature a source id keeps its legacy meaning and legacy checks.
 SOURCE_IDENTITY_FEATURE = "source-identity-v1"
-# The bound comes from the mesh, not from taste. Ingestion writes each source's
-# id into a gmsh physical name,
+# Both bounds come from the mesh. Ingestion writes each source into a gmsh
+# physical name,
 #   wg-import-v1|tag=<tag>|source_id=<id>|instance_id=<instance>|role=<role>
 # (``server/mesh/imported.py``, ``_physical_name``), and gmsh 4.15 writes at
 # most 128 UTF-8 bytes of a physical name to MSH 2.2, silently cutting the rest
 # (even inside a multi-byte character), after which ingestion refuses the mesh
-# for a missing physical name. The rest of the name is at most:
+# for a missing physical name -- after meshing. Under the feature WG therefore
+# checks the WHOLE name at validation, with the worst-case tag 9999 (tags start
+# at 101, and 9,899 sources would not fit in a 1 MiB manifest: a minimal source
+# is 262 bytes), and refuses the source there, before any work.
+#
+# The identity additionally has a fixed ceiling, so a CAD writer can size its
+# identities without knowing the rest of the name. With WGLink's own values the
+# rest takes at most 103 bytes:
 #   47  fixed text ("wg-import-v1|tag=", "|source_id=", "|instance_id=", "|role=")
-#    4  tag digits: tags start at 101, and 9,899 sources would not fit in a
-#       1 MiB manifest (a minimal source is 262 bytes)
-#   36  instance id: WGLink mints a UUID; WG's Onshape ids are 30; none is "null"
+#    4  tag digits (9999)
+#   36  instance id: WGLink mints a UUID; WG's Onshape ids are 30
 #   16  role: PASSIVE_CARDIOID, WGLink's longest
-# 128 - 47 - 4 - 36 - 16 = 25 bytes for the identity, counted in UTF-8 bytes
-# because that is what gmsh counts. No bound applies without the feature.
+# 128 - 103 = 25 bytes, counted in UTF-8 bytes because that is what gmsh counts.
+# A longer role or instance id is refused by the whole-name check, not assumed
+# away. No bound applies without the feature.
 GMSH_PHYSICAL_NAME_MAX_BYTES = 128
 SOURCE_IDENTITY_MAX_BYTES = 25
+WORST_CASE_SOURCE_TAG = 9999
+
+
+def source_physical_name(tag: int, source_id: str, instance_id: Any, role: str) -> str:
+    """The mesh physical name ingestion gives a source.
+
+    A copy of ``server.mesh.imported._physical_name``, which this light reader
+    does not import (the mesh module loads the meshing stack); a test pins the
+    two equal.
+    """
+
+    instance = "null" if instance_id is None else str(instance_id)
+    return (
+        f"wg-import-v1|tag={tag}|source_id={source_id}|"
+        f"instance_id={instance}|role={role}"
+    )
 REQUIRED_BASE_FEATURES = frozenset(
     {"checksummed-files-v1", "assembly-frame-v1", "instance-records-v1"}
 )
@@ -524,10 +547,23 @@ def _validate_source(
                 f"{SOURCE_IDENTITY_FEATURE} source identity must be at most "
                 f"{SOURCE_IDENTITY_MAX_BYTES} UTF-8 bytes",
             )
-    _string(_required(obj, "role", path), f"{path}.role")
+    role = _string(_required(obj, "role", path), f"{path}.role")
+    assert role is not None
     instance_id = _string(obj.get("instance_id"), f"{path}.instance_id", nullable=True)
     if instance_id is not None and instance_id not in instance_ids:
         _fail(f"{path}.instance_id", f"does not name an instances[] record: {instance_id!r}")
+    if source_identity:
+        name_bytes = len(
+            source_physical_name(WORST_CASE_SOURCE_TAG, source_id, instance_id, role).encode("utf-8")
+        )
+        if name_bytes > GMSH_PHYSICAL_NAME_MAX_BYTES:
+            _fail(
+                path,
+                f"{SOURCE_IDENTITY_FEATURE} source {source_id!r} would need a "
+                f"{name_bytes}-byte mesh physical name (its id, instance_id and role "
+                f"together); the mesh keeps at most {GMSH_PHYSICAL_NAME_MAX_BYTES} "
+                "UTF-8 bytes, so shorten the role or instance_id",
+            )
     if not isinstance(_required(obj, "required", path), bool):
         _fail(f"{path}.required", "must be boolean")
     _string(_required(obj, "default_drive_channel_id", path), f"{path}.default_drive_channel_id")
@@ -939,6 +975,8 @@ __all__ = [
     "SOURCE_IDENTITY_FEATURE",
     "GMSH_PHYSICAL_NAME_MAX_BYTES",
     "SOURCE_IDENTITY_MAX_BYTES",
+    "WORST_CASE_SOURCE_TAG",
+    "source_physical_name",
     "SUPPORTED_FEATURES",
     "declared_domain_planes",
     "WgReturnBundle",

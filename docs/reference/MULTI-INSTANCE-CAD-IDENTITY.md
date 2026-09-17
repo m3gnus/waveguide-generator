@@ -37,13 +37,19 @@ A return that lists `source-identity-v1` in `required_features` gives the existi
 - **Form.** An opaque string: non-empty, with no leading or trailing whitespace, and at
   most 25 UTF-8 bytes. WG does not parse it. Ids remain unique across the whole return,
   not only within an instance.
-- **Why 25 bytes.** Ingestion writes the id into the mesh's physical name
-  `wg-import-v1|tag=<tag>|source_id=<id>|instance_id=<instance>|role=<role>`, and gmsh
-  writes at most 128 UTF-8 bytes of a physical name, silently cutting the rest; the cut
-  mesh is refused. The rest of the name takes at most 103 bytes: 47 of fixed text, 4 tag
-  digits (tags start at 101, and a fifth digit needs more sources than a 1 MiB manifest
-  holds), a 36-byte instance id (WGLink mints UUIDs), and 16 for `PASSIVE_CARDIOID`,
-  WGLink's longest role. The limit counts bytes because gmsh does.
+- **The whole mesh name must fit, and WG checks it when it reads the bundle.** Ingestion
+  writes each source into the mesh's physical name
+  `wg-import-v1|tag=<tag>|source_id=<id>|instance_id=<instance>|role=<role>` (`null` for
+  an unlinked source), and gmsh writes at most 128 UTF-8 bytes of a physical name,
+  silently cutting the rest; a cut mesh would be refused only after meshing. So WG
+  refuses the source at validation when that name, with the largest possible tag 9999
+  (tags start at 101, and a fifth digit needs more sources than a 1 MiB manifest holds),
+  exceeds 128 UTF-8 bytes -- whether the id, the instance id or the role is too long.
+- **Why 25 bytes for the id.** It is the id's share of that budget with WGLink's own
+  values: 47 bytes of fixed text, 4 tag digits, a 36-byte instance id (WGLink mints
+  UUIDs) and 16 for `PASSIVE_CARDIOID`, its longest role, leave 25. A writer can size
+  its identities from this alone; the whole-name check still applies. Both limits count
+  bytes because gmsh does.
 - **Refused by the writer, never chosen by WG.** When a source's authored identity is
   missing, or resolves to no face, to split faces, or to faces another source claims, the
   CAD writer refuses to write the bundle and asks for reassignment. WG cannot tell from an
