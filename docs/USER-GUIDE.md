@@ -521,12 +521,22 @@ sent and solved the same way. Three things make it a valid return:
 2. **Model closed solids.** An open surface body must be classified with
    **Declare Body…** — `exterior-shell` to include it, `exclude` to leave it
    out — or the export refuses it as unclassified.
-3. **Respect the solver frame.** With no WG link to anchor it, the solver
-   assumes the model radiates along **+Z** with the throat at the **origin**,
-   centred on the x = 0 and y = 0 planes so symmetry can be detected. The
-   dialog's pre-flight summary warns when the model appears to violate any of
-   this — fix the placement in Fusion rather than solving a mis-framed model.
-
+3. **Confirm its solver frame.** With no WG link to anchor it, nothing in the
+   model says which way it radiates. The first time WG is asked to solve a
+   model from a project — **Solve in WG** in Fusion, **Solve** in WG, or a
+   retry — it prepares the model and then waits with **needs its solver frame
+   confirmed**. Choose the model axis that points out of the mouth (+X, -X, +Y,
+   -Y, +Z or -Z) and check the side and top views: they show the model as WG
+   will solve it, radiating along the solver +Z (blue) from the model's
+   origin, with the drive sources in orange. **Confirm … and solve** remembers
+   the choice for the project, so later exports of it solve without asking
+   again. WG asks again when the export is written in another component's
+   coordinates. A model from an unsaved Fusion document belongs to no project,
+   so its frame is confirmed for that one export only. Model the throat at the
+   origin and centre the model on the two planes across that axis so symmetry
+   can be detected; the dialog's pre-flight summary still warns when the model
+   appears to violate the +Z convention. A model declared as a half or
+   quarter (next item) is solved only along +Z, as modelled.
 4. **Say so if it is already a half.** A model you cut in CAD before exporting
    is not a full model with a hole in it, and nothing in the geometry says
    which one it is. Set **Model domain** in the Send/Solve dialog to the half
@@ -540,10 +550,11 @@ sent and solved the same way. Three things make it a valid return:
 
 **Solve in WG** then works as for a linked design. The return arrives marked
 as an imported CAD model — an informational note states that WG has no design
-identity for it and that the assembly frame is solved as-is — and mesh sizing
-and drive channels are set in the CAD Link panel as for any import. Nothing
-blocks the solve. Such a return is solved exactly as sent: there are no
-parametric formulas behind it to edit in WG.
+identity for it — and mesh sizing and drive channels are set in the CAD Link
+panel as for any import. Only the solver frame confirmation above stands
+between it and the solve; no path solves it before that. Such a return is
+solved exactly as sent: there are no parametric formulas behind it to edit in
+WG.
 
 The detailed CAD-link implementation plan is still active workspace material. Treat
 the UI and checked-in tests as the current behavior until that plan is closed and its

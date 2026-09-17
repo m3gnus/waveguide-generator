@@ -7,6 +7,7 @@ import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { openCadProject } from './CadProjectPanel';
 import { workspaceNavigation } from './workspaceNavigation';
 import { CadSolveInputs } from './CadSolveInputs';
+import { CadSolverFrameConfirm } from './CadSolverFrameConfirm';
 
 /** The hash of a `sha256:` digest, cut to what a person can read and compare. */
 export function shortSha256(digest: string | null | undefined): string {
@@ -30,6 +31,7 @@ const REASON_COPY: Record<string, string> = {
   interrupted: 'interrupted',
   ready_to_solve: 'ready to solve',
   update_restart_pending: 'held for the update restart',
+  frame_confirmation_required: 'needs its solver frame confirmed',
 };
 
 interface FindingReview {
@@ -76,7 +78,7 @@ interface Guidance {
   text: string | null;
   simulation: boolean;
   /** The action the reason calls for, offered while the operation waits. */
-  action: Exclude<OperationAction, 'dismiss'> | 'open-project' | null;
+  action: Exclude<OperationAction, 'dismiss'> | 'open-project' | 'confirm-frame' | null;
   /** Solve now beside it: the backend answers from the project's recorded setup. */
   alsoSolve?: boolean;
 }
@@ -126,6 +128,14 @@ function guidance(operation: CadOperationSummary, onScreen: boolean): Guidance {
         text: 'Approving applies to this preparation only; a new preparation needs its own review.',
         simulation: false,
         action: 'approve',
+      };
+    case 'frame_confirmation_required':
+      // An unlinked model: the backend solves nothing until its project's
+      // solver frame is confirmed, whichever way the solve was asked for.
+      return {
+        text: `${name} was authored in CAD. Confirm the axis it radiates along — once for its project — and WG solves it in that frame.`,
+        simulation: false,
+        action: 'confirm-frame',
       };
     case 'update_restart_pending':
       // The backend queues it again by itself; Solve now would only be refused until then.
@@ -221,6 +231,12 @@ function CadOperationCard({ operation, record }: {
       </ul>}
       {review.error && <span>Could not read the findings to review: {review.error}</span>}
       {help.text && <span>{help.text}</span>}
+      {waiting && help.action === 'confirm-frame' && heldAction !== 'solve' && <CadSolverFrameConfirm
+        key={`${operation.operationId}:${operation.attemptGeneration}:${operation.preparationId ?? ''}`}
+        operationId={operation.operationId}
+        label={label}
+        onConfirmed={() => ask('solve', () => coordinator.solveOperation(operation.operationId))}
+      />}
       <CadSolveInputs
         operationId={operation.operationId}
         operation={operation}

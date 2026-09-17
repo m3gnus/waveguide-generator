@@ -18,6 +18,13 @@
 .cad-direction-alert span { color: var(--fg3); font-size: var(--text-base); overflow-wrap: anywhere; }
 .cad-direction-alert button, .cad-secondary-action { justify-content: center; width: 100%; }
 .cad-confirm-actions { display: grid; grid-template-columns: 1fr 1.7fr; gap: 6px; margin-top: 8px; }
+.cad-solver-frame { display: grid; gap: 6px; margin-top: 6px; }
+.cad-solver-frame fieldset { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0; padding: 4px 6px; border: 1px solid var(--border-default); }
+.cad-solver-frame fieldset label { display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); }
+.cad-frame-views { display: flex; flex-wrap: wrap; gap: 6px; }
+.cad-frame-view { margin: 0; display: grid; gap: 2px; }
+.cad-frame-view canvas { max-width: 100%; height: auto; border: 1px solid var(--border-subtle); }
+.cad-frame-view figcaption { color: var(--fg3); font-size: var(--text-micro); }
 .cad-secondary-action { margin-top: 8px; }
 
 /* One notice channel at the top of the rail. */
