@@ -9,9 +9,11 @@ them; they are not a current release status dashboard.
   cost.
 - [Imported CAD same-mesh qualification](IMPORTED-SAME-MESH-QUALIFICATION.md): Metal
   and BEAT-CPU are given the same imported record and compared as complex responses,
-  against tolerances derived from analytic spheres and a refinement ladder. It covers
-  rotated, repeated-HF and reduced-domain fixtures and real returns through WG's
-  ingest. Two ingest findings are recorded.
+  against tolerances derived from analytic spheres and a refinement ladder. Measured at
+  `154bb93d`, it covers rotated, repeated-HF and reduced-domain fixtures and
+  harness-built CAD returns through WG's ingest: 79 judged rows pass and two refinement
+  rows are reported unjudged. The placed return and the rear-cap quarter, earlier
+  recorded as ingest findings, are now ordinary judged rows.
 
 ## Open: the one-pass manual test for the disk-image installer
 
