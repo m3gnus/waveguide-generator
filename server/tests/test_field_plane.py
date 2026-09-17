@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 from pathlib import Path
 import struct
@@ -184,7 +185,14 @@ def _create_job(
     backend: str = METAL_FIELD_TRACE_BACKEND,
     unavailable_reason: str | None = None,
 ) -> None:
-    now = "2026-08-18T00:00:00"
+    # Relative to the real clock, not an absolute calendar date: a fixed past
+    # date ages past the retention window's `datetime.now()` comparison in
+    # `server.jobs.store._prune_terminal_jobs` as real time advances, which
+    # silently prunes this job's field-trace artifact and turns every request
+    # in this file into a 410 `artifact_pruned`. `now()` keeps the job fresh
+    # regardless of when the suite runs (matches the pattern already used in
+    # test_field_traces_store.py).
+    now = datetime.now().isoformat()
     geometry: dict[str, Any]
     if multi:
         geometry = {
