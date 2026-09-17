@@ -788,7 +788,7 @@ outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 `accepted`. `document.applyingOperation.operationId` settles only Insert/Update as
 `recovery_required`. A missing observation stays `processing`.
 
-| Add-in field/value at pinned add-in `18619b633` | WG result |
+| Add-in field/value at pinned add-in `04b2524b4` | WG result |
 | --- | --- |
 | `recentOutcomes: superseded` (`_pending_handoff`) | `cancelled` / `superseded` |
 | `recentOutcomes: discarded` (`_sweep_leftover_claims`) | `cancelled` / `adapter_not_started` |
