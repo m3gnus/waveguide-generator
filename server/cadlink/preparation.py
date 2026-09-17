@@ -76,6 +76,12 @@ from .project_setup import (
     widen_polar_to_derivation,
 )
 from .setup import CadSolveSetup, solve_request_for, validate_setup
+from .solver_frame import (
+    AS_MODELLED,
+    REASON as FRAME_CONFIRMATION_REQUIRED,
+    record_frame_refusal,
+    resolve_for_manifest as resolve_solver_frame,
+)
 from .solve_command import (
     CAD_SOLVE_SUBMISSION_PREFIX,
     RETAIN_INVALID,
@@ -614,11 +620,15 @@ def _resumable(
     revision_id: str,
     manifest_sha256: str,
     semantics: str,
+    frame_axis: str | None = None,
 ) -> dict[str, Any] | None:
     """The operation's last preparation, when this attempt would make the same one.
 
     The same snapshot, setup revision and meshing semantics: the attempt
     resumes it instead of preparing anew, so the approvals given on it apply.
+    For an unlinked snapshot (``frame_axis`` given) also the same solver frame:
+    a preparation meshed in another frame, or one that states none, is made
+    again rather than solved in a frame nobody confirmed.
     """
 
     preparation_id = row.get("preparation_id")
@@ -633,7 +643,15 @@ def _resumable(
     ):
         return None
     ingest = store.get_ingest(str(preparation["ingest_id"]))
-    return json.loads(ingest["record_json"]) if ingest is not None else None
+    if ingest is None:
+        return None
+    record = json.loads(ingest["record_json"])
+    if frame_axis is not None:
+        normalisation = record.get("normalisation")
+        frame = normalisation.get("solver_frame") if isinstance(normalisation, Mapping) else None
+        if not isinstance(frame, Mapping) or frame.get("axis") != frame_axis:
+            return None
+    return record
 
 
 def _project_gate(retained: Mapping[str, Any]) -> dict[str, str]:
@@ -737,8 +755,17 @@ def _prepare_sync(
     setup, revision_id = loaded
     manifest_sha256 = str(retained["manifest_sha256"])
     semantics = meshing_semantics_fingerprint()
+    # An unlinked (CAD-authored) snapshot is meshed in the solver frame its
+    # project confirmed, or as modelled until then (CAD-OPERATIONS.md,
+    # "Unlinked solver frame"). None for a linked snapshot.
+    # A retained manifest that cannot be read here cannot be ingested either;
+    # the jobs system's own frame gate stays behind this one regardless.
+    solver_frame = resolve_solver_frame(
+        store, _retained_manifest(retained) or {"instances": [{}]}, manifest_sha256
+    )
+    frame_axis = solver_frame.axis if solver_frame is not None else None
 
-    record = _resumable(store, row, revision_id, manifest_sha256, semantics)
+    record = _resumable(store, row, revision_id, manifest_sha256, semantics, frame_axis)
     if record is None:
         # preparing-mesh: from the retained copy, under the attempt's fence.
         _advance(ctx, operation_id, generation, stage=STAGE_PREPARING_MESH)
@@ -756,6 +783,11 @@ def _prepare_sync(
                     **(
                         {"surface_deviation_mm": setup.preparation.surface_deviation_mm}
                         if setup.preparation.surface_deviation_mm is not None
+                        else {}
+                    ),
+                    **(
+                        {"solver_frame": frame_axis}
+                        if frame_axis is not None and frame_axis != AS_MODELLED
                         else {}
                     ),
                 },
@@ -811,6 +843,17 @@ def _prepare_sync(
         operation_id, generation, preparation_id,
     )
     _publish(ctx, prepared)
+
+    if solver_frame is not None:
+        # Before findings and approvals: a frame confirmed differently is a new
+        # preparation, and approvals never carry to it. The record says which
+        # frame it was meshed in; only that frame, confirmed, may be solved.
+        frame_refusal = record_frame_refusal(store, record)
+        if frame_refusal is not None:
+            return "done", _finish(
+                ctx, operation_id, generation, NEEDS_USER_INPUT,
+                reason=FRAME_CONFIRMATION_REQUIRED, message=frame_refusal,
+            )
 
     reviewed = (
         [finding for finding in request.approve_finding_ids if finding in blocking]
@@ -903,7 +946,9 @@ async def _submit(
         # so the binding is released and the user can change what they chose.
         code = str(getattr(exc, "reason_code", "") or getattr(exc, "code", "") or "")
         reason = (
-            "engine_unavailable"
+            FRAME_CONFIRMATION_REQUIRED
+            if code == FRAME_CONFIRMATION_REQUIRED
+            else "engine_unavailable"
             if "engine" in code or type(exc).__name__ == "EngineUnavailableError"
             else "submission_refused"
         )

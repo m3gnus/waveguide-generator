@@ -7765,6 +7765,45 @@
         "title": "SolveRequest",
         "type": "object"
       },
+      "SolverFrameConfirmationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "axis": {
+            "minLength": 1,
+            "title": "Axis",
+            "type": "string"
+          },
+          "ingestId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingestid"
+          },
+          "operationId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operationid"
+          }
+        },
+        "required": [
+          "axis"
+        ],
+        "title": "SolverFrameConfirmationRequest",
+        "type": "object"
+      },
       "SolverMeshRequest": {
         "description": "The design exactly as a solve submission would carry it.",
         "properties": {
@@ -9890,6 +9929,116 @@
           }
         },
         "summary": "Post Solve Command Outcome",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/solver-frame": {
+      "get": {
+        "description": "Every solver frame axis's matrix for this snapshot, and what its project confirmed.",
+        "operationId": "get_solver_frame_api_cadlink_solver_frame_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "operationId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Operationid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ingestId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ingestid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Solver Frame Api Cadlink Solver Frame Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Solver Frame",
+        "tags": [
+          "cadlink"
+        ]
+      },
+      "put": {
+        "description": "Confirm the axis this snapshot's project radiates along.",
+        "operationId": "put_solver_frame_api_cadlink_solver_frame_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SolverFrameConfirmationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Put Solver Frame Api Cadlink Solver Frame Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Solver Frame",
         "tags": [
           "cadlink"
         ]

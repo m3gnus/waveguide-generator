@@ -163,6 +163,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `snapshot_unavailable` | `rejected` | A received snapshot's bundle stayed unreadable for 24 hours (see "Delivery over HTTP"). Sending it again is a new operation |
 | `setup_required` | `needs_user_input` | No setup revision is bound yet; a CAD-authored model never borrows the open project's |
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
+| `frame_confirmation_required` | `needs_user_input` | An unlinked (CAD-authored) snapshot whose project has not confirmed the solver frame it was prepared in (see "Unlinked solver frame") |
 | `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout, a return that is not in the WGLink folder and has no retained copy |
 | `engine_unavailable` | `needs_user_input` | The engine the setup names cannot take this record; the message names the capable engines |
 | `submission_refused` | `needs_user_input` | The jobs system refused the request, or submitting it failed without creating a job |
@@ -301,6 +302,56 @@ whatever project is open. Nothing on the backend reads the live UI:
   its settings, and never borrows another project's.
 - **The polar grid** of the request is widened to what the ingestion derived for the
   snapshot, as the frontend does; the runtime refuses a narrower one.
+
+## Unlinked solver frame
+
+A return with no WG instance -- a model drawn from scratch in CAD -- carries no throat
+frame, so nothing in it says which way it radiates. It is not solvable until the user
+confirms its solver frame, once per project. `server/cadlink/solver_frame.py` is the
+executable half of this section.
+
+- **The frame (`cad-solver-frame-v1`).** The model axis that points out of the mouth,
+  one of `+z -z +x -x +y -y`. Each is one fixed proper rotation taking that axis to the
+  solver's +Z, by the minimal rotation (the perpendicular axis the two share is kept);
+  the origin is the model's own. `+z` is the identity, the frame every earlier release
+  solved in. `frame_matrix` is the only producer of these matrices: preparation meshes
+  with it, the ingestion record states it, and the preview and the frontend's fixture
+  (`frontend/src/viewport/solverFrame.fixture.json`, pinned equal on both sides) read
+  it, so the preview is the solved frame.
+- **Frame requirement.** A confirmation holds for this contract and the manifest's
+  `coordinate_system.export_frame` (absent = `root-component`). A snapshot written in
+  another component's coordinates is a different frame and is confirmed again. A return
+  declaring a reduced domain (`assembly.domain`) states its planes in the modelled frame,
+  so it allows only `+z`.
+- **Confirmed per project.** `cad_frame_confirmations` holds the latest confirmation per
+  key: the snapshot's project (`lineage:<id>`), or the exact snapshot
+  (`snapshot:<manifest hash>`) when it belongs to no project (an unsaved CAD document).
+  The key and requirement come from the ingestion record, never from a request. It is
+  not part of a setup revision, which any client records. No row means unconfirmed;
+  nothing is written when a store opens.
+- **Preparation.** An unlinked snapshot is meshed in its project's confirmed frame, or
+  as modelled (`+z`) until one is, and its record states the frame
+  (`normalisation.solver_frame`: contract, axis, requirement, allowed axes, matrix).
+  Right after the preparation is recorded, and before findings and approvals, an
+  unconfirmed frame waits as `frame_confirmation_required`; the preparation it made is
+  the preview's geometry. Confirming `+z` resumes that preparation; any other axis makes
+  a new one, and approvals never carry to it. A preparation is resumed only in the frame
+  this attempt would mesh in. `+z` is never written into the ingest options, so no mesh
+  cached before this contract is made again.
+- **Every solve path.** The jobs system refuses an unlinked record whose frame is not
+  the confirmed one under the same requirement (`frame_confirmation_required`), so
+  `/api/solve`, a retry and a recovered bound request all meet it. A record prepared
+  before the contract states no frame and is never taken as confirmed; it is prepared
+  again. A refusal with that code releases the binding and keeps the reason.
+- **Routes.** `GET /api/cadlink/solver-frame?operationId=|ingestId=` answers every axis's
+  `solverFromAssembly` and `previewFromRecord` (the matrix that turns the record's
+  geometry into that axis's frame), the requirement and the project's confirmation.
+  `PUT /api/cadlink/solver-frame` `{operationId | ingestId, axis}` confirms it (422 for a
+  linked snapshot or an axis the snapshot does not allow). Confirming prepares nothing,
+  so the update-restart latch does not apply. `POST /api/cadlink/ingest` meshes an
+  unlinked return in its project's confirmed frame; the request names none.
+- **Linked snapshots** are unaffected: they are solved in their anchor's frame and never
+  asked.
 
 ## Preparation
 

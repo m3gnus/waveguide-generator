@@ -1123,6 +1123,9 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
             expected_design_id=payload.expected_design_id,
             expected_instance_id=payload.expected_instance_id,
             defer_viewport=True,
+            # A model authored in CAD is shown in its project's confirmed
+            # solver frame; the request never names one (solver_frame.py).
+            resolve_confirmed_frame=True,
         )
     except HTTPException:
         raise
@@ -2274,6 +2277,10 @@ def _abandon_preparations_on_shutdown(application: FastAPI):
 
 def mount_cadlink(application: FastAPI) -> None:
     application.include_router(router)
+    # An unlinked model's solver frame: preview and confirmation.
+    from .solver_frame_api import router as solver_frame_router
+
+    application.include_router(solver_frame_router)
 
     async def advertise_fusion_delivery_on_startup() -> None:
         # Removes what a WG older than delivery version 3 left for its add-in,

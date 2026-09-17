@@ -1944,6 +1944,14 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
         }
     )
 
+    # A CAD-authored model solves only once its project confirmed the frame it
+    # was meshed in (server/cadlink/solver_frame.py); this one was modelled
+    # along +z and prepared as modelled.
+    from server.cadlink.solver_frame import confirm_frame
+
+    assert first["normalisation"]["solver_frame"]["axis"] == "+z"
+    confirm_frame(store, first, "+z")
+
     async def solve_conformance_record() -> dict[str, object]:
         runtime = JobRuntime(
             JobStore(data_dir / "jobs-conformance.db"),

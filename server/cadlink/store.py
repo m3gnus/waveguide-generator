@@ -263,6 +263,19 @@ _SCHEMA = (
       updated_at TEXT NOT NULL
     )
     """,
+    # The solver frame the user confirmed for an unlinked model, per project
+    # (or per snapshot when it belongs to none), under the frame requirement it
+    # was confirmed for (server/cadlink/solver_frame.py). Additive: an older
+    # release never opens it, and no row means unconfirmed -- the table is
+    # never filled at open.
+    """
+    CREATE TABLE IF NOT EXISTS cad_frame_confirmations (
+      key TEXT PRIMARY KEY,
+      requirement_json TEXT NOT NULL,
+      axis TEXT NOT NULL,
+      confirmed_at TEXT NOT NULL
+    )
+    """,
 )
 # Columns later stages added to cad_operations: nullable (or defaulted), so a
 # row written before them -- by an earlier build, or by an older release, which
@@ -278,6 +291,15 @@ _OPERATION_COLUMNS = (
     # the bound on waiting for it survives a restart.
     ("snapshot_unreadable_since", "TEXT"),
 )
+
+
+def _frame_confirmation(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "key": row["key"],
+        "requirement": json.loads(row["requirement_json"]),
+        "axis": row["axis"],
+        "confirmed_at": row["confirmed_at"],
+    }
 
 
 class StaleAttempt(RuntimeError):
@@ -1222,6 +1244,34 @@ class CadLinkStore:
         self.initialize()
         row = self._read_one("SELECT value_json FROM cad_settings WHERE key = ?", (key,))
         return json.loads(row["value_json"]) if row is not None else None
+
+    def record_frame_confirmation(
+        self, key: str, requirement: Mapping[str, Any], axis: str
+    ) -> dict[str, Any]:
+        """Confirm an unlinked model's solver frame; the latest confirmation wins."""
+
+        from .solver_frame import AXES
+
+        if not key or axis not in AXES:
+            raise ValueError("a frame confirmation names a key and one of the solver frame axes")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO cad_frame_confirmations (key, requirement_json, axis, confirmed_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
+                "requirement_json = excluded.requirement_json, axis = excluded.axis, "
+                "confirmed_at = excluded.confirmed_at",
+                (key, canonical_json(dict(requirement)), axis, utc_now()),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_frame_confirmations WHERE key = ?", (key,)
+            ).fetchone()
+        return _frame_confirmation(dict(row))
+
+    def get_frame_confirmation(self, key: str) -> dict[str, Any] | None:
+        self.initialize()
+        row = self._read_one("SELECT * FROM cad_frame_confirmations WHERE key = ?", (key,))
+        return _frame_confirmation(row) if row is not None else None
 
     def record_preparation(
         self,

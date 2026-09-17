@@ -1104,26 +1104,141 @@ def test_current_report_acknowledgement_and_imported_retry(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
-def test_unlinked_freshness_finding_does_not_block_submission(tmp_path: Path) -> None:
-    async def scenario() -> None:
-        runtime, ingest_id, _ = await _runtime_fixture(
-            tmp_path,
-            {
-                "freshness": {
-                    "verdict": "unlinked",
-                    "instances": [],
-                    "finding_id": "unlinked-mode",
-                },
-                "findings": [
-                    {
-                        "id": "unlinked-mode",
-                        "kind": "freshness",
-                        "blocking": False,
-                        "verdict": "unlinked",
-                    }
-                ],
+def _unlinked_changes(axis: str | None = "+z") -> dict[str, Any]:
+    """A record prepared from a return with no WG instance (CAD-authored)."""
+
+    from server.cadlink.solver_frame import CONTRACT, frame_matrix
+
+    normalisation: dict[str, Any] = {
+        "anchor_instance_id": None,
+        "assembly_frame_is_solver_frame": axis in (None, "+z"),
+        "matrix": frame_matrix(axis or "+z").tolist(),
+    }
+    if axis is not None:
+        normalisation["solver_frame"] = {
+            "contract": CONTRACT,
+            "axis": axis,
+            "requirement": {"contract": CONTRACT, "export_frame": "root-component"},
+            "allowed_axes": ["+z", "-z", "+x", "-x", "+y", "-y"],
+            "matrix": frame_matrix(axis).tolist(),
+        }
+    return {
+        "anchor": {
+            "instance_id": None,
+            "design_id": None,
+            "throat_frame": {
+                "axis": [0.0, 0.0, 1.0],
+                "origin_m": [0.0, 0.0, 0.0],
+                "u": [1.0, 0.0, 0.0],
+                "v": [0.0, 1.0, 0.0],
+                "mouth_center_m": [0.0, 0.0, 0.0],
+                "source_center_m": [0.0, 0.0, 0.0],
             },
+        },
+        "normalisation": normalisation,
+        "project": {"lineage_id": "wgl_cad_authored"},
+        "freshness": {
+            "verdict": "unlinked",
+            "instances": [],
+            "finding_id": "unlinked-mode",
+        },
+        "findings": [
+            {
+                "id": "unlinked-mode",
+                "kind": "freshness",
+                "blocking": False,
+                "verdict": "unlinked",
+            }
+        ],
+    }
+
+
+def test_unlinked_freshness_finding_does_not_block_a_confirmed_frame(tmp_path: Path) -> None:
+    """The unlinked finding stays informational; the confirmed frame is the gate."""
+
+    from server.cadlink.solver_frame import confirm_frame
+
+    async def scenario() -> None:
+        runtime, ingest_id, record = await _runtime_fixture(tmp_path, _unlinked_changes())
+        try:
+            confirm_frame(runtime.cadlink_store, {**record, "ingest_id": ingest_id}, "+z")
+            job_id = await runtime.submit(_request(ingest_id))
+            assert runtime.store.get_job_row(job_id) is not None
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_an_unlinked_record_with_no_confirmed_frame_is_refused_at_submission(
+    tmp_path: Path,
+) -> None:
+    """``/api/solve`` and every other submission meet the frame gate."""
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes())
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request(ingest_id))
+            assert caught.value.reason_code == "frame_confirmation_required"
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_legacy_unlinked_record_is_refused_even_when_the_project_confirmed(
+    tmp_path: Path,
+) -> None:
+    from server.cadlink.solver_frame import CONTRACT
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, _unlinked_changes(axis=None))
+        runtime.cadlink_store.record_frame_confirmation(
+            "lineage:wgl_cad_authored",
+            {"contract": CONTRACT, "export_frame": "root-component"},
+            "+z",
         )
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request(ingest_id))
+            assert caught.value.reason_code == "frame_confirmation_required"
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_retrying_an_unlinked_job_after_the_frame_changed_is_refused(tmp_path: Path) -> None:
+    from server.cadlink.solver_frame import confirm_frame
+
+    class HoldingEngine:
+        name = "metal"
+
+        async def run(self, *_args: Any, **_kwargs: Any) -> EngineRunResult:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    async def scenario() -> None:
+        runtime, ingest_id, record = await _runtime_fixture(tmp_path, _unlinked_changes("+y"))
+        runtime.engine_registry = _AlwaysRegistry(HoldingEngine())  # type: ignore[assignment]
+        stored = {**record, "ingest_id": ingest_id}
+        try:
+            confirm_frame(runtime.cadlink_store, stored, "+y")
+            source_id = await runtime.submit(_request(ingest_id))
+            confirm_frame(runtime.cadlink_store, stored, "-x")
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.retry(source_id)
+            assert caught.value.reason_code == "frame_confirmation_required"
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_linked_record_is_not_gated_by_any_frame_confirmation(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path)
         try:
             job_id = await runtime.submit(_request(ingest_id))
             assert runtime.store.get_job_row(job_id) is not None

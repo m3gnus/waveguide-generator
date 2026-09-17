@@ -31,6 +31,14 @@ from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes
 
+from .solver_frame import (
+    AS_MODELLED,
+    allowed_axes,
+    frame_matrix,
+    is_unlinked_manifest,
+    record_solver_frame,
+    resolve_for_manifest,
+)
 from .wgreturn import WgReturnBundle, WgReturnError, declared_domain_planes, read_wgreturn
 
 
@@ -501,9 +509,12 @@ def _cache_key(
     anchor = next((item for item in instances if item["instance_id"] == anchor_id), None)
     from server.mesh.imported import allocate_imported_tags, rigid_inverse
 
+    solver_frame_axis = options.get("solver_frame")
     transform = (
         rigid_inverse(anchor["assembly_from_link"]).tolist()
         if anchor is not None
+        else frame_matrix(str(solver_frame_axis)).tolist()
+        if solver_frame_axis is not None
         else [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
     )
 
@@ -842,6 +853,35 @@ def _design_target_hint(store: CadLinkStore, design_ids: set[str]) -> str:
     return "; ".join(described)
 
 
+def _requested_solver_frame(
+    manifest: Mapping[str, Any], prep_options: Mapping[str, Any] | None
+) -> str:
+    """The solver frame axis this preparation meshes an unlinked return in."""
+
+    requested = (prep_options or {}).get("solver_frame")
+    if requested is None:
+        return AS_MODELLED
+    try:
+        frame_matrix(requested)
+    except ValueError as exc:
+        raise IngestRefusal("stage 4 STEP import + normalisation", f"solver frame: {exc}") from exc
+    if not is_unlinked_manifest(manifest):
+        if requested == AS_MODELLED:
+            return AS_MODELLED
+        raise IngestRefusal(
+            "stage 4 STEP import + normalisation",
+            "solver frame: this return is linked to a WG design and is solved in its "
+            "design's frame; a solver frame applies only to a model authored in CAD",
+        )
+    if requested not in allowed_axes(manifest):
+        raise IngestRefusal(
+            "stage 4 STEP import + normalisation",
+            "solver frame: this return is declared as a half or quarter model and is "
+            f"solved only in the frame it was modelled in ({AS_MODELLED})",
+        )
+    return str(requested)
+
+
 def ingest_bundle(
     bundle_path: str | Path,
     mesh: Mapping[str, Any],
@@ -856,8 +896,15 @@ def ingest_bundle(
     defer_viewport: bool = False,
     commit_guard: Callable[[Any], bool] | None = None,
     retained_copy: bool = False,
+    resolve_confirmed_frame: bool = False,
 ) -> dict[str, Any]:
     """Run the nine ingestion stages and persist the immutable WG verdict.
+
+    ``resolve_confirmed_frame`` meshes a return with no WG instance in the
+    solver frame its project confirmed (``solver_frame.resolve_for_manifest``),
+    as modelled until one is; it is how a UI's ingest shows what would be
+    solved without the request naming a frame. Backend preparation resolves the
+    frame itself and passes it in ``prep_options``.
 
     ``commit_guard`` is a preparation attempt's fence
     (``CadLinkStore.attempt_is_current``): it runs inside the transaction that
@@ -878,6 +925,18 @@ def ingest_bundle(
     except Exception as exc:
         raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
     manifest = bundle.manifest
+    # The solver frame of a return with no WG instance (server/cadlink/
+    # solver_frame.py). Checked before any gate: it is a statement about which
+    # frame this preparation meshes in, and a linked return is always meshed in
+    # its anchor's frame. The modelled frame is today's and is never written
+    # into the options, so every mesh cached before the contract keeps its key.
+    if resolve_confirmed_frame and is_unlinked_manifest(manifest):
+        resolved = resolve_for_manifest(store, manifest, bundle.manifest_sha256)
+        prep_options = {
+            **dict(prep_options or {}),
+            "solver_frame": resolved.axis if resolved is not None else AS_MODELLED,
+        }
+    solver_frame_axis = _requested_solver_frame(manifest, prep_options)
     returned_design_ids = {
         str(instance["design_id"])
         for instance in manifest["instances"]
@@ -969,6 +1028,9 @@ def ingest_bundle(
     except IngestRefusal:
         raise
     options = dict(prep_options or {})
+    options.pop("solver_frame", None)
+    if solver_frame_axis != AS_MODELLED:
+        options["solver_frame"] = solver_frame_axis
     # The domain declaration comes from the CAD bundle, never from the request:
     # it is a statement about the geometry that arrived, and a caller must not
     # be able to assert it over the top of one. It joins the options here so it
@@ -1364,7 +1426,14 @@ def ingest_bundle(
                 manifest, selected_instance_id=resolved_instance_id
             ),
             "consistency": {"status": "accepted", "checked_instances": len(manifest["instances"])},
-            "normalisation": built["normalisation"],
+            "normalisation": (
+                {
+                    **built["normalisation"],
+                    "solver_frame": record_solver_frame(manifest, solver_frame_axis),
+                }
+                if is_unlinked_manifest(manifest)
+                else built["normalisation"]
+            ),
             "anchor": (
                 {
                     "instance_id": anchor_instance["instance_id"],

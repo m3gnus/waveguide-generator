@@ -2598,17 +2598,54 @@ def build_imported_mesh(
     anchor_id = manifest["coordinate_system"].get("solver_anchor_instance_id")
     if anchor_id is None and len(instances) == 1:
         anchor_id = instances[0]["instance_id"]
-    normalization = np.eye(4) if anchor_id is None else rigid_inverse(instance_by_id[str(anchor_id)]["assembly_from_link"])
+    # A return with no WG instance has no throat frame of its own: it is meshed
+    # in the solver frame its project confirmed (server/cadlink/solver_frame.py),
+    # the assembly frame as modelled (+z) until then. The one matrix producer is
+    # ``frame_matrix``, which the preview reads as well.
+    from server.cadlink.solver_frame import AS_MODELLED, frame_matrix
+
+    solver_frame_axis = options.get("solver_frame")
+    if solver_frame_axis is not None and anchor_id is not None:
+        raise ImportedMeshError(
+            "normalisation: a solver frame applies only to a return with no WG instance"
+        )
+    if solver_frame_axis is not None and declared_cut_planes:
+        raise ImportedMeshError(
+            "symmetry: a return declared as a half or quarter model is solved only in "
+            "the frame it was modelled in"
+        )
+    solver_frame_axis = AS_MODELLED if solver_frame_axis is None else str(solver_frame_axis)
+    try:
+        frame = frame_matrix(solver_frame_axis)
+    except ValueError as exc:
+        raise ImportedMeshError(f"normalisation: {exc}") from exc
+    normalization = (
+        frame
+        if anchor_id is None
+        else rigid_inverse(instance_by_id[str(anchor_id)]["assembly_from_link"])
+    )
     recorded_offset_mm = recorded_vertical_offset_mm(
         None if anchor_id is None else instance_by_id[str(anchor_id)]
     )
     normalisation_record = {
         "anchor_instance_id": anchor_id,
-        "assembly_frame_is_solver_frame": anchor_id is None,
+        "assembly_frame_is_solver_frame": anchor_id is None and solver_frame_axis == AS_MODELLED,
         "matrix": normalization.tolist(),
         "rigid_tolerance": 1.0e-6,
         "post_transform_gate_mm": PLANE_DISTANCE_MM,
     }
+    if anchor_id is None and solver_frame_axis != AS_MODELLED:
+        # Rotated into the solver frame, so the assembly frame no longer is it.
+        # The observation frame every engine reads is the solver's own: +Z from
+        # the origin, where the author modelled the throat.
+        normalisation_record["anchor_throat_frame"] = {
+            "axis": [0.0, 0.0, 1.0],
+            "origin_m": [0.0, 0.0, 0.0],
+            "u": [1.0, 0.0, 0.0],
+            "v": [0.0, 1.0, 0.0],
+            "mouth_center_m": [0.0, 0.0, 0.0],
+            "source_center_m": [0.0, 0.0, 0.0],
+        }
 
     # The file's own body inventory, read once: the scope gate reads it below,
     # and the healing options read it before the import that the gate then

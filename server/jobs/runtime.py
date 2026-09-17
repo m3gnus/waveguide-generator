@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping
 import uuid
 
 from server.cadlink.ingest import get_ingestion_record
+from server.cadlink.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED, record_frame_refusal
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import parse
@@ -2404,6 +2405,20 @@ class JobRuntime:
                 "ingest_sha_mismatch",
                 "request hashes do not match the immutable ingestion record",
                 details=mismatches,
+            )
+        # An unlinked (CAD-authored) model solves only in the solver frame its
+        # project confirmed, exactly the one this record was meshed in. Every
+        # submission meets this -- a direct solve, a retry, a CAD operation's
+        # own -- so no path solves a model whose frame nobody confirmed
+        # (docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame").
+        frame_refusal = await asyncio.to_thread(
+            record_frame_refusal, self.cadlink_store, record
+        )
+        if frame_refusal is not None:
+            raise ImportedSolveRefusal(
+                FRAME_CONFIRMATION_REQUIRED,
+                frame_refusal,
+                details={"ingest_id": geometry.ingest_id},
             )
 
         sources = _imported_record_sources(record)
