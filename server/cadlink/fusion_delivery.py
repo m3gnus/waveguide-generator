@@ -44,6 +44,10 @@ DELIVERY_VERSION = 3
 SOLVE_COMMAND_DELIVERY = DELIVERY_VERSION
 FUSION_REQUEST_DELIVERY = DELIVERY_VERSION
 SCHEMA_VERSION = DELIVERY_VERSION
+# WG reads returns that require ``source-identity-v1`` (``wgreturn.py``). The
+# add-in declares that feature only when WG advertises this; a WG that does not
+# would refuse the bundle as an unknown required feature.
+SOURCE_IDENTITY = 1
 SEQUENCE_FIELD = "deliverySequence"
 # What a WG before delivery version 3 wrote beside the request folders.
 LEGACY_SLOT_FILENAMES = (".fusion-return-request.json", ".fusion-handoff.json")
@@ -95,6 +99,7 @@ def capabilities() -> dict[str, Any]:
         "producer": "waveguide-generator",
         "solveCommandDelivery": SOLVE_COMMAND_DELIVERY,
         "fusionRequestDelivery": FUSION_REQUEST_DELIVERY,
+        "sourceIdentity": SOURCE_IDENTITY,
     }
 
 
@@ -487,6 +492,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "SEQUENCE_FIELD",
     "SOLVE_COMMAND_DELIVERY",
+    "SOURCE_IDENTITY",
     "addin_delivery_version",
     "advertise_fusion_delivery",
     "capabilities",

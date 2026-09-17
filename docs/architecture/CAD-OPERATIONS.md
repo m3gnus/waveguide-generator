@@ -283,6 +283,11 @@ whatever project is open. Nothing on the backend reads the live UI:
   never a new claim -- and that project's setup for exactly the snapshot's sources (id,
   canonical role and required, as the returns listing states them). A recorded setup this
   build cannot use is `setup_required` too.
+- **Across exports.** When returns require `source-identity-v1`, each source id is the
+  CAD-authored identity of that logical source, so the next export of the same sources
+  finds the same setup, and a source whose identity was reassigned does not inherit it.
+  The inventory key is unchanged, so setups recorded for returns without the feature keep
+  their exact key.
 - **Whose it is.** An operation's summary names its snapshot's document and, when WG knows
   it, the project (`snapshot.documentName`, `snapshot.projectLineageId`), so the UI can
   offer to open that project for its settings; the `setup_required` message names the
@@ -676,12 +681,22 @@ add-in it ships.
 
 ## Capability file
 
-WG tells the add-in which delivery version it reads in
-`<data dir>/ipc/wglink/wg-capabilities.json`. WG writes it atomically at every start:
+WG tells the add-in which delivery version it reads, and which optional return features
+it accepts, in `<data dir>/ipc/wglink/wg-capabilities.json`. WG writes it atomically at
+every start:
 
 ```json
-{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 3, "fusionRequestDelivery": 3}
+{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 3, "fusionRequestDelivery": 3, "sourceIdentity": 1}
 ```
+
+- **`sourceIdentity: 1`** means WG reads returns that require `source-identity-v1`
+  (`docs/reference/MULTI-INSTANCE-CAD-IDENTITY.md`, "Cross-export source identity"). An
+  add-in must declare that feature only when WG advertises it, because a WG without it
+  refuses the bundle as an unknown required feature. It is advertised only when the file
+  is readable, `schemaVersion` is 1, and `sourceIdentity` is an integer of at least 1 (not
+  a boolean) -- the same reading rules as the delivery versions. Anything else means "do
+  not declare it". Adding the field changed neither `schemaVersion` nor either delivery
+  version.
 
 - **Reading it.** A reader ignores fields it does not know. A missing or unreadable file,
   a `schemaVersion` the reader does not know, or a value that is not an integer read as

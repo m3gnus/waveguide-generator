@@ -17,11 +17,51 @@ The current return contract keeps the rest of the addressing graph explicit:
 | Linked placement | `instances[].instance_id` | Minted by CAD at insert; stable for that managed link |
 | Managed body | `scope.included[].object_id` plus `wglink_instance_id` | Native object identity within this return; never inferred from design or export ID |
 | Placement transform | `instances[].assembly_from_link`, owned by that instance | Live placement state in this return |
-| Drivable patch | `sources[].id` plus `instance_id` | Stable result address within the return |
+| Drivable patch | `sources[].id` plus `instance_id` | Stable result address within the return; with `source-identity-v1`, also the CAD-authored identity of that source across exports |
 | Default drive channel | `sources[].default_drive_channel_id` | Initial job/result address; one value may not span linked instances |
 
 Body fingerprints and transform hashes are state evidence, not replacement
-identities. Cross-export face identity remains out of scope.
+identities. Cross-export source identity is opt-in (below); cross-export body identity
+remains out of scope.
+
+## Cross-export source identity (`source-identity-v1`)
+
+A return that lists `source-identity-v1` in `required_features` gives the existing
+`sources[].id` a stronger meaning. There is no new field.
+
+- **Meaning.** Each id is the CAD-authored identity of that logical source: authored in
+  CAD metadata, resolved to faces at export, and the same in every later export of that
+  source. `instance_id` keeps its meaning.
+- **Every source participates.** The return has at least one source, and every source
+  has an id.
+- **Form.** An opaque string: non-empty, with no leading or trailing whitespace, and at
+  most 25 UTF-8 bytes. WG does not parse it. Ids remain unique across the whole return,
+  not only within an instance.
+- **Why 25 bytes.** Ingestion writes the id into the mesh's physical name
+  `wg-import-v1|tag=<tag>|source_id=<id>|instance_id=<instance>|role=<role>`, and gmsh
+  writes at most 128 UTF-8 bytes of a physical name, silently cutting the rest; the cut
+  mesh is refused. The rest of the name takes at most 103 bytes: 47 of fixed text, 4 tag
+  digits (tags start at 101, and a fifth digit needs more sources than a 1 MiB manifest
+  holds), a 36-byte instance id (WGLink mints UUIDs), and 16 for `PASSIVE_CARDIOID`,
+  WGLink's longest role. The limit counts bytes because gmsh does.
+- **Refused by the writer, never chosen by WG.** When a source's authored identity is
+  missing, or resolves to no face, to split faces, or to faces another source claims, the
+  CAD writer refuses to write the bundle and asks for reassignment. WG cannot tell from an
+  opaque string which face was meant, so it never remaps or picks one. What WG checks is
+  what it can see: a duplicate, empty, untrimmed, over-long or non-string id refuses the
+  whole bundle.
+- **CAD-private.** Fusion entity tokens and face-UID stamps stay inside the add-in; they
+  never enter the manifest.
+- **Negotiated.** WG advertises `"sourceIdentity": 1` in `wg-capabilities.json`
+  (`docs/architecture/CAD-OPERATIONS.md`, "Capability file"). A WG that does not advertise it
+  refuses the feature as unknown.
+- **Absent means unchanged.** Without the feature a source id keeps every earlier rule
+  (unique, non-empty; no trimming or length rule), and project-setup inventory keys are
+  byte-identical to earlier releases.
+
+The project-setup inventory is keyed by source id, canonical role and `required`
+("Project setups" in `CAD-OPERATIONS.md`), so a setup follows sources whose identity is
+stable and is not inherited by a reassigned one.
 
 ## Fusion status selection
 
@@ -122,5 +162,6 @@ WGLink source. Two deliberate boundaries remain:
    Studio links. True repeated-placement parity remains blocked on Assembly
    occurrence discovery/transform support and the shared-definition product
    decision described above.
-2. A future cross-export body/entity identity, if needed, must be authored by
-   CAD. WG must not derive it from names, face order, or fingerprints.
+2. Cross-export source identity is `source-identity-v1`, authored by CAD. A future
+   cross-export body identity, if needed, must be authored by CAD as well. WG must not
+   derive either from names, face order, or fingerprints.

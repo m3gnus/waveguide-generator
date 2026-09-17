@@ -29,6 +29,7 @@ SUPPORTED_FEATURES = frozenset(
         "instance-records-v1",
         "fem-air-volume-v1",
         "reduced-domain-v1",
+        "source-identity-v1",
     }
 )
 # The CAD author's statement that the exported bodies ARE the reduced domain:
@@ -55,6 +56,31 @@ DOMAIN_KIND_FOR_PLANES = {
     ("x0", "y0"): "quarter",
 }
 REDUCED_DOMAIN_FEATURE = "reduced-domain-v1"
+# A return that requires this feature states that every ``sources[].id`` is the
+# CAD-authored identity of that logical source, the same across exports. The
+# field and its uniqueness are unchanged; the feature adds only a canonical form
+# (trimmed, bounded) so the identity survives WG's own whitespace-normalising
+# consumers. Resolving the identity to faces -- and refusing a removed, split or
+# ambiguous mapping -- is the CAD writer's job before the bundle exists: an
+# opaque string cannot show WG which face it should have been, so WG never picks.
+# Without the feature a source id keeps its legacy meaning and legacy checks.
+SOURCE_IDENTITY_FEATURE = "source-identity-v1"
+# The bound comes from the mesh, not from taste. Ingestion writes each source's
+# id into a gmsh physical name,
+#   wg-import-v1|tag=<tag>|source_id=<id>|instance_id=<instance>|role=<role>
+# (``server/mesh/imported.py``, ``_physical_name``), and gmsh 4.15 writes at
+# most 128 UTF-8 bytes of a physical name to MSH 2.2, silently cutting the rest
+# (even inside a multi-byte character), after which ingestion refuses the mesh
+# for a missing physical name. The rest of the name is at most:
+#   47  fixed text ("wg-import-v1|tag=", "|source_id=", "|instance_id=", "|role=")
+#    4  tag digits: tags start at 101, and 9,899 sources would not fit in a
+#       1 MiB manifest (a minimal source is 262 bytes)
+#   36  instance id: WGLink mints a UUID; WG's Onshape ids are 30; none is "null"
+#   16  role: PASSIVE_CARDIOID, WGLink's longest
+# 128 - 47 - 4 - 36 - 16 = 25 bytes for the identity, counted in UTF-8 bytes
+# because that is what gmsh counts. No bound applies without the feature.
+GMSH_PHYSICAL_NAME_MAX_BYTES = 128
+SOURCE_IDENTITY_MAX_BYTES = 25
 REQUIRED_BASE_FEATURES = frozenset(
     {"checksummed-files-v1", "assembly-frame-v1", "instance-records-v1"}
 )
@@ -479,10 +505,25 @@ def _validate_instance(value: Any, path: str) -> str:
     return instance_id
 
 
-def _validate_source(value: Any, path: str, instance_ids: set[str]) -> str:
+def _validate_source(
+    value: Any,
+    path: str,
+    instance_ids: set[str],
+    *,
+    source_identity: bool = False,
+) -> str:
     obj = _mapping(value, path)
     source_id = _string(_required(obj, "id", path), f"{path}.id")
     assert source_id is not None
+    if source_identity:
+        if source_id != source_id.strip():
+            _fail(f"{path}.id", f"{SOURCE_IDENTITY_FEATURE} source identity must be trimmed")
+        if len(source_id.encode("utf-8")) > SOURCE_IDENTITY_MAX_BYTES:
+            _fail(
+                f"{path}.id",
+                f"{SOURCE_IDENTITY_FEATURE} source identity must be at most "
+                f"{SOURCE_IDENTITY_MAX_BYTES} UTF-8 bytes",
+            )
     _string(_required(obj, "role", path), f"{path}.role")
     instance_id = _string(obj.get("instance_id"), f"{path}.instance_id", nullable=True)
     if instance_id is not None and instance_id not in instance_ids:
@@ -686,8 +727,24 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     sources = _list(_required(manifest, "sources", "$"), "$.sources")
     if not sources:
         _fail("$.sources", "must contain at least one source")
-    source_ids = [_validate_source(item, f"$.sources[{index}]", set(instance_ids)) for index, item in enumerate(sources)]
+    source_identity = SOURCE_IDENTITY_FEATURE in feature_names
+    source_ids = [
+        _validate_source(
+            item,
+            f"$.sources[{index}]",
+            set(instance_ids),
+            source_identity=source_identity,
+        )
+        for index, item in enumerate(sources)
+    ]
     if len(set(source_ids)) != len(source_ids):
+        if source_identity:
+            # Two sources claiming one identity is an ambiguous resolution the
+            # writer must refuse; WG does not choose between them.
+            _fail(
+                "$.sources",
+                f"{SOURCE_IDENTITY_FEATURE} source identities must be unique within the return",
+            )
         _fail("$.sources", "source ids must be unique")
     channel_owners: dict[str, set[str]] = {}
     for source in sources:
@@ -879,6 +936,9 @@ __all__ = [
     "DOMAIN_PLANES",
     "EXPORT_FRAMES",
     "REDUCED_DOMAIN_FEATURE",
+    "SOURCE_IDENTITY_FEATURE",
+    "GMSH_PHYSICAL_NAME_MAX_BYTES",
+    "SOURCE_IDENTITY_MAX_BYTES",
     "SUPPORTED_FEATURES",
     "declared_domain_planes",
     "WgReturnBundle",

@@ -60,6 +60,7 @@ from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.solver import metal
+from test_cadlink_wgreturn import _manifest as wgreturn_manifest, write_bundle
 
 
 def _fingerprint(volume: float = 1.0):
@@ -253,6 +254,238 @@ def test_ingest_store_round_trip(tmp_path: Path) -> None:
     row = store.allocate_ingest(manifest_sha256="sha256:m", artifact_sha256="sha256:a", record_builder=lambda ingest_id, created: json.dumps({"ingest_id": ingest_id, "created_at": created}))
     assert row["ingest_id"].startswith("wgi_")
     assert store.get_ingest(row["ingest_id"]) == row
+
+
+def _built_for_source(source_id: str) -> dict:
+    """What the isolated mesh child returns for a one-source return."""
+
+    symmetry = {
+        "cut_planes": [],
+        "planes": {axis: {"accepted": False} for axis in ("x0", "y0", "z0")},
+    }
+    return {
+        "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+        "transformed_geometry_hash": "sha256:" + "3" * 64,
+        "normalisation": {"matrix": np.eye(4)},
+        "role_resolution": {source_id: {"surfaces": [1]}},
+        "role_findings": [],
+        "symmetry": symmetry,
+        "healing": {"performed": False, "mode": "none"},
+        "polar_grid_derivation": polar_grid_from_symmetry(symmetry),
+        "sizing_estimate": {"triangles": 1},
+        "tag_allocation": {
+            "tag_namespace": "wg-import-v1",
+            "tag_map": {
+                "1": {"source_id": None, "instance_id": None, "role": "rigid"},
+                "101": {"source_id": source_id, "instance_id": "instance-1", "role": "HF"},
+            },
+            "source_tags": {source_id: 101},
+        },
+        "stats": {"triangle_count": 1},
+        "metadata": {},
+        "integrity": {"valid": True},
+        "viewport_mesh": {"available": False, "reason": "not needed for contract test"},
+    }
+
+
+def test_a_real_source_identity_bundle_survives_into_the_ingest_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The real reader and the real ingest orchestration; only the mesh child is replaced."""
+
+    source_id = "cad-authored-source-17"
+    manifest = wgreturn_manifest(b"STEP")
+    manifest["required_features"].append("source-identity-v1")
+    manifest["sources"][0]["id"] = source_id
+    bundle = write_bundle(tmp_path / "returns", manifest, step=b"STEP")
+    meshed: list[object] = []
+
+    def build(*args, **kwargs):
+        meshed.append(args)
+        return _built_for_source(source_id)
+
+    monkeypatch.setattr("server.cadlink.ingest.build_imported_mesh_isolated", build)
+    store = CadLinkStore(tmp_path / "cadlink.db")
+
+    record = ingest_bundle(
+        bundle,
+        {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {source_id: 8}},
+        [],
+        store,
+        tmp_path / "data",
+        expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+    )
+
+    assert len(meshed) == 1
+    assert [source["id"] for source in record["sources"]] == [source_id]
+    stored = json.loads(store.get_ingest(record["ingest_id"])["record_json"])
+    assert [source["id"] for source in stored["sources"]] == [source_id]
+
+
+@pytest.mark.parametrize("declared", [True, False])
+def test_an_untrimmed_source_id_is_refused_at_stage_1_only_when_identity_is_declared(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, declared: bool
+) -> None:
+    source_id = " cad-authored-source-17"
+    manifest = wgreturn_manifest(b"STEP")
+    if declared:
+        manifest["required_features"].append("source-identity-v1")
+    manifest["sources"][0]["id"] = source_id
+    bundle = write_bundle(tmp_path / "returns", manifest, step=b"STEP")
+    meshed: list[object] = []
+
+    def build(*args, **kwargs):
+        meshed.append(args)
+        return _built_for_source(source_id)
+
+    monkeypatch.setattr("server.cadlink.ingest.build_imported_mesh_isolated", build)
+    store = CadLinkStore(tmp_path / "cadlink.db")
+
+    def ingest() -> dict:
+        return ingest_bundle(
+            bundle,
+            {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {source_id: 8}},
+            [],
+            store,
+            tmp_path / "data",
+            expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+        )
+
+    if declared:
+        with pytest.raises(IngestRefusal) as caught:
+            ingest()
+        assert caught.value.stage == "stage 1 bundle validation"
+        assert "source-identity-v1 source identity must be trimmed" in str(caught.value)
+        assert meshed == []
+    else:
+        # Without the feature the id keeps its legacy acceptance, end to end.
+        record = ingest()
+        assert len(meshed) == 1
+        assert [source["id"] for source in record["sources"]] == [source_id]
+
+
+# WGLink's longest source role and the instance id it mints (a UUID).
+_LONGEST_WGLINK_ROLE = "PASSIVE_CARDIOID"
+_WGLINK_INSTANCE_ID = "3f2c9a4e-8b1d-4c6f-9e2a-7d5b1c0e8f43"
+
+
+def test_the_source_identity_byte_limit_fits_the_worst_case_physical_name() -> None:
+    """The arithmetic behind SOURCE_IDENTITY_MAX_BYTES, checked against the real formatter."""
+
+    from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
+    from server.cadlink.wgreturn import GMSH_PHYSICAL_NAME_MAX_BYTES, SOURCE_IDENTITY_MAX_BYTES
+    from server.mesh.imported import FIRST_SOURCE_TAG, _physical_name
+
+    assert len(_WGLINK_INSTANCE_ID) == 36
+    minimal_source = {
+        "id": "a", "role": "HF", "required": True, "default_drive_channel_id": "d",
+        "patch_policy": "single-connected", "expected_connected_components": 1,
+        "selectors": {"advanced_face_indices": [0]},
+        "observed": {"face_count": 1, "total_area_mm2": 1, "per_face_area_mm2": [1], "bodies": []},
+    }
+    # A fifth tag digit needs more sources than a manifest can hold.
+    fifth_digit_sources = 10_000 - FIRST_SOURCE_TAG
+    assert fifth_digit_sources * len(json.dumps(minimal_source, separators=(",", ":"))) > MAX_WGRETURN_JSON_BYTES
+
+    def name_bytes(identity: str) -> int:
+        return len(_physical_name(9_999, identity, _WGLINK_INSTANCE_ID, _LONGEST_WGLINK_ROLE).encode("utf-8"))
+
+    assert name_bytes("x" * SOURCE_IDENTITY_MAX_BYTES) <= GMSH_PHYSICAL_NAME_MAX_BYTES
+    assert name_bytes("x" * (SOURCE_IDENTITY_MAX_BYTES + 1)) > GMSH_PHYSICAL_NAME_MAX_BYTES
+
+
+def test_a_max_length_source_identity_meshes_for_real_with_its_physical_name_intact(
+    tmp_path: Path,
+) -> None:
+    """No stub: gmsh writes the name, and ingestion checks it is all there."""
+
+    gmsh = pytest.importorskip("gmsh")
+    from hornlab_mesher.cad import write_step
+    from hornlab_mesher.geometry import PointGridHornGeometry
+    from hornlab_mesher.step_import import advanced_face_order, gmsh_surface_tags
+    from server.cadlink.wgreturn import SOURCE_IDENTITY_MAX_BYTES
+
+    n_phi, n_length = 16, 6
+    inner = np.empty((n_phi, n_length + 1, 3), dtype=float)
+    for phi_index in range(n_phi):
+        phi = math.tau * phi_index / n_phi
+        for length_index in range(n_length + 1):
+            fraction = length_index / n_length
+            radius = 10.0 + 20.0 * fraction
+            inner[phi_index, length_index] = (radius * math.cos(phi), radius * math.sin(phi), 60.0 * fraction)
+    outer = inner.copy()
+    radial = np.linalg.norm(outer[:, :, :2], axis=2)
+    outer[:, :, 0] *= (radial + 4.0) / radial
+    outer[:, :, 1] *= (radial + 4.0) / radial
+    geometry = PointGridHornGeometry(inner_points=inner, outer_points=outer, wall_thickness_mm=4.0)
+
+    bundle = tmp_path / "workspace" / "wgreturn" / "identity.wgreturn"
+    bundle.mkdir(parents=True)
+    step_path, info = _run_in_gmsh_session(write_step, geometry, bundle / "assembly.step", open_throat=False)
+    step = step_path.read_bytes()
+
+    def plane_face() -> tuple[int, float]:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        gmsh.model.occ.importShapes(str(step_path), highestDimOnly=True)
+        gmsh.model.occ.synchronize()
+        surfaces = gmsh_surface_tags()
+        faces = advanced_face_order(step_path)
+        surface = next(tag for tag in surfaces if str(gmsh.model.getType(2, tag)).casefold() == "plane")
+        area = float(gmsh.model.occ.getMass(2, surface))
+        gmsh.clear()
+        return faces[surfaces.index(surface)], area
+
+    face_id, area = _run_in_gmsh_session(plane_face)
+    source_id = "s" * SOURCE_IDENTITY_MAX_BYTES
+    manifest = wgreturn_manifest(step)
+    manifest["required_features"].append("source-identity-v1")
+    manifest["assembly"]["bbox_mm"] = [list(info.bounding_box_mm[0]), list(info.bounding_box_mm[1])]
+    manifest["coordinate_system"]["solver_anchor_instance_id"] = _WGLINK_INSTANCE_ID
+    manifest["scope"]["included"][0]["wglink_instance_id"] = _WGLINK_INSTANCE_ID
+    manifest["scope"]["skipped"] = []
+    instance = manifest["instances"][0]
+    instance["instance_id"] = _WGLINK_INSTANCE_ID
+    # The tiny horn's throat: a 20 mm disc in the z=0 plane, axis +z, in the link frame.
+    instance["source_contract"] = {
+        "role": "HF", "throat_z_mm": 0,
+        "throat_plane_link": {"origin_mm": [0, 0, 0], "normal": [0, 0, 1]},
+        "axis_link": {"origin_mm": [0, 0, 0], "direction": [0, 0, 1]},
+        "throat_diameter_mm": 20.0, "expected_disc_area_mm2": math.pi * 100.0,
+    }
+    manifest["sources"] = [{
+        "id": source_id,
+        "role": _LONGEST_WGLINK_ROLE,
+        "instance_id": _WGLINK_INSTANCE_ID,
+        "required": True,
+        "default_drive_channel_id": "drive-passive-cardioid",
+        "patch_policy": "single-connected",
+        "expected_connected_components": 1,
+        "selectors": {"advanced_face_indices": [face_id]},
+        "observed": {"face_count": 1, "total_area_mm2": area, "per_face_area_mm2": [area], "bodies": ["speaker"]},
+        "suggested_resolution_mm": 8,
+    }]
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest), encoding="utf-8")
+    data_dir = tmp_path / "data"
+
+    record = _run_in_gmsh_session(
+        ingest_bundle,
+        bundle,
+        {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {source_id: 8}},
+        [],
+        CadLinkStore(data_dir / "cadlink.db"),
+        data_dir,
+        expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+        expected_instance_id=_WGLINK_INSTANCE_ID,
+    )
+
+    expected = (
+        f"wg-import-v1|tag=101|source_id={source_id}|"
+        f"instance_id={_WGLINK_INSTANCE_ID}|role={_LONGEST_WGLINK_ROLE}"
+    )
+    assert len(expected.encode("utf-8")) <= 128
+    assert f'"{expected}"' in Path(record["mesh_store_path"]).read_text(encoding="utf-8")
+    assert int(record["mesh"]["stats"]["tag_counts"]["101"]) > 0
 
 
 def test_endpoint_validates_workspace_and_returns_pipeline_record(monkeypatch, tmp_path: Path) -> None:

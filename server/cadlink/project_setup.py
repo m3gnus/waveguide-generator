@@ -39,6 +39,13 @@ def inventory_sha256(sources: Sequence[Mapping[str, Any]]) -> str:
 
     Roles are canonical (``canonical_source_role``), as the returns listing and
     so the frontend state them, whatever spelling the manifest used.
+
+    The source ``id`` is part of the key. When a return requires
+    ``source-identity-v1`` that id is the CAD-authored identity of the logical
+    source, the same across exports, so a project's setup follows its sources
+    from one export to the next and a reassigned identity does not inherit it.
+    The byte shape is unchanged, so an inventory from a return without the
+    feature keeps its exact digest.
     """
 
     entries = sorted(

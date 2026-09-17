@@ -27,6 +27,7 @@ from server.cadlink.project_setup import (
     widen_polar_to_derivation,
 )
 from server.cadlink.setup import solve_request_for, validate_setup
+from server.cadlink.wgreturn import read_wgreturn
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
 
@@ -34,6 +35,9 @@ from test_cad_preparation import Harness, _accept, _manifest, _setup
 
 
 SOURCES = [{"id": "source-hf", "role": "HF", "required": True}]
+# inventory_sha256(SOURCES) as every WG before source-identity-v1 computed it.
+# A changed literal means every project setup recorded so far is orphaned.
+LEGACY_INVENTORY_SHA256 = "sha256:c38c167819ef5ba47ee8e8103ee1fe57629be18017a80ff2fc8d10df25a9bc36"
 
 
 @pytest.fixture
@@ -69,12 +73,60 @@ def _project_return(harness: Harness, name: str, design_id: str, lineage_id: str
     return f"wgreturn/{name}.wgreturn", "sha256:" + hashlib.sha256(body).hexdigest()
 
 
-def _record_setup(harness: Harness, lineage_id: str, setup: dict[str, Any]) -> dict[str, Any]:
+def _record_setup(
+    harness: Harness,
+    lineage_id: str,
+    setup: dict[str, Any],
+    *,
+    inventory: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     from server.cadlink.api import ProjectSetupRequest, put_project_setup
 
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
-    payload = ProjectSetupRequest(lineageId=lineage_id, inventory=SOURCES, setup=setup)
+    payload = ProjectSetupRequest(
+        lineageId=lineage_id, inventory=SOURCES if inventory is None else inventory, setup=setup
+    )
     return asyncio.run(put_project_setup(payload, request))
+
+
+def _identity_return(
+    harness: Harness,
+    name: str,
+    design_id: str,
+    lineage_id: str,
+    *,
+    source_id: str,
+    return_id: str,
+    export_sequence: int,
+    role: str = "HF",
+) -> tuple[str, str]:
+    """One export of that project's design declaring source-identity-v1."""
+
+    step = b"STEP " + name.encode()
+    manifest = copy.deepcopy(_manifest(step))
+    manifest["required_features"].append("source-identity-v1")
+    manifest["return"]["id"] = return_id
+    manifest["instances"][0]["design_id"] = design_id
+    manifest["instances"][0]["lineage_id"] = lineage_id
+    manifest["instances"][0]["export_sequence"] = export_sequence
+    manifest["sources"][0]["id"] = source_id
+    manifest["sources"][0]["role"] = role
+    bundle = harness.workspace / "wgreturn" / f"{name}.wgreturn"
+    bundle.mkdir(parents=True)
+    (bundle / "assembly.step").write_bytes(step)
+    body = json.dumps(manifest).encode("utf-8")
+    (bundle / "wgreturn.json").write_bytes(body)
+    return f"wgreturn/{name}.wgreturn", "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def _identity_setup(source_id: str, rigid: float) -> dict[str, Any]:
+    return {
+        "geometry": {
+            "drive_channels": [{"id": "drive-hf", "source_ids": [source_id]}],
+            "mesh": {"rigid_size_mm": rigid, "transition_mm": 30.0, "source_size_mm": {source_id: 8.0}},
+        },
+        "options": {"frequencies_hz": [500.0, 1000.0, 2000.0]},
+    }
 
 
 def _select_engine(harness: Harness, engine: str) -> None:
@@ -98,6 +150,72 @@ def test_a_project_setup_is_recorded_for_its_project_and_sources(harness: Harnes
     row = harness.store.get_project_setup(lineage, inventory_sha256(SOURCES))
     assert row["revision_id"] == changed["revisionId"]  # the latest is the project's
     assert harness.store.get_project_setup(lineage, inventory_sha256([])) is None
+
+
+def test_a_stable_source_identity_keeps_its_project_setup_across_exports(harness: Harness) -> None:
+    design_id, lineage = _project(harness, 45.0)
+    recorded = _record_setup(
+        harness,
+        lineage,
+        _identity_setup("cad-source-17", rigid=9.0),
+        inventory=[{"id": "cad-source-17", "role": "HF", "required": True}],
+    )
+    first_path, first_sha = _identity_return(
+        harness, "export-7", design_id, lineage, source_id="cad-source-17",
+        return_id="wgr_01J5A8QK3M9T2XVBH0RD7NWE6C", export_sequence=7,
+    )
+    # The next export of the same design: a new return, new geometry bytes, and
+    # the role spelled differently -- but the same CAD-authored source identity.
+    again_path, again_sha = _identity_return(
+        harness, "export-8", design_id, lineage, source_id="cad-source-17",
+        return_id="wgr_01J5A8QK3M9T2XVBH0RD7NWE6D", export_sequence=8, role="hf",
+    )
+    first = read_wgreturn(harness.workspace / first_path).manifest
+    again = read_wgreturn(harness.workspace / again_path).manifest
+    assert first["return"]["id"] != again["return"]["id"]
+    assert inventory_sha256(first["sources"]) == inventory_sha256(again["sources"])
+
+    _accept(harness.store, "cmd-7", first_path, first_sha)
+    _accept(harness.store, "cmd-8", again_path, again_sha)
+    summaries = [harness.prepare("cmd-7"), harness.prepare("cmd-8")]
+
+    assert [summary["state"] for summary in summaries] == ["accepted", "accepted"]
+    assert [summary["setupRevisionId"] for summary in summaries] == [recorded["revisionId"]] * 2
+    assert [request.geometry.mesh.rigid_size_mm for request in harness.submitted] == [9.0, 9.0]
+
+
+def test_a_reassigned_source_identity_does_not_inherit_the_project_setup(harness: Harness) -> None:
+    design_id, lineage = _project(harness, 45.0)
+    _record_setup(
+        harness,
+        lineage,
+        _identity_setup("cad-source-17", rigid=9.0),
+        inventory=[{"id": "cad-source-17", "role": "HF", "required": True}],
+    )
+    bundle_path, manifest_sha = _identity_return(
+        harness, "reassigned", design_id, lineage, source_id="cad-source-42",
+        return_id="wgr_01J5A8QK3M9T2XVBH0RD7NWE6E", export_sequence=9,
+    )
+    reassigned = read_wgreturn(harness.workspace / bundle_path).manifest
+    assert inventory_sha256(reassigned["sources"]) != inventory_sha256(
+        [{"id": "cad-source-17", "role": "HF", "required": True}]
+    )
+    _accept(harness.store, "cmd-9", bundle_path, manifest_sha)
+
+    summary = harness.prepare("cmd-9")
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
+    assert harness.submitted == []
+
+
+def test_a_legacy_source_inventory_digest_is_byte_stable(harness: Harness) -> None:
+    design_id, lineage = _project(harness, 45.0)
+    bundle_path, _manifest_sha = _project_return(harness, "legacy", design_id, lineage)
+    legacy = read_wgreturn(harness.workspace / bundle_path).manifest
+
+    assert "source-identity-v1" not in legacy["required_features"]
+    assert inventory_sha256(SOURCES) == LEGACY_INVENTORY_SHA256
+    assert inventory_sha256(legacy["sources"]) == LEGACY_INVENTORY_SHA256
 
 
 def test_the_project_of_a_snapshot_is_read_not_claimed(harness: Harness) -> None:

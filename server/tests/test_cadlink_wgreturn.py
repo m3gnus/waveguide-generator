@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -59,6 +60,135 @@ def test_worked_example_shape_and_real_member_table_validate(tmp_path: Path) -> 
         "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
         "and carries no document signature",
     )
+
+
+SOURCE_IDENTITY = "source-identity-v1"
+
+
+def _identity_manifest(source_id: object = "cad-authored-source-17") -> dict:
+    manifest = _manifest(b"STEP")
+    manifest["required_features"].append(SOURCE_IDENTITY)
+    manifest["sources"][0]["id"] = source_id
+    return manifest
+
+
+def test_source_identity_v1_is_read_from_a_real_directory_bundle(tmp_path: Path) -> None:
+    result = read_wgreturn(write_bundle(tmp_path, _identity_manifest()))
+
+    assert SOURCE_IDENTITY in result.manifest["required_features"]
+    assert [source["id"] for source in result.manifest["sources"]] == ["cad-authored-source-17"]
+
+
+@pytest.mark.parametrize("source_id", ["x" * 25, "\u00e9" * 12 + "x"])
+def test_source_identity_v1_accepts_an_identity_at_the_byte_limit(source_id: str) -> None:
+    assert len(source_id.encode("utf-8")) == 25
+    validated = validate_manifest(_identity_manifest(source_id))
+
+    assert validated["sources"][0]["id"] == source_id
+
+
+def test_source_identity_v1_is_accepted_in_a_wgreturn_1_1_bundle(tmp_path: Path) -> None:
+    manifest = _identity_manifest()
+    manifest["wgreturn_version"] = "1.1"
+    manifest["assembly"]["signature_hash"] = "sha256:" + "4" * 64
+
+    result = read_wgreturn(write_bundle(tmp_path, manifest))
+
+    assert result.manifest["sources"][0]["id"] == "cad-authored-source-17"
+
+
+@pytest.mark.parametrize(
+    ("source_id", "reason"),
+    [
+        (" ", "must be trimmed"),
+        (" source-17", "must be trimmed"),
+        ("source-17 ", "must be trimmed"),
+        ("\tsource-17", "must be trimmed"),
+        ("source-17\n", "must be trimmed"),
+        ("x" * 26, "must be at most 25 UTF-8 bytes"),
+        # 13 characters, 26 bytes: gmsh counts bytes, so the reader does too.
+        ("\u00e9" * 13, "must be at most 25 UTF-8 bytes"),
+    ],
+)
+def test_source_identity_v1_refuses_a_noncanonical_identity(
+    tmp_path: Path, source_id: str, reason: str
+) -> None:
+    expected = f"$.sources[0].id: {SOURCE_IDENTITY} source identity {reason}"
+
+    with pytest.raises(WgReturnError, match=re.escape(expected)):
+        validate_manifest(_identity_manifest(source_id))
+    with pytest.raises(WgReturnError, match=re.escape(expected)):
+        read_wgreturn(write_bundle(tmp_path, _identity_manifest(source_id)))
+
+
+@pytest.mark.parametrize("source_id", ["", 17, None, ["cad-source-17"]])
+def test_source_identity_v1_refuses_an_empty_or_non_string_identity(source_id: object) -> None:
+    with pytest.raises(WgReturnError, match=re.escape("$.sources[0].id: must be a non-empty string")):
+        validate_manifest(_identity_manifest(source_id))
+
+
+def test_source_identity_v1_refuses_a_source_without_an_identity() -> None:
+    manifest = _identity_manifest()
+    second = deepcopy(manifest["sources"][0])
+    second["default_drive_channel_id"] = "drive-hf-2"
+    del second["id"]
+    manifest["sources"].append(second)
+
+    with pytest.raises(WgReturnError, match=re.escape("$.sources[1].id: is required")):
+        validate_manifest(manifest)
+
+
+def test_source_identity_v1_refuses_a_return_with_no_sources() -> None:
+    manifest = _identity_manifest()
+    manifest["sources"] = []
+
+    with pytest.raises(WgReturnError, match=re.escape("$.sources: must contain at least one source")):
+        validate_manifest(manifest)
+
+
+def test_source_identity_v1_refuses_an_ambiguous_duplicate_identity() -> None:
+    manifest = _identity_manifest()
+    duplicate = deepcopy(manifest["sources"][0])
+    duplicate["default_drive_channel_id"] = "drive-hf-2"
+    manifest["sources"].append(duplicate)
+
+    with pytest.raises(
+        WgReturnError,
+        match=re.escape(
+            f"$.sources: {SOURCE_IDENTITY} source identities must be unique within the return"
+        ),
+    ):
+        validate_manifest(manifest)
+
+
+def test_an_unknown_source_identity_version_is_still_refused() -> None:
+    manifest = _manifest(b"STEP")
+    manifest["required_features"].append("source-identity-v2")
+
+    with pytest.raises(WgReturnError, match="unknown required feature\\(s\\): source-identity-v2"):
+        validate_manifest(manifest)
+
+
+@pytest.mark.parametrize("source_id", [" source-17 ", "x" * 129, f" {'x' * 129} "])
+def test_a_legacy_source_id_keeps_its_previous_validation(tmp_path: Path, source_id: str) -> None:
+    manifest = _manifest(b"STEP")
+    manifest["sources"][0]["id"] = source_id
+
+    result = read_wgreturn(write_bundle(tmp_path, manifest))
+
+    assert result.manifest["sources"][0]["id"] == source_id
+    assert SOURCE_IDENTITY not in result.manifest["required_features"]
+
+
+def test_a_legacy_duplicate_source_id_is_still_refused_with_its_legacy_message() -> None:
+    manifest = _manifest(b"STEP")
+    duplicate = deepcopy(manifest["sources"][0])
+    duplicate["default_drive_channel_id"] = "drive-hf-2"
+    manifest["sources"].append(duplicate)
+
+    with pytest.raises(WgReturnError) as refused:
+        validate_manifest(manifest)
+    assert str(refused.value) == "$.sources: source ids must be unique"
 
 
 def test_multi_instance_identity_refuses_body_and_channel_aliases() -> None:

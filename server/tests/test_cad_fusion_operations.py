@@ -35,6 +35,20 @@ def _result(bundle: Path, export_id: str = "wge_1") -> dict[str, object]:
     }
 
 
+def test_capabilities_advertise_source_identity_without_changing_delivery() -> None:
+    """``sourceIdentity`` is additive: the schema and both delivery versions stay put."""
+
+    assert fusion_delivery.capabilities() == {
+        "schemaVersion": 1,
+        "producer": "waveguide-generator",
+        "solveCommandDelivery": 3,
+        "fusionRequestDelivery": 3,
+        "sourceIdentity": 1,
+    }
+    # An integer, as the add-in reads every capability value; never a bool.
+    assert type(fusion_delivery.capabilities()["sourceIdentity"]) is int
+
+
 def test_publishing_a_return_request_records_its_operation_before_the_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
