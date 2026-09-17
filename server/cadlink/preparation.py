@@ -758,11 +758,16 @@ def _prepare_sync(
     # An unlinked (CAD-authored) snapshot is meshed in the solver frame its
     # project confirmed, or as modelled until then (CAD-OPERATIONS.md,
     # "Unlinked solver frame"). None for a linked snapshot.
-    # A retained manifest that cannot be read here cannot be ingested either;
-    # the jobs system's own frame gate stays behind this one regardless.
-    solver_frame = resolve_solver_frame(
-        store, _retained_manifest(retained) or {"instances": [{}]}, manifest_sha256
-    )
+    retained_manifest = _retained_manifest(retained)
+    if retained_manifest is None:
+        # Never guessed: a manifest read as linked would skip the frame the
+        # snapshot may need. Another attempt can overcome an unreadable copy.
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
+            message="WG could not read the retained copy of this return. Send it again "
+            "from Fusion, or press Solve now to try again.",
+        )
+    solver_frame = resolve_solver_frame(store, retained_manifest, manifest_sha256)
     frame_axis = solver_frame.axis if solver_frame is not None else None
 
     record = _resumable(store, row, revision_id, manifest_sha256, semantics, frame_axis)
@@ -844,16 +849,16 @@ def _prepare_sync(
     )
     _publish(ctx, prepared)
 
-    if solver_frame is not None:
-        # Before findings and approvals: a frame confirmed differently is a new
-        # preparation, and approvals never carry to it. The record says which
-        # frame it was meshed in; only that frame, confirmed, may be solved.
-        frame_refusal = record_frame_refusal(store, record)
-        if frame_refusal is not None:
-            return "done", _finish(
-                ctx, operation_id, generation, NEEDS_USER_INPUT,
-                reason=FRAME_CONFIRMATION_REQUIRED, message=frame_refusal,
-            )
+    # Before findings and approvals: a frame confirmed differently is a new
+    # preparation, and approvals never carry to it. Read from the record, for
+    # every preparation: it says what was prepared, linked or not, and which
+    # frame; only that frame, confirmed, may be solved.
+    frame_refusal = record_frame_refusal(store, record)
+    if frame_refusal is not None:
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT,
+            reason=FRAME_CONFIRMATION_REQUIRED, message=frame_refusal,
+        )
 
     reviewed = (
         [finding for finding in request.approve_finding_ids if finding in blocking]

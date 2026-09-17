@@ -319,3 +319,39 @@ def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monke
     assert mesher.calls[-1]["options"]["solver_frame"] == "+y"
     with pytest.raises(Exception):
         CadReturnIngestRequest.model_validate({**copy.deepcopy(payload.model_dump(by_alias=True)), "solverFrame": "+x"})
+
+
+def test_the_record_is_gated_even_when_the_manifest_resolution_says_linked(real, monkeypatch) -> None:
+    """The gate reads what was prepared, not only what the manifest was read as."""
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    monkeypatch.setattr(preparation, "resolve_solver_frame", lambda *_args: None)
+
+    summary = _prepare(harness)
+
+    assert _waiting_for_frame(summary), summary
+    assert harness.submitted == []
+
+
+def test_an_unreadable_retained_manifest_waits_as_preparation_failed(real) -> None:
+    """Never read as linked: a manifest WG cannot read is a preparation that failed."""
+
+    from server.cadlink.ingest import retained_snapshot_path
+
+    harness, mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    first = _prepare(harness)
+    assert _waiting_for_frame(first)
+    manifest_sha = json.loads(harness.row()["snapshot_json"])["manifest_sha256"]
+    (retained_snapshot_path(harness.data_dir, manifest_sha) / "wgreturn.json").write_text(
+        "{not json", encoding="utf-8"
+    )
+    calls = len(mesher.calls)
+
+    summary = _prepare(harness)
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed"), summary
+    assert len(mesher.calls) == calls and harness.submitted == []

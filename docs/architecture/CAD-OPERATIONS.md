@@ -338,11 +338,19 @@ executable half of this section.
   a new one, and approvals never carry to it. A preparation is resumed only in the frame
   this attempt would mesh in. `+z` is never written into the ingest options, so no mesh
   cached before this contract is made again.
-- **Every solve path.** The jobs system refuses an unlinked record whose frame is not
-  the confirmed one under the same requirement (`frame_confirmation_required`), so
-  `/api/solve`, a retry and a recovered bound request all meet it. A record prepared
-  before the contract states no frame and is never taken as confirmed; it is prepared
-  again. A refusal with that code releases the binding and keeps the reason.
+- **Every submission.** The jobs system refuses, at submission, an unlinked record whose
+  frame is not the confirmed one under the same requirement
+  (`frame_confirmation_required`), so `/api/solve`, a retry, a CAD operation's own
+  submission and a recovered bound request all meet it. A record prepared before the
+  contract states no frame and is never taken as confirmed; it is prepared again. A
+  refusal with that code releases the binding and keeps the reason.
+  - **One exception: jobs already queued.** A job accepted before an upgrade to this
+    contract and still queued is requeued by `JobRuntime.start` as it was submitted; it
+    is not submitted again, so it is not re-gated. Every later solve of that model is.
+  - **Headless solves.** `server/cli/solve.py` submits through the same runtime, so a
+    headless solve of an unlinked ingestion is refused until its frame is confirmed. The
+    frame is confirmed only in WG's CAD Link panel or through the route below, for
+    example `PUT /api/cadlink/solver-frame` with `{"ingestId": "wgi_…", "axis": "+z"}`.
 - **Routes.** `GET /api/cadlink/solver-frame?operationId=|ingestId=` answers every axis's
   `solverFromAssembly` and `previewFromRecord` (the matrix that turns the record's
   geometry into that axis's frame), the requirement and the project's confirmation.
