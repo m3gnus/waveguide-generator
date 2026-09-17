@@ -1,7 +1,8 @@
 """``/api/cadlink/live``: endpoint hello, registration, refresh and end of a session.
 
-The heartbeat route lives in :mod:`server.cadlink.live.heartbeat` and the
-delivery route in :mod:`server.cadlink.live.deliveries`, both on
+The heartbeat route lives in :mod:`server.cadlink.live.heartbeat`, the
+delivery route in :mod:`server.cadlink.live.deliveries` and the Fusion-bound
+request routes in :mod:`server.cadlink.live.requests`, all on
 :data:`session_router`.
 
 Check order on every live route (docs/reference/CADLINK-LIVE-PROTOCOL.md,
@@ -46,6 +47,7 @@ from server.platform.paths import app_root
 from . import endpoint as live_endpoint
 from . import proof as live_proof
 from . import registry as live_registry
+from . import wake as live_wake
 from .registry import LiveAuthError, LiveRegistry, LiveSession
 
 
@@ -356,7 +358,7 @@ def mount_live(application: FastAPI) -> None:
 
     # Route modules that add to the routers above, imported here because they
     # import this module.
-    from . import deliveries, heartbeat  # noqa: F401
+    from . import deliveries, heartbeat, requests  # noqa: F401
 
     application.state.live_registry = None
     for router in (public_router, registration_router, session_router):
@@ -390,6 +392,8 @@ def mount_live(application: FastAPI) -> None:
         data_dir = Path(application.state.data_dir)
         application.state.live_registry = None
         live_registry.remove_registry_if_ours(data_dir, registry.instance_id)
+        # Long polls waiting on this start find it stopped at once.
+        live_wake.notify(data_dir)
         if getattr(application.state, "advertised_port", None) is not None:
             await asyncio.to_thread(live_endpoint.remove_endpoint_if_ours, data_dir, registry.instance_id)
 

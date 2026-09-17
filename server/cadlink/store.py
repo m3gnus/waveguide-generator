@@ -30,17 +30,22 @@ from .operations import (
     CANCEL_REQUESTED,
     CLAIMABLE_STATES,
     DIGEST_VERSION,
+    FUSION_STAGES,
     INSERT_LINK,
     MUTATING_KINDS,
     NEEDS_USER_INPUT,
     PREPARE_AND_SOLVE,
     PROCESSING,
     RECEIVED,
+    RECOVERY_REQUIRED,
     REJECTED,
+    REQUEST_RETURN,
     STAGES,
+    STAGE_ADAPTER_RECEIVED,
     STAGE_READY,
     STAGE_RECEIVED,
     TERMINAL_STATES,
+    UPDATE_LINK,
     canonical_json,
     check_transition,
     normalize_request,
@@ -290,7 +295,23 @@ _OPERATION_COLUMNS = (
     # When a received snapshot was first found unreadable (UTC ISO-8601), so
     # the bound on waiting for it survives a restart.
     ("snapshot_unreadable_since", "TEXT"),
+    # A Fusion-bound request claimed over the live protocol: the installation,
+    # live session and claim ids, the generation the claim started and the
+    # request it took, so a lost claim answer replays after its file is gone
+    # (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7). Never a token.
+    ("claim_json", "TEXT"),
 )
+# The kinds WG asks Fusion to run (``fusion_outcomes.FUSION_KINDS``).
+_FUSION_KINDS = (INSERT_LINK, REQUEST_RETURN, UPDATE_LINK)
+
+# What the live Fusion request methods found; the route names the answer.
+FUSION_UNKNOWN = "unknown"
+FUSION_CLAIMED_ELSEWHERE = "claimed_elsewhere"
+FUSION_STALE_ATTEMPT = "stale_attempt"
+FUSION_STAGE_OUT_OF_ORDER = "stage_out_of_order"
+FUSION_OUTCOME_CONFLICT = "outcome_conflict"
+FUSION_RECORDED = "recorded"
+FUSION_ALREADY_RECORDED = "already_recorded"
 
 
 def _frame_confirmation(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -840,6 +861,155 @@ class CadLinkStore:
                 "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
             ).fetchone()
         return self._row(row)
+
+    # -- Fusion-bound requests claimed live: CADLINK-LIVE-PROTOCOL.md, section 7 --
+    #
+    # The request file is the mutual-exclusion token between the live claim and
+    # the add-in's file claim; these methods are the store half, each one short
+    # transaction with no file I/O inside.
+
+    def claim_fusion_request(
+        self, operation_id: str, expected_generation: int, claim: Mapping[str, Any]
+    ) -> int | None:
+        """Claim a received Fusion request for a live claim whose file WG already hid.
+
+        Conditional on ``expected_generation`` and on the operation still being
+        ``received`` and unclaimed. Records ``claim`` (plus the new generation)
+        and the ``adapter-received`` stage in the same update. Returns the new
+        generation, or None when nothing changed.
+        """
+
+        generation = _require_generation(expected_generation)
+        record = {**dict(claim), "attemptGeneration": generation + 1}
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_operations SET attempt_generation = attempt_generation + 1, "
+                "state = ?, stage = ?, claim_json = ?, updated_at = ? "
+                "WHERE operation_id = ? AND attempt_generation = ? AND state = ? "
+                f"AND claim_json IS NULL AND kind IN ({', '.join('?' for _ in _FUSION_KINDS)})",
+                (
+                    PROCESSING, STAGE_ADAPTER_RECEIVED, canonical_json(record), utc_now(),
+                    operation_id, generation, RECEIVED, *_FUSION_KINDS,
+                ),
+            )
+        return generation + 1 if cursor.rowcount == 1 else None
+
+    @staticmethod
+    def _fusion_fence(
+        row: sqlite3.Row | None, generation: int, installation_id: str
+    ) -> str | None:
+        """Why a live attempt may not write this row, checked in its transaction."""
+
+        if row is None or row["kind"] not in _FUSION_KINDS:
+            return FUSION_UNKNOWN
+        try:
+            claim = json.loads(row["claim_json"]) if row["claim_json"] else None
+        except (TypeError, ValueError):
+            claim = None
+        if not isinstance(claim, Mapping) or claim.get("installationId") != installation_id:
+            return FUSION_CLAIMED_ELSEWHERE
+        if int(row["attempt_generation"]) != generation:
+            return FUSION_STALE_ATTEMPT
+        return None
+
+    def advance_fusion_stage(
+        self, operation_id: str, generation: int, stage: str, installation_id: str
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Record how far Fusion got with a live-claimed request.
+
+        Fenced on the claiming installation and the attempt generation, and
+        only while the attempt runs (``processing``, or ``cancel_requested``).
+        A stage moves exactly one step forward; the same stage again changes
+        nothing. Returns a ``FUSION_*`` status and the row.
+        """
+
+        attempt = _require_generation(generation)
+        if stage not in FUSION_STAGES:
+            raise ValueError(f"unknown Fusion request stage {stage!r}")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+            refused = self._fusion_fence(row, attempt, installation_id)
+            if refused is not None:
+                return refused, self._row(row)
+            if row["state"] not in (PROCESSING, CANCEL_REQUESTED):
+                return FUSION_STALE_ATTEMPT, self._row(row)
+            current = row["stage"]
+            if current == stage:
+                return FUSION_ALREADY_RECORDED, self._row(row)
+            position = FUSION_STAGES.index(current) if current in FUSION_STAGES else -1
+            if FUSION_STAGES.index(stage) != position + 1:
+                return FUSION_STAGE_OUT_OF_ORDER, self._row(row)
+            conn.execute(
+                "UPDATE cad_operations SET stage = ?, updated_at = ? WHERE operation_id = ?",
+                (stage, utc_now(), operation_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return FUSION_RECORDED, self._row(row)
+
+    def complete_fusion_request(
+        self,
+        operation_id: str,
+        generation: int,
+        installation_id: str,
+        decide: Callable[[Mapping[str, Any]], tuple[str, str | None, Mapping[str, Any] | None]],
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Record the outcome a live-claimed request's attempt reports.
+
+        Fenced as :meth:`advance_fusion_stage`. ``decide(row)`` maps the
+        reported outcome to ``(state, reason, outcome)`` from the row read in
+        this transaction; a ``ValueError`` from it changes nothing. The same
+        outcome again is ``already_recorded``, a different one
+        ``outcome_conflict``. A dismissal stands: from ``cancel_requested`` the
+        outcome is ``cancelled``, and any completion of that attempt afterwards
+        is already recorded. From ``recovery_required`` only a reconciled
+        ``accepted`` settles. Returns a ``FUSION_*`` status and the row.
+        """
+
+        attempt = _require_generation(generation)
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+            refused = self._fusion_fence(row, attempt, installation_id)
+            if refused is not None:
+                return refused, self._row(row)
+            current = str(row["state"])
+            if current == RECEIVED:
+                return FUSION_STALE_ATTEMPT, self._row(row)
+            state, reason, outcome = decide(dict(row))
+            outcome_json = validate_outcome(operation_id, state, reason=reason, outcome=outcome)
+            reconciled = outcome is not None and outcome.get("reconciled") is True
+            if current in TERMINAL_STATES:
+                same = (current, row["reason"]) == (state, reason) or (
+                    current == CANCELLED and row["reason"] is None
+                )
+                return (
+                    FUSION_ALREADY_RECORDED if same else FUSION_OUTCOME_CONFLICT
+                ), self._row(row)
+            if current == RECOVERY_REQUIRED:
+                if state == RECOVERY_REQUIRED:
+                    return FUSION_ALREADY_RECORDED, self._row(row)
+                if not (state == ACCEPTED and reconciled):
+                    return FUSION_OUTCOME_CONFLICT, self._row(row)
+            if current == CANCEL_REQUESTED:
+                state, reason, outcome_json = CANCELLED, None, None
+            check_transition(str(row["kind"]), current, state, reconciled=reconciled)
+            conn.execute(
+                "UPDATE cad_operations SET state = ?, reason = ?, outcome_json = ?, updated_at = ? "
+                "WHERE operation_id = ?",
+                (state, reason, outcome_json, utc_now(), operation_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            ).fetchone()
+        return FUSION_RECORDED, self._row(row)
 
     def advance_operation(
         self,

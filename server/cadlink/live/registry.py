@@ -225,6 +225,30 @@ class LiveRegistry:
             self._by_digest[digest] = session.live_session_id
         return token
 
+    def still_current(self, session: LiveSession, presented_digest: bytes) -> str | None:
+        """Why ``session`` no longer authenticates, or None while it still does.
+
+        For a request that authenticated and then waited (a long poll): the
+        same codes :meth:`authenticate` answers, without counting as activity.
+        """
+
+        now = _now()
+        with self._lock:
+            if self._sessions.get(session.live_session_id) is not session:
+                expiry = self._superseded.get(presented_digest)
+                if expiry is not None and expiry > now:
+                    return SESSION_SUPERSEDED
+                return SESSION_UNKNOWN
+            if self._expired(session, now):
+                return TOKEN_EXPIRED
+            current = hmac.compare_digest(session.token_digest, presented_digest)
+            grace = session.previous_digest is not None and hmac.compare_digest(
+                session.previous_digest, presented_digest
+            )
+            if not current and not (grace and now <= session.previous_valid_until):
+                return TOKEN_EXPIRED
+            return None
+
     def end(self, session: LiveSession) -> None:
         with self._lock:
             if self._sessions.get(session.live_session_id) is session:

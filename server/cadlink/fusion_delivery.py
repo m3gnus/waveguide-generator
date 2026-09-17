@@ -34,6 +34,8 @@ import threading
 import time
 from typing import Any, Callable, Literal, Mapping
 
+from .live import wake as live_wake
+
 
 IPC_SUBDIRECTORY = Path("ipc") / "wglink"
 CAPABILITIES_FILENAME = "wg-capabilities.json"
@@ -338,6 +340,8 @@ def publish_fusion_request(
             if outcome != "removed":
                 continue
             withdrawn.append(operation_id)
+    # A live long poll may be waiting for exactly this (a hint; it rescans too).
+    live_wake.notify(data_dir)
     # The request id is the operation id: it follows the request through the
     # add-in's heartbeat and outcomes (CAD-OPERATIONS.md, "WG-produced Fusion requests").
     logger.info(
@@ -393,6 +397,13 @@ def recover_staged_fusion_requests(
     The JSON is durable before its operation is accepted. A received row plus
     this hidden file proves the interruption happened between acceptance and
     publication. Existing visible requests and add-in claims always win.
+
+    A live claim hides a request under the same pattern,
+    ``.<requestId>.json.live-<claimId>.tmp``, before it claims the operation
+    in the store. Interrupted before that claim, the row is still ``received``
+    and the request is restored; interrupted after it, the row is not, and the
+    hidden file is deleted -- as is one whose operation was cancelled meanwhile
+    (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7).
     """
 
     recovered: list[str] = []
@@ -431,6 +442,8 @@ def recover_staged_fusion_requests(
                 os.replace(temporary, own)
                 recovered.append(operation_id)
                 logger.info("Recovered staged Fusion request %s at startup.", operation_id)
+    if recovered:
+        live_wake.notify(data_dir)
     return tuple(recovered)
 
 

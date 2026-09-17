@@ -56,12 +56,21 @@ STAGE_VALIDATING = "validating"
 STAGE_PREPARING_MESH = "preparing-mesh"
 STAGE_READY = "ready"
 STAGE_SUBMITTED = "submitted"
+# Where a WG-produced Fusion request stands once the add-in claimed it over the
+# live protocol (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7): received by
+# the adapter at the claim, then queued for Fusion's main thread, then executing.
+# They move exactly one step at a time within one attempt; the outcome follows.
+STAGE_ADAPTER_RECEIVED = "adapter-received"
+STAGE_QUEUED_FOR_FUSION = "queued-for-fusion"
+STAGE_EXECUTING = "executing"
+FUSION_STAGES = (STAGE_ADAPTER_RECEIVED, STAGE_QUEUED_FOR_FUSION, STAGE_EXECUTING)
 STAGES = (
     STAGE_RECEIVED,
     STAGE_VALIDATING,
     STAGE_PREPARING_MESH,
     STAGE_READY,
     STAGE_SUBMITTED,
+    *FUSION_STAGES,
 )
 TERMINAL_STATES = frozenset({ACCEPTED, REJECTED, CANCELLED})
 CLAIMABLE_STATES = frozenset({RECEIVED, PROCESSING, NEEDS_USER_INPUT})
@@ -104,6 +113,8 @@ REASON_CODES: Mapping[str, str] = {
     "session_changed": CANCELLED,
     "publication_failed": CANCELLED,
     "adapter_refused": REJECTED,
+    # The adapter reported that the request failed before it changed anything.
+    "adapter_failed": REJECTED,
     "adapter_not_started": CANCELLED,
 }
 BASELINE_KINDS = frozenset({"document_signature_hash"})
@@ -361,6 +372,7 @@ __all__ = [
     "CANCELLED",
     "CANCEL_REQUESTED",
     "CLAIMABLE_STATES",
+    "FUSION_STAGES",
     "DIGEST_VERSION",
     "INSERT_LINK",
     "KINDS",
@@ -375,7 +387,10 @@ __all__ = [
     "RECOVERY_REQUIRED",
     "REJECTED",
     "STAGES",
+    "STAGE_ADAPTER_RECEIVED",
+    "STAGE_EXECUTING",
     "STAGE_PREPARING_MESH",
+    "STAGE_QUEUED_FOR_FUSION",
     "STAGE_READY",
     "STAGE_RECEIVED",
     "STAGE_SUBMITTED",

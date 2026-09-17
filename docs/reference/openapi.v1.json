@@ -1221,6 +1221,27 @@
         "title": "ChooseExportDestinationRequest",
         "type": "object"
       },
+      "ClaimRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptGeneration": {
+            "minimum": 0.0,
+            "title": "Attemptgeneration",
+            "type": "integer"
+          },
+          "claimId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+            "title": "Claimid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attemptGeneration",
+          "claimId"
+        ],
+        "title": "ClaimRequest",
+        "type": "object"
+      },
       "ClearFailedResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1246,6 +1267,82 @@
           "deleted_ids"
         ],
         "title": "ClearFailedResponse",
+        "type": "object"
+      },
+      "CompletionEvidence": {
+        "additionalProperties": false,
+        "description": "The link the document carries: this operation and its export.",
+        "properties": {
+          "exportId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Exportid",
+            "type": "string"
+          },
+          "operationId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operationid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operationId",
+          "exportId"
+        ],
+        "title": "CompletionEvidence",
+        "type": "object"
+      },
+      "CompletionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptGeneration": {
+            "minimum": 0.0,
+            "title": "Attemptgeneration",
+            "type": "integer"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompletionEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "outcome": {
+            "enum": [
+              "applied",
+              "reconciled",
+              "refused",
+              "superseded",
+              "discarded",
+              "recoveryRequired",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attemptGeneration",
+          "outcome"
+        ],
+        "title": "CompletionRequest",
         "type": "object"
       },
       "ConfigBlock": {
@@ -6712,6 +6809,30 @@
         "title": "PrepareOperationRequest",
         "type": "object"
       },
+      "ProgressRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "attemptGeneration": {
+            "minimum": 0.0,
+            "title": "Attemptgeneration",
+            "type": "integer"
+          },
+          "stage": {
+            "enum": [
+              "queuedForFusion",
+              "executing"
+            ],
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attemptGeneration",
+          "stage"
+        ],
+        "title": "ProgressRequest",
+        "type": "object"
+      },
       "ProjectSetupRequest": {
         "additionalProperties": false,
         "properties": {
@@ -8704,6 +8825,286 @@
           }
         },
         "summary": "Post Live Heartbeat",
+        "tags": [
+          "cadlink-live"
+        ]
+      }
+    },
+    "/api/cadlink/live/requests": {
+      "get": {
+        "description": "The Fusion-bound requests this session may claim; waits for one when none.",
+        "operationId": "poll_fusion_requests_api_cadlink_live_requests_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "waitSeconds",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 25,
+              "minimum": 0,
+              "title": "Waitseconds",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "store_busy: the live session service is not running"
+          }
+        },
+        "summary": "Poll Fusion Requests",
+        "tags": [
+          "cadlink-live"
+        ]
+      }
+    },
+    "/api/cadlink/live/requests/{operationId}/claim": {
+      "post": {
+        "description": "Take one offered request; the first claim by either transport wins.",
+        "operationId": "claim_fusion_request_api_cadlink_live_requests__operationId__claim_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operationId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+              "title": "Operationid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "store_busy: the live session service is not running"
+          }
+        },
+        "summary": "Claim Fusion Request",
+        "tags": [
+          "cadlink-live"
+        ]
+      }
+    },
+    "/api/cadlink/live/requests/{operationId}/complete": {
+      "post": {
+        "description": "Record the claimed request's outcome, mapped as the heartbeat maps it.",
+        "operationId": "complete_fusion_request_api_cadlink_live_requests__operationId__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operationId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+              "title": "Operationid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "store_busy: the live session service is not running"
+          }
+        },
+        "summary": "Complete Fusion Request",
+        "tags": [
+          "cadlink-live"
+        ]
+      }
+    },
+    "/api/cadlink/live/requests/{operationId}/progress": {
+      "post": {
+        "description": "Record that Fusion queued, then began executing, the claimed request.",
+        "operationId": "fusion_request_progress_api_cadlink_live_requests__operationId__progress_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operationId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+              "title": "Operationid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "store_busy: the live session service is not running"
+          }
+        },
+        "summary": "Fusion Request Progress",
         "tags": [
           "cadlink-live"
         ]

@@ -18,6 +18,7 @@ from .operations import (
     RECOVERY_REQUIRED,
     REJECTED,
     REQUEST_RETURN,
+    STAGE_EXECUTING,
     STATES,
     TERMINAL_STATES,
     UPDATE_LINK,
@@ -173,6 +174,81 @@ def _delivery_still_pending(ipc: Path, row: Mapping[str, Any]) -> bool:
     )
 
 
+#: Outcomes the add-in reports for a Fusion request, by either transport: the
+#: heartbeat's ``recentOutcomes``/``lastRequest`` and a live completion
+#: (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7).
+ADAPTER_OUTCOMES = (
+    "applied", "reconciled", "refused", "superseded", "discarded", "recoveryRequired", "failed",
+)
+_APPLIED_BY_EVIDENCE = "Fusion document evidence confirms this operation applied."
+_RECONCILED = "Fusion reconciled this operation from its document evidence."
+
+
+def adapter_outcome(
+    row: Mapping[str, Any],
+    outcome: str,
+    *,
+    evidence: tuple[str, str] | None = None,
+    message: str | None = None,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """What the store records when the add-in reports ``outcome`` for ``row``.
+
+    Returns ``(state, reason, outcome)``. One mapping for the heartbeat and
+    for a live completion. A mutation is accepted only as reconciled, with
+    ``evidence`` equal to its own operation and export ids; ``failed`` leaves
+    a mutation that was executing ``recovery_required``. Raises ``ValueError``
+    for an outcome that does not apply to the operation's kind.
+    """
+
+    operation_id = str(row["operation_id"])
+    mutating = row.get("kind") in MUTATING_KINDS
+
+    def said(default: str) -> dict[str, Any]:
+        return {"message": message or default}
+
+    if outcome in ("applied", "reconciled"):
+        if not mutating:
+            if outcome == "reconciled" or evidence is not None:
+                raise ValueError("a return request is applied without document evidence")
+            return ACCEPTED, None, said("Fusion reported that it completed the return request.")
+        export_id = _export_id(row)
+        if export_id is None or evidence != (operation_id, export_id):
+            raise ValueError("a document mutation is accepted only with its own operation and export ids")
+        return ACCEPTED, None, {
+            **said(_APPLIED_BY_EVIDENCE if outcome == "applied" else _RECONCILED),
+            "reconciled": True,
+            "evidence": {"operation_id": operation_id, "export_id": export_id},
+        }
+    if outcome == "refused":
+        return REJECTED, "adapter_refused", said("Fusion refused this request.")
+    if outcome == "superseded":
+        return CANCELLED, "superseded", said("Fusion superseded this request before it started.")
+    if outcome == "discarded":
+        return CANCELLED, "adapter_not_started", said(
+            "Fusion discarded an interrupted claim that never started."
+        )
+    if outcome == "recoveryRequired":
+        if not mutating:
+            raise ValueError("only a document mutation can need recovery")
+        return RECOVERY_REQUIRED, None, said(
+            "Fusion reported that this document mutation needs recovery."
+        )
+    if outcome == "failed":
+        if mutating and row.get("stage") == STAGE_EXECUTING:
+            return RECOVERY_REQUIRED, None, said(
+                "Fusion reported a failure while it was applying this document mutation."
+            )
+        return REJECTED, "adapter_failed", said("Fusion reported that this request failed.")
+    raise ValueError(f"unknown adapter outcome {outcome!r}")
+
+
+def _record_adapter_outcome(
+    store: CadLinkStore, row: Mapping[str, Any], outcome: str, **kwargs: Any
+) -> dict[str, Any] | None:
+    state, reason, recorded = adapter_outcome(row, outcome, **kwargs)
+    return _record(store, row, state, reason=reason, outcome=recorded)
+
+
 def settle_from_heartbeat(
     store: CadLinkStore,
     heartbeat: Mapping[str, Any],
@@ -203,7 +279,7 @@ def settle_from_heartbeat(
                 row,
                 ACCEPTED,
                 outcome={
-                    "message": "Fusion document evidence confirms this operation applied.",
+                    "message": _APPLIED_BY_EVIDENCE,
                     "reconciled": True,
                     "evidence": {"operation_id": evidence[0], "export_id": evidence[1]},
                 },
@@ -225,33 +301,14 @@ def settle_from_heartbeat(
             continue
 
         recent = _recent(heartbeat, row)
-        if recent == "superseded":
-            value = _record(
-                store, row, CANCELLED, reason="superseded",
-                outcome={"message": "Fusion superseded this request before it started."},
-            )
-        elif recent == "discarded":
-            value = _record(
-                store, row, CANCELLED, reason="adapter_not_started",
-                outcome={"message": "Fusion discarded an interrupted claim that never started."},
-            )
+        if recent in ("superseded", "discarded"):
+            value = _record_adapter_outcome(store, row, recent)
         elif recent == "reconciled" and row["kind"] in MUTATING_KINDS and _export_id(row):
-            export_id = str(_export_id(row))
-            value = _record(
-                store,
-                row,
-                ACCEPTED,
-                outcome={
-                    "message": "Fusion reconciled this operation from its document evidence.",
-                    "reconciled": True,
-                    "evidence": {"operation_id": operation_id, "export_id": export_id},
-                },
+            value = _record_adapter_outcome(
+                store, row, "reconciled", evidence=(operation_id, str(_export_id(row)))
             )
         elif recent == "recoveryRequired" and row["kind"] in MUTATING_KINDS:
-            value = _record(
-                store, row, RECOVERY_REQUIRED,
-                outcome={"message": "Fusion reported that this document mutation needs recovery."},
-            )
+            value = _record_adapter_outcome(store, row, "recoveryRequired")
         else:
             value = None
             if recent not in {None, "wgOutdated", "notTaken"}:
@@ -263,17 +320,11 @@ def settle_from_heartbeat(
         last = _last(heartbeat, row)
         last_outcome = _operation_id(last.get("outcome")) if last is not None else None
         if last_outcome == "refused":
-            value = _record(
-                store, row, REJECTED, reason="adapter_refused",
-                outcome={"message": "Fusion refused this request."},
-            )
+            value = _record_adapter_outcome(store, row, "refused")
             changed += value is not None
             continue
         if last_outcome == "applied" and row["kind"] == REQUEST_RETURN:
-            value = _record(
-                store, row, ACCEPTED,
-                outcome={"message": "Fusion reported that it completed the return request."},
-            )
+            value = _record_adapter_outcome(store, row, "applied")
             changed += value is not None
             continue
 
@@ -286,4 +337,4 @@ def settle_from_heartbeat(
     return changed
 
 
-__all__ = ["FUSION_KINDS", "settle_from_heartbeat"]
+__all__ = ["ADAPTER_OUTCOMES", "FUSION_KINDS", "adapter_outcome", "settle_from_heartbeat"]

@@ -1,11 +1,9 @@
 # CAD Link live protocol
 
-Status: protocol version 1. Sections 2-6 and 8 (endpoint discovery, registration, sessions
-and tokens, origin and validation rules, heartbeat over HTTP, WG-bound deliveries) are
-**implemented in WG** (`server/cadlink/live/`). Section 7 (Fusion-bound requests) is the
-agreed contract for work that is **not implemented yet**; until it is, those routes do not
-exist and the add-in uses the v3 files for them. No released WGLink speaks this protocol
-yet.
+Status: protocol version 1, **implemented in WG** (`server/cadlink/live/`): endpoint
+discovery, registration, sessions and tokens, origin and validation rules, heartbeat over
+HTTP, Fusion-bound requests and WG-bound deliveries (sections 2-8). No released WGLink
+speaks this protocol yet; until one does, the add-in uses the v3 files.
 
 The live protocol changes how CAD Link operations travel between WG and its Fusion add-in,
 not what they mean. The operation contract, digests and states are those of
@@ -252,26 +250,120 @@ add-in writes to `.fusion-status.json`; `204` with no body when recorded. Body l
   heartbeat was selected. For the same heartbeat object the status is otherwise identical
   on either transport.
 
-## 7. Fusion-bound requests (not implemented yet)
+## 7. Fusion-bound requests
 
-WG still records the operation and publishes the v3 request file; the file is the
-mutual-exclusion token.
+WG still records every Fusion-bound operation (`request_return`, `insert_link`,
+`update_link`) and publishes its v3 request file ([CAD operations](../architecture/CAD-OPERATIONS.md),
+"WG-produced Fusion requests"). The add-in takes a request either by renaming that file
+(the file transport, unchanged) or through the routes below. **The visible file is the
+mutual-exclusion token**: whoever renames it first has the request, whichever transport
+it uses. Every route here is authenticated (section 5); none is held by the restart latch,
+because a claim starts no work in WG and a file claim cannot be held either.
 
-- **Long poll** `GET /requests?waitSeconds=25` → `{"requests": [{operationId, kind,
-  attemptGeneration, request}]}`: Fusion-bound operations in `received` whose file is
-  visible, a return request only for the session's `adapterSessionId`, ordered by
-  `deliverySequence` then ID.
-- **Claim** `POST /requests/{operationId}/claim {"attemptGeneration": g, "claimId": "<uuid>"}`:
-  WG hides the visible file, claims the operation (`g+1`, recording the installation,
-  session and claim IDs), then deletes the hidden file and answers
-  `{attemptGeneration: g+1, request}`. A vanished file is `409 claimed_elsewhere`; a failed
-  store claim restores the file and is `409 stale_attempt`; the same `claimId` again is a 200
-  replay, another claim `409 already_claimed`. Startup recovery deletes a hidden file whose
-  operation is already processing and restores one still `received`.
-- **Progress** `queuedForFusion` → `executing`, forward-only and fenced; a repeat is 200.
-- **Completion** `{attemptGeneration, outcome, message?, evidence?}` with the heartbeat
-  outcome mapping; the same terminal outcome again is 200 `alreadyRecorded`, a different one
-  `409 outcome_conflict`.
+Operations, claims, progress and outcomes are bound to the **installation** and the
+**attempt generation**, never to a session: after a token refresh or a new registration
+of the same installation the attempt continues.
+
+### 7.1 Long poll
+
+`GET /requests?waitSeconds=<0-25>` (default 25; anything else `400 invalid_request`) →
+`200 {"requests": [{"operationId", "kind", "attemptGeneration", "request"}]}`.
+
+- **Offered:** a Fusion-bound operation in `received` whose request file is visible under
+  its own name and is a valid v3 request of that operation; a return request only when
+  its `sessionId` is the session's registered `adapterSessionId`. `request` is the file's
+  JSON exactly. Ordered by `deliverySequence`, then operation ID. An offer changes
+  nothing.
+- **Waiting.** With nothing to offer WG waits up to `waitSeconds` and answers as soon as
+  a request is published, else `{"requests": []}` at the bound. A missed wake-up costs
+  at most one rescan: WG reads the store again every 2 s while it waits. The wait holds
+  no database transaction and no lock.
+- **Ends early** with `401` (`session_superseded`, `token_expired`, `session_unknown`)
+  when the session stops authenticating while it waits, or `503 store_busy` when WG
+  stops. A wait is not activity for the idle timeout; the heartbeat is.
+
+### 7.2 Claim
+
+`POST /requests/{operationId}/claim` `{"attemptGeneration": g, "claimId": "<id>"}`.
+`claimId` matches `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` (a UUID fits); the add-in journals it
+before it sends the claim. Under WG's publisher lock:
+
+0. An operation that does not exist or is not Fusion-bound → `404 operation_unknown`.
+   **A claim already recorded answers first:** the same `claimId`, installation and
+   generation (`g+1` recorded for `g`) → `200` with exactly the original answer, taken
+   from the store, even after the file is gone, after the operation finished and after a
+   WG restart; any other claim → `409 already_claimed`.
+1. A return request for another `adapterSessionId` → `409 session_mismatch`, nothing
+   renamed. WG renames the visible file to `.<operationId>.json.live-<claimId>.tmp`. Gone
+   → `409 claimed_elsewhere` (the add-in, or another claim, took it); another rename
+   failure (a Windows sharing violation) → `503 store_busy`.
+2. WG claims the operation in the store, conditional on generation `g`, state `received`
+   and no recorded claim: generation `g+1`, `processing`, stage `adapter-received`, and
+   the claim recorded (installation, live session and claim IDs, the generation, the time
+   and the request itself; never a token). If that claim is refused, WG **deletes the
+   file of an operation that finished or was dismissed** (terminal, or
+   `cancel_requested`) -- it is never resurrected -- and puts any other back for the
+   file transport, then answers `409 stale_attempt`. A busy store restores the file and answers `503 store_busy`.
+3. WG deletes the hidden file and answers `200 {"attemptGeneration": g+1, "request": <the v3
+   request>}`. A deletion that fails is left to startup recovery.
+
+**Interrupted claims.** Startup recovery handles the hidden name like any staged request
+file. Interrupted between steps 1 and 2, the operation is still `received`: the visible
+file is restored and offered again at `g` (and the file transport can take it). If the
+operation was cancelled meanwhile, the file is deleted. Interrupted between steps 2 and
+3, the operation is `processing`: the hidden file is deleted, no request is visible, and
+the claim replays by its `claimId`. While a live claim holds a file hidden, heartbeat
+settlement treats the request as still being delivered and does not claim it.
+
+### 7.3 Progress
+
+`POST /requests/{operationId}/progress` `{"attemptGeneration": g, "stage":
+"queuedForFusion"|"executing"}` → `200 {"operation": <operation summary>}`.
+
+- Stored as the operation's stage: `adapter-received` (set by the claim) →
+  `queued-for-fusion` → `executing`, **one step at a time**. The same stage again →
+  `200 {"operation", "alreadyRecorded": true}` with no write; a skipped or earlier stage →
+  `409 stage_out_of_order`.
+- Fenced: the operation must have been claimed live by this installation
+  (else `409 claimed_elsewhere`, which is also the answer for a file-claimed operation),
+  be at generation `g` and still running (`processing`, or `cancel_requested`), else
+  `409 stale_attempt`.
+
+### 7.4 Completion
+
+`POST /requests/{operationId}/complete` `{"attemptGeneration": g, "outcome": O,
+"message"?: "<1-2000 chars>", "evidence"?: {"operationId", "exportId"}}` →
+`200 {"operation": <operation summary>}`, fenced as progress.
+
+The mapping is the heartbeat's (`fusion_outcomes.adapter_outcome`, one implementation
+for both transports):
+
+| `outcome` | `request_return` | `insert_link` / `update_link` |
+| --- | --- | --- |
+| `applied` | `accepted` | reconciled `accepted`, only with `evidence` equal to the operation's own ID and export ID |
+| `reconciled` | `400 invalid_request` | reconciled `accepted`, evidence as above |
+| `refused` | `rejected` / `adapter_refused` | same |
+| `superseded` | `cancelled` / `superseded` | same |
+| `discarded` | `cancelled` / `adapter_not_started` | same |
+| `recoveryRequired` | `400 invalid_request` | `recovery_required` |
+| `failed` | `rejected` / `adapter_failed` | `recovery_required` if the stage was `executing`, else `rejected` / `adapter_failed` |
+
+- Missing or mismatched evidence for a mutation, or evidence on a return request →
+  `400 invalid_request`; nothing is recorded. `failed` has no heartbeat equivalent (the
+  heartbeat leaves such an operation `processing`); over HTTP it is recorded as above.
+- **Repeats.** The same outcome again → `200 {"operation", "alreadyRecorded": true}`;
+  a different one → `409 outcome_conflict`. This holds whichever transport recorded the
+  first: a heartbeat that later reports the same outcome settles nothing again, and a
+  live completion of an outcome the heartbeat already recorded is `alreadyRecorded`.
+- **Dismissal stands.** From `cancel_requested` the outcome recorded is `cancelled`, and
+  any completion of that attempt afterwards is `alreadyRecorded`. From
+  `recovery_required` only a reconciled `accepted` settles; the same outcome again is
+  `alreadyRecorded`, anything else `409 outcome_conflict`.
+- An obsolete attempt -- one WG took over, or whose operation finished at a later
+  generation -- gets `409 stale_attempt` and changes nothing.
+
+Every recorded claim, stage and outcome is published to WG's UI as a `cadOperation`
+event after it is committed; the event carries the operation summary, never the claim.
 
 ## 8. WG-bound deliveries and the outbox
 
@@ -356,14 +448,15 @@ mutual-exclusion token.
 | --- | --- |
 | WG restarts | New registry, instance and secret; old tokens and the old secret are refused; the client applies the go-live rule again and registers. Operations persist and are offered, recovered or settled again. |
 | Token refresh | New token only, 30 s grace; no operation or digest changes. |
-| A response is lost | Claim replay by `claimId`, same progress stage, same outcome, delivery recovery by digest. |
-| Crash between claim and file delete | Startup recovery deletes the hidden file; the operation stays processing. |
+| A response is lost | Claim replay by `claimId` (from the store, even after the file is gone or a WG restart), the same progress stage (`alreadyRecorded`), the same outcome (`alreadyRecorded`), delivery recovery by digest. |
+| WG stops between hiding a request and claiming it | Startup recovery restores the visible request if the operation is still `received`, and deletes it if the operation was cancelled meanwhile. |
+| WG stops between the claim and deleting the file | Startup recovery deletes the hidden file; the operation stays processing, and the claim replays. |
 | Fusion restarts mid-request | The claim journal is settled read-only; the operation is never re-run. |
 | Another process binds the port after WG exits | It cannot prove the secret; the client stays in file mode. |
 | WG stops between accepting a delivery and answering it | A solve stays `received` and the next delivery pass prepares it; a `receive_snapshot` left `received` or `processing` is settled at startup (a `processing` one taken over by a new claim). The add-in's retry is `recovered` by digest. |
 | The store refuses a snapshot's outcome after its claim | The retry answers `503 store_busy`; the next pass or retry takes it over and settles it. |
 | Outbox item made while WG was down | Delivered at the next session (a solve also by its v3 file), accepted once. |
-| Missed wake-up | The next poll, or the operations listing. |
+| Missed wake-up | The waiting long poll rescans every 2 s; otherwise the next poll, or the operations listing. |
 
 ## 10. Error codes
 
@@ -383,9 +476,10 @@ Every refusal is an error envelope with `stage: "cadlink-live"`.
 | 409 | `wglink_folder_not_selected`, `update_restart_pending` (deliveries) | yes | implemented |
 | 503 | `snapshot_not_readable`, `store_busy` (deliveries; `Retry-After: 1`) | yes | implemented |
 | — | outcome `rejected` / `snapshot_unavailable`: a `receive_snapshot` unreadable for 24 h (a 200 answer, not an HTTP error) | send again as a new operation | implemented |
-| 404 | `operation_unknown` | no | planned |
-| 409 | `session_mismatch` (Fusion-bound requests) | no | planned |
-| 409 | `claimed_elsewhere`, `already_claimed`, `stale_attempt`, `outcome_conflict` | no | planned |
+| 404 | `operation_unknown` (Fusion-bound requests) | no | implemented |
+| 409 | `session_mismatch` (a return request for another adapter session) | no | implemented |
+| 409 | `claimed_elsewhere`, `already_claimed`, `stale_attempt`, `stage_out_of_order`, `outcome_conflict` | no | implemented |
+| 503 | `store_busy` (Fusion-bound requests: the store is busy, a request file could not be renamed, or WG stopped during a long poll; `Retry-After: 1`) | yes | implemented |
 
 ## 11. Security boundary
 
@@ -400,6 +494,7 @@ Every refusal is an error envelope with `stage: "cadlink-live"`.
 
 ## Platform evidence still owed
 
-Unit tests do not prove: the Windows ACL on the endpoint file; loopback and proxy bypass from
+Unit tests do not prove: the Windows ACL on the endpoint file; a live claim's rename of a request
+file another process holds open on Windows; loopback and proxy bypass from
 inside Fusion's Python; custom-event dispatch under long polling; reconnection across a real
 WG restart and a token refresh; an outbox item delivered once on macOS and Windows.

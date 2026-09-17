@@ -176,6 +176,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `publication_failed` | `cancelled` | The operation was stored but its request file could not be published |
 | `adapter_refused` | `rejected` | Fusion explicitly refused this exact request and no document evidence says it applied |
 | `adapter_not_started` | `cancelled` | Fusion discarded a leftover claim with neither evidence nor an applying mark |
+| `adapter_failed` | `rejected` | Fusion reported over the live protocol that the request failed before it changed the document (a mutation that failed while executing is `recovery_required` instead) |
 
 The three rejections are final because a refreshed baseline, target or snapshot is a new
 operation. Every `needs_user_input` code keeps the operation, and another
@@ -535,7 +536,8 @@ need.
 - **The later stages are additive too.** They add two tables (`cad_setup_revisions`,
   `cad_preparations`) and nullable columns to `cad_operations` (`stage`,
   `setup_revision_id`, `request_json`, `snapshot_json`, `preparation_id`,
-  `approvals_json`), in the same upgrade transaction. A row written before them reads its
+  `approvals_json`, `snapshot_unreadable_since`, `claim_json`), in the same upgrade
+  transaction. A row written before them reads its
   stage from its state. An interrupted upgrade rolls back as a whole and completes at the
   next start, and finished work is never handed out again.
 - **A rollback keeps CAD Link working.** Every release refuses a `user_version` above
@@ -887,6 +889,15 @@ claim, if any, already owns delivery, and a terminal operation must never run tw
 3. **Run it at most once** per request ID, in the order "Fusion-bound mutations" gives,
    then delete the claim, whatever the outcome.
 4. **A return request runs only in the session it names** (`sessionId`).
+
+**Or over the live protocol.** A live add-in takes the same requests through
+`/api/cadlink/live/requests` (`docs/reference/CADLINK-LIVE-PROTOCOL.md`, section 7): WG
+hides the visible file under `.<requestId>.json.live-<claimId>.tmp`, claims the operation
+(`processing`, stage `adapter-received`, the claim recorded in `claim_json`), then deletes
+the hidden file. The file is the mutual-exclusion token, so a request is taken exactly
+once, by whichever transport renames it first. The add-in then reports the stages
+`queued-for-fusion` and `executing` and the outcome, fenced on its installation and the
+attempt generation, with the heartbeat's outcome mapping below.
 
 **Heartbeat outcome mapping.** WG reads only a fresh heartbeat with
 `deliveryVersion >= 3`, live or file: the one `fusion_status.select_heartbeat` chooses

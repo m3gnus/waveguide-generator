@@ -13,7 +13,9 @@ export interface CadOperationSummary {
   /** "States": `received`, `processing`, `needs_user_input`, `accepted`,
    * `rejected`, `cancelled`, `recovery_required`, `cancel_requested`. */
   state: string;
-  /** "Preparation": `received`, `validating`, `preparing-mesh`, `ready`, `submitted`. */
+  /** "Preparation": `received`, `validating`, `preparing-mesh`, `ready`, `submitted`.
+   * A Fusion-bound request claimed live: `adapter-received`, `queued-for-fusion`,
+   * `executing` (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7). */
   stage: string | null;
   /** A reason code ("Outcomes"), or null. */
   reason: string | null;
