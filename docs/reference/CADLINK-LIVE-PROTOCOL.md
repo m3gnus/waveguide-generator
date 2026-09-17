@@ -238,7 +238,10 @@ add-in writes to `.fusion-status.json`; `204` with no body when recorded. Body l
   registry and the heartbeat is fresh; else a fresh file heartbeat; else none. The same
   freshness window applies to both. A WG that has not started or has stopped has no
   registry, so only the file is read. The evidence collector (`scripts/cadlink_evidence.py`)
-  still collects only the file heartbeat; collecting the live one is owed.
+  still collects only the file heartbeat -- the live one is kept in this in-memory registry
+  and never persisted, so a read-only, out-of-process, offline collector cannot see it; its
+  `manifest.json` carries a `notes` entry saying so and pointing at this section's
+  `heartbeatTransport` field as the place that does know.
 - **One selection per status answer.** `POST /api/cadlink/fusion-status` reads the clock
   once, selects once, and gives that same heartbeat and instant to operation settlement and
   to the status it reports, so the two cannot disagree when the file changes, or the

@@ -188,6 +188,34 @@ def test_session_token_and_registration_secret_keys_are_redacted() -> None:
     }
 
 
+# --- live heartbeat transport summary -------------------------------------
+
+
+def test_evidence_notes_the_live_heartbeat_transport_is_unknown_offline(tmp_path: Path) -> None:
+    """The collector cannot see WG's in-memory ``LiveRegistry`` (CL11b): it
+    runs offline, out of process, so it can never know whether the freshest
+    heartbeat came by the live HTTP transport or the file one. That must be
+    recorded, not silently omitted -- the bundle's ``notes`` says so and
+    points at ``/fusion-status``'s ``heartbeatTransport`` field.
+    """
+
+    data_dir = tmp_path / "data"
+    evidence = cadlink_evidence.collect_evidence(data_dir)
+    assert any("heartbeatTransport" in note for note in evidence["notes"])
+    assert any("live" in note and "file" in note for note in evidence["notes"])
+
+
+def test_manifest_carries_the_notes_without_unzipping_every_member(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    evidence = cadlink_evidence.collect_evidence(data_dir)
+    destination = tmp_path / "evidence.zip"
+    cadlink_evidence.write_zip(evidence, destination)
+    with zipfile.ZipFile(destination) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    assert manifest["notes"] == evidence["notes"]
+    assert any("heartbeatTransport" in note for note in manifest["notes"])
+
+
 # --- the database is opened read-only -----------------------------------
 
 

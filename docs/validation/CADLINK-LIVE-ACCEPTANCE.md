@@ -40,6 +40,17 @@ blank until you run the step; do not mark a row done from memory.
   `manifest.json` rather than crashing the collector. See its module
   docstring for exactly what each zip member is and where it comes from.
 
+  `manifest.json`'s `notes` always carries one caveat worth reading before
+  you file a heartbeat-related row: since CL11b, WG prefers a live HTTP
+  heartbeat over the file one when a fresh one exists, but that live
+  heartbeat lives only in the running WG's memory. This collector is
+  read-only and offline, so it cannot tell you which transport was in
+  effect for a given step -- check `POST /api/cadlink/fusion-status`'s
+  `heartbeatTransport` field on the running WG at the time
+  (`docs/reference/CADLINK-LIVE-PROTOCOL.md`, section 6) instead of
+  inferring it from `fusion-status.json` in the zip, which is always the
+  file transport's payload.
+
 ## Run record
 
 | | |

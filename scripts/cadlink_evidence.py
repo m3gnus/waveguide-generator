@@ -24,7 +24,8 @@ and an optional operation id, this writes one zip holding:
   given operation id when one is given.
 - ``server.log``: the application log lines naming the operation id, or the
   whole log when no id is given.
-- ``manifest.json``: what ran, when, and which of the above was present.
+- ``manifest.json``: what ran, when, and which of the above was present, plus
+  ``notes`` (see below).
 
 Every read goes through ``Path.read_text``/``iterdir``/``stat`` or a sqlite
 connection opened ``mode=ro``; nothing here creates, renames or deletes a file
@@ -33,6 +34,18 @@ rather than raised. This is a script, not a server route: it never imports
 anything that starts an event loop or touches a live WG process, so it is
 safe to run against a data directory belonging to a WG that is currently
 running.
+
+Since CL11b, WG selects a live HTTP heartbeat over the file one when a fresh
+one exists (``server.cadlink.fusion_status.select_heartbeat``), but the live
+heartbeat lives only in that WG process's in-memory ``LiveRegistry``
+(``server/cadlink/live/registry.py``) -- it is never written to a file, and a
+WG restart forgets it. This collector is read-only and runs out of process,
+so it never calls a running WG over HTTP and can never observe which
+transport was selected. Rather than guess or stay silent about that gap, both
+``collect_evidence`` and the zip's ``manifest.json`` carry a ``notes`` list
+that says so explicitly and points at the one place that does know: WG's own
+``POST /api/cadlink/fusion-status`` response, whose ``heartbeatTransport``
+field names ``"live"``, ``"file"``, or ``null``.
 """
 
 from __future__ import annotations
@@ -60,7 +73,7 @@ from server.cadlink.live.endpoint import ENDPOINT_FILENAME
 from server.platform.paths import data_paths
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Mirrors CadWorkspaceState.SETTINGS_NAME / SETTINGS_KEY
 # (server/workspace/api.py) without importing that stateful class: reported
@@ -70,6 +83,22 @@ CADLINK_SETTINGS_KEY = "cadLinkPath"
 
 _REDACTED_KEY_TOKENS = ("token", "secret", "password")
 _REDACTED_PLACEHOLDER = "*** redacted ***"
+
+# Static, not derived from the data directory: this collector can never know
+# the live-vs-file answer offline, regardless of what it finds on disk (see
+# the module docstring). ``fusion-status.json`` above is always the file
+# transport's payload; it has no ``heartbeatTransport`` field of its own --
+# that field only exists on WG's own /fusion-status answer.
+_LIVE_HEARTBEAT_TRANSPORT_NOTE = (
+    "This collector is read-only and runs offline, out of process: it never "
+    "calls a running WG over HTTP, so it cannot know whether the freshest "
+    "heartbeat came by the live transport or the file one. The live "
+    "heartbeat (CL11b) lives only in WG's in-process LiveRegistry and is "
+    "never persisted to a file this collector can read; fusion-status.json "
+    "above is always the file transport's payload. See WG's own answer to "
+    "POST /api/cadlink/fusion-status -- its heartbeatTransport field names "
+    "\"live\", \"file\", or null."
+)
 
 # A cap against a hand-placed or unrotated log; the application log itself is
 # rotated well under this (server/platform/logging_setup.py).
@@ -253,6 +282,10 @@ def collect_evidence(data_dir: Path, *, operation_id: str | None = None) -> dict
         "requestDirectories": collect_request_directories(data_dir),
         "operations": collect_operations(data_dir, operation_id=operation_id),
         "serverLog": collect_server_log(data_dir, operation_id=operation_id),
+        # Caveats about this bundle that are true regardless of what was
+        # found on disk. See the module docstring and
+        # ``_LIVE_HEARTBEAT_TRANSPORT_NOTE``.
+        "notes": [_LIVE_HEARTBEAT_TRANSPORT_NOTE],
     }
 
 
@@ -298,6 +331,9 @@ def write_zip(evidence: Mapping[str, Any], destination: Path) -> Path:
         "cadLinkExchangeFolder": evidence["cadLinkExchangeFolder"],
         "operationId": evidence["operationId"],
         "members": _member_presence(evidence),
+        # Carried up from the evidence dict so the release owner sees it in
+        # manifest.json without unzipping every member (see module docstring).
+        "notes": evidence["notes"],
     }
     members["manifest.json"] = _json_member(manifest)
 
