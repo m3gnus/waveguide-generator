@@ -47,7 +47,7 @@ from server.workspace.archive import (
     reclaim_captured_documents,
 )
 
-from .addin_update import last_refresh, poll_activation
+from .addin_update import last_refresh, loaded_addin_identity, poll_activation
 from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
 from .fusion_status import read_live_fusion_heartbeat
 from .fusion_outcomes import FUSION_KINDS, settle_from_heartbeat
@@ -58,6 +58,7 @@ from .fusion_delivery import (
     recover_staged_fusion_requests,
 )
 from .fusion_return import publish_return_request
+from .live.api import mount_live
 from .ingest import (
     IngestRefusal,
     build_deferred_viewport,
@@ -861,7 +862,11 @@ async def fusion_status(
     if status.get("state") == "addin_outdated" or (
         report is not None and report.get("verdict") != "disabled"
     ):
+        # What the add-in reported loading in its live session, now -- not the
+        # snapshot the activation pass stored when it decided.
         status["addinRefresh"] = report
+        if report is not None:
+            report["loadedIdentity"] = loaded_addin_identity(Path(request.app.state.data_dir))
     status["cadFolderConfigured"] = selected is not None
     status["cadFolderPath"] = str(selected) if selected is not None else None
     status["cadConnectionIssue"] = None
@@ -2291,6 +2296,9 @@ def mount_cadlink(application: FastAPI) -> None:
         )
 
     application.router.add_event_handler("startup", advertise_fusion_delivery_on_startup)
+    # After the capability file that advertises ``liveProtocol``: the live
+    # session's registry, and its endpoint file when the launcher named a port.
+    mount_live(application)
     application.router.add_event_handler("startup", _recover_on_startup(application))
     application.router.add_event_handler("startup", _deliver_solve_commands(application))
     application.router.add_event_handler(

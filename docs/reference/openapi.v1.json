@@ -5212,6 +5212,84 @@
         "type": "object"
       },
       "JsonValue": {},
+      "LoadedIdentity": {
+        "additionalProperties": false,
+        "description": "The build WGLink captured when it loaded.",
+        "properties": {
+          "addinVersion": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Addinversion"
+          },
+          "loadedAt": {
+            "maxLength": 64,
+            "title": "Loadedat",
+            "type": "string"
+          },
+          "managedBy": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Managedby"
+          },
+          "source": {
+            "enum": [
+              "managed",
+              "devSync",
+              "unmanaged"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "sourceCommit": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourcecommit"
+          },
+          "waveguideGeneratorRoot": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waveguidegeneratorroot"
+          }
+        },
+        "required": [
+          "source",
+          "sourceCommit",
+          "addinVersion",
+          "managedBy",
+          "waveguideGeneratorRoot",
+          "loadedAt"
+        ],
+        "title": "LoadedIdentity",
+        "type": "object"
+      },
       "ManualSolveOperationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -6984,6 +7062,67 @@
         "title": "RadiationImpedanceTermination",
         "type": "object"
       },
+      "RegistrationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "adapterSessionId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Adaptersessionid",
+            "type": "string"
+          },
+          "adapterVersion": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Adapterversion",
+            "type": "string"
+          },
+          "cadApplication": {
+            "const": "fusion360",
+            "title": "Cadapplication",
+            "type": "string"
+          },
+          "clientNonce": {
+            "maxLength": 128,
+            "title": "Clientnonce",
+            "type": "string"
+          },
+          "clientProof": {
+            "maxLength": 128,
+            "title": "Clientproof",
+            "type": "string"
+          },
+          "deliveryVersion": {
+            "title": "Deliveryversion",
+            "type": "integer"
+          },
+          "installationId": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+            "title": "Installationid",
+            "type": "string"
+          },
+          "liveProtocol": {
+            "title": "Liveprotocol",
+            "type": "integer"
+          },
+          "loadedIdentity": {
+            "$ref": "#/components/schemas/LoadedIdentity"
+          }
+        },
+        "required": [
+          "cadApplication",
+          "liveProtocol",
+          "deliveryVersion",
+          "installationId",
+          "adapterSessionId",
+          "adapterVersion",
+          "clientNonce",
+          "clientProof",
+          "loadedIdentity"
+        ],
+        "title": "RegistrationRequest",
+        "type": "object"
+      },
       "ResultProvenance": {
         "additionalProperties": true,
         "properties": {
@@ -8302,6 +8441,215 @@
         "summary": "Get Ingest Viewport Mesh",
         "tags": [
           "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/live/endpoint": {
+      "get": {
+        "description": "Which WG start answers here. Never the secret.",
+        "operationId": "live_endpoint_hello_api_cadlink_live_endpoint_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Live Endpoint Hello Api Cadlink Live Endpoint Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "store_busy: the live session service is not running"
+          }
+        },
+        "summary": "Live Endpoint Hello",
+        "tags": [
+          "cadlink-live"
+        ]
+      }
+    },
+    "/api/cadlink/live/sessions": {
+      "post": {
+        "description": "Register the add-in after it proves it read this start's secret.",
+        "operationId": "register_live_session_api_cadlink_live_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "store_busy: the live session service is not running"
+          }
+        },
+        "summary": "Register Live Session",
+        "tags": [
+          "cadlink-live"
+        ]
+      }
+    },
+    "/api/cadlink/live/sessions/current": {
+      "delete": {
+        "description": "End the session at once; the add-in continues with file delivery.",
+        "operationId": "end_live_session_api_cadlink_live_sessions_current_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "store_busy: the live session service is not running"
+          }
+        },
+        "summary": "End Live Session",
+        "tags": [
+          "cadlink-live"
+        ]
+      }
+    },
+    "/api/cadlink/live/sessions/refresh": {
+      "post": {
+        "description": "A new token for the same session; the old one stays valid for 30 s.\n\nOnly the current token refreshes; a token in its grace window is refused.",
+        "operationId": "refresh_live_session_api_cadlink_live_sessions_refresh_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "store_busy: the live session service is not running"
+          }
+        },
+        "summary": "Refresh Live Session",
+        "tags": [
+          "cadlink-live"
         ]
       }
     },

@@ -4,8 +4,9 @@ Given a WG application data directory -- the directory ``WG2_DATA_DIR`` names,
 or the platform default ``server.platform.paths.resolve_data_dir`` resolves --
 and an optional operation id, this writes one zip holding:
 
-- ``fusion-status.json`` and ``wg-capabilities.json``: the contents of
-  ``.fusion-status.json`` and ``wg-capabilities.json`` under the data
+- ``fusion-status.json``, ``wg-capabilities.json`` and ``wg-endpoint.json``:
+  the contents of ``.fusion-status.json``, ``wg-capabilities.json`` and the
+  live session's ``wg-endpoint.json`` under the data
   directory's own ``ipc/wglink`` folder (``server/cadlink/fusion_status.py``,
   ``server/cadlink/fusion_delivery.py`` -- this is WG-internal signaling,
   rooted at the application data directory itself, not at the user-chosen
@@ -55,6 +56,7 @@ import zipfile
 # never used to locate the ipc/wglink signaling files above.
 from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME, HANDOFFS, RETURN_REQUESTS, ipc_folder
 from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
+from server.cadlink.live.endpoint import ENDPOINT_FILENAME
 from server.platform.paths import data_paths
 
 
@@ -136,7 +138,7 @@ def _read_json_member(path: Path) -> dict[str, Any]:
 
 
 def collect_ipc_files(data_dir: Path) -> dict[str, Any]:
-    """``.fusion-status.json`` and ``wg-capabilities.json``, redacted.
+    """``.fusion-status.json``, ``wg-capabilities.json`` and ``wg-endpoint.json``, redacted.
 
     Both live under ``<data_dir>/ipc/wglink`` -- the application data
     directory, not the user-chosen CAD-link exchange folder (see the module
@@ -147,6 +149,8 @@ def collect_ipc_files(data_dir: Path) -> dict[str, Any]:
     return {
         "fusionStatus": _read_json_member(folder / FUSION_STATUS_FILENAME),
         "wgCapabilities": _read_json_member(folder / CAPABILITIES_FILENAME),
+        # The live session endpoint; its ``registrationSecret`` is redacted.
+        "wgEndpoint": _read_json_member(folder / ENDPOINT_FILENAME),
     }
 
 
@@ -262,6 +266,7 @@ def _member_presence(evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [
         {"name": "fusion-status.json", "present": ipc["fusionStatus"]["present"]},
         {"name": "wg-capabilities.json", "present": ipc["wgCapabilities"]["present"]},
+        {"name": "wg-endpoint.json", "present": ipc["wgEndpoint"]["present"]},
         {"name": "request-directories.json", "present": True},
         {
             "name": "return-requests",
@@ -279,6 +284,7 @@ def write_zip(evidence: Mapping[str, Any], destination: Path) -> Path:
     members: dict[str, bytes] = {
         "fusion-status.json": _json_member(evidence["ipc"]["fusionStatus"]),
         "wg-capabilities.json": _json_member(evidence["ipc"]["wgCapabilities"]),
+        "wg-endpoint.json": _json_member(evidence["ipc"]["wgEndpoint"]),
         "request-directories.json": _json_member(evidence["requestDirectories"]),
         "cad-operations.json": _json_member(evidence["operations"]),
     }

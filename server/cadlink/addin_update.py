@@ -96,6 +96,7 @@ from server.cadlink.fusion_status import (
     fusion_process_state,
     read_fusion_status,
 )
+from server.cadlink.live.registry import registry_for
 from server.platform.paths import app_root, resolve_data_dir
 from server.platform.warmup import DRAIN_TIMEOUT_SECONDS, BackgroundWarmup
 
@@ -365,17 +366,22 @@ def _describe(build: object) -> str:
     return text
 
 
-def loaded_addin_identity() -> dict[str, str] | None:
-    """The build WGLink says it actually loaded. Always ``None`` for now.
+def loaded_addin_identity(data_dir: Path | None = None) -> dict[str, Any] | None:
+    """The build WGLink says it actually loaded, or ``None``.
 
-    The seam for CAD Link Phase 4, the handshake: WGLink captures its build
-    identity when it loads and reports it with a session ID, and that report,
-    not the marker on disk, is what "active" means. Until it exists, an
-    activated verdict means only that Fusion's next start loads the copy WG
-    installed -- never that Fusion is running it.
+    WGLink captures its build identity when it loads and reports it when it
+    registers a live session (``server/cadlink/live``); that report, not the
+    marker on disk, is what "active" means. It is the identity of the latest
+    registered session of this data directory's running WG that is still
+    valid, with ``matchesPin`` saying whether its commit is the one this WG
+    pins. A pin mismatch is reported, never refused. Without a data directory,
+    a running WG or a valid session it is ``None``, and an activated verdict
+    means only that Fusion's next start loads the copy WG installed -- never
+    that Fusion is running it.
     """
 
-    return None
+    registry = registry_for(data_dir)
+    return registry.loaded_identity() if registry is not None else None
 
 
 # -- The start being confirmed ------------------------------------------------

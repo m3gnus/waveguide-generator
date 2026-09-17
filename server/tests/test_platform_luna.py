@@ -386,6 +386,8 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     assert config_kwargs["ws_max_size"] == DEFAULT_MAX_FRAME_BYTES
     assert config_kwargs["ws_max_queue"] == 1
     assert app_kwargs["solver_warmup"] is False
+    # The live CAD Link endpoint file names the port this start reserved.
+    assert app_kwargs["advertised_port"] == 3100
     # Runs default beside the user's documents, not inside the checkout: an
     # install directory does not survive a reinstall and is not anywhere a
     # user looks for their own output.

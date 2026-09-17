@@ -666,8 +666,13 @@ add-in it ships.
     registration, one from another folder, or one not set to run on startup is reported
     with the status (`addinRefresh.registration`).
   - "Activated" means Fusion's next start loads the new copy, never that it runs it.
-    The loaded identity arrives with the Phase 4 handshake
-    (`addin_update.loaded_addin_identity`).
+    What Fusion actually loaded is the identity WGLink reports when it registers a live
+    session (`docs/reference/CADLINK-LIVE-PROTOCOL.md`), with `matchesPin` saying whether
+    its commit is the pinned one; a mismatch is reported, not refused. The status poll
+    reports it at response time as `addinRefresh.loadedIdentity`
+    (`addin_update.loaded_addin_identity`), and `null` while no live session is valid. It
+    appears only where the status already carries `addinRefresh`: an outdated add-in, or an
+    activation decision other than "disabled".
 - **What an older WG left is removed.** At every start WG removes the single slots
   `.fusion-return-request.json` and `.fusion-handoff.json`, their records
   (`.legacy-slot.json`), and request files of another schema. No add-in this WG talks to
@@ -686,7 +691,7 @@ it accepts, in `<data dir>/ipc/wglink/wg-capabilities.json`. WG writes it atomic
 every start:
 
 ```json
-{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 3, "fusionRequestDelivery": 3, "sourceIdentity": 1}
+{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 3, "fusionRequestDelivery": 3, "sourceIdentity": 1, "liveProtocol": 1}
 ```
 
 - **`sourceIdentity: 1`** means WG reads returns that require `source-identity-v1`
@@ -697,6 +702,10 @@ every start:
   a boolean) -- the same reading rules as the delivery versions. Anything else means "do
   not declare it". Adding the field changed neither `schemaVersion` nor either delivery
   version.
+- **`liveProtocol: 1`** means this WG serves live protocol 1 at the address in
+  `wg-endpoint.json` (`docs/reference/CADLINK-LIVE-PROTOCOL.md`). An add-in goes live only
+  when WG advertises it, read by the same rules; anything else means "use the files". It
+  is additive: the files above keep working, with or without a live session.
 
 - **Reading it.** A reader ignores fields it does not know. A missing or unreadable file,
   a `schemaVersion` the reader does not know, or a value that is not an integer read as

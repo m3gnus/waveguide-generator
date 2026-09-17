@@ -12,8 +12,10 @@ import time
 from typing import Callable
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -107,17 +109,29 @@ class _RequestBodyLimitMiddleware:
         *,
         max_body_bytes: int,
         path_limits: dict[str, int] | None = None,
+        prefix_limits: dict[str, int] | None = None,
+        envelope_prefixes: dict[str, str] | None = None,
     ) -> None:
         self.app = app
         self.max_body_bytes = max_body_bytes
         self.path_limits = dict(path_limits or {})
+        #: Path prefix -> limit, used when no exact path limit applies.
+        self.prefix_limits = dict(prefix_limits or {})
+        #: Path prefix -> error-envelope stage for the 413 answer.
+        self.envelope_prefixes = dict(envelope_prefixes or {})
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        path_limit = self.path_limits.get(str(scope.get("path", "")))
+        request_path = str(scope.get("path", ""))
+        path_limit = self.path_limits.get(request_path)
+        if path_limit is None:
+            path_limit = next(
+                (limit for prefix, limit in self.prefix_limits.items() if request_path.startswith(prefix)),
+                None,
+            )
         applied_limit = path_limit if path_limit is not None else self.max_body_bytes
 
         for name, raw_value in scope.get("headers", ()):
@@ -180,8 +194,8 @@ class _RequestBodyLimitMiddleware:
                 include_default=path_limit is None,
             )
 
-    @staticmethod
     async def _reject(
+        self,
         scope: Scope,
         receive: Receive,
         send: Send,
@@ -189,16 +203,25 @@ class _RequestBodyLimitMiddleware:
         applied_limit: int,
         include_default: bool,
     ) -> None:
+        envelope_prefixes = self.envelope_prefixes
         if applied_limit % (1024 * 1024) == 0:
             label = f"{applied_limit // (1024 * 1024)} MB"
         else:
             label = f"{applied_limit} bytes"
         if include_default and applied_limit != DEFAULT_MAX_REQUEST_BODY_BYTES:
             label += " (64 MB production default)"
-        await JSONResponse(
-            status_code=413,
-            content={"detail": f"Request body exceeds the {label} limit."},
-        )(scope, receive, send)
+        message = f"Request body exceeds the {label} limit."
+        request_path = str(scope.get("path", ""))
+        stage = next(
+            (stage for prefix, stage in envelope_prefixes.items() if request_path.startswith(prefix)),
+            None,
+        )
+        content = (
+            error_envelope(code="request_too_large", stage=stage, message=message)
+            if stage is not None
+            else {"detail": message}
+        )
+        await JSONResponse(status_code=413, content=content)(scope, receive, send)
 
 
 async def prewarm_solver() -> None:
@@ -410,6 +433,39 @@ class _HashedAssetStaticFiles(StaticFiles):
 #: CAD document that copies tens of megabytes -- and it is refused before its
 #: handler runs, so the return stays on disk exactly as it was.
 RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest"})
+#: Routes whose invalid requests answer 400 ``invalid_request`` without echoing
+#: any input (docs/reference/CADLINK-LIVE-PROTOCOL.md). FastAPI's default 422
+#: repeats the offending values, and a live request can carry a token or proof.
+LIVE_VALIDATION_PREFIX = "/api/cadlink/live/"
+#: The body ceiling of every live route (a route may set its own exact-path
+#: limit). Registration is a few kilobytes; nothing live needs megabytes.
+MAX_LIVE_REQUEST_BODY_BYTES = 64 * 1024
+
+
+async def _request_validation_error(request: Request, exc: Exception) -> Response:
+    if not isinstance(exc, RequestValidationError) or not request.url.path.startswith(
+        LIVE_VALIDATION_PREFIX
+    ):
+        return await request_validation_exception_handler(request, exc)  # type: ignore[arg-type]
+    # Where and what kind, never the value: no ``input``, ``msg`` or ``ctx``.
+    # An unknown key's location ends in the key itself, which the client chose,
+    # so it is reported at its parent object instead.
+    errors = []
+    for error in exc.errors():
+        kind = str(error.get("type", ""))
+        loc = [part if isinstance(part, (int, str)) else str(part) for part in error.get("loc", ())]
+        if kind == "extra_forbidden" and loc:
+            loc = loc[:-1]
+        errors.append({"loc": loc, "type": kind})
+    return JSONResponse(
+        status_code=400,
+        content=error_envelope(
+            code="invalid_request",
+            stage="cadlink-live",
+            message="The request is not valid.",
+            details={"errors": errors},
+        ),
+    )
 
 
 def create_app(
@@ -419,6 +475,7 @@ def create_app(
     solver_warmup: bool = False,
     update_request_path: str | Path | None = None,
     update_staging_root: str | Path | None = None,
+    advertised_port: int | None = None,
 ) -> FastAPI:
     """Assemble an app instance without creating persistent directories.
 
@@ -427,13 +484,26 @@ def create_app(
     that native solve is not coordinated with either user jobs or application
     shutdown. The production launcher passes true only for an explicit
     ``WG2_SOLVER_WARMUP=1`` diagnostic opt-in.
+
+    ``advertised_port`` is the loopback port the launcher reserved for this
+    app. Only with it does startup publish ``wg-endpoint.json``, the live CAD
+    Link endpoint file (``server/cadlink/live``); a test, an embedder or the
+    OpenAPI generator serves no socket and publishes nothing.
     """
 
+    if advertised_port is not None and (
+        isinstance(advertised_port, bool)
+        or not isinstance(advertised_port, int)
+        or not 1 <= advertised_port <= 65535
+    ):
+        raise ValueError(f"advertised_port must be a TCP port, not {advertised_port!r}")
     started = time.monotonic()
     resolved_data_dir = resolve_data_dir(data_dir)
     application = FastAPI(title="Waveguide Generator", version=VERSION)
     application.state.started = started
     application.state.data_dir = resolved_data_dir
+    application.state.advertised_port = advertised_port
+    application.add_exception_handler(RequestValidationError, _request_validation_error)
     extra_ws_origins = parse_extra_websocket_origins(
         os.environ.get("WG2_EXTRA_WS_ORIGINS")
     )
@@ -459,6 +529,8 @@ def create_app(
             _WORKSPACE_EXPORT_PATH: MAX_EXPORT_REQUEST_BODY_BYTES,
             CLIENT_LOG_PATH: MAX_CLIENT_LOG_BODY_BYTES,
         },
+        prefix_limits={LIVE_VALIDATION_PREFIX: MAX_LIVE_REQUEST_BODY_BYTES},
+        envelope_prefixes={LIVE_VALIDATION_PREFIX: "cadlink-live"},
     )
     # One persistent owner thread services every gmsh call.  Prewarming here
     # retains the v1 off-main-thread ``interruptible=False`` invariant from

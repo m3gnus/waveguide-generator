@@ -141,6 +141,53 @@ def test_collect_evidence_redacts_ipc_file_contents(tmp_path: Path) -> None:
     assert b"should-not-leak" not in destination.read_bytes()
 
 
+def test_the_endpoint_file_is_collected_with_its_secret_redacted(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    ipc = _ipc_folder(data_dir)
+    _write_json(
+        ipc / "wg-endpoint.json",
+        {
+            "schemaVersion": 1,
+            "producer": "waveguide-generator",
+            "instanceId": "a" * 32,
+            "baseUrl": "http://127.0.0.1:3100",
+            "liveProtocol": 1,
+            "registrationSecret": "endpoint-secret-should-not-leak",
+        },
+    )
+
+    evidence = cadlink_evidence.collect_evidence(data_dir)
+
+    endpoint = evidence["ipc"]["wgEndpoint"]
+    assert endpoint["present"] is True
+    assert endpoint["content"]["instanceId"] == "a" * 32
+    assert endpoint["content"]["registrationSecret"] == cadlink_evidence._REDACTED_PLACEHOLDER
+
+    destination = tmp_path / "evidence.zip"
+    cadlink_evidence.write_zip(evidence, destination)
+    with zipfile.ZipFile(destination) as archive:
+        written = json.loads(archive.read("wg-endpoint.json"))
+        manifest = json.loads(archive.read("manifest.json"))
+    assert written["content"]["baseUrl"] == "http://127.0.0.1:3100"
+    assert {"name": "wg-endpoint.json", "present": True} in manifest["members"]
+    with zipfile.ZipFile(destination) as archive:
+        for name in archive.namelist():
+            assert b"endpoint-secret-should-not-leak" not in archive.read(name)
+
+
+def test_session_token_and_registration_secret_keys_are_redacted() -> None:
+    redacted = cadlink_evidence.redact(
+        {"registrationSecret": "s", "sessionToken": "t", "live": [{"sessionToken": "u"}], "instanceId": "i"}
+    )
+    placeholder = cadlink_evidence._REDACTED_PLACEHOLDER
+    assert redacted == {
+        "registrationSecret": placeholder,
+        "sessionToken": placeholder,
+        "live": [{"sessionToken": placeholder}],
+        "instanceId": "i",
+    }
+
+
 # --- the database is opened read-only -----------------------------------
 
 

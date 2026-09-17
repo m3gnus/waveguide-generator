@@ -48,6 +48,10 @@ SCHEMA_VERSION = DELIVERY_VERSION
 # add-in declares that feature only when WG advertises this; a WG that does not
 # would refuse the bundle as an unknown required feature.
 SOURCE_IDENTITY = 1
+# WG serves the live session protocol, version 1, at the address in
+# ``wg-endpoint.json`` (``server/cadlink/live``). The add-in goes live only when
+# WG advertises this; otherwise it keeps to the files above.
+LIVE_PROTOCOL = 1
 SEQUENCE_FIELD = "deliverySequence"
 # What a WG before delivery version 3 wrote beside the request folders.
 LEGACY_SLOT_FILENAMES = (".fusion-return-request.json", ".fusion-handoff.json")
@@ -100,6 +104,7 @@ def capabilities() -> dict[str, Any]:
         "solveCommandDelivery": SOLVE_COMMAND_DELIVERY,
         "fusionRequestDelivery": FUSION_REQUEST_DELIVERY,
         "sourceIdentity": SOURCE_IDENTITY,
+        "liveProtocol": LIVE_PROTOCOL,
     }
 
 
@@ -487,6 +492,7 @@ __all__ = [
     "INSERT_HANDOFF_TTL",
     "LEGACY_RECORD_FILENAME",
     "LEGACY_SLOT_FILENAMES",
+    "LIVE_PROTOCOL",
     "PublishedRequest",
     "RETURN_REQUESTS",
     "SCHEMA_VERSION",

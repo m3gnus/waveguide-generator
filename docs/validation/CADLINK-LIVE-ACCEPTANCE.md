@@ -107,7 +107,11 @@ release's CAD Link surface accepted:
 - Live-session reconnect, token refresh, and the outbox fallback, each
   exercised at least once with a real network interruption.
 - The add-in's loaded identity is what WG expects after a live-session
-  handshake.
+  handshake: `addinRefresh.loadedIdentity` in the Fusion status names the
+  commit Fusion loaded, with `matchesPin` true for the pinned add-in.
+- The live endpoint file is private to the user (on Windows, readable by no
+  other account), and a second process that binds WG's port after WG quits
+  is not trusted by the add-in (it stays on file delivery).
 - A mixed pairing (one side on the live-session transport, the other still on
   file-based v3 delivery) behaves per the compatibility notes in the CAD Link
   plan, not by accident.

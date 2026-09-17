@@ -1,0 +1,310 @@
+# CAD Link live protocol
+
+Status: protocol version 1. Sections 2-5 (endpoint discovery, registration, sessions and
+tokens, origin and validation rules) are **implemented in WG** (`server/cadlink/live/`).
+Sections 6-8 (heartbeat over HTTP, Fusion-bound requests, WG-bound deliveries) are the
+agreed contract for work that is **not implemented yet**; until it is, those routes do not
+exist and the add-in uses the v3 files for everything. No released WGLink speaks this
+protocol yet.
+
+The live protocol changes how CAD Link operations travel between WG and its Fusion add-in,
+not what they mean. The operation contract, digests and states are those of
+[CAD operations](../architecture/CAD-OPERATIONS.md).
+
+## 1. Transports and precedence
+
+- **The v3 files stay unchanged and always on.** WG writes `wg-capabilities.json` and every
+  Fusion-bound request file and collects v3 solve files; the add-in writes its file
+  heartbeat and, when it cannot deliver live, v3 solve files. They are the offline and
+  cold-start transport.
+- **Live is additive.** With no usable endpoint, or a refusal by protocol, the add-in uses
+  the v3 files.
+- **One operation, either path.** An operation is identified by its operation ID and
+  digest. Transport fields -- tokens, proofs, nonces, the installation header, session IDs,
+  attempt and claim IDs, `requestedAt`, file names -- are never digest inputs.
+- **Precedence:** heartbeat -- a fresh live heartbeat of a current session, else a fresh
+  file heartbeat; Fusion-bound requests -- first claim wins; WG-bound deliveries -- first
+  accept wins, the other recovers.
+
+## 2. Endpoint discovery
+
+At startup WG writes `<data dir>/ipc/wglink/wg-endpoint.json`:
+
+```json
+{"schemaVersion": 1, "producer": "waveguide-generator", "instanceId": "<32 hex, per start>",
+ "pid": 12345, "baseUrl": "http://127.0.0.1:3100", "liveProtocol": 1,
+ "startedAt": "2026-09-17T10:00:00Z", "registrationSecret": "<per start>"}
+```
+
+- **Written only by a serving start.** The launcher passes the loopback port it reserved to
+  `create_app(advertised_port=...)`; without a port (tests, embedders, the OpenAPI
+  generator) there is no file. It uses the same atomic writer as the capability file: a
+  private temporary file (mode 0600 on POSIX), fsync, replace. On Windows the file relies on
+  the per-user profile ACL of the data directory.
+- **The secret** is created per start and kept only in WG's memory and this file. It never
+  crosses the socket (section 3), is never logged, never returned by any route, and is
+  redacted by `scripts/cadlink_evidence.py`.
+- **Lifetime.** Replaced by every start; removed at clean shutdown only while it still names
+  that start's `instanceId`.
+- **Capability.** `wg-capabilities.json` carries the integer `"liveProtocol": 1`, read with
+  the same rules as the other capability values (an integer of at least 1, never a boolean).
+- **Client go-live rule.** The add-in goes live only if all of these hold, and otherwise uses
+  the files:
+  1. `wg-capabilities.json` parses, has `schemaVersion` 1, and advertises an integer
+     `liveProtocol` of at least 1 (so a WG without live support that left an old endpoint
+     file behind stays in file mode);
+  2. `wg-endpoint.json` parses, has `schemaVersion` 1, the expected `producer`,
+     `liveProtocol` 1, a `baseUrl` of the form `http://127.0.0.1:<1-65535>`, and every field
+     present with the right type;
+  3. `GET /api/cadlink/live/endpoint` answers 200 with the same schema and the file's
+     `instanceId`; any other status, a network error or a parse failure means stale;
+  4. the registration's server proof verifies (section 3);
+  5. on POSIX, `wg-endpoint.json` is owned by the current user with no group or other
+     permission bits, and the `ipc/wglink` folder is not writable by group or other, checked
+     without following symlinks (a symlink means stale). A `WG2_DATA_DIR` on a shared or
+     multi-user path is not supported for live use and stays in file mode by this rule.
+
+  A stale endpoint is checked again when either file's modification time or size changes,
+  or every 30 s.
+
+## 3. Registration and mutual proof
+
+All live routes are under `/api/cadlink/live`. Every live request except
+`GET /endpoint` carries the header `X-WGLink-Installation: <installationId>`.
+
+`GET /endpoint` answers `{"schemaVersion": 1, "producer": "waveguide-generator",
+"instanceId": "...", "liveProtocol": 1, "deliveryVersion": 3}`.
+
+`POST /sessions` carries no `Authorization` header:
+
+```json
+{"cadApplication": "fusion360", "liveProtocol": 1, "deliveryVersion": 3,
+ "installationId": "<same as the header>", "adapterSessionId": "<heartbeat sessionId>",
+ "adapterVersion": "<string>",
+ "clientNonce": "<unpadded base64url of 32 random bytes, never reused>",
+ "clientProof": "<unpadded base64url HMAC-SHA256, below>",
+ "loadedIdentity": {"source": "managed|devSync|unmanaged", "sourceCommit": "<40 hex|null>",
+   "addinVersion": "<string|null>", "managedBy": "<string|null>",
+   "waveguideGeneratorRoot": "<string|null>", "loadedAt": "<ISO-8601>"}}
+```
+
+Every field is required; the nullable ones are sent as `null`. `adapterSessionId` and
+`adapterVersion` are non-empty strings of at most 128 characters. Unknown fields are refused
+with `400 invalid_request`, so a client that sends fields this WG does not know is not live
+with it and stays in file mode.
+
+**Mutual proof.**
+
+```
+clientProof = HMAC-SHA256(secret, "wglink-client\n" + clientNonce + "\n" + instanceId + "\n" + installationId)
+serverProof = HMAC-SHA256(secret, "wglink-server\n" + clientNonce + "\n" + instanceId + "\n" + installationId)
+```
+
+- The HMAC key is the UTF-8 bytes of `registrationSecret` exactly as the endpoint file holds
+  it (no decoding, no trimming). The message is the UTF-8 bytes of the labelled string;
+  `\n` is a single LF.
+- `clientNonce`, `clientProof` and `serverProof` are unpadded base64url; each must decode to
+  exactly 32 bytes, in its canonical spelling. WG decodes the proof (a malformed one is
+  `401 registration_proof_invalid`) and compares the bytes with `hmac.compare_digest`.
+- WG refuses a nonce this start has already accepted (`401 registration_proof_invalid`). A
+  nonce is recorded only after its proof verifies, so a bad proof cannot burn a legitimate
+  client's nonce.
+- The add-in verifies `serverProof` **before** it uses the token or sends any other request.
+  The secret never crosses the socket, so a process that binds the port after WG exits
+  learns nothing it can replay and cannot produce `serverProof`.
+
+**Who registers.** Only the add-in instance that owns the active IPC lease registers, and it
+ends its session (`DELETE /sessions/current`) when it loses the lease or stops.
+
+**installationId.** A UUID the add-in creates once in
+`<data dir>/ipc/wglink/.wglink-installation.json`. Grammar `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`.
+
+**loadedIdentity** is what the add-in captured once when it loaded: the managed install
+marker, else the developer-sync marker, else `unmanaged`.
+
+**Checks, in order, after the Origin rule (section 5):**
+
+1. installation header missing or malformed → `400 installation_mismatch`;
+2. body validation → `400 invalid_request`;
+3. header and body `installationId` differ → `400 installation_mismatch`;
+4. `liveProtocol` other than 1 → `409 protocol_unsupported` (the add-in uses the files);
+5. `deliveryVersion` below 3 → `409 addin_outdated`;
+6. nonce or proof invalid, or the nonce reused → `401 registration_proof_invalid`.
+
+**Pin mismatch is reported, not refused.** WG adds `matchesPin` to the identity: `true` only
+when `sourceCommit` is not null and equals the WGLink commit this WG pins.
+
+**201 response:**
+
+| Field | Value |
+| --- | --- |
+| `liveSessionId` | Session ID, stable across refreshes |
+| `sessionToken` | Bearer token |
+| `expiresAt` | Registration + 15 min (UTC, `...Z`) |
+| `refreshAfter` | Registration + 10 min |
+| `idleTimeoutSeconds` | 60 |
+| `heartbeatIntervalSeconds` | 4 |
+| `longPollSeconds` | 25 |
+| `instanceId` | This start |
+| `serverProof` | Above |
+| `liveProtocol` | 1 |
+| `capabilities` | Exactly the content of `wg-capabilities.json` |
+| `loadedIdentity` | The registered identity with `matchesPin` |
+
+## 4. Sessions and tokens
+
+- **One registry per data directory, per start.** WG keeps sessions, used nonces and the
+  loaded identity in memory, in a registry tagged with the start's `instanceId`. Startup
+  replaces any registry for that data directory; shutdown removes it only if it is still its
+  own. Two WGs on different data directories share nothing, and a stopped WG has no live
+  state. Nothing is persisted: a restart forgets every session and nonce, and the old secret
+  no longer verifies.
+- **Token use.** `Authorization: Bearer <sessionToken>`, together with an
+  `X-WGLink-Installation` header equal to the session's `installationId`.
+- **Token storage.** WG keeps only `sha256(token)`, finds the session by that digest, and
+  confirms it with `hmac.compare_digest`.
+- **One session per installation.** A new registration supersedes the installation's
+  previous session.
+- **Validity.** A token authenticates while its session is current, not expired
+  (15 minutes after registration or its last refresh), and not idle: any authenticated
+  request is activity, and more than 60 s without one ends the session.
+- **Refresh.** `POST /sessions/refresh` answers 200
+  `{liveSessionId, sessionToken, expiresAt, refreshAfter}`: a new token for the same session
+  with a new 15-minute lifetime. The replaced token stays valid for 30 s (never past its own
+  expiry) for other requests, but cannot refresh (`401 token_expired`); a later refresh ends
+  that grace at once.
+- **Clocks.** Lifetime, grace and idle are measured on WG's monotonic clock, so a change of
+  the system clock neither ends nor extends a session; `expiresAt` and `refreshAfter` are the
+  corresponding wall-clock times, for information.
+- **End.** `DELETE /sessions/current` answers 204 and ends the session at once.
+- **401 recovery.** Apply the go-live rule again and register again. Operations, claims and
+  outbox items are bound to the installation and attempt generation, never to a session.
+- **Never** is a token, proof, nonce or the secret in a digest, bundle, CAD attribute, query
+  string, log line, database or file, or in any response other than `POST /sessions` and
+  `POST /sessions/refresh` (the secret in none).
+
+## 5. Loopback, origin, validation and ordering
+
+- The global Host/Origin guard is unchanged: the Host must be loopback on the bound port, and
+  a non-local `Origin` (including `null`) is refused there with 403.
+- **Live routes refuse any `Origin` header**, including the application's own origin, with
+  `403 origin_not_allowed`, `GET /endpoint` included. Browsers send `Origin` on cross-origin
+  and non-GET requests and WG's own UI never calls these routes; a client that sends no
+  `Origin`, the installation header and a valid token (or a valid registration proof) is the
+  add-in.
+- **Validation errors** on live routes answer `400 invalid_request` with the location and
+  type of each error only, never the input values; an unknown key is reported at its parent
+  object, since its name is input too. Every other route keeps FastAPI's 422.
+- **Body limit.** A live request body over 64 KiB answers `413 request_too_large` (a route
+  may set its own limit, as the heartbeat's 256 KiB will).
+- **Order of checks:** Host guard → body size limit → Origin refusal → installation header →
+  authentication → body validation → restart latch (routes that start work check it
+  themselves, answering `409 update_restart_pending`) → handler. The checks before the body
+  run before the body is read, so an unauthenticated request answers 401 whatever its body,
+  even one that is not JSON. Live routes are not in the application-wide restart latch.
+- A WG that has not finished starting, or is stopping, answers live routes with
+  `503 store_busy` (retryable).
+- **Client:** only `baseUrl`, proxies bypassed, no redirects followed.
+
+## 6. Heartbeat over HTTP (not implemented yet)
+
+`POST /api/cadlink/live/heartbeat` with exactly the file heartbeat object; 204; body limit
+256 KiB (`413 request_too_large`).
+
+- Validation is the file heartbeat's (schema, application, `deliveryVersion` of at least 3).
+  A heartbeat whose `updatedAt` is already outside the freshness window when posted is
+  `409 heartbeat_stale` and not recorded; a `sessionId` other than the session's
+  `adapterSessionId` is `409 session_mismatch`.
+- The add-in keeps writing `.fusion-status.json` while live.
+- Selection: the registry's live heartbeat if its session is current and it is fresh, else a
+  fresh file heartbeat, else none; one selection per status call. The status reports
+  `heartbeatTransport` `"live"|"file"|null`.
+
+## 7. Fusion-bound requests (not implemented yet)
+
+WG still records the operation and publishes the v3 request file; the file is the
+mutual-exclusion token.
+
+- **Long poll** `GET /requests?waitSeconds=25` → `{"requests": [{operationId, kind,
+  attemptGeneration, request}]}`: Fusion-bound operations in `received` whose file is
+  visible, a return request only for the session's `adapterSessionId`, ordered by
+  `deliverySequence` then ID.
+- **Claim** `POST /requests/{operationId}/claim {"attemptGeneration": g, "claimId": "<uuid>"}`:
+  WG hides the visible file, claims the operation (`g+1`, recording the installation,
+  session and claim IDs), then deletes the hidden file and answers
+  `{attemptGeneration: g+1, request}`. A vanished file is `409 claimed_elsewhere`; a failed
+  store claim restores the file and is `409 stale_attempt`; the same `claimId` again is a 200
+  replay, another claim `409 already_claimed`. Startup recovery deletes a hidden file whose
+  operation is already processing and restores one still `received`.
+- **Progress** `queuedForFusion` → `executing`, forward-only and fenced; a repeat is 200.
+- **Completion** `{attemptGeneration, outcome, message?, evidence?}` with the heartbeat
+  outcome mapping; the same terminal outcome again is 200 `alreadyRecorded`, a different one
+  `409 outcome_conflict`.
+
+## 8. WG-bound deliveries and the outbox (not implemented yet)
+
+`POST /deliveries {operationId, kind: prepare_and_solve|receive_snapshot, returnId (solve
+only), bundlePath: "wgreturn/<name>.wgreturn", manifestSha256, requestedAt}`.
+
+- Bundles travel by reference; WG retains the bundle before it acknowledges, and holds an
+  in-flight delivery so the file-collection pass never takes the same operation meanwhile.
+- Answers: retained, or never retainable → 200 `{result: created|recovered, operation}`;
+  transient → `503 snapshot_not_readable`, `Retry-After: 1`, for at most 30 s, then 200; a
+  different payload for the operation ID → `409 operation_conflict`; no WGLink folder →
+  `409 wglink_folder_not_selected` (retryable); approved update restart →
+  `409 update_restart_pending` (retryable, after authentication).
+- `receive_snapshot` records a retained snapshot (no ingest, mesh or solve); leftovers are
+  settled at startup and on each delivery pass.
+- The add-in's outbox keeps each item under a fixed operation ID. A solve with no healthy
+  session is written as the v3 solve file; a `receive_snapshot` waits in the outbox. Mixed
+  file and live delivery of one operation is accepted once, in any order.
+
+## 9. Exactly-once recovery
+
+| Event | Rule |
+| --- | --- |
+| WG restarts | New registry, instance and secret; old tokens and the old secret are refused; the client applies the go-live rule again and registers. Operations persist and are offered, recovered or settled again. |
+| Token refresh | New token only, 30 s grace; no operation or digest changes. |
+| A response is lost | Claim replay by `claimId`, same progress stage, same outcome, delivery recovery by digest. |
+| Crash between claim and file delete | Startup recovery deletes the hidden file; the operation stays processing. |
+| Fusion restarts mid-request | The claim journal is settled read-only; the operation is never re-run. |
+| Another process binds the port after WG exits | It cannot prove the secret; the client stays in file mode. |
+| Outbox item made while WG was down | Delivered at the next session, accepted once. |
+| Missed wake-up | The next poll, or the operations listing. |
+
+## 10. Error codes
+
+Every refusal is an error envelope with `stage: "cadlink-live"`.
+
+| HTTP | Code | Retry | Status |
+| --- | --- | --- | --- |
+| 400 | `invalid_request` (no input echo), `installation_mismatch` (registration header) | no | implemented |
+| 401 | `registration_proof_invalid` (bad proof or reused nonce) | read the endpoint file again | implemented |
+| 401 | `session_unknown`, `token_expired`, `session_superseded`, `installation_mismatch` | register again | implemented |
+| 403 | `origin_not_allowed` (plus the global Host/Origin 403) | no | implemented |
+| 409 | `addin_outdated`, `protocol_unsupported` | no (file mode) | implemented |
+| 413 | `request_too_large` (64 KiB unless a route sets its own) | no | implemented |
+| 503 | `store_busy` | yes | implemented (WG not started or stopping) |
+| 404 | `operation_unknown` | no | planned |
+| 409 | `session_mismatch`, `heartbeat_stale` | no | planned |
+| 409 | `claimed_elsewhere`, `already_claimed`, `stale_attempt`, `outcome_conflict` | no | planned |
+| 409 | `operation_conflict` | no | planned |
+| 409 | `wglink_folder_not_selected`, `update_restart_pending` | yes | planned |
+| 503 | `snapshot_not_readable` | yes | planned |
+
+## 11. Security boundary
+
+- Only the live routes are authenticated. The rest of WG's local API stays reachable by any
+  local process, as before; the live protocol does not change that.
+- The trust anchor is the data directory's file permissions: whoever can read
+  `wg-endpoint.json` can register. That is why the client refuses a group- or
+  other-accessible file or folder on POSIX, and why a shared data directory is unsupported
+  for live use.
+- Loopback only: WG binds `127.0.0.1`, the Host guard refuses other authorities, and the
+  client bypasses proxies.
+
+## Platform evidence still owed
+
+Unit tests do not prove: the Windows ACL on the endpoint file; loopback and proxy bypass from
+inside Fusion's Python; custom-event dispatch under long polling; reconnection across a real
+WG restart and a token refresh; an outbox item delivered once on macOS and Windows.

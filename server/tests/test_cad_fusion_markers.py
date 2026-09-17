@@ -214,13 +214,15 @@ def _run_cadlink_startup(data_dir: Path, workspace: Path) -> None:
 def test_wg_advertises_delivery_version_3_at_startup(data_dir: Path, workspace: Path) -> None:
     _run_cadlink_startup(data_dir, workspace)
 
-    # ``sourceIdentity`` tells the add-in it may declare source-identity-v1.
+    # ``sourceIdentity`` tells the add-in it may declare source-identity-v1;
+    # ``liveProtocol`` that this WG serves the live session protocol.
     assert _read(_ipc(data_dir) / CAPABILITIES) == {
         "schemaVersion": 1,
         "producer": "waveguide-generator",
         "solveCommandDelivery": 3,
         "fusionRequestDelivery": 3,
         "sourceIdentity": 1,
+        "liveProtocol": 1,
     }
     assert [path.name for path in _ipc(data_dir).iterdir() if path.name.endswith(".tmp")] == []
 
