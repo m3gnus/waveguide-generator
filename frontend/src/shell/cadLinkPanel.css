@@ -25,6 +25,7 @@
 .cad-frame-view { margin: 0; display: grid; gap: 2px; }
 .cad-frame-view canvas { max-width: 100%; height: auto; border: 1px solid var(--border-subtle); }
 .cad-frame-view figcaption { color: var(--fg3); font-size: var(--text-micro); }
+.cad-direction-alert span.cad-solver-frame-error { color: var(--red); }
 .cad-secondary-action { margin-top: 8px; }
 
 /* One notice channel at the top of the rail. */

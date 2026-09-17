@@ -528,10 +528,15 @@ sent and solved the same way. Three things make it a valid return:
    confirmed**. Choose the model axis that points out of the mouth (+X, -X, +Y,
    -Y, +Z or -Z) and check the side and top views: they show the model as WG
    will solve it, radiating along the solver +Z (blue) from the model's
-   origin, with the drive sources in orange. **Confirm … and solve** remembers
-   the choice for the project, so later exports of it solve without asking
-   again. WG asks again when the export is written in another component's
-   coordinates. A model from an unsaved Fusion document belongs to no project,
+   origin, with the drive sources in orange. Nothing is chosen for you: pick
+   an axis, then **Confirm … and solve** remembers the choice for the project,
+   so later exports of it solve without asking again. WG asks again when the
+   export is written in another component's coordinates. **If you reorient the
+   model in CAD, change its frame too**: the CAD Link panel's **Solver frame**
+   section shows the confirmed axis, and **Change solver frame** picks another
+   with the same preview. A change applies to later preparations only — runs
+   already solved keep the frame they were solved in — so prepare the model
+   again to solve it in the new frame. A model from an unsaved Fusion document belongs to no project,
    so its frame is confirmed for that one export only. Model the throat at the
    origin and centre the model on the two planes across that axis so symmetry
    can be detected; the dialog's pre-flight summary still warns when the model

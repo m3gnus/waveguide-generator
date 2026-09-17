@@ -233,7 +233,7 @@ function CadOperationCard({ operation, record }: {
       {help.text && <span>{help.text}</span>}
       {waiting && help.action === 'confirm-frame' && heldAction !== 'solve' && <CadSolverFrameConfirm
         key={`${operation.operationId}:${operation.attemptGeneration}:${operation.preparationId ?? ''}`}
-        operationId={operation.operationId}
+        snapshot={{ operationId: operation.operationId }}
         label={label}
         onConfirmed={() => ask('solve', () => coordinator.solveOperation(operation.operationId))}
       />}

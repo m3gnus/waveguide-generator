@@ -21,6 +21,8 @@ import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
 import { CadOperationsSection, shortSha256 } from './CadOperationsSection';
+import { CadSolverFrameConfirm } from './CadSolverFrameConfirm';
+import { getSolverFrame, type SolverFramePreview } from '../api/solverFrame';
 import { requestSettings } from './settingsNavigation';
 import { workspaceNavigation } from './workspaceNavigation';
 import './cadLinkPanel.css';
@@ -335,6 +337,62 @@ function FindingRows({ record }: { record: CadReturnIngestRecord }) {
       > · blocking</small>}</span>
     </div>)}
   </div>;
+}
+
+/** The solver frame of a model authored in CAD: what its project confirmed, and
+ * a way to change it -- say, after the model was reoriented in CAD. A change
+ * applies to later preparations only; runs already solved keep their frame. */
+export function SolverFrameSection({ record, fetcher = fetch }: {
+  record: CadReturnIngestRecord;
+  fetcher?: typeof fetch;
+}) {
+  const unlinked = record.freshness?.verdict === 'unlinked';
+  const [preview, setPreview] = useState<SolverFramePreview | null>(null);
+  const [changing, setChanging] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    if (!unlinked) return undefined;
+    let current = true;
+    void getSolverFrame({ ingestId: record.ingest_id }, fetcher)
+      .then((answer) => { if (current) setPreview(answer); })
+      .catch(() => { if (current) setPreview(null); });
+    return () => { current = false; };
+  }, [fetcher, record.ingest_id, refresh, unlinked]);
+  useEffect(() => { setChanging(false); }, [record.ingest_id]);
+  if (!unlinked) return null;
+  const state = preview && !preview.linked ? preview : null;
+  const confirmed = state?.confirmed?.axis ?? null;
+  const name = record.project?.document_name ?? 'this model';
+  return <CadDrawer
+    key={record.ingest_id}
+    title="Solver frame"
+    chip={confirmed ? `along ${confirmed}` : 'not confirmed'}
+    warning={!confirmed}
+    className="cad-solver-frame-section"
+  >
+    <p className="cad-detail">
+      {confirmed
+        ? `${name} is solved along its ${confirmed} axis, as confirmed for its project.`
+        : `No solver frame is confirmed for ${name}’s project yet; WG asks before its first solve.`}
+      {state && confirmed && state.recordAxis !== confirmed
+        ? ` This preparation was meshed along ${state.recordAxis}: prepare it again to solve along ${confirmed}.`
+        : ''}
+    </p>
+    {changing
+      ? <CadSolverFrameConfirm
+        snapshot={{ ingestId: record.ingest_id }}
+        label={name}
+        mode="change"
+        fetcher={fetcher}
+        onConfirmed={() => { setChanging(false); setRefresh((count) => count + 1); }}
+      />
+      : <button
+        className="link-button"
+        data-action="change-solver-frame"
+        title="Choose another axis for this project. Runs already solved keep their frame."
+        onClick={() => setChanging(true)}
+      >Change solver frame</button>}
+  </CadDrawer>;
 }
 
 function ChecksSection({ record }: { record: CadReturnIngestRecord }) {
@@ -739,6 +797,7 @@ export function CadLinkPanel() {
         >Open Simulation</button>
       </div>}
       {record && <ChecksSection record={record}/>}
+      {record && <SolverFrameSection record={record}/>}
       {/* Solves Fusion sent, which the backend prepares from each project's own
           setup: shown here so the ones waiting on the user can be acted on. */}
       <CadOperationsSection record={record}/>

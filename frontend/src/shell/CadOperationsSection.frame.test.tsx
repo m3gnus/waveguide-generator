@@ -85,6 +85,7 @@ describe('an operation waiting for its solver frame', () => {
     await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
     // No plain Solve now: solving without confirming would only wait again.
     expect(host.querySelector('button[aria-label="Solve now: Authored horn"]')).toBeNull();
+    expect(host.querySelector<HTMLButtonElement>('button[data-action="confirm-frame"]')!.disabled).toBe(true);
     await act(async () => { host.querySelector<HTMLInputElement>('input[value="-x"]')!.click(); });
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="confirm-frame"]')!.click(); });
     await vi.waitFor(() => expect(solveOperation).toHaveBeenCalledWith('op-1'));
