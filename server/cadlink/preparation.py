@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
@@ -58,6 +59,7 @@ from .operations import (
     PREPARE_AND_SOLVE,
     PROCESSING,
     REASON_UPDATE_RESTART_PENDING,
+    RECEIVE_SNAPSHOT,
     RECEIVED,
     RECOVERY_REQUIRED,
     REJECTED,
@@ -81,6 +83,7 @@ from .solve_command import (
     RETAINED,
     SolveOutcomeConflict,
     collect_solve_deliveries,
+    live_held_operation_ids,
     record_outcome,
 )
 from .store import BindingConflict, CadLinkStore, StaleAttempt
@@ -250,12 +253,16 @@ def _retained(data_dir: Path, row: Mapping[str, Any]) -> dict[str, Any] | None:
 def retain_operation_snapshot(
     store: CadLinkStore, data_dir: Path, workspace_root: Path | None, operation_id: str
 ) -> str:
-    """Receive-time retention: keep the snapshot an unfinished solve operation names.
+    """Receive-time retention: keep the snapshot an unfinished operation names.
+
+    A solve (``prepare_and_solve``) or a received snapshot
+    (``receive_snapshot``); ``settle_snapshot_operation`` then settles the
+    latter.
 
     Called before the delivery is acknowledged, and says whether it may be:
 
     - ``RETAINED``: WG holds the snapshot, or there is nothing for it to hold
-      (the operation is unknown, finished, or not a solve).
+      (the operation is unknown, finished, or of another kind).
     - ``RETAIN_INVALID``: the return can never be retained as the command
       names it -- malformed, changed since the command, outside the WGLink
       folder. The delivery is acknowledged, and preparation refuses it.
@@ -270,7 +277,11 @@ def retain_operation_snapshot(
 
     try:
         row = store.get_operation(operation_id)
-        if row is None or row["kind"] != PREPARE_AND_SOLVE or row["state"] in TERMINAL_STATES:
+        if (
+            row is None
+            or row["kind"] not in _RETAINED_KINDS
+            or row["state"] in TERMINAL_STATES
+        ):
             return RETAINED
         if _retained(data_dir, row) is not None:
             return RETAINED
@@ -293,6 +304,153 @@ def retain_operation_snapshot(
         logger.warning("Could not retain the snapshot of CAD operation %s: %s", operation_id, exc)
         return RETAIN_INVALID
     return RETAINED
+
+
+_RETAINED_KINDS = frozenset({PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT})
+#: A received snapshot is settled from either state: ``processing`` is one a
+#: settler claimed and never recorded (WG stopped, or the store refused the
+#: outcome), which the next settler takes over.
+SETTLEABLE_SNAPSHOT_STATES = frozenset({RECEIVED, PROCESSING})
+#: How long a received snapshot's bundle may stay unreadable before the
+#: operation is rejected (``snapshot_unavailable``). Measured from the first
+#: unreadable attempt, recorded durably, so a restart does not reset it.
+SNAPSHOT_UNAVAILABLE_BOUND = timedelta(hours=24)
+SNAPSHOT_ACCEPTED_MESSAGE = "WG verified and kept this snapshot."
+SNAPSHOT_INVALID_MESSAGE = (
+    "WG could not verify this snapshot as Fusion named it: it is malformed, changed since "
+    "it was sent, or outside the WGLink folder. Send it again from Fusion."
+)
+SNAPSHOT_UNAVAILABLE_MESSAGE = (
+    "WG could not read this snapshot in the WGLink folder for 24 hours. Send it again from "
+    "Fusion."
+)
+_SNAPSHOT_PAGE = 100
+
+
+def _wall_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _unreadable_too_long(store: CadLinkStore, row: Mapping[str, Any], now: datetime) -> bool:
+    """Record the first unreadable time if new; whether the bound has passed."""
+
+    operation_id = str(row["operation_id"])
+    since = row.get("snapshot_unreadable_since")
+    if not since:
+        since = store.note_snapshot_unreadable(
+            operation_id, now.astimezone(timezone.utc).isoformat(timespec="seconds")
+        )
+    if not since:
+        return False
+    try:
+        first = datetime.fromisoformat(str(since))
+    except ValueError:
+        return False
+    if first.tzinfo is None:
+        first = first.replace(tzinfo=timezone.utc)
+    return now - first >= SNAPSHOT_UNAVAILABLE_BOUND
+
+
+def settle_snapshot_operation(
+    store: CadLinkStore, data_dir: Path, workspace_root: Path | None, operation_id: str
+) -> str:
+    """Retain a received snapshot and record what that found (CAD-OPERATIONS.md).
+
+    For a ``receive_snapshot`` in ``received`` or ``processing``:
+
+    - retained, and WG holds the copy -> claimed -> ``accepted``;
+    - never retainable as named -> claimed -> ``rejected`` / ``snapshot_invalid``;
+    - not readable now -> no claim and no outcome, unless it has been unreadable
+      for ``SNAPSHOT_UNAVAILABLE_BOUND``: then ``rejected`` /
+      ``snapshot_unavailable``.
+
+    The claim moves the generation on, so a settler that claimed earlier and
+    never recorded is taken over, and its late outcome is refused. Nothing is
+    ingested, meshed or solved, and no intent is recorded. Returns
+    ``RETAINED`` once accepted, ``RETAIN_INVALID`` once rejected, and
+    ``RETAIN_TRANSIENT`` while it is still unsettled, whatever the reason;
+    another kind is only retained (``retain_operation_snapshot``). A store
+    error propagates.
+    """
+
+    retention = retain_operation_snapshot(store, data_dir, workspace_root, operation_id)
+    row = store.get_operation(operation_id)
+    if row is None or row["kind"] != RECEIVE_SNAPSHOT:
+        return retention
+    if row["state"] not in SETTLEABLE_SNAPSHOT_STATES:
+        return RETAINED if row["state"] == ACCEPTED else RETAIN_INVALID
+    if retention == RETAINED and _retained(data_dir, row) is None:
+        # Nothing is accepted before WG holds its bytes.
+        retention = RETAIN_TRANSIENT
+    if retention == RETAINED:
+        state, reason, message = ACCEPTED, None, SNAPSHOT_ACCEPTED_MESSAGE
+    elif retention != RETAIN_TRANSIENT:
+        state, reason, message = REJECTED, "snapshot_invalid", SNAPSHOT_INVALID_MESSAGE
+    elif _unreadable_too_long(store, row, _wall_now()):
+        state, reason, message = REJECTED, "snapshot_unavailable", SNAPSHOT_UNAVAILABLE_MESSAGE
+    else:
+        return RETAIN_TRANSIENT
+    held_at = int(row["attempt_generation"])
+    generation = store.claim(operation_id, held_at)
+    if generation is None:
+        return RETAIN_TRANSIENT
+    if row["state"] == PROCESSING:
+        logger.info(
+            "Received snapshot %s: attempt %d took it over from attempt %d, which never "
+            "recorded an outcome.",
+            operation_id, generation, held_at,
+        )
+    recorded = store.record_outcome(
+        operation_id, generation, state, reason=reason, outcome={"message": message}
+    )
+    if recorded is None:
+        return RETAIN_TRANSIENT
+    log = logger.warning if reason == "snapshot_unavailable" else logger.info
+    log("Received snapshot %s: %s%s.", operation_id, state, f" ({reason})" if reason else "")
+    return RETAINED if state == ACCEPTED else RETAIN_INVALID
+
+
+def settle_received_snapshots(ctx: PreparationContext) -> list[str]:
+    """Settle the unsettled snapshots nobody is delivering now. Returns those settled.
+
+    What a delivery over HTTP left ``received`` or ``processing`` -- WG
+    stopped, or the store refused, between acceptance and outcome; a return
+    not readable within the live bound -- is settled here
+    (``settle_snapshot_operation``), at startup and on each delivery pass with
+    a WGLink folder. Every such row is reached, page by page, however many stay
+    unreadable. Each page is listed first and the live holds read after, so a
+    snapshot still being delivered is never settled from under its delivery.
+    A store error on one row is logged and the rest go on.
+    """
+
+    if ctx.workspace_root is None:
+        return []
+    settled: list[str] = []
+    cursor = 0
+    while True:
+        page = ctx.store.operation_page(
+            kind=RECEIVE_SNAPSHOT, states=SETTLEABLE_SNAPSHOT_STATES,
+            after_rowid=cursor, limit=_SNAPSHOT_PAGE,
+        )
+        if not page:
+            break
+        held = live_held_operation_ids()
+        for cursor, row in page:
+            operation_id = str(row["operation_id"])
+            if operation_id in held:
+                continue
+            try:
+                settle_snapshot_operation(ctx.store, ctx.data_dir, ctx.workspace_root, operation_id)
+                current = ctx.store.get_operation(operation_id)
+            except sqlite3.Error as exc:
+                logger.warning("Could not settle the received snapshot %s: %s", operation_id, exc)
+                continue
+            if current is not None and current["state"] not in SETTLEABLE_SNAPSHOT_STATES:
+                settled.append(operation_id)
+                _publish(ctx, current)
+        if len(page) < _SNAPSHOT_PAGE:
+            break
+    return settled
 
 
 def reconcile_with_jobs(ctx: PreparationContext, operation_id: str) -> dict[str, Any] | None:
@@ -977,7 +1135,10 @@ async def run_delivery_pass(
     update restart is approved the pass does nothing at all: no preparation
     starts, and delivered files stay on disk for after the restart. Once the
     latch is down, the solves it held at submission are queued again first,
-    with or without a WGLink folder. Returns the operations this pass started.
+    with or without a WGLink folder. Received snapshots nobody is delivering
+    are settled first (``settle_received_snapshots``). An operation a delivery
+    over HTTP holds is not started: the received rows are listed first and the
+    live holds read after them. Returns the operations this pass started.
     """
 
     if _restart_pending(ctx):
@@ -985,6 +1146,7 @@ async def run_delivery_pass(
     await asyncio.to_thread(requeue_restart_parked, ctx)
     if ctx.workspace_root is None:
         return []
+    await asyncio.to_thread(settle_received_snapshots, ctx)
     held: set[str] = set()
     await asyncio.to_thread(
         collect_solve_deliveries,
@@ -1002,6 +1164,9 @@ async def run_delivery_pass(
         ctx.store.list_operations,
         kind=PREPARE_AND_SOLVE, states={RECEIVED}, oldest_first=True, limit=100,
     )
+    # After the listing, never before: a live hold is recorded before its
+    # operation commits, so every listed row still being delivered is in it.
+    held |= live_held_operation_ids()
     started: list[str] = []
     for row in rows:
         operation_id = str(row["operation_id"])
@@ -1026,11 +1191,14 @@ def recover_operations(ctx: PreparationContext) -> int:
     for the user (``interrupted``); a bound request is kept, so the next
     preparation submits exactly it. One an update restart held at submission
     is queued again (``received``), so the delivery loop prepares it by
-    itself. Returns how many operations changed.
+    itself. Received snapshots a stopped backend left are settled
+    (``settle_received_snapshots``) when a WGLink folder is selected. Returns
+    how many operations changed.
     """
 
     store = ctx.store
     changed = len(requeue_restart_parked(ctx))
+    changed += len(settle_received_snapshots(ctx))
     for row in store.list_operations(
         kind=PREPARE_AND_SOLVE, states={RECEIVED, PROCESSING, NEEDS_USER_INPUT, CANCEL_REQUESTED},
         oldest_first=True, limit=1000,
@@ -1086,5 +1254,7 @@ __all__ = [
     "requeue_restart_parked",
     "retain_operation_snapshot",
     "run_delivery_pass",
+    "settle_received_snapshots",
+    "settle_snapshot_operation",
     "submission_key",
 ]

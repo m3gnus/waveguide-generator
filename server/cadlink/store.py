@@ -274,6 +274,9 @@ _OPERATION_COLUMNS = (
     ("snapshot_json", "TEXT"),
     ("preparation_id", "TEXT"),
     ("approvals_json", "TEXT"),
+    # When a received snapshot was first found unreadable (UTC ISO-8601), so
+    # the bound on waiting for it survives a restart.
+    ("snapshot_unreadable_since", "TEXT"),
 )
 
 
@@ -904,6 +907,61 @@ class CadLinkStore:
                 "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
             ).fetchone()
         return self._row(row)
+
+    def note_snapshot_unreadable(self, operation_id: str, at: str) -> str | None:
+        """Record when an unfinished operation's snapshot was first unreadable.
+
+        The first time stands. Returns the time recorded, or None when the
+        operation is unknown or finished.
+        """
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "UPDATE cad_operations SET snapshot_unreadable_since = ? "
+                "WHERE operation_id = ? AND snapshot_unreadable_since IS NULL "
+                f"AND state NOT IN ({', '.join('?' for _ in TERMINAL_STATES)})",
+                (at, operation_id, *sorted(TERMINAL_STATES)),
+            )
+            row = conn.execute(
+                "SELECT state, snapshot_unreadable_since FROM cad_operations "
+                "WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+        if row is None or row["state"] in TERMINAL_STATES:
+            return None
+        return row["snapshot_unreadable_since"]
+
+    def operation_page(
+        self,
+        *,
+        kind: str,
+        states: Iterable[str],
+        after_rowid: int = 0,
+        limit: int = 100,
+    ) -> list[tuple[int, dict[str, Any]]]:
+        """Operations of a kind in acceptance order after a cursor, with their cursor.
+
+        For a reader that must reach every row however many stay in a state.
+        """
+
+        self.initialize()
+        wanted = sorted(set(states))
+        if not wanted:
+            return []
+        bounded_limit = max(1, min(int(limit), 1000))
+        with self._lock:
+            rows = self._connect().execute(
+                "SELECT rowid AS page_rowid, * FROM cad_operations "
+                f"WHERE kind = ? AND state IN ({', '.join('?' for _ in wanted)}) "
+                "AND rowid > ? ORDER BY rowid ASC LIMIT ?",
+                (kind, *wanted, int(after_rowid), bounded_limit),
+            ).fetchall()
+        page: list[tuple[int, dict[str, Any]]] = []
+        for row in rows:
+            item = dict(row)
+            page.append((int(item.pop("page_rowid")), item))
+        return page
 
     def bind_request(
         self,

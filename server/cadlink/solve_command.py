@@ -15,7 +15,10 @@ What a WGLink older than version 3 writes -- the single slot
 ``.wg-solve-request.json``, or a version-2 file -- is refused visibly, with the
 remedy: WG installs the add-in it ships, and Fusion has to load it. From then on the
 store, not the file, is the command: the backend's delivery loop is its one
-consumer, and prepares it from there. The ledger helpers below are the store's
+consumer, and prepares it from there. A WGLink with a live session delivers the
+same item over HTTP instead (``server/cadlink/live/deliveries.py``); both paths
+accept through ``accept_delivery``, so one item is one operation whichever way,
+or both ways, it arrives. The ledger helpers below are the store's
 view of terminal outcomes. A command whose gates block is not terminal: it
 stays so the user can acknowledge findings and run it.
 """
@@ -28,6 +31,7 @@ import logging
 import os
 from pathlib import Path
 import threading
+import time
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 import uuid
 
@@ -35,8 +39,10 @@ from .identity import utc_now
 from .operations import (
     ACCEPTED,
     PREPARE_AND_SOLVE,
+    RECEIVE_SNAPSHOT,
     REJECTED,
     TERMINAL_STATES,
+    normalize_request,
     prepare_and_solve_request,
     request_digest,
 )
@@ -97,6 +103,22 @@ _DELIVERY_LOCK = threading.Lock()
 # Each kept claim, by claim name: the operation it names, and how many passes
 # it has waited for that operation's return.
 _retention_waits: dict[str, tuple[str, int]] = {}
+# How long a delivery over HTTP whose return cannot be read is answered 503 and
+# held, from its first such answer (CADLINK-LIVE-PROTOCOL.md section 8). The
+# file claim's RETENTION_PASSES is the same bound counted in passes.
+LIVE_TRANSIENT_BOUND_S = 30.0
+# How long past its bound a transient deadline is remembered once nothing holds
+# it any more. A retry within that time is acknowledged at once; the entry is
+# then dropped, so memory stays bounded, and a retry later still starts a new
+# bound.
+LIVE_DEADLINE_MEMORY_S = 300.0
+# The operations deliveries over HTTP hold, kept apart from the file claims
+# above: operation id -> whether a delivery is in flight, and the deadline of
+# its first transient answer. Guarded by its own lock, which readers take
+# without _DELIVERY_LOCK, so a slow retention never blocks a delivery pass.
+_LIVE_WAITS_LOCK = threading.Lock()
+_live_waits: dict[str, _LiveWait] = {}
+_now = time.monotonic
 
 
 @dataclass(frozen=True)
@@ -121,6 +143,212 @@ class PendingSolveCommand:
             "manifestSha256": self.manifest_sha256,
             "requestedAt": self.requested_at,
         }
+
+
+@dataclass
+class _LiveWait:
+    #: A delivery of the operation is being accepted or retained now.
+    in_flight: bool
+    #: LIVE_TRANSIENT_BOUND_S after its first transient answer; None before one.
+    deadline: float | None
+
+    def held(self, now: float) -> bool:
+        return self.in_flight or (self.deadline is not None and now < self.deadline)
+
+
+@dataclass(frozen=True)
+class DeliveredItem:
+    """One WG-bound delivery, by file or over HTTP: only what identifies it.
+
+    ``requestedAt``, the file name, tokens and headers are transport and never
+    reach it, so the same item by either path has the same digest.
+    """
+
+    operation_id: str
+    kind: str
+    bundle_path: str
+    manifest_sha256: str
+    #: Solve deliveries only.
+    return_id: str | None = None
+
+    @classmethod
+    def from_command(cls, command: PendingSolveCommand) -> DeliveredItem:
+        return cls(
+            operation_id=command.command_id,
+            kind=PREPARE_AND_SOLVE,
+            bundle_path=command.bundle_path,
+            manifest_sha256=command.manifest_sha256,
+            return_id=command.return_id,
+        )
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> DeliveredItem:
+        """The item a live delivery body names (already validated by the route)."""
+
+        return cls(
+            operation_id=str(payload["operationId"]),
+            kind=str(payload["kind"]),
+            bundle_path=str(payload["bundlePath"]),
+            manifest_sha256=str(payload["manifestSha256"]),
+            return_id=(
+                str(payload.get("returnId") or "") if payload["kind"] == PREPARE_AND_SOLVE else None
+            ),
+        )
+
+    def request(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        if self.kind == PREPARE_AND_SOLVE:
+            return prepare_and_solve_request(
+                return_id=self.return_id or "",
+                bundle_path=self.bundle_path,
+                manifest_sha256=self.manifest_sha256,
+            )
+        if self.kind == RECEIVE_SNAPSHOT:
+            return normalize_request(
+                RECEIVE_SNAPSHOT,
+                {},
+                {"bundle_path": self.bundle_path, "manifest_sha256": self.manifest_sha256},
+            )
+        raise ValueError(f"{self.kind!r} is not delivered to WG")
+
+
+@dataclass(frozen=True)
+class DeliveryAnswer:
+    """What accepting one delivery did.
+
+    ``result`` is the store's: ``created``, ``recovered`` or ``conflict``. A
+    conflict leaves the stored operation untouched. ``retention`` is what
+    ``retain`` reported for the stored operation, or None without one. ``row``
+    is the operation as it stands after retention.
+    """
+
+    row: dict[str, Any]
+    result: str
+    digest: str
+    retention: object | None
+
+
+def accept_delivery(
+    store: CadLinkStore,
+    item: DeliveredItem,
+    *,
+    retain: Callable[[str], object] | None,
+) -> DeliveryAnswer:
+    """Accept a delivered item, or recover the operation it repeats, then retain.
+
+    The one acceptance of both transports: the v3 file pass and the live
+    route. Same id and digest recovers; a different digest or kind is
+    ``conflict``, decided here from the store's result and nothing else.
+    ``retain`` runs for the operation stored under the id whatever the result,
+    as the file pass always did. Delivery paths call it under ``_DELIVERY_LOCK``.
+    """
+
+    target, inputs = item.request()
+    digest = request_digest(item.kind, target, inputs)
+    row, result = store.accept_operation(item.operation_id, item.kind, digest, target, inputs)
+    if retain is None:
+        return DeliveryAnswer(row=row, result=result, digest=digest, retention=None)
+    retention = retain(item.operation_id)
+    current = store.get_operation(item.operation_id)
+    return DeliveryAnswer(
+        row=current if current is not None else row, result=result, digest=digest,
+        retention=retention,
+    )
+
+
+def live_held_operation_ids() -> frozenset[str]:
+    """The operations a delivery over HTTP holds now.
+
+    Held: in flight, or answered transient less than ``LIVE_TRANSIENT_BOUND_S``
+    ago. A deadline that has passed no longer holds, but it is remembered (for
+    ``LIVE_DEADLINE_MEMORY_S``) so the retry is acknowledged at the bound rather
+    than given a new one. Takes only the live waits' lock, never
+    ``_DELIVERY_LOCK``. A reader lists rows first and calls this after: every
+    hold is recorded before its operation commits, so a listed row still being
+    delivered is in the answer.
+    """
+
+    now = _now()
+    with _LIVE_WAITS_LOCK:
+        for operation_id, wait in list(_live_waits.items()):
+            if (
+                not wait.in_flight
+                and wait.deadline is not None
+                and wait.deadline + LIVE_DEADLINE_MEMORY_S <= now
+            ):
+                del _live_waits[operation_id]
+        return frozenset(
+            operation_id for operation_id, wait in _live_waits.items() if wait.held(now)
+        )
+
+
+LIVE_ACCEPTED = "accepted"
+LIVE_CONFLICT = "conflict"
+LIVE_TRANSIENT = "transient"
+
+
+@dataclass(frozen=True)
+class LiveDelivery:
+    """The live route's answer: accepted (200), conflict (409) or transient (503)."""
+
+    status: str
+    answer: DeliveryAnswer
+
+
+def deliver_live(
+    store: CadLinkStore,
+    item: DeliveredItem,
+    *,
+    retain: Callable[[str], object],
+) -> LiveDelivery:
+    """One delivery over HTTP, held against the delivery pass while in flight.
+
+    Under ``_DELIVERY_LOCK`` the operation is held before it is accepted, then
+    its snapshot retained. How the hold ends:
+
+    - accepted (200): released, with any transient deadline;
+    - a return that cannot be read now (503): held until
+      ``LIVE_TRANSIENT_BOUND_S`` after the first such answer. A retry keeps
+      that deadline; one at or after it is acknowledged (200) and released;
+    - a conflict (409), a busy store or any other exception: the hold goes
+      back to what it was before this delivery, so a conflicting or failed
+      delivery never releases an earlier delivery's transient hold.
+    """
+
+    operation_id = item.operation_id
+    with _DELIVERY_LOCK:
+        with _LIVE_WAITS_LOCK:
+            previous = _live_waits.get(operation_id)
+            bound = previous.deadline if previous is not None else None
+            _live_waits[operation_id] = _LiveWait(in_flight=True, deadline=bound)
+        after: _LiveWait | None = previous
+        try:
+            answer = accept_delivery(store, item, retain=retain)
+            if answer.result == "conflict":
+                return LiveDelivery(LIVE_CONFLICT, answer)
+            if answer.retention == RETAIN_TRANSIENT:
+                now = _now()
+                if bound is None or now < bound:
+                    after = _LiveWait(
+                        in_flight=False,
+                        deadline=bound if bound is not None else now + LIVE_TRANSIENT_BOUND_S,
+                    )
+                    return LiveDelivery(LIVE_TRANSIENT, answer)
+                logger.warning(
+                    "The return of CAD operation %r could not be read in %.0f s. Its live "
+                    "delivery is acknowledged, and the operation waits for its return.",
+                    operation_id,
+                    LIVE_TRANSIENT_BOUND_S,
+                )
+            after = None
+            return LiveDelivery(LIVE_ACCEPTED, answer)
+        finally:
+            with _LIVE_WAITS_LOCK:
+                if after is not None:
+                    _live_waits[operation_id] = _LiveWait(
+                        in_flight=False, deadline=after.deadline
+                    )
+                else:
+                    _live_waits.pop(operation_id, None)
 
 
 class SolveOutcomeConflict(ValueError):
@@ -317,20 +545,16 @@ def _delivery_conflict(row: Mapping[str, Any], digest: str | None) -> dict[str, 
     return None
 
 
-def _persist(store: CadLinkStore, command: PendingSolveCommand) -> dict[str, Any] | None:
-    """Accept a delivered command, or recover the operation it repeats.
+def _file_answer(command: PendingSolveCommand, accepted: DeliveryAnswer) -> dict[str, Any] | None:
+    """What a v3 file delivery is owed on its own, from its acceptance.
 
-    Returns the answer this delivery is owed on its own, or None when the
-    operation it names waits to be handed out: the outcome that already stands,
-    or a refusal when its id already names a different request that is finished
-    or is not a solve.
+    The answer this delivery is owed on its own, or None when the operation it
+    names waits to be handed out: the outcome that already stands, or a
+    refusal when its id already names a different request that is finished or
+    is not a solve. A refusal is logged whatever is answered.
     """
 
-    target, inputs = solve_command_request(command)
-    digest = request_digest(PREPARE_AND_SOLVE, target, inputs)
-    row, result = store.accept_operation(
-        command.command_id, PREPARE_AND_SOLVE, digest, target, inputs
-    )
+    row, result, digest = accepted.row, accepted.result, accepted.digest
     refusal = _delivery_conflict(row, digest) if result == "conflict" else None
     if refusal is not None:
         # The stored operation is untouched and its result is not this
@@ -443,10 +667,12 @@ def collect_solve_deliveries(
                 # and is recovered or refused as any other.
                 answer = _refuse_outdated(store, command)
             else:
-                answer = _persist(store, command)
+                accepted = accept_delivery(
+                    store, DeliveredItem.from_command(command), retain=retain
+                )
+                answer = _file_answer(command, accepted)
                 if (
-                    retain is not None
-                    and retain(command.command_id) == RETAIN_TRANSIENT
+                    accepted.retention == RETAIN_TRANSIENT
                     and _keep_for_retention(claim, command)
                 ):
                     if held is not None:

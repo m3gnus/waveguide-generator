@@ -59,8 +59,9 @@ applying marks, recent outcomes, and exact last-request trace durably.
   `{document_id, export_id}` shape does not reinterpret a stored digest-version-1 row.
 - **Solves and snapshots** address nothing in CAD, so their target is empty and
   everything they need is an input. Later inputs join under a new digest version: a
-  snapshot id and a setup revision for a solve, and the import intent for a received
-  snapshot once it has a producer.
+  snapshot id and a setup revision for a solve, and an import intent for a received
+  snapshot. A received snapshot's one producer is a delivery over HTTP (see "Delivery
+  over HTTP"); it records no intent yet.
 
 ## Identity
 
@@ -159,6 +160,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `baseline_conflict` | `rejected` | The document no longer matches the expected baseline, and there is no evidence that this operation already applied |
 | `target_not_exact` | `rejected` | The target does not resolve to exactly one instance |
 | `snapshot_invalid` | `rejected` | The snapshot fails verification, or no longer matches the operation's inputs |
+| `snapshot_unavailable` | `rejected` | A received snapshot's bundle stayed unreadable for 24 hours (see "Delivery over HTTP"). Sending it again is a new operation |
 | `setup_required` | `needs_user_input` | No setup revision is bound yet; a CAD-authored model never borrows the open project's |
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
 | `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout, a return that is not in the WGLink folder and has no retained copy |
@@ -531,7 +533,8 @@ is the operation `prepare_and_solve`, with the `commandId` as its operation ID.
    when the file is already gone, or on Windows while its writer still holds it open.
 2. **Read** the claim. What the rename took is the request.
 3. **Persist** it: accept the operation, or recover the one it repeats, as in the
-   delivery table above.
+   delivery table above. A delivery over HTTP is accepted by the same code, with the
+   same digest (see "Delivery over HTTP").
 4. **Retain** the snapshot the operation names in WG's own storage (see "Preparation").
    - Retained, or never retainable as it is named (malformed, changed since the command,
      outside the WGLink folder): go on. Preparation refuses a return that cannot be
@@ -578,6 +581,50 @@ later files wait for the next pass.
   prepares from what was accepted. A return that was never retained is checked when
   preparation retains it; one that no longer matches its command is `rejected`
   (`snapshot_invalid`).
+
+**Delivery over HTTP.** A WGLink with a live session delivers the same item by
+`POST /api/cadlink/live/deliveries` (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 8)
+instead of writing the file. It names the bundle by reference in the WGLink folder, as the
+file does, and is `prepare_and_solve` or `receive_snapshot`.
+
+- **One acceptance.** The file pass and the route accept through one function: the same
+  digest (`requestedAt` is transport on both), the same conflict rule, taken from the
+  store's result. One operation delivered by file and over HTTP, in either order or at
+  once, is accepted once and prepared once; one consumer in the process accepts at a time.
+- **Retained before the answer.** The route answers 200 (`created` or `recovered`) once
+  the snapshot is retained, or once it can never be retained as named (preparation then
+  refuses it). A return that cannot be read now is answered 503 and retried by the
+  add-in. The first such answer sets a deadline 30 s later; a retry at or after it is
+  acknowledged (200), and a solve then waits for its return (`preparation_failed`), as a
+  file claim does after its passes. The deadline is remembered for five minutes past
+  it; a retry later than that starts a new 30 s bound.
+- **Held while in flight.** Before the route accepts, it records a hold on the operation,
+  apart from the file claims' waits. The hold ends with a 200. A 503 keeps it until its
+  deadline, after which the operation is no longer held (the delivery pass may start it)
+  even before the retry arrives. A conflict (409), a busy store or an error leaves the
+  hold as it was before that delivery, so a conflicting delivery never releases another
+  one's 503 hold. A delivery pass lists `received` operations first and reads the holds
+  after, so it never starts an operation whose delivery is still being accepted or
+  retained. The holds are in memory: a restart forgets them, and the add-in's retry is
+  recovered by digest.
+- **A received snapshot** is retained, then claimed and recorded `accepted`; one that can
+  never be retained as named is `rejected` (`snapshot_invalid`); one that cannot be read
+  now is not claimed and gets no outcome. Nothing is ingested, meshed or solved. It is
+  never `accepted` before WG holds its bytes.
+- **Unsettled snapshots.** A received snapshot left `received` (WG stopped between
+  acceptance and outcome, or the return was not readable within the bound) or
+  `processing` (a settler claimed it, and WG stopped or the store refused its outcome) is
+  settled the same way at startup and at the start of each delivery pass with a WGLink
+  folder, and by the add-in's retry. Every such operation is reached, however many stay
+  unreadable, and one a delivery holds is skipped. Settling claims the operation again,
+  so the new generation takes it over and a late outcome from the earlier claim is
+  refused. The route never answers 200 for a snapshot still `received` or `processing`
+  except at the 30 s bound; the settlement finishes it after.
+- **Bounded wait for a snapshot.** The first time a received snapshot's bundle is found
+  unreadable is stored with the operation (`snapshot_unreadable_since`), so a restart
+  does not reset it. Once it has stayed unreadable for 24 hours the operation is
+  `rejected` (`snapshot_unavailable`) and logged. Sending it again from Fusion is a new
+  operation with a new ID.
 
 ## Solve-command compatibility
 

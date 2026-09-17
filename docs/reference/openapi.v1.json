@@ -1417,6 +1417,60 @@
         "title": "DeleteResponse",
         "type": "object"
       },
+      "DeliveryRequest": {
+        "additionalProperties": false,
+        "description": "One outbox item. Transport fields (tokens, attempts, claims) are refused.",
+        "properties": {
+          "bundlePath": {
+            "minLength": 1,
+            "title": "Bundlepath",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "prepare_and_solve",
+              "receive_snapshot"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "manifestSha256": {
+            "minLength": 1,
+            "title": "Manifestsha256",
+            "type": "string"
+          },
+          "operationId": {
+            "minLength": 1,
+            "title": "Operationid",
+            "type": "string"
+          },
+          "requestedAt": {
+            "minLength": 1,
+            "title": "Requestedat",
+            "type": "string"
+          },
+          "returnId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returnid"
+          }
+        },
+        "required": [
+          "operationId",
+          "kind",
+          "bundlePath",
+          "manifestSha256",
+          "requestedAt"
+        ],
+        "title": "DeliveryRequest",
+        "type": "object"
+      },
       "DesignAvailability": {
         "additionalProperties": false,
         "description": "Whether a job's stored design can be reopened, and if not, why not.\n\nJobs imported from v1 are the reason this exists. Most of them are\nrecovered into v2's own snapshot shape and are indistinguishable from a\nnatively solved job; the rest must say what is wrong in words the user can\nact on, because \"Rerun is greyed out\" is not a diagnosis.",
@@ -8441,6 +8495,66 @@
         "summary": "Get Ingest Viewport Mesh",
         "tags": [
           "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/live/deliveries": {
+      "post": {
+        "description": "Accept or recover one delivered operation once its snapshot is retained.",
+        "operationId": "post_live_delivery_api_cadlink_live_deliveries_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeliveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request (no input echoed) or installation_mismatch"
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused; error.code names why (never 422)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "snapshot_not_readable or store_busy: retry after Retry-After"
+          }
+        },
+        "summary": "Post Live Delivery",
+        "tags": [
+          "cadlink-live"
         ]
       }
     },
