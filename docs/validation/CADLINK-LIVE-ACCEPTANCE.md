@@ -41,8 +41,8 @@ blank until you run the step; do not mark a row done from memory.
   docstring for exactly what each zip member is and where it comes from.
 
   `manifest.json`'s `notes` always carries one caveat worth reading before
-  you file a heartbeat-related row: since CL11b, WG prefers a live HTTP
-  heartbeat over the file one when a fresh one exists, but that live
+  you file a heartbeat-related row: WG prefers a live HTTP heartbeat over
+  the file one when a fresh one exists, but that live
   heartbeat lives only in the running WG's memory. This collector is
   read-only and offline, so it cannot tell you which transport was in
   effect for a given step -- check `POST /api/cadlink/fusion-status`'s

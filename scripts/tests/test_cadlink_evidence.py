@@ -192,7 +192,7 @@ def test_session_token_and_registration_secret_keys_are_redacted() -> None:
 
 
 def test_evidence_notes_the_live_heartbeat_transport_is_unknown_offline(tmp_path: Path) -> None:
-    """The collector cannot see WG's in-memory ``LiveRegistry`` (CL11b): it
+    """The collector cannot see WG's in-memory ``LiveRegistry``: it
     runs offline, out of process, so it can never know whether the freshest
     heartbeat came by the live HTTP transport or the file one. That must be
     recorded, not silently omitted -- the bundle's ``notes`` says so and

@@ -35,8 +35,8 @@ anything that starts an event loop or touches a live WG process, so it is
 safe to run against a data directory belonging to a WG that is currently
 running.
 
-Since CL11b, WG selects a live HTTP heartbeat over the file one when a fresh
-one exists (``server.cadlink.fusion_status.select_heartbeat``), but the live
+WG prefers a live HTTP heartbeat over the file one when a fresh one exists
+(``server.cadlink.fusion_status.select_heartbeat``), but the live
 heartbeat lives only in that WG process's in-memory ``LiveRegistry``
 (``server/cadlink/live/registry.py``) -- it is never written to a file, and a
 WG restart forgets it. This collector is read-only and runs out of process,
@@ -93,7 +93,7 @@ _LIVE_HEARTBEAT_TRANSPORT_NOTE = (
     "This collector is read-only and runs offline, out of process: it never "
     "calls a running WG over HTTP, so it cannot know whether the freshest "
     "heartbeat came by the live transport or the file one. The live "
-    "heartbeat (CL11b) lives only in WG's in-process LiveRegistry and is "
+    "heartbeat lives only in WG's in-process LiveRegistry and is "
     "never persisted to a file this collector can read; fusion-status.json "
     "above is always the file transport's payload. See WG's own answer to "
     "POST /api/cadlink/fusion-status -- its heartbeatTransport field names "
