@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import contextlib
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
 import logging
 import os
 from pathlib import Path
+import secrets
 import shutil
+import stat
+import time
 from typing import Any
 
 from server.cadlink.isolated import (
@@ -39,7 +43,13 @@ from .solver_frame import (
     record_solver_frame,
     resolve_for_manifest,
 )
-from .wgreturn import WgReturnBundle, WgReturnError, declared_domain_planes, read_wgreturn
+from .wgreturn import (
+    WgReturnBundle,
+    WgReturnError,
+    WgReturnIntegrityError,
+    declared_domain_planes,
+    read_wgreturn,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -399,16 +409,194 @@ def cad_document_member(manifest: Mapping[str, Any]) -> str | None:
     return None
 
 
+#: How long a `.wg2-import-bundle-*` directory must have gone untouched before
+#: it counts as abandoned. A staging directory is only ever a copy of one
+#: bundle, whose largest member is capped at `MAX_STEP_INPUT_BYTES`, so no live
+#: copy can still be running a day after its directory was last written to --
+#: while a copy that a kill or a power cut left behind never will be again.
+_ABANDONED_STAGING_AGE = 24 * 60 * 60
+_STAGING_PREFIX = ".wg2-import-bundle-"
+#: A retained copy that was replaced waits here, beside the copy that replaced
+#: it, until the publication it was moved aside for has gone through.
+_SUPERSEDED_SUFFIX = ".superseded-"
+
+
+def _is_the_bundle(copy: Path, bundle: WgReturnBundle) -> bool:
+    """Whether the tree at `copy` still is the bundle whose digest names it.
+
+    Re-reading is what makes this a check rather than a hope: `read_wgreturn`
+    hashes every member against the manifest's own table, and derives
+    `manifest_sha256` from the manifest bytes. So an equal `manifest_sha256`
+    says the whole tree is byte-for-byte what was accepted -- apart from the
+    captured CAD document, which WG deliberately does not keep.
+
+    The `artifact_sha256` comparison below is *implied* by that equality rather
+    than independent of it -- it is the assembly's declared hash, read out of
+    the same manifest (`wgreturn.py`, `read_wgreturn`). It is kept as a cheap
+    restatement of what this copy is for, not as a second check.
+    """
+
+    try:
+        found = read_wgreturn(copy, absent_purposes=frozenset({CAD_DOCUMENT_PURPOSE}))
+    except (WgReturnError, OSError, ValueError):
+        return False
+    return (
+        found.manifest_sha256 == bundle.manifest_sha256
+        and found.artifact_sha256 == bundle.artifact_sha256
+    )
+
+
+def _copy_member(source: str, destination: str) -> None:
+    """`shutil.copy2`, and then get the bytes it wrote onto the disk.
+
+    `os.replace` orders the copy against concurrent *readers*; it is not a
+    durability barrier. On APFS, and on ext4's default `data=ordered`, the
+    rename can reach stable storage while the file data has not, so an unclean
+    shutdown can leave a tree of holes under a name that asserts a manifest
+    digest -- the one corruption content addressing cannot express.
+
+    The flush is on a descriptor opened for *writing*, as every other flush in
+    this application is. `os.fsync` is `_commit()` on Windows, which calls
+    `FlushFileBuffers`; that API wants `GENERIC_WRITE` on the handle and fails
+    with `ERROR_ACCESS_DENIED` otherwise, so flushing the read descriptor a
+    verification pass would open is documented to fail there.
+
+    A filesystem that refuses the flush anyway costs this copy its durability
+    across a crash, and nothing else: a torn copy is caught and replaced when
+    it is read (`_is_the_bundle`, `preparation._retained_manifest`). Failing
+    the retention instead would take CAD Link down for the sake of hardening.
+    """
+
+    shutil.copy2(source, destination)
+    # `copy2` preserves the source's mode, and a member the user or Fusion
+    # marked read-only cannot then be opened for writing -- on Windows that is
+    # the read-only attribute, and the open fails there too. The write bit goes
+    # back before the copy is published, so the member keeps the mode it came
+    # with; without this the flush is silently skipped for exactly those files.
+    restore: int | None = None
+    try:
+        mode = os.stat(destination).st_mode
+        if not mode & stat.S_IWUSR:
+            os.chmod(destination, mode | stat.S_IWUSR)
+            restore = mode
+        descriptor = os.open(destination, os.O_WRONLY)
+    except OSError as exc:
+        # Everything here is best effort, including finding out the mode: the
+        # docstring above promises that a flush WG cannot perform costs this
+        # copy its durability and nothing else, and raising out of the copy
+        # would cost the retention instead.
+        logger.warning("Could not open %s to flush it: %s", Path(destination).name, exc)
+        _restore_mode(destination, restore)
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError as exc:
+        logger.warning(
+            "This filesystem refused to flush %s, so WG's copy of it is not "
+            "crash-durable; a torn copy is replaced when it is read. (%s)",
+            Path(destination).name,
+            exc,
+        )
+    finally:
+        os.close(descriptor)
+        _restore_mode(destination, restore)
+
+
+def _restore_mode(path: str, mode: int | None) -> None:
+    """Put back a mode `_copy_member` widened so it could flush the file."""
+
+    if mode is None:
+        return
+    with contextlib.suppress(OSError):
+        os.chmod(path, mode)
+
+
+def _flush_tree(staged: Path) -> None:
+    """Flush the staged tree's directories; `_copy_member` flushed its files.
+
+    The directory entries matter as much as the bytes: a member name may carry
+    path segments (`wgreturn.py`, `_portable_member_name`), and a rename that
+    is durable while an intermediate directory's entry is not leaves exactly
+    the tree-of-holes state the file flushes exist to prevent.
+    """
+
+    for member in sorted(staged.rglob("*")):
+        if member.is_dir() and not member.is_symlink():
+            _flush_directory(member)
+    _flush_directory(staged)
+
+
+def _flush_directory(path: Path) -> None:
+    """Best effort: a directory cannot be opened for `fsync` on Windows."""
+
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _sweep_abandoned_staging(parent: Path, keep: Path) -> None:
+    """Remove staging leftovers nothing can still be using.
+
+    Only a staging directory or a superseded copy, only directories, and only
+    by the directory's own modification time, so a copy another attempt is
+    making right now is left alone -- and a retained `<digest>.wgreturn` copy,
+    however old, is never a candidate.
+    """
+
+    cutoff = time.time() - _ABANDONED_STAGING_AGE
+    try:
+        candidates = list(parent.iterdir())
+    except OSError:
+        return
+    for candidate in candidates:
+        leftover = (
+            candidate.name.startswith(_STAGING_PREFIX) or _SUPERSEDED_SUFFIX in candidate.name
+        )
+        if candidate == keep or not leftover:
+            continue
+        try:
+            if not candidate.is_dir() or candidate.is_symlink():
+                continue
+            if candidate.stat().st_mtime > cutoff:
+                continue
+        except OSError:
+            continue
+        logger.info("Removing an abandoned import staging leftover: %s", candidate.name)
+        shutil.rmtree(candidate, ignore_errors=True)
+
+
 def _stage_bundle_cas(
     bundle: WgReturnBundle, imports_root: Path
-) -> tuple[Path, Path | None, Path | None]:
+) -> tuple[Path, Path | None, Path | None, bool]:
     """Copy a verified bundle completely before entering the registry transaction."""
 
     destination = imports_root / "bundles" / f"{bundle.manifest_sha256.removeprefix('sha256:')}.wgreturn"
+    replacing = False
     if destination.is_dir():
-        return destination, None, None
+        if _is_the_bundle(destination, bundle):
+            # Content addressing doing its job: the same return is kept once.
+            return destination, None, None, False
+        # The copy under this digest is not the bundle the digest names -- a
+        # torn write, a truncated member, an edit. The path is the only claim
+        # anything downstream has about the content, so WG does not hand it out
+        # again; it has verified bytes in its hands right now, and puts those
+        # there instead.
+        logger.warning(
+            "The retained copy %s is not the bundle it is named for; replacing it.",
+            destination.name,
+        )
+        replacing = True
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = publish_staging_directory(destination.parent, ".wg2-import-bundle-")
+    temporary = publish_staging_directory(destination.parent, _STAGING_PREFIX)
     staged = temporary / destination.name
     # A captured Fusion archive is tens of megabytes and is not geometry WG
     # solves from -- it is there for the user's own archive. Copying it here too
@@ -421,11 +609,24 @@ def _stage_bundle_cas(
             staged,
             symlinks=False,
             ignore=lambda _directory, names: [name for name in names if name in excluded],
+            copy_function=_copy_member,
         )
+        if not _is_the_bundle(staged, bundle):
+            # `copytree` re-reads the source, so the bundle verified above is
+            # not necessarily the bundle that was copied: it can have been
+            # replaced in between by a different, internally valid one. Those
+            # bytes are not what this digest names, and are refused rather than
+            # published under it.
+            raise WgReturnIntegrityError(
+                "The return bundle changed while WG was retaining it. "
+                "Send it again from Fusion."
+            )
+        _flush_tree(staged)
+        _sweep_abandoned_staging(destination.parent, temporary)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
-    return destination, staged, temporary
+    return destination, staged, temporary, replacing
 
 
 def retained_snapshot_path(data_dir: str | Path, manifest_sha256: str) -> Path:
@@ -471,9 +672,9 @@ def retain_snapshot(
                 "Send it again from Fusion."
             )
     imports_root = data_paths(data_dir).root / "imports"
-    destination, staged, staged_root = _stage_bundle_cas(bundle, imports_root)
+    destination, staged, staged_root, replacing = _stage_bundle_cas(bundle, imports_root)
     try:
-        _publish_staged_bundle(destination, staged)
+        _publish_staged_bundle(destination, staged, replace_existing=replacing)
     finally:
         if staged_root is not None:
             shutil.rmtree(staged_root, ignore_errors=True)
@@ -484,14 +685,48 @@ def retain_snapshot(
     }
 
 
-def _publish_staged_bundle(destination: Path, staged: Path | None) -> None:
-    if staged is None or destination.is_dir():
+def _publish_staged_bundle(
+    destination: Path, staged: Path | None, *, replace_existing: bool = False
+) -> None:
+    if staged is None:
         return
+    superseded: Path | None = None
+    if destination.is_dir():
+        if not replace_existing:
+            # Another attempt published the same digest while this one copied.
+            # Both copies verified, so either is the bundle: the first one wins
+            # and this one is thrown away with its staging directory.
+            return
+        # A directory cannot be renamed over on either platform, so the copy WG
+        # could not verify moves aside first. It moves to a *sibling*, not into
+        # the staging directory: that directory is removed unconditionally when
+        # retention ends, and `_is_the_bundle` also reports False for a copy it
+        # merely could not open, so a transiently unreadable but intact copy
+        # would otherwise be destroyed along with the replacement that failed
+        # to land. Here a stop between the two renames leaves it for the sweep.
+        superseded = destination.parent / (
+            f"{destination.name}{_SUPERSEDED_SUFFIX}{secrets.token_hex(6)}"
+        )
+        try:
+            os.replace(destination, superseded)
+        except FileNotFoundError:
+            superseded = None  # another attempt has already dealt with it
+        else:
+            # A rename does not touch the inode's mtime, so without this the
+            # copy arrives here carrying however old the retained copy was --
+            # and the sweep, which goes by mtime, would be free to take it
+            # from a concurrent attempt still between these two renames.
+            with contextlib.suppress(OSError):
+                os.utime(superseded, None)
     try:
         os.replace(staged, destination)
     except OSError:
         if not destination.is_dir():
             raise
+    _flush_directory(destination.parent)
+    if superseded is not None:
+        # Only now: the copy it replaced is on disk until the replacement is.
+        shutil.rmtree(superseded, ignore_errors=True)
 
 
 def _cache_key(
@@ -1308,9 +1543,12 @@ def ingest_bundle(
         if resolution.get("skipped") and source_id not in skipped_source_ids:
             findings.append({"id": _finding_id("source-skip", {"source_id": source_id, "reason": resolution.get("reason")}), "kind": "source-skip", "blocking": True, "source_id": source_id, "reason": resolution.get("reason")})
 
-    bundle_destination, staged_bundle, staged_bundle_root = _stage_bundle_cas(
-        bundle, imports_root
-    )
+    (
+        bundle_destination,
+        staged_bundle,
+        staged_bundle_root,
+        replacing_bundle,
+    ) = _stage_bundle_cas(bundle, imports_root)
     effective_skipped_source_ids = sorted(
         set(skipped_source_ids)
         | {
@@ -1349,7 +1587,9 @@ def ingest_bundle(
     )
 
     def publish(ingest_id: str, created_at: str) -> str:
-        _publish_staged_bundle(bundle_destination, staged_bundle)
+        _publish_staged_bundle(
+            bundle_destination, staged_bundle, replace_existing=replacing_bundle
+        )
         anchor_instance_id = built["normalisation"].get("anchor_instance_id")
         anchor_instance = next(
             (

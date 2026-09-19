@@ -277,3 +277,33 @@ def test_a_cad_authored_return_is_ingested_as_before_with_no_design_named(
     assert (summary["state"], summary["jobId"]) == ("accepted", "job-1"), summary
     assert named == [{}]
     assert _freshness(_record(harness, summary)) == [("unlinked", False)]
+
+
+def test_a_damaged_retained_copy_is_replaced_before_the_real_ingest_reads_it(real) -> None:
+    """A copy that no longer is its digest is replaced, not meshed and not refused.
+
+    Through the production ``ingest_bundle``, because this is exactly the shape
+    a stand-in hides: the retained copy is what the ingest reads, and a bundle
+    reader given damaged bytes refuses the solve for good. Sending the same
+    model again could not help -- content-addressed staging skipped the copy.
+    """
+
+    harness, _mesher = real
+    design_id, _lineage_id = _project(harness, 45.0)
+    step = b"STEP exported from WG"
+    manifest = _manifest(step)
+    manifest["instances"][0]["design_id"] = design_id
+    bundle_path, digest = _write(harness, "exported", _current(harness, manifest, design_id), step)
+    _accept(harness.store, "cmd-1", bundle_path, digest)
+    revision = _revision(harness.store, _setup())
+    assert _prepare(harness, setup_revision_id=revision)["state"] == "accepted"
+
+    copies = sorted((harness.data_dir / "imports" / "bundles").glob("*.wgreturn"))
+    assert len(copies) == 1
+    (copies[0] / "assembly.step").write_bytes(b"")  # a torn write, or an edit
+
+    _accept(harness.store, "cmd-2", bundle_path, digest)  # the user sends it again
+    summary = _prepare(harness, "cmd-2", setup_revision_id=revision)
+
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-2"), summary
+    assert (copies[0] / "assembly.step").read_bytes() == step

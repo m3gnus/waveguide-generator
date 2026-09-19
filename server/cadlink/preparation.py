@@ -35,6 +35,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -219,8 +220,8 @@ def exchange_bundle_path(workspace_root: Path | None, bundle_path: str) -> Path:
         # The folder was switched, a drive is not mounted, or the return was
         # removed before WG kept a copy: cannot proceed now, not never.
         raise SnapshotUnavailable(
-            "The return Fusion sent is not in the WGLink folder, and WG has no copy of it. "
-            "Check the WGLink folder in Settings → CAD Link, or send it again from Fusion."
+            "The return Fusion sent is not in the WGLink folder, and WG has no copy it can "
+            "use. Check the WGLink folder in Settings → CAD Link, or send it again from Fusion."
         )
     return path
 
@@ -244,7 +245,15 @@ def _snapshot_record(store: CadLinkStore, retained: Mapping[str, Any]) -> dict[s
 
 
 def _retained(data_dir: Path, row: Mapping[str, Any]) -> dict[str, Any] | None:
-    """The operation's retained snapshot, when WG still holds the copy."""
+    """The operation's retained snapshot, when WG still holds the copy.
+
+    A copy WG cannot read is not one it holds, and saying otherwise was a dead
+    end: the caller would not retain again, and content-addressed staging skips
+    an existing copy of an unchanged model, so neither pressing Solve now nor
+    sending the same model again from Fusion could ever get past it. Reported
+    absent, the return is taken again from the WGLink folder and the damaged
+    copy is replaced (``ingest._stage_bundle_cas``).
+    """
 
     snapshot = json.loads(row["snapshot_json"]) if row.get("snapshot_json") else None
     if not isinstance(snapshot, Mapping):
@@ -253,7 +262,10 @@ def _retained(data_dir: Path, row: Mapping[str, Any]) -> dict[str, Any] | None:
         path = retained_snapshot_path(data_dir, str(snapshot.get("manifest_sha256") or ""))
     except ValueError:
         return None
-    return {**snapshot, "retained_path": str(path)} if path.is_dir() else None
+    if not path.is_dir():
+        return None
+    retained = {**snapshot, "retained_path": str(path)}
+    return retained if _retained_manifest(retained) is not None else None
 
 
 def retain_operation_snapshot(
@@ -330,6 +342,12 @@ SNAPSHOT_UNAVAILABLE_MESSAGE = (
     "WG could not read this snapshot in the WGLink folder for 24 hours. Send it again from "
     "Fusion."
 )
+#: WG's own copy is damaged and could not be replaced. Never terminal, and
+#: never worded as the user's return being at fault: it is not.
+DAMAGED_COPY_MESSAGE = (
+    "WG's copy of this model is damaged, and it could not take a fresh one from the WGLink "
+    "folder. Send the model again from Fusion."
+)
 _SNAPSHOT_PAGE = 100
 
 
@@ -386,7 +404,11 @@ def settle_snapshot_operation(
     if row["state"] not in SETTLEABLE_SNAPSHOT_STATES:
         return RETAINED if row["state"] == ACCEPTED else RETAIN_INVALID
     if retention == RETAINED and _retained(data_dir, row) is None:
-        # Nothing is accepted before WG holds its bytes.
+        # Nothing is accepted before WG holds a copy that is the return it
+        # names: what is established here is the copy's *identity*, which is
+        # all this path needs, because nothing here ingests, meshes or solves.
+        # A member damaged inside an otherwise intact copy is caught by
+        # ``_copy_is_whole`` before preparation meshes from it.
         retention = RETAIN_TRANSIENT
     if retention == RETAINED:
         state, reason, message = ACCEPTED, None, SNAPSHOT_ACCEPTED_MESSAGE
@@ -595,15 +617,67 @@ def _load_setup(
 
 
 def _retained_manifest(retained: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    """A retained snapshot's manifest, already verified when it was retained."""
+    """A retained snapshot's manifest, when the copy still is the bundle it is named for.
+
+    The directory's name *is* the manifest's sha256 (``retained_snapshot_path``),
+    so hashing the bytes read back and comparing them to it is what makes the
+    path a claim about the content rather than an assumption about it. Without
+    it, a different but internally valid bundle left at this path is read as
+    this one: every check inside the bundle passes, and B's geometry is meshed
+    and solved under A's recorded identity. Reading the manifest without that
+    comparison is exactly the digest/path mismatch this storage exists to
+    reject.
+    """
 
     try:
-        manifest = json.loads(
-            (Path(str(retained["retained_path"])) / "wgreturn.json").read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError, KeyError, TypeError):
+        path = Path(str(retained["retained_path"]))
+        raw = (path / "wgreturn.json").read_bytes()
+    except (OSError, KeyError, TypeError):
+        return None
+    if hashlib.sha256(raw).hexdigest() != path.name.removesuffix(".wgreturn"):
+        logger.warning("The retained copy %s does not hash to its own name.", path.name)
+        return None
+    try:
+        manifest = json.loads(raw)
+    except ValueError:
         return None
     return manifest if isinstance(manifest, Mapping) else None
+
+
+def _retain_from_return(ctx: PreparationContext, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the return this operation names, from the WGLink folder."""
+
+    inputs = _inputs(row)
+    return retain_snapshot(
+        exchange_bundle_path(ctx.workspace_root, str(inputs.get("bundle_path") or "")),
+        ctx.data_dir,
+        expected_manifest_sha256=str(inputs.get("manifest_sha256") or "") or None,
+    )
+
+
+def _copy_is_whole(retained: Mapping[str, Any]) -> bool:
+    """Whether every member of the retained copy is still what the manifest declares.
+
+    ``_retained_manifest`` settles the copy's *identity* for the price of one
+    small hash, which is what every caller needs. This is the rest of the
+    claim, and only preparation needs it, because preparation is what is about
+    to mesh from those bytes: a torn write lands on the big STEP far more often
+    than on the tiny manifest, and the manifest alone cannot see that. Left to
+    the ingest, the same damage surfaced as a terminal ``snapshot_invalid``
+    that blamed the user's return while the good one sat in the WGLink folder.
+    """
+
+    path = Path(str(retained["retained_path"]))
+    try:
+        found = read_snapshot(path, retained=True)
+    except (WgReturnError, OSError, ValueError):
+        return False
+    # Defence in depth, and no more than that: every caller reaches this only
+    # through ``_retained``, which has already compared the manifest's hash to
+    # this same name. ``_retained``'s gate is the one holding the identity
+    # requirement up -- a later simplification of it would take the real check
+    # away, and this line would not notice.
+    return found.manifest_sha256 == "sha256:" + path.name.removesuffix(".wgreturn")
 
 
 def _document_name(manifest: Mapping[str, Any] | None) -> str | None:
@@ -698,14 +772,37 @@ def _prepare_sync(
     # validating: the retained copy, made now if the operation predates it.
     _advance(ctx, operation_id, generation, stage=STAGE_VALIDATING)
     retained = _retained(ctx.data_dir, row)
-    if retained is None:
-        inputs = _inputs(row)
+    if retained is not None and not _copy_is_whole(retained):
+        # WG's own copy is no longer the bundle its digest names. It is
+        # replaced from the return, never meshed from and never reported as
+        # the user's return being invalid -- which is where this used to land,
+        # terminally, from inside the ingest.
+        logger.warning(
+            "CAD operation %s: the retained copy is damaged; taking it again.", operation_id
+        )
         try:
-            retained = retain_snapshot(
-                exchange_bundle_path(ctx.workspace_root, str(inputs.get("bundle_path") or "")),
-                ctx.data_dir,
-                expected_manifest_sha256=str(inputs.get("manifest_sha256") or "") or None,
+            retained = _retain_from_return(ctx, row)
+        except (OSError, ValueError) as exc:
+            # Whatever went wrong replacing it, the fault named here is WG's
+            # copy, not the user's return: the return has left the WGLink
+            # folder, or this solve never named one in it -- a manual solve
+            # names ``ingest/<id>``, which `exchange_bundle_path` refuses as a
+            # path shape. Falling through to the block below would answer that
+            # with a terminal ``snapshot_invalid`` carrying an internal
+            # path-validation string. (`SnapshotUnavailable` is an `OSError`
+            # and `WgReturnError` a `ValueError`, so this covers all of them.)
+            logger.info(
+                "CAD operation %s: the damaged copy could not be replaced: %s",
+                operation_id, exc,
             )
+            return "done", _finish(
+                ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
+                message=DAMAGED_COPY_MESSAGE,
+            )
+        _advance(ctx, operation_id, generation, snapshot=_snapshot_record(store, retained))
+    if retained is None:
+        try:
+            retained = _retain_from_return(ctx, row)
         except SnapshotUnavailable as exc:
             return "done", _finish(
                 ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
@@ -761,11 +858,14 @@ def _prepare_sync(
     retained_manifest = _retained_manifest(retained)
     if retained_manifest is None:
         # Never guessed: a manifest read as linked would skip the frame the
-        # snapshot may need. Another attempt can overcome an unreadable copy.
+        # snapshot may need. The copy was readable when `_retained` reported it
+        # a moment ago, so something damaged it in between; another attempt
+        # replaces it from the WGLink folder, which is what the message says.
         return "done", _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
-            message="WG could not read the retained copy of this return. Send it again "
-            "from Fusion, or press Solve now to try again.",
+            message="WG could not read its retained copy of this return. Press Solve now: "
+            "WG takes a fresh copy from the WGLink folder. If the return has left that "
+            "folder, send the model again from Fusion.",
         )
     solver_frame = resolve_solver_frame(store, retained_manifest, manifest_sha256)
     frame_axis = solver_frame.axis if solver_frame is not None else None

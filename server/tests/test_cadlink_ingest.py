@@ -224,7 +224,7 @@ def test_ingest_refuses_repeated_design_without_exact_anchor_instance(
     }
     monkeypatch.setattr(
         "server.cadlink.ingest.read_wgreturn",
-        lambda _path: SimpleNamespace(manifest=manifest),
+        lambda _path, **_kwargs: SimpleNamespace(manifest=manifest),
     )
     store = CadLinkStore(tmp_path / "cadlink.db")
 
@@ -734,7 +734,7 @@ def test_ingest_refuses_a_return_from_another_active_project(
 ) -> None:
     monkeypatch.setattr(
         "server.cadlink.ingest.read_wgreturn",
-        lambda _path: SimpleNamespace(
+        lambda _path, **_kwargs: SimpleNamespace(
             manifest={"instances": [{"design_id": "wgd_other"}]},
         ),
     )
@@ -764,7 +764,7 @@ def test_ingest_refuses_a_design_owned_return_when_no_design_is_named(
 
     monkeypatch.setattr(
         "server.cadlink.ingest.read_wgreturn",
-        lambda _path: SimpleNamespace(
+        lambda _path, **_kwargs: SimpleNamespace(
             manifest={"instances": [{"design_id": "wgd_tritonia"}]},
         ),
     )
@@ -802,7 +802,7 @@ def test_ingest_refusal_names_a_known_target_design_by_its_registry_filename(
     design_id = saved["identity"].design_id
     monkeypatch.setattr(
         "server.cadlink.ingest.read_wgreturn",
-        lambda _path: SimpleNamespace(
+        lambda _path, **_kwargs: SimpleNamespace(
             manifest={"instances": [{"design_id": design_id}]},
         ),
     )
@@ -838,7 +838,7 @@ def test_ingest_still_accepts_a_cad_authored_return_that_names_no_design(
 
     monkeypatch.setattr(
         "server.cadlink.ingest.read_wgreturn",
-        lambda _path: SimpleNamespace(
+        lambda _path, **_kwargs: SimpleNamespace(
             manifest={
                 "instances": [{"instance_id": "anchor", "design_id": None}],
                 "coordinate_system": {"solver_anchor_instance_id": "anchor"},
@@ -1351,7 +1351,7 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         "metadata": {"numpy_array": np.array([1, 2])},
         "integrity": {"valid": np.bool_(True)},
     }
-    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path: bundle)
+    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path, **_kwargs: bundle)
     isolated_integrity: dict[str, object] = {}
 
     def build_isolated(*_args, **kwargs):
@@ -1508,7 +1508,7 @@ def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(
         "integrity": {"valid": True},
         "viewport_mesh": {"available": False, "reason": "visual tessellation failed"},
     }
-    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path: bundle)
+    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path, **_kwargs: bundle)
     monkeypatch.setattr(
         "server.cadlink.ingest.build_imported_mesh_isolated", lambda *_args, **_kwargs: built
     )
@@ -2029,7 +2029,7 @@ def test_an_isolated_mesh_refusal_publishes_nothing_and_poisons_no_cache(
             "stopped with its descendants",
         )
 
-    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path: bundle)
+    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path, **_kwargs: bundle)
     monkeypatch.setattr("server.cadlink.ingest.build_imported_mesh_isolated", refuse)
 
     store = CadLinkStore(tmp_path / "cadlink.db")

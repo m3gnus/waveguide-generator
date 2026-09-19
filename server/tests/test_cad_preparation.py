@@ -14,15 +14,20 @@ from contextlib import closing
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
+import time
 from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
 
 from server.cadlink import ingest as ingest_module
+from server.cadlink import preparation as preparation_module
+from server.cadlink.ingest import read_snapshot, retain_snapshot
 from server.cadlink.isolation import ChildRefusal
 from server.cadlink.operations import (
     PREPARE_AND_SOLVE,
@@ -913,6 +918,533 @@ def test_cleanup_keeps_what_a_pending_operation_still_references(
     assert pending_operation_return_states(harness.store) == []
     # The retained snapshot itself is never pruned.
     assert list((harness.data_dir / "imports" / "bundles").iterdir())
+
+
+# -- retained copies: content-addressed staging --------------------------------------
+#
+# The copy under <data>/imports/bundles is addressed by the manifest hash, so its
+# path is the only claim anything downstream has about its content. These tests
+# drive real bundle directories through the real staging path -- no stand-in for
+# the copy, the verification or the publication.
+
+
+def _bundles(harness: Harness) -> Path:
+    return harness.data_dir / "imports" / "bundles"
+
+
+def _staging_roots(harness: Harness) -> list[Path]:
+    root = _bundles(harness)
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.iterdir() if p.name.startswith(".wg2-import-bundle-"))
+
+
+def _write_and_retain(harness: Harness, name: str = "speaker.wgreturn") -> tuple[Path, dict[str, str]]:
+    relative, _manifest = _write_return(harness.workspace, name)
+    source = harness.workspace / relative
+    return source, retain_snapshot(source, harness.data_dir)
+
+
+def _retained_copy(harness: Harness) -> Path:
+    copies = sorted(_bundles(harness).glob("*.wgreturn"))
+    assert len(copies) == 1
+    return copies[0]
+
+
+def test_a_retained_copy_whose_bytes_were_damaged_is_replaced_not_handed_out(
+    harness: Harness,
+) -> None:
+    """The path asserts a digest, so a copy that no longer matches it is not a copy."""
+
+    source, retained = _write_and_retain(harness)
+    copy = Path(retained["retained_path"])
+    (copy / "assembly.step").write_bytes(b"")  # a torn write, or an edit
+
+    again = retain_snapshot(source, harness.data_dir)
+
+    assert again == retained
+    assert read_snapshot(copy, retained=True).manifest_sha256 == retained["manifest_sha256"]
+    assert _staging_roots(harness) == []
+
+
+def test_a_retained_copy_whose_manifest_is_unreadable_is_replaced(harness: Harness) -> None:
+    source, retained = _write_and_retain(harness)
+    copy = Path(retained["retained_path"])
+    (copy / "wgreturn.json").write_bytes(b"{ not json")
+
+    again = retain_snapshot(source, harness.data_dir)
+
+    assert read_snapshot(again["retained_path"], retained=True).manifest_sha256 == (
+        retained["manifest_sha256"]
+    )
+    assert _staging_roots(harness) == []
+    # The copy it replaced goes as soon as the replacement is on disk, not in
+    # a day's time when the sweep would have got to it.
+    assert [p.name for p in _bundles(harness).iterdir()] == [copy.name]
+
+
+def test_an_unchanged_return_is_copied_once(harness: Harness, monkeypatch) -> None:
+    """Content addressing still means one copy: an intact one is kept, not remade."""
+
+    source, retained = _write_and_retain(harness)
+    made: list[Path] = []
+    real_staging = ingest_module.publish_staging_directory
+
+    def counted(parent, prefix):
+        directory = real_staging(parent, prefix)
+        made.append(directory)
+        return directory
+
+    monkeypatch.setattr(ingest_module, "publish_staging_directory", counted)
+
+    assert retain_snapshot(source, harness.data_dir) == retained
+    assert made == []
+
+
+def test_a_copy_another_attempt_published_first_is_the_one_that_stands(
+    harness: Harness, monkeypatch
+) -> None:
+    """Two attempts, one digest: the loser publishes nothing and refuses nothing.
+
+    The rival arrives in the window between the check and the rename, which is
+    the only window left once staging verifies what is already there.
+    """
+
+    relative, _manifest = _write_return(harness.workspace)
+    source = harness.workspace / relative
+    real_copytree = ingest_module.shutil.copytree
+    real_replace = ingest_module.os.replace
+    rival = ingest_module.retained_snapshot_path(
+        harness.data_dir, read_wgreturn(source).manifest_sha256
+    )
+
+    def publish_a_rival_first(staged, destination, **kwargs):
+        if Path(destination) == rival and not rival.exists():
+            real_copytree(source, rival)
+        return real_replace(staged, destination, **kwargs)
+
+    monkeypatch.setattr(ingest_module.os, "replace", publish_a_rival_first)
+
+    retained = retain_snapshot(source, harness.data_dir)
+
+    assert read_snapshot(retained["retained_path"], retained=True).manifest_sha256 == (
+        retained["manifest_sha256"]
+    )
+    assert _staging_roots(harness) == []
+
+
+def test_staging_that_fails_before_publication_leaves_nothing_and_retries(
+    harness: Harness, monkeypatch
+) -> None:
+    relative, _manifest = _write_return(harness.workspace)
+    source = harness.workspace / relative
+    real_replace = ingest_module.os.replace
+    attempts: list[int] = []
+
+    def refuse_once(*args, **kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise OSError("the machine stopped")
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(ingest_module.os, "replace", refuse_once)
+
+    with pytest.raises(OSError):
+        retain_snapshot(source, harness.data_dir)
+
+    assert list(_bundles(harness).glob("*.wgreturn")) == []
+    assert _staging_roots(harness) == []
+
+    retained = retain_snapshot(source, harness.data_dir)
+
+    assert read_snapshot(retained["retained_path"], retained=True).manifest_sha256 == (
+        retained["manifest_sha256"]
+    )
+
+
+def test_a_staging_directory_a_kill_left_behind_is_never_adopted(harness: Harness) -> None:
+    """A restart copies again; the half-written tree a kill left is not a copy."""
+
+    relative, _manifest = _write_return(harness.workspace)
+    source = harness.workspace / relative
+    digest = read_wgreturn(source).manifest_sha256.removeprefix("sha256:")
+    abandoned = _bundles(harness) / ".wg2-import-bundle-000000000000" / f"{digest}.wgreturn"
+    abandoned.mkdir(parents=True)
+    (abandoned / "assembly.step").write_bytes(b"ST")  # a copy that never finished
+
+    retained = retain_snapshot(source, harness.data_dir)
+
+    assert retained["manifest_sha256"] == "sha256:" + digest
+    assert read_snapshot(retained["retained_path"], retained=True).manifest_sha256 == (
+        "sha256:" + digest
+    )
+    assert (abandoned / "assembly.step").read_bytes() == b"ST"  # still only staging
+
+
+def test_cleanup_removes_only_staging_directories_nothing_can_still_be_using(
+    harness: Harness,
+) -> None:
+    bundles = _bundles(harness)
+    bundles.mkdir(parents=True)
+    aged = bundles / ".wg2-import-bundle-aaaaaaaaaaaa"
+    fresh = bundles / ".wg2-import-bundle-bbbbbbbbbbbb"
+    aged_superseded = bundles / ("d" * 64 + ".wgreturn.superseded-aaaaaaaaaaaa")
+    fresh_superseded = bundles / ("e" * 64 + ".wgreturn.superseded-bbbbbbbbbbbb")
+    retained_copy = bundles / ("c" * 64 + ".wgreturn")
+    for directory in (aged, fresh, aged_superseded, fresh_superseded, retained_copy):
+        directory.mkdir()
+    long_ago = time.time() - 72 * 3600
+    for directory in (aged, aged_superseded, retained_copy):
+        os.utime(directory, (long_ago, long_ago))
+
+    _write_and_retain(harness)
+
+    assert not aged.exists()  # nothing has been writing there for days
+    assert not aged_superseded.exists()  # the replacement it waited for landed long ago
+    assert fresh.is_dir()  # another attempt may be filling it right now
+    assert fresh_superseded.is_dir()  # another attempt may be replacing it right now
+    assert retained_copy.is_dir()  # a retained copy is never staging rubbish
+
+
+def test_staged_bytes_reach_the_disk_before_the_copy_is_published(
+    harness: Harness, monkeypatch
+) -> None:
+    """`os.replace` orders readers, not writes: a crash must not publish holes."""
+
+    relative, _manifest = _write_return(harness.workspace)
+    source = harness.workspace / relative
+    events: list[tuple[str, int]] = []
+    real_fsync, real_replace = ingest_module.os.fsync, ingest_module.os.replace
+
+    def record_fsync(fd):
+        try:
+            events.append(("fsync", os.fstat(fd).st_ino))
+        except OSError:  # pragma: no cover - a descriptor fstat refuses
+            pass
+        return real_fsync(fd)
+
+    def record_replace(*args, **kwargs):
+        events.append(("replace", 0))
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(ingest_module.os, "fsync", record_fsync)
+    monkeypatch.setattr(ingest_module.os, "replace", record_replace)
+
+    retained = retain_snapshot(source, harness.data_dir)
+
+    published = {
+        member.stat().st_ino
+        for member in Path(retained["retained_path"]).rglob("*")
+        if member.is_file()
+    }
+    assert published
+    first_publication = next(
+        index for index, (kind, _) in enumerate(events) if kind == "replace"
+    )
+    flushed = {inode for kind, inode in events[:first_publication] if kind == "fsync"}
+    assert published <= flushed
+
+
+def test_a_retained_copy_wg_cannot_read_is_taken_again_from_the_wglink_folder(
+    harness: Harness,
+) -> None:
+    """Sending again, or pressing Solve now, has to be able to get past a bad copy."""
+
+    _received(harness)
+    assert harness.prepare()["reason"] == "setup_required"  # retained, then waits
+    copy = _retained_copy(harness)
+    (copy / "wgreturn.json").write_bytes(b"{ not json")
+
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
+    assert read_snapshot(copy, retained=True).manifest_sha256 == (
+        "sha256:" + copy.name.removesuffix(".wgreturn")
+    )
+
+
+def test_an_unreadable_copy_with_the_return_gone_says_what_the_user_can_do(
+    harness: Harness,
+) -> None:
+    bundle_path, _manifest = _received(harness)
+    assert harness.prepare()["reason"] == "setup_required"
+    (_retained_copy(harness) / "wgreturn.json").write_bytes(b"{ not json")
+    (harness.workspace / bundle_path).rename(harness.workspace / "elsewhere")
+
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+    assert "no copy it can use" in summary["message"]
+    assert "send it again from Fusion" in summary["message"]
+
+
+def test_a_copy_damaged_after_it_was_taken_asks_for_another_attempt(
+    harness: Harness, monkeypatch
+) -> None:
+    """The residual race the guard exists for: damaged between retaining and reading."""
+
+    _received(harness)
+    real_retain = preparation_module.retain_snapshot
+
+    def damage_after_retaining(*args, **kwargs):
+        retained = real_retain(*args, **kwargs)
+        (Path(retained["retained_path"]) / "wgreturn.json").write_bytes(b"{ not json")
+        return retained
+
+    monkeypatch.setattr(preparation_module, "retain_snapshot", damage_after_retaining)
+
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+    assert "takes a fresh copy from the WGLink folder" in summary["message"]
+
+
+def _plant(harness: Harness, copy: Path, name: str = "b.wgreturn", step: bytes = b"ANOTHER STEP") -> str:
+    """Put a different, internally valid bundle where another digest's copy belongs."""
+
+    other = harness.workspace / "other"
+    relative, digest = _write_return(other, name, step=step)
+    assert digest.removeprefix("sha256:") != copy.name.removesuffix(".wgreturn")
+    shutil.rmtree(copy)
+    shutil.copytree(other / relative, copy)
+    return digest
+
+
+def test_a_different_valid_bundle_under_another_digest_is_never_solved(
+    harness: Harness,
+) -> None:
+    """A7's hard requirement, at the entry point the preparation path uses.
+
+    B is internally valid, so every check inside it passes; what it is not is
+    the bundle whose digest names the directory it was found in. With the
+    return itself gone there is nothing to replace it with, and WG must refuse
+    rather than mesh B's geometry under A's recorded identity.
+    """
+
+    bundle_path, manifest_a = _received(harness)
+    assert harness.prepare()["reason"] == "setup_required"
+    copy = _retained_copy(harness)
+    _plant(harness, copy)
+    (harness.workspace / bundle_path).rename(harness.workspace / "elsewhere")
+
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+
+    assert summary["state"] != "accepted", summary
+    assert harness.ingest.calls == [] and harness.submitted == []
+    assert json.loads(harness.row()["snapshot_json"])["manifest_sha256"] == manifest_a
+
+
+def test_a_different_valid_bundle_under_another_digest_is_replaced_by_the_right_one(
+    harness: Harness,
+) -> None:
+    """And with the return still in the WGLink folder, A is put back and solved."""
+
+    _received(harness)
+    assert harness.prepare()["reason"] == "setup_required"
+    copy = _retained_copy(harness)
+    _plant(harness, copy)
+
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1"), summary
+    assert read_snapshot(copy, retained=True).manifest_sha256 == (
+        "sha256:" + copy.name.removesuffix(".wgreturn")
+    )
+    assert (copy / "assembly.step").read_bytes() == b"STEP"  # A's geometry, not B's
+
+
+def test_retaining_again_does_not_accept_a_copy_that_is_not_the_return_it_names(
+    harness: Harness,
+) -> None:
+    """The receive path has its own gate: nothing there ever reaches the ingest.
+
+    ``retain_operation_snapshot`` and ``settle_snapshot_operation`` decide
+    whether WG holds a snapshot without meshing anything, so the identity
+    check in ``_retained_manifest`` is the only thing standing between them and
+    a different bundle left at this digest's path.
+    """
+
+    from server.cadlink.solve_command import RETAINED
+
+    _bundle_path, manifest = _received(harness)
+    workspace = harness.workspace.resolve()
+    assert retain_operation_snapshot(harness.store, harness.data_dir, workspace, "cmd-1") == (
+        RETAINED
+    )
+    copy = _retained_copy(harness)
+    _plant(harness, copy)
+
+    again = retain_operation_snapshot(harness.store, harness.data_dir, workspace, "cmd-1")
+
+    assert again == RETAINED
+    assert read_snapshot(copy, retained=True).manifest_sha256 == manifest
+    assert (copy / "assembly.step").read_bytes() == b"STEP"  # A's, not B's
+
+
+def test_a_member_damaged_retained_copy_is_replaced_when_solve_now_is_pressed(
+    harness: Harness,
+) -> None:
+    """A torn write lands on the big STEP far more often than on the tiny manifest.
+
+    The manifest-damage case recovered already; this one used to reach
+    ``rejected``/``snapshot_invalid`` from inside the ingest -- terminal, and
+    blaming the user's return while the good one sat in the WGLink folder.
+    """
+
+    _received(harness)
+    assert harness.prepare()["reason"] == "setup_required"
+    copy = _retained_copy(harness)
+    (copy / "assembly.step").write_bytes(b"")
+
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1"), summary
+    assert (copy / "assembly.step").read_bytes() == b"STEP"
+
+
+def test_a_damaged_copy_that_cannot_be_replaced_waits_rather_than_rejects(
+    harness: Harness,
+) -> None:
+    """WG's copy is the broken one, so the user's return is not what is refused.
+
+    The operation stays retryable and the message says what is actually wrong;
+    what it must never carry is the internal path-validation string
+    ``exchange_bundle_path`` raises, on a terminal state.
+    """
+
+    bundle_path, _manifest = _received(harness)
+    assert harness.prepare()["reason"] == "setup_required"
+    (_retained_copy(harness) / "assembly.step").write_bytes(b"")
+    (harness.workspace / bundle_path).rename(harness.workspace / "elsewhere")
+
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+    # By text, not by comparing the constant to itself: what is pinned here is
+    # that the message names WG's copy as the fault, not the user's return.
+    assert "WG's copy of this model is damaged" in summary["message"]
+    assert "bundlePath" not in summary["message"]
+    assert harness.ingest.calls == [] and harness.submitted == []
+
+
+def test_a_read_only_member_is_flushed_like_any_other(
+    harness: Harness, monkeypatch
+) -> None:
+    """`copy2` carries the source's mode over, and a read-only file cannot be opened to flush."""
+
+    relative, _manifest = _write_return(harness.workspace)
+    source = harness.workspace / relative
+    (source / "assembly.step").chmod(0o444)
+    flushed: list[int] = []
+    real_fsync = ingest_module.os.fsync
+
+    def record_fsync(descriptor):
+        flushed.append(os.fstat(descriptor).st_ino)
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(ingest_module.os, "fsync", record_fsync)
+
+    retained = retain_snapshot(source, harness.data_dir)
+
+    member = Path(retained["retained_path"]) / "assembly.step"
+    assert member.stat().st_ino in flushed
+    assert stat.S_IMODE(member.stat().st_mode) == 0o444  # and it keeps the mode it came with
+
+
+def test_every_directory_of_the_staged_tree_is_flushed_before_publication(
+    harness: Harness, monkeypatch
+) -> None:
+    """`$.files` member names may carry path segments; those directories count too."""
+
+    step = b"STEP"
+    manifest = _manifest(step)
+    manifest["assembly"]["file"] = "geometry/assembly.step"
+    manifest["files"] = {"geometry/assembly.step": manifest["files"]["assembly.step"]}
+    bundle = harness.workspace / "wgreturn" / "nested.wgreturn"
+    (bundle / "geometry").mkdir(parents=True)
+    (bundle / "geometry" / "assembly.step").write_bytes(step)
+    (bundle / "wgreturn.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    flushed: list[int] = []
+    published_at: list[int] = []
+    real_fsync, real_replace = ingest_module.os.fsync, ingest_module.os.replace
+
+    def record_fsync(descriptor):
+        flushed.append(os.fstat(descriptor).st_ino)
+        return real_fsync(descriptor)
+
+    def record_replace(*args, **kwargs):
+        published_at.append(len(flushed))
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(ingest_module.os, "fsync", record_fsync)
+    monkeypatch.setattr(ingest_module.os, "replace", record_replace)
+
+    retained = retain_snapshot(bundle, harness.data_dir)
+
+    copy = Path(retained["retained_path"])
+    before = set(flushed[: published_at[0]])
+    assert (copy / "geometry").stat().st_ino in before
+    assert (copy / "geometry" / "assembly.step").stat().st_ino in before
+    # And the directory the copy is published into, after the rename it holds.
+    assert copy.parent.stat().st_ino in set(flushed[published_at[0]:])
+
+
+def test_a_flush_the_filesystem_refuses_does_not_break_retaining(
+    harness: Harness, monkeypatch
+) -> None:
+    """Durability is hardening; refusing to keep the return at all is not.
+
+    A filesystem that refuses `fsync` costs the copy its crash-durability, and
+    a torn copy is caught and replaced when it is read (`_is_the_bundle`,
+    `_retained_manifest`). Failing retention instead would take CAD Link down.
+    """
+
+    def refuse(_descriptor):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(ingest_module.os, "fsync", refuse)
+    relative, _manifest_sha = _write_return(harness.workspace)
+
+    retained = retain_snapshot(harness.workspace / relative, harness.data_dir)
+
+    assert read_snapshot(retained["retained_path"], retained=True).manifest_sha256 == (
+        retained["manifest_sha256"]
+    )
+
+
+def test_the_copy_a_failed_replacement_moved_aside_is_not_destroyed_with_the_staging(
+    harness: Harness, monkeypatch
+) -> None:
+    """Cleanup must not take recoverable data: the staging root is not its home."""
+
+    source, retained = _write_and_retain(harness)
+    copy = Path(retained["retained_path"])
+    (copy / "wgreturn.json").write_bytes(b"{ not json")  # so the copy is replaced
+    kept = (copy / "assembly.step").read_bytes()
+    long_ago = time.time() - 72 * 3600
+    os.utime(copy, (long_ago, long_ago))  # WG has held this copy for days
+    real_replace = ingest_module.os.replace
+    renames: list[int] = []
+
+    def refuse_the_publication(*args, **kwargs):
+        renames.append(1)
+        if len(renames) == 2:  # the move aside went through; the publication does not
+            raise OSError("the volume went away")
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(ingest_module.os, "replace", refuse_the_publication)
+
+    with pytest.raises(OSError):
+        retain_snapshot(source, harness.data_dir)
+
+    superseded = [p for p in _bundles(harness).iterdir() if ".superseded-" in p.name]
+    assert len(superseded) == 1, sorted(p.name for p in _bundles(harness).iterdir())
+    assert (superseded[0] / "assembly.step").read_bytes() == kept
+    assert _staging_roots(harness) == []
+    # A rename does not move the mtime on, so the age the retained copy had is
+    # exactly what would offer this one to the next sweep.
+    _write_and_retain(harness, "other.wgreturn")  # any retention sweeps
+    assert (superseded[0] / "assembly.step").read_bytes() == kept
 
 
 # -- faults --------------------------------------------------------------------------

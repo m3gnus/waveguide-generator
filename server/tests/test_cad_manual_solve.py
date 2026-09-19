@@ -11,8 +11,11 @@ from types import SimpleNamespace
 import pytest
 
 from server.cadlink import api
+from server.cadlink import ingest as ingest_module
+from server.cadlink import preparation as preparation_module
 from server.cadlink.ingest import retain_snapshot
 from server.cadlink.operations import PREPARE_AND_SOLVE
+from server.cadlink.wgreturn import WgReturnIntegrityError
 
 from test_cad_preparation import Harness, _revision, _setup, _write_return
 
@@ -66,6 +69,37 @@ def _create(harness: Harness, ingest_id: str, operation_id: str = "manual-1"):
             _request(harness),
         )
     )
+
+
+def test_retaining_refuses_a_bundle_swapped_after_initial_verification(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    relative, original_manifest = _write_return(
+        harness.workspace, "speaker.wgreturn", step=b"ORIGINAL"
+    )
+    replacement_root = harness.workspace / "replacement"
+    replacement_relative, _replacement_manifest = _write_return(
+        replacement_root, "speaker.wgreturn", step=b"REPLACEMENT"
+    )
+    source = harness.workspace / relative
+    replacement = replacement_root / replacement_relative
+    real_copytree = ingest_module.shutil.copytree
+
+    def swap_then_copy(source_path, destination, **kwargs):
+        shutil.copy2(replacement / "wgreturn.json", source / "wgreturn.json")
+        shutil.copy2(replacement / "assembly.step", source / "assembly.step")
+        return real_copytree(source_path, destination, **kwargs)
+
+    monkeypatch.setattr(ingest_module.shutil, "copytree", swap_then_copy)
+
+    with pytest.raises(WgReturnIntegrityError, match="changed while WG was retaining it"):
+        retain_snapshot(source, harness.data_dir)
+
+    retained = harness.data_dir / "imports" / "bundles" / (
+        original_manifest.removeprefix("sha256:") + ".wgreturn"
+    )
+    assert not retained.exists()
+    assert list(retained.parent.iterdir()) == []
 
 
 def test_a_manual_solve_prepares_from_the_retained_copy_with_the_folder_gone(
@@ -183,3 +217,33 @@ def test_an_exact_replay_recovers_while_an_update_restart_is_pending(harness: Ha
     )
 
     assert replayed == created
+
+
+def test_a_manual_solve_whose_only_copy_is_damaged_waits_rather_than_rejects(
+    harness: Harness,
+) -> None:
+    """A manual solve names `ingest/<id>`, which is not a return in the folder.
+
+    `recover_manual_solve` always writes that bundle path, so there is no such
+    thing as a manual solve without one -- and `exchange_bundle_path` refuses
+    its shape. Reached from the damaged-copy path, that refusal used to land on
+    a terminal `rejected`/`snapshot_invalid` carrying the internal string
+    "bundlePath must name a .wgreturn bundle under the workspace's wgreturn/".
+    """
+
+    ingest_id, retained = _ingest(harness)
+    _create(harness, ingest_id)
+    assert json.loads(harness.row("manual-1")["inputs_json"])["bundle_path"] == (
+        f"ingest/{ingest_id}"
+    )
+    (retained / "assembly.step").write_bytes(b"")  # a torn write in the only copy
+    shutil.rmtree(harness.workspace / "wgreturn")  # and the return has left the folder
+
+    summary = harness.prepare(
+        "manual-1", setup_revision_id=_revision(harness.store, _setup(engine="metal"))
+    )
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+    assert "bundlePath" not in summary["message"]
+    assert summary["message"] == preparation_module.DAMAGED_COPY_MESSAGE
+    assert harness.ingest.calls == [] and harness.submitted == []

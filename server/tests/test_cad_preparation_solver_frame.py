@@ -335,8 +335,16 @@ def test_the_record_is_gated_even_when_the_manifest_resolution_says_linked(real,
     assert harness.submitted == []
 
 
-def test_an_unreadable_retained_manifest_waits_as_preparation_failed(real) -> None:
-    """Never read as linked: a manifest WG cannot read is a preparation that failed."""
+def test_an_unreadable_retained_manifest_is_replaced_and_still_never_read_as_linked(
+    real,
+) -> None:
+    """Never read as linked -- and never a dead end either.
+
+    A retained copy WG cannot read is replaced from the WGLink folder
+    (``ingest._stage_bundle_cas``), so the snapshot goes on as what it is: an
+    unlinked model still waiting for its frame. What must not happen is a solve
+    submitted on a guessed frame.
+    """
 
     from server.cadlink.ingest import retained_snapshot_path
 
@@ -346,12 +354,38 @@ def test_an_unreadable_retained_manifest_waits_as_preparation_failed(real) -> No
     first = _prepare(harness)
     assert _waiting_for_frame(first)
     manifest_sha = json.loads(harness.row()["snapshot_json"])["manifest_sha256"]
+    copy = retained_snapshot_path(harness.data_dir, manifest_sha)
+    (copy / "wgreturn.json").write_text("{not json", encoding="utf-8")
+
+    summary = _prepare(harness)
+
+    assert _waiting_for_frame(summary), summary
+    assert summary["jobId"] is None and harness.submitted == []
+    assert json.loads((copy / "wgreturn.json").read_text(encoding="utf-8"))["document"] == {
+        "name": "Authored horn",
+        "native_id": NATIVE_ID,
+    }
+
+
+def test_an_unreadable_retained_manifest_with_the_return_gone_waits(real) -> None:
+    """Nothing to replace it with: the snapshot waits rather than being guessed at."""
+
+    from server.cadlink.ingest import retained_snapshot_path
+
+    harness, mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    assert _waiting_for_frame(_prepare(harness))
+    manifest_sha = json.loads(harness.row()["snapshot_json"])["manifest_sha256"]
     (retained_snapshot_path(harness.data_dir, manifest_sha) / "wgreturn.json").write_text(
         "{not json", encoding="utf-8"
     )
+    returns = harness.workspace / "wgreturn"
+    returns.rename(harness.workspace / "elsewhere")  # the folder was switched
     calls = len(mesher.calls)
 
     summary = _prepare(harness)
 
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed"), summary
+    assert "no copy it can use" in summary["message"]
     assert len(mesher.calls) == calls and harness.submitted == []

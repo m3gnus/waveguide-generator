@@ -431,7 +431,9 @@ def test_the_stored_bundle_copy_leaves_the_captured_document_behind(tmp_path: Pa
     bundle = read_wgreturn(bundle_path)
 
     assert cad_document_member(bundle.manifest) == "document.f3d"
-    _destination, staged, _temporary = _stage_bundle_cas(bundle, tmp_path / "imports")
+    _destination, staged, _temporary, _replacing = _stage_bundle_cas(
+        bundle, tmp_path / "imports"
+    )
 
     assert staged is not None
     assert (staged / "assembly.step").read_bytes() == step
