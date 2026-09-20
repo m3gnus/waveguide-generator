@@ -211,7 +211,9 @@ export function useCadSend({
      */
     const attempt = async (
       current: FusionCadStatus | null,
-      mayChooseFolder: boolean,
+      // Each allowance is spent once, so the chain is bounded: at most one
+      // status read and one folder dialog per press, in either order.
+      may: { readStatus: boolean; chooseFolder: boolean },
     ): Promise<WgLinkExportResponse | null> => {
       // First, because no status is not a status to decide from, and every way
       // in reaches this line. `fusionWorkflowView(null)` is "Checking Fusion
@@ -221,10 +223,22 @@ export function useCadSend({
       // both on the first heartbeat and in the window a parameter edit opens
       // by blanking the status. Guarding one caller would leave the others.
       if (current === null) {
-        throw refuse(
-          'WG could not check the Fusion link, so it sent nothing rather than risk '
-          + 'replacing that link with a new document. Try Send again in a moment.',
-        );
+        if (!may.readStatus) {
+          throw refuse(
+            'WG could not check the Fusion link, so it sent nothing rather than risk '
+            + 'replacing that link with a new document. Try Send again in a moment.',
+          );
+        }
+        // Press Send, and Send is what re-reads. The heartbeat poll is
+        // suspended while no exchange folder is configured -- the add-in
+        // writes the heartbeat into that folder, so there is nothing there to
+        // read -- which makes the read at mount the only one there will be. If
+        // that one failed, waiting recovers nothing and the folder dialog is
+        // never reached, so refusing here with "try again in a moment" would
+        // promise a recovery no amount of waiting delivers. The folder
+        // allowance is carried through: a status that now says there is no
+        // folder still has to be able to ask for one.
+        return attempt(await readFusionStatus.current(), { ...may, readStatus: false });
       }
       if (current.state === 'instance_selection_required') {
         throw refuse('Choose which linked Fusion instance to update.');
@@ -234,7 +248,7 @@ export function useCadSend({
       // folder: the export guard in `sendDesignToCad` is still the check that
       // decides, and this is only what turns its refusal into a way forward.
       if (current.cadFolderConfigured === false) {
-        if (!mayChooseFolder) {
+        if (!may.chooseFolder) {
           // Asked once and answered; the folder the user chose is still not
           // one WG can use. Sending anyway is the create-over-a-link defect.
           throw refuse(
@@ -243,9 +257,10 @@ export function useCadSend({
           );
         }
         // A pick that could not be re-read answers `null`, which the guard at
-        // the top of this function refuses. It is not repeated here: one
-        // statement of the rule is what keeps every entry covered by it.
-        return attempt(await chooseCadFolder(), false);
+        // the top of this function refuses -- and does not re-read, because the
+        // pick has just done that. One statement of the rule, every entry
+        // covered by it.
+        return attempt(await chooseCadFolder(), { readStatus: false, chooseFolder: false });
       }
       const action = fusionWorkflowView(current).action;
       if (action === 'update' && current.fusionChangesAvailable && !options?.confirmed) {
@@ -257,8 +272,8 @@ export function useCadSend({
         ? { documentId: current.documentId, instanceId: current.link.instanceId, returnStateHash: current.link.documentSignatureHash }
         : undefined);
     };
-    return attempt(fusionStatus, true);
-  }, [chooseCadFolder, fusionStatus, refuse, sendToFusion]);
+    return attempt(fusionStatus, { readStatus: true, chooseFolder: true });
+  }, [chooseCadFolder, fusionStatus, readFusionStatus, refuse, sendToFusion]);
 
   const cancelFusionConflict = useCallback(() => setPendingFusionConflict(false), []);
 

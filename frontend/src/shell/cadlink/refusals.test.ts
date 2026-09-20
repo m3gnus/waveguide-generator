@@ -27,26 +27,40 @@ describe('presentCadRefusal', () => {
     expect(presented.remedy!.toLowerCase()).toContain('send');
   });
 
-  /** The exact remedy copy that has been read and approved, per refusal.
+  /** The exact sentence the user reads, per refusal: summary and remedy as
+   * `refusalSentence` composes them.
    *
-   * An allowlist, not a list of forbidden phrasings, and the reason is that
-   * two successive attempts at the forbidden-phrase form both shipped a remedy
-   * that named a cause nobody had reproduced. The first forbade only the
-   * literal words "was deleted" and passed a remedy telling users to check the
-   * component was "at the top level of the assembly" -- a condition that
-   * cannot produce this refusal at all, since `_matching_occurrences` scans
-   * `design.rootComponent.allOccurrences`, which traverses nested occurrences,
-   * and a nested wrapper raises its own distinct refusal. The second forbade
-   * "this happens when" and passed "This usually happens if the managed body
-   * was suppressed in the timeline". A list of ways to phrase a diagnosis can
-   * never be complete, because English always has one more.
+   * An allowlist, not a list of forbidden phrasings, because three successive
+   * attempts at a narrower constraint each shipped a false cause through the
+   * part the constraint did not cover. A list forbidding "was deleted" passed
+   * a remedy saying the component must be "at the top level of the assembly"
+   * -- a condition that cannot produce this refusal at all, since
+   * `_matching_occurrences` scans `design.rootComponent.allOccurrences`, which
+   * traverses nested occurrences, and a nested wrapper raises its own distinct
+   * refusal. A longer list, forbidding "this happens when", passed "This
+   * usually happens if the managed body was suppressed in the timeline". And
+   * an allowlist over `remedy` alone passed "This happens when the wrapper
+   * component was deleted from the assembly" -- in `summary`, which the user
+   * reads in the same breath.
    *
-   * So the constraint is inverted: this is the copy, character for character.
-   * Any edit to a remedy -- adding a sentence, softening one, or adding a new
-   * entry to the table -- fails here and has to be changed in this file too,
-   * which is the point. A person then reads the new sentence and decides
-   * whether WG can stand behind it, instead of a regex deciding.
+   * So what is pinned is the composed, user-visible sentence rather than any
+   * one field: whatever fields the table grows, the thing a person is shown is
+   * the thing that has been approved, character for character. Any edit fails
+   * here and has to be made in this file too, which is the point -- a person
+   * then reads the new sentence and decides whether WG can stand behind it,
+   * instead of a regex deciding.
    */
+  const APPROVED_SENTENCES: Readonly<Record<string, string>> = {
+    'has no resolvable wrapper occurrence':
+      'Fusion refused to export this waveguide: it could not find the component '
+      + 'the waveguide was placed as, so it does not know where the geometry sits in the '
+      + 'assembly. Nothing was exported and nothing was solved at a guessed position. '
+      + 'Open the linked document in Fusion and check that the WG waveguide’s own '
+      + 'component is still there and is the one this design is linked to. Then send the '
+      + 'design from WG again to rebuild the link, and ask for the geometry once more.',
+  };
+
+  /** The remedy half on its own, so the per-field check below stays useful. */
   const APPROVED_REMEDIES: Readonly<Record<string, string>> = {
     'has no resolvable wrapper occurrence':
       'Open the linked document in Fusion and check that the WG waveguide’s own '
@@ -54,10 +68,23 @@ describe('presentCadRefusal', () => {
       + 'design from WG again to rebuild the link, and ask for the geometry once more.',
   };
 
-  it('ships only remedy copy that has been read and approved', () => {
-    // Both directions, so neither a new table entry nor a stale approval can
-    // pass unnoticed, and an empty table cannot make this vacuous.
+  it('shows only the composed sentence that has been read and approved', () => {
+    // The authoritative check: whatever `presentCadRefusal` fills in and
+    // `refusalSentence` joins, this is what reaches the user. An entry's own
+    // invariant is a message that matches it, so this covers every row without
+    // needing a sample refusal written for each.
     expect(REFUSAL_COPY.length).toBeGreaterThan(0);
+    expect(REFUSAL_COPY.map((entry) => entry.invariant).sort())
+      .toEqual(Object.keys(APPROVED_SENTENCES).sort());
+    for (const entry of REFUSAL_COPY) {
+      const presented = presentCadRefusal(entry.invariant);
+      expect(presented).not.toBeNull();
+      expect(refusalSentence(presented!)).toBe(APPROVED_SENTENCES[entry.invariant]);
+    }
+  });
+
+  it('ships only remedy copy that has been read and approved', () => {
+    // Kept alongside the composed check: it says which half a diff changed.
     expect(REFUSAL_COPY.map((entry) => entry.invariant).sort())
       .toEqual(Object.keys(APPROVED_REMEDIES).sort());
     for (const entry of REFUSAL_COPY) {
