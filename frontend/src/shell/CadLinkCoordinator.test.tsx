@@ -938,6 +938,315 @@ describe('CadLinkCoordinator', () => {
     expect(cadLinkCoordinatorBridge.getSnapshot().error ?? '').toContain('could not check');
   });
 
+  it('refuses to send while it has never read the Fusion status', async () => {
+    // The null status is not a state with an answer in it: `fusionWorkflowView`
+    // reads it as "Checking Fusion 360…" and hands back `action: 'open'`, which
+    // is a create send with no expected document, instance or return-state
+    // hash -- over whatever link the document actually has. The Send control
+    // is live throughout (ParamPanel renders on any truthy `action`), and a
+    // heartbeat that will not answer is reached by a 503, by Fusion being
+    // unreachable, or by the blanking window the next test covers.
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') return json({
+        bundlePath: '/workspace/wglink/speaker.wglink', bundleId: 'wgb_1', exportId: 'wge_1',
+        sequence: 1, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+      });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/fusion-status')) return json({ detail: 'heartbeat unreadable' }, 503);
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus).toBeNull();
+
+    let outcome: unknown = 'not settled';
+    await act(async () => {
+      outcome = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion()
+        .then((value) => ({ resolved: value }), (reason: unknown) => ({ rejected: String(reason) }));
+    });
+
+    expect(calls).not.toContain('/api/export/wglink');
+    expect(outcome).toMatchObject({ rejected: expect.stringContaining('could not check') });
+    expect(cadLinkCoordinatorBridge.getSnapshot().error ?? '').toContain('could not check');
+    // And it never claims a send it did not make.
+    expect(cadLinkCoordinatorBridge.getSnapshot().status ?? '').not.toContain('Opening in Fusion');
+  });
+
+  it('binds the update to the link once the status is readable', async () => {
+    // The control for the two refusals around it: the same design, the same
+    // mock, and a heartbeat that answers. If this ever stops binding all three
+    // expectations, the refusals above stop meaning anything.
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    let exported: Record<string, unknown> | null = null;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') {
+        exported = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        return json({
+          bundlePath: '/workspace/wglink/speaker.wglink', bundleId: 'wgb_1', exportId: 'wge_1',
+          sequence: 5, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+        });
+      }
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/fusion-status')) return json({
+        ...linkedFusionStatus, state: 'stale', wgChangesAvailable: true, fusionChangesAvailable: false,
+      });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
+
+    expect(exported).toMatchObject({
+      expectedFusionDocumentId: 'fusion:doc-1',
+      expectedFusionInstanceId: 'wgi_1',
+      expectedFusionReturnStateHash: 'sha256:doc-state',
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().status ?? '').toContain('Update sent to Fusion 360');
+  });
+
+  it('refuses to send in the window where a parameter edit has blanked the status', async () => {
+    // Editing a parameter blanks `fusionStatus` and starts a fresh read, so
+    // there is a real window -- up to the next poll -- in which the status is
+    // null while the Send control is on screen and the link is live. Pressing
+    // Send there used to export a create with nothing bound to the link.
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    const calls: string[] = [];
+    const held = deferred<Response>();
+    let blockStatus = false;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') return json({
+        bundlePath: '/workspace/wglink/speaker.wglink', bundleId: 'wgb_1', exportId: 'wge_1',
+        sequence: 1, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+      });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/fusion-status')) {
+        // The read the edit starts has not come back yet; that is the window.
+        return blockStatus ? held.promise : json({ ...linkedFusionStatus, state: 'stale', wgChangesAvailable: true });
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus).not.toBeNull();
+
+    blockStatus = true;
+    await act(async () => { useDesignStore.getState().updateField('R', 321); });
+    expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus).toBeNull();
+
+    let outcome: unknown = 'not settled';
+    await act(async () => {
+      outcome = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion()
+        .then((value) => ({ resolved: value }), (reason: unknown) => ({ rejected: String(reason) }));
+    });
+
+    expect(calls).not.toContain('/api/export/wglink');
+    expect(outcome).toMatchObject({ rejected: expect.stringContaining('could not check') });
+    held.resolve(json({ ...linkedFusionStatus, state: 'stale', wgChangesAvailable: true }));
+  });
+
+  it('asks for the exchange folder once, and refuses rather than reopening the picker', async () => {
+    // The re-entry is bounded to one recursion: the second pass may not ask
+    // again. Without the bound a folder WG still cannot use reopens the native
+    // picker on top of itself, and the refusal that says so is unreachable.
+    let picks = 0;
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === '/api/cad-workspace/select') {
+        picks += 1;
+        // Chosen the first time, dismissed the second: so an unbounded
+        // re-entry terminates and is told apart by its message, instead of
+        // spinning until the test times out.
+        return json(picks === 1 ? { selected: true, path: '/chosen/cadlink' } : { selected: false, path: null });
+      }
+      if (path === '/api/cad-workspace/path') return json({ selected: false, path: null });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: false, items: [] });
+      // Still unusable after the pick: the folder is read from the filesystem
+      // every time, so choosing one WG cannot use changes nothing.
+      if (path.endsWith('/fusion-status')) return json({ ...linkedFusionStatus, cadFolderConfigured: false });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    let outcome: unknown = 'not settled';
+    await act(async () => {
+      outcome = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion()
+        .then((value) => ({ resolved: value }), (reason: unknown) => ({ rejected: String(reason) }));
+    });
+
+    expect(picks).toBe(1);
+    expect(outcome).toMatchObject({ rejected: expect.stringContaining('still has no shared folder') });
+    expect(cadLinkCoordinatorBridge.getSnapshot().error ?? '').toContain('still has no shared folder');
+    expect(calls).not.toContain('/api/export/wglink');
+  });
+
+  /** Drive a send that parks in the folder picker, so the world can be changed
+   * underneath it. The picker is a native dialog the server opens, so it is
+   * held open for as long as the user takes -- seconds at least. */
+  const sendAcrossThePicker = async (options: {
+    duringPicker?: () => void;
+    holdFirstStatusRead?: boolean;
+  } = {}) => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    let folder: string | null = null;
+    const picker = deferred<Response>();
+    // Every status read taken while the hold is on, not just the first: the
+    // folder selection itself wakes the coordinator into a read, so "the first
+    // read after the pick" is not reliably the one the send is waiting on.
+    let holdingStatus = options.holdFirstStatusRead === true;
+    const heldStatusReads: Array<{ resolve: (value: Response) => void }> = [];
+    const statusBodies: Array<Record<string, unknown>> = [];
+    const calls: string[] = [];
+    let exportBody: Record<string, unknown> | null = null;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === '/api/cad-workspace/select') return picker.promise;
+      if (path === '/api/cad-workspace/path') return json({ selected: folder !== null, path: folder });
+      if (path === '/api/export/wglink') {
+        exportBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        return json({
+          bundlePath: '/chosen/cadlink/wglink/speaker.wglink', bundleId: 'wgb_1', exportId: 'wge_1',
+          sequence: 1, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+        });
+      }
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: folder !== null, items: [] });
+      if (path.endsWith('/fusion-status')) {
+        statusBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        if (holdingStatus && folder !== null) {
+          const held = deferred<Response>();
+          heldStatusReads.push(held);
+          return held.promise;
+        }
+        return json({
+          ...linkedFusionStatus, state: 'stale', wgChangesAvailable: true,
+          cadFolderConfigured: folder !== null,
+        });
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    let settled: unknown = 'pending';
+    const sends: Array<Promise<unknown>> = [];
+    await act(async () => {
+      const first = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      sends.push(first);
+      first.then((value) => { settled = { resolved: value }; },
+        (reason: unknown) => { settled = { rejected: String(reason) }; });
+      await Promise.resolve(); await Promise.resolve();
+    });
+
+    options.duringPicker?.();
+
+    folder = '/chosen/cadlink';
+    await act(async () => {
+      picker.resolve(json({ selected: true, path: folder }));
+      await Promise.resolve(); await Promise.resolve();
+      await Promise.resolve(); await Promise.resolve();
+    });
+
+    return {
+      calls, sends, statusBodies,
+      settled: () => settled,
+      exportBody: () => exportBody,
+      heldStatusReads,
+      releaseHeldStatus: async (bump: () => void) => {
+        // Let go of the hold first, so the read `bump` starts answers at once
+        // and becomes the newest one; the reads held before it are then
+        // released into a world that has already moved past them.
+        holdingStatus = false;
+        bump();
+        await act(async () => {
+          heldStatusReads.forEach((held) => held.resolve(json({
+            ...linkedFusionStatus, state: 'stale', wgChangesAvailable: true, cadFolderConfigured: true,
+          })));
+          await Promise.resolve(); await Promise.resolve();
+          await Promise.resolve(); await Promise.resolve();
+        });
+      },
+    };
+  };
+
+  it('exports the design the guards were computed from, not the one captured before the picker', async () => {
+    // The native folder picker is open for as long as the user takes, and WG
+    // stays live behind it. The status the guards re-run against is read after
+    // it closes, from the design as it is then; the export used to carry the
+    // design as it was when Send was pressed. So the guards could clear a
+    // revision the bundle did not contain -- the same defect as deciding from
+    // a pre-picker status, one await further along.
+    const run = await sendAcrossThePicker({
+      duringPicker: () => { act(() => { useDesignStore.getState().updateField('R', 321); }); },
+    });
+
+    const statusRead = run.statusBodies[run.statusBodies.length - 1];
+    expect((statusRead?.design as Record<string, unknown>).R).toBe(321);
+    expect((run.exportBody()?.design as Record<string, unknown>).R).toBe(321);
+    expect(run.exportBody()?.designRevision).toBe(useDesignStore.getState().designRevision);
+  });
+
+  it('control: with no edit across the picker, the export carries that same design', async () => {
+    const run = await sendAcrossThePicker();
+    const statusRead = run.statusBodies[run.statusBodies.length - 1];
+    expect((statusRead?.design as Record<string, unknown>).R)
+      .toBe((run.exportBody()?.design as Record<string, unknown>).R);
+    expect(run.exportBody()?.designRevision).toBe(useDesignStore.getState().designRevision);
+  });
+
+  it('refuses rather than deciding from a status another read has already replaced', async () => {
+    // The read the send waited for came back after a newer one, so it was
+    // never published: the panel is showing the newer status and the send
+    // would be deciding from the older one. That is the same disagreement
+    // between what was decided and what is true as the two defects above.
+    const run = await sendAcrossThePicker({ holdFirstStatusRead: true });
+    // The send is parked on a status read that has not answered yet.
+    expect(run.heldStatusReads.length).toBeGreaterThan(0);
+    expect(run.calls).not.toContain('/api/export/wglink');
+    await run.releaseHeldStatus(() => {
+      // A parameter edit starts a fresh status read, which supersedes the
+      // one the send is still waiting on.
+      act(() => { useDesignStore.getState().updateField('R', 321); });
+    });
+
+    expect(run.calls).not.toContain('/api/export/wglink');
+    expect(run.settled()).toMatchObject({ rejected: expect.stringContaining('could not check') });
+  });
+
+  it('opens one folder dialog across rapid presses, not one on top of another', async () => {
+    // Two presses used to reach `selectCadWorkspace` twice and stack two
+    // native folder dialogs, because `sendingToFusion` is only set inside the
+    // export -- past the picker -- so it disables nothing while the dialog is
+    // open. Only the pick is shared: overlapping sends stay supported, fenced
+    // by the send request number, which the newest-send test pins.
+    let second!: Promise<unknown>;
+    const run = await sendAcrossThePicker({
+      duringPicker: () => {
+        act(() => {
+          second = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion()
+            .catch(() => undefined);
+        });
+      },
+    });
+    expect(run.calls.filter((path) => path === '/api/cad-workspace/select')).toHaveLength(1);
+    // Both presses continue from the folder chosen in that one dialog.
+    await act(async () => { await Promise.all([run.sends[0], second]); });
+    expect(run.settled()).toMatchObject({ resolved: expect.objectContaining({ exportId: 'wge_1' }) });
+  });
+
   it('says plainly what is needed when the folder picker is dismissed', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

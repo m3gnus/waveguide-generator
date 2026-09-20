@@ -15,8 +15,10 @@ import { keptContentKeyOf, rememberSentCopy } from '../../design/replacementChec
 import { fusionWorkflowView } from '../cadWorkflowView';
 
 interface UseCadSendOptions {
-  design: ReturnType<typeof useDesignStore.getState>['design'];
-  designRevision: number;
+  // No `design`/`designRevision`: the send reads both from the store at the
+  // moment it builds the bundle, because a render-time capture goes stale
+  // across the folder picker. Passing them in would offer a second, older
+  // source of the same fact.
   designName: string;
   identity: ReturnType<typeof useDocumentStore.getState>['identity'];
   setCadLink: ReturnType<typeof useDocumentStore.getState>['setCadLink'];
@@ -44,8 +46,6 @@ function polarConfigStillCommitted(committed: unknown): boolean {
 
 /** Own the one outbound Fusion path and its confirmation/fencing state. */
 export function useCadSend({
-  design,
-  designRevision,
   designName,
   identity,
   setCadLink,
@@ -60,6 +60,11 @@ export function useCadSend({
   const [sendingToFusion, setSendingToFusion] = useState(false);
   const [pendingFusionConflict, setPendingFusionConflict] = useState(false);
   const fusionSendRequest = useRef(0);
+  /** The folder pick currently in flight, so a second send joins that dialog
+   * rather than opening another one on top of it. Scoped to the pick, not to
+   * the whole send: overlapping sends are a supported case, fenced by
+   * `fusionSendRequest` so the newest one's identity and feedback win. */
+  const folderPickInFlight = useRef<Promise<FusionCadStatus | null> | null>(null);
 
   useEffect(() => () => { fusionSendRequest.current += 1; }, []);
 
@@ -74,6 +79,14 @@ export function useCadSend({
     noteCadActivity();
     try {
       const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
+      // Read here, not from the render this callback was built in. A send can
+      // sit in the native folder picker for as long as the user takes, and WG
+      // stays live behind it: the status the guards re-ran against was read
+      // after the picker closed, from the design as it is now. Exporting the
+      // design as it was when Send was pressed would clear a revision the
+      // bundle does not contain. `isCurrentDocumentLoad` fences document
+      // loads, which is a different thing from a parameter edit.
+      const { design, designRevision } = useDesignStore.getState();
       const sentKey = keptContentKeyOf(design);
       const result = await sendDesignToCad(
         design,
@@ -116,7 +129,7 @@ export function useCadSend({
     } finally {
       if (request === fusionSendRequest.current && mounted.current) setSendingToFusion(false);
     }
-  }, [design, designRevision, designName, identity, mounted, noteCadActivity, refresh, setCadLink,
+  }, [designName, identity, mounted, noteCadActivity, refresh, setCadLink,
     setError, setStatus]);
 
   /** End the send with a sentence, rather than with an answer.
@@ -150,28 +163,41 @@ export function useCadSend({
    * has Fusion-side changes. Deciding from it would run the guards below
    * against a world that no longer exists.
    */
-  const chooseCadFolder = useCallback(async (): Promise<FusionCadStatus | null> => {
-    let selected: boolean;
-    try {
-      // No body: the server opens its own native folder picker. A dismissed
-      // picker answers with the selection as it was, which is still none.
-      selected = (await selectCadWorkspace()).selected;
-    } catch (reason) {
-      const failed = reason instanceof Error ? reason : new Error(String(reason));
-      setError(failed.message);
-      throw failed;
-    }
-    if (!selected) {
-      throw refuse(
-        'WG and Fusion share a folder, and none is chosen yet, so there is nowhere to send '
-        + 'this design. Choose the folder when WG asks, or set it in Settings → CAD Link, '
-        + 'and send again.',
-      );
-    }
-    return readFusionStatus.current();
+  const chooseCadFolder = useCallback((): Promise<FusionCadStatus | null> => {
+    // One dialog at a time. `sendingToFusion` is only set inside the export,
+    // which is past this point, so it disables no control while the picker is
+    // open: two quick presses of Send used to reach `selectCadWorkspace` twice
+    // and stack two native folder dialogs. A second send joins this one and
+    // continues from the folder the user chooses in it.
+    if (folderPickInFlight.current) return folderPickInFlight.current;
+    const picking = (async (): Promise<FusionCadStatus | null> => {
+      let selected: boolean;
+      try {
+        // No body: the server opens its own native folder picker. A dismissed
+        // picker answers with the selection as it was, which is still none.
+        selected = (await selectCadWorkspace()).selected;
+      } catch (reason) {
+        const failed = reason instanceof Error ? reason : new Error(String(reason));
+        setError(failed.message);
+        throw failed;
+      }
+      if (!selected) {
+        throw refuse(
+          'WG and Fusion share a folder, and none is chosen yet, so there is nowhere to send '
+          + 'this design. Choose the folder when WG asks, or set it in Settings → CAD Link, '
+          + 'and send again.',
+        );
+      }
+      return readFusionStatus.current();
+    })();
+    folderPickInFlight.current = picking;
+    void picking.catch(() => undefined).finally(() => {
+      if (folderPickInFlight.current === picking) folderPickInFlight.current = null;
+    });
+    return picking;
   }, [readFusionStatus, refuse, setError]);
 
-  const sendWgToFusion = useCallback(async (options?: { confirmed?: boolean }): Promise<WgLinkExportResponse | null> => {
+  const sendWgToFusion = useCallback((options?: { confirmed?: boolean }): Promise<WgLinkExportResponse | null> => {
     /** The whole outbound guard chain, against one status.
      *
      * The status is a parameter rather than a closure read so that choosing a
@@ -187,14 +213,27 @@ export function useCadSend({
       current: FusionCadStatus | null,
       mayChooseFolder: boolean,
     ): Promise<WgLinkExportResponse | null> => {
-      if (current?.state === 'instance_selection_required') {
+      // First, because no status is not a status to decide from, and every way
+      // in reaches this line. `fusionWorkflowView(null)` is "Checking Fusion
+      // 360…" with `action: 'open'` -- a create send carrying no expected
+      // document, instance or return-state hash, over whatever link the
+      // document really has -- and the Send control is live while it shows,
+      // both on the first heartbeat and in the window a parameter edit opens
+      // by blanking the status. Guarding one caller would leave the others.
+      if (current === null) {
+        throw refuse(
+          'WG could not check the Fusion link, so it sent nothing rather than risk '
+          + 'replacing that link with a new document. Try Send again in a moment.',
+        );
+      }
+      if (current.state === 'instance_selection_required') {
         throw refuse('Choose which linked Fusion instance to update.');
       }
       // Only on an explicit negative. `cadFolderConfigured` is polled with the
       // rest of the Fusion status, and an unknown answer is not a missing
       // folder: the export guard in `sendDesignToCad` is still the check that
       // decides, and this is only what turns its refusal into a way forward.
-      if (current?.cadFolderConfigured === false) {
+      if (current.cadFolderConfigured === false) {
         if (!mayChooseFolder) {
           // Asked once and answered; the folder the user chose is still not
           // one WG can use. Sending anyway is the create-over-a-link defect.
@@ -203,24 +242,18 @@ export function useCadSend({
             + 'nowhere to send it. Check the folder in Settings → CAD Link, and send again.',
           );
         }
-        const chosen = await chooseCadFolder();
-        if (chosen === null) {
-          // No post-pick status is not a status to act on: the shape of a
-          // missing one is `open`, which is exactly the unbound create send.
-          throw refuse(
-            'WG could not check the Fusion link after that folder was chosen, so it sent '
-            + 'nothing rather than risk replacing the link with a new document. Send again.',
-          );
-        }
-        return attempt(chosen, false);
+        // A pick that could not be re-read answers `null`, which the guard at
+        // the top of this function refuses. It is not repeated here: one
+        // statement of the rule is what keeps every entry covered by it.
+        return attempt(await chooseCadFolder(), false);
       }
       const action = fusionWorkflowView(current).action;
-      if (action === 'update' && current?.fusionChangesAvailable && !options?.confirmed) {
+      if (action === 'update' && current.fusionChangesAvailable && !options?.confirmed) {
         setPendingFusionConflict(true);
         return null;
       }
       setPendingFusionConflict(false);
-      return sendToFusion(action === 'update' && current?.documentId && current.link
+      return sendToFusion(action === 'update' && current.documentId && current.link
         ? { documentId: current.documentId, instanceId: current.link.instanceId, returnStateHash: current.link.documentSignatureHash }
         : undefined);
     };

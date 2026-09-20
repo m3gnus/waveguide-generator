@@ -95,6 +95,27 @@ function sendRequests(): string[] {
   return requested.filter((path) => path === '/api/cad-workspace/path' || path === '/api/export/wglink');
 }
 
+/** A Fusion heartbeat the coordinator will accept, for the Send-to-CAD tests.
+ *
+ * These mount the real coordinator, and Send now refuses while WG has never
+ * read a Fusion status -- a null status reads as `action: 'open'`, which is a
+ * create send with nothing bound to the link. Before that guard existed these
+ * tests passed with no heartbeat at all, which is exactly the hole. The state
+ * is `not_linked`: the WG design carries a CAD link record while the active
+ * Fusion document holds no managed instance of it, which is the case that
+ * produces the create send they assert.
+ */
+function fusionStatusResponse(): Response {
+  return new Response(JSON.stringify({
+    cadApplication: 'fusion360', cadFolderConfigured: true, cadFolderPath: '/cad-library',
+    state: 'not_linked', processRunning: true, running: true, updatedAt: null,
+    documentName: 'Untitled', documentId: 'fusion:doc-1', currentFormula: 'OSSE',
+    fusionFormula: null, link: null, wgChangesAvailable: false, fusionChangesAvailable: false,
+    documentChanged: false, documentChangeDetectable: false, staleDetectionExplanation: null,
+    realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
 function openedResponse(r: number) {
   return {
     dialect: 'ath', migrationsApplied: [],
@@ -463,6 +484,7 @@ describe('design file export menu', () => {
       if (path === '/api/cad-workspace/path') {
         return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
       }
+      if (path.endsWith('/fusion-status')) return fusionStatusResponse();
       return new Response(JSON.stringify({
         bundlePath: '/cad-library/wglink/tritonia_mk2.wglink', bundleId: 'wgb_1',
         exportId: 'wge_1', sequence: 7, designHash: 'sha256:d',
@@ -471,6 +493,10 @@ describe('design file export menu', () => {
     });
 
     const item = itemNamed('Send to CAD');
+    // Let the coordinator's first heartbeat land: Send refuses while WG
+    // has never read a Fusion status, which is what `open()` has just
+    // started asking for.
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { item.click(); });
 
     expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
@@ -491,6 +517,7 @@ describe('design file export menu', () => {
       if (path === '/api/cad-workspace/path') {
         return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
       }
+      if (path.endsWith('/fusion-status')) return fusionStatusResponse();
       return new Response(JSON.stringify({
         bundlePath: '/cad-library/wglink/tritonia_mk2.wglink', bundleId: 'wgb_1',
         exportId: 'wge_1', sequence: 7, designHash: 'sha256:d',
@@ -499,6 +526,10 @@ describe('design file export menu', () => {
     });
 
     const item = itemNamed('Send to CAD');
+    // Let the coordinator's first heartbeat land: Send refuses while WG
+    // has never read a Fusion status, which is what `open()` has just
+    // started asking for.
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => {
       item.click();
       item.click();
@@ -514,6 +545,7 @@ describe('design file export menu', () => {
       if (path === '/api/cad-workspace/path') {
         return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
       }
+      if (path.endsWith('/fusion-status')) return fusionStatusResponse();
       return new Response(JSON.stringify({
         bundlePath: '/cad-library/wglink/tritonia_mk2.wglink', bundleId: 'wgb_1',
         exportId: 'wge_1', sequence: 1, designHash: 'sha256:d',
@@ -527,6 +559,10 @@ describe('design file export menu', () => {
     });
 
     const item = itemNamed('Send to CAD');
+    // Let the coordinator's first heartbeat land: Send refuses while WG
+    // has never read a Fusion status, which is what `open()` has just
+    // started asking for.
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { item.click(); });
 
     expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);

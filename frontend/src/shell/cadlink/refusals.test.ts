@@ -27,49 +27,50 @@ describe('presentCadRefusal', () => {
     expect(presented.remedy!.toLowerCase()).toContain('send');
   });
 
-  /** Phrases that would state a cause, for a refusal that has none established.
+  /** The exact remedy copy that has been read and approved, per refusal.
    *
-   * The first version of this test forbade only the literal words "was
-   * deleted", and passed a remedy that told users to check the component was
-   * "at the top level of the assembly" -- a condition that cannot produce this
-   * refusal at all: `_matching_occurrences` scans
+   * An allowlist, not a list of forbidden phrasings, and the reason is that
+   * two successive attempts at the forbidden-phrase form both shipped a remedy
+   * that named a cause nobody had reproduced. The first forbade only the
+   * literal words "was deleted" and passed a remedy telling users to check the
+   * component was "at the top level of the assembly" -- a condition that
+   * cannot produce this refusal at all, since `_matching_occurrences` scans
    * `design.rootComponent.allOccurrences`, which traverses nested occurrences,
-   * and a nested wrapper raises its own distinct refusal
-   * (`wglink_send.py`, "Move the wrapper to the root level and send again").
-   * So the list is by mechanism, not by the one phrase that got through:
-   * placement, deletion, renaming, and any word that frames a step as the
-   * explanation rather than as something to try.
+   * and a nested wrapper raises its own distinct refusal. The second forbade
+   * "this happens when" and passed "This usually happens if the managed body
+   * was suppressed in the timeline". A list of ways to phrase a diagnosis can
+   * never be complete, because English always has one more.
+   *
+   * So the constraint is inverted: this is the copy, character for character.
+   * Any edit to a remedy -- adding a sentence, softening one, or adding a new
+   * entry to the table -- fails here and has to be changed in this file too,
+   * which is the point. A person then reads the new sentence and decides
+   * whether WG can stand behind it, instead of a regex deciding.
    */
-  const CAUSAL_PHRASES = [
-    'top level', 'top-level', 'root level', 'root-level', 'nested', 'inside another',
-    'was deleted', 'has been deleted', 'were deleted', 'you deleted',
-    'was renamed', 'has been renamed', 'you renamed', 'was moved', 'you moved',
-    'because', 'this happens when', 'this occurs when', 'the cause', 'caused by',
-    'which means', 'means that', 'due to',
-  ];
+  const APPROVED_REMEDIES: Readonly<Record<string, string>> = {
+    'has no resolvable wrapper occurrence':
+      'Open the linked document in Fusion and check that the WG waveguide’s own '
+      + 'component is still there and is the one this design is linked to. Then send the '
+      + 'design from WG again to rebuild the link, and ask for the geometry once more.',
+  };
 
-  it('asserts no cause in any remedy, for any refusal in the table', () => {
-    // Every entry, not just the one a reviewer happens to look at: a remedy
-    // added later must not name a cause either. An empty table would make
-    // this vacuous, so the table has to have entries for it to constrain.
+  it('ships only remedy copy that has been read and approved', () => {
+    // Both directions, so neither a new table entry nor a stale approval can
+    // pass unnoticed, and an empty table cannot make this vacuous.
     expect(REFUSAL_COPY.length).toBeGreaterThan(0);
+    expect(REFUSAL_COPY.map((entry) => entry.invariant).sort())
+      .toEqual(Object.keys(APPROVED_REMEDIES).sort());
     for (const entry of REFUSAL_COPY) {
-      const remedy = entry.remedy.toLowerCase();
-      for (const phrase of CAUSAL_PHRASES) {
-        expect(`${entry.invariant} :: ${phrase} :: ${remedy.includes(phrase)}`)
-          .toBe(`${entry.invariant} :: ${phrase} :: false`);
-      }
+      expect(entry.remedy).toBe(APPROVED_REMEDIES[entry.invariant]);
     }
   });
 
-  it('checks the phrase list would actually catch a remedy that names a cause', () => {
-    // A forbidden-phrase list that matches nothing proves nothing. This is the
-    // control: the exact remedy this test was written against once shipped,
-    // and every phrase below is one it or a plausible successor contains.
-    const rejected = 'Check that the component is still present, at the top level of the '
-      + 'assembly, because the wrapper was deleted or was renamed.';
-    expect(CAUSAL_PHRASES.filter((phrase) => rejected.includes(phrase)))
-      .toEqual(expect.arrayContaining(['top level', 'because', 'was deleted', 'was renamed']));
+  it('presents exactly the approved remedy, not merely an equivalent one', () => {
+    // The table is one hop from the user; this is the other. A transform that
+    // decorated the remedy on the way out would satisfy the test above while
+    // still putting unapproved words on screen.
+    const presented = presentCadRefusal(WRAPPER_REFUSAL)!;
+    expect(presented.remedy).toBe(APPROVED_REMEDIES['has no resolvable wrapper occurrence']);
   });
 
   it('preserves the report verbatim for the disclosure', () => {

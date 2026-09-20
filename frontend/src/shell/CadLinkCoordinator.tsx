@@ -757,8 +757,6 @@ export function CadLinkCoordinator() {
     sendWgToFusion,
     cancelFusionConflict,
   } = useCadSend({
-    design,
-    designRevision,
     designName,
     identity,
     setCadLink,
@@ -792,16 +790,20 @@ export function CadLinkCoordinator() {
       if (!['closed', 'addin_offline', 'addin_outdated', 'no_document', 'not_linked', 'instance_selection_required', 'current', 'stale'].includes(next.state)) {
         return null;
       }
-      if (request === fusionStatusRequest.current) {
-        setFusionStatus(next);
-        fusionProcessLive.current = next.processRunning === true;
-        // A heartbeat that keeps saying `closed` is the evidence for backing
-        // off; the first one that says anything else is Fusion arriving, and
-        // everything downstream of it wants the base rate again.
-        if (next.state !== lastFusionState.current) {
-          lastFusionState.current = next.state;
-          noteCadActivity();
-        }
+      // A newer read has already answered, so this one is not published. It is
+      // not handed back either: a caller that decided from it would be acting
+      // on a status the panel is not showing and the newer read has replaced,
+      // which is the disagreement between decision and truth that the send
+      // guards exist to prevent. `null` sends it back to ask again.
+      if (request !== fusionStatusRequest.current) return null;
+      setFusionStatus(next);
+      fusionProcessLive.current = next.processRunning === true;
+      // A heartbeat that keeps saying `closed` is the evidence for backing
+      // off; the first one that says anything else is Fusion arriving, and
+      // everything downstream of it wants the base rate again.
+      if (next.state !== lastFusionState.current) {
+        lastFusionState.current = next.state;
+        noteCadActivity();
       }
       return next;
     } catch {
