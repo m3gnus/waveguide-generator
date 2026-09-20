@@ -8,7 +8,10 @@ import {
 import { preferencesStore } from '../../prefs/preferences';
 import { useDocumentStore } from '../../stores/document';
 import { useCadReturnStore } from '../../stores/cadReturn';
+import { useCadOperationsStore } from '../../stores/cadOperations';
+import { isPendingCadOperation } from '../../api/cadOperations';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
+import { presentCadRefusal, refusalSentence } from './refusals';
 
 export interface RefreshOptions {
   background?: boolean;
@@ -86,6 +89,7 @@ interface UseCadReturnArrivalsOptions {
   returnsIdleMs: number;
   returnsMs: number;
   setError: Dispatch<SetStateAction<string | null>>;
+  setErrorDiagnostics: Dispatch<SetStateAction<{ message: string; detail: string } | null>>;
   setStatus: Dispatch<SetStateAction<string | null>>;
   startAdaptivePoll(
     restarts: Set<() => void>,
@@ -120,6 +124,7 @@ export function useCadReturnArrivals({
   returnsIdleMs,
   returnsMs,
   setError,
+  setErrorDiagnostics,
   setStatus,
   startAdaptivePoll,
 }: UseCadReturnArrivalsOptions) {
@@ -156,7 +161,30 @@ export function useCadReturnArrivals({
             item.readable && item.requestId === pendingReturnRequestId.current
           )) ?? null
         : null;
-      if (
+      // Before the wall clock: Fusion may have answered already, and refused.
+      // A return request's operation id *is* its request id
+      // (server/cadlink/fusion_return.py hands `request_id` to
+      // `accept_operation`), so the refusal WG recorded is in hand under the
+      // id this pull is waiting on. Waiting the full minute and then saying
+      // Fusion did not answer would be stating something WG can see is false.
+      const answered = pendingReturnRequestId.current
+        ? useCadOperationsStore.getState().operations[pendingReturnRequestId.current] ?? null
+        : null;
+      // A bundle that did arrive wins: the arrival path below settles it, and
+      // nothing here overtakes geometry the user can already use.
+      if (!requested && answered && !isPendingCadOperation(answered) && answered.state !== 'accepted') {
+        pendingReturnRequestId.current = null;
+        pendingReturnRequestedAt.current = null;
+        const presented = presentCadRefusal(answered.message);
+        const sentence = presented
+          ? refusalSentence(presented)
+          : `Fusion ${answered.state === 'cancelled' ? 'did not carry out' : 'refused'} the request for this model’s geometry, and reported no detail.`;
+        const waiter = pendingReturnWaiter.current;
+        pendingReturnWaiter.current = null;
+        if (presented) setErrorDiagnostics({ message: sentence, detail: presented.diagnostics });
+        if (waiter) waiter.fail(new Error(sentence));
+        else setError(sentence);
+      } else if (
         pendingReturnRequestId.current
         && pendingReturnRequestedAt.current !== null
         && Date.now() - pendingReturnRequestedAt.current > 60_000
@@ -279,7 +307,8 @@ export function useCadReturnArrivals({
       if (request === returnListRequest.current) setLoading(false);
     }
   }, [autoIngestSelected, cadFolderConfigured, enterCadWorkspace, manualSelectionAt, noteCadActivity,
-    projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, setError, setStatus]);
+    projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, setError,
+    setErrorDiagnostics, setStatus]);
   refreshRef.current = refresh;
 
   // Returns arrive in the workspace's wgreturn folder, which only the Fusion

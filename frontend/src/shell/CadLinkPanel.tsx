@@ -483,6 +483,7 @@ export function CadLinkPanel() {
     ingestError,
     sendingToFusion,
     error,
+    errorDiagnostics,
     status,
     viewportNotice,
     fusionStatus,
@@ -647,7 +648,17 @@ export function CadLinkPanel() {
     <h2 className="sr-only">CAD Link</h2>
     {/* One notice channel. Transient events land here, at the top of the rail;
         persistent conditions render inside the card they belong to. */}
-    {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
+    {error && <div className="cad-alert cad-alert-error" role="alert">
+      {error}
+      {/* The report behind the sentence: the adapter's own words, the entity
+          ids and the internal invariants. It belongs to this exact message,
+          so a later unrelated error leaves it behind rather than carrying a
+          stale explanation under a new headline. */}
+      {errorDiagnostics?.message === error && <details className="cad-alert-diagnostics">
+        <summary>Diagnostics</summary>
+        <p className="cad-detail">{errorDiagnostics.detail}</p>
+      </details>}
+    </div>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
 
     {/* 1 · Project: what am I working on? */}

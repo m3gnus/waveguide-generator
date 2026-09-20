@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import type { FusionCadStatus } from '../../api/cadlink';
+import { selectCadWorkspace } from '../../api/cadWorkspace';
 import { sendDesignToCad, type WgLinkExportResponse } from '../../api/designIo';
 import {
   currentDocumentLoad,
@@ -113,6 +114,44 @@ export function useCadSend({
   }, [design, designRevision, designName, identity, mounted, noteCadActivity, refresh, setCadLink,
     setError, setStatus]);
 
+  /** Make sure the shared exchange folder exists before the send needs it.
+   *
+   * WG refuses to guess this folder, deliberately: the add-in's
+   * `workspace_root` says an implicit application-data fallback would hide the
+   * exchange and make first-time setup impossible to understand. That refusal
+   * stays. What changes is that it stops being the end of the operation --
+   * pressing Send with no folder chosen used to reach the export guard and go
+   * no further, leaving a first-time user with a sentence pointing at a dialog
+   * they had to find. Now the dialog is opened here and the send continues
+   * into it. The folder is still the user's choice; nothing is defaulted.
+   */
+  const ensureCadFolder = useCallback(async (known: FusionCadStatus | null): Promise<void> => {
+    // Only on an explicit negative. `cadFolderConfigured` is polled with the
+    // rest of the Fusion status, and an unknown answer is not a missing
+    // folder: the export guard in `sendDesignToCad` is still the check that
+    // decides, and this is only what turns its refusal into a way forward.
+    if (known?.cadFolderConfigured !== false) return;
+    try {
+      // No body: the server opens its own native folder picker. A dismissed
+      // picker answers with the selection as it was, which is still none.
+      if ((await selectCadWorkspace()).selected) return;
+    } catch (reason) {
+      const failed = reason instanceof Error ? reason : new Error(String(reason));
+      setError(failed.message);
+      throw failed;
+    }
+    // Thrown rather than returned: a `null` answer already means "parked on
+    // the two-way conflict dialog", and a caller that reported this as that
+    // would be telling the user something that did not happen.
+    const refusal = new Error(
+      'WG and Fusion share a folder, and none is chosen yet, so there is nowhere to send '
+      + 'this design. Choose the folder when WG asks, or set it in Settings → CAD Link, '
+      + 'and send again.',
+    );
+    setError(refusal.message);
+    throw refusal;
+  }, [setError]);
+
   const sendWgToFusion = useCallback(async (options?: { confirmed?: boolean }): Promise<WgLinkExportResponse | null> => {
     const current = fusionStatus;
     if (current?.state === 'instance_selection_required') {
@@ -120,6 +159,7 @@ export function useCadSend({
       setError(reason.message);
       throw reason;
     }
+    await ensureCadFolder(current);
     const action = fusionWorkflowView(current).action;
     if (action === 'update' && current?.fusionChangesAvailable && !options?.confirmed) {
       setPendingFusionConflict(true);
@@ -129,7 +169,7 @@ export function useCadSend({
     return sendToFusion(action === 'update' && current?.documentId && current.link
       ? { documentId: current.documentId, instanceId: current.link.instanceId, returnStateHash: current.link.documentSignatureHash }
       : undefined);
-  }, [fusionStatus, sendToFusion, setError]);
+  }, [ensureCadFolder, fusionStatus, sendToFusion, setError]);
 
   const cancelFusionConflict = useCallback(() => setPendingFusionConflict(false), []);
 

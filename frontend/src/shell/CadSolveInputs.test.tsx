@@ -106,6 +106,50 @@ describe('CAD solve input identities', () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
+  it('carries the protocol state, stage, reason and timings that the card keeps out of sight', async () => {
+    // PLAN A6 keeps the primary path free of protocol internals and puts them
+    // one disclosure away. These are the internals: the raw codes the backend
+    // records, when the operation was taken and last moved, and whatever the
+    // add-in or the preparation reported in its own words.
+    vi.stubGlobal('fetch', vi.fn());
+    await act(async () => root.render(<CadSolveInputs
+      operationId="op-1"
+      operation={operation({
+        setupRevisionId: null,
+        state: 'needs_user_input',
+        stage: 'preparing-mesh',
+        reason: 'preparation_failed',
+        message: 'Meshing stopped: the exported solid self-intersects near the throat.',
+      })}
+      resolvedEngine="metal"
+      engineSource="job"
+    />));
+
+    expect(host.textContent).toContain('Stateneeds_user_input');
+    expect(host.textContent).toContain('Stagepreparing-mesh');
+    expect(host.textContent).toContain('Reasonpreparation_failed');
+    expect(host.textContent).toContain('2026-09-14T10:00:00Z');
+    expect(host.textContent).toContain('2026-09-14T10:00:05Z');
+    expect(host.textContent).toContain('Meshing stopped: the exported solid self-intersects near the throat.');
+    // The identities this disclosure already carried are still the only
+    // `code` elements in it; the new rows are prose, not identities.
+    expect(host.querySelectorAll('code')).toHaveLength(5);
+  });
+
+  it('records the absence of a stage, reason or report rather than leaving a blank', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    await act(async () => root.render(<CadSolveInputs
+      operationId="op-1"
+      operation={operation({ setupRevisionId: null, stage: null, reason: null, message: null, updatedAt: null })}
+      resolvedEngine="metal"
+      engineSource="job"
+    />));
+
+    expect(host.textContent).toContain('Stagenot recorded');
+    expect(host.textContent).toContain('Reasonnone');
+    expect(host.textContent).not.toContain('Reported');
+  });
+
   it('shows complete snapshot digests even when their prefixes match', async () => {
     const first = `sha256:${'a'.repeat(63)}1`;
     const second = `sha256:${'a'.repeat(63)}2`;

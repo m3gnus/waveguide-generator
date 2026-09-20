@@ -33,6 +33,11 @@
 .cad-alert-error { border-color: var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); color: var(--fg1); }
 .cad-alert-notice { border-color: var(--hair); background: var(--surface-raised); color: var(--fg2); }
 .cad-status-strip { background: var(--ov1); color: var(--fg2); }
+/* The evidence behind a refusal, one chevron away from its sentence. */
+.cad-alert-diagnostics { margin-top: 5px; }
+.cad-alert-diagnostics > summary { cursor: pointer; color: var(--fg3); font-size: var(--text-micro); }
+.cad-alert-diagnostics > summary:focus-visible { outline: 1px solid var(--focus, var(--fg1)); outline-offset: 2px; }
+.cad-alert-diagnostics > p { margin: 4px 0 0; }
 
 /* ---- 1 · Project ---- */
 .cad-project-row { display: flex; align-items: flex-start; gap: 8px; }

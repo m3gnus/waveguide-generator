@@ -907,6 +907,54 @@ describe('CadLinkPanel', () => {
       .toEqual(fusionWorkflowView(currentFusion));
   });
 
+  it('keeps the WG-side copy when the Fusion observation is also out of date', () => {
+    // Both halves can be out of date at once, and they are known in different
+    // ways: the WG side is read from stored identity, the Fusion side is
+    // explicitly not known. The certain fact leads; the uncertainty qualifies
+    // it; the state keeps carrying the uncertainty so nothing claims a
+    // measurement. Before this, the freshness branch pre-empted the WG copy
+    // entirely (A5 review finding D5).
+    const both = {
+      ...currentFusion,
+      state: 'stale' as const,
+      observationFreshness: 'stale' as const,
+      wgChangesAvailable: true,
+      fusionFormula: 'osse',
+      currentFormula: 'R-OSSE',
+      link: { ...currentFusion.link!, configPresent: false, parameterDriftCount: 2 },
+    };
+    const view = fusionWorkflowView(both);
+    // The honesty state and the offered action are A5's, and unchanged.
+    expect(view.state).toBe('refresh-needed');
+    expect(view.action).toBe('update');
+    expect(view.headline).toContain('WG design changed');
+    // Everything the later branch would have said is still said.
+    expect(view.detail).toContain('Fusion has OSSE; WG is now R-OSSE.');
+    expect(view.detail).toContain('predates full WG config synchronization');
+    expect(view.detail).toContain('2 managed Fusion parameters have local edits');
+    // And the freshness caveat is still there, with its remedy.
+    expect(view.detail).toContain('moved on since WGLink measured it');
+    expect(view.detail).toContain('WGLink measures the model as it exports it');
+
+    // Never measured at all, with the same WG-side change.
+    const unmeasured = fusionWorkflowView({ ...both, observationFreshness: 'none' as const });
+    expect(unmeasured.state).toBe('unmeasured');
+    expect(unmeasured.headline).toContain('WG design changed');
+    expect(unmeasured.detail).toContain('Fusion has OSSE; WG is now R-OSSE.');
+    expect(unmeasured.detail).toContain('has not measured this document');
+
+    // The other ordering is untouched: with no WG-side change the freshness
+    // headline is still the one that leads, and no WG copy is invented.
+    const fusionOnly = fusionWorkflowView({
+      ...both, wgChangesAvailable: false,
+    });
+    expect(fusionOnly.state).toBe('refresh-needed');
+    expect(fusionOnly.headline).toContain('Fusion geometry may have changed');
+    expect(fusionOnly.headline).not.toContain('WG design changed');
+    expect(fusionOnly.detail).not.toContain('WG is now R-OSSE');
+    expect(fusionOnly.action).toBeNull();
+  });
+
   it('refuses an add-in older than WG with the remedy startup left', () => {
     // Nothing the older add-in reports about the document is acted on, and the
     // prompt names what WG already did: installed its own, or could not.
@@ -1818,6 +1866,77 @@ describe('CadLinkPanel', () => {
     });
     expect(cadLinkCoordinatorBridge.getSnapshot().pullingFromFusion).toBe(false);
     expect(requestCount).toBe(1);
+  });
+
+  it('puts a Fusion refusal on the primary path and its report behind a disclosure', async () => {
+    useDocumentStore.setState({
+      identity: { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 2 },
+    });
+    const refusal = "WGLink instance '393aaad4-9e78-462d-ad6c-126d411fbefd' "
+      + 'has no resolvable wrapper occurrence; placement was not defaulted to identity.';
+    const fusion = { ...currentFusion, state: 'stale' as const, fusionChangesAvailable: true };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/fusion-status')) return json(fusion);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/request-fusion-return')) {
+        return json({ status: 'requested', requestId: 'req_refused', documentName: 'Tritonia V' });
+      }
+      return json(record);
+    }));
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => {
+      cadLinkCoordinatorBridge.getSnapshot().pullFromFusion().catch(() => undefined);
+      await Promise.resolve(); await Promise.resolve();
+    });
+    act(() => {
+      useCadOperationsStore.getState().apply({
+        operationId: 'req_refused', kind: 'request_return', state: 'rejected', stage: 'executing',
+        reason: 'adapter_refused', message: refusal, jobId: null, attemptGeneration: 1,
+        setupRevisionId: null, preparationId: null, snapshot: null, legacy: false,
+        createdAt: '2026-09-20T10:00:00Z', updatedAt: '2026-09-20T10:00:01Z',
+      } as CadOperationSummary);
+    });
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve();
+    });
+
+    const alert = host.querySelector<HTMLElement>('.cad-alert-error[role="alert"]')!;
+    expect(alert).not.toBeNull();
+    const disclosure = alert.querySelector<HTMLDetailsElement>('details.cad-alert-diagnostics')!;
+    expect(disclosure).not.toBeNull();
+    const summary = disclosure.querySelector<HTMLElement>('summary')!;
+
+    // Primary path: what happened and what to do, with no opaque identity.
+    const primary = alert.textContent!.replace(disclosure.textContent!, '');
+    expect(primary).toContain('refused');
+    expect(primary).not.toContain('393aaad4');
+    expect(primary).not.toContain('defaulted to identity');
+
+    // The disclosure is shut to begin with, and its evidence is not read out
+    // as part of the alert until it is opened.
+    expect(disclosure.open).toBe(false);
+
+    // Accessible: a real summary element, with a name, reachable by keyboard
+    // and operable from it.
+    expect(summary.tagName).toBe('SUMMARY');
+    expect(summary.textContent).toBe('Diagnostics');
+    summary.focus();
+    expect(document.activeElement).toBe(summary);
+    act(() => { summary.click(); });
+    expect(disclosure.open).toBe(true);
+    expect(disclosure.textContent).toContain(refusal);
+    expect(disclosure.textContent).toContain('393aaad4-9e78-462d-ad6c-126d411fbefd');
+
+    // A later, unrelated error takes the alert over. The report belonged to
+    // the refusal, so it goes with it rather than standing under a headline it
+    // does not explain.
+    await act(async () => { cadLinkCoordinatorBridge.getSnapshot().reportError('The jobs system is not answering.'); });
+    const replaced = host.querySelector<HTMLElement>('.cad-alert-error[role="alert"]')!;
+    expect(replaced.textContent).toContain('The jobs system is not answering.');
+    expect(replaced.querySelector('details.cad-alert-diagnostics')).toBeNull();
+    expect(replaced.textContent).not.toContain('393aaad4');
   });
 
   it('records blocking findings on the wire, filters skipped sizes, and emits range/list sweep shapes', () => {

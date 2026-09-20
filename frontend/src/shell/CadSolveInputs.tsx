@@ -99,7 +99,19 @@ export function CadSolveInputs({
       <div><dt>Preparation</dt><dd><code>{operation?.preparationId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
       <div><dt>Setup revision</dt><dd><code>{setupRevisionId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
       <div><dt>Engine</dt><dd><code>{engine ?? (loadingOperation || loadingEngine ? 'reading…' : 'not recorded')}</code></dd></div>
+      {/* The protocol's own words for where this operation stands, and when it
+          got there. The card above says it in the user's terms; PLAN A6 keeps
+          the codes and the timings here, one disclosure away, so the primary
+          path never has to spell out an internal state name. */}
+      <div><dt>State</dt><dd>{operation?.state ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
+      <div><dt>Stage</dt><dd>{operation ? operation.stage ?? 'not recorded' : loadingOperation ? 'reading…' : 'not recorded'}</dd></div>
+      <div><dt>Reason</dt><dd>{operation ? operation.reason ?? 'none' : loadingOperation ? 'reading…' : 'not recorded'}</dd></div>
+      <div><dt>Received</dt><dd>{operation?.createdAt ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
+      <div><dt>Last moved</dt><dd>{operation?.updatedAt ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
     </dl>
+    {/* Verbatim, because it is evidence: whatever the adapter or the
+        preparation reported is what a second report has to be compared with. */}
+    {operation?.message && <p className="cad-solve-inputs-reported">Reported · {operation.message}</p>}
     {(operationError || setupError) && <span className="cad-solve-inputs-error">
       Could not read all bound inputs: {operationError ?? setupError}
     </span>}

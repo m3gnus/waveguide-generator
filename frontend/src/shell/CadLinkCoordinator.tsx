@@ -61,6 +61,16 @@ export {
 } from './cadlink/arrivals';
 export { cadHistorySetup, refreshChannelDriverBases } from './cadlink/restores';
 
+/** A report belonging to one error message: the protocol-level evidence a
+ * surface puts behind a disclosure rather than in the sentence it shows.
+ *
+ * `message` names the error it belongs to, so a surface renders it only while
+ * that exact error is the one on screen. */
+export interface ErrorDiagnostics {
+  message: string;
+  detail: string;
+}
+
 interface CadLinkCoordinatorSnapshot {
   bundles: CadReturnBundle[];
   loading: boolean;
@@ -69,6 +79,7 @@ interface CadLinkCoordinatorSnapshot {
   sendingToFusion: boolean;
   pullingFromFusion: boolean;
   error: string | null;
+  errorDiagnostics: ErrorDiagnostics | null;
   status: string | null;
   viewportNotice: string | null;
   fusionStatus: FusionCadStatus | null;
@@ -118,6 +129,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   sendingToFusion: false,
   pullingFromFusion: false,
   error: null,
+  errorDiagnostics: null,
   status: null,
   viewportNotice: null,
   fusionStatus: null,
@@ -562,6 +574,10 @@ export function CadLinkCoordinator() {
   const [ingesting, setIngesting] = useState(false);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Evidence for one error, kept beside it rather than in it: the message it
+  // belongs to is stored with it, so a later unrelated error hides this
+  // without every setError call site having to remember to clear it.
+  const [errorDiagnostics, setErrorDiagnostics] = useState<ErrorDiagnostics | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [viewportNotice, setViewportNotice] = useState<string | null>(null);
   const [fusionStatus, setFusionStatus] = useState<FusionCadStatus | null>(null);
@@ -714,6 +730,7 @@ export function CadLinkCoordinator() {
     returnsIdleMs: cadPollIntervals.returnsIdleMs,
     returnsMs: cadPollIntervals.returnsMs,
     setError,
+    setErrorDiagnostics,
     setStatus,
     startAdaptivePoll,
   });
@@ -1245,6 +1262,7 @@ export function CadLinkCoordinator() {
       sendingToFusion,
       pullingFromFusion,
       error,
+      errorDiagnostics,
       status,
       viewportNotice,
       fusionStatus,
@@ -1282,6 +1300,7 @@ export function CadLinkCoordinator() {
       sendingToFusion: false,
       pullingFromFusion: false,
       error: null,
+      errorDiagnostics: null,
       status: null,
       viewportNotice: null,
       fusionStatus: null,
@@ -1319,6 +1338,7 @@ export function CadLinkCoordinator() {
     reconcileOperation,
     solveOperationWithSettings,
     error,
+    errorDiagnostics,
     fusionStatus,
     ingest,
     ingestSelected,

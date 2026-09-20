@@ -237,6 +237,26 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   const parameterCopy = status.link?.parameterCount
     ? `${status.link.parameterCount} managed CAD parameters`
     : 'the managed CAD parameters';
+  /** What changed on the WG side, which is read from stored identity rather
+   * than from any measurement of Fusion. One definition, used by the plain
+   * "WG design changed" reading at the end and by the freshness branch below,
+   * so the two can no longer say different things about the same facts. */
+  const wgChangeDetail = (): string => {
+    const fusionFormula = status.fusionFormula?.toLocaleUpperCase();
+    const currentFormula = status.currentFormula.toLocaleUpperCase();
+    const mismatch = fusionFormula && fusionFormula !== currentFormula
+      ? `Fusion has ${fusionFormula}; WG is now ${currentFormula}.`
+      : 'WG parameters changed after this Fusion waveguide was built.';
+    const configCopy = status.link?.configPresent
+      ? ''
+      : ' This link also predates full WG config synchronization.';
+    const localEditCopy = status.link?.parameterDriftCount
+      ? ` ${status.link.parameterDriftCount} managed Fusion parameter${status.link.parameterDriftCount === 1 ? ' has' : 's have'} local edits.`
+      : status.link?.localBodyState && status.link.localBodyState !== 'unmodified'
+        ? ` The managed Fusion body is ${status.link.localBodyState}.`
+        : '';
+    return `${mismatch}${configCopy}${localEditCopy}`;
+  };
   // Before any reading that turns an absence of reported change into "nothing
   // changed": WGLink's heartbeat publishes a cached measurement, and unless its
   // revision tokens agree that measurement describes a revision the document
@@ -248,20 +268,26 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   const freshness = status.observationFreshness;
   if ((freshness === 'stale' || freshness === 'none') && !status.fusionChangesAvailable) {
     const named = status.documentName ? ` · ${status.documentName}` : '';
-    // The WG side is read from stored identity, never from a measurement, so it
-    // is still something WG can say -- and Send stays offered because of it.
-    const wgCopy = status.wgChangesAvailable
-      ? ' The parametric WG design has also changed since this Fusion waveguide was built.'
-      : '';
+    // Two facts, known in two different ways. The WG side is read from stored
+    // identity and is known; the Fusion side is explicitly not. So the known
+    // fact leads -- it is the one with an action attached -- and the unknown
+    // one qualifies it, while `state` goes on carrying the uncertainty so no
+    // surface reads this as a measurement. Dropping the WG copy here was A5
+    // review finding D5, handed to A6: `action` stayed `update`, so the only
+    // thing lost was the copy that says what actually changed.
+    const wgCopy = status.wgChangesAvailable ? ` ${wgChangeDetail()}` : '';
     const remedy = ' Bring the Fusion geometry into WG to find out: WGLink measures the model as it exports it.';
+    const headline = (unknownHalf: string): string => (
+      status.wgChangesAvailable ? `WG design changed${named}` : `${unknownHalf}${named}`
+    );
     return freshness === 'none' ? {
       state: 'unmeasured',
-      headline: `Fusion geometry not measured yet${named}`,
+      headline: headline('Fusion geometry not measured yet'),
       detail: explainedStaleDetail(status, `WGLink has not measured this document's geometry, so WG cannot tell whether it still matches what was returned.${wgCopy}${remedy}`),
       action: status.wgChangesAvailable ? 'update' : null,
     } : {
       state: 'refresh-needed',
-      headline: `Fusion geometry may have changed${named}`,
+      headline: headline('Fusion geometry may have changed'),
       detail: explainedStaleDetail(status, `The Fusion model has moved on since WGLink measured it, so WG cannot tell whether its geometry still matches what was returned.${wgCopy}${remedy}`),
       action: status.wgChangesAvailable ? 'update' : null,
     };
@@ -284,26 +310,13 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
     detail: explainedStaleDetail(status, 'The parametric WG design matches Fusion. The latest Fusion geometry has already been returned to WG for simulation.'),
     action: null,
   };
-  const fusionFormula = status.fusionFormula?.toLocaleUpperCase();
-  const currentFormula = status.currentFormula.toLocaleUpperCase();
-  const mismatch = fusionFormula && fusionFormula !== currentFormula
-    ? `Fusion has ${fusionFormula}; WG is now ${currentFormula}.`
-    : 'WG parameters changed after this Fusion waveguide was built.';
-  const configCopy = status.link?.configPresent
-    ? ''
-    : ' This link also predates full WG config synchronization.';
-  const localEditCopy = status.link?.parameterDriftCount
-    ? ` ${status.link.parameterDriftCount} managed Fusion parameter${status.link.parameterDriftCount === 1 ? ' has' : 's have'} local edits.`
-    : status.link?.localBodyState && status.link.localBodyState !== 'unmodified'
-      ? ` The managed Fusion body is ${status.link.localBodyState}.`
-      : '';
   const conflictCopy = status.fusionChangesAvailable
     ? ' Fusion geometry also changed; choose which direction to synchronize.'
     : '';
   return {
     state: 'stale',
     headline: `${status.fusionChangesAvailable ? 'WG and Fusion both changed' : 'WG design changed'}${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: explainedStaleDetail(status, `${mismatch}${configCopy}${localEditCopy}${conflictCopy}`),
+    detail: explainedStaleDetail(status, `${wgChangeDetail()}${conflictCopy}`),
     action: 'update',
   };
 }
