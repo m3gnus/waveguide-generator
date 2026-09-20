@@ -107,9 +107,23 @@ export interface FusionCadLink {
   documentSignatureHash: string | null;
   documentBodyCount: number;
   sourceStateHash: string | null;
+  /** The revision the Fusion document is at now, and the revision the measured
+   * half above was taken at (null when there is no measurement to offer).
+   * Both are absent when an older WGLink add-in reports the document. */
+  geometryRevisionToken?: string | null;
+  measuredRevisionToken?: string | null;
   exportId: string | null;
   exportSequence: string | null;
 }
+
+/** Which revision the selected link's measured half describes.
+ *
+ * WGLink's heartbeat inspects no geometry: the measured fields are whatever a
+ * previous measurement cached, and the two revision tokens say which revision
+ * that was. `none` is a document nothing has measured yet; `stale` is an
+ * observation of a revision Fusion has already left; `unknown` is an add-in
+ * that publishes neither token, which says nothing either way. */
+export type CadObservationFreshness = 'current' | 'stale' | 'none' | 'unknown';
 
 /** A WG operation the linked document is marked as applying: it began changing
  * the model and did not finish, so the add-in will not repeat it. */
@@ -184,6 +198,9 @@ export interface FusionCadStatus {
   fusionChangesAvailable: boolean;
   documentChanged: boolean;
   documentChangeDetectable: boolean;
+  /** Null when no link is selected, so there is no measured half to place on a
+   * revision. Absent only from a status this build did not produce. */
+  observationFreshness?: CadObservationFreshness | null;
   staleDetectionExplanation: string | null;
   /** The delivery version the add-in reports; below WG's, the state is `addin_outdated`. */
   addinDeliveryVersion?: number | null;

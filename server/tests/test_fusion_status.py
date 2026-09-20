@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import re
 from types import SimpleNamespace
 import hashlib
 import threading
@@ -479,6 +480,10 @@ def test_status_endpoint_hashes_the_design_and_reports_wglink_folder_setup(
         "fusionChangesAvailable": False,
         "documentChanged": False,
         "documentChangeDetectable": False,
+        # No link is selected in a closed status, so there is no measured half
+        # to place on a revision -- distinct from "unknown", which is what an
+        # add-in that publishes neither revision token leaves behind.
+        "observationFreshness": None,
         "staleDetectionExplanation": None,
         "addinDeliveryVersion": None,
         "recoveryRequired": None,
@@ -959,3 +964,252 @@ def test_a_return_request_is_refused_before_anything_is_published(
     else:
         assert "has not reported the model's state" in error.value.detail
     assert not (tmp_path / "ipc" / "wglink" / ".fusion-return-requests").exists()
+
+
+# --- CL13: which revision the heartbeat's measured half describes -----------
+#
+# WGLink's periodic heartbeat inspects no geometry: it publishes identity from
+# stored attributes and, for the measured half, whatever a previous measurement
+# left in its cache (fusion-addins/WGLink/README.md, "The heartbeat reads cached
+# state only"). ``geometryRevisionToken`` is the revision the document is at now
+# and ``measuredRevisionToken`` the revision that cache was filled at, so the two
+# together are the only thing that says whether the measured half is current.
+# Without them WG compared a cached hash against a returned one and read
+# "equal" as "unchanged", which reports a moved document as up to date.
+
+
+def _returned_root(folder: Path, *, signature: str, bodies: int = 1) -> Path:
+    """A minimal root-scope return carrying a document signature to compare."""
+
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "wgreturn.json").write_text(json.dumps({
+        "wgreturn_version": "1.1",
+        "scope": {"selection": "root"},
+        "assembly": {"n_bodies_expected": bodies, "signature_hash": signature},
+        "instances": [],
+        "sources": [],
+    }))
+    return folder
+
+
+def _measured_link(**updates: object) -> dict[str, object]:
+    """A link whose measured half was taken at the revision it is published at."""
+
+    link = _link(
+        localBodyState="unmodified",
+        documentSignatureHash="sha256:document-a",
+        documentBodyCount=1,
+        geometryRevisionToken="rev-1",
+        measuredRevisionToken="rev-1",
+    )
+    link.update(updates)
+    return link
+
+
+def test_a_document_that_moved_since_its_measurement_is_not_reported_current(
+    tmp_path: Path,
+) -> None:
+    """The cached hash equals the returned one, and that proves nothing.
+
+    Every comparable field is byte-for-byte what a current document would
+    publish. The only difference is that the document is at ``rev-2`` and the
+    measurement was taken at ``rev-1``, so WG holds an observation of a revision
+    Fusion has already left. Reporting ``current`` here is a claim about a
+    measurement that did not occur.
+    """
+
+    workspace = tmp_path / "workspace"
+    returned = _returned_root(workspace / "speaker.wgreturn", signature="sha256:document-a")
+
+    _write_status(workspace, links=[_measured_link()])
+    current = _read(workspace, returned_bundle=returned)
+    assert current["state"] == "current"
+    assert current["documentChangeDetectable"] is True
+
+    _write_status(workspace, links=[_measured_link(geometryRevisionToken="rev-2")])
+    moved = _read(workspace, returned_bundle=returned)
+
+    # The defect, first: today this reads "current".
+    assert moved["state"] != "current"
+    # Not "compared and equal": nothing current was compared at all.
+    assert moved["documentChangeDetectable"] is False
+    assert moved["staleDetectionExplanation"] is not None
+    assert "measured" in moved["staleDetectionExplanation"]
+    assert current["observationFreshness"] == "current"
+    assert moved["observationFreshness"] == "stale"
+
+
+def test_an_uncomputable_revision_token_is_an_earlier_observation_too(
+    tmp_path: Path,
+) -> None:
+    """A null ``geometryRevisionToken`` means the revision could not be keyed.
+
+    WGLink publishes it as null when ``_geometry_change_key`` raised, so there is
+    nothing to compare the measurement's own token against. That is the same
+    answer as an unequal pair: the measured half may describe an earlier
+    revision, and WG may not say otherwise.
+    """
+
+    workspace = tmp_path / "workspace"
+    _write_status(workspace, links=[_measured_link(geometryRevisionToken=None)])
+
+    status = _read(workspace)
+
+    assert status["state"] != "current"
+    assert status["documentChangeDetectable"] is False
+    assert status["observationFreshness"] == "stale"
+
+
+def test_no_measurement_at_all_is_distinct_from_an_earlier_one(tmp_path: Path) -> None:
+    """Three states, not two: none, earlier, current.
+
+    An empty ``documentSignatureHash`` with ``localBodyState: "unknown"`` is what
+    a restart or a switch to an unmeasured document publishes. It is never
+    another document's measurement and never a claim of a fresh one, so it reads
+    from the hashes rather than the tokens -- a null ``measuredRevisionToken``
+    accompanies it, and must not be mistaken for a stale observation of
+    something.
+    """
+
+    workspace = tmp_path / "workspace"
+    returned = _returned_root(workspace / "speaker.wgreturn", signature="sha256:document-a")
+    _write_status(workspace, links=[_link(
+        localBodyState="unknown",
+        documentSignatureHash=None,
+        documentBodyCount=0,
+        sourceStateHash=None,
+        geometryRevisionToken="rev-7",
+        measuredRevisionToken=None,
+    )])
+
+    status = _read(workspace, returned_bundle=returned)
+
+    assert status["state"] != "current"
+    assert status["documentChangeDetectable"] is False
+    # The existing honesty valve now says why, instead of reporting an
+    # undetectable comparison with no explanation at all.
+    assert status["staleDetectionExplanation"] is not None
+    assert "not measured" in status["staleDetectionExplanation"]
+    assert status["observationFreshness"] == "none"
+
+
+def test_both_revision_tokens_reach_the_link_payload(tmp_path: Path) -> None:
+    """``_link_payload`` is an allow-list, and it dropped both names."""
+
+    workspace = tmp_path / "workspace"
+    _write_status(workspace, links=[_measured_link(
+        geometryRevisionToken="rev-9", measuredRevisionToken="rev-8",
+    )])
+
+    link = _read(workspace)["link"]
+
+    assert link["geometryRevisionToken"] == "rev-9"
+    assert link["measuredRevisionToken"] == "rev-8"
+
+
+def test_an_addin_that_sends_neither_token_behaves_exactly_as_today(
+    tmp_path: Path,
+) -> None:
+    """Both fields are additive under heartbeat schema 1.
+
+    An older WGLink never publishes either name. Omitting the member rather than
+    defaulting it keeps "never sent" distinguishable from "sent as null", the way
+    ``driftedParameters`` already is -- and every other member of the answer has
+    to read exactly as it did before this change.
+    """
+
+    workspace = tmp_path / "workspace"
+    returned = _returned_root(workspace / "speaker.wgreturn", signature="sha256:document-a")
+
+    legacy_link = _link(
+        localBodyState="unmodified",
+        documentSignatureHash="sha256:document-a",
+        documentBodyCount=1,
+    )
+    assert "geometryRevisionToken" not in legacy_link
+    assert "measuredRevisionToken" not in legacy_link
+    _write_status(workspace, links=[legacy_link])
+    legacy = _read(workspace, returned_bundle=returned)
+
+    _write_status(workspace, links=[_measured_link()])
+    tokened = _read(workspace, returned_bundle=returned)
+
+    # Nothing is invented for an add-in that said nothing.
+    assert "geometryRevisionToken" not in legacy["link"]
+    assert "measuredRevisionToken" not in legacy["link"]
+    assert legacy["observationFreshness"] == "unknown"
+    assert legacy["state"] == "current"
+    assert legacy["documentChangeDetectable"] is True
+    assert legacy["staleDetectionExplanation"] is None
+    # And the whole answer matches the one a current measurement produces,
+    # member for member, apart from the two new names themselves.
+    assert {
+        name: value for name, value in legacy.items()
+        if name not in {"link", "matchingLinks", "observationFreshness"}
+    } == {
+        name: value for name, value in tokened.items()
+        if name not in {"link", "matchingLinks", "observationFreshness"}
+    }
+
+
+def test_evidence_of_a_change_survives_an_earlier_observation(tmp_path: Path) -> None:
+    """Only the absence of evidence is withdrawn, never the evidence.
+
+    An observation taken at ``rev-1`` that already differed from the returned
+    model has not stopped differing because the document moved on to ``rev-2``.
+    ``documentChanged`` and ``fusionChangesAvailable`` stay true; what may not
+    stand is the claim that the comparison was made against the document as it
+    is now.
+    """
+
+    workspace = tmp_path / "workspace"
+    returned = _returned_root(workspace / "speaker.wgreturn", signature="sha256:returned")
+    _write_status(workspace, links=[_measured_link(
+        documentSignatureHash="sha256:moved-on", geometryRevisionToken="rev-2",
+    )])
+
+    status = _read(workspace, returned_bundle=returned)
+
+    assert status["documentChanged"] is True
+    assert status["fusionChangesAvailable"] is True
+    assert status["observationFreshness"] == "stale"
+    assert status["documentChangeDetectable"] is False
+
+
+def test_no_selected_link_reports_no_observation_freshness(tmp_path: Path) -> None:
+    """The field describes the selected link's measured half, and there is none."""
+
+    workspace = tmp_path / "workspace"
+    _write_status(workspace, links=[])
+
+    assert _read(workspace)["observationFreshness"] is None
+
+
+def test_observation_freshness_names_agree_with_the_frontend() -> None:
+    """One state machine, spelled once on each side.
+
+    The server decides the freshness and the frontend decides what to show for
+    it, so a name added on one side and not the other is a silent fall-through
+    to whatever the other side's default happens to be. This is the mechanical
+    check that the two lists are the same list; the behavioural agreement is in
+    the tests above and in ``CadLinkPanel.test.tsx``.
+    """
+
+    from server.cadlink import fusion_status as module
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "frontend" / "src" / "api" / "cadlink.ts"
+    ).read_text(encoding="utf-8")
+    declaration = re.search(
+        r"export type CadObservationFreshness\s*=\s*([^;]+);", source
+    )
+    assert declaration is not None, "the frontend no longer declares the union"
+    declared = set(re.findall(r"'([a-z_-]+)'", declaration.group(1)))
+
+    assert declared == {
+        module.OBSERVATION_CURRENT,
+        module.OBSERVATION_STALE,
+        module.OBSERVATION_NONE,
+        module.OBSERVATION_UNKNOWN,
+    }

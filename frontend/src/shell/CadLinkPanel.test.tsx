@@ -855,6 +855,56 @@ describe('CadLinkPanel', () => {
     }).detail).toContain(staleDetectionExplanation);
   });
 
+  it('never reads an earlier observation as a measurement of the model now', () => {
+    // WGLink's heartbeat inspects no geometry: its measured half is whatever a
+    // previous measurement cached, and the revision tokens are what say which
+    // revision that was (fusion-addins/WGLink/README.md). Three states, not two.
+    const measured = { ...currentFusion, observationFreshness: 'current' as const };
+    expect(fusionWorkflowView(measured)).toMatchObject({ state: 'current' });
+
+    // Moved on since the measurement: nothing here is evidence of anything.
+    const moved = fusionWorkflowView({
+      ...measured, state: 'stale' as const, observationFreshness: 'stale' as const,
+    });
+    expect(moved.state).toBe('refresh-needed');
+    expect(moved.detail).not.toContain('already been returned to WG');
+    expect(moved.detail).toContain('measured');
+    expect(moved.action).toBeNull();
+
+    // Never measured: a restart, or a document nothing has walked yet.
+    const unmeasured = fusionWorkflowView({
+      ...measured,
+      state: 'stale' as const,
+      observationFreshness: 'none' as const,
+      link: { ...currentFusion.link!, localBodyState: 'unknown', documentSignatureHash: null },
+    });
+    expect(unmeasured.state).toBe('unmeasured');
+    expect(unmeasured.detail).not.toContain('already been returned to WG');
+
+    // A WG-side change is read from stored identity, not from a measurement, so
+    // it still stands -- and Send stays offered.
+    expect(fusionWorkflowView({
+      ...measured,
+      state: 'stale' as const,
+      observationFreshness: 'stale' as const,
+      wgChangesAvailable: true,
+    })).toMatchObject({ state: 'refresh-needed', action: 'update' });
+
+    // Positive evidence of a Fusion change survives: an observation that already
+    // differed from the returned model has not stopped differing.
+    expect(fusionWorkflowView({
+      ...measured,
+      state: 'stale' as const,
+      observationFreshness: 'stale' as const,
+      fusionChangesAvailable: true,
+      documentChanged: true,
+    })).toMatchObject({ state: 'stale' });
+
+    // An add-in that publishes neither token is unchanged by all of this.
+    expect(fusionWorkflowView({ ...currentFusion, observationFreshness: 'unknown' as const }))
+      .toEqual(fusionWorkflowView(currentFusion));
+  });
+
   it('refuses an add-in older than WG with the remedy startup left', () => {
     // Nothing the older add-in reports about the document is acted on, and the
     // prompt names what WG already did: installed its own, or could not.

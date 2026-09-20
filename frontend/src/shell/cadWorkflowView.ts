@@ -4,7 +4,11 @@ import type { OnshapeStatus } from '../api/onshape';
 /** Shared by the CAD Link panel, the rail card, and the coordinator's send
  * path, so every surface derives the same outbound action from one status. */
 export interface CadWorkflowView {
-  state: 'checking' | 'closed' | 'addin-offline' | 'addin-outdated' | 'recovery-required' | 'no-document' | 'not-linked' | 'instance-selection' | 'current' | 'stale' | 'not-configured';
+  /** `refresh-needed` and `unmeasured` are the two ways WG cannot tell: the
+   * measured half of Fusion's heartbeat describes a revision the document has
+   * already left, or nothing has measured the document at all. Neither is
+   * `current` and neither is `stale`, which both claim a comparison. */
+  state: 'checking' | 'closed' | 'addin-offline' | 'addin-outdated' | 'recovery-required' | 'no-document' | 'not-linked' | 'instance-selection' | 'current' | 'refresh-needed' | 'unmeasured' | 'stale' | 'not-configured';
   headline: string;
   detail: string;
   action: 'open' | 'update' | null;
@@ -233,6 +237,33 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   const parameterCopy = status.link?.parameterCount
     ? `${status.link.parameterCount} managed CAD parameters`
     : 'the managed CAD parameters';
+  // Before any reading that turns an absence of reported change into "nothing
+  // changed": WGLink's heartbeat publishes a cached measurement, and unless its
+  // revision tokens agree that measurement describes a revision the document
+  // may already have left. Positive evidence is exempt -- an observation that
+  // already differed from the returned model has not stopped differing -- so
+  // this only covers the case where silence would be read as agreement.
+  const freshness = status.observationFreshness;
+  if ((freshness === 'stale' || freshness === 'none') && !status.fusionChangesAvailable) {
+    const named = status.documentName ? ` · ${status.documentName}` : '';
+    // The WG side is read from stored identity, never from a measurement, so it
+    // is still something WG can say -- and Send stays offered because of it.
+    const wgCopy = status.wgChangesAvailable
+      ? ' The parametric WG design has also changed since this Fusion waveguide was built.'
+      : '';
+    const remedy = ' Bring the Fusion geometry into WG to find out: WGLink measures the model as it exports it.';
+    return freshness === 'none' ? {
+      state: 'unmeasured',
+      headline: `Fusion geometry not measured yet${named}`,
+      detail: explainedStaleDetail(status, `WGLink has not measured this document's geometry, so WG cannot tell whether it still matches what was returned.${wgCopy}${remedy}`),
+      action: status.wgChangesAvailable ? 'update' : null,
+    } : {
+      state: 'refresh-needed',
+      headline: `Fusion geometry may have changed${named}`,
+      detail: explainedStaleDetail(status, `The Fusion model has moved on since WGLink measured it, so WG cannot tell whether its geometry still matches what was returned.${wgCopy}${remedy}`),
+      action: status.wgChangesAvailable ? 'update' : null,
+    };
+  }
   if (status.state === 'current') return {
     state: 'current',
     headline: `Fusion 360 is open · ${status.documentName ?? 'active document'}`,

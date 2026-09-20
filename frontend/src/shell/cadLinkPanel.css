@@ -82,6 +82,10 @@
 .cad-connection-dot-checking { background: var(--fg3); }
 .cad-link-quiet .cad-connection-dot { margin-top: 0; }
 .cad-connection-stale .cad-connection-dot, .cad-connection-not-configured .cad-connection-dot, .cad-connection-addin-offline .cad-connection-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
+/* WG cannot tell: the measured half of the heartbeat is of an earlier revision,
+   or nothing has measured the document. Not green, and not the grey of
+   "checking" -- the answer is known to be unavailable, which needs the user. */
+.cad-connection-refresh-needed .cad-connection-dot, .cad-connection-unmeasured .cad-connection-dot, .cad-connection-dot-refresh-needed, .cad-connection-dot-unmeasured { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
 .cad-primary-action { justify-content: center; width: 100%; min-height: 34px; }
 .cad-link-card code { color: var(--fg2); font: var(--text-micro) var(--mono); }
 .cad-onshape-open { display: inline-block; margin-top: 6px; color: var(--acc); }

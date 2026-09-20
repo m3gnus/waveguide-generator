@@ -249,6 +249,20 @@ add-in writes to `.fusion-status.json`; `204` with no body when recorded. Body l
 - **The status reports `heartbeatTransport`**: `"live"`, `"file"`, or `null` when no
   heartbeat was selected. For the same heartbeat object the status is otherwise identical
   on either transport.
+- **The status reports `observationFreshness`**, for the selected link, from the two
+  revision tokens each link carries beside its measured state (`geometryRevisionToken`,
+  `measuredRevisionToken`; the add-in's `WGLink/README.md` owns their semantics). The
+  heartbeat inspects no geometry, so `localBodyState`, `bodyFingerprintHash`,
+  `documentSignatureHash`, `documentBodyCount` and `sourceStateHash` are a cached
+  measurement, and only the tokens say which revision it was taken at:
+  `"current"` (tokens equal), `"stale"` (unequal, or a null `geometryRevisionToken`),
+  `"none"` (empty `documentSignatureHash` with `localBodyState: "unknown"` -- read from
+  the hashes, never from the tokens), `"unknown"` (an add-in that publishes neither
+  token), or `null` when no link is selected. Anything but `"current"` or `"unknown"`
+  makes `documentChangeDetectable` false and forbids `state: "current"`: a cached hash
+  that equals the returned one is not a comparison against the document as it stands.
+  Evidence of a difference is not withdrawn -- an observation that already differed has
+  not stopped differing -- only the absence of one.
 
 ## 7. Fusion-bound requests
 

@@ -46,6 +46,53 @@ _SCOPED_SELECTION_EXPLANATION = (
     "stale detection unavailable: this return covers a selected assembly "
     "subtree, and Fusion reports its document signature for the whole root"
 )
+_EARLIER_OBSERVATION_EXPLANATION = (
+    "stale detection unavailable: the Fusion model has moved since WGLink last "
+    "measured it, so WG holds an observation of an earlier revision"
+)
+_NO_OBSERVATION_EXPLANATION = (
+    "stale detection unavailable: WGLink has not measured this Fusion "
+    "document's geometry yet"
+)
+
+#: Which revision the measured half of a heartbeat link describes.
+#:
+#: WGLink's periodic heartbeat inspects no geometry. It publishes identity from
+#: stored attributes, and for ``localBodyState``, ``bodyFingerprintHash``,
+#: ``documentSignatureHash``, ``documentBodyCount`` and ``sourceStateHash``
+#: whatever a previous measurement left in its cache
+#: (``fusion-addins/WGLink/README.md``, "The heartbeat reads cached state
+#: only"). The two revision tokens beside them are the only thing that says
+#: which revision that cache belongs to, and without them a cached hash that
+#: equals the returned one reads as "compared and unchanged".
+OBSERVATION_CURRENT = "current"
+OBSERVATION_STALE = "stale"
+OBSERVATION_NONE = "none"
+#: An add-in that publishes neither token says nothing either way, so every
+#: answer stays exactly what it was before the tokens existed.
+OBSERVATION_UNKNOWN = "unknown"
+_REVISION_TOKENS = ("geometryRevisionToken", "measuredRevisionToken")
+
+
+def _observation_freshness(link: Mapping[str, Any]) -> str:
+    """Classify a link's measured half: none, an earlier revision, or current."""
+
+    if not any(name in link for name in _REVISION_TOKENS):
+        return OBSERVATION_UNKNOWN
+    # Read the hashes, not the tokens, for whether there is an observation at
+    # all: an empty signature with an unknown body state is what a restart or a
+    # switch to an unmeasured document publishes. It is never another
+    # document's measurement, and never a claim of a fresh one.
+    if not link.get("documentSignatureHash") and link.get("localBodyState") == "unknown":
+        return OBSERVATION_NONE
+    geometry = link.get("geometryRevisionToken")
+    measured = link.get("measuredRevisionToken")
+    if geometry and measured and geometry == measured:
+        return OBSERVATION_CURRENT
+    # Unequal tokens, or a null ``geometryRevisionToken`` meaning the revision
+    # could not be keyed at all: either way the measurement describes a
+    # revision the document may already have left.
+    return OBSERVATION_STALE
 
 
 def fusion_process_running(*, system: str | None = None) -> bool:
@@ -445,6 +492,14 @@ def _link_payload(value: object) -> dict[str, Any] | None:
     # of pretending it knows which parameters changed.
     if drifted_parameters is not None:
         payload["driftedParameters"] = drifted_parameters
+    # Both revision tokens are additive under heartbeat schema 1 and travel the
+    # same way: an add-in that never sends one omits the member, a new add-in
+    # with nothing to report sends null. Defaulting them would collapse those
+    # two into one and make an older add-in look like a document nobody has
+    # measured.
+    for name in _REVISION_TOKENS:
+        if name in value:
+            payload[name] = _string(value.get(name))
     return payload
 
 
@@ -488,6 +543,10 @@ def read_fusion_status(
         "fusionChangesAvailable": False,
         "documentChanged": False,
         "documentChangeDetectable": False,
+        # Which revision the selected link's measured half describes. There is
+        # no selected link in any of the states this default covers, so the
+        # answer is not "unknown" -- it is "no link to describe".
+        "observationFreshness": None,
         "staleDetectionExplanation": None,
         "addinDeliveryVersion": None,
         "recoveryRequired": None,
@@ -559,6 +618,16 @@ def read_fusion_status(
 
     link = selected[0]
     base["selectedInstanceId"] = link["instanceId"]
+    observation_freshness = _observation_freshness(link)
+    # An observation of a revision Fusion has already left, or none at all, is
+    # not evidence of anything: its comparisons may be repeated word for word by
+    # a document that has since moved. Positive evidence still stands -- an
+    # observation that already differed from the returned model has not stopped
+    # differing -- so only the *absence* of a difference is withdrawn here.
+    observation_is_current = observation_freshness in {
+        OBSERVATION_CURRENT,
+        OBSERVATION_UNKNOWN,
+    }
     fusion_hash = link.get("designHash")
     current_body_hash = link.get("bodyFingerprintHash")
     if returned_manifest is None:
@@ -592,15 +661,23 @@ def read_fusion_status(
         and current_document_hash != returned_document_hash
     )
     document_change_detectable = bool(
-        document_aggregates_detectable
+        observation_is_current
+        and document_aggregates_detectable
         and current_document_hash
         and returned_document_hash
     )
+    stale_detection_explanation: str | None = None
+    # An observation problem comes first, and without waiting for a returned
+    # bundle: it is why *every* comparison here is unavailable, not only the
+    # one against a return.
+    if observation_freshness == OBSERVATION_STALE:
+        stale_detection_explanation = _EARLIER_OBSERVATION_EXPLANATION
+    elif observation_freshness == OBSERVATION_NONE:
+        stale_detection_explanation = _NO_OBSERVATION_EXPLANATION
     # A scoped return is not a legacy one: telling the user their bundle
     # predates wgreturn 1.1 when they simply picked a subtree in the Send
     # dialog sends them looking for the wrong problem.
-    stale_detection_explanation: str | None = None
-    if returned_bundle is not None:
+    elif returned_bundle is not None:
         if not document_aggregates_detectable:
             stale_detection_explanation = _SCOPED_SELECTION_EXPLANATION
         elif returned_document_hash is None:
@@ -626,7 +703,8 @@ def read_fusion_status(
     state = (
         "current"
         if (
-            not wg_changes_available
+            observation_is_current
+            and not wg_changes_available
             and not fusion_changes_available
             and link.get("parameterDriftCount") == 0
             and link.get("localBodyState") == "unmodified"
@@ -642,6 +720,7 @@ def read_fusion_status(
         "fusionChangesAvailable": fusion_changes_available,
         "documentChanged": document_changed,
         "documentChangeDetectable": document_change_detectable,
+        "observationFreshness": observation_freshness,
         "staleDetectionExplanation": stale_detection_explanation,
     }
 
@@ -659,6 +738,10 @@ __all__ = [
     "FUSION_CLOSED",
     "FUSION_RUNNING",
     "FUSION_UNKNOWN",
+    "OBSERVATION_CURRENT",
+    "OBSERVATION_NONE",
+    "OBSERVATION_STALE",
+    "OBSERVATION_UNKNOWN",
     "fusion_process_running",
     "fusion_process_state",
     "heartbeat_now",
