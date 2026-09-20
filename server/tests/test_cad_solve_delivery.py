@@ -25,7 +25,12 @@ from typing import Any
 import pytest
 
 from server.cadlink.operations import prepare_and_solve_request, request_digest
-from server.cadlink.preparation import PreparationContext, reconcile_with_jobs, run_delivery_pass
+from server.cadlink.preparation import (
+    DeliveryPassReporter,
+    PreparationContext,
+    reconcile_with_jobs,
+    run_delivery_pass,
+)
 from server.cadlink.solve_command import collect_solve_deliveries, record_outcome
 from server.cadlink.store import CadLinkStore
 
@@ -599,3 +604,115 @@ def test_the_delivery_loop_reconciles_through_the_real_jobs_store(
     row = store.get_operation("cmd-1")
     assert (row["state"], row["job_id"]) == ("accepted", "job-7")
     assert asyncio.run(one_pass()) == []
+
+
+# --- Why a pass started nothing -------------------------------------------
+#
+# The loop runs `run_delivery_pass` once a second for as long as WG is open.
+# Three of its outcomes are indistinguishable from outside: an approved update
+# restart stops it before anything is collected, an unselected CAD Link folder
+# stops it just after, and an ordinary idle pass starts nothing because there
+# is nothing to start. A consumer that has been declining a user's solve for
+# hours therefore looks exactly like one with no work, which is how two real
+# `prepare_and_solve` operations sat in `received` while the pass ran roughly
+# 50 000 times without a line in the log.
+
+
+def _noted_pass(context, **kwargs) -> tuple[list[str], list[str | None]]:
+    """One pass, with the reason it started nothing."""
+
+    notes: list[str | None] = []
+    started = asyncio.run(
+        run_delivery_pass(
+            context,
+            spawn=lambda _operation_id, coroutine: coroutine.close(),
+            note=notes.append,
+            **kwargs,
+        )
+    )
+    return started, notes
+
+
+def _context(data_dir, store, workspace, *, blocked: str | None = None) -> PreparationContext:
+    return PreparationContext(
+        store=store,
+        data_dir=data_dir,
+        workspace_root=workspace.resolve() if workspace is not None else None,
+        submission_blocked=lambda: blocked,
+    )
+
+
+def test_a_pass_stopped_by_an_approved_restart_reports_that_reason(data_dir, workspace, store):
+    workspace.mkdir(parents=True, exist_ok=True)
+    reason = "Waveguide Generator is about to restart to install 0.3.4."
+
+    started, notes = _noted_pass(_context(data_dir, store, workspace, blocked=reason))
+
+    assert started == []
+    assert notes == [reason]
+
+
+def test_a_pass_without_a_cad_link_folder_reports_that_reason(data_dir, store):
+    started, notes = _noted_pass(_context(data_dir, store, None))
+
+    assert started == []
+    assert len(notes) == 1
+    assert notes[0] is not None
+    assert "folder" in notes[0].lower()
+
+
+def test_a_pass_that_collects_and_starts_work_reports_no_reason(data_dir, workspace, store):
+    """The control: a pass that actually starts an operation notes nothing.
+
+    Without it, a `note` that simply never fired would satisfy both tests
+    above by accident.
+    """
+
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-noted", bundle_path, manifest)
+
+    started, notes = _noted_pass(_context(data_dir, store, workspace))
+
+    assert started == ["cmd-noted"]
+    assert notes == [None]
+
+
+def test_an_idle_pass_is_not_reported_as_a_blocked_one(data_dir, workspace, store):
+    """Nothing to do is not a reason; it must not read as a stopped consumer."""
+
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    started, notes = _noted_pass(_context(data_dir, store, workspace))
+
+    assert started == []
+    assert notes == [None]
+
+
+# --- Reporting a stopped consumer -----------------------------------------
+
+
+def test_a_stopped_consumer_is_reported_once_not_every_second():
+    reporter = DeliveryPassReporter()
+    reason = "No CAD Link folder is selected."
+
+    assert reporter.observe(reason) == reason
+    assert [reporter.observe(reason) for _ in range(5)] == [None] * 5
+
+
+def test_resuming_is_reported_once_and_only_after_a_stop():
+    reporter = DeliveryPassReporter()
+
+    # Never stopped: an ordinary pass says nothing at all.
+    assert reporter.observe(None) is None
+    assert reporter.observe(None) is None
+
+    reporter.observe("stopped")
+    assert reporter.observe(None) == DeliveryPassReporter.RESUMED
+    assert reporter.observe(None) is None
+
+
+def test_a_different_reason_is_reported_again():
+    reporter = DeliveryPassReporter()
+    reporter.observe("first")
+
+    assert reporter.observe("second") == "second"

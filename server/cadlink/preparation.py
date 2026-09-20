@@ -148,6 +148,40 @@ class SnapshotUnavailable(OSError):
     """The return cannot be read now; the operation waits instead of failing for good."""
 
 
+#: Why a delivery pass collected nothing. The CAD Link folder is the exchange
+#: itself, so without one there is no command to read -- which is a stopped
+#: consumer, not an idle one, and the user is the only one who can end it.
+NO_WORKSPACE_REASON = (
+    "No CAD Link folder is selected, so Waveguide Generator cannot collect the "
+    "solve commands Fusion sends. Choose the folder in CAD Link settings."
+)
+
+
+class DeliveryPassReporter:
+    """What to say about a delivery pass, given what the last one said.
+
+    The loop runs about once a second, so a stopped consumer must be reported
+    once rather than 86 000 times a day, and its resumption once. ``observe``
+    takes the reason a pass started nothing (``None`` when it ran normally)
+    and returns the line to log, or ``None`` for say nothing.
+
+    Resumption is reported only after a stop, and that falls out of the
+    equality guard rather than needing its own branch: reaching the resume line
+    at all means the last pass carried a reason.
+    """
+
+    RESUMED = "Collecting CAD solve commands again."
+
+    def __init__(self) -> None:
+        self._reason: str | None = None
+
+    def observe(self, reason: str | None) -> str | None:
+        if reason == self._reason:
+            return None
+        self._reason = reason
+        return reason if reason is not None else self.RESUMED
+
+
 def submission_key(operation_id: str) -> str:
     return f"{CAD_SOLVE_SUBMISSION_PREFIX}{operation_id}"
 
@@ -1271,6 +1305,7 @@ async def run_delivery_pass(
     *,
     spawn: Callable[[str, Awaitable[Any]], object],
     running: set[str] | frozenset[str] = frozenset(),
+    note: Callable[[str | None], None] | None = None,
 ) -> list[str]:
     """Collect Fusion's solve commands, and start preparing each new one.
 
@@ -1291,10 +1326,21 @@ async def run_delivery_pass(
     live holds read after them. Returns the operations this pass started.
     """
 
-    if _restart_pending(ctx):
+    def _note(reason: str | None) -> None:
+        # Exactly once per pass, and outside every handler that swallows: a
+        # pass that starts nothing must say whether that is idleness or a
+        # stopped consumer. The two are otherwise identical from outside, and
+        # this loop runs about 86 000 times a day.
+        if note is not None:
+            note(reason)
+
+    blocked = _restart_pending(ctx)
+    if blocked:
+        _note(blocked)
         return []
     await asyncio.to_thread(requeue_restart_parked, ctx)
     if ctx.workspace_root is None:
+        _note(NO_WORKSPACE_REASON)
         return []
     await asyncio.to_thread(settle_received_snapshots, ctx)
     held: set[str] = set()
@@ -1307,8 +1353,10 @@ async def run_delivery_pass(
         ),
         held=held,
     )
-    if _restart_pending(ctx):
+    blocked = _restart_pending(ctx)
+    if blocked:
         # Approved while this pass collected: nothing starts.
+        _note(blocked)
         return []
     rows = await asyncio.to_thread(
         ctx.store.list_operations,
@@ -1330,6 +1378,7 @@ async def run_delivery_pass(
                 expected_generation=int(row["attempt_generation"]),
             ),
         )
+    _note(None)
     return started
 
 
@@ -1391,6 +1440,8 @@ def recover_operations(ctx: PreparationContext) -> int:
 
 
 __all__ = [
+    "NO_WORKSPACE_REASON",
+    "DeliveryPassReporter",
     "DismissalUnconfirmed",
     "PreparationContext",
     "PreparationInput",

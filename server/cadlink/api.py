@@ -88,6 +88,7 @@ from .preparation import (
     operation_summary,
     prepare_operation,
     recover_operations,
+    DeliveryPassReporter,
     run_delivery_pass,
 )
 from .project_setup import SOLVER_SELECTION, inventory_sha256
@@ -2215,14 +2216,25 @@ def _deliver_solve_commands(application: FastAPI):
         async def deliver() -> None:
             failures = 0
             reported: str | None = None
+            # Why the last pass started nothing, so a consumer that is stopped
+            # rather than idle says so -- once, not once a second.
+            pass_reporter = DeliveryPassReporter()
+            notes: list[str | None] = []
             while True:
                 try:
                     workspace_root = await asyncio.to_thread(_selected_workspace_root, state)
+                    notes.clear()
                     await run_delivery_pass(
                         _preparation_context(state, workspace_root=workspace_root),
                         spawn=spawn,
                         running=running,
+                        note=notes.append,
                     )
+                    # Read outside the handler below: a swallowed exception
+                    # must never be mistaken for a pass that ran and declined.
+                    line = pass_reporter.observe(notes[0] if notes else None)
+                    if line is not None:
+                        logger.info("CAD solve delivery: %s", line)
                     failures, reported = 0, None
                 except asyncio.CancelledError:
                     raise
