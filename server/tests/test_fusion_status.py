@@ -1155,11 +1155,13 @@ def test_an_addin_that_sends_neither_token_behaves_exactly_as_today(
 def test_evidence_of_a_change_survives_an_earlier_observation(tmp_path: Path) -> None:
     """Only the absence of evidence is withdrawn, never the evidence.
 
-    An observation taken at ``rev-1`` that already differed from the returned
-    model has not stopped differing because the document moved on to ``rev-2``.
-    ``documentChanged`` and ``fusionChangesAvailable`` stay true; what may not
-    stand is the claim that the comparison was made against the document as it
-    is now.
+    ``documentChanged`` and ``fusionChangesAvailable`` stay true across a move
+    of the revision. Not because a difference cannot stop being one -- undo the
+    edit back to the returned state and this observation still reports a
+    difference the document no longer has -- but because that is the
+    conservative direction, and WGLink re-measures inline before any guarded
+    mutation. What may not stand is the narrower claim that the comparison was
+    made against the document as it is now.
     """
 
     workspace = tmp_path / "workspace"
@@ -1213,3 +1215,64 @@ def test_observation_freshness_names_agree_with_the_frontend() -> None:
         module.OBSERVATION_NONE,
         module.OBSERVATION_UNKNOWN,
     }
+
+
+def test_an_unreadable_signature_with_a_measured_body_is_an_earlier_observation(
+    tmp_path: Path,
+) -> None:
+    """No measurement at all is both hashes, not the signature alone.
+
+    WGLink builds a link's body state and its document signature separately: the
+    signature comes from one root-scope read that may raise, and the per-body
+    state from the records beside it. So an empty ``documentSignatureHash`` next
+    to a measured ``localBodyState`` is a real heartbeat -- a measurement was
+    taken, and only its document half is missing. Reading the empty signature on
+    its own would report "WGLink has not measured this document yet" over an
+    observation that exists and is out of date, which sends the user looking for
+    a first measurement instead of a fresh one.
+    """
+
+    workspace = tmp_path / "workspace"
+    _write_status(workspace, links=[_link(
+        localBodyState="modified",
+        documentSignatureHash=None,
+        geometryRevisionToken="rev-2",
+        measuredRevisionToken="rev-1",
+    )])
+
+    status = _read(workspace)
+
+    assert status["observationFreshness"] == "stale"
+    assert status["state"] != "current"
+    assert status["documentChangeDetectable"] is False
+    assert status["staleDetectionExplanation"] is not None
+    assert "has moved since" in status["staleDetectionExplanation"]
+
+
+def test_non_string_revision_tokens_are_never_compared_as_equal(tmp_path: Path) -> None:
+    """``_link_payload`` is the trust boundary, and it coerces both tokens.
+
+    The heartbeat is a JSON file on disk and an HTTP post: nothing guarantees a
+    token arrives as a string. Two equal numbers compared directly would say
+    "measured at the revision we are at now" and license ``current`` -- a
+    measurement claim built on a type the add-in never promised. Coerced, a
+    non-string token is no token, which is the same answer as a revision that
+    could not be keyed.
+    """
+
+    workspace = tmp_path / "workspace"
+    _write_status(workspace, links=[_link(
+        localBodyState="unmodified",
+        documentSignatureHash="sha256:document-a",
+        documentBodyCount=1,
+        geometryRevisionToken=5,
+        measuredRevisionToken=5,
+    )])
+
+    status = _read(workspace)
+
+    assert status["observationFreshness"] == "stale"
+    assert status["state"] != "current"
+    assert status["documentChangeDetectable"] is False
+    assert status["link"]["geometryRevisionToken"] is None
+    assert status["link"]["measuredRevisionToken"] is None

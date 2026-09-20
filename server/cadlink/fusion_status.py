@@ -68,8 +68,19 @@ _NO_OBSERVATION_EXPLANATION = (
 OBSERVATION_CURRENT = "current"
 OBSERVATION_STALE = "stale"
 OBSERVATION_NONE = "none"
-#: An add-in that publishes neither token says nothing either way, so every
-#: answer stays exactly what it was before the tokens existed.
+#: Neither token present. That is a bounded set of add-ins, not an open-ended
+#: compatibility waiver. :func:`read_fusion_status` answers ``addin_outdated``
+#: to any heartbeat below WG's own ``DELIVERY_VERSION`` -- 3, and an add-in
+#: older than the one that introduced it reports no delivery version at all --
+#: before it reads a link at all. Above that floor, WGLink has carried both
+#: names since its ``3dd9771``: the commit that made the heartbeat cache-only
+#: added them in the same change, without a delivery bump, and the record
+#: builder emits every field of its map unconditionally, null included. So an
+#: omission can only come from an add-in at or above the delivery-3 floor and
+#: older than ``3dd9771`` -- exactly the ones whose heartbeat measured the
+#: geometry it published, on the tick that published it. Their cached values
+#: are a measurement that occurred, so answering from them claims nothing that
+#: did not happen.
 OBSERVATION_UNKNOWN = "unknown"
 _REVISION_TOKENS = ("geometryRevisionToken", "measuredRevisionToken")
 
@@ -621,9 +632,20 @@ def read_fusion_status(
     observation_freshness = _observation_freshness(link)
     # An observation of a revision Fusion has already left, or none at all, is
     # not evidence of anything: its comparisons may be repeated word for word by
-    # a document that has since moved. Positive evidence still stands -- an
-    # observation that already differed from the returned model has not stopped
-    # differing -- so only the *absence* of a difference is withdrawn here.
+    # a document that has since moved. Only the *absence* of a difference is
+    # withdrawn here.
+    #
+    # Positive evidence is kept, and not because a difference cannot stop being
+    # one -- it can. Undo the edit back to the returned state and an observation
+    # of the edited revision still reports ``documentChanged`` at a revision
+    # where nothing differs any more. It is kept because the direction is the
+    # conservative one: holding "may have changed" over a document that now
+    # matches costs a redundant Receive, while withdrawing it would announce
+    # that Fusion matches the returned model on the strength of a measurement
+    # that cannot speak for the revision the document is at. And WGLink
+    # re-measures inline before any guarded mutation
+    # (``_require_live_state``), so a positive this stale is decided again at
+    # the one moment it could cost anything.
     observation_is_current = observation_freshness in {
         OBSERVATION_CURRENT,
         OBSERVATION_UNKNOWN,

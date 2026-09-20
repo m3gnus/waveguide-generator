@@ -240,9 +240,11 @@ function fusionConnectionView(status: FusionCadStatus | null): CadWorkflowView {
   // Before any reading that turns an absence of reported change into "nothing
   // changed": WGLink's heartbeat publishes a cached measurement, and unless its
   // revision tokens agree that measurement describes a revision the document
-  // may already have left. Positive evidence is exempt -- an observation that
-  // already differed from the returned model has not stopped differing -- so
-  // this only covers the case where silence would be read as agreement.
+  // may already have left. Positive evidence is exempt, not because a
+  // difference cannot stop being one (an undo back to the returned state leaves
+  // one reporting a difference the document no longer has) but because
+  // over-reporting is the conservative direction, so this only covers the case
+  // where silence would be read as agreement.
   const freshness = status.observationFreshness;
   if ((freshness === 'stale' || freshness === 'none') && !status.fusionChangesAvailable) {
     const named = status.documentName ? ` · ${status.documentName}` : '';

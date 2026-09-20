@@ -890,8 +890,10 @@ describe('CadLinkPanel', () => {
       wgChangesAvailable: true,
     })).toMatchObject({ state: 'refresh-needed', action: 'update' });
 
-    // Positive evidence of a Fusion change survives: an observation that already
-    // differed from the returned model has not stopped differing.
+    // Positive evidence of a Fusion change survives. Not because a difference
+    // cannot stop being one -- an undo back to the returned state leaves an
+    // observation reporting a difference the document no longer has -- but
+    // because over-reporting is the conservative direction here.
     expect(fusionWorkflowView({
       ...measured,
       state: 'stale' as const,

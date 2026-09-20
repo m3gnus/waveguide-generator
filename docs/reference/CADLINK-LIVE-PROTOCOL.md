@@ -261,8 +261,11 @@ add-in writes to `.fusion-status.json`; `204` with no body when recorded. Body l
   token), or `null` when no link is selected. Anything but `"current"` or `"unknown"`
   makes `documentChangeDetectable` false and forbids `state: "current"`: a cached hash
   that equals the returned one is not a comparison against the document as it stands.
-  Evidence of a difference is not withdrawn -- an observation that already differed has
-  not stopped differing -- only the absence of one.
+  Evidence of a difference is not withdrawn, only the absence of one. Not because a
+  difference cannot stop being one -- an undo back to the returned state leaves an
+  observation reporting a difference the document no longer has -- but because
+  over-reporting a change is the conservative direction, and the add-in re-measures
+  inline before any guarded mutation.
 
 ## 7. Fusion-bound requests
 
