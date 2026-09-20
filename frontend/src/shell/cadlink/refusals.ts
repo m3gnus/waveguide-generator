@@ -22,7 +22,7 @@ export interface PresentedRefusal {
   diagnostics: string;
 }
 
-interface RefusalCopy {
+export interface RefusalCopy {
   /** A phrase that identifies the refusal without matching its variable parts. */
   invariant: string;
   summary: string;
@@ -33,8 +33,12 @@ interface RefusalCopy {
  *
  * Matched on the fixed half of the sentence, because the rest of it is an
  * instance id that differs every time.
+ *
+ * Exported so the tests can constrain every entry rather than the one they
+ * happen to look up: a remedy that names an unestablished cause is the defect
+ * this table is most likely to grow, and it has to be caught table-wide.
  */
-const REFUSAL_COPY: readonly RefusalCopy[] = [
+export const REFUSAL_COPY: readonly RefusalCopy[] = [
   {
     // fusion-addins/WGLink/wglink_send.py, `_strict_assembly_from_link`:
     // `_matching_occurrences` found nothing to place this link against, and
@@ -45,10 +49,18 @@ const REFUSAL_COPY: readonly RefusalCopy[] = [
     summary: 'Fusion refused to export this waveguide: it could not find the component '
       + 'the waveguide was placed as, so it does not know where the geometry sits in the '
       + 'assembly. Nothing was exported and nothing was solved at a guessed position.',
+    // No cause is named. `_matching_occurrences` scans occurrences under a
+    // bare `except Exception: continue`, so an absent occurrence and an
+    // unreadable one are indistinguishable from here, and neither has been
+    // reproduced. An earlier draft of this remedy told the user to check the
+    // component was at the top level of the assembly; that condition cannot
+    // produce this refusal at all -- the scan walks
+    // `design.rootComponent.allOccurrences`, which traverses nested
+    // occurrences, and a nested wrapper raises its own distinct refusal
+    // immediately afterwards. This says what to try, and nothing about why.
     remedy: 'Open the linked document in Fusion and check that the WG waveguide’s own '
-      + 'component is still present, at the top level of the assembly, and is the one this '
-      + 'design is linked to. If it is not, send the design from WG again to rebuild the '
-      + 'link, then ask for the geometry once more.',
+      + 'component is still there and is the one this design is linked to. Then send the '
+      + 'design from WG again to rebuild the link, and ask for the geometry once more.',
   },
 ];
 

@@ -604,6 +604,9 @@ export function CadLinkCoordinator() {
   const ingestRequest = useRef(0);
   const ingestAbortController = useRef<AbortController | null>(null);
   const fusionStatusRequest = useRef(0);
+  // Set from `refreshFusionStatus` below, which the send path needs before it
+  // is declared. Same shape as `refreshRef`.
+  const fusionStatusReader = useRef<() => Promise<FusionCadStatus | null>>(async () => null);
   const onshapeStatusRequest = useRef(0);
   const onshapeConnectionRequested = useRef(false);
   const mounted = useRef(true);
@@ -762,13 +765,21 @@ export function CadLinkCoordinator() {
     fusionStatus,
     mounted,
     noteCadActivity,
+    readFusionStatus: fusionStatusReader,
     refresh,
     setError,
     setStatus,
   });
 
-  const refreshFusionStatus = useCallback(async () => {
-    if (preferences.cadApplication !== 'fusion360') return;
+  /** Read Fusion's status, publish it, and answer with what was read.
+   *
+   * The answer is for a caller that changed the world and must not go on
+   * deciding from the status it held before -- the send path, after the folder
+   * picker. `null` means there is no status to act on, which is not the same
+   * as `closed` or `not_linked`: those are answers.
+   */
+  const refreshFusionStatus = useCallback(async (): Promise<FusionCadStatus | null> => {
+    if (preferences.cadApplication !== 'fusion360') return null;
     const request = ++fusionStatusRequest.current;
     try {
       const next = await getFusionCadStatus(
@@ -778,8 +789,10 @@ export function CadLinkCoordinator() {
         fetch,
         selectedFusionInstanceId,
       );
-      if (request === fusionStatusRequest.current
-        && ['closed', 'addin_offline', 'addin_outdated', 'no_document', 'not_linked', 'instance_selection_required', 'current', 'stale'].includes(next.state)) {
+      if (!['closed', 'addin_offline', 'addin_outdated', 'no_document', 'not_linked', 'instance_selection_required', 'current', 'stale'].includes(next.state)) {
+        return null;
+      }
+      if (request === fusionStatusRequest.current) {
         setFusionStatus(next);
         fusionProcessLive.current = next.processRunning === true;
         // A heartbeat that keeps saying `closed` is the evidence for backing
@@ -790,11 +803,14 @@ export function CadLinkCoordinator() {
           noteCadActivity();
         }
       }
+      return next;
     } catch {
       // Presence is advisory. Workspace and export errors are presented by the
       // actual action; a missed heartbeat must not hide CAD returns.
+      return null;
     }
   }, [design, identity, noteCadActivity, preferences.cadApplication, selectedBundlePath, selectedFusionInstanceId]);
+  fusionStatusReader.current = refreshFusionStatus;
 
   const selectFusionInstance = useCallback((instanceId: string) => {
     setSelectedFusionInstanceId(instanceId);

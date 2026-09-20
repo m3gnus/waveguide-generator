@@ -845,6 +845,99 @@ describe('CadLinkCoordinator', () => {
     expect(cadLinkCoordinatorBridge.getSnapshot().error).toBeNull();
   });
 
+  it('runs the send guards against the link the folder picker revealed, not the one before it', async () => {
+    // The exchange folder is read from the filesystem and the link is not
+    // (server/workspace/api.py answers `None` for a folder that is not a
+    // directory right now, while the link and heartbeat come from the data
+    // directory). So an established link with Fusion-side changes can be
+    // reported alongside `cadFolderConfigured: false` -- a renamed, unmounted
+    // or not-yet-synced folder is enough. Choosing the folder changes the
+    // world the guards are about, so every guard has to see the status read
+    // after the pick. Deciding from the pre-pick status made the two-way
+    // conflict guard unreachable (`not-configured` has a null `action`) and
+    // sent an unbound create export over a live link, reporting success.
+    let folder: string | null = null;
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === '/api/cad-workspace/select') {
+        folder = '/chosen/cadlink';
+        return json({ selected: true, path: folder });
+      }
+      // Present, so that a send which does get this far succeeds rather than
+      // failing on the mock: the defect this covers reported success.
+      if (path === '/api/cad-workspace/path') return json({ selected: folder !== null, path: folder });
+      if (path === '/api/export/wglink') return json({
+        bundlePath: '/chosen/cadlink/wglink/speaker.wglink', bundleId: 'wgb_1', exportId: 'wge_1',
+        sequence: 1, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+      });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: folder !== null, items: [] });
+      if (path.endsWith('/fusion-status')) return json({
+        ...linkedFusionStatus,
+        state: 'stale', wgChangesAvailable: true, fusionChangesAvailable: true,
+        cadFolderConfigured: folder !== null, cadFolderPath: folder,
+      });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.cadFolderConfigured).toBe(false);
+
+    let outcome: unknown = 'not settled';
+    await act(async () => {
+      outcome = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+    });
+
+    expect(calls).toContain('/api/cad-workspace/select');
+    // Parked on the two-way conflict dialog, which is what `null` means.
+    expect(outcome).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(true);
+    // Nothing was exported, so nothing overwrote the link with a create send.
+    expect(calls).not.toContain('/api/export/wglink');
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toBeNull();
+  });
+
+  it('will not send when the status cannot be read again after the folder is chosen', async () => {
+    // Without a post-pick status there is nothing to derive open-vs-update
+    // from, and the shape of a missing status -- `fusionWorkflowView(null)`
+    // answers `open` -- is exactly the unbound create send this must not make.
+    let folder: string | null = null;
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === '/api/cad-workspace/select') {
+        folder = '/chosen/cadlink';
+        return json({ selected: true, path: folder });
+      }
+      if (path === '/api/cad-workspace/path') return json({ selected: folder !== null, path: folder });
+      if (path === '/api/export/wglink') return json({
+        bundlePath: '/chosen/cadlink/wglink/speaker.wglink', bundleId: 'wgb_1', exportId: 'wge_1',
+        sequence: 1, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+      });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: folder !== null, items: [] });
+      if (path.endsWith('/fusion-status')) {
+        return folder === null
+          ? json({ ...linkedFusionStatus, cadFolderConfigured: false, cadFolderPath: null })
+          : json({ detail: 'fusion status unavailable' }, 503);
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    let outcome: unknown = 'not settled';
+    await act(async () => {
+      outcome = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion()
+        .then((value) => ({ resolved: value }), (reason: unknown) => ({ rejected: String(reason) }));
+    });
+
+    expect(calls).toContain('/api/cad-workspace/select');
+    expect(calls).not.toContain('/api/export/wglink');
+    // A rejection, never `null`: `null` means parked on the conflict dialog.
+    expect(outcome).toMatchObject({ rejected: expect.stringContaining('could not check') });
+    expect(cadLinkCoordinatorBridge.getSnapshot().error ?? '').toContain('could not check');
+  });
+
   it('says plainly what is needed when the folder picker is dismissed', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -941,6 +1034,65 @@ describe('CadLinkCoordinator', () => {
     expect(snapshot.error ?? '').not.toContain('defaulted to identity');
     expect(snapshot.errorDiagnostics?.message).toBe(snapshot.error);
     expect(snapshot.errorDiagnostics?.detail).toContain(WRAPPER_REFUSAL);
+    expect(snapshot.pullingFromFusion).toBe(false);
+  });
+
+  it('lets an arrived bundle win over a refusal recorded under the same request id', async () => {
+    // WG can hold both at once: WGLink writes the bundle and the operation
+    // record separately, and a retried or partly-failed operation can end
+    // `rejected` after the geometry it produced is already in the folder. The
+    // bundle is geometry the user can use; the refusal is a report about the
+    // request. Presenting the refusal instead would take working geometry off
+    // the screen and replace it with an error about work that did land.
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = { cadFolderConfigured: true, items: [] };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(linkedFusionStatus);
+      if (path.endsWith('/request-fusion-return')) {
+        return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
+      }
+      if (path.endsWith('/ingest')) return json(ingestRecord);
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    let settled: CadReturnBundle | null = null;
+    let rejection: unknown;
+    await act(async () => {
+      cadLinkCoordinatorBridge.getSnapshot().pullFromFusion()
+        .then((bundle) => { settled = bundle; }, (reason) => { rejection = reason; });
+      await Promise.resolve(); await Promise.resolve();
+    });
+
+    // Both arrive in the same poll: the geometry in the listing, the refusal
+    // under the request id this pull is waiting on.
+    listing = {
+      cadFolderConfigured: true,
+      items: [{ ...initialBundle, requestId: 'req_1', documentName: 'Speaker pulled' }],
+    };
+    act(() => {
+      useCadOperationsStore.getState().apply(refusedReturnOperation('req_1', WRAPPER_REFUSAL));
+    });
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve();
+    });
+
+    // The pull settles on the geometry, and the refusal never becomes the
+    // answer: no rejection, no error, and nothing on screen about a refusal.
+    expect(rejection).toBeUndefined();
+    expect(settled).toMatchObject({ requestId: 'req_1' });
+    const snapshot = cadLinkCoordinatorBridge.getSnapshot();
+    expect(snapshot.error).toBeNull();
+    expect(snapshot.errorDiagnostics).toBeNull();
+    expect(snapshot.status ?? '').not.toContain('refused');
+    // And the arrival went on down the normal path: selected, then ingested.
+    expect(useCadReturnStore.getState().selectedBundle?.requestId).toBe('req_1');
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
     expect(snapshot.pullingFromFusion).toBe(false);
   });
 
