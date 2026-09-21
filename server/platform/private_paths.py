@@ -10,14 +10,8 @@ import threading
 
 
 log = logging.getLogger("wg.paths")
-_checked_paths: set[str] = set()
+_checked_paths: set[tuple[int, int]] = set()
 _checked_paths_lock = threading.Lock()
-
-
-def _path_key(path: Path) -> str:
-    """A lexical, absolute key which deliberately does not follow symlinks."""
-
-    return os.path.normcase(os.path.abspath(path))
 
 
 def _symlink_in_chain(path: Path, data_root: Path) -> Path | None:
@@ -56,22 +50,16 @@ def ensure_private_directory(
         path.mkdir(mode=0o700, parents=parents, exist_ok=True)
         return path
 
-    key = _path_key(path)
-    with _checked_paths_lock:
-        already_checked = key in _checked_paths
-    if already_checked:
-        path.mkdir(mode=0o700, parents=parents, exist_ok=True)
-        return path
-
     try:
-        path.lstat()
-        existed = True
-    except FileNotFoundError:
+        path.mkdir(mode=0o700, parents=parents, exist_ok=False)
         existed = False
-    path.mkdir(mode=0o700, parents=parents, exist_ok=True)
+    except FileExistsError:
+        existed = True
+    metadata = path.lstat()
+    key = (metadata.st_dev, metadata.st_ino)
 
-    # Another caller may have completed this one-time inspection while this
-    # caller was ensuring that the directory exists.
+    # Cache the object, not its name: an externally recreated directory at the
+    # same path has a new identity and must be inspected and tightened again.
     with _checked_paths_lock:
         already_checked = key in _checked_paths
         if not already_checked:
@@ -84,7 +72,6 @@ def ensure_private_directory(
     if not existed:
         return path
 
-    metadata = path.lstat()
     try:
         linked = _symlink_in_chain(path, data_root if data_root is not None else path)
     except OSError as exc:

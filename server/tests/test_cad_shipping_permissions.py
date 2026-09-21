@@ -255,22 +255,85 @@ def test_owned_shipping_directories_with_loose_modes_are_tightened(tmp_path: Pat
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
-def test_private_directory_tightening_is_checked_once_per_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_private_directory_tightening_does_not_repeat_chmod_or_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     path = tmp_path / "existing"
     path.mkdir(mode=0o755)
     path.chmod(0o755)
-    ensure_private_directory(path, data_root=tmp_path)
-    real_lstat = Path.lstat
+    real_chmod = Path.chmod
+    chmod_calls: list[Path] = []
 
-    def reject_repeated_lstat(candidate: Path, *args: Any, **kwargs: Any):
+    def record_chmod(candidate: Path, *args: Any, **kwargs: Any) -> None:
         if candidate == path:
-            pytest.fail("repeated permission lstat")
-        return real_lstat(candidate, *args, **kwargs)
+            chmod_calls.append(candidate)
+            raise PermissionError(errno.EACCES, "injected chmod failure")
+        real_chmod(candidate, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "lstat", reject_repeated_lstat)
-    ensure_private_directory(path, data_root=tmp_path)
+    monkeypatch.setattr(Path, "chmod", record_chmod)
+    with caplog.at_level(logging.WARNING, logger="wg.paths"):
+        ensure_private_directory(path, data_root=tmp_path)
+        ensure_private_directory(path, data_root=tmp_path)
+
+    assert chmod_calls == [path]
+    assert caplog.text.count("Could not tighten permissions") == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
+def test_recreated_directory_is_tightened(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    path = data_dir / "ipc" / "wglink"
+    ensure_private_directory(path, parents=True, data_root=data_dir)
+    path.rmdir()
+    path.mkdir(mode=0o755)
+    path.chmod(0o755)
+
+    fusion_delivery.ipc_folder(data_dir, create=True)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o700
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory descriptors")
+def test_parent_swap_is_not_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    inbox = _inbox(data_dir)
+    original = _valid_request("original-request")
+    outside_request = _valid_request("outside-request")
+    (inbox / "request.json").write_text(json.dumps(original), encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "request.json").write_text(
+        json.dumps(outside_request), encoding="utf-8"
+    )
+    saved_inbox = inbox.with_name("saved-inbox")
+    real_open = os.open
+    swapped = False
+
+    def swap_after_directory_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        nonlocal swapped
+        descriptor = real_open(path, flags, *args, **kwargs)
+        if not swapped and Path(path) == inbox.resolve() and flags & os.O_DIRECTORY:
+            inbox.rename(saved_inbox)
+            inbox.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return descriptor
+
+    monkeypatch.setattr(solve_command.os, "open", swap_after_directory_open)
+    store = CadLinkStore.for_data_dir(data_dir)
+    try:
+        collect_solve_deliveries(data_dir, store)
+        assert swapped
+        assert store.get_operation(original["commandId"]) is not None
+        assert store.get_operation(outside_request["commandId"]) is None
+    finally:
+        store.close()
+
+    assert (outside / "request.json").is_file()
+    assert list(saved_inbox.iterdir()) == []
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks and modes")

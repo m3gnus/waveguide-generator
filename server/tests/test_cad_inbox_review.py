@@ -94,16 +94,19 @@ def _fail_reads(monkeypatch: pytest.MonkeyPatch, *, claims: bool, times: int | N
     real = os.open
     count = {"n": 0}
 
-    def open_file(path: str | bytes | os.PathLike[str] | os.PathLike[bytes], flags: int, *args: Any) -> int:
+    def open_file(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        *args: Any,
+        **kwargs: Any,
+    ) -> int:
         candidate = Path(path)
         is_claim = candidate.name.startswith(CLAIM_PREFIX)
-        target = is_claim if claims else (
-            candidate.parent.name == SOLVE_REQUESTS_DIRECTORY and not is_claim
-        )
+        target = is_claim if claims else candidate.suffix == ".json" and not is_claim
         if target and (times is None or count["n"] < times):
             count["n"] += 1
             raise PermissionError(*SHARING_VIOLATION)
-        return real(path, flags, *args)
+        return real(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(solve_command.os, "open", open_file)
     return count
@@ -234,16 +237,16 @@ def test_a_refused_claim_that_cannot_be_deleted_is_reported_once(env, monkeypatc
     data_dir, workspace, store = env
     bundle_path, manifest = _write_return(workspace)
     _drop(data_dir, _request("cmd-nokind", bundle_path, manifest, schema=4))
-    real = Path.unlink
+    real = os.unlink
     held = {"on": True, "tries": 0}
 
-    def unlink(self: Path, *args: Any, **kwargs: Any) -> None:
-        if self.name.startswith(CLAIM_PREFIX) and held["on"]:
+    def unlink(path: str | bytes | os.PathLike[str], *args: Any, **kwargs: Any) -> None:
+        if Path(path).name.startswith(CLAIM_PREFIX) and held["on"]:
             held["tries"] += 1
             raise PermissionError(*SHARING_VIOLATION)
-        return real(self, *args, **kwargs)
+        return real(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(solve_command.os, "unlink", unlink)
     refused: list[dict[str, Any]] = []
     for _ in range(5):
         collect_solve_deliveries(data_dir, store, refuse=refused.append)

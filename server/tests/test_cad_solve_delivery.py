@@ -162,18 +162,17 @@ def test_a_newer_marker_written_during_the_acknowledgement_survives(
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
     _file(data_dir, "cmd-1", bundle_path, manifest)
-    folder = _ipc(data_dir).resolve()
-    original_unlink = Path.unlink
+    original_unlink = os.unlink
     injected: list[str] = []
 
-    def unlink_after_a_newer_marker_lands(self, *args, **kwargs):
+    def unlink_after_a_newer_marker_lands(path, *args, **kwargs):
         # Fusion writes cmd-2 between the consumer's read of cmd-1 and its delete.
-        if not injected and folder in Path(self).resolve().parents:
-            injected.append(str(self))
+        if not injected and Path(path).name.startswith(solve_command.CLAIM_PREFIX):
+            injected.append(str(path))
             _file(data_dir, "cmd-2", bundle_path, manifest, requested_at="2026-09-13T01:00:05Z")
-        return original_unlink(self, *args, **kwargs)
+        return original_unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "unlink", unlink_after_a_newer_marker_lands)
+    monkeypatch.setattr(solve_command.os, "unlink", unlink_after_a_newer_marker_lands)
 
     assert _poll(data_dir, store) is None
     assert injected, "the consumer never deleted a delivery file"
@@ -305,17 +304,17 @@ def test_a_failed_delete_after_persisting_recovers_the_same_operation(
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
     _file(data_dir, "cmd-1", bundle_path, manifest)
-    original_unlink = Path.unlink
+    original_unlink = os.unlink
     refused: list[str] = []
 
     # Held for the whole of one pass, brief retries included.
-    def held_open_once(self, *args, **kwargs):
+    def held_open_once(path, *args, **kwargs):
         if len(refused) < solve_command._HELD_ATTEMPTS:
-            refused.append(str(self))
+            refused.append(str(path))
             raise PermissionError(13, "The process cannot access the file")
-        return original_unlink(self, *args, **kwargs)
+        return original_unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "unlink", held_open_once)
+    monkeypatch.setattr(solve_command.os, "unlink", held_open_once)
 
     assert _poll(data_dir, store) is None
     assert refused and len(_delivery_files(data_dir)) == 1

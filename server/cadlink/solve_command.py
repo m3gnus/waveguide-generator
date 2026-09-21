@@ -30,6 +30,7 @@ stays so the user can acknowledge findings and run it.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import errno
 import json
@@ -92,6 +93,9 @@ _unreadable_waits: dict[str, tuple[str, int]] = {}
 # Claims already refused (or reported unreadable) whose file is still there, by
 # claim name: reported once; afterwards only the delete is retried, quietly.
 _refused_claims: set[str] = set()
+_DELIVERY_DIR_FDS = os.name != "nt" and all(
+    operation in os.supports_dir_fd for operation in (os.open, os.rename, os.unlink)
+)
 
 
 class _Unreadable:
@@ -508,7 +512,7 @@ def _command_from_payload(
     )
 
 
-def _read_payload(path: Path) -> object:
+def _read_payload(path: Path, *, dir_fd: int | None = None) -> object:
     """The JSON a file holds; None when its bytes are not JSON; :class:`_Unreadable`
     when the read itself failed, after a brief retry of a file that is held.
 
@@ -519,7 +523,11 @@ def _read_payload(path: Path) -> object:
     for attempt in range(_HELD_ATTEMPTS):
         descriptor: int | None = None
         try:
-            metadata = path.lstat()
+            metadata = (
+                os.stat(path.name, dir_fd=dir_fd, follow_symlinks=False)
+                if dir_fd is not None
+                else path.lstat()
+            )
             is_reparse_point = bool(
                 getattr(metadata, "st_file_attributes", 0)
                 & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
@@ -536,7 +544,11 @@ def _read_payload(path: Path) -> object:
             else:
                 flags |= getattr(os, "O_BINARY", 0)
             try:
-                descriptor = os.open(path, flags)
+                descriptor = (
+                    os.open(path.name, flags, dir_fd=dir_fd)
+                    if dir_fd is not None
+                    else os.open(path, flags)
+                )
             except OSError as exc:
                 if nofollow and exc.errno == errno.ELOOP:
                     return _UnsafePayload(
@@ -599,21 +611,35 @@ class _Delivery:
     command: PendingSolveCommand | None
     age: tuple[str, int, str]
     invalid: str | None = None
+    #: A pinned directory for every filesystem operation in this pass (POSIX).
+    dir_fd: int | None = None
 
 
-def _files(directory: Path) -> list[Path]:
+def _files(directory: Path, *, dir_fd: int | None = None) -> list[Path]:
     try:
         # Unsafe leaf types must reach ``_read_payload`` for visible refusal.
         # Real directories are not request files and remain untouched.
+        if dir_fd is not None:
+            return [
+                directory / name
+                for name in os.listdir(dir_fd)
+                if not stat.S_ISDIR(
+                    os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode
+                )
+            ]
         return [path for path in directory.iterdir() if path.is_symlink() or not path.is_dir()]
     except OSError:
         return []
 
 
 def _delivery(
-    path: Path, *, claimed: bool, schema_versions: frozenset[int]
+    path: Path,
+    *,
+    claimed: bool,
+    schema_versions: frozenset[int],
+    dir_fd: int | None = None,
 ) -> _Delivery | None:
-    payload = _read_payload(path)
+    payload = _read_payload(path, dir_fd=dir_fd)
     invalid: str | None = None
     if isinstance(payload, _UnsafePayload):
         invalid = payload.reason
@@ -624,10 +650,16 @@ def _delivery(
         if not claimed:
             return None
         try:
-            modified = path.stat().st_mtime_ns
+            modified = (
+                os.stat(path.name, dir_fd=dir_fd).st_mtime_ns
+                if dir_fd is not None
+                else path.stat().st_mtime_ns
+            )
         except OSError:
             return None
-        return _Delivery(path, claimed, schema_versions, None, ("", modified, path.name), None)
+        return _Delivery(
+            path, claimed, schema_versions, None, ("", modified, path.name), None, dir_fd
+        )
     if invalid is None:
         try:
             command = _command_from_payload(payload, path, schema_versions=schema_versions)
@@ -642,7 +674,11 @@ def _delivery(
             return None
         invalid = UNREADABLE_CLAIM_REASON
     try:
-        modified = path.lstat().st_mtime_ns
+        modified = (
+            os.stat(path.name, dir_fd=dir_fd, follow_symlinks=False).st_mtime_ns
+            if dir_fd is not None
+            else path.lstat().st_mtime_ns
+        )
     except OSError:
         return None
     requested_at = (
@@ -651,7 +687,13 @@ def _delivery(
         else str(payload.get("requestedAt") or "") if isinstance(payload, Mapping) else ""
     )
     return _Delivery(
-        path, claimed, schema_versions, command, (requested_at, modified, path.name), invalid
+        path,
+        claimed,
+        schema_versions,
+        command,
+        (requested_at, modified, path.name),
+        invalid,
+        dir_fd,
     )
 
 
@@ -667,7 +709,56 @@ def inbox_refusal(payload: object, file_name: str, reason: str) -> dict[str, Any
     }
 
 
-def _deliveries(data_dir: Path) -> list[_Delivery]:
+def _delivery_directories(data_dir: Path) -> tuple[Path, Path]:
+    folder = ipc_folder(data_dir, create=True)
+    requests = folder / SOLVE_REQUESTS_DIRECTORY
+    ensure_private_directory(
+        Path(data_dir) / IPC_SUBDIRECTORY / SOLVE_REQUESTS_DIRECTORY,
+        data_root=Path(data_dir),
+    )
+    return folder, requests
+
+
+@contextmanager
+def _pinned_delivery_directories(
+    data_dir: Path,
+):
+    """Pin each delivery directory for one complete collection pass.
+
+    Configured data roots may intentionally be symlinks, so resolve the chosen
+    directories first and apply ``O_NOFOLLOW`` only to each resolved leaf. On
+    Windows, where these relative operations are unavailable, leaf identity is
+    still checked by :func:`_read_payload`; parent replacement remains inside
+    the established same-user filesystem trust boundary.
+    """
+
+    directories = _delivery_directories(data_dir)
+    descriptors: dict[Path, int | None] = dict.fromkeys(directories)
+    opened: list[int] = []
+    try:
+        if _DELIVERY_DIR_FDS:
+            flags = (
+                os.O_RDONLY
+                | os.O_DIRECTORY
+                | os.O_NOFOLLOW
+                | getattr(os, "O_CLOEXEC", 0)
+            )
+            for directory in directories:
+                descriptor = os.open(directory.resolve(strict=True), flags)
+                descriptors[directory] = descriptor
+                opened.append(descriptor)
+        yield directories, descriptors
+    finally:
+        for descriptor in reversed(opened):
+            os.close(descriptor)
+
+
+def _deliveries(
+    data_dir: Path,
+    *,
+    dir_fds: Mapping[Path, int | None] | None = None,
+    directories: tuple[Path, Path] | None = None,
+) -> list[_Delivery]:
     """Every solve command waiting on disk, oldest first.
 
     That is the per-command files, what an older WGLink wrote (taken only to be
@@ -677,26 +768,40 @@ def _deliveries(data_dir: Path) -> list[_Delivery]:
     file's modification time.
     """
 
-    folder = ipc_folder(data_dir, create=True)
-    requests = folder / SOLVE_REQUESTS_DIRECTORY
-    ensure_private_directory(
-        Path(data_dir) / IPC_SUBDIRECTORY / SOLVE_REQUESTS_DIRECTORY, data_root=Path(data_dir)
-    )
+    folder, requests = directories or _delivery_directories(data_dir)
     found: list[_Delivery | None] = []
     for directory, versions in ((folder, _SLOT_SCHEMAS), (requests, _FILE_SCHEMAS)):
-        for path in _files(directory):
+        dir_fd = dir_fds.get(directory) if dir_fds is not None else None
+        for path in _files(directory, dir_fd=dir_fd):
             if path.name.startswith(CLAIM_PREFIX) and path.suffix == ".json":
-                found.append(_delivery(path, claimed=True, schema_versions=versions))
+                found.append(
+                    _delivery(
+                        path, claimed=True, schema_versions=versions, dir_fd=dir_fd
+                    )
+                )
     found.append(
-        _delivery(folder / SOLVE_REQUEST_FILENAME, claimed=False, schema_versions=_SLOT_SCHEMAS)
+        _delivery(
+            folder / SOLVE_REQUEST_FILENAME,
+            claimed=False,
+            schema_versions=_SLOT_SCHEMAS,
+            dir_fd=dir_fds.get(folder) if dir_fds is not None else None,
+        )
     )
-    for path in _files(requests):
+    requests_fd = dir_fds.get(requests) if dir_fds is not None else None
+    for path in _files(requests, dir_fd=requests_fd):
         if not path.name.startswith(".") and path.suffix == ".json":
-            found.append(_delivery(path, claimed=False, schema_versions=_FILE_SCHEMAS))
+            found.append(
+                _delivery(
+                    path,
+                    claimed=False,
+                    schema_versions=_FILE_SCHEMAS,
+                    dir_fd=requests_fd,
+                )
+            )
     return sorted((item for item in found if item is not None), key=lambda item: item.age)
 
 
-def _claim(path: Path) -> Path | None:
+def _claim(path: Path, *, dir_fd: int | None = None) -> Path | None:
     """Take a delivery by renaming it; None means try again on the next poll.
 
     The rename fails when the file is already gone (another consumer took it)
@@ -705,7 +810,10 @@ def _claim(path: Path) -> Path | None:
 
     claim = path.with_name(f"{CLAIM_PREFIX}{uuid.uuid4().hex}.json")
     try:
-        os.rename(path, claim)
+        if dir_fd is None:
+            os.rename(path, claim)
+        else:
+            os.rename(path.name, claim.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
     except FileNotFoundError:
         return None
     except OSError as exc:
@@ -714,7 +822,9 @@ def _claim(path: Path) -> Path | None:
     return claim
 
 
-def _acknowledge(path: Path, *, quiet: bool = False) -> bool:
+def _acknowledge(
+    path: Path, *, quiet: bool = False, dir_fd: int | None = None
+) -> bool:
     """Delete a consumed delivery. False leaves it for the next poll to recover.
 
     A file another process holds is retried briefly first.
@@ -722,7 +832,10 @@ def _acknowledge(path: Path, *, quiet: bool = False) -> bool:
 
     for attempt in range(_HELD_ATTEMPTS):
         try:
-            path.unlink()
+            if dir_fd is None:
+                path.unlink()
+            else:
+                os.unlink(path.name, dir_fd=dir_fd)
         except FileNotFoundError:
             return True
         except OSError as exc:
@@ -901,8 +1014,11 @@ def collect_solve_deliveries(
             except Exception:  # noqa: BLE001 - as above
                 logger.debug("Could not report a refused delivery.", exc_info=True)
 
-    with _DELIVERY_LOCK:
-        deliveries = _deliveries(data_dir)
+    with _DELIVERY_LOCK, _pinned_delivery_directories(data_dir) as (
+        directories,
+        dir_fds,
+    ):
+        deliveries = _deliveries(data_dir, dir_fds=dir_fds, directories=directories)
         # A claim that is gone -- acknowledged, or taken by another consumer --
         # waits for nothing any more.
         present = {delivery.path.name for delivery in deliveries if delivery.claimed}
@@ -919,13 +1035,17 @@ def collect_solve_deliveries(
             if delivery.claimed and delivery.path.name in _refused_claims:
                 # Refused (or reported unreadable) already, and its file is
                 # still here: only the delete is retried, and quietly.
-                _acknowledge(delivery.path, quiet=True)
+                _acknowledge(delivery.path, quiet=True, dir_fd=delivery.dir_fd)
                 continue
-            claim = delivery.path if delivery.claimed else _claim(delivery.path)
+            claim = (
+                delivery.path
+                if delivery.claimed
+                else _claim(delivery.path, dir_fd=delivery.dir_fd)
+            )
             if claim is None:
                 continue
             # What the rename took is the request, not what was read before.
-            payload = _read_payload(claim)
+            payload = _read_payload(claim, dir_fd=delivery.dir_fd)
             if isinstance(payload, _UnsafePayload):
                 invalid = payload.reason
                 payload = None
@@ -972,7 +1092,7 @@ def collect_solve_deliveries(
                 )
                 refused(refusal)
                 _retention_waits.pop(claim.name, None)
-                if not _acknowledge(claim):
+                if not _acknowledge(claim, dir_fd=delivery.dir_fd):
                     # Held: reported once, the delete retried quietly each pass.
                     _refused_claims.add(claim.name)
                 continue
@@ -1011,7 +1131,7 @@ def collect_solve_deliveries(
                 held.discard(command.command_id)
             # A delete that fails leaves the claim for the next poll, which
             # recovers the same operation and answers it then.
-            if _acknowledge(claim) and answer is not None:
+            if _acknowledge(claim, dir_fd=delivery.dir_fd) and answer is not None:
                 return {"command": command.payload(), "outcome": answer}
     return None
 
