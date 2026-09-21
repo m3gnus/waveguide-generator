@@ -786,6 +786,175 @@ def test_delivery_loop_pushes_when_addin_session_or_declaration_changes(
     ]
 
 
+@pytest.mark.parametrize("setting", [[], {}])
+def test_malformed_addin_declaration_does_not_stop_delivery(
+    data_dir, workspace, store, monkeypatch, setting
+) -> None:
+    from server.cadlink import api
+    from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
+
+    marker = workspace / "ipc" / "wglink" / FUSION_STATUS_FILENAME
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({
+        "sessionId": "malformed-session",
+        "diagnostics": {"activation": {
+            "settingsKey": "automatic_coordination",
+            "automaticCoordination": False,
+            "setting": setting,
+        }},
+    }), encoding="utf-8")
+    passes: list[bool] = []
+    published: list[dict[str, Any]] = []
+    app = SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=store,
+        data_dir=str(data_dir),
+        cad_workspace=SimpleNamespace(selected_path=lambda: workspace),
+        jobs_runtime=SimpleNamespace(
+            store=SimpleNamespace(), events=SimpleNamespace(publish=published.append), submit=None
+        ),
+        update_restart=None,
+    ))
+    monkeypatch.setenv("WG2_CAD_DELIVERY", "1")
+    monkeypatch.setattr(api, "_DELIVERY_INTERVAL_S", 0.001)
+
+    async def observed_pass(*_args, **_kwargs):
+        passes.append(True)
+
+    monkeypatch.setattr(api, "run_delivery_pass", observed_pass)
+
+    async def scenario() -> None:
+        await api._deliver_solve_commands(app)()
+        task = app.state.cad_delivery_task
+        try:
+            for _ in range(100):
+                if passes:
+                    return
+                await asyncio.sleep(0.002)
+            raise AssertionError("malformed advisory declaration prevented every delivery pass")
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(scenario())
+    assert published == [{"v": 1, "kind": "cadAddinStatusChanged"}]
+
+
+def test_addin_detector_failure_is_logged_once_and_does_not_stop_delivery(
+    data_dir, workspace, store, monkeypatch, caplog
+) -> None:
+    from server.cadlink import api
+
+    passes: list[bool] = []
+    app = SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=store,
+        data_dir=str(data_dir),
+        cad_workspace=SimpleNamespace(selected_path=lambda: workspace),
+        jobs_runtime=SimpleNamespace(store=SimpleNamespace(), events=None, submit=None),
+        update_restart=None,
+    ))
+    monkeypatch.setenv("WG2_CAD_DELIVERY", "1")
+    monkeypatch.setattr(api, "_DELIVERY_INTERVAL_S", 0.001)
+
+    def broken_detector(_workspace):
+        raise RuntimeError("broken declaration detector")
+
+    async def observed_pass(*_args, **_kwargs):
+        passes.append(True)
+
+    monkeypatch.setattr(api, "addin_inbox_session_signature", broken_detector)
+    monkeypatch.setattr(api, "run_delivery_pass", observed_pass)
+
+    async def scenario() -> None:
+        await api._deliver_solve_commands(app)()
+        task = app.state.cad_delivery_task
+        try:
+            for _ in range(100):
+                if len(passes) >= 3:
+                    return
+                await asyncio.sleep(0.002)
+            raise AssertionError("detector failure prevented delivery passes")
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(scenario())
+    detector_logs = [
+        record for record in caplog.records
+        if "Detecting the CAD add-in declaration failed" in record.getMessage()
+    ]
+    assert len(detector_logs) == 1
+
+
+def test_transient_partial_heartbeat_does_not_publish_addin_transition(
+    data_dir, workspace, store, monkeypatch
+) -> None:
+    from server.cadlink import api
+    from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
+
+    marker = workspace / "ipc" / "wglink" / FUSION_STATUS_FILENAME
+    marker.parent.mkdir(parents=True)
+    payload = {
+        "sessionId": "stable-session",
+        "diagnostics": {"activation": {
+            "settingsKey": "automatic_coordination",
+            "automaticCoordination": False,
+            "setting": "settings",
+        }},
+    }
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+    published: list[dict[str, Any]] = []
+    passes = 0
+    continue_pass: asyncio.Queue[None] = asyncio.Queue()
+    app = SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=store,
+        data_dir=str(data_dir),
+        cad_workspace=SimpleNamespace(selected_path=lambda: workspace),
+        jobs_runtime=SimpleNamespace(
+            store=SimpleNamespace(), events=SimpleNamespace(publish=published.append), submit=None
+        ),
+        update_restart=None,
+    ))
+    monkeypatch.setenv("WG2_CAD_DELIVERY", "1")
+    monkeypatch.setattr(api, "_DELIVERY_INTERVAL_S", 0.001)
+
+    async def observed_pass(*_args, **_kwargs):
+        nonlocal passes
+        passes += 1
+        await continue_pass.get()
+
+    monkeypatch.setattr(api, "run_delivery_pass", observed_pass)
+
+    async def wait_for_passes(count: int) -> None:
+        for _ in range(100):
+            if passes >= count:
+                return
+            await asyncio.sleep(0.002)
+        raise AssertionError(f"delivery loop stopped at {passes} passes")
+
+    async def scenario() -> None:
+        await api._deliver_solve_commands(app)()
+        task = app.state.cad_delivery_task
+        try:
+            await wait_for_passes(1)
+            assert len(published) == 1
+            marker.write_text('{"sessionId":', encoding="utf-8")
+            continue_pass.put_nowait(None)
+            await wait_for_passes(2)
+            marker.write_text(json.dumps(payload), encoding="utf-8")
+            continue_pass.put_nowait(None)
+            await wait_for_passes(3)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(scenario())
+    assert published == [{"v": 1, "kind": "cadAddinStatusChanged"}]
+
+
 def test_a_pass_that_collects_and_starts_work_reports_no_reason(data_dir, workspace, store):
     """The control: a pass that actually starts an operation notes nothing.
 

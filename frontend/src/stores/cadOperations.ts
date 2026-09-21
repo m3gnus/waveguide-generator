@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { getCadOperation, isPendingCadOperation, listCadOperations, type CadDeliveryStatus, type CadInboxRefusal, type CadOperationSummary } from '../api/cadOperations';
+import { CadLinkApiError } from '../api/cadlink';
 import { jobsSocket, type JobsSocketManager } from '../api/jobsSocket';
 
 /** How many refusals the CAD Link panel keeps, as the server does. */
@@ -134,6 +135,7 @@ export const FIRST_CONNECTION_WINDOW_MS = 10 * 60_000;
 const SEEN_SINCE_KEY = 'wg2.cad.sends.since.v1';
 const DISPLAYED_KEY = 'wg2.cad.sends.displayed.v1';
 const DISPLAYED_LIMIT = 100;
+const RECOVERY_READ_CONCURRENCY = 8;
 
 function sessionStore(): Storage | null {
   try {
@@ -182,31 +184,85 @@ export const displayedSends = {
  * `awaited` is taken before the first await, before the reconnect's own
  * listing can forget those rows.
  */
+interface RecoveryResult {
+  reconciled: ReadonlySet<string>;
+  errors: string[];
+  recentSucceeded: boolean;
+}
+
 export async function recoverMissedSnapshots(
   since: number,
   fetcher: typeof fetch = fetch,
   awaited: ReadonlySet<string> = new Set(pendingCadOperations(useCadOperationsStore.getState().operations).map((operation) => operation.operationId)),
-): Promise<ReadonlySet<string>> {
+  awaitedCopies: ReadonlyMap<string, CadOperationSummary> = new Map(
+    [...awaited].flatMap((operationId) => {
+      const operation = useCadOperationsStore.getState().operations[operationId];
+      return operation ? [[operationId, operation] as const] : [];
+    }),
+  ),
+): Promise<RecoveryResult> {
   // The recent page discovers Sends only. Operations this page was already
   // awaiting are reconciled by id, so neither the page size nor newer history
   // can hide their authoritative outcome.
-  const [recent, exact] = await Promise.all([
-    listCadOperations({ pending: false, limit: 50 }, fetcher),
-    Promise.all([...awaited].map((operationId) => getCadOperation(operationId, fetcher))),
+  const exactReads = async () => {
+    const results: Array<{ operationId: string; result: PromiseSettledResult<CadOperationSummary> }> = [];
+    const operationIds = [...awaited];
+    for (let start = 0; start < operationIds.length; start += RECOVERY_READ_CONCURRENCY) {
+      const batch = operationIds.slice(start, start + RECOVERY_READ_CONCURRENCY);
+      const settled = await Promise.allSettled(
+        batch.map((operationId) => getCadOperation(operationId, fetcher)),
+      );
+      batch.forEach((operationId, index) => results.push({ operationId, result: settled[index] }));
+    }
+    return results;
+  };
+  const [recentResult, exact] = await Promise.all([
+    listCadOperations({ pending: false, limit: 50 }, fetcher).then(
+      (operations) => ({ status: 'fulfilled' as const, operations }),
+      (reason: unknown) => ({ status: 'rejected' as const, reason }),
+    ),
+    exactReads(),
   ]);
-  recent
-    .filter((operation) => (
-      operation.kind === 'receive_snapshot'
-        && (operation.state === 'accepted' || operation.state === 'rejected')
-        && Date.parse(operation.updatedAt ?? '') >= since - RECONNECT_MARGIN_MS
-    ))
-    .forEach((operation) => { useCadOperationsStore.getState().apply(operation); });
+  if (recentResult.status === 'fulfilled') {
+    recentResult.operations
+      .filter((operation) => (
+        operation.kind === 'receive_snapshot'
+          && (operation.state === 'accepted' || operation.state === 'rejected')
+          && Date.parse(operation.updatedAt ?? '') >= since - RECONNECT_MARGIN_MS
+      ))
+      .forEach((operation) => { useCadOperationsStore.getState().apply(operation); });
+  }
   const reconciled = new Set<string>();
-  exact.forEach((operation) => {
-    useCadOperationsStore.getState().apply(operation);
-    if (!isPendingCadOperation(operation)) reconciled.add(operation.operationId);
+  const errors: string[] = [];
+  exact.forEach(({ operationId, result }) => {
+    if (result.status === 'fulfilled') {
+      useCadOperationsStore.getState().apply(result.value);
+      if (!isPendingCadOperation(result.value)) reconciled.add(operationId);
+      return;
+    }
+    if (result.reason instanceof CadLinkApiError && result.reason.status === 404) {
+      const held = awaitedCopies.get(operationId);
+      if (held) {
+        useCadOperationsStore.getState().apply({
+          ...held,
+          state: 'rejected',
+          stage: null,
+          reason: 'request_unknown',
+          message: 'This request is no longer known to WG. It may belong to an earlier operation registry.',
+          // Equal is accepted by the store, and cannot lose to browser/server
+          // clock skew as a freshly generated client timestamp could.
+          updatedAt: held.updatedAt,
+        });
+      }
+      reconciled.add(operationId);
+      return;
+    }
+    errors.push(`${operationId}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
   });
-  return reconciled;
+  if (recentResult.status === 'rejected') {
+    errors.unshift(`recent Sends: ${recentResult.reason instanceof Error ? recentResult.reason.message : String(recentResult.reason)}`);
+  }
+  return { reconciled, errors, recentSucceeded: recentResult.status === 'fulfilled' };
 }
 
 /** Retries of a recovery that failed, and how long each waits. Bounded: a
@@ -225,7 +281,7 @@ export function connectCadOperations(
   // Kept for this page connection across retries and reconnects. A pending
   // listing may remove the visible row after it finishes, but only an exact
   // terminal read proves that the awaited operation was reconciled.
-  const unresolvedAwaited = new Set<string>();
+  const unresolvedAwaited = new Map<string, CadOperationSummary>();
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const clearRetry = () => {
     if (retryTimer !== null) clearTimeout(retryTimer);
@@ -240,20 +296,23 @@ export function connectCadOperations(
     const since = recoveredUpTo
       ?? (Number.isFinite(stored) && stored > 0 ? stored : at - FIRST_CONNECTION_WINDOW_MS);
     pendingCadOperations(useCadOperationsStore.getState().operations)
-      .forEach((operation) => unresolvedAwaited.add(operation.operationId));
-    void recoverMissedSnapshots(since, fetch, unresolvedAwaited).then((reconciled) => {
+      .forEach((operation) => {
+        if (!unresolvedAwaited.has(operation.operationId)) unresolvedAwaited.set(operation.operationId, operation);
+      });
+    void recoverMissedSnapshots(since, fetch, new Set(unresolvedAwaited.keys()), unresolvedAwaited).then((result) => {
       if (generation !== recoveryGeneration) return;
-      reconciled.forEach((operationId) => unresolvedAwaited.delete(operationId));
-      recoveredUpTo = Math.max(recoveredUpTo ?? 0, at);
-      try { storage?.setItem(SEEN_SINCE_KEY, String(recoveredUpTo)); } catch { /* in memory only */ }
-      useCadOperationsStore.getState().setRecoveryError(null);
-    }, (reason: unknown) => {
-      if (generation !== recoveryGeneration) return;
-      // The boundary stays where the last success left it, so the next
-      // recovery still covers what this one could not read.
+      result.reconciled.forEach((operationId) => unresolvedAwaited.delete(operationId));
+      if (result.recentSucceeded) {
+        recoveredUpTo = Math.max(recoveredUpTo ?? 0, at);
+        try { storage?.setItem(SEEN_SINCE_KEY, String(recoveredUpTo)); } catch { /* in memory only */ }
+      }
+      if (!result.errors.length) {
+        useCadOperationsStore.getState().setRecoveryError(null);
+        return;
+      }
       const delay = RECOVERY_RETRY_DELAYS_MS[attempt];
       useCadOperationsStore.getState().setRecoveryError(
-        `WG could not check what arrived from Fusion while it was disconnected (${reason instanceof Error ? reason.message : String(reason)}). `
+        `WG could not check what arrived from Fusion while it was disconnected (${result.errors.join('; ')}). `
         + (delay !== undefined ? 'It will try again shortly.' : 'It will try again when it reconnects; Refresh CAD Link to look now.'),
       );
       if (delay !== undefined) retryTimer = setTimeout(() => recover(attempt + 1), delay);

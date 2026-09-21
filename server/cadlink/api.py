@@ -2283,20 +2283,34 @@ def _deliver_solve_commands(application: FastAPI):
             pass_reporter = DeliveryPassReporter()
             notes: list[str | None] = []
             addin_signature: tuple[str | None, bool] | None = None
+            reported_addin_errors: set[str] = set()
             status.started()
             try:
                 while True:
                     try:
                         status.pass_started()
                         workspace_root = await asyncio.to_thread(_selected_workspace_root, state)
-                        next_addin_signature = await asyncio.to_thread(
-                            addin_inbox_session_signature, workspace_root
-                        )
-                        if next_addin_signature != addin_signature:
-                            addin_signature = next_addin_signature
-                            events = getattr(getattr(state, "jobs_runtime", None), "events", None)
-                            if events is not None:
-                                events.publish({"v": 1, "kind": "cadAddinStatusChanged"})
+                        try:
+                            next_addin_signature = await asyncio.to_thread(
+                                addin_inbox_session_signature, workspace_root
+                            )
+                            if (
+                                next_addin_signature is not None
+                                and next_addin_signature != addin_signature
+                            ):
+                                addin_signature = next_addin_signature
+                                events = getattr(
+                                    getattr(state, "jobs_runtime", None), "events", None
+                                )
+                                if events is not None:
+                                    events.publish({"v": 1, "kind": "cadAddinStatusChanged"})
+                        except Exception as exc:  # noqa: BLE001 - advisory detection only
+                            error = f"{type(exc).__name__}: {exc}"
+                            if error not in reported_addin_errors:
+                                logger.warning(
+                                    "Detecting the CAD add-in declaration failed.", exc_info=True
+                                )
+                                reported_addin_errors.add(error)
                         notes.clear()
                         one_pass = asyncio.ensure_future(run_delivery_pass(
                             _preparation_context(state, workspace_root=workspace_root),

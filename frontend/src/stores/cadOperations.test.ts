@@ -105,13 +105,19 @@ describe('CAD operations store', () => {
     };
     const solve = summary({ operationId: 'awaited-solve', state: 'processing', attemptGeneration: 1 });
     useCadOperationsStore.getState().apply(solve);
+    useCadOperationsStore.getState().apply(summary({ operationId: 'other-solve', state: 'processing' }));
     let exactReads = 0;
+    let otherReads = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/operations/awaited-solve')) {
         exactReads += 1;
         if (exactReads === 1) throw new TypeError('temporary failure');
         return json({ ...solve, state: 'accepted', stage: 'submitted', jobId: 'new-job' });
+      }
+      if (path.endsWith('/operations/other-solve')) {
+        otherReads += 1;
+        return json(summary({ operationId: 'other-solve', state: 'accepted', stage: 'submitted', jobId: 'other-job' }));
       }
       // The bounded history page is deliberately empty: the awaited row may
       // be older than its newest 50 operations. The pending list also omits it.
@@ -122,8 +128,12 @@ describe('CAD operations store', () => {
       listener!.resync();
       await vi.advanceTimersByTimeAsync(10);
       expect(useCadOperationsStore.getState().operations['awaited-solve']).toBeUndefined();
+      expect(useCadOperationsStore.getState().operations['other-solve']).toMatchObject({
+        state: 'accepted', jobId: 'other-job',
+      });
       await vi.advanceTimersByTimeAsync(RECOVERY_RETRY_DELAYS_MS[0] + 10);
       expect(exactReads).toBe(2);
+      expect(otherReads).toBe(1);
       expect(useCadOperationsStore.getState().operations['awaited-solve']).toMatchObject({
         state: 'accepted', jobId: 'new-job',
       });
@@ -132,6 +142,98 @@ describe('CAD operations store', () => {
       disconnect();
       vi.unstubAllGlobals();
       vi.useRealTimers();
+    }
+  });
+
+  it('recovers each awaited operation independently and resolves a missing request once', async () => {
+    vi.useFakeTimers();
+    let listener: CadOperationListener | null = null;
+    const manager = {
+      subscribeCadOperations: (next: CadOperationListener) => { listener = next; return () => undefined; },
+    };
+    useCadOperationsStore.getState().apply(summary({ operationId: 'missing', state: 'processing' }));
+    useCadOperationsStore.getState().apply(summary({ operationId: 'good', state: 'processing' }));
+    const exactReads: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/operations/missing')) {
+        exactReads.push('missing');
+        return new Response(JSON.stringify({ detail: 'Unknown CAD operation' }), {
+          status: 404, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (path.endsWith('/operations/good')) {
+        exactReads.push('good');
+        return json(summary({ operationId: 'good', state: 'accepted', stage: 'submitted', jobId: 'new-job' }));
+      }
+      if (path.includes('pending=false')) {
+        return json({ operations: [summary({
+          operationId: 'recent-send', kind: 'receive_snapshot', state: 'accepted',
+          updatedAt: '2026-09-21T11:59:59Z',
+        })] });
+      }
+      return json({ operations: [] });
+    }));
+    const disconnect = connectCadOperations(manager as never, () => Date.parse('2026-09-21T12:00:00Z'));
+    try {
+      listener!.resync();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(useCadOperationsStore.getState().operations.good).toMatchObject({ state: 'accepted', jobId: 'new-job' });
+      expect(useCadOperationsStore.getState().operations.missing).toMatchObject({
+        state: 'rejected', reason: 'request_unknown',
+      });
+      expect(useCadOperationsStore.getState().operations.missing.message).toContain('no longer known to WG');
+      expect(useCadOperationsStore.getState().operations['recent-send']).toMatchObject({
+        kind: 'receive_snapshot', state: 'accepted',
+      });
+      expect(exactReads).toEqual(expect.arrayContaining(['missing', 'good']));
+
+      listener!.resync();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(exactReads.filter((id) => id === 'missing')).toHaveLength(1);
+      expect(exactReads.filter((id) => id === 'good')).toHaveLength(1);
+    } finally {
+      disconnect();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it('caps awaited recovery reads at eight concurrent requests', async () => {
+    let listener: CadOperationListener | null = null;
+    const manager = {
+      subscribeCadOperations: (next: CadOperationListener) => { listener = next; return () => undefined; },
+    };
+    for (let index = 0; index < 18; index += 1) {
+      useCadOperationsStore.getState().apply(summary({ operationId: `awaited-${index}`, state: 'processing' }));
+    }
+    let active = 0;
+    let maximum = 0;
+    const releases: Array<() => void> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (!path.includes('/operations/awaited-')) return json({ operations: [] });
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise<void>((resolve) => { releases.push(resolve); });
+      active -= 1;
+      const operationId = path.slice(path.lastIndexOf('/') + 1);
+      return json(summary({ operationId, state: 'accepted', stage: 'submitted', jobId: `job-${operationId}` }));
+    }));
+    const disconnect = connectCadOperations(manager as never);
+    try {
+      listener!.resync();
+      await vi.waitFor(() => expect(releases).toHaveLength(8));
+      releases.splice(0).forEach((release) => release());
+      await vi.waitFor(() => expect(releases).toHaveLength(8));
+      releases.splice(0).forEach((release) => release());
+      await vi.waitFor(() => expect(releases).toHaveLength(2));
+      releases.splice(0).forEach((release) => release());
+      await vi.waitFor(() => expect(useCadOperationsStore.getState().operations['awaited-17'].state).toBe('accepted'));
+      expect(maximum).toBe(8);
+    } finally {
+      disconnect();
+      vi.unstubAllGlobals();
     }
   });
 });

@@ -558,16 +558,18 @@ def addin_declares_inbox_transfer(payload: Mapping[str, Any]) -> bool:
     """
 
     activation = _activation(payload)
+    setting = activation.get("setting") if activation is not None else None
     return (
         activation is not None
         and isinstance(activation.get("automaticCoordination"), bool)
         and isinstance(activation.get("settingsKey"), str)
         and bool(activation["settingsKey"])
-        and activation.get("setting") in {"default", "settings", "invalid"}
+        and isinstance(setting, str)
+        and setting in {"default", "settings", "invalid"}
     )
 
 
-def addin_inbox_session_signature(data_dir: Path | None) -> tuple[str | None, bool]:
+def addin_inbox_session_signature(data_dir: Path | None) -> tuple[str | None, bool] | None:
     """Identity and validated inbox declaration from the file heartbeat.
 
     The delivery loop uses this only as a change detector. It deliberately
@@ -577,7 +579,16 @@ def addin_inbox_session_signature(data_dir: Path | None) -> tuple[str | None, bo
 
     if data_dir is None:
         return None, False
-    payload = _read_file_heartbeat(data_dir)
+    marker = data_dir.resolve() / IPC_SUBDIRECTORY / FUSION_STATUS_FILENAME
+    try:
+        if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > _MAX_STATUS_BYTES:
+            return None, False
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        # An atomic writer may be between bytes, or Windows may temporarily
+        # deny the read. This is no observation; the caller retains its last
+        # signature until a complete read proves a transition.
+        return None
     if not isinstance(payload, Mapping):
         return None, False
     return _string(payload.get("sessionId")), addin_declares_inbox_transfer(payload)

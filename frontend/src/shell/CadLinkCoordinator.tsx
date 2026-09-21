@@ -1396,7 +1396,7 @@ export function CadLinkCoordinator() {
     if (heldIntent !== null && (
       (acceptedSeq !== null && heldIntent.acceptedSeq !== null && acceptedSeq < heldIntent.acceptedSeq)
       || (acceptedSeq === null && heldIntent.acceptedSeq !== null)
-      || (acceptedSeq === null && heldIntent.acceptedSeq === null && order < heldIntent.sentAt)
+      || (acceptedSeq === null && heldIntent.acceptedSeq === null && order <= heldIntent.sentAt)
     )) return;
     const intent = { acceptedSeq, sentAt: order, picks: manualSelections.current };
     sendIntent.current = intent;
