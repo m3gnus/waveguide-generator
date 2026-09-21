@@ -49,6 +49,7 @@ import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runMatchesC
 import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
 import { powerAgreementHealth, powerCheckMessage } from '../results/radiatedPower';
+import { solveAttention } from './solveAttention';
 
 /**
  * Where the SPL card's curves were measured.
@@ -2199,7 +2200,16 @@ export function ResultsPanel() {
     if (selection.awaiting) {
       const awaited = jobs.find((job) => job.id === selection.awaiting) ?? null;
       if (awaited && (awaited.has_results || Boolean(provisional.entries[awaited.id]))) {
-        compareSelection.followLatest(awaited.id);
+        // The run stays owned by the input it was submitted with. When a newer
+        // model has been put on screen while it ran, following it would hand
+        // the slot straight on (the release rule below), so the run the user
+        // asked for is pinned instead, and carries its own `other model` marker.
+        if (runMatchesContext(awaited, coherenceContext) === 'other-model') compareSelection.setPrimary(awaited.id);
+        else compareSelection.followLatest(awaited.id);
+        // Here, where the claim resolves, and not where it was made: reveal
+        // Results if the user is still waiting for this run, otherwise say it
+        // is ready (shell/solveAttention).
+        solveAttention.resultsReady(awaited.id);
         return;
       }
       if (awaited && (awaited.status === 'error' || awaited.status === 'cancelled')) {

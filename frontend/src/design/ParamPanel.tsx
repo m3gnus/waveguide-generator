@@ -636,7 +636,7 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
     // Onshape's public-document consent stays in CAD Link. Fusion sends use
     // the coordinator's unified path; its dialog holds the two-way conflict.
     if (onshape) {
-      workspaceNavigation.activate('cadlink');
+      workspaceNavigation.navigate('cadlink');
       return;
     }
     void cadCoordinator.sendWgToFusion().catch(() => undefined);
@@ -1043,7 +1043,7 @@ function CadMeshDetail() {
 
 function CadSimulationEmpty() {
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
-  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link setup</button></div>;
+  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.navigate('cadlink')}>Open CAD Link setup</button></div>;
 }
 
 export function ParamPanel({ tab }: { tab: ParameterTab }) {

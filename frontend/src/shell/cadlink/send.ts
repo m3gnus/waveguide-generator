@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import type { FusionCadStatus } from '../../api/cadlink';
+import { cadCoordinationOff } from '../../api/cadCoordination';
 import { selectCadWorkspace } from '../../api/cadWorkspace';
 import { sendDesignToCad, type WgLinkExportResponse } from '../../api/designIo';
 import {
@@ -272,6 +273,12 @@ export function useCadSend({
         ? { documentId: current.documentId, instanceId: current.link.instanceId, returnStateHash: current.link.documentSignatureHash }
         : undefined);
     };
+    // With WG's coordination gate off nothing reads Fusion's status on a
+    // clock, so the status held here may be as old as the page. The command
+    // is when it is read (M1 contract, C7 "Status on command").
+    if (cadCoordinationOff()) {
+      return readFusionStatus.current().then((current) => attempt(current, { readStatus: false, chooseFolder: true }));
+    }
     return attempt(fusionStatus, { readStatus: true, chooseFolder: true });
   }, [chooseCadFolder, fusionStatus, readFusionStatus, refuse, sendToFusion]);
 

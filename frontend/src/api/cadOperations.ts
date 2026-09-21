@@ -48,8 +48,9 @@ export interface CadOperationPreparation {
 }
 
 export interface CadOperationDetail extends CadOperationSummary {
-  /** `<report_sha256>:<finding_id>` for each approved blocking finding. */
-  approvals: string[];
+  /** Each approved blocking finding, on the preparation it was approved on
+   * (`CadLinkStore.add_approvals`). An approval never carries to another. */
+  approvals: Array<{ preparation_id: string; finding_id: string }>;
   preparation: CadOperationPreparation | null;
 }
 

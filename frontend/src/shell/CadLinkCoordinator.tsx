@@ -28,7 +28,9 @@ import {
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
-import { connectCadOperations, useCadOperationsStore } from '../stores/cadOperations';
+import { connectCadOperations, pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
+import { cadCoordinationOff, cadCoordinationStore } from '../api/cadCoordination';
+import { solveAttention } from './solveAttention';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { rememberCadProject } from '../stores/cadProjectMemory';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
@@ -657,6 +659,18 @@ export function CadLinkCoordinator() {
     || fusionPullPromise.current !== null
   ), []);
 
+  /** CAD work the user is waiting on: a request to Fusion still unanswered, or
+   * an operation that has not reached an end. Unlike `cadFlowActive`, neither
+   * the workspace mode nor a running Fusion counts -- those are standing
+   * conditions, and polling on them is exactly the unconditional coordination
+   * the gate turns off. */
+  const cadWorkInFlight = useCallback(() => (
+    pendingReturnRequestId.current !== null
+    || pendingReturnWaiter.current !== null
+    || fusionPullPromise.current !== null
+    || pendingCadOperations(useCadOperationsStore.getState().operations).length > 0
+  ), []);
+
   /** Restart every poll at its base rate. Called for anything that means the
    * user is back in the CAD flow — entering the workspace, sending, expecting
    * a return, a listing or status that actually changed, the window regaining
@@ -675,10 +689,15 @@ export function CadLinkCoordinator() {
     idleMs: number,
     unconfiguredMs: number | null,
   ): number | null => {
+    // WG's coordination gate (api/cadCoordination). Off: nothing here runs on
+    // a clock unless CAD work is in flight -- a Send or pull the user started,
+    // or an operation that has not finished. Everything else is event-driven:
+    // mount, focus, entering CAD mode, a folder chosen, and operation pushes.
+    if (cadCoordinationOff()) return cadWorkInFlight() ? baseMs : null;
     if (cadFlowActive()) return baseMs;
     if (cadFolderConfigured.current === false) return unconfiguredMs;
     return Date.now() - lastCadActivityAt.current >= cadPollIntervals.quietMs ? idleMs : baseMs;
-  }, [cadFlowActive]);
+  }, [cadFlowActive, cadWorkInFlight]);
 
   useEffect(() => {
     setSelectedFusionInstanceId(null);
@@ -1108,6 +1127,9 @@ export function CadLinkCoordinator() {
    * status and the decision about where to stop: a blocked readiness gate is
    * reported and left for the user, never solved around. */
   const pullAndSolve = useCallback(async (): Promise<'solving' | 'blocked' | 'failed'> => {
+    // Pressed now; the solve it ends in reveals its results if the user is
+    // still waiting for them by then (shell/solveAttention).
+    solveAttention.armSolve();
     try {
       await pullFromFusion();
       setStatus('Received the current Fusion geometry. Preparing the simulation…');
@@ -1155,14 +1177,14 @@ export function CadLinkCoordinator() {
   /** Solve now: the backend prepares the operation from the setup its project
    * recorded -- never from whatever is open here -- and submits it. */
   const solveOperation = useCallback((operationId: string) => actOnOperation(
-    () => prepareCadOperation(operationId),
+    () => { solveAttention.armOperation(operationId); return prepareCadOperation(operationId); },
     'Preparing the model Fusion sent. Its run appears in the Jobs rail once it is submitted.',
   ), [actOnOperation]);
 
   /** Approve and solve: the findings the user reviewed, on the one preparation
    * that reported them. A new preparation needs its own review. */
   const approveOperation = useCallback((operationId: string, approvals: CadOperationApprovals) => actOnOperation(
-    () => prepareCadOperation(operationId, { approvals }),
+    () => { solveAttention.armOperation(operationId); return prepareCadOperation(operationId, { approvals }); },
     'Approved the reviewed findings for this preparation. Preparing and solving the model Fusion sent.',
   ), [actOnOperation]);
 
@@ -1193,6 +1215,7 @@ export function CadLinkCoordinator() {
    * the model's project -- the one the backend names for the snapshot, when it
    * knows -- and the operation is prepared with exactly that revision. */
   const solveOperationWithSettings = useCallback((operationId: string) => actOnOperation(async () => {
+    solveAttention.armOperation(operationId);
     const state = useCadReturnStore.getState();
     const lineageId = settingsProjectFor(useCadOperationsStore.getState().operations[operationId], state);
     const built = buildCadProjectSetup(state, undefined, undefined, lineageId);
@@ -1244,8 +1267,35 @@ export function CadLinkCoordinator() {
   // The cadence checks the mode on every tick, but a poll that is already
   // sitting on a thirty-second delay would not notice for thirty seconds.
   useEffect(() => workspaceModeStore.subscribe(() => {
-    if (workspaceModeStore.getSnapshot().mode === 'cad') noteCadActivity();
-  }), [noteCadActivity]);
+    if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
+    noteCadActivity();
+    // With the gate off no clock will read them, so entering the workspace
+    // reads the returns and Fusion's status once, as the event it is.
+    if (cadCoordinationOff() && !onshape) {
+      void refresh({ background: true, autoOpenNew: true });
+      void refreshFusionStatus();
+    }
+  }), [noteCadActivity, onshape, refresh, refreshFusionStatus]);
+
+  // The gate arrives with the first returns listing, and its answer
+  // re-evaluates every poll's cadence. So does CAD work starting or ending:
+  // with the gate off, an operation that is still unfinished is what keeps the
+  // reads running, and the last one finishing is what lets them stop.
+  useEffect(() => {
+    const restartAll = () => pollRestarts.current.forEach((restart) => restart());
+    const unsubscribeGate = cadCoordinationStore.subscribe(restartAll);
+    let working = pendingCadOperations(useCadOperationsStore.getState().operations).length > 0;
+    const unsubscribeOperations = useCadOperationsStore.subscribe((state) => {
+      const next = pendingCadOperations(state.operations).length > 0;
+      if (next === working) return;
+      working = next;
+      if (cadCoordinationOff()) restartAll();
+    });
+    return () => {
+      unsubscribeGate();
+      unsubscribeOperations();
+    };
+  }, []);
 
   // Choosing a CAD workspace folder is the one event that has to reach a
   // coordinator which has switched itself off, and the `focus` above only

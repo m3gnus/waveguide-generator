@@ -37,22 +37,37 @@ const REASON_COPY: Record<string, string> = {
 interface FindingReview {
   preparationId: string | null;
   findingIds: string[];
+  /** Of `findingIds`, those already approved on this same preparation. */
+  approvedIds: string[];
   findings: CadReturnFinding[];
   error: string | null;
 }
 
-const NO_REVIEW: FindingReview = { preparationId: null, findingIds: [], findings: [], error: null };
+const NO_REVIEW: FindingReview = { preparationId: null, findingIds: [], approvedIds: [], findings: [], error: null };
 
-/** The blocking findings one preparation reported, as the backend records them. */
+/** The gates a preparation stops at, in the backend's order
+ * (server/cadlink/preparation.py): frame, then findings, then the submission. */
+const LADDER_REASONS: ReadonlySet<string> = new Set(['frame_confirmation_required', 'findings_need_review']);
+
+/** The blocking findings one preparation reported, as the backend records them.
+ *
+ * Read at the frame gate as well as at the findings gate: `reason` names one
+ * gate, the current one, while the preparation behind it already knows its
+ * blocking findings (published before the frame gate returns). Reading them
+ * only at their own gate is what let a user fix the frame and then hit a second
+ * wall with no warning it was coming. */
 function useFindingReview(operation: CadOperationSummary): FindingReview & { retry: () => void } {
-  const wanted = operation.reason === 'findings_need_review';
+  const wanted = operation.kind === 'prepare_and_solve'
+    && operation.state === 'needs_user_input'
+    && LADDER_REASONS.has(operation.reason ?? '');
   const [review, setReview] = useState<FindingReview>(NO_REVIEW);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!wanted) return undefined;
     let current = true;
     void (async () => {
-      const preparation = (await getCadOperation(operation.operationId)).preparation;
+      const detail = await getCadOperation(operation.operationId);
+      const preparation = detail.preparation;
       if (!current) return;
       if (!preparation) throw new Error('the backend has not recorded its preparation yet');
       // The ids are the review; the ingestion record only puts words to them.
@@ -60,16 +75,94 @@ function useFindingReview(operation: CadOperationSummary): FindingReview & { ret
         .then((record) => record.findings.filter((finding) => preparation.blockingFindingIds.includes(finding.id)))
         .catch(() => [] as CadReturnFinding[]);
       if (current) {
+        const approvedIds = approvedFindingIds(detail.approvals, preparation.preparationId)
+          .filter((id) => preparation.blockingFindingIds.includes(id));
         setReview({
-          preparationId: preparation.preparationId, findingIds: preparation.blockingFindingIds, findings, error: null,
+          preparationId: preparation.preparationId,
+          findingIds: preparation.blockingFindingIds,
+          approvedIds,
+          findings,
+          error: null,
         });
       }
     })().catch((reason: unknown) => {
       if (current) setReview({ ...NO_REVIEW, error: reason instanceof Error ? reason.message : String(reason) });
     });
     return () => { current = false; };
-  }, [wanted, operation.operationId, operation.preparationId, operation.attemptGeneration, attempt]);
+  }, [wanted, operation.operationId, operation.preparationId, operation.attemptGeneration, operation.reason, attempt]);
   return { ...(wanted ? review : NO_REVIEW), retry: () => setAttempt((count) => count + 1) };
+}
+
+/** The findings approved on one preparation; the stored shape, read defensively. */
+function approvedFindingIds(approvals: unknown, preparationId: string): string[] {
+  if (!Array.isArray(approvals)) return [];
+  return approvals.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const { preparation_id: preparation, finding_id: finding } = item as Record<string, unknown>;
+    return preparation === preparationId && typeof finding === 'string' ? [finding] : [];
+  });
+}
+
+/** One step between a waiting solve and its job. */
+export interface SolveGateStep {
+  gate: 'frame' | 'findings' | 'solve' | 'other';
+  current: boolean;
+  text: string;
+}
+
+function findingCount(count: number): string {
+  return `${count} blocking finding${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * Every step still between a waiting solve and its job, the current one first.
+ *
+ * `reason` is by design a single current gate, so a card that rendered only it
+ * always under-reported: the remaining ladder comes from the preparation's
+ * blocking findings and the submission step behind them. Only what remains is
+ * listed -- a gate already passed, or one that never applied to this model,
+ * is not.
+ */
+export function solveGateLadder(
+  operation: Pick<CadOperationSummary, 'kind' | 'state' | 'reason'>,
+  review: Pick<FindingReview, 'findingIds' | 'approvedIds'> | null,
+): SolveGateStep[] {
+  if (operation.kind !== 'prepare_and_solve' || operation.state !== 'needs_user_input') return [];
+  const blocking = review?.findingIds ?? [];
+  const approved = new Set(review?.approvedIds ?? []);
+  const unapproved = blocking.filter((id) => !approved.has(id));
+  const submit: SolveGateStep = {
+    gate: 'solve', current: false, text: 'Then WG submits the solve, and its results open in Results.',
+  };
+  switch (operation.reason) {
+    case 'frame_confirmation_required':
+      return [
+        {
+          gate: 'frame', current: true,
+          text: 'Now: confirm the solver frame — the axis this model radiates along — below.',
+        },
+        ...(blocking.length ? [{
+          gate: 'findings' as const, current: false,
+          text: `Then: review ${findingCount(blocking.length)} this model's preparation reported. Confirming the frame prepares it again, so they are approved on that preparation.`,
+        }] : []),
+        submit,
+      ];
+    case 'findings_need_review':
+      return [
+        {
+          gate: 'findings', current: true,
+          text: `Now: review ${findingCount(unapproved.length || blocking.length)}, then Approve and solve.`,
+        },
+        submit,
+      ];
+    case 'ready_to_solve':
+      return [{ gate: 'solve', current: true, text: 'Now: press Solve now to start it.' }];
+    default:
+      return [
+        { gate: 'other', current: true, text: `Now: ${REASON_COPY[operation.reason ?? ''] ?? 'it needs your attention'} — see below.` },
+        { gate: 'solve', current: false, text: 'Then WG prepares it again. Any further check it stops at is listed here.' },
+      ];
+  }
 }
 
 type OperationAction = 'solve' | 'approve' | 'use-settings' | 'dismiss';
@@ -216,11 +309,21 @@ function CadOperationCard({ operation, record }: {
     operation.stage,
     operation.reason ? REASON_COPY[operation.reason] ?? operation.reason : null,
   ].filter(Boolean).join(' · ');
+  const ladder = solveGateLadder(operation, review.error ? null : review);
+  const manual = operation.operationId.startsWith('manual-solve:');
   return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId}>
     <div>
-      <b>{solve ? 'Fusion asked for a solve' : `CAD operation · ${operation.kind}`}{documentName ? ` · ${documentName}` : ''}</b>
+      <b>{solve ? (manual ? 'Your solve is waiting' : 'Fusion asked for a solve') : `CAD operation · ${operation.kind}`}{documentName ? ` · ${documentName}` : ''}</b>
       <span role="status">{status}</span>
       {operation.message && <span>{operation.message}</span>}
+      {ladder.length > 0 && <ol className="cad-operation-ladder" aria-label="What this solve still needs">
+        {ladder.map((step) => <li
+          key={step.gate}
+          data-gate={step.gate}
+          aria-current={step.current ? 'step' : undefined}
+          className={step.current ? 'current' : undefined}
+        >{step.text}</li>)}
+      </ol>}
       {reviewedPreparation && <ul className="cad-operation-findings">
         {review.findingIds.map((id) => {
           const finding = review.findings.find((item) => item.id === id);
@@ -229,7 +332,9 @@ function CadOperationCard({ operation, record }: {
           </li>;
         })}
       </ul>}
-      {review.error && <span>Could not read the findings to review: {review.error}</span>}
+      {/* At the frame gate the read only forecasts the next gate; failing it
+          must not read as a problem with this one. */}
+      {review.error && operation.reason === 'findings_need_review' && <span>Could not read the findings to review: {review.error}</span>}
       {help.text && <span>{help.text}</span>}
       {waiting && help.action === 'confirm-frame' && heldAction !== 'solve' && <CadSolverFrameConfirm
         key={`${operation.operationId}:${operation.attemptGeneration}:${operation.preparationId ?? ''}`}
@@ -250,10 +355,10 @@ function CadOperationCard({ operation, record }: {
         title="Dismiss this request. Fusion will not offer it again."
         onClick={() => ask('dismiss', () => coordinator.dismissOperation(operation.operationId))}
       >Dismiss</button>}
-      {review.error && <button aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
+      {review.error && operation.reason === 'findings_need_review' && <button aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
       {help.simulation && <button
         aria-label={`Open Simulation for ${label}`}
-        onClick={() => workspaceNavigation.activate('simulation')}
+        onClick={() => workspaceNavigation.navigate('simulation')}
       >Open Simulation</button>}
       {waiting && help.action === 'approve' && reviewedPreparation && <button
         className="primary"

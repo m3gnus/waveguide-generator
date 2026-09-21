@@ -679,7 +679,7 @@ describe('solve invocation mutex', () => {
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.textContent).toBe('Solve');
     act(() => workspaceModeStore.setMode('cad'));
-    expect(solve.textContent).toBe('Solve CAD Link');
+    expect(solve.textContent).toBe('Solve');
     expect(solve.title).toContain('displayed CAD Link model');
     await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
 
@@ -735,7 +735,7 @@ describe('solve invocation mutex', () => {
     });
     act(() => workspaceModeStore.setMode('cad'));
     const solve = host.querySelector<HTMLButtonElement>('button')!;
-    expect(solve.textContent).toBe('Solve CAD Link');
+    expect(solve.textContent).toBe('Solve');
     await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
 
     const setup = mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup;
@@ -897,24 +897,80 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitImported).not.toHaveBeenCalled();
   });
 
-  it('makes the Fusion pull the primary action when Fusion moved past the prepared geometry', async () => {
+  // V2: Solve has one meaning. It solves the model and settings on screen;
+  // Fusion reporting newer geometry never changes what it does or which
+  // action is primary, and the button and the shortcut are the same command.
+  it.each([
+    ['Fusion reports newer geometry', true],
+    ['Fusion reports nothing new (positive control for the same measurement)', false],
+  ])('keeps Solve as the one primary action that solves the displayed model when %s', async (_name, fusionChangesAvailable) => {
     const pullAndSolve = vi.fn(async () => 'solving' as const);
+    const pullFromFusion = vi.fn(async () => { throw new Error('not in this test'); });
     vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
       ...cadLinkCoordinatorBridge.getSnapshot(),
       pullAndSolve,
-      fusionStatus: { running: true, fusionChangesAvailable: true } as never,
+      pullFromFusion,
+      fusionStatus: {
+        running: true, state: 'stale', fusionChangesAvailable,
+        observationFreshness: 'current', documentChangeDetectable: true,
+      } as never,
     });
+    readyCad('wgi_displayed');
     act(() => workspaceModeStore.setMode('cad'));
     await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
 
     const buttons = [...host.querySelectorAll<HTMLButtonElement>('.solve-button')];
-    expect(buttons[0].textContent).toContain('Pull from Fusion & Solve');
-    // The geometry WG already prepared stays solvable beside it.
-    expect(buttons[1].textContent).toContain('Solve prepared');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].textContent).toContain('Solve');
+    expect(buttons[0].className).toBe('solve-button');
+    expect(host.textContent).not.toContain('Pull from Fusion & Solve');
 
-    await act(async () => { buttons[0].click(); await Promise.resolve(); });
-    expect(pullAndSolve).toHaveBeenCalledOnce();
+    await act(async () => { buttons[0].click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(pullAndSolve).not.toHaveBeenCalled();
+    expect(pullFromFusion).not.toHaveBeenCalled();
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+    expect(mocks.createCadOperation).toHaveBeenCalledWith(expect.objectContaining({ ingestId: 'wgi_displayed' }));
     expect(mocks.submitImported).not.toHaveBeenCalled();
+  });
+
+  it('gives the keyboard shortcut the same meaning as the button while Fusion reports newer geometry', async () => {
+    const pullAndSolve = vi.fn(async () => 'solving' as const);
+    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...cadLinkCoordinatorBridge.getSnapshot(),
+      pullAndSolve,
+      fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never,
+    });
+    readyCad('wgi_displayed');
+    act(() => workspaceModeStore.setMode('cad'));
+    await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(pullAndSolve).not.toHaveBeenCalled();
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+    expect(mocks.createCadOperation).toHaveBeenCalledWith(expect.objectContaining({ ingestId: 'wgi_displayed' }));
+  });
+
+  it('offers the Fusion refresh as its own action on the source line, which never solves', async () => {
+    const pullFromFusion = vi.fn(async () => ({}) as never);
+    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...cadLinkCoordinatorBridge.getSnapshot(),
+      pullFromFusion,
+      fusionStatus: { running: true, state: 'stale', fusionChangesAvailable: true, observationFreshness: 'current', documentChangeDetectable: true } as never,
+    });
+    readyCad('wgi_displayed');
+    act(() => workspaceModeStore.setMode('cad'));
+    await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
+
+    const line = host.querySelector('.cad-source-line')!;
+    expect(line.textContent).toContain('Model loaded from Fusion · Newer CAD changes available');
+    const refresh = [...line.querySelectorAll('button')].find((button) => button.textContent === 'Refresh')!;
+    await act(async () => { refresh.click(); await Promise.resolve(); });
+    expect(pullFromFusion).toHaveBeenCalledOnce();
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.prepareCadOperation).not.toHaveBeenCalled();
   });
 
   it('enters CAD mode without an ingest and exposes the submission blocker', async () => {
@@ -923,7 +979,7 @@ describe('solve invocation mutex', () => {
       workspaceModeStore.setMode('cad');
     });
     const solve = host.querySelector<HTMLButtonElement>('button')!;
-    expect(solve.textContent).toBe('Solve CAD Link');
+    expect(solve.textContent).toBe('Solve');
     expect(solve.disabled).toBe(true);
     expect(solve.title).toBe('Ingest a CAD return before solving.');
   });

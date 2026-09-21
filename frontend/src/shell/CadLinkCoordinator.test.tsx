@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
 import { selectCadWorkspace } from '../api/cadWorkspace';
+import { resetCadCoordinationForTests } from '../api/cadCoordination';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { applyOpenedDesign, openCadLinkedProject, takeDesignOpenTicket } from '../design/openCadProject';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
@@ -163,6 +164,8 @@ describe('CadLinkCoordinator', () => {
     resetDocumentStore();
     resetSolveOptionsStore();
     resetCadOperationsStore();
+    // Each mount reads the coordination gate once; a fresh page every test.
+    resetCadCoordinationForTests();
     workspaceModeStore.setMode('parametric');
     localStorage.removeItem('wg2.workspace.mode.v1');
     localStorage.removeItem('wg2.cad.project.v1');

@@ -17,7 +17,7 @@ import { ViewportPanel } from './ViewportPanel';
 import { dockviewPanelVisibility, PanelVisibilityContext } from './panelVisibility';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { namespaceStorage } from '../stores/durableSettings';
-import { bindWorkspaceNavigation, type WorkspacePanel } from './workspaceNavigation';
+import { bindWorkspaceNavigation, noteExplicitNavigation, publishVisiblePanels, type WorkspacePanel } from './workspaceNavigation';
 export { workspaceNavigation } from './workspaceNavigation';
 
 export const LEGACY_LAYOUT_KEY = 'wg2.dockview.layout.v1';
@@ -284,6 +284,49 @@ export function syncCadLinkPanel(api: DockviewApi, mode: WorkspaceMode): void {
   });
 }
 
+/** Keys that choose a dock tab from the keyboard. */
+const TAB_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['Enter', ' ', 'ArrowLeft', 'ArrowRight', 'Home', 'End']);
+
+/**
+ * Report the dock to the navigation seam: which panels are on screen, and when
+ * the user chooses a tab.
+ *
+ * A tab chosen by pointer or keyboard is explicit navigation. dockview's own
+ * active-panel event cannot say that: it also fires when a layout is rebuilt,
+ * when a group merely takes focus, and when the application fronts a panel.
+ */
+export function bindDockNavigation(api: DockviewApi, host: HTMLElement): () => void {
+  const unbind = bindWorkspaceNavigation((panel: WorkspacePanel) => {
+    const target = api.getPanel(panel);
+    if (!target) return false;
+    target.api.setActive();
+    publish();
+    return true;
+  });
+  const publish = () => publishVisiblePanels(api.panels.filter((panel) => panel.api.isVisible).map((panel) => panel.id));
+  const onTabInput = (event: Event) => {
+    const target = event.target as Element | null;
+    if (!target?.closest?.('.dv-tab')) return;
+    if (event.type === 'keydown' && !TAB_NAVIGATION_KEYS.has((event as KeyboardEvent).key)) return;
+    noteExplicitNavigation();
+  };
+  host.addEventListener('pointerdown', onTabInput, true);
+  host.addEventListener('keydown', onTabInput, true);
+  const subscriptions = [
+    api.onDidLayoutChange(publish),
+    api.onDidActivePanelChange(publish),
+    api.onDidAddPanel(publish),
+    api.onDidRemovePanel(publish),
+  ];
+  publish();
+  return () => {
+    host.removeEventListener('pointerdown', onTabInput, true);
+    host.removeEventListener('keydown', onTabInput, true);
+    subscriptions.forEach((subscription) => subscription.dispose());
+    unbind();
+  };
+}
+
 /** What a newly observed host size means for a dock laid out at `laidOut`.
  *
  * The size read during mount cannot be trusted: the host measures 10x100 while
@@ -342,12 +385,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       keyboardNavigation: true,
     });
     apiRef.current = dockview.api;
-    const unbindNavigation = bindWorkspaceNavigation((panel: WorkspacePanel) => {
-      const target = dockview.api.getPanel(panel);
-      if (!target) return false;
-      target.api.setActive();
-      return true;
-    });
+    const unbindNavigation = bindDockNavigation(dockview.api, host.current);
     const initialSize = measureHost(host.current, dockview.api);
     const initialLayoutSize = seedSize(initialSize);
     const stored = layoutStorage.getItem(LAYOUT_KEY);

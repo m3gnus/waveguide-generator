@@ -81,17 +81,12 @@ button:disabled { cursor: default; }
 .command-affordance svg { width: 13px; height: 13px; flex: none; }
 .command-affordance span { flex: 1; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2px; border-radius: var(--r3); background: var(--kbd-bg); color: var(--fg2); font: var(--text-micro)/1 var(--mono); }
-/* Wide enough for "Solve CAD Link" so the label never resizes the button.
-   The workspace-mode switch sits immediately before it in the same flex row,
-   and a button that grows on mode change drags that switch sideways under the
-   pointer -- so toggling twice means aiming twice. Centred, so the shorter
-   "Solve" stays optically attached to its own control rather than drifting.
-   170px was measured against the longer "Solve Fusion CAD" this label
-   replaced, so it still clears the widest label plus its shortcut chip. */
+/* One label in both modes now ("Solve"), but the width stays fixed: the
+   workspace-mode switch sits immediately before it in the same flex row, and a
+   button that changed width would drag that switch sideways under the pointer.
+   Centred, so the label stays optically attached to its own control. */
 .solve-button { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 170px; height: 27px; padding: 0 8px 0 8px; border-radius: var(--r2); background: var(--solve-grad); box-shadow: var(--solve-sh); color: var(--solve-fg); font-size: var(--text-base); font-weight: 600; }
 .solve-button:disabled { filter: saturate(.55); opacity: .5; }
-/* The plain solve when a Fusion pull is the recommended action beside it. */
-.solve-button-secondary { min-width: 0; background: var(--ctl-grad); box-shadow: none; border: 1px solid var(--hair); color: var(--fg1); font-weight: 500; }
 .solve-button svg { width: 11px; }
 /* Beside the Solve button, never inside its title: a disabled control cannot be
    hovered usefully, and this text exists for exactly that case. It is bounded
@@ -100,6 +95,18 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .solve-notice { min-width: 0; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); line-height: 1.2; }
 .solve-notice-blocked { color: var(--red); }
 .solve-notice-substituted { color: var(--amber); }
+/* Where the CAD model on screen came from. Never a claim that it is Fusion's
+   latest unless that was measured; Refresh is its own explicit action. */
+.cad-source-line { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 46ch; font-size: var(--text-sm); color: var(--fg2); white-space: nowrap; }
+.cad-source-line > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cad-source-line button { flex: none; height: 22px; padding: 0 7px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-sm); }
+.cad-source-changed { color: var(--amber); }
+.cad-source-unverified { color: var(--fg3); }
+/* The route to something that finished out of sight: a request waiting for
+   the user, or results that arrived after they moved on. */
+.attention-notice { display: flex; flex: none; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border: 1px solid rgba(var(--amber-rgb), .45); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-sm); font-weight: 600; white-space: nowrap; }
+.attention-notice i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.attention-ready { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
 .solve-button kbd { border-color: var(--solve-kbd-bd); background: var(--solve-kbd); color: var(--solve-kbd-fg); }
 .theme-toggle { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--seg-bg); }
 .theme-toggle button { display: grid; place-items: center; width: 24px; height: 20px; border-radius: var(--r3); background: transparent; color: var(--fg3); }

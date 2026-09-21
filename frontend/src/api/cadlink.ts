@@ -58,7 +58,13 @@ export interface CadReturnBundle {
   reason?: string | null;
 }
 
-export interface CadReturnListing { items: CadReturnBundle[]; cadFolderConfigured: boolean }
+export interface CadReturnListing {
+  items: CadReturnBundle[];
+  cadFolderConfigured: boolean;
+  /** WG's CAD coordination gate (server/cadlink/coordination.py); absent
+   * from a server that predates it, which means today's behaviour. */
+  coordination?: 'on' | 'off';
+}
 
 export interface CadLinkedDesignSummary {
   /** Null for a project that exists only in CAD; it has no snapshot to open. */

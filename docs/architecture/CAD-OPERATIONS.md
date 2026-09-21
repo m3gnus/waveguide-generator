@@ -455,6 +455,15 @@ through the same route and stages as a solve requested by Fusion.
   sending them. Nothing else consumes them: `GET /api/cadlink/solve-command` answers that
   nothing is pending (see "Solve-command compatibility"). `WG2_CAD_DELIVERY=0` turns the
   loop off (the test suite does).
+- **Coordination gate.** `WG2_CAD_COORDINATION=off` (read once at start-up, reported on
+  the "application initialized" log line, the CAD Link panel and
+  `GET /api/cadlink/coordination`) stops the frontend's clock-driven CAD returns listing
+  and Fusion-status read unless CAD work is in flight: an unfinished operation, or a
+  Send or pull the user started. They still run on explicit events (start-up, window
+  focus, entering CAD mode, choosing a folder), a Send reads Fusion's status when it is
+  pressed, and operation changes arrive as `cadOperation` messages on `/ws/jobs`. The
+  default, `on`, is the behaviour before the gate existed. The gate never stops the
+  delivery loop above: that is the transfer path, not coordination.
 - **Update restart.** Once an update restart is approved, WG starts no new CAD
   preparation until it happens (docs/reference/UPDATE-TRANSACTION-CONTRACT.md §4.2). The
   latch is the one the solve, retry, install and ingest routes read.

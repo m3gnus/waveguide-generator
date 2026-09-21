@@ -25,6 +25,7 @@ import { CadSolverFrameConfirm } from './CadSolverFrameConfirm';
 import { getSolverFrame, type SolverFramePreview } from '../api/solverFrame';
 import { requestSettings } from './settingsNavigation';
 import { workspaceNavigation } from './workspaceNavigation';
+import { cadCoordinationStore } from '../api/cadCoordination';
 import './cadLinkPanel.css';
 
 // Kept as public panel helpers for existing callers; implementation lives next
@@ -320,6 +321,18 @@ function CheckRow({ check }: { check: CheckDescriptor }) {
     </summary>
     <div className="cad-check-detail">{check.detail}</div>
   </details>;
+}
+
+/** WG's coordination gate, as the server read it at start-up, so a comparison
+ * run can record its configuration from WG's own self-report. */
+export function CadCoordinationNote() {
+  const state = useSyncExternalStore(cadCoordinationStore.subscribe, cadCoordinationStore.getSnapshot, cadCoordinationStore.getSnapshot);
+  if (state === 'unknown') return null;
+  return <p className="cad-detail cad-coordination-state" data-coordination={state}>
+    {state === 'on'
+      ? 'Background coordination: on. WG checks CAD Link returns and Fusion status on a timer.'
+      : 'Background coordination: off (WG2_CAD_COORDINATION). WG checks CAD Link returns and Fusion status only while CAD work is in flight, and when you act.'}
+  </p>;
 }
 
 /** Findings are part of the same checklist: a blocking finding is a failing
@@ -676,6 +689,7 @@ export function CadLinkPanel() {
           </summary>
           <div className="cad-link-quiet-body">
             <p>{workflow.detail}</p>
+            <CadCoordinationNote/>
             <div className="cad-link-actions">
               {linkActions}
               <button className="link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
@@ -685,7 +699,7 @@ export function CadLinkPanel() {
         : <>
           <div className={`cad-connection cad-connection-${workflow.state}`}>
             <span className="cad-connection-dot" aria-hidden="true"/>
-            <div><h4>{workflow.headline}</h4><p>{workflow.detail}</p></div>
+            <div><h4>{workflow.headline}</h4><p>{workflow.detail}</p><CadCoordinationNote/></div>
             <button className="link-button cad-link-settings" onClick={() => requestSettings('cad')}>Settings</button>
           </div>
           {!onshape && matchingFusionLinks.length > 1 && workflow.state === 'instance-selection' && <label className="field-row linked-instance-selection">
@@ -804,7 +818,7 @@ export function CadLinkPanel() {
         <button
           className="link-button"
           title="Drivers, crossover, sweep, directivity, solve options, and mesh detail live in the Simulation tab."
-          onClick={() => workspaceNavigation.activate('simulation')}
+          onClick={() => workspaceNavigation.navigate('simulation')}
         >Open Simulation</button>
       </div>}
       {record && <ChecksSection record={record}/>}

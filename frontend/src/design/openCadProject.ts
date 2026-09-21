@@ -7,6 +7,7 @@ import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { currentEditorMutation } from '../stores/editorMutation';
 import { restoreSolveSettingsFromBlocks } from '../stores/solveOptions';
 import { keptContentKeyNow } from './replacementCheck';
+import { noteExplicitNavigation } from '../shell/workspaceNavigation';
 
 /** Only the fields a later save may advance; the rest is derived state. */
 export function editableIdentity(identity: DesignIdentity | null | undefined): DesignIdentity | null {
@@ -100,6 +101,9 @@ export function takeDesignOpenTicket(options: {
   decidedAgainstLoad?: number;
 } = {}): DesignOpenTicket {
   latestOpenRequest += 1;
+  // Every ticket is a design or project the user chose to open: from here on,
+  // a solve finishing for what was on screen before may not pull them back.
+  noteExplicitNavigation();
   return {
     documentLoad: options.decidedAgainstLoad ?? currentDocumentLoad(),
     editorMutation: options.checkEdits === false ? null : currentEditorMutation(),

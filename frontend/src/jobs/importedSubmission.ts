@@ -53,6 +53,27 @@ function readManualSolveIdentity(
   };
 }
 
+/**
+ * The ingestion a manual solve operation was created for.
+ *
+ * Its completion must be recognised against that ingestion, not the one on
+ * screen when the job finishes: a newer CAD snapshot prepared while the solve
+ * runs is a different model, and the run still belongs to the one submitted.
+ */
+export function manualCadSolveIngestFor(
+  operationId: string,
+  storage: Pick<Storage, 'getItem' | 'key' | 'length'> | null = typeof sessionStorage === 'undefined' ? null : sessionStorage,
+): string | null {
+  if (!storage) return null;
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (!key?.startsWith(MANUAL_SOLVE_OPERATION_PREFIX)) continue;
+    const ingestId = key.slice(MANUAL_SOLVE_OPERATION_PREFIX.length);
+    if (readManualSolveIdentity(ingestId, storage)?.operationId === operationId) return ingestId;
+  }
+  return null;
+}
+
 export function manualCadSolveIdentity(
   ingestId: string,
   createRun: () => { designName: string; label: string },

@@ -48,6 +48,7 @@ from server.workspace.archive import (
 )
 
 from .addin_update import last_refresh, loaded_addin_identity, poll_activation
+from .coordination import COORDINATION_ON
 from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
 from .fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
 from .fusion_outcomes import FUSION_KINDS, settle_from_heartbeat
@@ -690,13 +691,17 @@ def _resolve_return_bundle(
 @router.get("/returns")
 async def list_returns(request: Request) -> dict[str, Any]:
     workspace: WorkspaceState = request.app.state.cad_workspace
+    # WG's coordination gate (``coordination.py``) rides on the listing the
+    # frontend reads at mount, so learning it costs no request of its own.
+    coordination = getattr(request.app.state, "cad_coordination", COORDINATION_ON)
     selected = workspace.selected_path()
     if selected is None:
-        return {"items": [], "cadFolderConfigured": False}
+        return {"items": [], "cadFolderConfigured": False, "coordination": coordination}
     workspace_root = selected.resolve()
     return {
         "items": await asyncio.to_thread(_return_listing, workspace_root),
         "cadFolderConfigured": True,
+        "coordination": coordination,
     }
 
 

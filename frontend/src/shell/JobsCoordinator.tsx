@@ -13,7 +13,7 @@ import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
-import { acknowledgeManualCadSolveCompletion, acknowledgeManualCadSolvePreparation, forgetManualCadSolveOperationId, importedSubmissionBlocker, manualCadSolveIdentity, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
+import { acknowledgeManualCadSolveCompletion, acknowledgeManualCadSolvePreparation, forgetManualCadSolveOperationId, importedSubmissionBlocker, manualCadSolveIdentity, manualCadSolveIngestFor, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -29,6 +29,7 @@ import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '.
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
+import { solveAttention, useOperationAttention } from './solveAttention';
 
 /**
  * A line of text rendered beside the Solve button, not inside its `title`.
@@ -207,6 +208,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (!identity) return;
     acceptSubmittedLabel(identity.designName);
     compareSelection.awaitRun(operation.jobId);
+    solveAttention.bindRun(operation.jobId, operation.operationId);
     void jobsSocket.refresh().catch((reason: unknown) => {
       setActionError(reason instanceof Error ? reason.message : String(reason));
     });
@@ -217,13 +219,42 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // submitImported's response path, with session storage fencing reloads and
   // duplicate events.
   useEffect(() => {
-    const ingestId = cadReturn.ingestRecord?.ingest_id;
-    if (!ingestId) return;
     for (const operation of Object.values(cadOperations)) {
       if (operation.kind !== 'prepare_and_solve' || operation.state !== 'accepted' || !operation.jobId) continue;
-      completeManualCadSolve(ingestId, operation);
+      // The ingestion it was submitted for, which a newer snapshot on screen
+      // does not change: the run stays owned by its original input.
+      const ingestId = manualCadSolveIngestFor(operation.operationId);
+      if (ingestId) completeManualCadSolve(ingestId, operation);
     }
-  }, [cadOperations, cadReturn.ingestRecord?.ingest_id, completeManualCadSolve]);
+  }, [cadOperations, completeManualCadSolve]);
+
+  // A solve Fusion asked for is the user's command too, given in Fusion: its
+  // run is claimed for the primary slot as a WG solve's is, once, when this
+  // page watched it finish. One that was already finished when this page
+  // first saw it is history, not news, and the manual solves above have their
+  // own session-fenced completion.
+  const watchedOperations = useRef(new Set<string>());
+  const claimedOperations = useRef(new Set<string>());
+  useEffect(() => {
+    for (const operation of Object.values(cadOperations)) {
+      if (operation.kind !== 'prepare_and_solve' || operation.operationId.startsWith('manual-solve:')) continue;
+      if (isPendingCadOperation(operation)) {
+        watchedOperations.current.add(operation.operationId);
+        continue;
+      }
+      if (operation.state !== 'accepted' || !operation.jobId) continue;
+      if (!watchedOperations.current.has(operation.operationId)) continue;
+      if (claimedOperations.current.has(operation.operationId)) continue;
+      claimedOperations.current.add(operation.operationId);
+      compareSelection.awaitRun(operation.jobId);
+      solveAttention.bindRun(operation.jobId, operation.operationId);
+      void jobsSocket.refresh().catch(() => undefined);
+    }
+  }, [cadOperations]);
+
+  // A request that stops to wait for the user fronts the CAD Link panel while
+  // its command is still the user's latest intention (shell/solveAttention).
+  useOperationAttention(cadOperations);
 
   let currentOptions: SolveOptions | null = null;
   let solveOptionsError: string | null = null;
@@ -304,6 +335,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // when a result had been pinned for comparison; without it, a pin taken
       // at any point in the session quietly kept every later solve hidden.
       compareSelection.awaitRun(jobId);
+      solveAttention.bindRun(jobId);
       acceptSubmittedLabel(designName);
       await jobsSocket.refresh();
     } finally {
@@ -349,6 +381,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // (under cad-solve:<id>), so a solve from here never carries a command key.
       acceptSubmittedLabel(designName);
       compareSelection.awaitRun(jobId);
+      solveAttention.bindRun(jobId);
       await jobsSocket.refresh();
       return jobId;
     } finally {
@@ -395,6 +428,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
             // A lost prepare response can race the backend all the way to a
             // terminal outcome. Observing that row completes the retry; it
             // must not turn the retry into a second explicit solve.
+            solveAttention.bindOperation(operationId);
             useCadOperationsStore.getState().apply(held);
             acknowledgeManualCadSolvePreparation(ingestId, operationId);
             if (held.state !== 'accepted') {
@@ -415,6 +449,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       } catch (reason) {
         if (!(reason instanceof CadLinkApiError && reason.status === 404)) throw reason;
       }
+      // The operation this press creates or recovers carries its arm, so the
+      // run it ends in -- or the gate it stops at -- may follow the user.
+      solveAttention.bindOperation(operationId);
       const setup = {
         ...built.setup,
         label: identity.label,
@@ -495,6 +532,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     ? importedEngine !== null
     : solvePlan !== null && !solvePlanPending && solvePlanError === null;
   const solve = useCallback(() => {
+    // The button, the shortcut and the palette all arrive here: one command.
+    solveAttention.armSolve();
     const action = async () => {
       if (fileGeometryActive) {
         throw new Error('A standalone imported mesh is for viewport inspection only. Show Parametric to solve the WG design.');
@@ -533,7 +572,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     disabled: !solveAvailable || submitting || Boolean(solveBlocker) || fileGeometryActive,
     notice,
     submitting,
-    label: cadGeometryActive ? 'Solve CAD Link' : 'Solve',
+    label: 'Solve',
     title: submitting
       ? 'Submitting solve…'
       : fileGeometryActive

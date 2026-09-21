@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+import { cadCoordinationStore } from '../../api/cadCoordination';
 import {
   listReturns,
   requestFusionReturn,
@@ -152,6 +153,7 @@ export function useCadReturnArrivals({
       const next = new Map(response.items.map((item) => [item.bundlePath, item.modifiedAt]));
       const wasConfigured = cadFolderConfigured.current;
       cadFolderConfigured.current = response.cadFolderConfigured;
+      cadCoordinationStore.set(response.coordination === 'off' ? 'off' : 'on');
       const listingChanged = previous === null
         || previous.size !== next.size
         || [...next].some(([path, modifiedAt]) => previous.get(path) !== modifiedAt);

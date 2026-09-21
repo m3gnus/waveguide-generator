@@ -197,4 +197,7 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 /* CAD operations: solves Fusion sent, which the backend prepares. */
 .cad-operation .cad-confirm-actions { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 .cad-operation-findings { margin: 0; padding-left: 16px; color: var(--fg3); font-size: var(--text-base); }
+/* Every step still between a waiting solve and its job; the current one leads. */
+.cad-operation-ladder { margin: 0; padding-left: 18px; color: var(--fg3); font-size: var(--text-base); }
+.cad-operation-ladder li.current { color: var(--fg1); font-weight: 600; }
 .cad-model-provenance { overflow-wrap: anywhere; }

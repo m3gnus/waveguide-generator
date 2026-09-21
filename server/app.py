@@ -26,6 +26,7 @@ from server.diagnostics import mount_diagnostics
 from server.diagnostics.api import CLIENT_LOG_PATH, MAX_CLIENT_LOG_BODY_BYTES
 from server.diagnostics.capabilities import capabilities_payload
 from server.cadlink import mount_cadlink, mount_onshape
+from server.cadlink.coordination import CAD_COORDINATION_ENV, read_cad_coordination
 from server.design_io import mount_design_io
 from server.drivers import mount_drivers
 from server.exports import mount_exports
@@ -515,7 +516,14 @@ def create_app(
     )
     engine_registry = EngineRegistry(detector=detect_engines)
     application.state.engine_registry = engine_registry
-    logging.getLogger("wg").info("Waveguide Generator %s application initialized", BUILD)
+    # Read once, here, for the life of the process (server/cadlink/coordination.py).
+    application.state.cad_coordination = read_cad_coordination()
+    logging.getLogger("wg").info(
+        "Waveguide Generator %s application initialized; CAD coordination %s (%s)",
+        BUILD,
+        application.state.cad_coordination,
+        CAD_COORDINATION_ENV,
+    )
     # The SPA is 2.27 MB of JavaScript and 187 kB of CSS.  Even on loopback that
     # is worth compressing: it gzips to roughly a quarter of the bytes, and the
     # same middleware covers the multi-hundred-kB results payloads.  500 bytes

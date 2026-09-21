@@ -6,9 +6,13 @@ import { DesignFileMenu } from '../design/DesignFileMenu';
 import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterTab } from '../design/parameterRegistry';
 import { PARAMETRIC_CONTROL_DESCRIPTORS, parametricControlMatchesQuery } from '../design/parametricControlRegistry';
 import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
-import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName } from '../prefs/preferences';
+import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
+import { useCadOperationsStore } from '../stores/cadOperations';
+import type { FusionCadStatus } from '../api/cadlink';
+import { operationNeedsUser, solveAttention, useReadyRun } from './solveAttention';
+import { noteExplicitNavigation } from './workspaceNavigation';
 import { useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
@@ -47,7 +51,7 @@ export function revealParameterFromPalette(
   // Establish the owning workspace before the dock panel is activated or the
   // still-mounted panel could claim a request for controls it is about to hide.
   workspaceModeStore.setMode(owningMode);
-  workspaceNavigation.activate(tab);
+  workspaceNavigation.navigate(tab);
   // The request waits to be claimed, so it does not need to be timed to land
   // after the panel mounts — and not deferring it means the route still works
   // in a background tab, where animation frames never run.
@@ -56,13 +60,13 @@ export function revealParameterFromPalette(
 
 export function revealCadControlFromPalette(id: string, tab: ParameterTab, query: string, fallbackId?: string): void {
   workspaceModeStore.setMode('cad');
-  workspaceNavigation.activate(tab);
+  workspaceNavigation.navigate(tab);
   requestParameterReveal({ id, tab, query, target: 'control', fallbackId });
 }
 
 export function revealParametricControlFromPalette(id: string, tab: ParameterTab, query: string): void {
   workspaceModeStore.setMode('parametric');
-  workspaceNavigation.activate(tab);
+  workspaceNavigation.navigate(tab);
   requestParameterReveal({ id, tab, query, target: 'control' });
 }
 
@@ -79,6 +83,8 @@ export interface ParameterPaletteContext {
  * restores the parametric working design if a CAD flow replaced it, so the
  * toggle never presents a CAD project's design as the user's own. */
 export function activateWorkspaceMode(mode: WorkspaceMode): void {
+  // The user's own switch: whatever was waiting to follow them no longer may.
+  noteExplicitNavigation();
   if (mode === 'parametric') restoreParametricWorkingDesign();
   workspaceModeStore.setMode(mode);
   if (mode === 'cad' && !useCadReturnStore.getState().ingestRecord) {
@@ -143,11 +149,50 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
   return [...parameterEntries, ...cadEntries];
 }
 
+/**
+ * Where the CAD model on screen came from, and what WG can honestly say about
+ * whether Fusion still matches it.
+ *
+ * It never claims the displayed model is Fusion's latest unless the add-in's
+ * measurement is of the revision Fusion is at (`observationFreshness`
+ * `current`, or `unknown`: an add-in older than the revision tokens, whose
+ * heartbeat measured what it published -- see server/cadlink/fusion_status.py.
+ * `unknown` is not an incompatible add-in). An older snapshot stays solvable on
+ * purpose; this line only says so.
+ */
+export interface CadSourceLine {
+  text: string;
+  tone: 'info' | 'changed' | 'unverified';
+  /** A refresh from Fusion is worth offering. */
+  refresh: boolean;
+}
+
+export function cadSourceLine(status: FusionCadStatus | null | undefined, modelShown: boolean): CadSourceLine | null {
+  if (!modelShown) return null;
+  const base = 'Model loaded from Fusion';
+  if (!status?.running || status.state !== 'current' && status.state !== 'stale') {
+    return { text: base, tone: 'info', refresh: false };
+  }
+  // Positive evidence of a difference stands whatever the observation's age:
+  // over-reporting it costs a redundant refresh, never a wrong solve.
+  if (status.fusionChangesAvailable) {
+    return { text: `${base} · Newer CAD changes available`, tone: 'changed', refresh: true };
+  }
+  const freshness = status.observationFreshness ?? null;
+  const measured = freshness === 'current' || freshness === 'unknown';
+  if (!measured || !status.documentChangeDetectable) {
+    return { text: `${base} · Live CAD freshness not verified`, tone: 'unverified', refresh: true };
+  }
+  return { text: `${base} · Matches Fusion`, tone: 'info', refresh: false };
+}
+
 /** The solve actions.
  *
- * When Fusion has moved past the geometry WG prepared, solving what WG holds
- * is usually the wrong action, so the pull becomes primary and the prepared
- * solve stays beside it rather than disappearing.
+ * Solve has one meaning: it solves the model and settings WG displays now. The
+ * connection to Fusion never changes what it does or which button is primary;
+ * the button, the shortcut and the palette's Solve are the same command.
+ * Bringing newer geometry in from Fusion is its own explicit action on the
+ * source line (and "Pull from Fusion & Solve" in the command palette).
  */
 export function SolveActions() {
   const solve = useSolveControl();
@@ -157,23 +202,20 @@ export function SolveActions() {
     cadLinkCoordinatorBridge.getSnapshot,
     cadLinkCoordinatorBridge.getSnapshot,
   );
-  const fusionMoved = mode === 'cad' && cadCoordinator.fusionStatus?.fusionChangesAvailable === true;
+  const modelShown = useCadReturnStore((state) => Boolean(state.ingestRecord));
+  const fusion = usePreferences().cadApplication === 'fusion360';
+  const source = mode === 'cad' && fusion
+    ? cadSourceLine(cadCoordinator.fusionStatus, modelShown)
+    : null;
 
   return <>
-    {fusionMoved && <button
-      className="solve-button"
-      disabled={cadCoordinator.pullingFromFusion || solve.submitting}
-      title="Ask Fusion for its current geometry, prepare it, and solve"
-      aria-busy={cadCoordinator.pullingFromFusion}
-      onClick={() => { void cadCoordinator.pullAndSolve().catch(() => undefined); }}
-    ><Icon name="reset"/>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Pull from Fusion & Solve'}</button>}
     <button
-      className={fusionMoved ? 'solve-button solve-button-secondary' : 'solve-button'}
-      disabled={solve.disabled || cadCoordinator.pullingFromFusion}
-      title={fusionMoved ? `${solve.title} (the geometry WG already prepared)` : solve.title}
+      className="solve-button"
+      disabled={solve.disabled}
+      title={solve.title}
       aria-busy={solve.submitting}
       onClick={solve.solve}
-    ><Icon name="play"/>{fusionMoved ? 'Solve prepared' : solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
+    ><Icon name="play"/>{solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
     {solve.notice && <span
       className={`solve-notice solve-notice-${solve.notice.tone}`}
       role="status"
@@ -181,6 +223,64 @@ export function SolveActions() {
          solve can proceed, so this must not interrupt what the user is doing. */
       aria-live="polite"
     >{solve.notice.text}</span>}
+    {source && <span className={`cad-source-line cad-source-${source.tone}`} role="status" title={source.text}>
+      <span>{source.text}</span>
+      {source.refresh && <button
+        type="button"
+        disabled={cadCoordinator.pullingFromFusion}
+        aria-busy={cadCoordinator.pullingFromFusion}
+        title="Bring Fusion's current geometry into WG without solving it"
+        onClick={() => { void cadCoordinator.pullFromFusion().catch(() => undefined); }}
+      >{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Refresh'}</button>}
+    </span>}
+    <AttentionNotices/>
+  </>;
+}
+
+/**
+ * The route to something that finished out of sight.
+ *
+ * A request waiting for the user is announced wherever they are -- including
+ * Parametric mode, where the CAD Link panel is not in the dock at all -- and
+ * the notice opens it. Choosing that is the user's explicit act, so it may
+ * change the workspace mode; nothing here changes it by itself. A solve whose
+ * results arrived after the user navigated elsewhere is only indicated.
+ */
+export function AttentionNotices() {
+  useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
+  const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const operations = useCadOperationsStore((state) => state.operations);
+  const readyRun = useReadyRun();
+  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  const waiting = Object.values(operations).filter(operationNeedsUser);
+  const showWaiting = waiting.length > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
+  const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
+  const readyJob = readyRun ? jobs.find((job) => job.id === readyRun) ?? null : null;
+  const first = waiting[0];
+  const waitingLabel = !first
+    ? ''
+    : waiting.length > 1
+      ? `${waiting.length} CAD requests need you`
+      : first.kind === 'prepare_and_solve' ? 'A solve is waiting for you' : 'A CAD update needs recovery';
+  return <>
+    {showWaiting && <button
+      type="button"
+      className="attention-notice attention-waiting"
+      title={first?.message ?? waitingLabel}
+      onClick={() => {
+        if (mode !== 'cad') activateWorkspaceMode('cad');
+        workspaceNavigation.navigate('cadlink');
+      }}
+    ><i/>{waitingLabel} · Show</button>}
+    {showReady && <button
+      type="button"
+      className="attention-notice attention-ready"
+      title={`${readyJob ? runDisplayName(readyJob) : 'The run you solved'} finished. It is the selected result.`}
+      onClick={() => {
+        solveAttention.dismissReady();
+        workspaceNavigation.navigate('results');
+      }}
+    ><i/>Results ready · Show</button>}
   </>;
 }
 
@@ -270,7 +370,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       detail: job.has_results ? 'Show in Results' : `${job.status} · no results`,
       keywords: `${job.id} ${job.status}`,
       disabled: !job.has_results,
-      run: () => { compareSelection.setPrimary(job.id); workspaceNavigation.activate('results'); },
+      run: () => { compareSelection.setPrimary(job.id); workspaceNavigation.navigate('results'); },
     }));
     const commands: PaletteEntry[] = [
       { id: 'solve', kind: 'Commands', label: solve.label, detail: solve.title, disabled: solve.disabled, run: solve.solve },
@@ -281,7 +381,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
         label: 'Pull from Fusion & Solve',
         detail: 'Request the current Fusion geometry, prepare it, and solve',
         disabled: workspaceMode !== 'cad' || !cadCoordinator.fusionStatus?.running,
-        run: () => { void cadLinkCoordinatorBridge.getSnapshot().pullAndSolve(); },
+        run: () => { void cadLinkCoordinatorBridge.getSnapshot().pullAndSolve().catch(() => undefined); },
       },
       {
         id: 'cad-pull',
