@@ -15,9 +15,11 @@ This page and that module must agree. Change them together.
 
 **Status of this cut.** The store, the identity rules and the vocabulary below are in
 place. The solve-command outcome ledger lives in the store, and Fusion's solve commands
-are delivered through it (see "Solve-command delivery"). WG and its add-in speak one
-delivery version, 3, and nothing older (see "Delivery version"): every request is its
-own file, and there is no single-slot marker and no twin. The adapter follows the order
+are delivered through it (see "Solve-command delivery"). WG and its add-in speak
+delivery version 3 for the heartbeat and Fusion-bound requests; WG's separate
+`solveCommandDelivery` capability is 4 while its request consumer runs (see "Delivery
+version"). Every request is its own file, and there is no single-slot marker and no twin.
+The adapter follows the order
 in "Fusion-bound mutations", marks an operation as applying before it writes, and
 settles what an interrupted session left. The backend owns a solve operation end to end
 (see "Setup revisions" and "Preparation"): its retained snapshot, its setup revision,
@@ -616,12 +618,16 @@ need.
 
 ## Solve-command delivery
 
-A Fusion solve command reaches WG as its own file:
-`<data dir>/ipc/wglink/.wg-solve-requests/<commandId>.json`, with `schemaVersion` 3. It
-is the operation `prepare_and_solve`, with the `commandId` as its operation ID.
+A WG-bound Fusion request reaches WG as its own file:
+`<data dir>/ipc/wglink/.wg-solve-requests/<commandId>.json`. Schema 4 carries a `kind`:
+`prepare_and_solve` is Solve and `receive_snapshot` is Send. Schema 3 remains a Solve
+for compatibility with the shipped WGLink pin and other schema-3 fallbacks. Schemas 1
+and 2 are refused as outdated.
 
-- **Fields.** `target: "waveguide-generator"`, `commandId`, `returnId`, `bundlePath`,
-  `manifestSha256` and `requestedAt`, plus `operationId`, which must equal `commandId`.
+- **Fields.** `target: "waveguide-generator"`, `schemaVersion`, `kind` for schema 4,
+  `commandId`, `operationId` (equal to `commandId`), `bundlePath`, `manifestSha256` and
+  `requestedAt`. A Solve also has `returnId`, which is present even when empty; Send
+  omits it. Schema 3 is interpreted as `prepare_and_solve`.
 - **Digest.** The `prepare_and_solve` digest above, over `return_id`, `bundle_path` and
   `manifest_sha256`. `requestedAt` and the file's name and folder are transport.
 - **Writing a file.** A producer stages it under a name that starts with `.` or does not
@@ -629,18 +635,23 @@ is the operation `prepare_and_solve`, with the `commandId` as its operation ID.
   start with `.`.
 - **The file name is the producer's convention.** WG identifies a command by the
   `commandId` inside the file, not by the file's name.
-- **Files WG cannot read.** WG leaves a file where it is, and acts on nothing in it,
-  when it is malformed, lacks a required field, has a `schemaVersion` WG does not know,
-  or has an `operationId` that differs from its `commandId`. A claim WG cannot read is
-  left the same way. WG looks at such a file again on every poll, and a newer WG may
-  understand it.
-- **What an older add-in writes.** A WGLink older than delivery version 3 writes the
-  single slot `.wg-solve-request.json`, or a version-2 file in the folder above. WG
-  claims such a command and refuses it, with the remedy as its reason (restart Fusion so
-  it loads the add-in WG installed). The refusal is recorded as the operation's outcome
-  and logged, like any other. It is never run. A command under an ID the store already
-  holds is instead a repeat delivery, and is recovered or refused as the delivery table
-  says.
+- **Files WG cannot identify as requests.** WG leaves a staging name, non-JSON file,
+  another target, or otherwise unidentifiable content alone. A file it can identify as a
+  request but cannot validate is claimed, refused visibly, and deleted.
+- **What the shipped pin writes.** The pinned WGLink `04b2524b` reports delivery version
+  3 and writes schema-3 Solves, which WG accepts as `prepare_and_solve`. Its plain Send
+  is not a schema-3 inbox request: WG finds that return by listing the returns folder.
+  A WGLink older than delivery version 3 writes the single slot
+  `.wg-solve-request.json`, or a version-2 file in the folder above; WG claims such a
+  command and refuses it with the remedy as its reason. It is never run. A command under
+  an ID the store already holds is instead a repeat delivery, and is recovered or
+  refused as the delivery table says.
+
+If a Send or Solve write's outcome is unknown, the add-in retries the same ID and fields
+a bounded number of times. Only an exact reread of the complete request is reported as
+sent; if it still cannot be confirmed, the user sees **Unconfirmed**, with the short ID
+and a prompt to check WG's CAD Link panel before sending again. It never reports "not
+asked" or silently invents a new request ID.
 
 **Consuming a delivery.** WG takes each file in five steps:
 
@@ -822,9 +833,11 @@ dismisses it there; a job it submits for it is reconciled through the submission
 
 ## Delivery version
 
-WG and WGLink speak one delivery version, **3**, in both directions, and nothing older.
-Release owner decision, 2026-09-13: no older add-in is supported, and WG always uses the
-add-in it ships.
+WG and WGLink speak delivery version **3** for the heartbeat and Fusion-bound requests,
+and nothing older. WG separately advertises `solveCommandDelivery: 4` while its request
+consumer runs; it omits that capability while the consumer is disabled. Release owner
+decision, 2026-09-13: no older add-in is supported, and WG always uses the add-in it
+ships.
 
 - **WG refuses an older add-in.** The add-in reports its version in the heartbeat as
   `deliveryVersion`. A live heartbeat without it, or below 3, gives the status
@@ -898,12 +911,13 @@ add-in it ships.
 
 ## Capability file
 
-WG tells the add-in which delivery version it reads, and which optional return features
+WG tells the add-in which delivery version it reads, which WG-bound request schema it
+reads, and which optional return features
 it accepts, in `<data dir>/ipc/wglink/wg-capabilities.json`. WG writes it atomically at
 every start:
 
 ```json
-{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 3, "fusionRequestDelivery": 3, "sourceIdentity": 1, "liveProtocol": 1}
+{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 4, "fusionRequestDelivery": 3, "sourceIdentity": 1, "liveProtocol": 1}
 ```
 
 - **`sourceIdentity: 1`** means WG reads returns that require `source-identity-v1`

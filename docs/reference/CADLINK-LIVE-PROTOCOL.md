@@ -3,7 +3,8 @@
 Status: protocol version 1, **implemented in WG** (`server/cadlink/live/`): endpoint
 discovery, registration, sessions and tokens, origin and validation rules, heartbeat over
 HTTP, Fusion-bound requests and WG-bound deliveries (sections 2-8). No released WGLink
-speaks this protocol yet; until one does, the add-in uses the v3 files.
+speaks this protocol yet; until one does, the shipped pin uses the v3 files: schema-3
+Solves, while plain Send is found by listing the returns folder.
 
 The live protocol changes how CAD Link operations travel between WG and its Fusion add-in,
 not what they mean. The operation contract, digests and states are those of
@@ -12,11 +13,17 @@ not what they mean. The operation contract, digests and states are those of
 ## 1. Transports and precedence
 
 - **The v3 files stay unchanged and always on.** WG writes `wg-capabilities.json` and every
-  Fusion-bound request file and collects v3 solve files; the add-in writes its file
-  heartbeat and, when it cannot deliver live, v3 solve files. They are the offline and
-  cold-start transport.
-- **Live is additive.** With no usable endpoint, or a refusal by protocol, the add-in uses
-  the v3 files.
+  Fusion-bound request file. Its heartbeat and Fusion-bound request delivery remain 3;
+  its WG request inbox additionally accepts schema 4, where `kind` distinguishes Send
+  from Solve, while schema 3 means Solve. The shipped pin writes schema-3 Solves and WG
+  finds its plain Send by listing the returns folder. They are the offline and cold-start
+  transports.
+- **Live is additive.** An add-in from M1 on sends every WG-bound Send and Solve through
+  the request inbox, never over live: schema 4 when WG advertises
+  `solveCommandDelivery: 4`, schema-3 Solve files when WG advertises 3, and a visible
+  refusal for Send against a WG advertising only 3. Live carries Fusion-bound requests;
+  WG's live delivery route remains for add-ins that still use it and deduplicates with the
+  inbox by operation ID.
 - **One operation, either path.** An operation is identified by its operation ID and
   digest. Transport fields -- tokens, proofs, nonces, the installation header, session IDs,
   attempt and claim IDs, `requestedAt`, file names -- are never digest inputs.
@@ -398,7 +405,7 @@ event after it is committed; the event carries the operation summary, never the 
   `400 invalid_request`. The digest is the operation's
   ([CAD operations](../architecture/CAD-OPERATIONS.md), "Identity"): `requestedAt`, the
   token, the headers and the transport never change it, so the same item delivered as a
-  v3 solve file and over HTTP is one operation.
+  schema-3 or schema-4 request file and over HTTP is one operation.
 - **By reference.** The bundle stays in the WGLink folder; WG retains it into its own
   storage before it answers 200.
 - **Checks, in order, after the session checks and body validation (section 5):**
@@ -452,12 +459,15 @@ event after it is committed; the event carries the operation summary, never the 
   (honour `Retry-After`) until WG answers 200 -- for `snapshot_not_readable` it does
   within 30 s. A 401 is answered by registering again (section 4) and retrying the same
   item. Only a network failure (refused, reset, timeout) or a 401 that one new
-  registration does not cure makes a solve fall back to the v3 solve file with the same
-  operation ID; the digest is the same, so whichever arrives first is accepted and the
-  other recovers it.
+  registration does not cure makes a request fall back to the inbox using the capability
+  WG advertises: schema 4 when `solveCommandDelivery` is 4, or schema 3 for a Solve when
+  it is exactly 3. Send refuses against 3, and both commands refuse when the capability
+  is absent. The same operation ID and digest make whichever valid delivery arrives first
+  the accepted one; the other recovers it.
 - **The add-in's outbox** keeps each item under a fixed operation ID, created after the
-  bundle and before any send. A solve with no healthy session is written as the v3 solve
-  file (cold start); a `receive_snapshot` waits in
+  bundle and before any send. The shipped pin's Solve with no healthy session is written
+  as the schema-3 solve file (cold start); a current add-in writes schema 4 when WG
+  advertises it. Existing `receive_snapshot` outbox items wait in
   `<data dir>/ipc/wglink/.wglink-outbox/<operationId>.json`, which WG never reads, and is
   deleted on 200 or `409 operation_conflict`. Mixed file and live delivery of one operation
   is accepted once, in any order or at once.
