@@ -36,6 +36,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import stat
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable, Mapping
@@ -52,6 +53,7 @@ from .operations import (
     prepare_and_solve_request,
     request_digest,
 )
+from server.platform.private_paths import ensure_private_directory
 
 if TYPE_CHECKING:
     from .store import CadLinkStore
@@ -80,6 +82,9 @@ UNREADABLE_PASSES = 30
 #: before the pass moves on (Windows sharing violations are short).
 _HELD_ATTEMPTS = 10
 _HELD_RETRY_SECONDS = 0.02
+#: Request files are tiny (normally under 1 KiB). Bound what is read into
+#: memory while leaving ample room for compatible future fields.
+MAX_REQUEST_BYTES = 64 * 1024
 # Each claim WG could not read, by claim name: the request file it was, and how
 # many passes its read has failed.
 _unreadable_waits: dict[str, tuple[str, int]] = {}
@@ -93,6 +98,13 @@ class _Unreadable:
 
     def __init__(self, error: OSError) -> None:
         self.error = error
+
+
+class _UnsafePayload:
+    """A path whose own filesystem metadata makes it unsafe to read."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
 
 
 def _held(error: OSError) -> bool:
@@ -409,7 +421,7 @@ class SolveOutcomeConflict(ValueError):
 def ipc_folder(data_dir: Path, *, create: bool = False) -> Path:
     folder = data_dir.resolve() / IPC_SUBDIRECTORY
     if create:
-        folder.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(folder, parents=True)
     return folder
 
 
@@ -503,6 +515,15 @@ def _read_payload(path: Path) -> object:
 
     for attempt in range(_HELD_ATTEMPTS):
         try:
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                return _UnsafePayload("WG refuses a request path that is a symbolic link.")
+            if not stat.S_ISREG(metadata.st_mode):
+                return _UnsafePayload("WG refuses a request path that is not a regular file.")
+            if metadata.st_size > MAX_REQUEST_BYTES:
+                return _UnsafePayload(
+                    f"WG refuses a request file larger than {MAX_REQUEST_BYTES} bytes."
+                )
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
             if not _held(exc) or attempt == _HELD_ATTEMPTS - 1:
@@ -531,7 +552,9 @@ class _Delivery:
 
 def _files(directory: Path) -> list[Path]:
     try:
-        return [path for path in directory.iterdir() if path.is_file()]
+        # Unsafe leaf types must reach ``_read_payload`` for visible refusal.
+        # Real directories are not request files and remain untouched.
+        return [path for path in directory.iterdir() if path.is_symlink() or not path.is_dir()]
     except OSError:
         return []
 
@@ -541,6 +564,9 @@ def _delivery(
 ) -> _Delivery | None:
     payload = _read_payload(path)
     invalid: str | None = None
+    if isinstance(payload, _UnsafePayload):
+        invalid = payload.reason
+        payload = None
     if isinstance(payload, _Unreadable):
         # Not read: nothing is known about it. An unclaimed file is tried again
         # next pass; a claim is kept, and the pass reads it again.
@@ -551,10 +577,13 @@ def _delivery(
         except OSError:
             return None
         return _Delivery(path, claimed, schema_versions, None, ("", modified, path.name), None)
-    try:
-        command = _command_from_payload(payload, path, schema_versions=schema_versions)
-    except InvalidRequest as exc:
-        command, invalid = None, str(exc)
+    if invalid is None:
+        try:
+            command = _command_from_payload(payload, path, schema_versions=schema_versions)
+        except InvalidRequest as exc:
+            command, invalid = None, str(exc)
+    else:
+        command = None
     if command is None and invalid is None:
         # Not identifiably a request: left alone -- unless it is a claim, which
         # only this consumer makes, and which must not be re-read for ever.
@@ -562,7 +591,7 @@ def _delivery(
             return None
         invalid = UNREADABLE_CLAIM_REASON
     try:
-        modified = path.stat().st_mtime_ns
+        modified = path.lstat().st_mtime_ns
     except OSError:
         return None
     requested_at = (
@@ -597,8 +626,9 @@ def _deliveries(data_dir: Path) -> list[_Delivery]:
     file's modification time.
     """
 
-    folder = ipc_folder(data_dir)
+    folder = ipc_folder(data_dir, create=True)
     requests = folder / SOLVE_REQUESTS_DIRECTORY
+    ensure_private_directory(requests)
     found: list[_Delivery | None] = []
     for directory, versions in ((folder, _SLOT_SCHEMAS), (requests, _FILE_SCHEMAS)):
         for path in _files(directory):
@@ -843,6 +873,11 @@ def collect_solve_deliveries(
                 continue
             # What the rename took is the request, not what was read before.
             payload = _read_payload(claim)
+            if isinstance(payload, _UnsafePayload):
+                invalid = payload.reason
+                payload = None
+            else:
+                invalid = None
             if isinstance(payload, _Unreadable):
                 # The read failed: this may be a valid request another process
                 # holds. It is kept and read again next pass -- never refused
@@ -865,13 +900,16 @@ def collect_solve_deliveries(
                     refused(refusal)
                 continue
             _unreadable_waits.pop(claim.name, None)
-            try:
-                command = _command_from_payload(
-                    payload, claim, schema_versions=delivery.schema_versions
-                )
-                invalid = None if command is not None else UNREADABLE_CLAIM_REASON
-            except InvalidRequest as exc:
-                command, invalid = None, str(exc)
+            if invalid is None:
+                try:
+                    command = _command_from_payload(
+                        payload, claim, schema_versions=delivery.schema_versions
+                    )
+                    invalid = None if command is not None else UNREADABLE_CLAIM_REASON
+                except InvalidRequest as exc:
+                    command, invalid = None, str(exc)
+            else:
+                command = None
             if command is None:
                 # Taken, refused and removed: never parked, never re-read.
                 refusal = inbox_refusal(payload, delivery.path.name, invalid or UNREADABLE_CLAIM_REASON)

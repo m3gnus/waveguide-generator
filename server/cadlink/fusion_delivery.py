@@ -34,6 +34,8 @@ import threading
 import time
 from typing import Any, Callable, Literal, Mapping
 
+from server.platform.private_paths import ensure_private_directory
+
 from .live import wake as live_wake
 
 
@@ -99,7 +101,7 @@ class PublishedRequest:
 def ipc_folder(data_dir: Path, *, create: bool = False) -> Path:
     folder = Path(data_dir).resolve() / IPC_SUBDIRECTORY
     if create:
-        folder.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(folder, parents=True)
     return folder
 
 
@@ -309,7 +311,7 @@ def publish_fusion_request(
         raise ValueError("A Fusion request id must be a plain file name.")
     directory = ipc_folder(data_dir, create=True) / channel.directory
     with _LOCK:
-        directory.mkdir(exist_ok=True)
+        ensure_private_directory(directory)
         withdrawn: list[str] = []
         sequences = [0]
         withdrawable: list[tuple[Path, str]] = []

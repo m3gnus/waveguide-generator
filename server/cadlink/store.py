@@ -14,6 +14,7 @@ import threading
 from typing import Any
 
 from server.platform.paths import data_paths
+from server.platform.private_paths import ensure_private_directory
 from server.platform.sqlite import JournalModeStatus, configure_connection
 from server.workspace.archive import archive_folder_slug
 
@@ -579,7 +580,7 @@ class CadLinkStore:
         if self._initialized:
             return
         if str(self.db_path) != ":memory:":
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            ensure_private_directory(self.db_path.parent, parents=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if version < 0 or version > HIGHEST_READABLE_FORMAT:

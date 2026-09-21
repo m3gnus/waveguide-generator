@@ -93,6 +93,15 @@ applying marks, recent outcomes, and exact last-request trace durably.
 
 ## Delivery
 
+**Local trust boundary.** The server binds only to loopback. A missing `Origin`
+header is allowed, so any local process running as the same user can call the
+ordinary API; changing that API's authentication is a product decision, not a
+property of this file transport. The request inbox relies on the user's profile
+permissions and, on POSIX, owner-only (`0700`) modes on `ipc/wglink`, its
+`.wg-solve-requests` inbox, and the data directory that contains `cadlink.db`.
+On Windows these paths live under the per-user profile and WG does not attempt
+ACL changes here.
+
 A WG-bound command is handled in this order:
 
 1. read the delivery;
