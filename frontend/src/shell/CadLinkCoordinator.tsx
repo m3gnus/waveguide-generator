@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   CadLinkApiError,
   getFusionCadStatus,
@@ -31,6 +31,7 @@ import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
 import { connectCadOperations, displayedSends, pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
 import { cadCoordinationOff, cadCoordinationStore } from '../api/cadCoordination';
+import { agedFusionStatus, statusExpiresAt } from './cadWorkflowView';
 import { solveAttention } from './solveAttention';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { rememberCadProject } from '../stores/cadProjectMemory';
@@ -604,6 +605,9 @@ export function CadLinkCoordinator() {
   // never takes the selection from it (see `refresh`). Reset by every
   // project switch.
   const manualSelectionAt = useRef<number | null>(null);
+  /** How many returns the user has picked by hand: exact where a clock is
+   * not -- a pick in the same millisecond a display began still counts. */
+  const manualSelections = useRef(0);
   // A return was refused because it names a design other than the open one.
   // Until the user acts on that, WG must not put some third project's geometry
   // on screen in its place: entering CAD Link is how a refusal is shown, and
@@ -698,16 +702,26 @@ export function CadLinkCoordinator() {
     baseMs: number,
     idleMs: number,
     unconfiguredMs: number | null,
+    listing = false,
   ): number | null => {
     // WG's coordination gate (api/cadCoordination). Off: nothing here runs on
     // a clock unless CAD work is in flight -- a Send or pull the user started,
     // or an operation that has not finished. Everything else is event-driven:
     // mount, focus, entering CAD mode, a folder chosen, and operation pushes.
-    if (cadCoordinationOff()) return cadWorkInFlight() ? baseMs : null;
+    // One exception: an add-in that does not declare the inbox transfer (the
+    // shipped pin, or one WG has not heard from) publishes a plain Send only as
+    // a return in the folder, and the listing is the only thing that finds it,
+    // so the listing keeps today's cadence for it.
+    if (cadCoordinationOff() && !(listing && !addinDeclaresInbox.current)) {
+      return cadWorkInFlight() ? baseMs : null;
+    }
     if (cadFlowActive()) return baseMs;
     if (cadFolderConfigured.current === false) return unconfiguredMs;
     return Date.now() - lastCadActivityAt.current >= cadPollIntervals.quietMs ? idleMs : baseMs;
   }, [cadFlowActive, cadWorkInFlight]);
+  /** The connected add-in sends through WG's request inbox (its heartbeat says
+   * so); until WG knows that, the listing keeps looking for plain Sends. */
+  const addinDeclaresInbox = useRef(false);
 
   useEffect(() => {
     setSelectedFusionInstanceId(null);
@@ -827,6 +841,11 @@ export function CadLinkCoordinator() {
       if (request !== fusionStatusRequest.current) return null;
       setFusionStatus(next);
       fusionProcessLive.current = next.processRunning === true;
+      const declares = next.addinInboxTransfer === true;
+      if (declares !== addinDeclaresInbox.current) {
+        addinDeclaresInbox.current = declares;
+        pollRestarts.current.forEach((restart) => restart());
+      }
       // A heartbeat that keeps saying `closed` is the evidence for backing
       // off; the first one that says anything else is Fusion arriving, and
       // everything downstream of it wants the base rate again.
@@ -842,6 +861,23 @@ export function CadLinkCoordinator() {
     }
   }, [design, identity, noteCadActivity, preferences.cadApplication, selectedBundlePath, selectedFusionInstanceId]);
   fusionStatusReader.current = refreshFusionStatus;
+
+  // With WG's coordination gate off nothing re-reads Fusion's status on a
+  // clock, so a status held here is aged by the page itself: once its
+  // observation passes the freshness window it says what it is -- Fusion's
+  // last report, and when -- instead of going on claiming the document matches.
+  // One timer per status held, and no request (review F4).
+  const coordination = useSyncExternalStore(cadCoordinationStore.subscribe, cadCoordinationStore.getSnapshot, cadCoordinationStore.getSnapshot);
+  useEffect(() => {
+    if (coordination !== 'off') return undefined;
+    const held = fusionStatus;
+    const expires = statusExpiresAt(held);
+    if (held === null || expires === null) return undefined;
+    const timer = window.setTimeout(() => {
+      setFusionStatus((current) => (current === held ? agedFusionStatus(held) : current));
+    }, Math.max(0, expires - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [coordination, fusionStatus]);
 
   const selectFusionInstance = useCallback((instanceId: string) => {
     setSelectedFusionInstanceId(instanceId);
@@ -1033,7 +1069,11 @@ export function CadLinkCoordinator() {
    * advances both generations, then a fresh ingest aborts any older request;
    * late fetch implementations that ignore abort are still rejected by the
    * store generation before they can publish a record or viewport scene. */
-  const selectBundle = useCallback((bundle: CadReturnBundle, projectLineageId?: string | null) => {
+  const selectBundleAs = useCallback((
+    bundle: CadReturnBundle,
+    projectLineageId: string | null | undefined,
+    automatic: boolean,
+  ) => {
     if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
       refusedForeignReturn.current = true;
       setError(`That return belongs to another CAD-linked project. Open it from File → CAD-linked designs first.`);
@@ -1042,10 +1082,11 @@ export function CadLinkCoordinator() {
     }
     // A selection the user made themselves is the acknowledgement a standing
     // refusal was waiting for, and newer intent than any return already sent;
-    // the restore's own selection is neither.
-    if (!restoringCadProject.current) {
+    // the restore's own selection is neither, and nor is displaying a Send.
+    if (!automatic && !restoringCadProject.current) {
       refusedForeignReturn.current = false;
       manualSelectionAt.current = Date.now();
+      manualSelections.current += 1;
     }
     useCadReturnStore.getState().selectBundle(bundle, projectLineageId);
     rereadDrivers();
@@ -1053,7 +1094,13 @@ export function CadLinkCoordinator() {
     enterCadWorkspace();
     autoIngestSelected();
   }, [autoIngestSelected, rereadDrivers]);
+  const selectBundle = useCallback(
+    (bundle: CadReturnBundle, projectLineageId?: string | null) => selectBundleAs(bundle, projectLineageId, false),
+    [selectBundleAs],
+  );
   selectBundleRef.current = selectBundle;
+  const autoSelectBundleRef = useRef(selectBundleAs);
+  autoSelectBundleRef.current = selectBundleAs;
 
   // The panel's button: same work, feedback already presented, nothing thrown.
   const ingest = useCallback(async () => {
@@ -1316,27 +1363,40 @@ export function CadLinkCoordinator() {
   // new id naming the same bundle re-selects that model and brings it to the
   // front (E2). A Send WG refused is said, not dropped.
   const handledSends = useRef(new Set<string>());
+  // Displays are ordered by when each Send was made, and fenced across every
+  // await: an older Send -- a recovery that lands late, two recovered at once
+  // -- never replaces a newer arrival, and nothing replaces a return the user
+  // selected after the display began (review F3).
+  const sendIntent = useRef<{ sentAt: number; picks: number } | null>(null);
   const displaySend = useCallback(async (operation: CadOperationSummary) => {
     const bundlePath = operation.snapshot?.bundlePath;
     if (!bundlePath) return;
+    const sentAt = Date.parse(operation.createdAt ?? operation.updatedAt ?? '');
+    const order = Number.isFinite(sentAt) ? sentAt : 0;
+    if (sendIntent.current !== null && order < sendIntent.current.sentAt) return;
+    const intent = { sentAt: order, picks: manualSelections.current };
+    sendIntent.current = intent;
+    const superseded = () => sendIntent.current !== intent || manualSelections.current !== intent.picks;
     noteCadActivity();
     await refresh({ background: true, autoOpenNew: true }).catch(() => undefined);
+    if (superseded()) return;
     if (useCadReturnStore.getState().selectedBundle?.bundlePath === bundlePath) {
       enterCadWorkspace();
       return;
     }
     // A return the user picked by hand after this was sent stays selected,
     // as the listing's own arrival rule keeps it.
-    const sentAt = Date.parse(operation.createdAt ?? '');
     if (manualSelectionAt.current !== null && Number.isFinite(sentAt) && manualSelectionAt.current > sentAt) {
       const name = operation.snapshot?.documentName ?? 'the model Fusion sent';
       setStatus(`Received ${name} from Fusion 360. You selected another return after it was sent, so that one stays selected; select ${name} from the return list to use it.`);
       return;
     }
     const listed = await listReturns().catch(() => null);
+    if (superseded()) return;
     const bundle = listed?.items.find((item) => item.bundlePath === bundlePath && item.readable);
     if (bundle) {
-      selectBundleRef.current(bundle);
+      // Automatic: displaying a Send is not the user's pick.
+      autoSelectBundleRef.current(bundle, undefined, true);
       return;
     }
     // Accepted, and WG holds its copy, but there is nothing here to open: said,

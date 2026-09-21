@@ -16,7 +16,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
-import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
+import { recoverMissedSnapshots, resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
@@ -371,6 +371,49 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     expect(activations).not.toContain('results');
     // The result on screen stays where it was.
     expect(compareSelection.getSnapshot().primary).toBe('earlier');
+  });
+
+  // -- Reconnect: the outcome the page was waiting for (whole-stack review F1) --
+
+  /** Exactly a reconnect's two reads, against a server that answers `finished`. */
+  async function reconnect(finished: CadOperationSummary[]): Promise<void> {
+    const api = (async (input: RequestInfo | URL) => new Response(JSON.stringify({
+      operations: String(input).includes('pending=false') ? finished : [],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+    await act(async () => {
+      await Promise.all([useCadOperationsStore.getState().load(api), recoverMissedSnapshots(Date.now() - 60_000, api)]);
+      await flush();
+    });
+  }
+
+  it.each(['manual', 'fusion'])('lets a %s solve that finished while disconnected still replace the pinned result', async (origin) => {
+    await jobs([cadJob('old-pinned', 'wgi_first')]);
+    act(() => compareSelection.setPrimary('old-pinned'));
+    const operationId = origin === 'manual' ? await pressSolve() : 'fusion-new';
+    if (origin === 'fusion') await deliver(operation(operationId, 'processing'));
+    await reconnect([operation(operationId, 'accepted', { jobId: 'job-new', updatedAt: new Date().toISOString() })]);
+    await jobs([cadJob('job-new', 'wgi_first'), cadJob('old-pinned', 'wgi_first')]);
+    expect(compareSelection.getSnapshot().primary).toBe('job-new');
+    expect(activations).toContain('results');
+  });
+
+  it('never lets an unrelated finished solve in the recovery take the result slot', async () => {
+    await jobs([cadJob('old-pinned', 'wgi_first')]);
+    act(() => compareSelection.setPrimary('old-pinned'));
+    await reconnect([operation('someone-elses', 'accepted', { jobId: 'job-other', updatedAt: new Date().toISOString() })]);
+    await jobs([cadJob('job-other', 'wgi_first'), cadJob('old-pinned', 'wgi_first')]);
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'old-pinned', awaiting: null });
+    expect(activations).not.toContain('results');
+  });
+
+  it('says so when a solve the page was waiting for was refused while disconnected', async () => {
+    const operationId = await pressSolve();
+    await reconnect([operation(operationId, 'rejected', {
+      reason: 'snapshot_invalid', message: 'The return in the WGLink folder is not the one Fusion named.',
+      updatedAt: new Date().toISOString(),
+    })]);
+    const { jobsCoordinatorBridge: bridge } = await import('./JobsCoordinator');
+    expect(bridge.getSnapshot().actionError).toContain('not the one Fusion named');
   });
 
   // -- V4: the viewport is the contract -------------------------------------

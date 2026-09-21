@@ -211,6 +211,12 @@ export interface FusionCadStatus {
    * last reported, at `observedAt` (server/cadlink/fusion_status.py). */
   statusObserved?: boolean;
   observedAt?: string | null;
+  /** How long WG treats an observation as current (server FUSION_STATUS_TTL). */
+  statusTtlSeconds?: number;
+  /** How the add-in publishes: on each command, continuously, or unknown. */
+  observationPolicy?: 'command' | 'continuous' | 'unknown' | null;
+  /** The add-in sends Send and Solve through WG's request inbox. */
+  addinInboxTransfer?: boolean;
   staleDetectionExplanation: string | null;
   /** The delivery version the add-in reports; below WG's, the state is `addin_outdated`. */
   addinDeliveryVersion?: number | null;

@@ -99,7 +99,11 @@ export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
     if (visible && unseen) useCadOperationsStore.getState().acknowledgeRefusals();
   }, [unseen, visible]);
 
-  const lines = deliveryHealthLines(status, now());
+  const recoveryError = useCadOperationsStore((state) => state.recoveryError);
+  const lines = [
+    ...deliveryHealthLines(status, now()),
+    ...(recoveryError ? [{ tone: 'waiting' as const, text: recoveryError }] : []),
+  ];
   if (!lines.length && !refusals.length) return null;
   return <div className="cad-delivery-health" role="status">
     {lines.map((line) => <p key={line.text} className={`cad-delivery-${line.tone}`}>{line.text}</p>)}

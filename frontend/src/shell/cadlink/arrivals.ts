@@ -71,7 +71,7 @@ interface UseCadReturnArrivalsOptions {
   noteCadActivity(): void;
   onshape: boolean;
   pageIsVisible(): boolean;
-  pollDelayMs(baseMs: number, idleMs: number, unconfiguredMs: number | null): number | null;
+  pollDelayMs(baseMs: number, idleMs: number, unconfiguredMs: number | null, listing?: boolean): number | null;
   pollRestarts: MutableRefObject<Set<() => void>>;
   projectOpenPending: MutableRefObject<boolean>;
   refreshChannelDriverBases(): Promise<unknown>;
@@ -326,7 +326,7 @@ export function useCadReturnArrivals({
     const stop = startAdaptivePoll(
       pollRestarts.current,
       () => { if (pageIsVisible()) void refresh({ background: true, autoOpenNew: true }); },
-      () => pollDelayMs(returnsMs, returnsIdleMs, returnsIdleMs),
+      () => pollDelayMs(returnsMs, returnsIdleMs, returnsIdleMs, true),
     );
     return () => {
       stop();

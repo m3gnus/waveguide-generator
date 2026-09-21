@@ -251,3 +251,28 @@ describe('R2: a WGLink that reports only on command keeps every explicit action'
     expect(cadSourceLine(offline, true)?.text).toBe('Model loaded from Fusion');
   });
 });
+
+describe('the CAD Link panel says why the listing still runs (review F5)', () => {
+  it.each([
+    [true, false],
+    [false, true],
+  ])('with the add-in declaring the inbox transfer = %s, says the listing is needed = %s', async (declares, needed) => {
+    const { CadCoordinationNote } = await import('./CadLinkPanel');
+    const { cadLinkCoordinatorBridge } = await import('./CadLinkCoordinator');
+    const { resetCadCoordinationForTests } = await import('../api/cadCoordination');
+    resetCadCoordinationForTests('off');
+    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...cadLinkCoordinatorBridge.getSnapshot(),
+      fusionStatus: { running: true, state: 'current', addinInboxTransfer: declares } as unknown as FusionCadStatus,
+    });
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => { root.render(<CadCoordinationNote/>); });
+    expect(host.textContent?.includes('needs the listing to pick up Send')).toBe(needed);
+    act(() => root.unmount());
+    host.remove();
+    resetCadCoordinationForTests();
+    vi.restoreAllMocks();
+  });
+});

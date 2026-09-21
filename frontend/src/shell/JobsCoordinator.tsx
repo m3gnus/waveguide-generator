@@ -252,6 +252,24 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, [cadOperations]);
 
+  // A solve this page was waiting for that ended refused says so, whether its
+  // outcome arrived live or was recovered on reconnect (review F1): the Solve
+  // the user gave -- here or in Fusion -- must not simply stop existing.
+  const reportedRefusals = useRef(new Set<string>());
+  useEffect(() => {
+    for (const operation of Object.values(cadOperations)) {
+      if (operation.kind !== 'prepare_and_solve' || operation.state !== 'rejected') continue;
+      if (reportedRefusals.current.has(operation.operationId)) continue;
+      const mine = operation.operationId.startsWith('manual-solve:')
+        ? manualCadSolveIngestFor(operation.operationId) !== null
+        : watchedOperations.current.has(operation.operationId);
+      if (!mine) continue;
+      reportedRefusals.current.add(operation.operationId);
+      const name = operation.snapshot?.documentName ?? 'the model';
+      setActionError(`The solve of ${name} was refused: ${operation.message ?? operation.reason ?? 'no reason given'}`);
+    }
+  }, [cadOperations]);
+
   // A request that stops to wait for the user fronts the CAD Link panel while
   // its command is still the user's latest intention (shell/solveAttention).
   useOperationAttention(cadOperations);

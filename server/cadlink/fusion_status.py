@@ -523,6 +523,43 @@ def _link_payload(value: object) -> dict[str, Any] | None:
     return payload
 
 
+#: How an add-in's heartbeat reaches WG, from its own diagnostics: ``command`` --
+#: published only when it runs a command (automatic coordination off) --,
+#: ``continuous`` -- on its own clock --, or ``unknown`` (an add-in that does not
+#: say, such as the shipped pin).
+OBSERVATION_POLICY_COMMAND = "command"
+OBSERVATION_POLICY_CONTINUOUS = "continuous"
+OBSERVATION_POLICY_UNKNOWN = "unknown"
+
+
+def _activation(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    diagnostics = payload.get("diagnostics")
+    activation = diagnostics.get("activation") if isinstance(diagnostics, Mapping) else None
+    return activation if isinstance(activation, Mapping) else None
+
+
+def observation_policy(payload: Mapping[str, Any]) -> str:
+    activation = _activation(payload)
+    if activation is None:
+        return OBSERVATION_POLICY_UNKNOWN
+    return (
+        OBSERVATION_POLICY_COMMAND
+        if activation.get("automaticCoordination") is False
+        else OBSERVATION_POLICY_CONTINUOUS
+    )
+
+
+def addin_declares_inbox_transfer(payload: Mapping[str, Any]) -> bool:
+    """Whether this add-in sends Send and Solve through WG's request inbox.
+
+    The M1 add-in reports its activation gate (``diagnostics.activation``) and
+    writes every WG-bound request to the inbox; the shipped pin reports neither,
+    and still publishes a plain Send only as a return WG must find by listing.
+    """
+
+    return _activation(payload) is not None
+
+
 def _command_driven_heartbeat(data_dir: Path, checked_at: datetime) -> Mapping[str, Any] | None:
     """The file heartbeat of an add-in that runs no automatic coordination.
 
@@ -539,9 +576,7 @@ def _command_driven_heartbeat(data_dir: Path, checked_at: datetime) -> Mapping[s
     updated_at = _timestamp(payload.get("updatedAt"))
     if updated_at is None or updated_at > checked_at:
         return None
-    diagnostics = payload.get("diagnostics")
-    activation = diagnostics.get("activation") if isinstance(diagnostics, Mapping) else None
-    if not isinstance(activation, Mapping) or activation.get("automaticCoordination") is not False:
+    if observation_policy(payload) != OBSERVATION_POLICY_COMMAND:
         return None
     return payload
 
@@ -607,6 +642,12 @@ def read_fusion_status(
         "addinDeliveryVersion": None,
         "recoveryRequired": None,
         "heartbeatTransport": None,
+        # When this answer's evidence was observed, and for how long WG treats
+        # an observation as current: the page ages a status it holds by these,
+        # so a status read once is never presented as current for ever.
+        "statusTtlSeconds": FUSION_STATUS_TTL.total_seconds(),
+        "observationPolicy": None,
+        "addinInboxTransfer": False,
     }
     payload, transport = heartbeat if heartbeat is not None else select_heartbeat(workspace_root, checked_at)
     # A future timestamp is not trusted either (``FUSION_STATUS_MAX_SKEW``).
@@ -643,6 +684,8 @@ def read_fusion_status(
         "adapterVersion": _string(payload.get("adapterVersion")),
         "workspaceRoot": _string(payload.get("workspaceRoot")),
         "updatedAt": updated_at.isoformat().replace("+00:00", "Z"),
+        "observationPolicy": observation_policy(payload),
+        "addinInboxTransfer": addin_declares_inbox_transfer(payload),
     }
     delivery = addin_delivery_version(payload)
     base["addinDeliveryVersion"] = delivery

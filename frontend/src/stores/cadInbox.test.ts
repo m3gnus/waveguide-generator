@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JobsSocketManager, type CadOperationListener, type JobsWebSocketLike } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
-import { connectCadOperations, resetCadOperationsStore, useCadOperationsStore } from './cadOperations';
+import { connectCadOperations, RECOVERY_RETRY_DELAYS_MS, resetCadOperationsStore, useCadOperationsStore } from './cadOperations';
 
 class MockSocket implements JobsWebSocketLike {
   readyState = 1;
@@ -123,6 +123,112 @@ describe('the WG request inbox on the page', () => {
     await flush();
     expect(useCadOperationsStore.getState().operations['send-old']?.state).toBe('accepted');
     expect(Number(sessionStorage.getItem('wg2.cad.sends.since.v1'))).toBe(clock);
+  });
+
+  it('does not move the watermark past a Send when a recovery fails, and says so (review F2)', async () => {
+    const listener = capture();
+    vi.stubGlobal('fetch', vi.fn(async () => json({ operations: [] })));
+    listener.resync();
+    await flush();
+    // A Send lands at 12:01 while disconnected. Recovery at 12:05 fails.
+    clock = Date.parse('2026-09-21T12:05:00Z');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('pending=false')) throw new TypeError('temporary network failure');
+      return json({ operations: [] });
+    }));
+    listener.resync();
+    await flush();
+    expect(useCadOperationsStore.getState().recoveryError).toContain('temporary network failure');
+    expect(Number(sessionStorage.getItem('wg2.cad.sends.since.v1'))).toBe(Date.parse('2026-09-21T12:00:00Z'));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => json({
+      operations: String(input).includes('pending=false') ? [sent('send-missed', '2026-09-21T12:01:00Z')] : [],
+    })));
+    clock = Date.parse('2026-09-21T12:10:00Z');
+    listener.resync();
+    await flush();
+    expect(useCadOperationsStore.getState().operations['send-missed']?.state).toBe('accepted');
+    expect(useCadOperationsStore.getState().recoveryError).toBeNull();
+  });
+
+  it('retries a failed recovery by itself, bounded', async () => {
+    vi.useFakeTimers();
+    try {
+      const listener = capture();
+      let attempts = 0;
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('pending=false')) {
+          attempts += 1;
+          if (attempts === 1) throw new TypeError('down');
+          return json({ operations: [sent('send-missed', '2026-09-21T11:59:00Z')] });
+        }
+        return json({ operations: [] });
+      }));
+      listener.resync();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(attempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(RECOVERY_RETRY_DELAYS_MS[0] + 10);
+      expect(attempts).toBe(2);
+      expect(useCadOperationsStore.getState().operations['send-missed']?.state).toBe('accepted');
+      // Succeeded: no further retries.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets only the newest of two overlapping recoveries move the watermark', async () => {
+    const listener = capture();
+    const answers: Array<(value: Response) => void> = [];
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+      String(input).includes('pending=false')
+        ? new Promise<Response>((resolve) => { answers.push(resolve); })
+        : Promise.resolve(json({ operations: [] }))
+    )));
+    clock = Date.parse('2026-09-21T12:05:00Z');
+    listener.resync();
+    clock = Date.parse('2026-09-21T12:10:00Z');
+    listener.resync();
+    await flush();
+    // The newer answers first; the older, late one must not move the boundary back.
+    answers[1](json({ operations: [] }));
+    await flush();
+    answers[0](json({ operations: [] }));
+    await flush();
+    expect(Number(sessionStorage.getItem('wg2.cad.sends.since.v1'))).toBe(Date.parse('2026-09-21T12:10:00Z'));
+  });
+
+  it('recovers only what this page awaited and recent Sends, refused ones included (review F1)', async () => {
+    const { recoverMissedSnapshots } = await import('./cadOperations');
+    useCadOperationsStore.getState().apply({ ...sent('op-mine', '2026-09-21T12:00:00Z', 'processing'), kind: 'prepare_and_solve' });
+    const api = (async () => json({ operations: [
+      { ...sent('op-mine', '2026-09-21T12:02:00Z', 'accepted'), kind: 'prepare_and_solve', jobId: 'job-1' },
+      { ...sent('op-unrelated', '2026-09-21T12:02:00Z', 'accepted'), kind: 'prepare_and_solve', jobId: 'job-2' },
+      sent('send-refused', '2026-09-21T12:03:00Z', 'rejected'),
+    ] })) as typeof fetch;
+    await recoverMissedSnapshots(Date.parse('2026-09-21T12:00:00Z'), api);
+    const operations = useCadOperationsStore.getState().operations;
+    expect(operations['op-mine']?.state).toBe('accepted');
+    expect(operations['op-unrelated']).toBeUndefined();
+    expect(operations['send-refused']?.state).toBe('rejected');
+  });
+
+  it('a late success of an older recovery does not clear the failure of a newer one', async () => {
+    const listener = capture();
+    const answers: Array<{ resolve: (value: Response) => void; reject: (reason: unknown) => void }> = [];
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+      String(input).includes('pending=false')
+        ? new Promise<Response>((resolve, reject) => { answers.push({ resolve, reject }); })
+        : Promise.resolve(json({ operations: [] }))
+    )));
+    listener.resync();
+    listener.resync();
+    await flush();
+    answers[1].reject(new TypeError('newer failed'));
+    await flush();
+    answers[0].resolve(json({ operations: [] }));
+    await flush();
+    expect(useCadOperationsStore.getState().recoveryError).toContain('newer failed');
   });
 
   it('keeps a pushed delivery status for the panel', () => {

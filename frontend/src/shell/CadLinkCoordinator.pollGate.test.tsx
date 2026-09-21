@@ -18,13 +18,14 @@ import { resetCadCoordinationForTests } from '../api/cadCoordination';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { resetCadPreparationStore } from '../stores/cadPreparation';
-import { resetCadReturnStore } from '../stores/cadReturn';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge, resetCadPollIntervals } from './CadLinkCoordinator';
+import { cadSourceLine } from './TopBar';
 
 /** Fusion open with a linked document: under the gate's "on" rules, a reason
  * to poll at the base rate for as long as it stays open. */
@@ -34,6 +35,8 @@ const fusionOpen = {
   documentName: 'Speaker', documentId: 'fusion:doc-1', currentFormula: 'OSSE', fusionFormula: 'OSSE',
   link: null, wgChangesAvailable: false, fusionChangesAvailable: false, documentChanged: false,
   documentChangeDetectable: true, staleDetectionExplanation: null, observationFreshness: 'current',
+  // The M1 add-in: it sends through WG's request inbox and says so.
+  addinInboxTransfer: true, observationPolicy: 'command', statusTtlSeconds: 20,
   realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
 } as unknown as FusionCadStatus;
 
@@ -221,6 +224,62 @@ describe('WG CAD coordination gate', () => {
     expect(refused).toBeInstanceOf(Error);
     // Status read on command, and nothing else: no export, no Fusion request.
     expect(calls.slice(before).filter((path) => !path.endsWith('/api/cadlink/fusion-status'))).toEqual([]);
+  });
+
+  // -- review F4: a status held without polling ages into a last report ----
+
+  it('off: a fresh status held while idle stops claiming "Matches Fusion" once its window passes', async () => {
+    statusAnswer = { ...fusionOpen, updatedAt: new Date().toISOString() } as FusionCadStatus;
+    await mount();
+    expect(cadSourceLine(cadLinkCoordinatorBridge.getSnapshot().fusionStatus, true)?.text).toContain('Matches Fusion');
+    const reads = polls();
+    // The next read would say closed, but nothing reads: no CAD work, no action.
+    statusAnswer = { ...fusionOpen, state: 'closed', running: false, processRunning: false } as FusionCadStatus;
+    await act(async () => { await vi.advanceTimersByTimeAsync(TEN_MINUTES); });
+    const line = cadSourceLine(cadLinkCoordinatorBridge.getSnapshot().fusionStatus, true)!;
+    expect(line.text).not.toContain('Matches Fusion');
+    expect(line.text).toMatch(/Fusion last reported .*not observed since/);
+    expect(line.refresh).toBe(true);
+    // Aged by the page itself: no request was made to do it.
+    expect(polls()).toBe(reads);
+  });
+
+  it('on: the same status is left alone, the clock keeps it current (the control)', async () => {
+    gate = 'on';
+    statusAnswer = { ...fusionOpen, updatedAt: new Date().toISOString() } as FusionCadStatus;
+    await mount();
+    // Between two reads, well past the status's own window.
+    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
+    expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.statusObserved).toBeUndefined();
+  });
+
+  // -- review F5: the shipped pin's plain Send needs the listing -------------
+
+  it('off: an add-in that does not declare the inbox transfer keeps the listing, so its plain Send is picked up', async () => {
+    statusAnswer = { ...fusionOpen, addinInboxTransfer: false, observationPolicy: 'unknown' } as FusionCadStatus;
+    await mount();
+    let listingItems: unknown[] = [];
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/returns')) {
+        calls.push(String(input));
+        return json({ cadFolderConfigured: true, coordination: 'off', items: listingItems });
+      }
+      return originalFetch(input, init);
+    }));
+    const before = calls.filter((path) => path.endsWith('/returns')).length;
+    // 04b2524b publishes a plain Send only as a return in the folder.
+    listingItems = [{
+      name: 'pin-send.wgreturn', bundlePath: 'wgreturn/pin-send.wgreturn', readable: true,
+      modifiedAt: new Date().toISOString(), documentName: 'Sent by shipped pin', designIds: [], sources: [],
+    }];
+    await act(async () => { await vi.advanceTimersByTimeAsync(TEN_MINUTES); });
+    expect(calls.filter((path) => path.endsWith('/returns')).length - before).toBeGreaterThan(20);
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('wgreturn/pin-send.wgreturn');
+    // Fusion's status is still not read on a clock.
+    const statusReads = calls.filter((path) => path.endsWith('/fusion-status')).length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(TEN_MINUTES); });
+    expect(calls.filter((path) => path.endsWith('/fusion-status')).length).toBe(statusReads);
   });
 
   it('off: Send to Fusion reads Fusion status when the user issues it', async () => {

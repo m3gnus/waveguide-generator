@@ -80,3 +80,30 @@ def test_a_report_from_the_future_is_never_trusted(tmp_path: Path) -> None:
         _write_status(workspace, links=[_link()], updated_at=NOW + timedelta(hours=1)), coordinating=False
     )
     assert _read(workspace, process_running=True)["state"] == "addin_offline"
+
+
+# -- review F4/F5: every running answer says how it was observed ----------------
+
+
+@pytest.mark.parametrize(
+    ("coordinating", "policy", "inbox"),
+    [(False, "command", True), (True, "continuous", True), (None, "unknown", False)],
+    ids=["m1-addin-off", "m1-addin-on", "shipped-pin"],
+)
+def test_a_fresh_answer_carries_its_observation_policy_and_the_inbox_declaration(
+    tmp_path: Path, coordinating, policy, inbox
+) -> None:
+    workspace = tmp_path / "workspace"
+    _with_activation(_write_status(workspace, links=[_link()]), coordinating=coordinating)
+    status = _read(workspace, process_running=True)
+    assert status["state"] == "current"
+    assert status["observationPolicy"] == policy
+    assert status["addinInboxTransfer"] is inbox
+    assert status["statusTtlSeconds"] == FUSION_STATUS_TTL.total_seconds()
+    assert status["updatedAt"] == NOW.isoformat().replace("+00:00", "Z")
+
+
+def test_no_heartbeat_declares_nothing(tmp_path: Path) -> None:
+    status = _read(tmp_path / "workspace", process_running=True)
+    assert status["addinInboxTransfer"] is False
+    assert status["observationPolicy"] is None

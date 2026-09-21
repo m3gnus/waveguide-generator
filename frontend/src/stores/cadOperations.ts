@@ -18,6 +18,9 @@ interface CadOperationsState {
   /** The consumer's state as the server last pushed it, or null before any push. */
   deliveryStatus: CadDeliveryStatus | null;
   setDeliveryStatus: (status: CadDeliveryStatus) => void;
+  /** Why the last reconnect recovery failed, or null. */
+  recoveryError: string | null;
+  setRecoveryError: (message: string | null) => void;
   /** Read the unfinished operations, which are authoritative. */
   load: (fetcher?: typeof fetch) => Promise<void>;
   /** Merge one `cadOperation` message; false when it is older than what is held. */
@@ -65,6 +68,8 @@ export const useCadOperationsStore = create<CadOperationsState>((set, get) => ({
   unseenRefusals: 0,
   deliveryStatus: null,
   setDeliveryStatus: (status) => set({ deliveryStatus: status }),
+  recoveryError: null,
+  setRecoveryError: (message) => { if (get().recoveryError !== message) set({ recoveryError: message }); },
   recordRefusal: (refusal) => {
     const held = get().refusals;
     if (held.some((item) => refusalKey(item) === refusalKey(refusal))) return;
@@ -158,51 +163,102 @@ export const displayedSends = {
 };
 
 /**
- * Sends WG accepted while this page was not listening (M1 transfer contract,
- * C7 E3). The unfinished listing cannot hold them -- an accepted snapshot is
- * finished -- so a reconnect reads the recent finished ones as well and hands
- * any accepted since the previous connection to the store, as the push would
- * have. The page's own record of what it displayed keeps a repeat harmless.
+ * What happened while this page was not listening (M1 transfer contract, C7
+ * E3), read on every connection from the recent finished operations:
+ *
+ * - Sends accepted or refused since the last successful recovery. An accepted
+ *   snapshot is finished, so the unfinished listing cannot hold it.
+ * - The terminal outcome of exactly the operations this page was waiting for
+ *   (pending in the store when the connection began): a solve that finished
+ *   while disconnected still takes the result slot it was armed for, and one
+ *   that was refused still says so. Unrelated history is not applied, so an old
+ *   solve can never steal the slot.
+ *
+ * `awaited` is taken before the first await, before the reconnect's own
+ * listing can forget those rows.
  */
-export async function recoverMissedSnapshots(since: number, fetcher: typeof fetch = fetch): Promise<void> {
+export async function recoverMissedSnapshots(
+  since: number,
+  fetcher: typeof fetch = fetch,
+  awaited: ReadonlySet<string> = new Set(pendingCadOperations(useCadOperationsStore.getState().operations).map((operation) => operation.operationId)),
+): Promise<void> {
   const recent = await listCadOperations({ pending: false, limit: 50 }, fetcher);
   recent
-    .filter((operation) => operation.kind === 'receive_snapshot' && operation.state === 'accepted')
-    .filter((operation) => Date.parse(operation.updatedAt ?? '') >= since - RECONNECT_MARGIN_MS)
+    .filter((operation) => (
+      awaited.has(operation.operationId)
+      || (operation.kind === 'receive_snapshot'
+        && (operation.state === 'accepted' || operation.state === 'rejected')
+        && Date.parse(operation.updatedAt ?? '') >= since - RECONNECT_MARGIN_MS)
+    ))
     .forEach((operation) => { useCadOperationsStore.getState().apply(operation); });
 }
+
+/** Retries of a recovery that failed, and how long each waits. Bounded: a
+ * failure that persists is left visible instead of retried for ever. */
+export const RECOVERY_RETRY_DELAYS_MS = [5_000, 30_000, 120_000];
 
 /** Feed the store from the jobs channel, reading the list again on every connection. */
 export function connectCadOperations(
   manager: JobsSocketManager = jobsSocket,
   now: () => number = Date.now,
 ): () => void {
-  let previousConnection: number | null = null;
-  return manager.subscribeCadOperations({
+  // The boundary of the last recovery that succeeded: only a success moves it,
+  // and only the newest recovery may (review F2).
+  let recoveredUpTo: number | null = null;
+  let recoveryGeneration = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearRetry = () => {
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = null;
+  };
+  const recover = (attempt: number) => {
+    clearRetry();
+    const generation = ++recoveryGeneration;
+    const storage = sessionStore();
+    const stored = Number(storage?.getItem(SEEN_SINCE_KEY) ?? Number.NaN);
+    const at = now();
+    const since = recoveredUpTo
+      ?? (Number.isFinite(stored) && stored > 0 ? stored : at - FIRST_CONNECTION_WINDOW_MS);
+    const awaited = new Set(pendingCadOperations(useCadOperationsStore.getState().operations).map((operation) => operation.operationId));
+    void recoverMissedSnapshots(since, fetch, awaited).then(() => {
+      if (generation !== recoveryGeneration) return;
+      recoveredUpTo = Math.max(recoveredUpTo ?? 0, at);
+      try { storage?.setItem(SEEN_SINCE_KEY, String(recoveredUpTo)); } catch { /* in memory only */ }
+      useCadOperationsStore.getState().setRecoveryError(null);
+    }, (reason: unknown) => {
+      if (generation !== recoveryGeneration) return;
+      // The boundary stays where the last success left it, so the next
+      // recovery still covers what this one could not read.
+      const delay = RECOVERY_RETRY_DELAYS_MS[attempt];
+      useCadOperationsStore.getState().setRecoveryError(
+        `WG could not check what arrived from Fusion while it was disconnected (${reason instanceof Error ? reason.message : String(reason)}). `
+        + (delay !== undefined ? 'It will try again shortly.' : 'It will try again when it reconnects; Refresh CAD Link to look now.'),
+      );
+      if (delay !== undefined) retryTimer = setTimeout(() => recover(attempt + 1), delay);
+    });
+  };
+  const unsubscribe = manager.subscribeCadOperations({
     operation: (operation) => { useCadOperationsStore.getState().apply(operation); },
     refusal: (refusal) => { useCadOperationsStore.getState().recordRefusal(refusal); },
     deliveryStatus: (status) => { useCadOperationsStore.getState().setDeliveryStatus(status); },
     resync: () => {
-      void useCadOperationsStore.getState().load().catch(() => undefined);
       // Every connection, the first included: a Send accepted before this page
       // first connected (WG's start-up pass, a reload) was pushed to nobody.
-      // Since this tab's previous connection -- kept across reloads -- or, for
-      // a tab that never connected, a bounded window. What this tab already
+      // Since the last successful recovery -- kept across reloads -- or, for a
+      // tab that never recovered, a bounded window. What this tab already
       // displayed is recorded (displayedSends), so nothing is shown twice.
-      const storage = sessionStore();
-      const stored = Number(storage?.getItem(SEEN_SINCE_KEY) ?? Number.NaN);
-      const at = now();
-      const since = previousConnection
-        ?? (Number.isFinite(stored) && stored > 0 ? stored : at - FIRST_CONNECTION_WINDOW_MS);
-      previousConnection = at;
-      try { storage?.setItem(SEEN_SINCE_KEY, String(at)); } catch { /* in memory only */ }
-      void recoverMissedSnapshots(since).catch(() => undefined);
+      recover(0);
+      void useCadOperationsStore.getState().load().catch(() => undefined);
     },
   });
+  return () => {
+    clearRetry();
+    unsubscribe();
+  };
 }
 
 export function resetCadOperationsStore(): void {
   loadGeneration += 1;
   appliedDuringLoad.clear();
-  useCadOperationsStore.setState({ operations: {}, refusals: [], unseenRefusals: 0, deliveryStatus: null });
+  useCadOperationsStore.setState({ operations: {}, refusals: [], unseenRefusals: 0, deliveryStatus: null, recoveryError: null });
 }

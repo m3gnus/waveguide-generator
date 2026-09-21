@@ -328,11 +328,15 @@ function CheckRow({ check }: { check: CheckDescriptor }) {
  * run can record its configuration from WG's own self-report. */
 export function CadCoordinationNote() {
   const state = useSyncExternalStore(cadCoordinationStore.subscribe, cadCoordinationStore.getSnapshot, cadCoordinationStore.getSnapshot);
+  const coordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
   if (state === 'unknown') return null;
+  const inbox = coordinator.fusionStatus?.addinInboxTransfer === true;
   return <p className="cad-detail cad-coordination-state" data-coordination={state}>
     {state === 'on'
       ? 'Background coordination: on. WG checks CAD Link returns and Fusion status on a timer.'
-      : 'Background coordination: off (WG2_CAD_COORDINATION). WG checks CAD Link returns and Fusion status only while CAD work is in flight, and when you act.'}
+      : inbox
+        ? 'Background coordination: off (WG2_CAD_COORDINATION). WG checks CAD Link returns and Fusion status only while CAD work is in flight, and when you act.'
+        : 'Background coordination: off (WG2_CAD_COORDINATION), but this WGLink needs the listing to pick up Send: it does not send through WG\u2019s request inbox, so WG keeps checking the CAD Link folder on a timer.'}
   </p>;
 }
 

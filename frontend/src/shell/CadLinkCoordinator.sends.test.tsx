@@ -250,6 +250,73 @@ describe('an accepted Send is displayed from its event', () => {
     expect(ingests).toEqual([]);
   });
 
+  it.each(['newest first', 'oldest first'])('recovering two Sends %s leaves the newest one displayed (review F3)', async (order) => {
+    const old = bundle({ name: 'old.wgreturn', bundlePath: 'wgreturn/old.wgreturn', documentName: 'Old', modifiedAt: new Date(Date.now() - 60_000).toISOString() });
+    const newest = bundle({ name: 'new.wgreturn', bundlePath: 'wgreturn/new.wgreturn', documentName: 'New', modifiedAt: new Date(Date.now() - 30_000).toISOString() });
+    listing = [newest, old];
+    const sends = [
+      send('new-send', newest, { createdAt: newest.modifiedAt, updatedAt: newest.modifiedAt }),
+      send('old-send', old, { createdAt: old.modifiedAt, updatedAt: old.modifiedAt }),
+    ];
+    if (order === 'oldest first') sends.reverse();
+    await act(async () => {
+      sends.forEach((item) => useCadOperationsStore.getState().apply(item));
+      await flush();
+    });
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newest.bundlePath);
+  });
+
+  it('never replaces a return the user selects while a Send is being displayed', async () => {
+    const arrived = bundle({ modifiedAt: new Date(Date.now() - 5_000).toISOString() });
+    const picked = bundle({ name: 'picked.wgreturn', bundlePath: 'wgreturn/picked.wgreturn', documentName: 'Picked' });
+    listing = [picked];  // the Send's return is not listed yet on the first read
+    await act(async () => {
+      useCadOperationsStore.getState().apply(send('send-slow', arrived, { createdAt: arrived.modifiedAt }));
+      // The user picks a return while the display is still reading.
+      cadLinkCoordinatorBridge.getSnapshot().selectBundle(picked);
+      listing = [picked, arrived];
+      await flush();
+    });
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(picked.bundlePath);
+  });
+
+  it('never replaces a return the user selects while the display is reading the folder', async () => {
+    const arrived = bundle({ modifiedAt: new Date(Date.now() - 5_000).toISOString() });
+    const picked = bundle({ name: 'picked.wgreturn', bundlePath: 'wgreturn/picked.wgreturn', documentName: 'Picked' });
+    // The display's reads before its own second listing do not find its
+    // return (its refresh, and entering CAD mode, each read once); that second
+    // listing does, and the user picks another return while it is on its way.
+    let returnsReads = 0;
+    const real = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/returns')) {
+        returnsReads += 1;
+        listings += 1;
+        if (returnsReads === 3) {
+          act(() => { cadLinkCoordinatorBridge.getSnapshot().selectBundle(picked); });
+          return json({ cadFolderConfigured: true, items: [picked, arrived], coordination: 'off' });
+        }
+        return json({ cadFolderConfigured: true, items: [picked], coordination: 'off' });
+      }
+      return real(input, init);
+    }));
+    await deliver(send('send-slow', arrived, { createdAt: arrived.modifiedAt }));
+    expect(returnsReads).toBe(3);
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(picked.bundlePath);
+  });
+
+  it('does not record displaying a Send as the user\'s own pick', async () => {
+    const first = bundle({ name: 'a.wgreturn', bundlePath: 'wgreturn/a.wgreturn', documentName: 'A' });
+    const second = bundle({ name: 'b.wgreturn', bundlePath: 'wgreturn/b.wgreturn', documentName: 'B' });
+    listing = [second, first];
+    const t0 = Date.now();
+    await deliver(send('send-a', first, { createdAt: new Date(t0 - 10_000).toISOString() }));
+    // Made after A was sent but before A was displayed: newer than A, so it is shown.
+    await deliver(send('send-b', second, { createdAt: new Date(t0 - 5_000).toISOString() }));
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(second.bundlePath);
+    expect(cadLinkCoordinatorBridge.getSnapshot().status ?? '').not.toContain('stays selected');
+  });
+
   it('leaves a Send that is still being received alone (the control for every display above)', async () => {
     listing = [bundle()];
     await deliver(send('send-pending', bundle(), { state: 'received' }));

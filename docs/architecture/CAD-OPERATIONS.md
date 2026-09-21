@@ -475,8 +475,22 @@ through the same route and stages as a solve requested by Fusion.
   says whether the consumer runs, why its last pass started nothing, and when a pass last
   completed. The loop pushes that state (`cadDeliveryStatus`) when its declined reason
   changes or a pass runs past 15 s, so the panel needs no clock to hear of either. A
-  page's first connection also recovers Sends accepted in the previous ten minutes (or
-  since the tab's last connection, across a reload), and never shows one twice. While
+  page's first connection also recovers Sends accepted or refused in the previous ten
+  minutes (or since the tab's last successful recovery, across a reload), and never shows
+  one twice. Every connection also recovers the terminal outcome of exactly the
+  operations the page was waiting for, so a solve that finished while disconnected still
+  takes its result slot and a refused one still says so; unrelated history is not
+  applied. The recovery boundary moves only after a recovery succeeds; a failure is shown
+  and retried three times. Displays of recovered Sends are ordered by when each was sent
+  and never replace a newer one or a return the user picked meanwhile.
+- **Status the page holds.** Each running Fusion status carries when it was observed
+  (`updatedAt`), how long it counts as current (`statusTtlSeconds`), how the add-in
+  publishes (`observationPolicy`) and whether it sends through the request inbox
+  (`addinInboxTransfer`). With the gate off, the page ages a held status past its window
+  into "Fusion last reported <time>, not observed since" by itself, with no request. With
+  the gate off the returns listing still runs as before for an add-in that does not
+  declare the inbox transfer (the shipped pin publishes a plain Send only as a return in
+  the folder), and the CAD Link panel says so. While
   the consumer is off the live delivery route answers a retryable 409
   `delivery_consumer_disabled` instead of accepting what nothing would run.
 - **Coordination gate.** `WG2_CAD_COORDINATION=off` (read once at start-up, reported on

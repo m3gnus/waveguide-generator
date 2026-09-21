@@ -61,6 +61,38 @@ export function onshapeWorkflowView(status: OnshapeStatus | null): CadWorkflowVi
   };
 }
 
+const DEFAULT_STATUS_TTL_S = 20;
+
+/** When a status WG holds stops describing now, in ms, or null when it never
+ * claimed to (no heartbeat, or already marked as a last report). */
+export function statusExpiresAt(status: FusionCadStatus | null): number | null {
+  if (!status?.running || status.statusObserved === false) return null;
+  const observed = Date.parse(status.updatedAt ?? '');
+  if (!Number.isFinite(observed)) return null;
+  return observed + (status.statusTtlSeconds ?? DEFAULT_STATUS_TTL_S) * 1000;
+}
+
+/**
+ * A status held past its freshness window, withdrawn to what it can still
+ * honestly say: this is what Fusion last reported, and when (the server's own
+ * `_not_observed_since`, applied by the page to a status it holds, so that
+ * holding one without polling never turns it into a claim about now).
+ */
+export function agedFusionStatus(status: FusionCadStatus): FusionCadStatus {
+  const measured = status.observationFreshness === 'current' || status.observationFreshness === 'unknown';
+  return {
+    ...status,
+    statusObserved: false,
+    observedAt: status.updatedAt ?? null,
+    ...(measured ? {
+      observationFreshness: 'stale' as const,
+      documentChangeDetectable: false,
+      staleDetectionExplanation: 'stale detection unavailable: WG has not observed Fusion since this report',
+    } : {}),
+    state: status.state === 'current' ? 'stale' : status.state,
+  };
+}
+
 function explainedStaleDetail(status: FusionCadStatus, detail: string): string {
   const explanation = status.staleDetectionExplanation?.trim();
   return explanation ? `${detail} ${explanation}` : detail;
