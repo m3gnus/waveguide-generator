@@ -10,8 +10,20 @@ import threading
 
 
 log = logging.getLogger("wg.paths")
-_checked_paths: set[tuple[int, int]] = set()
-_checked_paths_lock = threading.Lock()
+# Folders left as they are, each reported once per process: (path, reason).
+# Keyed by name and reason, never by inode, because Linux reuses an inode
+# number after rmdir + mkdir and would make a recreated folder look handled.
+_reported: set[tuple[str, str]] = set()
+_reported_lock = threading.Lock()
+
+
+def _report_once(path: Path, reason: str, message: str, *args: object) -> None:
+    key = (os.path.normcase(os.path.abspath(path)), reason)
+    with _reported_lock:
+        if key in _reported:
+            return
+        _reported.add(key)
+    log.warning(message, *args)
 
 
 def _symlink_in_chain(path: Path, data_root: Path) -> Path | None:
@@ -55,32 +67,28 @@ def ensure_private_directory(
         existed = False
     except FileExistsError:
         existed = True
-    metadata = path.lstat()
-    key = (metadata.st_dev, metadata.st_ino)
-
-    # Cache the object, not its name: an externally recreated directory at the
-    # same path has a new identity and must be inspected and tightened again.
-    with _checked_paths_lock:
-        already_checked = key in _checked_paths
-        if not already_checked:
-            _checked_paths.add(key)
-    if already_checked:
-        return path
-
-    # mkdir applied 0700 to a leaf this process created. Existing directories
-    # alone need inspection and possible tightening.
+    # mkdir applied 0700 to a leaf this process created. Only an existing
+    # folder needs a look, and one already private needs nothing more: the
+    # common case on every delivery pass is one lstat.
     if not existed:
+        return path
+    metadata = path.lstat()
+    if stat.S_ISDIR(metadata.st_mode) and stat.S_IMODE(metadata.st_mode) == 0o700:
         return path
 
     try:
         linked = _symlink_in_chain(path, data_root if data_root is not None else path)
     except OSError as exc:
         # Tightening is optional; an ancestor WG cannot inspect must not stop it.
-        log.warning("Not tightening permissions on %s; could not inspect its path: %s", path, exc)
+        _report_once(
+            path, "uninspectable",
+            "Not tightening permissions on %s; could not inspect its path: %s", path, exc,
+        )
         return path
     if linked is not None:
         # A data folder kept elsewhere through a symlink is the user's layout.
-        log.warning(
+        _report_once(
+            path, "symlink",
             "Not tightening permissions on %s because its data path contains "
             "the symbolic link %s.",
             path,
@@ -91,13 +99,19 @@ def ensure_private_directory(
         raise NotADirectoryError(path)
     getuid = getattr(os, "getuid", None)
     if getuid is None or metadata.st_uid != getuid():
-        log.warning(
-            "Not tightening permissions on %s because WG does not own it.", path
+        _report_once(
+            path, "foreign", "Not tightening permissions on %s because WG does not own it.", path
         )
         return path
-    if stat.S_IMODE(metadata.st_mode) != 0o700:
+    with _reported_lock:
+        # A folder whose chmod already failed is used as it is; retrying it on
+        # every delivery pass would change nothing and cost a call a second.
+        gave_up = (os.path.normcase(os.path.abspath(path)), "chmod") in _reported
+    if stat.S_IMODE(metadata.st_mode) != 0o700 and not gave_up:
         try:
             path.chmod(0o700)
         except OSError as exc:
-            log.warning("Could not tighten permissions on %s; continuing: %s", path, exc)
+            _report_once(
+                path, "chmod", "Could not tighten permissions on %s; continuing: %s", path, exc
+            )
     return path

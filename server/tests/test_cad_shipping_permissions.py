@@ -54,11 +54,11 @@ def _valid_request(command_id: str = "cmd-safe") -> dict[str, Any]:
 def _fresh_reader_state():
     for name in ("_retention_waits", "_unreadable_waits", "_refused_claims"):
         getattr(solve_command, name).clear()
-    private_paths._checked_paths.clear()
+    private_paths._reported.clear()
     yield
     for name in ("_retention_waits", "_unreadable_waits", "_refused_claims"):
         getattr(solve_command, name).clear()
-    private_paths._checked_paths.clear()
+    private_paths._reported.clear()
 
 
 def test_a_symlink_claim_is_refused_and_unlinked_without_touching_its_target(
@@ -127,7 +127,9 @@ def test_a_regular_file_swapped_to_a_symlink_is_refused_without_reading_target(
     result = solve_command._read_payload(request)
 
     assert isinstance(result, solve_command._UnsafePayload)
-    assert "symbolic link" in result.reason
+    # POSIX refuses the link itself; Windows' pathname fallback sees the opened
+    # file's identity differ from the one it checked. Either way it is refused.
+    assert "symbolic link" in result.reason or "changed while it was opened" in result.reason
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX FIFO")
@@ -453,3 +455,25 @@ def test_a_symlinked_data_folder_is_used_as_it_is(tmp_path: Path) -> None:
     assert (real / "cadlink.db").is_file()
     # The user's target is left exactly as they made it.
     assert stat.S_IMODE(real.stat().st_mode) == 0o755
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
+def test_a_folder_loosened_after_it_was_tightened_is_tightened_again(tmp_path: Path) -> None:
+    """The same folder (same inode) loosened later is caught on the next call.
+
+    This fails on every OS for any cache keyed by the folder's identity, which
+    is also what hid a recreated folder on Linux, where rmdir + mkdir reuses
+    the inode number.
+    """
+
+    data_dir = tmp_path / "data"
+    path = data_dir / "ipc" / "wglink"
+    path.mkdir(parents=True, mode=0o755)
+    path.chmod(0o755)
+    ensure_private_directory(path, data_root=data_dir)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o700
+
+    path.chmod(0o755)
+    ensure_private_directory(path, data_root=data_dir)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o700
