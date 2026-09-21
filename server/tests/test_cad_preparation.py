@@ -1351,6 +1351,7 @@ def test_a_read_only_member_is_flushed_like_any_other(
     assert stat.S_IMODE(member.stat().st_mode) == 0o444  # and it keeps the mode it came with
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory flushing is unavailable on Windows")
 def test_every_directory_of_the_staged_tree_is_flushed_before_publication(
     harness: Harness, monkeypatch
 ) -> None:
@@ -1384,16 +1385,47 @@ def test_every_directory_of_the_staged_tree_is_flushed_before_publication(
     copy = Path(retained["retained_path"])
     before = set(flushed[: published_at[0]])
     assert (copy / "geometry" / "assembly.step").stat().st_ino in before
+    assert (copy / "geometry").stat().st_ino in before
+    # And the directory the copy is published into, after the rename it holds.
+    assert copy.parent.stat().st_ino in set(flushed[published_at[0]:])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory flushing is unavailable off Windows")
+def test_on_windows_the_staged_file_is_flushed_and_no_directory_flush_is_claimed(
+    harness: Harness, monkeypatch
+) -> None:
+    """Windows records the staged file flush but does not claim directory flushes."""
+
+    step = b"STEP"
+    manifest = _manifest(step)
+    manifest["assembly"]["file"] = "geometry/assembly.step"
+    manifest["files"] = {"geometry/assembly.step": manifest["files"]["assembly.step"]}
+    bundle = harness.workspace / "wgreturn" / "nested.wgreturn"
+    (bundle / "geometry").mkdir(parents=True)
+    (bundle / "geometry" / "assembly.step").write_bytes(step)
+    (bundle / "wgreturn.json").write_bytes(json.dumps(manifest).encode("utf-8"))
+    flushed: list[int] = []
+    published_at: list[int] = []
+    real_fsync, real_replace = ingest_module.os.fsync, ingest_module.os.replace
+
+    def record_fsync(descriptor):
+        flushed.append(os.fstat(descriptor).st_ino)
+        return real_fsync(descriptor)
+
+    def record_replace(*args, **kwargs):
+        published_at.append(len(flushed))
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(ingest_module.os, "fsync", record_fsync)
+    monkeypatch.setattr(ingest_module.os, "replace", record_replace)
+
+    retained = retain_snapshot(bundle, harness.data_dir)
+
+    copy = Path(retained["retained_path"])
+    before = set(flushed[: published_at[0]])
+    assert (copy / "geometry" / "assembly.step").stat().st_ino in before
     directories = {(copy / "geometry").stat().st_ino, copy.parent.stat().st_ino}
-    if os.name == "nt":
-        # Windows cannot open a directory for fsync, and `_flush_directory`
-        # does not try; the file flush above is the whole guarantee there, so
-        # no directory may appear among the flushes at all.
-        assert directories.isdisjoint(flushed)
-    else:
-        assert (copy / "geometry").stat().st_ino in before
-        # And the directory the copy is published into, after the rename it holds.
-        assert copy.parent.stat().st_ino in set(flushed[published_at[0]:])
+    assert directories.isdisjoint(flushed)
 
 
 def test_a_flush_the_filesystem_refuses_does_not_break_retaining(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
@@ -90,6 +91,104 @@ def _claims_and_grants_stay_in_the_test_directory(
     root = tmp_path / "cache"
     monkeypatch.setattr(update_lock, "cache_root", lambda **_kwargs: root)
     return root
+
+
+def test_macos_flush_requests_fullfsync_and_reports_full_strength(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int]] = []
+
+    class FakeFcntl:
+        F_FULLFSYNC = 987
+
+        def fcntl(self, descriptor: int, command: int) -> None:
+            calls.append((descriptor, command))
+
+    monkeypatch.setattr(apply_update_module, "_HOST_IS_MACOS", True)
+    monkeypatch.setattr(apply_update_module, "fcntl", FakeFcntl())
+
+    assert apply_update_module._fsync_descriptor(12) is True
+    assert calls == [(12, FakeFcntl.F_FULLFSYNC)]
+
+
+@pytest.mark.parametrize("unsupported_errno", sorted(apply_update_module.UNSUPPORTED_FLUSH_ERRNOS))
+def test_macos_flush_falls_back_for_unsupported_fullfsync(
+    unsupported_errno: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[int, int]] = []
+
+    class FakeFcntl:
+        F_FULLFSYNC = 987
+
+        def fcntl(self, descriptor: int, command: int) -> None:
+            calls.append((descriptor, command))
+            raise OSError(unsupported_errno, "unsupported")
+
+    monkeypatch.setattr(apply_update_module, "_HOST_IS_MACOS", True)
+    monkeypatch.setattr(apply_update_module, "fcntl", FakeFcntl())
+    monkeypatch.setattr(apply_update_module.os, "fsync", lambda descriptor: calls.append((descriptor, -1)))
+
+    assert apply_update_module._fsync_descriptor(12) is False
+    assert calls == [(12, FakeFcntl.F_FULLFSYNC), (12, -1)]
+
+
+def test_macos_flush_propagates_a_genuine_io_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    error = OSError(errno.EIO, "media failure")
+    fsync_calls: list[int] = []
+
+    class FakeFcntl:
+        F_FULLFSYNC = 987
+
+        def fcntl(self, descriptor: int, command: int) -> None:
+            raise error
+
+    monkeypatch.setattr(apply_update_module, "_HOST_IS_MACOS", True)
+    monkeypatch.setattr(apply_update_module, "fcntl", FakeFcntl())
+    monkeypatch.setattr(apply_update_module.os, "fsync", fsync_calls.append)
+
+    with pytest.raises(OSError) as raised:
+        apply_update_module._fsync_descriptor(12)
+    assert raised.value is error
+    assert fsync_calls == []
+
+
+def test_non_macos_flush_uses_fsync_and_reports_full_strength(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    class FcntlMustNotBeUsed:
+        def fcntl(self, descriptor: int, command: int) -> None:
+            raise AssertionError("F_FULLFSYNC must not be requested off macOS")
+
+    monkeypatch.setattr(apply_update_module, "_HOST_IS_MACOS", False)
+    monkeypatch.setattr(apply_update_module, "fcntl", FcntlMustNotBeUsed())
+    monkeypatch.setattr(apply_update_module.os, "fsync", calls.append)
+
+    assert apply_update_module._fsync_descriptor(12) is True
+    assert calls == [12]
+
+
+def test_flush_policy_does_not_follow_sys_platform_after_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int]] = []
+    fsync_calls: list[int] = []
+
+    class FakeFcntl:
+        F_FULLFSYNC = 987
+
+        def fcntl(self, descriptor: int, command: int) -> None:
+            calls.append((descriptor, command))
+
+    monkeypatch.setattr(apply_update_module, "_HOST_IS_MACOS", True)
+    monkeypatch.setattr(apply_update_module, "fcntl", FakeFcntl())
+    monkeypatch.setattr(apply_update_module.os, "fsync", fsync_calls.append)
+    monkeypatch.setattr(apply_update_module.sys, "platform", "linux")
+
+    assert apply_update_module._fsync_descriptor(12) is True
+    assert calls == [(12, FakeFcntl.F_FULLFSYNC)]
+    assert fsync_calls == []
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 handle semantics")
