@@ -667,6 +667,54 @@ is the operation `prepare_and_solve`, with the `commandId` as its operation ID.
    holds the operation. If the delete fails, the next poll recovers the same operation
    from the claim that is left.
 
+**Crash and power-cut positions.** If WG stops between any two of the steps above, or
+before or during preparation, the next start still gives each request exactly one
+operation and at most one job. `server/tests/test_cad_inbox_restart.py` checks this for
+both kinds, for schema 4 and schema 3 files, and for a real process killed mid-pass. What
+the next start finds:
+
+| WG stopped | What is on disk | The next start |
+|---|---|---|
+| after the claim, before acceptance | a claim, no operation | reads the claim and accepts it |
+| after acceptance, before retention | a claim, operation `received` | recovers the operation from the claim, retains, deletes the claim |
+| after retention, before the delete | a claim, snapshot retained | recovers, deletes the claim |
+| after the delete, before preparation | no file, operation `received` | the delivery pass prepares it |
+| while preparing | no file, operation `processing` | `needs_user_input` (`interrupted`); Solve now submits one job |
+| after the job was created | job under `cad-solve:<id>`, not yet recorded | start-up recovery records `accepted` with that job |
+
+A received snapshot ends `accepted`, with no job, from every position.
+
+A power cut is different, because two writes are not durable at once:
+
+- `cadlink.db` and `jobs.db` run in WAL mode with `synchronous=NORMAL`
+  (`server/platform/sqlite.py`). A commit survives WG being killed, but a power cut or an
+  operating-system crash can roll back the most recent commits.
+- The claim rename and the claim delete are not followed by a flush of the folder. A
+  power cut can undo either of them, whatever happened to the database.
+
+What the user sees depends on which of these writes survived:
+
+- **The delete survived and the acceptance did not.** The request is lost. The file is
+  gone, so the add-in's pickup check reports nothing, and WG has no operation to show.
+  The user sees neither the model nor a solve, and presses Send or Solve again in Fusion.
+  That is a new command with a new ID. If only later commits were lost, such as a
+  preparation stage, start-up recovery finishes the operation from the state that
+  survived, as in the table.
+- **The acceptance survived and the delete did not.** The request file, or its claim,
+  is back. Delivering it again is safe (C5). It has the same ID and digest, so it
+  recovers the stored operation, with no second operation and no second job.
+- **Both were undone.** The file is back and the operation is gone, so WG accepts it
+  again as new. If `jobs.db` kept a job under `cad-solve:<id>`, preparation finds it and
+  records it instead of submitting again.
+- **Not covered.** The two databases are separate files. A power cut could keep the
+  operation's `accepted` outcome and lose the job it names. The operation would then name
+  a job that the jobs list does not have. No test covers this case. Nothing submits the
+  solve again, so the user solves again from Fusion.
+
+WG accepts this position rather than using `synchronous=FULL` for acceptance. No
+position gives a second operation or a second job. The worst a power cut does is lose a
+request that the user sends again.
+
 A claim left by an interrupted poll is finished by a later one. Within one poll,
 deliveries are taken oldest first: by `requestedAt` compared as text, then by the file's
 modification time, then by its name. `requestedAt` is optional, and a file without one

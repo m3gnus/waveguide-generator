@@ -53,14 +53,19 @@ def test_file_then_file_is_one_operation(tmp_path: Path, make) -> None:
         bundle_path, manifest = _write_return(app.workspace)
         request = make(bundle_path, manifest)
         drop(app.data_dir, request)
-        app.run_pass()
+        started = app.run_pass()
         before = app.row(request["operationId"])
         drop(app.data_dir, request)
-        app.run_pass()
+        # The loop tracks what it started (``running``), as the real one does.
+        started += app.run_pass(running=set(started))
         assert app.ids() == [request["operationId"]]
         after = app.row(request["operationId"])
         assert after["request_digest"] == before["request_digest"]
         assert after["attempt_generation"] >= before["attempt_generation"]
+        # One solve start for the two files, and a snapshot is never prepared.
+        # test_cad_inbox_restart.py runs the start to its job and counts it.
+        assert started == ([request["operationId"]] if request["kind"] == PREPARE_AND_SOLVE else [])
+        assert app.run_pass(running=set(started)) == []
 
 
 @pytest.mark.parametrize("make", [_snapshot_request, _solve_request], ids=["snapshot", "solve"])

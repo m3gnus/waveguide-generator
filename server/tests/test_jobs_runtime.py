@@ -178,6 +178,53 @@ def test_a_kept_bempp_wall_reports_no_adjustment() -> None:
     assert "adjustments" not in resolution.symmetry_metadata["solver_plan"]
 
 
+@pytest.mark.parametrize("geometry", ["parametric", "imported"])
+def test_the_bempp_wall_default_is_never_applied_to_imported_geometry(
+    tmp_path: Path, geometry: str
+) -> None:
+    """Imported geometry is the CAD model as sent: BEMPP solves it with no wall
+    added and reports no adjustment. The parametric bare shell submitted through
+    the same runtime is the positive control: there the default applies."""
+
+    from test_imported_jobs import _request as _imported_request, _runtime_fixture
+
+    async def scenario() -> dict[str, Any]:
+        runtime, ingest_id, _record = await _runtime_fixture(tmp_path)
+        # BEMPP declaring both geometry sources, so the imported job reaches it.
+        runtime.engine_registry = EngineRegistry(
+            detector=lambda: [
+                EngineInfo(
+                    "bempp", True, "test", "test", geometry_sources=("parametric", "imported")
+                )
+            ],
+            factory=lambda _name: _CompletingBempp(),
+        )
+        if geometry == "imported":
+            request = _imported_request(ingest_id)
+            request.options.engine = "bempp"
+        else:
+            request = _bare_request(engine="bempp", wall=0)
+        submitted = request.model_dump(mode="json")
+        try:
+            job_id = await runtime.submit(request)
+            row = runtime.store.get_job_row(job_id)
+        finally:
+            await runtime.shutdown()
+        assert row is not None
+        return {"row": row, "submitted": submitted}
+
+    result = asyncio.run(scenario())
+    row = result["row"]
+    plan = row["config_summary_json"]["symmetry"]["solver_plan"]
+    assert plan["engine"] == "bempp"
+    if geometry == "imported":
+        assert plan.get("adjustments", []) == []
+        # The stored geometry is the one submitted: no wall, no design.
+        assert row["config_json"]["geometry"] == result["submitted"]["geometry"]
+    else:
+        assert plan["adjustments"] == [{**EXPECTED_WALL_ADJUSTMENT, "requested": "explicit_zero"}]
+
+
 @pytest.mark.parametrize(
     "stored", [{"requested": "omitted"}, {"requested": "explicit_zero", "effective_mm": "x"}]
 )

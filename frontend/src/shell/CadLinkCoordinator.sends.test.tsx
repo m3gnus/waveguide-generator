@@ -14,10 +14,11 @@ import type { CadReturnBundle, FusionCadStatus } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { resetCadCoordinationForTests } from '../api/cadCoordination';
 import { preferencesStore } from '../prefs/preferences';
-import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
+import { recoverMissedSnapshots, resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { resetCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore } from '../stores/design';
+import { currentDocumentLoad, resetDesignStore, seedDesign, useDesignStore } from '../stores/design';
+import { keptContentKeyNow, replacingWouldLoseNow } from '../design/replacementCheck';
 import { resetDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -343,6 +344,81 @@ describe('an accepted Send is displayed from its event', () => {
     await deliver(send('send-b', second, { createdAt: new Date(t0 - 5_000).toISOString() }));
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(second.bundlePath);
     expect(cadLinkCoordinatorBridge.getSnapshot().status ?? '').not.toContain('stays selected');
+  });
+
+  // A Send is displayed in CAD mode and never written into the parametric
+  // design: M1 removed the auto-open that replaced it (review A8, brief 8).
+  const parametricState = () => {
+    const history = useDesignStore.temporal.getState();
+    return {
+      design: JSON.stringify(useDesignStore.getState().design),
+      revision: useDesignStore.getState().designRevision,
+      past: history.pastStates.length,
+      future: history.futureStates.length,
+      kept: keptContentKeyNow(),
+      wouldLose: replacingWouldLoseNow(),
+      documentLoad: currentDocumentLoad(),
+    };
+  };
+
+  const editTheParametricDesign = () => {
+    act(() => {
+      useDesignStore.getState().updateValue('length', 180);
+      useDesignStore.getState().updateValue('length', 190);
+      useDesignStore.getState().undo();  // one step back, so redo holds one too
+    });
+    const state = parametricState();
+    expect(state.past).toBeGreaterThan(0);
+    expect(state.future).toBeGreaterThan(0);
+    expect(state.wouldLose).toBe(true);  // unsaved work a replacement would lose
+    return state;
+  };
+
+  it('displaying a new Send leaves the parametric design and its undo history as they were', async () => {
+    const before = editTheParametricDesign();
+    const arrived = bundle({ modifiedAt: '2026-09-21T12:00:00Z' });
+    listing = [arrived];
+
+    await deliver(send('send-1', arrived));
+    await deliver(send('send-2', arrived, { createdAt: new Date(Date.now() + 60_000).toISOString() }));
+
+    expect(ingests).toEqual([arrived.bundlePath]);  // it was displayed
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(parametricState()).toEqual(before);
+    act(() => workspaceModeStore.setMode('parametric'));
+    expect(parametricState()).toEqual(before);
+  });
+
+  it('displaying a recovered Send leaves the parametric design and its undo history as they were', async () => {
+    const before = editTheParametricDesign();
+    const arrived = bundle({ modifiedAt: new Date(Date.now() - 30_000).toISOString() });
+    listing = [arrived];
+    const recovered = send('send-missed', arrived, { createdAt: arrived.modifiedAt, updatedAt: arrived.modifiedAt });
+    const api = vi.fn(async (input: RequestInfo | URL) => (
+      String(input).startsWith('/api/cadlink/operations') ? json({ operations: [recovered] }) : json({}, 404)
+    )) as unknown as typeof fetch;
+
+    await act(async () => { await recoverMissedSnapshots(Date.now() - 120_000, api); await flush(); });
+
+    expect(ingests).toEqual([arrived.bundlePath]);  // recovery displayed it
+    expect(parametricState()).toEqual(before);
+  });
+
+  it('a CAD project replacing the design moves every one of those measurements (their control)', () => {
+    const before = editTheParametricDesign();
+    act(() => {
+      useDesignStore.getState().replaceDesign(
+        { ...structuredClone(seedDesign), length: 240 } as typeof seedDesign,
+        { loadSource: 'cad-project-switch' },
+      );
+    });
+    const after = parametricState();
+    expect(after.design).not.toBe(before.design);
+    expect(after.revision).not.toBe(before.revision);
+    expect(after.past).toBe(0);
+    expect(after.future).toBe(0);
+    expect(after.kept).not.toBe(before.kept);
+    expect(after.documentLoad).not.toBe(before.documentLoad);
   });
 
   it('leaves a Send that is still being received alone (the control for every display above)', async () => {

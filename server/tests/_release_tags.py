@@ -18,12 +18,18 @@ from __future__ import annotations
 
 import os
 
-#: Every release tag a test in this suite extracts via ``git archive``.
-RELEASE_TAGS: tuple[str, ...] = ("v0.3.1", "v0.3.2")
+#: Every release tag a test in this suite extracts via ``git archive``,
+#: oldest first. ``v0.3.3-rc.1`` is a published pre-release: a beta-channel
+#: user can roll back to it, so it is a rollback target like any release.
+RELEASE_TAGS: tuple[str, ...] = ("v0.3.1", "v0.3.2", "v0.3.3-rc.1")
 
-#: The most recent of the above -- what a rollback/upgrade test compares
-#: "the build under test" against.
-LATEST_RELEASE_TAG = RELEASE_TAGS[-1]
+#: The most recent stable release -- what a rollback/upgrade test compares
+#: "the build under test" against. A pre-release is never this.
+LATEST_RELEASE_TAG = "v0.3.2"
+
+#: The releases a CAD Link registry this build wrote must still open in: the
+#: latest stable release, and every pre-release published since it.
+CADLINK_ROLLBACK_TAGS: tuple[str, ...] = ("v0.3.2", "v0.3.3-rc.1")
 
 #: True only in CI, once it has fetched every tag in RELEASE_TAGS.
 REQUIRE_RELEASE_TAGS = os.environ.get("WG_REQUIRE_RELEASE_TAGS") == "1"
