@@ -170,6 +170,20 @@ export interface CadSourceLine {
 export function cadSourceLine(status: FusionCadStatus | null | undefined, modelShown: boolean): CadSourceLine | null {
   if (!modelShown) return null;
   const base = 'Model loaded from Fusion';
+  // WGLink with its automatic coordination off reports only when it runs a
+  // command: WG holds its last report, and says so -- never "offline", never
+  // "matches" -- and Refresh stays, reading Fusion when pressed.
+  if (status?.statusObserved === false) {
+    const at = status.observedAt ? new Date(status.observedAt) : null;
+    const when = at && !Number.isNaN(at.getTime())
+      ? ` ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      : '';
+    return {
+      text: `${base} · Fusion last reported${when}, not observed since`,
+      tone: status.fusionChangesAvailable ? 'changed' : 'unverified',
+      refresh: true,
+    };
+  }
   if (!status?.running || status.state !== 'current' && status.state !== 'stale') {
     return { text: base, tone: 'info', refresh: false };
   }

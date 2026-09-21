@@ -7,7 +7,8 @@ import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOpe
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { CadDeliveryHealth, deliveryHealthLines, HUNG_PASS_MS, WAITING_READ_MS } from './CadDeliveryHealth';
 import { fusionWorkflowView } from './cadWorkflowView';
-import { AttentionNotices } from './TopBar';
+import { AttentionNotices, cadSourceLine } from './TopBar';
+import { PanelVisibilityContext, type PanelVisibility } from './panelVisibility';
 import { bindWorkspaceNavigation, publishVisiblePanels, resetWorkspaceNavigationForTests } from './workspaceNavigation';
 
 const NOW = Date.parse('2026-09-21T12:00:00Z');
@@ -128,6 +129,30 @@ describe('the CAD Link panel section', () => {
     expect(reads).toBe(1);
   });
 
+  it('reads again when the CAD Link panel comes into view (N1)', async () => {
+    const listeners = new Set<() => void>();
+    let isVisible = false;
+    const visibility: PanelVisibility = {
+      get isVisible() { return isVisible; },
+      subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    };
+    await act(async () => {
+      root.render(<PanelVisibilityContext.Provider value={visibility}><CadDeliveryHealth now={() => NOW}/></PanelVisibilityContext.Provider>);
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    const atMount = reads;
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * WAITING_READ_MS); });
+    expect(reads).toBe(atMount);
+    answer = status({ declined: 'No CAD Link folder is selected.' });
+    await act(async () => {
+      isVisible = true;
+      listeners.forEach((listener) => listener());
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(reads).toBe(atMount + 1);
+    expect(host.textContent).toContain('No CAD Link folder is selected.');
+  });
+
   it('lists refusals the server kept for a page that connected late', async () => {
     answer = status({ recentRefusals: [{ operationId: 'e5f7', file: 'e5f7.json', reason: 'It does not name its kind.', at: '2026-09-21T11:59:00Z' }] });
     await mount();
@@ -192,5 +217,37 @@ describe('WGLink that reports only on command', () => {
 
   it('leaves an observed status as it was (the control)', () => {
     expect(fusionWorkflowView(reported).headline).not.toMatch(/last reported/);
+  });
+});
+
+
+describe('R2: a WGLink that reports only on command keeps every explicit action', () => {
+  const lastReport = {
+    cadApplication: 'fusion360', cadFolderConfigured: true, state: 'stale', running: true, processRunning: true,
+    documentName: 'Speaker', documentId: 'fusion:doc-1', currentFormula: 'OSSE', fusionFormula: 'OSSE',
+    wgChangesAvailable: true, fusionChangesAvailable: false, documentChanged: false, documentChangeDetectable: false,
+    observationFreshness: 'stale', staleDetectionExplanation: 'stale detection unavailable',
+    statusObserved: false, observedAt: '2026-09-21T11:50:00Z',
+    link: { instanceId: 'i', parameterCount: 3, parameterDriftCount: 0, localBodyState: 'unmodified', configPresent: true, documentSignatureHash: 'sha256:d' },
+    realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
+  } as unknown as FusionCadStatus;
+
+  it('the source line says when Fusion last reported, and keeps Refresh', () => {
+    const line = cadSourceLine(lastReport, true)!;
+    expect(line.text).toMatch(/Fusion last reported .*not observed since$/);
+    expect(line.refresh).toBe(true);
+    expect(line.text).not.toMatch(/offline|closed|Matches/i);
+  });
+
+  it('keeps Send as an update of the linked document (never offline, never an unbound create)', () => {
+    const view = fusionWorkflowView(lastReport);
+    expect(view.state).not.toMatch(/offline|closed/);
+    expect(view.action).toBe('update');
+  });
+
+  it('a genuinely offline add-in is still reported offline (the control)', () => {
+    const offline = { ...lastReport, statusObserved: undefined, state: 'addin_offline', running: false, link: null } as unknown as FusionCadStatus;
+    expect(fusionWorkflowView(offline).state).toBe('addin-offline');
+    expect(cadSourceLine(offline, true)?.text).toBe('Model loaded from Fusion');
   });
 });
