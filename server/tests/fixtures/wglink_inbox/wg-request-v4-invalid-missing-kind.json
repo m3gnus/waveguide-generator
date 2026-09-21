@@ -1,0 +1,9 @@
+{
+  "bundlePath": "wgreturn/speaker.wgreturn",
+  "commandId": "e5f7a3b1-6c2d-4e8f-a9b0-3c1d7e2f5a44",
+  "manifestSha256": "sha256:66da9c4f4ca98e437e9a9e1b5f3580eaf9cac43c9ba67128267f837b5f8af573",
+  "operationId": "e5f7a3b1-6c2d-4e8f-a9b0-3c1d7e2f5a44",
+  "requestedAt": "2026-09-21T12:00:00Z",
+  "schemaVersion": 4,
+  "target": "waveguide-generator"
+}

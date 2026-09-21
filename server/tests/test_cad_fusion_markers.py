@@ -211,19 +211,36 @@ def _run_cadlink_startup(data_dir: Path, workspace: Path) -> None:
 # -- the capability file --------------------------------------------------------
 
 
-def test_wg_advertises_delivery_version_3_at_startup(data_dir: Path, workspace: Path) -> None:
+def test_wg_advertises_its_delivery_versions_at_startup(
+    data_dir: Path, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The suite turns the request consumer off; a WG that runs it advertises it.
+    monkeypatch.delenv("WG2_CAD_DELIVERY", raising=False)
     _run_cadlink_startup(data_dir, workspace)
 
     # ``sourceIdentity`` tells the add-in it may declare source-identity-v1;
-    # ``liveProtocol`` that this WG serves the live session protocol.
+    # ``liveProtocol`` that this WG serves the live session protocol. The WG
+    # request inbox reads schema 4 (a Send as well as a Solve); Fusion-bound
+    # requests stay version 3 (M1 transfer contract, C3).
     assert _read(_ipc(data_dir) / CAPABILITIES) == {
         "schemaVersion": 1,
         "producer": "waveguide-generator",
-        "solveCommandDelivery": 3,
+        "solveCommandDelivery": 4,
         "fusionRequestDelivery": 3,
         "sourceIdentity": 1,
         "liveProtocol": 1,
     }
+
+
+def test_wg_whose_consumer_is_off_does_not_advertise_solve_delivery(
+    data_dir: Path, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WG2_CAD_DELIVERY", "0")
+    _run_cadlink_startup(data_dir, workspace)
+
+    advertised = _read(_ipc(data_dir) / CAPABILITIES)
+    assert "solveCommandDelivery" not in advertised
+    assert advertised["fusionRequestDelivery"] == 3
     assert [path.name for path in _ipc(data_dir).iterdir() if path.name.endswith(".tmp")] == []
 
 

@@ -147,8 +147,28 @@ function activationNote(state: CadWorkflowView['state'], refresh: WgLinkRefreshR
   return troubled ? activationFootnotes(refresh, true).trim() : '';
 }
 
+/**
+ * WGLink with its automatic coordination off reports only when it runs a
+ * command, so the status WG holds is the one it last reported. That is neither
+ * an offline add-in nor a closed Fusion: say what it is, and keep the action
+ * the last report implies -- Send reads the status again when it is pressed,
+ * and WGLink checks the document itself before it changes anything.
+ */
+function notObservedView(view: CadWorkflowView, status: FusionCadStatus): CadWorkflowView {
+  const at = status.observedAt ? new Date(status.observedAt) : null;
+  const when = at && !Number.isNaN(at.getTime())
+    ? ` at ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : '';
+  return {
+    ...view,
+    headline: `Fusion 360 · last reported${when}`,
+    detail: `WGLink reports only when it runs a command (its automatic coordination is off), so WG has not observed Fusion since${when ? ` then` : ''}. Send, Solve and Refresh still work: each checks Fusion when it runs. As of that report: ${view.detail}`,
+  };
+}
+
 export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowView {
-  const view = fusionConnectionView(status);
+  const reported = fusionConnectionView(status);
+  const view = status?.statusObserved === false ? notObservedView(reported, status) : reported;
   // With no CAD folder chosen the note still belongs here: WG updates WGLink
   // either way, and a user without a folder must still learn that Fusion has
   // to close to finish it (the updater review §3.8).

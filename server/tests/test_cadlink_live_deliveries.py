@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from server.cadlink import preparation, solve_command
+from server.cadlink.delivery_status import delivery_status
 from server.cadlink.ingest import retained_snapshot_path
 from server.cadlink.operations import (
     PREPARE_AND_SOLVE,
@@ -147,7 +148,9 @@ class Wg:
 
 
 @contextmanager
-def wg(tmp_path: Path, *, select: bool = True, startup: tuple[str, ...] = STARTUP) -> Iterator[Wg]:
+def wg(
+    tmp_path: Path, *, select: bool = True, startup: tuple[str, ...] = STARTUP, consumer: bool = True
+) -> Iterator[Wg]:
     data_dir = tmp_path / "data"
     workspace = tmp_path / "workspace"
     data_dir.mkdir(exist_ok=True)
@@ -155,6 +158,11 @@ def wg(tmp_path: Path, *, select: bool = True, startup: tuple[str, ...] = STARTU
     application = create_app(data_dir=data_dir, advertised_port=3100)
     if select:
         application.state.cad_workspace.select(workspace)
+    if consumer:
+        # These tests are the consumer: they drive each delivery pass by hand
+        # (``run_pass``) instead of starting the loop, so the route is told
+        # one runs. ``consumer=False`` is a WG whose consumer is off.
+        delivery_status(application.state).started()
     _run_handlers(application, "startup", startup)
     try:
         yield Wg(application, data_dir, workspace)

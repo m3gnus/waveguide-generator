@@ -31,6 +31,8 @@ export interface CadOperationSummary {
     manifestSha256: string | null;
     documentName?: string | null;
     projectLineageId?: string | null;
+    /** Where the return sits in the WGLink folder (workspace-relative). */
+    bundlePath?: string | null;
   } | null;
   legacy: boolean;
   createdAt: string | null;
@@ -154,14 +156,40 @@ export function putSolverSelection(
   return jsonRequest('/api/cadlink/solver-selection', jsonBody('PUT', { engine }), fetcher);
 }
 
+/** A taken inbox file WG refused that has no operation row of its own
+ * (server/cadlink/solve_command.py `inbox_refusal`). */
+export interface CadInboxRefusal {
+  operationId: string | null;
+  file: string;
+  reason: string;
+  at: string;
+}
+
+/** WG's request consumer (server/cadlink/delivery_status.py). */
+export interface CadDeliveryStatus {
+  consumer: 'running' | 'disabled' | 'stopped' | 'not_started';
+  /** Why the last completed pass started nothing, or null when it was idle. */
+  declined: string | null;
+  passStartedAt: string | null;
+  lastPassCompletedAt: string | null;
+  recentRefusals: CadInboxRefusal[];
+  variable?: string;
+}
+
+export function getDeliveryStatus(fetcher: typeof fetch = fetch): Promise<CadDeliveryStatus> {
+  return jsonRequest('/api/cadlink/delivery', undefined, fetcher);
+}
+
 /** The unfinished operations, unless `pending` is false. */
 export async function listCadOperations(
-  options: { pending?: boolean } = {},
+  options: { pending?: boolean; limit?: number } = {},
   fetcher: typeof fetch = fetch,
 ): Promise<CadOperationSummary[]> {
-  const path = options.pending === false
-    ? '/api/cadlink/operations?pending=false'
-    : '/api/cadlink/operations';
+  const query = [
+    ...(options.pending === false ? ['pending=false'] : []),
+    ...(options.limit ? [`limit=${options.limit}`] : []),
+  ];
+  const path = `/api/cadlink/operations${query.length ? `?${query.join('&')}` : ''}`;
   const body = await jsonRequest<{ operations: CadOperationSummary[] }>(path, undefined, fetcher);
   return body.operations;
 }

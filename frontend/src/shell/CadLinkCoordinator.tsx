@@ -3,6 +3,7 @@ import {
   CadLinkApiError,
   getFusionCadStatus,
   ingestReturn,
+  listReturns,
   type CadReturnBundle,
   type CadReturnIngestRecord,
   type FusionCadStatus,
@@ -1305,6 +1306,57 @@ export function CadLinkCoordinator() {
       unsubscribeOperations();
     };
   }, []);
+
+  // An accepted Send is displayed from its event (M1 transfer contract, C4):
+  // the backend only retains it, and with the coordination gate off no
+  // listing poll would ever notice. The listing is read once, as the event it
+  // is, with its usual auto-open: its own record of what it has seen is the
+  // dedupe between this event and the listing's sighting of the same arrival,
+  // and nothing here is a permanent "already seen" set -- a later Send with a
+  // new id naming the same bundle re-selects that model and brings it to the
+  // front (E2). A Send WG refused is said, not dropped.
+  const handledSends = useRef(new Set<string>());
+  const displaySend = useCallback(async (operation: CadOperationSummary) => {
+    const bundlePath = operation.snapshot?.bundlePath;
+    if (!bundlePath) return;
+    noteCadActivity();
+    await refresh({ background: true, autoOpenNew: true }).catch(() => undefined);
+    if (useCadReturnStore.getState().selectedBundle?.bundlePath === bundlePath) {
+      enterCadWorkspace();
+      return;
+    }
+    // A return the user picked by hand after this was sent stays selected,
+    // as the listing's own arrival rule keeps it.
+    const sentAt = Date.parse(operation.createdAt ?? '');
+    if (manualSelectionAt.current !== null && Number.isFinite(sentAt) && manualSelectionAt.current > sentAt) {
+      const name = operation.snapshot?.documentName ?? 'the model Fusion sent';
+      setStatus(`Received ${name} from Fusion 360. You selected another return after it was sent, so that one stays selected; select ${name} from the return list to use it.`);
+      return;
+    }
+    const listed = await listReturns().catch(() => null);
+    const bundle = listed?.items.find((item) => item.bundlePath === bundlePath && item.readable);
+    if (bundle) selectBundleRef.current(bundle);
+  }, [noteCadActivity, refresh]);
+  useEffect(() => {
+    if (onshape) return undefined;
+    const handle = (operations: Record<string, CadOperationSummary>) => {
+      for (const operation of Object.values(operations)) {
+        if (operation.kind !== 'receive_snapshot' || handledSends.current.has(operation.operationId)) continue;
+        if (operation.state === 'rejected') {
+          handledSends.current.add(operation.operationId);
+          const name = operation.snapshot?.documentName ?? 'a model';
+          setError(`Fusion sent ${name}, but WG could not take it: ${operation.message ?? operation.reason ?? 'refused'}`);
+          enterCadWorkspace();
+          continue;
+        }
+        if (operation.state !== 'accepted') continue;
+        handledSends.current.add(operation.operationId);
+        void displaySend(operation);
+      }
+    };
+    handle(useCadOperationsStore.getState().operations);
+    return useCadOperationsStore.subscribe((state) => handle(state.operations));
+  }, [displaySend, onshape]);
 
   // Choosing a CAD workspace folder is the one event that has to reach a
   // coordinator which has switched itself off, and the `focus` above only

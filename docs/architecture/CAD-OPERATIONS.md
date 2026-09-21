@@ -455,6 +455,20 @@ through the same route and stages as a solve requested by Fusion.
   sending them. Nothing else consumes them: `GET /api/cadlink/solve-command` answers that
   nothing is pending (see "Solve-command compatibility"). `WG2_CAD_DELIVERY=0` turns the
   loop off (the test suite does).
+- **The WG request inbox (schema 4).** `.wg-solve-requests/<operationId>.json` carries a
+  Send (`kind: receive_snapshot`) as well as a Solve (`kind: prepare_and_solve`);
+  schema 3 is a Solve and stays current, schemas 1 and 2 are refused as outdated. WG
+  advertises `solveCommandDelivery: 4` on its own (the heartbeat and Fusion-bound
+  delivery stay 3), and advertises nothing while the consumer is off. A file WG can
+  identify as a request but cannot accept is claimed, refused with its reason and
+  deleted; one it cannot identify is left alone; a claim that is not a request ends. A
+  Send taken by file is settled as the live route settles one, and the page displays it
+  from its `cadOperation` event. Every row the inbox creates, recovers or refuses is
+  published on `/ws/jobs`; a refusal with no row of its own is published as
+  `cadInboxRefusal` and kept (the last 20) for `GET /api/cadlink/delivery`, which also
+  says whether the consumer runs, why its last pass started nothing, and when a pass last
+  completed. While the consumer is off the live delivery route answers a retryable 409
+  `delivery_consumer_disabled` instead of accepting what nothing would run.
 - **Coordination gate.** `WG2_CAD_COORDINATION=off` (read once at start-up, reported on
   the "application initialized" log line, the CAD Link panel and
   `GET /api/cadlink/coordination`) stops the frontend's clock-driven CAD returns listing

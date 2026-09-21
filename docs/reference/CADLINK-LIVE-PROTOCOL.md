@@ -403,8 +403,11 @@ event after it is committed; the event carries the operation summary, never the 
   storage before it answers 200.
 - **Checks, in order, after the session checks and body validation (section 5):**
   1. an approved update restart → `409 update_restart_pending` (retryable);
-  2. no WGLink folder selected → `409 wglink_folder_not_selected` (retryable);
-  3. the operation is held (below), accepted or recovered, and its snapshot retained:
+  2. WG's request consumer is not running (`WG2_CAD_DELIVERY=0`) →
+     `409 delivery_consumer_disabled` (retryable): nothing would ever prepare what it
+     accepted, so it accepts nothing;
+  3. no WGLink folder selected → `409 wglink_folder_not_selected` (retryable);
+  4. the operation is held (below), accepted or recovered, and its snapshot retained:
      - the ID already names a different request or kind, finished or not →
        `409 operation_conflict`; the stored operation is untouched;
      - the store is locked or busy → `503 store_busy`, `Retry-After: 1` (any other store
@@ -490,7 +493,7 @@ Every refusal is an error envelope with `stage: "cadlink-live"`.
 | 413 | `request_too_large` (64 KiB; the heartbeat 256 KiB) | no | implemented |
 | 503 | `store_busy` | yes | implemented (WG not started or stopping, or its store busy) |
 | 409 | `operation_conflict` (deliveries) | no | implemented |
-| 409 | `wglink_folder_not_selected`, `update_restart_pending` (deliveries) | yes | implemented |
+| 409 | `wglink_folder_not_selected`, `update_restart_pending`, `delivery_consumer_disabled` (deliveries) | yes | implemented |
 | 503 | `snapshot_not_readable`, `store_busy` (deliveries; `Retry-After: 1`) | yes | implemented |
 | — | outcome `rejected` / `snapshot_unavailable`: a `receive_snapshot` unreadable for 24 h (a 200 answer, not an HTTP error) | send again as a new operation | implemented |
 | 404 | `operation_unknown` (Fusion-bound requests) | no | implemented |

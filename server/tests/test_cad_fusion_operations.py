@@ -36,12 +36,14 @@ def _result(bundle: Path, export_id: str = "wge_1") -> dict[str, object]:
 
 
 def test_capabilities_advertise_source_identity_without_changing_delivery() -> None:
-    """``sourceIdentity`` and ``liveProtocol`` are additive: the schema and both delivery versions stay put."""
+    """``sourceIdentity`` and ``liveProtocol`` are additive: the schema and the
+    Fusion-bound delivery version stay put. Solve delivery is 4: the WG request
+    inbox reads requests that name their kind (M1 transfer contract, C3)."""
 
     assert fusion_delivery.capabilities() == {
         "schemaVersion": 1,
         "producer": "waveguide-generator",
-        "solveCommandDelivery": 3,
+        "solveCommandDelivery": 4,
         "fusionRequestDelivery": 3,
         "sourceIdentity": 1,
         "liveProtocol": 1,

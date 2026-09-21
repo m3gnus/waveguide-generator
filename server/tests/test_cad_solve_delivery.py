@@ -31,6 +31,7 @@ from server.cadlink.preparation import (
     reconcile_with_jobs,
     run_delivery_pass,
 )
+from server.cadlink import solve_command
 from server.cadlink.solve_command import collect_solve_deliveries, record_outcome
 from server.cadlink.store import CadLinkStore
 
@@ -221,7 +222,7 @@ def test_a_duplicate_after_the_outcome_replays_it_instead_of_running_again(
     assert (result["outcome"]["state"], result["outcome"]["jobId"]) == ("accepted", "job-1")
     # The replay names the delivery it answers.
     assert set(result["command"]) == {
-        "commandId", "returnId", "bundlePath", "manifestSha256", "requestedAt",
+        "kind", "commandId", "returnId", "bundlePath", "manifestSha256", "requestedAt",
     }
     assert _delivery_files(data_dir) == []
     assert _raw(data_dir, "cmd-1") == before
@@ -394,14 +395,17 @@ def test_an_operation_accepted_earlier_stays_ahead_of_a_later_delivery(
 def test_files_wg_cannot_read_are_left_in_place_and_block_nothing(
     data_dir, workspace, store
 ) -> None:
+    """What WG cannot identify as a request is left alone (M1 contract, C3)."""
+
     bundle_path, manifest = _bundle(workspace)
     folder = _ipc(data_dir) / V2_DIR
     folder.mkdir()
-    future = folder / "cmd-9.json"
-    future.write_text(json.dumps(_payload("cmd-9", bundle_path, manifest, schema=4)))
+    newer = folder / "cmd-9.json"
+    newer.write_text(json.dumps(_payload("cmd-9", bundle_path, manifest, schema=5)))
     torn = folder / "cmd-8.json"
     torn.write_text("{", encoding="utf-8")
-    mismatched = _file(data_dir, "cmd-7", bundle_path, manifest, operationId="cmd-other")
+    elsewhere = folder / "cmd-5.json"
+    elsewhere.write_text(json.dumps({**_payload("cmd-5", bundle_path, manifest), "target": "fusion"}))
     staging = folder / ".cmd-6.json.tmp"
     staging.write_text(json.dumps(_payload("cmd-6", bundle_path, manifest, schema=2)))
     _file(data_dir, "cmd-1", bundle_path, manifest)
@@ -409,8 +413,66 @@ def test_files_wg_cannot_read_are_left_in_place_and_block_nothing(
     assert _poll(data_dir, store) is None
 
     assert _waiting(store) == ["cmd-1"]
-    assert future.exists() and torn.exists() and mismatched.exists() and staging.exists()
+    assert newer.exists() and torn.exists() and elsewhere.exists() and staging.exists()
     assert _operation_ids(data_dir) == ["cmd-1"]
+
+
+def test_identified_requests_wg_cannot_accept_are_refused_and_removed(
+    data_dir, workspace, store
+) -> None:
+    """Identified but invalid: taken, refused with a reason, deleted -- never parked
+    and never re-read by every pass (M1 contract, C3). None blocks a good file."""
+
+    bundle_path, manifest = _bundle(workspace)
+    no_kind = _file(data_dir, "cmd-9", bundle_path, manifest, schema=4)
+    mismatched = _file(data_dir, "cmd-7", bundle_path, manifest, operationId="cmd-other")
+    snapshot_with_return = _file(
+        data_dir, "cmd-6", bundle_path, manifest, schema=4, kind="receive_snapshot"
+    )
+    unknown_kind = _file(data_dir, "cmd-4", bundle_path, manifest, schema=4, kind="update_link")
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+    refused: list[dict] = []
+
+    assert collect_solve_deliveries(data_dir, store, refuse=refused.append) is None
+
+    assert _waiting(store) == ["cmd-1"]
+    assert _operation_ids(data_dir) == ["cmd-1"]
+    assert not any(path.exists() for path in (no_kind, mismatched, snapshot_with_return, unknown_kind))
+    assert _delivery_files(data_dir) == []
+    reasons = {item["operationId"]: item["reason"] for item in refused}
+    assert set(reasons) == {"cmd-9", "cmd-7", "cmd-6", "cmd-4"}
+    assert "kind" in reasons["cmd-9"] and "operationId" in reasons["cmd-7"]
+    assert "returnId" in reasons["cmd-6"] and "update_link" in reasons["cmd-4"]
+
+
+def test_a_stale_claim_that_is_not_a_request_ends(data_dir, store) -> None:
+    folder = _ipc(data_dir) / V2_DIR
+    folder.mkdir()
+    claim = folder / f"{solve_command.CLAIM_PREFIX}abc.json"
+    claim.write_text("{", encoding="utf-8")
+    refused: list[dict] = []
+
+    collect_solve_deliveries(data_dir, store, refuse=refused.append)
+
+    assert not claim.exists()
+    assert [item["operationId"] for item in refused] == [None]
+
+
+def test_a_v4_solve_and_a_v4_snapshot_are_taken_as_their_kinds(data_dir, workspace, store) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-s", bundle_path, manifest, schema=4, kind="prepare_and_solve", returnId="")
+    snapshot = _payload("cmd-r", bundle_path, manifest, schema=4, kind="receive_snapshot")
+    del snapshot["returnId"]
+    folder = _ipc(data_dir) / V2_DIR
+    _atomic_write(folder / "cmd-r.json", snapshot)
+    published: list[dict] = []
+
+    assert collect_solve_deliveries(data_dir, store, publish=published.append) is None
+
+    assert store.get_operation("cmd-s")["kind"] == "prepare_and_solve"
+    assert store.get_operation("cmd-r")["kind"] == "receive_snapshot"
+    assert sorted(row["operation_id"] for row in published) == ["cmd-r", "cmd-s"]
+    assert _delivery_files(data_dir) == []
 
 
 def test_an_outcome_for_a_held_operation_ignores_a_conflicting_file_still_waiting(

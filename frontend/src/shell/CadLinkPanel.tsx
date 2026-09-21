@@ -21,6 +21,7 @@ import { Icon } from './icons';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
 import { CadOperationsSection, shortSha256 } from './CadOperationsSection';
+import { CadDeliveryHealth } from './CadDeliveryHealth';
 import { CadSolverFrameConfirm } from './CadSolverFrameConfirm';
 import { getSolverFrame, type SolverFramePreview } from '../api/solverFrame';
 import { requestSettings } from './settingsNavigation';
@@ -825,6 +826,7 @@ export function CadLinkPanel() {
       {record && <SolverFrameSection record={record}/>}
       {/* Solves Fusion sent, which the backend prepares from each project's own
           setup: shown here so the ones waiting on the user can be acted on. */}
+      <CadDeliveryHealth/>
       <CadOperationsSection record={record}/>
       <ModelVersions
         projectBundles={projectBundles}

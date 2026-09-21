@@ -7,8 +7,13 @@ re-observed and re-solved. A separate request carrying its own command id can
 be recorded as spent exactly once, which is what makes the automatic path safe.
 
 Delivery. Fusion writes each command as its own file,
-``.wg-solve-requests/<commandId>.json``, with ``schemaVersion`` 3 (delivery
-version 3; docs/architecture/CAD-OPERATIONS.md). Each delivered file is claimed
+``.wg-solve-requests/<commandId>.json`` -- the WG request inbox. Schema 3 is a
+solve (delivery version 3; docs/architecture/CAD-OPERATIONS.md). Schema 4 names
+its ``kind``: ``prepare_and_solve`` (Solve) or ``receive_snapshot`` (Send), the
+one difference between the two (M1 transfer contract, C2 and C3). A file WG can
+identify as a request but not accept -- no or an unknown kind, a broken
+``returnId`` rule, a bad id -- is claimed, refused visibly and deleted; one it
+cannot identify at all is left alone. Each delivered file is claimed
 by renaming it, read, persisted as a ``prepare_and_solve`` operation in the CAD
 operation store (``cad_operations`` in ``cadlink.db``), and only then deleted.
 What a WGLink older than version 3 writes -- the single slot
@@ -30,6 +35,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable, Mapping
@@ -57,7 +63,15 @@ SOLVE_REQUEST_FILENAME = ".wg-solve-request.json"
 LEGACY_SCHEMA_VERSION = 1
 OLDER_SCHEMA_VERSION = 2
 _SLOT_SCHEMAS = frozenset({LEGACY_SCHEMA_VERSION})
-_FILE_SCHEMAS = frozenset({OLDER_SCHEMA_VERSION, 3})
+_FILE_SCHEMAS = frozenset({OLDER_SCHEMA_VERSION, 3, 4})
+#: The schemas WG accepts as current: 3 is a solve, 4 names its kind. Anything
+#: else it can identify is an older add-in's, refused with the remedy.
+CURRENT_SCHEMAS = frozenset({3, 4})
+#: The schema whose requests name their kind (receive_snapshot or prepare_and_solve).
+KINDED_SCHEMA_VERSION = 4
+_KINDS = frozenset({PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT})
+_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+UNREADABLE_CLAIM_REASON = "WG could not read this request file as a request of any version."
 # One file per command, named <commandId>.json. A producer stages a file under
 # a name starting with "." (or not ending in .json) and renames it into place.
 SOLVE_REQUESTS_DIRECTORY = ".wg-solve-requests"
@@ -134,9 +148,12 @@ class PendingSolveCommand:
     bundle_path: str
     manifest_sha256: str
     requested_at: str
+    #: ``prepare_and_solve`` for every schema before 4; schema 4 names it.
+    kind: str = PREPARE_AND_SOLVE
 
     def payload(self) -> dict[str, Any]:
         return {
+            "kind": self.kind,
             "commandId": self.command_id,
             "returnId": self.return_id,
             "bundlePath": self.bundle_path,
@@ -175,10 +192,10 @@ class DeliveredItem:
     def from_command(cls, command: PendingSolveCommand) -> DeliveredItem:
         return cls(
             operation_id=command.command_id,
-            kind=PREPARE_AND_SOLVE,
+            kind=command.kind,
             bundle_path=command.bundle_path,
             manifest_sha256=command.manifest_sha256,
-            return_id=command.return_id,
+            return_id=command.return_id if command.kind == PREPARE_AND_SOLVE else None,
         )
 
     @classmethod
@@ -377,13 +394,30 @@ def legacy_ledger_path(data_dir: Path) -> Path:
     return ipc_folder(Path(data_dir)) / LEDGER_FILENAME
 
 
+class InvalidRequest(ValueError):
+    """A file WG identifies as a request to it, which it cannot accept.
+
+    Identified means a JSON object with ``target: waveguide-generator`` and a
+    ``schemaVersion`` WG recognises. Such a file is claimed, refused visibly
+    and deleted, never left to be re-read by every pass.
+    """
+
+
 def _command_from_payload(
     payload: object, path: Path, *, schema_versions: frozenset[int]
 ) -> PendingSolveCommand | None:
+    """The request a file holds; None when it is not identifiably one.
+
+    Raises :class:`InvalidRequest` for an identified request that fails
+    validation.
+    """
+
     if not isinstance(payload, Mapping):
         return None
+    schema = payload.get("schemaVersion")
     if (
-        payload.get("schemaVersion") not in schema_versions
+        isinstance(schema, bool)
+        or schema not in schema_versions
         or payload.get("target") != "waveguide-generator"
     ):
         return None
@@ -391,18 +425,37 @@ def _command_from_payload(
     bundle_path = payload.get("bundlePath")
     manifest_sha256 = payload.get("manifestSha256")
     if not all(isinstance(value, str) and value for value in (command_id, bundle_path, manifest_sha256)):
-        return None
+        raise InvalidRequest("It does not name its commandId, bundlePath and manifestSha256.")
     # A request may name its operation, and then it must be the command id:
     # otherwise WG cannot tell which identity the producer meant.
     if payload.get("operationId", command_id) != command_id:
-        return None
+        raise InvalidRequest("Its operationId is not its commandId.")
+    kind = PREPARE_AND_SOLVE
+    return_id = str(payload.get("returnId") or "")
+    if schema == KINDED_SCHEMA_VERSION:
+        kind = payload.get("kind")
+        if kind not in _KINDS:
+            raise InvalidRequest(
+                "It does not name its kind (receive_snapshot or prepare_and_solve)."
+                if kind is None
+                else f"Its kind {kind!r} is not one WG receives."
+            )
+        if not _OPERATION_ID.fullmatch(str(command_id)):
+            raise InvalidRequest("Its commandId is not a plain operation id.")
+        if kind == PREPARE_AND_SOLVE:
+            if not isinstance(payload.get("returnId"), str):
+                raise InvalidRequest("A solve request names its returnId.")
+            return_id = str(payload["returnId"])
+        elif "returnId" in payload:
+            raise InvalidRequest("A snapshot request names no returnId.")
     return PendingSolveCommand(
         marker_path=path,
         command_id=str(command_id),
-        return_id=str(payload.get("returnId") or ""),
+        return_id=return_id,
         bundle_path=str(bundle_path),
         manifest_sha256=str(manifest_sha256),
         requested_at=str(payload.get("requestedAt") or ""),
+        kind=str(kind),
     )
 
 
@@ -418,8 +471,10 @@ class _Delivery:
     path: Path
     claimed: bool
     schema_versions: frozenset[int]
-    command: PendingSolveCommand
+    #: None for a file that is to be refused (``invalid`` says why).
+    command: PendingSolveCommand | None
     age: tuple[str, int, str]
+    invalid: str | None = None
 
 
 def _files(directory: Path) -> list[Path]:
@@ -432,16 +487,42 @@ def _files(directory: Path) -> list[Path]:
 def _delivery(
     path: Path, *, claimed: bool, schema_versions: frozenset[int]
 ) -> _Delivery | None:
-    command = _command_from_payload(_read_payload(path), path, schema_versions=schema_versions)
-    if command is None:
-        return None
+    payload = _read_payload(path)
+    invalid: str | None = None
+    try:
+        command = _command_from_payload(payload, path, schema_versions=schema_versions)
+    except InvalidRequest as exc:
+        command, invalid = None, str(exc)
+    if command is None and invalid is None:
+        # Not identifiably a request: left alone -- unless it is a claim, which
+        # only this consumer makes, and which must not be re-read for ever.
+        if not claimed:
+            return None
+        invalid = UNREADABLE_CLAIM_REASON
     try:
         modified = path.stat().st_mtime_ns
     except OSError:
         return None
-    return _Delivery(
-        path, claimed, schema_versions, command, (command.requested_at, modified, path.name)
+    requested_at = (
+        command.requested_at
+        if command is not None
+        else str(payload.get("requestedAt") or "") if isinstance(payload, Mapping) else ""
     )
+    return _Delivery(
+        path, claimed, schema_versions, command, (requested_at, modified, path.name), invalid
+    )
+
+
+def inbox_refusal(payload: object, file_name: str, reason: str) -> dict[str, Any]:
+    """A refusal of a taken file that has no operation row of its own."""
+
+    command_id = payload.get("commandId") if isinstance(payload, Mapping) else None
+    return {
+        "operationId": command_id if isinstance(command_id, str) and command_id else None,
+        "file": file_name,
+        "reason": reason,
+        "at": utc_now(),
+    }
 
 
 def _deliveries(data_dir: Path) -> list[_Delivery]:
@@ -555,6 +636,10 @@ def _file_answer(command: PendingSolveCommand, accepted: DeliveryAnswer) -> dict
     """
 
     row, result, digest = accepted.row, accepted.result, accepted.digest
+    if result == "created":
+        # Its own outcome, however it settled, is news, not a replay: a
+        # snapshot settles at acceptance, and must not hold later files back.
+        return None
     refusal = _delivery_conflict(row, digest) if result == "conflict" else None
     if refusal is not None:
         # The stored operation is untouched and its result is not this
@@ -616,6 +701,8 @@ def collect_solve_deliveries(
     *,
     retain: Callable[[str], object] | None = None,
     held: set[str] | None = None,
+    publish: Callable[[Mapping[str, Any]], None] | None = None,
+    refuse: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     """Move delivered solve commands into the operation store, oldest first.
 
@@ -636,7 +723,28 @@ def collect_solve_deliveries(
     "outcome"}``, or None. Nothing hands it to a client: the refusal is logged,
     and the operation that holds the id is what the loop prepares. It stops at
     that answer, so later files wait for the next pass.
+
+    ``publish`` receives every operation row a file created, recovered or
+    refused (M1 transfer contract, C7 gap (i)), so the page hears of it on the
+    jobs channel. ``refuse`` receives each refusal that has no row of its own
+    -- an identified request WG cannot accept, or a stale claim -- as
+    :func:`inbox_refusal` builds it, and so does a conflict, whose row is
+    someone else's.
     """
+
+    def tell(row: Mapping[str, Any] | None) -> None:
+        if publish is not None and row is not None:
+            try:
+                publish(row)
+            except Exception:  # noqa: BLE001 - a notification never fails the delivery
+                logger.debug("Could not publish a delivered operation.", exc_info=True)
+
+    def refused(refusal: Mapping[str, Any]) -> None:
+        if refuse is not None:
+            try:
+                refuse(refusal)
+            except Exception:  # noqa: BLE001 - as above
+                logger.debug("Could not report a refused delivery.", exc_info=True)
 
     with _DELIVERY_LOCK:
         deliveries = _deliveries(data_dir)
@@ -655,21 +763,46 @@ def collect_solve_deliveries(
                 continue
             # What the rename took is the request, not what was read before.
             payload = _read_payload(claim)
-            command = _command_from_payload(
-                payload, claim, schema_versions=delivery.schema_versions
-            )
+            try:
+                command = _command_from_payload(
+                    payload, claim, schema_versions=delivery.schema_versions
+                )
+                invalid = None if command is not None else UNREADABLE_CLAIM_REASON
+            except InvalidRequest as exc:
+                command, invalid = None, str(exc)
             if command is None:
+                # Taken, refused and removed: never parked, never re-read.
+                refusal = inbox_refusal(payload, delivery.path.name, invalid or UNREADABLE_CLAIM_REASON)
+                logger.warning(
+                    "Refused the CAD Link request file %s (%s): %s",
+                    delivery.path.name, refusal["operationId"] or "no id", refusal["reason"],
+                )
+                refused(refusal)
+                _retention_waits.pop(claim.name, None)
+                _acknowledge(claim)
                 continue
-            outdated = isinstance(payload, Mapping) and payload.get("schemaVersion") != SCHEMA_VERSION
+            outdated = (
+                isinstance(payload, Mapping)
+                and payload.get("schemaVersion") not in CURRENT_SCHEMAS
+            )
             if outdated and store.get_operation(command.command_id) is None:
                 # An older add-in's command WG has never seen: refused, with
                 # the remedy. One the store already holds is a repeat delivery
                 # and is recovered or refused as any other.
                 answer = _refuse_outdated(store, command)
+                tell(store.get_operation(command.command_id))
             else:
                 accepted = accept_delivery(
                     store, DeliveredItem.from_command(command), retain=retain
                 )
+                tell(accepted.row)
+                if accepted.result == "conflict":
+                    conflict = _delivery_conflict(accepted.row, accepted.digest)
+                    refused(inbox_refusal(
+                        payload, delivery.path.name,
+                        conflict["reason"] if conflict is not None
+                        else "This id already names a request that is still running; this copy was not taken.",
+                    ))
                 answer = _file_answer(command, accepted)
                 if (
                     accepted.retention == RETAIN_TRANSIENT

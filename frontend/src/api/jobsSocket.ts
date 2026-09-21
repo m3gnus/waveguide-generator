@@ -1,6 +1,6 @@
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { compareSelection, provisionalResults, type ResultData } from './results';
-import type { CadOperationSummary } from './cadOperations';
+import type { CadInboxRefusal, CadOperationSummary } from './cadOperations';
 
 /**
  * Reference-compares own properties. Nested values are compared by identity,
@@ -641,9 +641,20 @@ function parseCadOperation(message: JsonRecord): CadOperationSummary | null {
   return operation as unknown as CadOperationSummary;
 }
 
+function parseInboxRefusal(message: Record<string, unknown>): CadInboxRefusal | null {
+  const refusal = message.refusal;
+  if (!isRecord(refusal)) return null;
+  const { operationId, file, reason, at } = refusal;
+  if (typeof file !== 'string' || typeof reason !== 'string' || typeof at !== 'string') return null;
+  if (operationId !== null && typeof operationId !== 'string') return null;
+  return { operationId: operationId ?? null, file, reason, at };
+}
+
 /** Receives the backend's CAD operation updates (CAD-OPERATIONS.md, "Events"). */
 export interface CadOperationListener {
   operation(operation: CadOperationSummary): void;
+  /** A taken request file WG refused, with no operation row of its own. */
+  refusal?(refusal: CadInboxRefusal): void;
   /** Updates carry no cursor, so every connection -- the first included --
    * reads the authoritative list again: an update sent before it, or while
    * disconnected, is recovered there. */
@@ -928,6 +939,16 @@ export class JobsSocketManager {
         return;
       }
       this.onEvent(event);
+      return;
+    }
+    if (decoded.kind === 'cadInboxRefusal') {
+      const refusal = parseInboxRefusal(decoded);
+      this.armHeartbeat();
+      if (refusal === null) {
+        this.update({ error: 'Invalid jobs cadInboxRefusal message' });
+        return;
+      }
+      this.cadOperationListeners.forEach((listener) => listener.refusal?.(refusal));
       return;
     }
     if (decoded.kind === 'cadOperation') {

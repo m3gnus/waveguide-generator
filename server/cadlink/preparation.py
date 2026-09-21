@@ -138,6 +138,9 @@ class PreparationContext:
     #: an approved update restart (UPDATE-TRANSACTION-CONTRACT.md 4.2).
     submission_blocked: Callable[[], str | None] | None = None
     ingest: Callable[..., dict[str, Any]] = ingest_bundle
+    #: Called with each refusal of a taken inbox file that has no operation
+    #: row of its own (``solve_command.inbox_refusal``).
+    refuse: Callable[[Mapping[str, Any]], None] | None = None
 
 
 class _Fenced(Exception):
@@ -212,6 +215,14 @@ def operation_summary(row: Mapping[str, Any]) -> dict[str, Any]:
                 "manifestSha256": snapshot.get("manifest_sha256"),
                 "documentName": snapshot.get("document_name"),
                 "projectLineageId": snapshot.get("project_lineage_id"),
+                # A Send names where its return sits in the WGLink folder, so
+                # the page can open it once accepted (M1 transfer contract,
+                # C4). Only a Send: a manual solve's input is an ingestion.
+                **(
+                    {"bundlePath": _inputs(row).get("bundle_path")}
+                    if row["kind"] == RECEIVE_SNAPSHOT
+                    else {}
+                ),
             }
             if isinstance(snapshot, Mapping)
             else None
@@ -1348,10 +1359,14 @@ async def run_delivery_pass(
         collect_solve_deliveries,
         ctx.data_dir,
         ctx.store,
-        retain=lambda operation_id: retain_operation_snapshot(
+        # A snapshot is settled as it is retained, exactly as the live route
+        # does; any other kind is only retained.
+        retain=lambda operation_id: settle_snapshot_operation(
             ctx.store, ctx.data_dir, ctx.workspace_root, operation_id
         ),
         held=held,
+        publish=lambda row: _publish(ctx, row),
+        refuse=ctx.refuse,
     )
     blocked = _restart_pending(ctx)
     if blocked:

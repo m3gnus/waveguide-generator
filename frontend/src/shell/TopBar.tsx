@@ -250,11 +250,14 @@ export function AttentionNotices() {
   useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const operations = useCadOperationsStore((state) => state.operations);
+  const unseenRefusals = useCadOperationsStore((state) => state.unseenRefusals);
   const readyRun = useReadyRun();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const waiting = Object.values(operations).filter(operationNeedsUser);
   const showWaiting = waiting.length > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
   const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
+  // A request WG took and refused has no row to wait in; this is its route.
+  const showRefused = unseenRefusals > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
   const readyJob = readyRun ? jobs.find((job) => job.id === readyRun) ?? null : null;
   const first = waiting[0];
   const waitingLabel = !first
@@ -272,6 +275,15 @@ export function AttentionNotices() {
         workspaceNavigation.navigate('cadlink');
       }}
     ><i/>{waitingLabel} · Show</button>}
+    {showRefused && <button
+      type="button"
+      className="attention-notice attention-refused"
+      title="WG took a request from Fusion and could not accept it. The CAD Link panel says why."
+      onClick={() => {
+        if (mode !== 'cad') activateWorkspaceMode('cad');
+        workspaceNavigation.navigate('cadlink');
+      }}
+    ><i/>{unseenRefusals === 1 ? 'A CAD request was refused' : `${unseenRefusals} CAD requests were refused`} · Show</button>}
     {showReady && <button
       type="button"
       className="attention-notice attention-ready"

@@ -43,7 +43,11 @@ CAPABILITIES_SCHEMA_VERSION = 1
 # The one delivery version WG speaks, in both directions. The add-in reports
 # its own in the heartbeat's ``deliveryVersion``; below this, WG refuses it.
 DELIVERY_VERSION = 3
-SOLVE_COMMAND_DELIVERY = DELIVERY_VERSION
+# The WG request inbox (M1 transfer contract, C3): 4 reads requests that name
+# their kind, a Send as well as a Solve. It moves on its own; the heartbeat's
+# delivery version and Fusion-bound request files stay 3, or every add-in
+# reporting 3 would be refused and every Fusion-bound file rewritten.
+SOLVE_COMMAND_DELIVERY = 4
 FUSION_REQUEST_DELIVERY = DELIVERY_VERSION
 SCHEMA_VERSION = DELIVERY_VERSION
 # WG reads returns that require ``source-identity-v1`` (``wgreturn.py``). The
@@ -99,8 +103,11 @@ def ipc_folder(data_dir: Path, *, create: bool = False) -> Path:
     return folder
 
 
-def capabilities() -> dict[str, Any]:
-    return {
+def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
+    """What WG advertises. ``solve_delivery`` False: its request consumer is off,
+    so it does not claim to read the inbox at all."""
+
+    advertised: dict[str, Any] = {
         "schemaVersion": CAPABILITIES_SCHEMA_VERSION,
         "producer": "waveguide-generator",
         "solveCommandDelivery": SOLVE_COMMAND_DELIVERY,
@@ -108,6 +115,9 @@ def capabilities() -> dict[str, Any]:
         "sourceIdentity": SOURCE_IDENTITY,
         "liveProtocol": LIVE_PROTOCOL,
     }
+    if not solve_delivery:
+        del advertised["solveCommandDelivery"]
+    return advertised
 
 
 def addin_delivery_version(heartbeat: Mapping[str, Any]) -> int | None:
@@ -472,7 +482,7 @@ def _remove_older_delivery(folder: Path) -> list[str]:
     return removed
 
 
-def advertise_fusion_delivery(data_dir: Path) -> None:
+def advertise_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) -> None:
     """Startup: remove an older WG's requests, then write the capability file.
 
     Neither failure stops WG. Without the file the add-in asks for WG to be
@@ -490,7 +500,7 @@ def advertise_fusion_delivery(data_dir: Path) -> None:
                 len(removed),
                 ", ".join(sorted(removed)),
             )
-        _write_json(folder / CAPABILITIES_FILENAME, capabilities())
+        _write_json(folder / CAPABILITIES_FILENAME, capabilities(solve_delivery=solve_delivery))
     except OSError as exc:
         logger.warning("Could not advertise WG's Fusion delivery version: %s", exc)
 

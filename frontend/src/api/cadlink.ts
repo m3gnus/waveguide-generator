@@ -207,6 +207,10 @@ export interface FusionCadStatus {
   /** Null when no link is selected, so there is no measured half to place on a
    * revision. Absent only from a status this build did not produce. */
   observationFreshness?: CadObservationFreshness | null;
+  /** False when WGLink runs no automatic coordination and this is the status it
+   * last reported, at `observedAt` (server/cadlink/fusion_status.py). */
+  statusObserved?: boolean;
+  observedAt?: string | null;
   staleDetectionExplanation: string | null;
   /** The delivery version the add-in reports; below WG's, the state is `addin_outdated`. */
   addinDeliveryVersion?: number | null;

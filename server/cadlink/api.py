@@ -49,6 +49,7 @@ from server.workspace.archive import (
 
 from .addin_update import last_refresh, loaded_addin_identity, poll_activation
 from .coordination import COORDINATION_ON
+from .delivery_status import delivery_status
 from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
 from .fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
 from .fusion_outcomes import FUSION_KINDS, settle_from_heartbeat
@@ -686,6 +687,14 @@ def _resolve_return_bundle(
             ):
                 return candidate_path, manifest
     return None, None
+
+
+@router.get("/delivery")
+async def get_delivery_status(request: Request) -> dict[str, Any]:
+    """The request consumer: running or not, why its last pass started nothing,
+    when a pass last completed, and recent refusals of taken files (C4)."""
+
+    return {**delivery_status(request.app.state).snapshot(), "variable": CAD_DELIVERY_ENV}
 
 
 @router.get("/returns")
@@ -1645,6 +1654,8 @@ class CadOperationSnapshotSummary(BaseModel):
     manifest_sha256: str | None = Field(alias="manifestSha256")
     document_name: str | None = Field(alias="documentName")
     project_lineage_id: str | None = Field(alias="projectLineageId")
+    #: A Send's return in the WGLink folder; absent for every other kind.
+    bundle_path: str | None = Field(default=None, alias="bundlePath")
 
 
 class CadOperationSummary(BaseModel):
@@ -1733,6 +1744,19 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
         message = {"v": 1, "kind": "cadOperation", "operation": dict(summary)}
         loop.call_soon_threadsafe(events.publish, message)
 
+    status = delivery_status(state)
+
+    def refuse(refusal: Mapping[str, Any]) -> None:
+        # Kept for a page that connects later, and pushed to one that is open.
+        # Without a jobs runtime there is no socket to push to, and the status
+        # route still serves the list (C7 gap (ii)).
+        status.refused(refusal)
+        events = getattr(runtime, "events", None)
+        if events is None:
+            return
+        message = {"v": 1, "kind": "cadInboxRefusal", "refusal": dict(refusal)}
+        loop.call_soon_threadsafe(events.publish, message)
+
     def job_for_submission(key: str) -> str | None:
         # A read of the jobs database; it never starts the jobs runtime.
         try:
@@ -1759,6 +1783,7 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
             EngineUnavailableError,
         ),
         submission_blocked=restart.refusal if restart is not None else None,
+        refuse=refuse,
     )
 
 
@@ -2203,13 +2228,28 @@ CAD_DELIVERY_ENV = "WG2_CAD_DELIVERY"
 _DELIVERY_INTERVAL_S = 1.0
 
 
+def delivery_consumer_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """Whether this WG runs the request consumer (the delivery loop) at all."""
+
+    source = os.environ if environ is None else environ
+    return source.get(CAD_DELIVERY_ENV, "") != "0"
+
+
 def _deliver_solve_commands(application: FastAPI):
     async def start_cad_delivery() -> None:
         # The backend is the one consumer of Fusion's solve commands
         # (CAD-OPERATIONS.md, "Delivery"); the UI only issues and observes.
-        if os.environ.get(CAD_DELIVERY_ENV, "") == "0":
-            return
         state = application.state
+        status = delivery_status(state)
+        if not delivery_consumer_enabled():
+            # Said, not silent: the live route refuses and the add-in is not
+            # told WG collects requests (C3), and the panel names the cause.
+            status.disabled()
+            logger.warning(
+                "CAD Link request consumer is off (%s=0): WG collects no Send or Solve from Fusion.",
+                CAD_DELIVERY_ENV,
+            )
+            return
         running: set[str] = set()
 
         def spawn(operation_id: str, coroutine: Awaitable[Any]) -> None:
@@ -2225,33 +2265,41 @@ def _deliver_solve_commands(application: FastAPI):
             # rather than idle says so -- once, not once a second.
             pass_reporter = DeliveryPassReporter()
             notes: list[str | None] = []
-            while True:
-                try:
-                    workspace_root = await asyncio.to_thread(_selected_workspace_root, state)
-                    notes.clear()
-                    await run_delivery_pass(
-                        _preparation_context(state, workspace_root=workspace_root),
-                        spawn=spawn,
-                        running=running,
-                        note=notes.append,
-                    )
-                    # Read outside the handler below: a swallowed exception
-                    # must never be mistaken for a pass that ran and declined.
-                    line = pass_reporter.observe(notes[0] if notes else None)
-                    if line is not None:
-                        logger.info("CAD solve delivery: %s", line)
-                    failures, reported = 0, None
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - the next pass tries again
-                    failures += 1
-                    error = f"{type(exc).__name__}: {exc}"
-                    if error != reported:
-                        # Each distinct failure once, not every second.
-                        logger.warning("Delivering CAD solve commands failed.", exc_info=True)
-                        reported = error
-                # Backs off to half a minute while a failure persists.
-                await asyncio.sleep(min(_DELIVERY_INTERVAL_S * 2 ** min(failures, 5), 30.0))
+            status.started()
+            try:
+                while True:
+                    try:
+                        status.pass_started()
+                        workspace_root = await asyncio.to_thread(_selected_workspace_root, state)
+                        notes.clear()
+                        await run_delivery_pass(
+                            _preparation_context(state, workspace_root=workspace_root),
+                            spawn=spawn,
+                            running=running,
+                            note=notes.append,
+                        )
+                        # Read outside the handler below: a swallowed exception
+                        # must never be mistaken for a pass that ran and declined.
+                        declined = notes[0] if notes else None
+                        status.pass_finished(declined)
+                        line = pass_reporter.observe(declined)
+                        if line is not None:
+                            logger.info("CAD solve delivery: %s", line)
+                        failures, reported = 0, None
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - the next pass tries again
+                        failures += 1
+                        error = f"{type(exc).__name__}: {exc}"
+                        status.pass_failed(error)
+                        if error != reported:
+                            # Each distinct failure once, not every second.
+                            logger.warning("Delivering CAD solve commands failed.", exc_info=True)
+                            reported = error
+                    # Backs off to half a minute while a failure persists.
+                    await asyncio.sleep(min(_DELIVERY_INTERVAL_S * 2 ** min(failures, 5), 30.0))
+            finally:
+                status.stopped()
 
         state.cad_delivery_task = asyncio.create_task(deliver())
 
@@ -2301,8 +2349,14 @@ def mount_cadlink(application: FastAPI) -> None:
 
     async def advertise_fusion_delivery_on_startup() -> None:
         # Removes what a WG older than delivery version 3 left for its add-in,
-        # then advertises version 3.
-        await asyncio.to_thread(advertise_fusion_delivery, Path(application.state.data_dir))
+        # then advertises what WG reads. Solve delivery only while the
+        # consumer runs: an add-in told nothing refuses at command time
+        # instead of writing a request nothing will read (contract C3).
+        await asyncio.to_thread(
+            advertise_fusion_delivery,
+            Path(application.state.data_dir),
+            solve_delivery=delivery_consumer_enabled(),
+        )
         await asyncio.to_thread(
             recover_staged_fusion_requests,
             Path(application.state.data_dir),

@@ -50,6 +50,15 @@ _EARLIER_OBSERVATION_EXPLANATION = (
     "stale detection unavailable: the Fusion model has moved since WGLink last "
     "measured it, so WG holds an observation of an earlier revision"
 )
+#: WGLink with its automatic coordination off publishes status only when it runs
+#: a command (at start-up, after each command, removed at shutdown), so between
+#: commands its heartbeat ages past ``FUSION_STATUS_TTL`` while Fusion and the
+#: add-in are both fine. That is not an offline add-in, and not a closed Fusion.
+_NOT_OBSERVED_EXPLANATION = (
+    "stale detection unavailable: WGLink reports status only when it runs a "
+    "command (its automatic coordination is off), so WG has not observed Fusion "
+    "since the last one"
+)
 _NO_OBSERVATION_EXPLANATION = (
     "stale detection unavailable: WGLink has not measured this Fusion "
     "document's geometry yet"
@@ -514,6 +523,42 @@ def _link_payload(value: object) -> dict[str, Any] | None:
     return payload
 
 
+def _command_driven_heartbeat(data_dir: Path, checked_at: datetime) -> Mapping[str, Any] | None:
+    """The file heartbeat of an add-in that runs no automatic coordination.
+
+    Only when it is otherwise valid and merely older than the freshness window
+    (never one from the future), and it states in its own diagnostics that its
+    automatic coordination is off. An add-in that does coordinate and went quiet
+    is offline, and stays reported so.
+    """
+
+    payload = _read_file_heartbeat(data_dir)
+    if heartbeat_problem(payload, checked_at) != (HEARTBEAT_STALE, "updatedAt"):
+        return None
+    assert isinstance(payload, Mapping)
+    updated_at = _timestamp(payload.get("updatedAt"))
+    if updated_at is None or updated_at > checked_at:
+        return None
+    diagnostics = payload.get("diagnostics")
+    activation = diagnostics.get("activation") if isinstance(diagnostics, Mapping) else None
+    if not isinstance(activation, Mapping) or activation.get("automaticCoordination") is not False:
+        return None
+    return payload
+
+
+def _not_observed_since(status: dict[str, Any]) -> dict[str, Any]:
+    """Withdraw every claim a report from before now would make about now."""
+
+    status = {**status, "statusObserved": False, "observedAt": status.get("updatedAt")}
+    if status.get("observationFreshness") in {OBSERVATION_CURRENT, OBSERVATION_UNKNOWN}:
+        status["observationFreshness"] = OBSERVATION_STALE
+        status["staleDetectionExplanation"] = _NOT_OBSERVED_EXPLANATION
+        status["documentChangeDetectable"] = False
+    if status.get("state") == "current":
+        status["state"] = "stale"
+    return status
+
+
 def read_fusion_status(
     workspace_root: Path,
     *,
@@ -566,7 +611,26 @@ def read_fusion_status(
     payload, transport = heartbeat if heartbeat is not None else select_heartbeat(workspace_root, checked_at)
     # A future timestamp is not trusted either (``FUSION_STATUS_MAX_SKEW``).
     if payload is None or heartbeat_problem(payload, checked_at) is not None:
-        return closed
+        reported = _command_driven_heartbeat(workspace_root, checked_at) if process_running else None
+        if reported is None:
+            return closed
+        # The last status that add-in chose to report, classified as of when it
+        # reported it, and marked as not observed since: never "offline", never
+        # "current". Settlement never reads it (``select_heartbeat`` only).
+        return _not_observed_since(
+            read_fusion_status(
+                workspace_root,
+                current_design_hash=current_design_hash,
+                current_formula=current_formula,
+                design_id=design_id,
+                instance_id=instance_id,
+                process_running=True,
+                returned_bundle=returned_bundle,
+                returned_manifest=returned_manifest,
+                now=_timestamp(reported.get("updatedAt")),
+                heartbeat=(reported, HEARTBEAT_FILE),
+            )
+        )
     updated_at = _timestamp(payload.get("updatedAt"))
     assert updated_at is not None
 

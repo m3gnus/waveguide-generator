@@ -10,8 +10,11 @@ token are checked before the body is read, then the body is validated
 (``400 invalid_request``). After them, in order:
 
 1. an approved update restart → ``409 update_restart_pending`` (retryable);
-2. no WGLink folder selected → ``409 wglink_folder_not_selected`` (retryable);
-3. the operation is held against the delivery pass, accepted or recovered,
+2. WG's request consumer is not running (``WG2_CAD_DELIVERY=0``, or not
+   started) → ``409 delivery_consumer_disabled`` (retryable): nothing would ever
+   prepare what this accepted (M1 transfer contract, C3);
+3. no WGLink folder selected → ``409 wglink_folder_not_selected`` (retryable);
+4. the operation is held against the delivery pass, accepted or recovered,
    and its snapshot retained (a received snapshot is also settled):
 
    - the id names a different request or kind → ``409 operation_conflict``;
@@ -24,7 +27,7 @@ token are checked before the body is read, then the body is validated
      snapshot was retained or can never be retained as named (preparation
      then refuses it).
 
-Nothing is accepted on any answer before step 3.
+Nothing is accepted on any answer before step 4.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 from server.cadlink import preparation, solve_command
+from server.cadlink.delivery_status import delivery_status
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
 from server.integration.contracts import ErrorEnvelope
 from server.updates.restart import UPDATE_RESTART_PENDING
@@ -115,6 +119,12 @@ async def post_live_delivery(
         return LiveRefusal(
             409, UPDATE_RESTART_PENDING,
             "Waveguide Generator is about to restart for an update; deliver this again after it.",
+            retryable=True,
+        ).response()
+    if not delivery_status(state).running():
+        return LiveRefusal(
+            409, "delivery_consumer_disabled",
+            "Waveguide Generator is not collecting CAD Link requests now; deliver this again once it is.",
             retryable=True,
         ).response()
     workspace_root = await asyncio.to_thread(_selected_workspace_root, state)

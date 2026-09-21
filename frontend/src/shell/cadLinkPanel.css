@@ -200,4 +200,10 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 /* Every step still between a waiting solve and its job; the current one leads. */
 .cad-operation-ladder { margin: 0; padding-left: 18px; color: var(--fg3); font-size: var(--text-base); }
 .cad-operation-ladder li.current { color: var(--fg1); font-weight: 600; }
+/* Why a request from Fusion is not moving, and what WG refused. */
+.cad-delivery-health { display: grid; gap: 4px; margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--hair); border-radius: var(--r2); font-size: var(--text-base); }
+.cad-delivery-health p { margin: 0; }
+.cad-delivery-blocked { color: var(--red); }
+.cad-delivery-waiting { color: var(--amber); }
+.cad-delivery-refusals ul { margin: 4px 0 0; padding-left: 16px; color: var(--fg2); }
 .cad-model-provenance { overflow-wrap: anywhere; }

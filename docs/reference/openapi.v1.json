@@ -201,6 +201,17 @@
       "CadOperationSnapshotSummary": {
         "additionalProperties": false,
         "properties": {
+          "bundlePath": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundlepath"
+          },
           "documentName": {
             "anyOf": [
               {
@@ -8367,6 +8378,30 @@
           }
         },
         "summary": "Cad Workspace Select",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/delivery": {
+      "get": {
+        "description": "The request consumer: running or not, why its last pass started nothing,\nwhen a pass last completed, and recent refusals of taken files (C4).",
+        "operationId": "get_delivery_status_api_cadlink_delivery_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Delivery Status Api Cadlink Delivery Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Delivery Status",
         "tags": [
           "cadlink"
         ]
