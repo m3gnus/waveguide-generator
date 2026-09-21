@@ -1348,7 +1348,9 @@ def test_request_files_are_byte_identical_with_or_without_a_live_session(
             if mode == "live":
                 assert len(app.poll(token).json()["requests"]) == 2
             files[mode] = {
-                str(path.relative_to(app.ipc)): path.read_bytes()
+                # as_posix: the expected names below are spelled with "/", and
+                # Windows spells a relative path with "\".
+                path.relative_to(app.ipc).as_posix(): path.read_bytes()
                 for path in app.ipc.rglob("*.json")
                 if path.parent != app.ipc
             }

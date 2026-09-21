@@ -260,7 +260,10 @@ def test_an_update_transaction_marks_the_installation_open_until_commit(tmp_path
         "schema": 1,
         "installation": installation_key(installation.resources),
         "transaction": transaction,
-        "dataDir": str(installation.data_dir.resolve()),
+        # The marker records the data directory in its comparable form, which
+        # on Windows is case-folded: two spellings of one directory must not
+        # read as two owners. normcase is the identity on POSIX.
+        "dataDir": os.path.normcase(str(installation.data_dir.resolve())),
     }
 
     allowed, detail = commit_transaction(
@@ -476,13 +479,23 @@ def test_failed_rollback_marker_publication_restores_the_superseded_journal(
     marker = installation.resources / ".update-transaction-open.json"
     real_write = apply_update_module.write_transaction_open_marker
     writes = 0
+    # A publication failure this host's regime refuses. Where directories can
+    # be flushed that is a lost directory entry; where they cannot (Windows),
+    # an unflushed entry is expected and accepted, so the refused failure there
+    # is an unflushed body. Either way the publication fails, and what is under
+    # test -- that the superseded journal and marker come back -- is the same.
+    failed_publication = (
+        apply_update_module.JournalDurability(True, False, True)
+        if apply_update_module.DIRECTORY_SYNC_SUPPORTED
+        else apply_update_module.JournalDurability(True, True, False)
+    )
 
     def fail_new_marker_once(*args: object, **kwargs: object) -> object:
         nonlocal writes
         writes += 1
         durability = real_write(*args, **kwargs)
         if writes == 1:
-            return apply_update_module.JournalDurability(True, False, True)
+            return failed_publication
         return durability
 
     monkeypatch.setattr(
@@ -506,7 +519,11 @@ def test_failed_rollback_marker_publication_restores_the_superseded_journal(
 def test_marker_removal_directory_sync_failure_restores_the_open_transaction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(apply_update_module, "DIRECTORY_SYNC_SUPPORTED", True)
+    # Set up under this host's real regime, then simulate one where directory
+    # entries can be flushed. Simulating it before the set-up made Windows,
+    # which cannot open a directory to flush it, refuse the set-up's own
+    # marker publication.
+    host_flushes_directories = apply_update_module.DIRECTORY_SYNC_SUPPORTED
     installation = _installation(tmp_path)
     transaction = _decided_update(installation)
     marker = installation.resources / ".update-transaction-open.json"
@@ -520,8 +537,11 @@ def test_marker_removal_directory_sync_failure_restores_the_open_transaction(
             return False
         if Path(path) == installation.resources:
             return True
-        return real_sync(path, **kwargs)
+        # Every other flush succeeds, as it would on the simulated platform:
+        # really performed where this host can, reported done where it cannot.
+        return real_sync(path, **kwargs) if host_flushes_directories else True
 
+    monkeypatch.setattr(apply_update_module, "DIRECTORY_SYNC_SUPPORTED", True)
     monkeypatch.setattr(apply_update_module, "sync_directory", fail_first_resource_sync)
     allowed, detail = commit_transaction(
         installation.data_dir,

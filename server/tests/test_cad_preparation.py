@@ -1383,10 +1383,17 @@ def test_every_directory_of_the_staged_tree_is_flushed_before_publication(
 
     copy = Path(retained["retained_path"])
     before = set(flushed[: published_at[0]])
-    assert (copy / "geometry").stat().st_ino in before
     assert (copy / "geometry" / "assembly.step").stat().st_ino in before
-    # And the directory the copy is published into, after the rename it holds.
-    assert copy.parent.stat().st_ino in set(flushed[published_at[0]:])
+    directories = {(copy / "geometry").stat().st_ino, copy.parent.stat().st_ino}
+    if os.name == "nt":
+        # Windows cannot open a directory for fsync, and `_flush_directory`
+        # does not try; the file flush above is the whole guarantee there, so
+        # no directory may appear among the flushes at all.
+        assert directories.isdisjoint(flushed)
+    else:
+        assert (copy / "geometry").stat().st_ino in before
+        # And the directory the copy is published into, after the rename it holds.
+        assert copy.parent.stat().st_ino in set(flushed[published_at[0]:])
 
 
 def test_a_flush_the_filesystem_refuses_does_not_break_retaining(

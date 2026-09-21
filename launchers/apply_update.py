@@ -198,6 +198,17 @@ DIRECTORY_SYNC_SUPPORTED = os.name == "posix"
 #: ``fcntl.F_FULLFSYNC``. Named here because the constant is absent on Linux.
 MACOS_FULL_FSYNC = 51
 
+#: Whether the kernel this process runs on is macOS's, read once at import like
+#: ``fcntl`` and ``DIRECTORY_SYNC_SUPPORTED`` above. Which flush call exists is a
+#: property of the running kernel, not of the platform a caller is acting for:
+#: ``platform_name`` parameters and a simulated ``sys.platform`` describe the
+#: bundle's layout, and neither can make ``F_FULLFSYNC`` exist on Linux or a
+#: plain ``fsync`` weaker on Windows. Reading ``sys.platform`` at call time let
+#: exactly that happen -- a macOS-layout run on Linux asked Linux for
+#: ``F_FULLFSYNC``, got EINVAL, and reported every flush as weakened, which the
+#: open-marker publication then refused.
+_HOST_IS_MACOS = sys.platform == "darwin"
+
 
 #: Errno values that mean "this file system does not implement F_FULLFSYNC",
 #: as opposed to "this flush failed". Only the first list may be answered by
@@ -232,7 +243,7 @@ def _fsync_descriptor(fd: int, *, log: LogCallable | None = None) -> bool:
     propagates.
     """
 
-    if fcntl is not None and sys.platform == "darwin":
+    if fcntl is not None and _HOST_IS_MACOS:
         try:
             fcntl.fcntl(fd, getattr(fcntl, "F_FULLFSYNC", MACOS_FULL_FSYNC))
             return True
@@ -250,7 +261,7 @@ def _fsync_descriptor(fd: int, *, log: LogCallable | None = None) -> bool:
     os.fsync(fd)
     # Off macOS, fsync is the strongest flush the standard library offers, and
     # on Linux it is a media flush; there is nothing weaker being substituted.
-    return sys.platform != "darwin"
+    return not _HOST_IS_MACOS
 
 
 def sync_directory(path: Path, *, log: LogCallable | None = None) -> bool:
