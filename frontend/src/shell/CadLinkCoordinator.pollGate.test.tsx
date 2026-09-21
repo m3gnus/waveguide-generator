@@ -19,7 +19,7 @@ import { preferencesStore } from '../prefs/preferences';
 import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { resetCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore } from '../stores/design';
+import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -56,6 +56,7 @@ describe('WG CAD coordination gate', () => {
   let root: Root;
   let calls: string[];
   let gate: string | null;
+  let statusAnswer: FusionCadStatus;
 
   const polls = () => calls.filter((path) => path.endsWith('/api/cadlink/returns') || path.endsWith('/api/cadlink/fusion-status')).length;
   const operationReads = () => calls.filter((path) => path.startsWith('/api/cadlink/operations')).length;
@@ -76,6 +77,7 @@ describe('WG CAD coordination gate', () => {
     workspaceModeStore.setMode('cad');
     calls = [];
     gate = 'off';
+    statusAnswer = fusionOpen;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       calls.push(path);
@@ -83,7 +85,7 @@ describe('WG CAD coordination gate', () => {
         // The gate rides on the listing; an older server's listing has no field.
         return json({ cadFolderConfigured: true, items: [], ...(gate === null ? {} : { coordination: gate }) });
       }
-      if (path.endsWith('/api/cadlink/fusion-status')) return json(fusionOpen);
+      if (path.endsWith('/api/cadlink/fusion-status')) return json(statusAnswer);
       if (path.startsWith('/api/cadlink/operations')) return json({ operations: [] });
       if (path.endsWith('/solver-selection')) return json({ engine: 'auto' });
       return json({}, 404);
@@ -171,6 +173,54 @@ describe('WG CAD coordination gate', () => {
     expect(polls() - atMount).toBe(2);
     await act(async () => { await vi.advanceTimersByTimeAsync(TEN_MINUTES); });
     expect(polls() - atMount).toBe(2);
+  });
+
+  it.each(['needs_user_input', 'recovery_required'])('off, an operation parked at %s: no clock reads (it cannot move without the user)', async (state) => {
+    await mount();
+    const atMount = polls();
+    act(() => { useCadOperationsStore.getState().apply({ ...pending('op-parked'), state, kind: state === 'recovery_required' ? 'update_link' : 'prepare_and_solve' }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(TEN_MINUTES); });
+    expect(polls()).toBe(atMount);
+  });
+
+  it('off: a parked operation that moves on again brings the reads back (the control)', async () => {
+    await mount();
+    act(() => { useCadOperationsStore.getState().apply({ ...pending('op-1'), state: 'needs_user_input' }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    const parked = polls();
+    act(() => { useCadOperationsStore.getState().apply({ ...pending('op-1', 'processing', '2026-09-21T10:00:30Z'), attemptGeneration: 2 }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(polls() - parked).toBeGreaterThanOrEqual(20);
+  });
+
+  it('off: a design edit reads Fusion status once, as the event it is, and no clock follows', async () => {
+    await mount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    const statusReads = () => calls.filter((path) => path.endsWith('/api/cadlink/fusion-status')).length;
+    const before = statusReads();
+    act(() => { useDesignStore.setState({ designRevision: useDesignStore.getState().designRevision + 1 }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    const afterEdit = statusReads();
+    expect(afterEdit - before).toBeGreaterThanOrEqual(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(TEN_MINUTES); });
+    expect(statusReads()).toBe(afterEdit);
+  });
+
+  it.each([
+    ['the add-in is offline', { running: false, processRunning: true, state: 'addin_offline' }],
+    ['Fusion already holds this design', {}],
+  ])('never sends an unbound create when %s: it refuses with the reason', async (_name, overrides) => {
+    statusAnswer = { ...fusionOpen, ...overrides } as FusionCadStatus;
+    await mount();
+    const before = calls.length;
+    let refused: unknown = null;
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion().catch((reason) => { refused = reason; });
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(refused).toBeInstanceOf(Error);
+    // Status read on command, and nothing else: no export, no Fusion request.
+    expect(calls.slice(before).filter((path) => !path.endsWith('/api/cadlink/fusion-status'))).toEqual([]);
   });
 
   it('off: Send to Fusion reads Fusion status when the user issues it', async () => {

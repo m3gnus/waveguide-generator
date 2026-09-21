@@ -463,7 +463,16 @@ through the same route and stages as a solve requested by Fusion.
   focus, entering CAD mode, choosing a folder), a Send reads Fusion's status when it is
   pressed, and operation changes arrive as `cadOperation` messages on `/ws/jobs`. The
   default, `on`, is the behaviour before the gate existed. The gate never stops the
-  delivery loop above: that is the transfer path, not coordination.
+  delivery loop above: that is the transfer path, not coordination. An operation parked
+  on the user (`needs_user_input`, `recovery_required`) is not work in flight: neither
+  read can move it, so it keeps no clock running. A design edit still reads Fusion's
+  status once, as the event it is (it compares the edited design with the linked one;
+  WG reads its own copy of the heartbeat and WGLink does no work for it); no clock
+  follows it.
+- **Send never becomes an unbound create.** When the Fusion status gives no action --
+  the add-in offline or outdated, an update under recovery, or Fusion already holding
+  the design -- Send is refused with that reason rather than written as a create with no
+  expected document, which would put a second Fusion document over a linked one.
 - **Update restart.** Once an update restart is approved, WG starts no new CAD
   preparation until it happens (docs/reference/UPDATE-TRANSACTION-CONTRACT.md §4.2). The
   latch is the one the solve, retry, install and ingest routes read.

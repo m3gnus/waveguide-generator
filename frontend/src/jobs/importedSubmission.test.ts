@@ -3,7 +3,7 @@ import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { expandLegacy, toWire, withDelayMode } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { acknowledgeManualCadSolvePreparation, buildImportedSubmission, forgetManualCadSolveOperationId, importedSubmissionBlocker, importedSubmissionNotices, manualCadSolveOperationId, manualCadSolvePreparationAcknowledged, undrivenChannels, widenPolarToDerivation } from './importedSubmission';
+import { acknowledgeManualCadSolvePreparation, manualCadSolveIdentity, manualCadSolveIngestFor, buildImportedSubmission, forgetManualCadSolveOperationId, importedSubmissionBlocker, importedSubmissionNotices, manualCadSolveOperationId, manualCadSolvePreparationAcknowledged, undrivenChannels, widenPolarToDerivation } from './importedSubmission';
 
 const bundle = {
   name: 'three-way.wgreturn', bundlePath: 'wgreturn/three-way.wgreturn', modifiedAt: '2026-08-13T12:00:00Z', readable: true,
@@ -337,5 +337,20 @@ describe('widening a polar grid onto the ingestion derivation', () => {
     widenPolarToDerivation(wire, derivation(false));
 
     expect(wire.polar_config).toMatchObject({ enabled_axes: ['horizontal', 'vertical'], inclination: 35 });
+  });
+});
+
+
+describe('matching a finished manual solve to the ingestion it was submitted for', () => {
+  beforeEach(() => { sessionStorage.clear(); });
+
+  it('finds the ingestion by the operation id, not by whichever identity is stored first', () => {
+    const run = () => ({ designName: 'Speaker', label: 'Speaker1' });
+    const first = manualCadSolveIdentity('wgi_a', run);
+    const second = manualCadSolveIdentity('wgi_b', run);
+    expect(first.operationId).not.toBe(second.operationId);
+    expect(manualCadSolveIngestFor(second.operationId)).toBe('wgi_b');
+    expect(manualCadSolveIngestFor(first.operationId)).toBe('wgi_a');
+    expect(manualCadSolveIngestFor('manual-solve:someone-else')).toBeNull();
   });
 });

@@ -162,6 +162,15 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
 };
 const bridgeListeners = new Set<() => void>();
 
+/** Operations parked on the user -- a solve at one of its gates, a Fusion edit
+ * waiting for recovery -- change only when the user acts or a push arrives.
+ * Neither the returns listing nor Fusion's status can move them, so with WG's
+ * coordination gate off they are not a reason to read either on a clock. */
+const PARKED_ON_THE_USER: ReadonlySet<string> = new Set(['needs_user_input', 'recovery_required']);
+export function movingOnItsOwn(operation: CadOperationSummary): boolean {
+  return !PARKED_ON_THE_USER.has(operation.state);
+}
+
 /** Only ever a hint. WG ships as a WebView2 window, not a browser tab, and a
  * window sitting behind other windows still reports `visible` — so this saves
  * no work at all in the packaged app. It is kept because it is correct and
@@ -668,7 +677,7 @@ export function CadLinkCoordinator() {
     pendingReturnRequestId.current !== null
     || pendingReturnWaiter.current !== null
     || fusionPullPromise.current !== null
-    || pendingCadOperations(useCadOperationsStore.getState().operations).length > 0
+    || pendingCadOperations(useCadOperationsStore.getState().operations).some(movingOnItsOwn)
   ), []);
 
   /** Restart every poll at its base rate. Called for anything that means the
@@ -1284,9 +1293,9 @@ export function CadLinkCoordinator() {
   useEffect(() => {
     const restartAll = () => pollRestarts.current.forEach((restart) => restart());
     const unsubscribeGate = cadCoordinationStore.subscribe(restartAll);
-    let working = pendingCadOperations(useCadOperationsStore.getState().operations).length > 0;
+    let working = pendingCadOperations(useCadOperationsStore.getState().operations).some(movingOnItsOwn);
     const unsubscribeOperations = useCadOperationsStore.subscribe((state) => {
-      const next = pendingCadOperations(state.operations).length > 0;
+      const next = pendingCadOperations(state.operations).some(movingOnItsOwn);
       if (next === working) return;
       working = next;
       if (cadCoordinationOff()) restartAll();

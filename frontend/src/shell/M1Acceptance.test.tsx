@@ -27,7 +27,10 @@ import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOpt
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
-import { JobsCoordinator } from './JobsCoordinator';
+import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
+import { activateWorkspaceMode } from './TopBar';
+import { takeDesignOpenTicket } from '../design/openCadProject';
+import { showJobModel } from '../jobs/showJobModel';
 import { ResultsPanel } from './ResultsPanel';
 import { SolveActions } from './TopBar';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
@@ -366,6 +369,69 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     await jobs([cadJob('job-old', 'wgi_first'), cadJob('earlier', 'wgi_first')]);
     expect(compareSelection.getSnapshot().awaiting).toBeNull();
     expect(activations).not.toContain('results');
+    // The result on screen stays where it was.
+    expect(compareSelection.getSnapshot().primary).toBe('earlier');
+  });
+
+  // -- V4: the viewport is the contract -------------------------------------
+
+  it('refuses to solve when the displayed CAD mesh is not the selected ingestion', async () => {
+    act(() => { importedMeshStore.setCad({ name: 'Other', source: 'cad', ingestId: 'wgi_other' } as ImportedMeshScene); });
+    await act(async () => { await flush(); });
+    // The button, at render time.
+    const button = host.querySelector<HTMLButtonElement>('.solve-button')!;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toContain('does not match the selected ingestion');
+    // The shortcut.
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
+      await flush();
+    });
+    // Every caller, at call time.
+    await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('does not match the selected ingestion');
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+    expect(mocks.prepareCadOperation).not.toHaveBeenCalled();
+  });
+
+  it('solves once the displayed mesh is the selected ingestion again (the control)', async () => {
+    act(() => { importedMeshStore.setCad({ name: 'Other', source: 'cad', ingestId: 'wgi_other' } as ImportedMeshScene); });
+    act(() => { importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId: 'wgi_first' } as ImportedMeshScene); });
+    await act(async () => { await flush(); });
+    await pressSolve();
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+  });
+
+  // -- V1: explicit navigation disarms the reveal ---------------------------
+
+  it.each([
+    ['a workspace mode switch', () => { activateWorkspaceMode('parametric'); activateWorkspaceMode('cad'); }],
+    ['opening a design or project', () => { takeDesignOpenTicket(); }],
+    ['showing a run\'s own model', () => { void showJobModel({ ...cadJob('x', 'wgi_first'), config_summary: {}, script_snapshot: null } as JobItem); }],
+  ])('does not reveal Results after %s during the solve, and says the results are ready', async (_name, navigate) => {
+    const operationId = await pressSolve();
+    const before = activations.length;
+    act(() => { navigate(); });
+    await deliver(operation(operationId, 'accepted', { jobId: 'job-1', updatedAt: '2026-09-21T10:00:05Z' }));
+    await jobs([cadJob('job-1', 'wgi_first')]);
+    expect(activations.slice(before)).not.toContain('results');
+    expect(compareSelection.getSnapshot().primary).toBe('job-1');
+    expect(host.querySelectorAll('.attention-ready')).toHaveLength(1);
+  });
+
+  it('reveals Results after a parametric Solve too', async () => {
+    act(() => { workspaceModeStore.setMode('parametric'); });
+    mocks.planSolveDesign.mockResolvedValue({ engine: 'metal', formulation: 'full-3d', reason: 'test', eligibility_reasons: [] });
+    mocks.submitDesign.mockResolvedValue('job-p');
+    await act(async () => { await flush(); });
+    const button = host.querySelector<HTMLButtonElement>('.solve-button')!;
+    expect(button.disabled).toBe(false);
+    await act(async () => { button.click(); await flush(8); });
+    expect(mocks.submitDesign).toHaveBeenCalledOnce();
+    const parametric = { ...cadJob('job-p', 'wgi_first'), config_summary: {}, cad_source: null } as JobItem;
+    await jobs([parametric]);
+    expect(compareSelection.getSnapshot().primary).toBe('job-p');
+    expect(activations).toContain('results');
   });
 
   it('keeps the result bound to the settings submitted when settings change during the run', async () => {

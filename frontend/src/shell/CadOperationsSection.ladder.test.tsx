@@ -148,6 +148,31 @@ describe('the needs_user_input ladder', () => {
     expect(coordinator.solveOperation).toHaveBeenCalledWith('manual-solve:op-1');
   });
 
+  it('counts an approval only on the preparation it was given for, as the backend records them', async () => {
+    const SECOND = 'finding-area-drift-0001';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = decodeURIComponent(String(input));
+      if (url.startsWith('/api/cadlink/operations/')) {
+        return json({
+          ...operation('findings_need_review'),
+          // One approved on this preparation, one on an earlier one.
+          approvals: [
+            { preparation_id: 'wgi_prep1', finding_id: FINDING },
+            { preparation_id: 'wgi_prep0', finding_id: SECOND },
+          ],
+          preparation: {
+            preparationId: 'wgi_prep1', ingestId: 'wgi_prep1', snapshotSha256: 's', setupRevisionId: 'wgs_1',
+            reportSha256: 'r', blockingFindingIds: [FINDING, SECOND], attemptGeneration: 1,
+          },
+        });
+      }
+      return json({ findings: [] });
+    }));
+    const ladder = await show(operation('findings_need_review'));
+    await vi.waitFor(() => expect(steps(ladder)[0].text).toContain('1 blocking finding'));
+    expect(steps(ladder)[0].text).not.toContain('2 blocking findings');
+  });
+
   it('counts only findings not already approved on this preparation', () => {
     const ladder = solveGateLadder(operation('findings_need_review'), { findingIds: ['a', 'b'], approvedIds: ['a'] });
     expect(ladder[0].text).toContain('1 blocking finding');

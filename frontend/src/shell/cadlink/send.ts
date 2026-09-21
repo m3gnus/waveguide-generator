@@ -263,7 +263,18 @@ export function useCadSend({
         // covered by it.
         return attempt(await chooseCadFolder(), { readStatus: false, chooseFolder: false });
       }
-      const action = fusionWorkflowView(current).action;
+      const view = fusionWorkflowView(current);
+      const action = view.action;
+      // No action means WG cannot say what a send would do to the document:
+      // the add-in is offline or outdated, an update is being recovered, or
+      // Fusion already holds this design. Sending anyway would be a create
+      // with no expected document -- a second Fusion document over a linked
+      // one, the create-over-a-link defect -- so it is refused with the reason.
+      if (action === null) {
+        throw refuse(view.state === 'current'
+          ? 'Fusion already holds this design as it is in WG, so there is nothing to send.'
+          : `WG did not send this design: ${view.headline}. ${view.detail}`);
+      }
       if (action === 'update' && current.fusionChangesAvailable && !options?.confirmed) {
         setPendingFusionConflict(true);
         return null;
