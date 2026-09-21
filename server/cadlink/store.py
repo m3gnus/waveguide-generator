@@ -552,9 +552,14 @@ class CadLinkStore:
     """Thread-safe, transaction-per-write CAD-link registry."""
 
     def __init__(
-        self, db_path: str | Path, *, legacy_solve_ledger: str | Path | None = None
+        self,
+        db_path: str | Path,
+        *,
+        legacy_solve_ledger: str | Path | None = None,
+        data_root: str | Path | None = None,
     ) -> None:
         self.db_path = Path(db_path)
+        self.data_root = Path(data_root) if data_root is not None else None
         # An earlier version's JSON solve-command ledger, imported on open.
         # Only ``for_data_dir`` knows where one lives.
         self.legacy_solve_ledger = (
@@ -574,13 +579,16 @@ class CadLinkStore:
         return cls(
             paths.db / "cadlink.db",
             legacy_solve_ledger=legacy_ledger_path(paths.root),
+            data_root=paths.root,
         )
 
     def initialize(self) -> None:
         if self._initialized:
             return
         if str(self.db_path) != ":memory:":
-            ensure_private_directory(self.db_path.parent, parents=True)
+            ensure_private_directory(
+                self.db_path.parent, parents=True, data_root=self.data_root
+            )
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if version < 0 or version > HIGHEST_READABLE_FORMAT:

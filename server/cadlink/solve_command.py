@@ -31,6 +31,7 @@ stays so the user can acknowledge findings and run it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import json
 import logging
 import os
@@ -419,10 +420,12 @@ class SolveOutcomeConflict(ValueError):
 
 
 def ipc_folder(data_dir: Path, *, create: bool = False) -> Path:
-    folder = data_dir.resolve() / IPC_SUBDIRECTORY
+    # Harden through the path as configured, so a symlinked data root is seen
+    # and left alone; hand callers the resolved folder, as before.
+    folder = Path(data_dir) / IPC_SUBDIRECTORY
     if create:
-        ensure_private_directory(folder, parents=True)
-    return folder
+        ensure_private_directory(folder, parents=True, data_root=Path(data_dir))
+    return folder.resolve()
 
 
 def legacy_ledger_path(data_dir: Path) -> Path:
@@ -514,17 +517,62 @@ def _read_payload(path: Path) -> object:
     """
 
     for attempt in range(_HELD_ATTEMPTS):
+        descriptor: int | None = None
         try:
             metadata = path.lstat()
-            if stat.S_ISLNK(metadata.st_mode):
+            is_reparse_point = bool(
+                getattr(metadata, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            )
+            if stat.S_ISLNK(metadata.st_mode) or is_reparse_point:
                 return _UnsafePayload("WG refuses a request path that is a symbolic link.")
             if not stat.S_ISREG(metadata.st_mode):
                 return _UnsafePayload("WG refuses a request path that is not a regular file.")
-            if metadata.st_size > MAX_REQUEST_BYTES:
+
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+            nofollow = getattr(os, "O_NOFOLLOW", 0)
+            if os.name != "nt":
+                flags |= nofollow
+            else:
+                flags |= getattr(os, "O_BINARY", 0)
+            try:
+                descriptor = os.open(path, flags)
+            except OSError as exc:
+                if nofollow and exc.errno == errno.ELOOP:
+                    return _UnsafePayload(
+                        "WG refuses a request path that is a symbolic link."
+                    )
+                raise
+
+            opened = os.fstat(descriptor)
+            if os.name == "nt" and (opened.st_dev, opened.st_ino) != (
+                metadata.st_dev,
+                metadata.st_ino,
+            ):
+                return _UnsafePayload(
+                    "WG refuses a request path that changed while it was opened."
+                )
+            if not stat.S_ISREG(opened.st_mode):
+                return _UnsafePayload("WG refuses a request path that is not a regular file.")
+            if opened.st_size > MAX_REQUEST_BYTES:
                 return _UnsafePayload(
                     f"WG refuses a request file larger than {MAX_REQUEST_BYTES} bytes."
                 )
-            text = path.read_text(encoding="utf-8")
+
+            chunks: list[bytes] = []
+            remaining = MAX_REQUEST_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload_bytes = b"".join(chunks)
+            if len(payload_bytes) > MAX_REQUEST_BYTES:
+                return _UnsafePayload(
+                    f"WG refuses a request file larger than {MAX_REQUEST_BYTES} bytes."
+                )
+            text = payload_bytes.decode("utf-8")
         except OSError as exc:
             if not _held(exc) or attempt == _HELD_ATTEMPTS - 1:
                 return _Unreadable(exc)
@@ -532,6 +580,9 @@ def _read_payload(path: Path) -> object:
             continue
         except ValueError:
             return None  # read, and not text
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         try:
             return json.loads(text)
         except (ValueError, TypeError):
@@ -628,7 +679,9 @@ def _deliveries(data_dir: Path) -> list[_Delivery]:
 
     folder = ipc_folder(data_dir, create=True)
     requests = folder / SOLVE_REQUESTS_DIRECTORY
-    ensure_private_directory(requests)
+    ensure_private_directory(
+        Path(data_dir) / IPC_SUBDIRECTORY / SOLVE_REQUESTS_DIRECTORY, data_root=Path(data_dir)
+    )
     found: list[_Delivery | None] = []
     for directory, versions in ((folder, _SLOT_SCHEMAS), (requests, _FILE_SCHEMAS)):
         for path in _files(directory):

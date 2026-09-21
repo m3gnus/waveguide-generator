@@ -99,10 +99,12 @@ class PublishedRequest:
 
 
 def ipc_folder(data_dir: Path, *, create: bool = False) -> Path:
-    folder = Path(data_dir).resolve() / IPC_SUBDIRECTORY
+    # Harden through the path as configured, so a symlinked data root is seen
+    # and left alone; hand callers the resolved folder, as before.
+    folder = Path(data_dir) / IPC_SUBDIRECTORY
     if create:
-        ensure_private_directory(folder, parents=True)
-    return folder
+        ensure_private_directory(folder, parents=True, data_root=Path(data_dir))
+    return folder.resolve()
 
 
 def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
@@ -311,7 +313,9 @@ def publish_fusion_request(
         raise ValueError("A Fusion request id must be a plain file name.")
     directory = ipc_folder(data_dir, create=True) / channel.directory
     with _LOCK:
-        ensure_private_directory(directory)
+        ensure_private_directory(
+            Path(data_dir) / IPC_SUBDIRECTORY / channel.directory, data_root=Path(data_dir)
+        )
         withdrawn: list[str] = []
         sequences = [0]
         withdrawable: list[tuple[Path, str]] = []

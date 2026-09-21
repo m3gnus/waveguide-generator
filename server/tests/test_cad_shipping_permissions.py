@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import json
 import logging
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 from typing import Any
 
@@ -20,6 +23,7 @@ from server.cadlink.solve_command import (
     ipc_folder,
 )
 from server.cadlink.store import CadLinkStore
+from server.app import create_app
 from server.platform import private_paths
 from server.platform.private_paths import ensure_private_directory
 
@@ -50,9 +54,11 @@ def _valid_request(command_id: str = "cmd-safe") -> dict[str, Any]:
 def _fresh_reader_state():
     for name in ("_retention_waits", "_unreadable_waits", "_refused_claims"):
         getattr(solve_command, name).clear()
+    private_paths._checked_paths.clear()
     yield
     for name in ("_retention_waits", "_unreadable_waits", "_refused_claims"):
         getattr(solve_command, name).clear()
+    private_paths._checked_paths.clear()
 
 
 def test_a_symlink_claim_is_refused_and_unlinked_without_touching_its_target(
@@ -99,6 +105,89 @@ def test_an_oversize_request_is_refused_logged_and_removed(
     assert len(refused) == 1
     assert str(EXPECTED_MAX_REQUEST_BYTES) in refused[0]["reason"]
     assert "Refused the CAD Link request file" in caplog.text
+
+
+def test_a_regular_file_swapped_to_a_symlink_is_refused_without_reading_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = tmp_path / "request.json"
+    request.write_text("{}", encoding="utf-8")
+    target = tmp_path / "outside.json"
+    target.write_text(json.dumps({"outside": "must not be read"}), encoding="utf-8")
+    real_lstat = Path.lstat
+
+    def swap_after_lstat(path: Path, *args: Any, **kwargs: Any):
+        metadata = real_lstat(path, *args, **kwargs)
+        if path == request and stat.S_ISREG(metadata.st_mode):
+            request.unlink()
+            request.symlink_to(target)
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", swap_after_lstat)
+    result = solve_command._read_payload(request)
+
+    assert isinstance(result, solve_command._UnsafePayload)
+    assert "symbolic link" in result.reason
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX FIFO")
+def test_a_regular_file_swapped_to_a_fifo_is_refused_without_blocking(
+    tmp_path: Path,
+) -> None:
+    request = tmp_path / "request.json"
+    source = f"""
+import os
+from pathlib import Path
+import stat
+from server.cadlink.solve_command import _read_payload, _UnsafePayload
+
+request = Path({str(request)!r})
+request.write_text('{{}}', encoding='utf-8')
+real_lstat = Path.lstat
+def swap_after_lstat(path, *args, **kwargs):
+    metadata = real_lstat(path, *args, **kwargs)
+    if path == request and stat.S_ISREG(metadata.st_mode):
+        request.unlink()
+        os.mkfifo(request)
+    return metadata
+Path.lstat = swap_after_lstat
+result = _read_payload(request)
+assert isinstance(result, _UnsafePayload), result
+print(result.reason)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", source],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+
+    assert "not a regular file" in completed.stdout
+
+
+def test_a_file_that_grows_after_fstat_is_bounded_and_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = tmp_path / "request.json"
+    request.write_text("{}", encoding="utf-8")
+    real_fstat = os.fstat
+    appended = False
+
+    def grow_after_fstat(descriptor: int):
+        nonlocal appended
+        metadata = real_fstat(descriptor)
+        if not appended:
+            appended = True
+            with request.open("ab") as stream:
+                stream.write(b" " * (EXPECTED_MAX_REQUEST_BYTES + 1))
+        return metadata
+
+    monkeypatch.setattr(solve_command.os, "fstat", grow_after_fstat)
+    result = solve_command._read_payload(request)
+
+    assert isinstance(result, solve_command._UnsafePayload)
+    assert str(EXPECTED_MAX_REQUEST_BYTES) in result.reason
 
 
 def test_a_directory_with_a_request_name_is_left_alone(tmp_path: Path) -> None:
@@ -154,10 +243,6 @@ def test_owned_shipping_directories_with_loose_modes_are_tightened(tmp_path: Pat
 
     fusion_delivery.ipc_folder(data_dir, create=True)
     assert stat.S_IMODE(paths[0].stat().st_mode) == 0o700
-    paths[0].chmod(0o755)
-    ipc_folder(data_dir, create=True)
-    assert stat.S_IMODE(paths[0].stat().st_mode) == 0o700
-    paths[0].chmod(0o755)
 
     store = CadLinkStore.for_data_dir(data_dir)
     try:
@@ -167,6 +252,108 @@ def test_owned_shipping_directories_with_loose_modes_are_tightened(tmp_path: Pat
         store.close()
 
     assert [stat.S_IMODE(path.stat().st_mode) for path in paths] == [0o700] * 3
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
+def test_private_directory_tightening_is_checked_once_per_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "existing"
+    path.mkdir(mode=0o755)
+    path.chmod(0o755)
+    ensure_private_directory(path, data_root=tmp_path)
+    real_lstat = Path.lstat
+
+    def reject_repeated_lstat(candidate: Path, *args: Any, **kwargs: Any):
+        if candidate == path:
+            pytest.fail("repeated permission lstat")
+        return real_lstat(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", reject_repeated_lstat)
+    ensure_private_directory(path, data_root=tmp_path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks and modes")
+@pytest.mark.parametrize("component", ["data", "ipc", "wglink"])
+def test_an_existing_inbox_under_a_symlinked_ancestor_is_not_tightened(
+    tmp_path: Path, component: str
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    data_dir = tmp_path / "data"
+    if component == "data":
+        data_dir.symlink_to(real, target_is_directory=True)
+    elif component == "ipc":
+        data_dir.mkdir()
+        (data_dir / "ipc").symlink_to(real, target_is_directory=True)
+    else:
+        (data_dir / "ipc").mkdir(parents=True)
+        (data_dir / "ipc" / "wglink").symlink_to(real, target_is_directory=True)
+    inbox = data_dir / "ipc" / "wglink" / SOLVE_REQUESTS_DIRECTORY
+    inbox.mkdir(parents=True, exist_ok=True)
+    inbox.chmod(0o755)
+
+    solve_command._deliveries(data_dir)
+
+    assert stat.S_IMODE(inbox.stat().st_mode) == 0o755
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks and modes")
+def test_a_database_under_a_symlinked_data_root_is_not_tightened(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    db = real / "db"
+    db.mkdir(parents=True)
+    db.chmod(0o755)
+    data_dir = tmp_path / "data"
+    data_dir.symlink_to(real, target_is_directory=True)
+    store = CadLinkStore.for_data_dir(data_dir)
+    try:
+        store.initialize()
+    finally:
+        store.close()
+
+    assert stat.S_IMODE(db.stat().st_mode) == 0o755
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory modes")
+@pytest.mark.parametrize("error", [errno.EPERM, errno.EROFS, errno.ENOTSUP])
+def test_chmod_failure_does_not_abort_startup_fusion_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: int,
+) -> None:
+    application = create_app(data_dir=tmp_path)
+    db = tmp_path / "db"
+    db.mkdir(exist_ok=True)
+    db.chmod(0o755)
+    staged = fusion_delivery.ipc_folder(tmp_path, create=True) / fusion_delivery.HANDOFFS.directory
+    staged.mkdir()
+    (staged / ".pending.json.stage.tmp").write_text(
+        json.dumps({"schemaVersion": 3, "operationId": "pending"}), encoding="utf-8"
+    )
+    real_chmod = Path.chmod
+
+    def fail_db_chmod(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path == db:
+            raise OSError(error, "injected chmod failure")
+        real_chmod(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "chmod", fail_db_chmod)
+    startup = next(
+        handler
+        for handler in application.router.on_startup
+        if handler.__name__ == "advertise_fusion_delivery_on_startup"
+    )
+    try:
+        with caplog.at_level(logging.WARNING, logger="wg.paths"):
+            asyncio.run(startup())
+        assert application.state.cadlink_store.get_operation("missing") is None
+        assert (db / "cadlink.db").is_file()
+    finally:
+        application.state.cadlink_store.close()
+
+    assert caplog.text.count("Could not tighten permissions") == 1
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX ownership")

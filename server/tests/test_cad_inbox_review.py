@@ -17,6 +17,7 @@ The injected ``PermissionError`` is what Windows raises while another process
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -90,18 +91,21 @@ def _claims(data_dir: Path) -> list[Path]:
 def _fail_reads(monkeypatch: pytest.MonkeyPatch, *, claims: bool, times: int | None) -> dict[str, int]:
     """Make reads of claims (or of unclaimed request files) raise, ``times`` times or for ever."""
 
-    real = Path.read_text
+    real = os.open
     count = {"n": 0}
 
-    def read_text(self: Path, *args: Any, **kwargs: Any) -> str:
-        is_claim = self.name.startswith(CLAIM_PREFIX)
-        target = is_claim if claims else (self.parent.name == SOLVE_REQUESTS_DIRECTORY and not is_claim)
+    def open_file(path: str | bytes | os.PathLike[str] | os.PathLike[bytes], flags: int, *args: Any) -> int:
+        candidate = Path(path)
+        is_claim = candidate.name.startswith(CLAIM_PREFIX)
+        target = is_claim if claims else (
+            candidate.parent.name == SOLVE_REQUESTS_DIRECTORY and not is_claim
+        )
         if target and (times is None or count["n"] < times):
             count["n"] += 1
             raise PermissionError(*SHARING_VIOLATION)
-        return real(self, *args, **kwargs)
+        return real(path, flags, *args)
 
-    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(solve_command.os, "open", open_file)
     return count
 
 
