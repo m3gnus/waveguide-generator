@@ -637,6 +637,7 @@ function parseCadOperation(message: JsonRecord): CadOperationSummary | null {
   if (typeof operation.operationId !== 'string' || operation.operationId.length === 0) return null;
   if (typeof operation.kind !== 'string' || typeof operation.state !== 'string') return null;
   if (!isNonNegativeInteger(operation.attemptGeneration)) return null;
+  if (hasOwn(operation, 'acceptedSeq') && operation.acceptedSeq !== null && !isNonNegativeInteger(operation.acceptedSeq)) return null;
   if (hasOwn(operation, 'updatedAt') && !isNullableString(operation.updatedAt)) return null;
   return operation as unknown as CadOperationSummary;
 }
@@ -657,6 +658,8 @@ export interface CadOperationListener {
   refusal?(refusal: CadInboxRefusal): void;
   /** WG's request consumer changed what it says: a declined reason, or a stuck pass. */
   deliveryStatus?(status: CadDeliveryStatus): void;
+  /** The active add-in session or its inbox declaration changed. */
+  addinStatusChanged?(): void;
   /** Updates carry no cursor, so every connection -- the first included --
    * reads the authoritative list again: an update sent before it, or while
    * disconnected, is recovered there. */
@@ -972,6 +975,11 @@ export class JobsSocketManager {
       }
       this.armHeartbeat();
       this.cadOperationListeners.forEach((listener) => listener.operation(operation));
+      return;
+    }
+    if (decoded.kind === 'cadAddinStatusChanged') {
+      this.armHeartbeat();
+      this.cadOperationListeners.forEach((listener) => listener.addinStatusChanged?.());
       return;
     }
     // Additive message kinds are ignored until this client understands them.

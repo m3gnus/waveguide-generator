@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from server.cadlink.fusion_status import FUSION_STATUS_TTL
+from server.cadlink.fusion_status import FUSION_STATUS_TTL, addin_declares_inbox_transfer
 from server.tests.test_fusion_status import NOW, _link, _read, _write_status
 
 QUIET = NOW - FUSION_STATUS_TTL - timedelta(minutes=5)
@@ -26,7 +26,11 @@ QUIET = NOW - FUSION_STATUS_TTL - timedelta(minutes=5)
 def _with_activation(marker: Path, coordinating: bool | None) -> None:
     payload = json.loads(marker.read_text(encoding="utf-8"))
     if coordinating is not None:
-        payload["diagnostics"] = {"activation": {"automaticCoordination": coordinating, "setting": "settings"}}
+        payload["diagnostics"] = {"activation": {
+            "settingsKey": "automatic_coordination",
+            "automaticCoordination": coordinating,
+            "setting": "settings",
+        }}
     marker.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -107,3 +111,30 @@ def test_no_heartbeat_declares_nothing(tmp_path: Path) -> None:
     status = _read(tmp_path / "workspace", process_running=True)
     assert status["addinInboxTransfer"] is False
     assert status["observationPolicy"] is None
+
+
+@pytest.mark.parametrize(
+    "activation",
+    [
+        {},
+        {"automaticCoordination": "false", "settingsKey": "automatic_coordination", "setting": "settings"},
+        {"automaticCoordination": False, "setting": "settings"},
+        {"automaticCoordination": False, "settingsKey": "automatic_coordination", "setting": "junk"},
+    ],
+    ids=["empty", "non-boolean", "missing-settings-key", "invalid-setting"],
+)
+def test_junk_activation_does_not_declare_inbox_transfer(activation: object) -> None:
+    assert addin_declares_inbox_transfer({"diagnostics": {"activation": activation}}) is False
+
+
+@pytest.mark.parametrize("coordinating", [False, True])
+@pytest.mark.parametrize("setting", ["default", "settings", "invalid"])
+def test_real_m1_activation_shape_declares_inbox_transfer(
+    coordinating: bool, setting: str
+) -> None:
+    payload = {"diagnostics": {"activation": {
+        "settingsKey": "automatic_coordination",
+        "automaticCoordination": coordinating,
+        "setting": setting,
+    }}}
+    assert addin_declares_inbox_transfer(payload) is True

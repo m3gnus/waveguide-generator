@@ -66,6 +66,18 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('routes an add-in session/declaration change as an explicit CAD event', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    const changed = vi.fn();
+    manager.subscribeCadOperations({ operation: vi.fn(), resync: vi.fn(), addinStatusChanged: changed });
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'cadAddinStatusChanged', epoch: 4 });
+    expect(changed).toHaveBeenCalledTimes(1);
+    manager.stop();
+  });
+
   it('accepts snapshot then contiguous events and tracks live job fields', async () => {
     const socket = new MockSocket();
     const fetcher = vi.fn(async () => json({ items: [job()] }));

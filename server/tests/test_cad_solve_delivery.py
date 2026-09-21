@@ -724,6 +724,68 @@ def test_a_pass_without_a_cad_link_folder_reports_that_reason(data_dir, store):
     assert "folder" in notes[0].lower()
 
 
+def test_delivery_loop_pushes_when_addin_session_or_declaration_changes(
+    data_dir, workspace, store, monkeypatch
+) -> None:
+    from server.cadlink import api
+    from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
+
+    workspace.mkdir(parents=True)
+    published: list[dict[str, Any]] = []
+    events = SimpleNamespace(publish=published.append)
+    runtime = SimpleNamespace(store=SimpleNamespace(), events=events, submit=None)
+    app = SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=store,
+        data_dir=str(data_dir),
+        cad_workspace=SimpleNamespace(selected_path=lambda: workspace),
+        jobs_runtime=runtime,
+        update_restart=None,
+    ))
+    monkeypatch.setenv("WG2_CAD_DELIVERY", "1")
+    monkeypatch.setattr(api, "_DELIVERY_INTERVAL_S", 0.001)
+
+    async def empty_pass(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(api, "run_delivery_pass", empty_pass)
+
+    marker = workspace / "ipc" / "wglink" / FUSION_STATUS_FILENAME
+
+    async def wait_for_events(count: int) -> None:
+        for _ in range(100):
+            if len([item for item in published if item.get("kind") == "cadAddinStatusChanged"]) >= count:
+                return
+            await asyncio.sleep(0.002)
+        raise AssertionError(f"did not receive {count} add-in status events: {published!r}")
+
+    async def scenario() -> None:
+        await api._deliver_solve_commands(app)()
+        task = app.state.cad_delivery_task
+        try:
+            await wait_for_events(1)  # initial no-add-in declaration
+            marker.parent.mkdir(parents=True)
+            marker.write_text(json.dumps({
+                "sessionId": "m1-session",
+                "diagnostics": {"activation": {
+                    "settingsKey": "automatic_coordination",
+                    "automaticCoordination": False,
+                    "setting": "settings",
+                }},
+            }), encoding="utf-8")
+            await wait_for_events(2)
+            marker.write_text(json.dumps({"sessionId": "pin-session"}), encoding="utf-8")
+            await wait_for_events(3)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(scenario())
+    assert [item["kind"] for item in published if item.get("kind") == "cadAddinStatusChanged"] == [
+        "cadAddinStatusChanged", "cadAddinStatusChanged", "cadAddinStatusChanged",
+    ]
+
+
 def test_a_pass_that_collects_and_starts_work_reports_no_reason(data_dir, workspace, store):
     """The control: a pass that actually starts an operation notes nothing.
 

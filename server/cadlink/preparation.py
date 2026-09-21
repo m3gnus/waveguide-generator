@@ -201,6 +201,7 @@ def operation_summary(row: Mapping[str, Any]) -> dict[str, Any]:
         stage = "submitted" if row.get("job_id") else ("received" if state == RECEIVED else None)
     return {
         "operationId": row["operation_id"],
+        "acceptedSeq": int(row["accepted_seq"]) if row.get("accepted_seq") is not None else None,
         "kind": row["kind"],
         "state": state,
         "stage": stage,

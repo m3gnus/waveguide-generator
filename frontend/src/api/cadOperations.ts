@@ -9,6 +9,8 @@ import { jsonRequest } from './cadlink';
  */
 export interface CadOperationSummary {
   operationId: string;
+  /** Monotonic server acceptance order (SQLite insertion sequence). */
+  acceptedSeq?: number | null;
   kind: string;
   /** "States": `received`, `processing`, `needs_user_input`, `accepted`,
    * `rejected`, `cancelled`, `recovery_required`, `cancel_requested`. */

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CadLinkApiError,
   getFusionCadStatus,
@@ -862,14 +862,12 @@ export function CadLinkCoordinator() {
   }, [design, identity, noteCadActivity, preferences.cadApplication, selectedBundlePath, selectedFusionInstanceId]);
   fusionStatusReader.current = refreshFusionStatus;
 
-  // With WG's coordination gate off nothing re-reads Fusion's status on a
-  // clock, so a status held here is aged by the page itself: once its
+  // A status held here is aged by the page itself: once its
   // observation passes the freshness window it says what it is -- Fusion's
   // last report, and when -- instead of going on claiming the document matches.
-  // One timer per status held, and no request (review F4).
-  const coordination = useSyncExternalStore(cadCoordinationStore.subscribe, cadCoordinationStore.getSnapshot, cadCoordinationStore.getSnapshot);
+  // One timer per status held, and no request. This applies under either gate:
+  // a hidden page or stalled gate-on request is not a fresh observation.
   useEffect(() => {
-    if (coordination !== 'off') return undefined;
     const held = fusionStatus;
     const expires = statusExpiresAt(held);
     if (held === null || expires === null) return undefined;
@@ -877,7 +875,26 @@ export function CadLinkCoordinator() {
       setFusionStatus((current) => (current === held ? agedFusionStatus(held) : current));
     }, Math.max(0, expires - Date.now()));
     return () => window.clearTimeout(timer);
-  }, [coordination, fusionStatus]);
+  }, [fusionStatus]);
+
+  // The delivery loop pushes this explicit event when the heartbeat switches
+  // add-in session or declaration. A jobs reconnect is the same invalidation.
+  // Forget first, so an M1 -> pin transition immediately re-enables legacy
+  // Send discovery while the authoritative status read is in flight.
+  useEffect(() => {
+    if (onshape) return undefined;
+    let revision = useCadOperationsStore.getState().addinStatusRevision;
+    return useCadOperationsStore.subscribe((state) => {
+      if (state.addinStatusRevision === revision) return;
+      revision = state.addinStatusRevision;
+      addinDeclaresInbox.current = false;
+      pollRestarts.current.forEach((restart) => restart());
+      if (pageIsVisible()) {
+        void refresh({ background: true, autoOpenNew: true });
+        void refreshFusionStatus();
+      }
+    });
+  }, [onshape, refresh, refreshFusionStatus]);
 
   const selectFusionInstance = useCallback((instanceId: string) => {
     setSelectedFusionInstanceId(instanceId);
@@ -1308,6 +1325,7 @@ export function CadLinkCoordinator() {
     if (onshape) return undefined;
     const resume = () => {
       if (!pageIsVisible()) return;
+      addinDeclaresInbox.current = false;
       noteCadActivity();
       void refresh({ background: true, autoOpenNew: true });
       void refreshFusionStatus();
@@ -1367,14 +1385,20 @@ export function CadLinkCoordinator() {
   // await: an older Send -- a recovery that lands late, two recovered at once
   // -- never replaces a newer arrival, and nothing replaces a return the user
   // selected after the display began (review F3).
-  const sendIntent = useRef<{ sentAt: number; picks: number } | null>(null);
+  const sendIntent = useRef<{ acceptedSeq: number | null; sentAt: number; picks: number } | null>(null);
   const displaySend = useCallback(async (operation: CadOperationSummary) => {
     const bundlePath = operation.snapshot?.bundlePath;
     if (!bundlePath) return;
     const sentAt = Date.parse(operation.createdAt ?? operation.updatedAt ?? '');
     const order = Number.isFinite(sentAt) ? sentAt : 0;
-    if (sendIntent.current !== null && order < sendIntent.current.sentAt) return;
-    const intent = { sentAt: order, picks: manualSelections.current };
+    const acceptedSeq = Number.isSafeInteger(operation.acceptedSeq) ? Number(operation.acceptedSeq) : null;
+    const heldIntent = sendIntent.current;
+    if (heldIntent !== null && (
+      (acceptedSeq !== null && heldIntent.acceptedSeq !== null && acceptedSeq < heldIntent.acceptedSeq)
+      || (acceptedSeq === null && heldIntent.acceptedSeq !== null)
+      || (acceptedSeq === null && heldIntent.acceptedSeq === null && order < heldIntent.sentAt)
+    )) return;
+    const intent = { acceptedSeq, sentAt: order, picks: manualSelections.current };
     sendIntent.current = intent;
     const superseded = () => sendIntent.current !== intent || manualSelections.current !== intent.picks;
     noteCadActivity();

@@ -201,11 +201,13 @@ describe('the WG request inbox on the page', () => {
   it('recovers only what this page awaited and recent Sends, refused ones included (review F1)', async () => {
     const { recoverMissedSnapshots } = await import('./cadOperations');
     useCadOperationsStore.getState().apply({ ...sent('op-mine', '2026-09-21T12:00:00Z', 'processing'), kind: 'prepare_and_solve' });
-    const api = (async () => json({ operations: [
-      { ...sent('op-mine', '2026-09-21T12:02:00Z', 'accepted'), kind: 'prepare_and_solve', jobId: 'job-1' },
+    const mine = { ...sent('op-mine', '2026-09-21T12:02:00Z', 'accepted'), kind: 'prepare_and_solve', jobId: 'job-1' };
+    const api = (async (input: RequestInfo | URL) => String(input).endsWith('/operations/op-mine')
+      ? json(mine)
+      : json({ operations: [
       { ...sent('op-unrelated', '2026-09-21T12:02:00Z', 'accepted'), kind: 'prepare_and_solve', jobId: 'job-2' },
       sent('send-refused', '2026-09-21T12:03:00Z', 'rejected'),
-    ] })) as typeof fetch;
+      ] })) as typeof fetch;
     await recoverMissedSnapshots(Date.parse('2026-09-21T12:00:00Z'), api);
     const operations = useCadOperationsStore.getState().operations;
     expect(operations['op-mine']?.state).toBe('accepted');

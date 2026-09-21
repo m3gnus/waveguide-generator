@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { isPendingCadOperation, listCadOperations, type CadDeliveryStatus, type CadInboxRefusal, type CadOperationSummary } from '../api/cadOperations';
+import { getCadOperation, isPendingCadOperation, listCadOperations, type CadDeliveryStatus, type CadInboxRefusal, type CadOperationSummary } from '../api/cadOperations';
 import { jobsSocket, type JobsSocketManager } from '../api/jobsSocket';
 
 /** How many refusals the CAD Link panel keeps, as the server does. */
@@ -21,6 +21,9 @@ interface CadOperationsState {
   /** Why the last reconnect recovery failed, or null. */
   recoveryError: string | null;
   setRecoveryError: (message: string | null) => void;
+  /** Changes when the jobs channel says the active add-in declaration may have changed. */
+  addinStatusRevision: number;
+  noteAddinStatusChanged: () => void;
   /** Read the unfinished operations, which are authoritative. */
   load: (fetcher?: typeof fetch) => Promise<void>;
   /** Merge one `cadOperation` message; false when it is older than what is held. */
@@ -70,6 +73,8 @@ export const useCadOperationsStore = create<CadOperationsState>((set, get) => ({
   setDeliveryStatus: (status) => set({ deliveryStatus: status }),
   recoveryError: null,
   setRecoveryError: (message) => { if (get().recoveryError !== message) set({ recoveryError: message }); },
+  addinStatusRevision: 0,
+  noteAddinStatusChanged: () => set({ addinStatusRevision: get().addinStatusRevision + 1 }),
   recordRefusal: (refusal) => {
     const held = get().refusals;
     if (held.some((item) => refusalKey(item) === refusalKey(refusal))) return;
@@ -181,16 +186,27 @@ export async function recoverMissedSnapshots(
   since: number,
   fetcher: typeof fetch = fetch,
   awaited: ReadonlySet<string> = new Set(pendingCadOperations(useCadOperationsStore.getState().operations).map((operation) => operation.operationId)),
-): Promise<void> {
-  const recent = await listCadOperations({ pending: false, limit: 50 }, fetcher);
+): Promise<ReadonlySet<string>> {
+  // The recent page discovers Sends only. Operations this page was already
+  // awaiting are reconciled by id, so neither the page size nor newer history
+  // can hide their authoritative outcome.
+  const [recent, exact] = await Promise.all([
+    listCadOperations({ pending: false, limit: 50 }, fetcher),
+    Promise.all([...awaited].map((operationId) => getCadOperation(operationId, fetcher))),
+  ]);
   recent
     .filter((operation) => (
-      awaited.has(operation.operationId)
-      || (operation.kind === 'receive_snapshot'
+      operation.kind === 'receive_snapshot'
         && (operation.state === 'accepted' || operation.state === 'rejected')
-        && Date.parse(operation.updatedAt ?? '') >= since - RECONNECT_MARGIN_MS)
+        && Date.parse(operation.updatedAt ?? '') >= since - RECONNECT_MARGIN_MS
     ))
     .forEach((operation) => { useCadOperationsStore.getState().apply(operation); });
+  const reconciled = new Set<string>();
+  exact.forEach((operation) => {
+    useCadOperationsStore.getState().apply(operation);
+    if (!isPendingCadOperation(operation)) reconciled.add(operation.operationId);
+  });
+  return reconciled;
 }
 
 /** Retries of a recovery that failed, and how long each waits. Bounded: a
@@ -206,6 +222,10 @@ export function connectCadOperations(
   // and only the newest recovery may (review F2).
   let recoveredUpTo: number | null = null;
   let recoveryGeneration = 0;
+  // Kept for this page connection across retries and reconnects. A pending
+  // listing may remove the visible row after it finishes, but only an exact
+  // terminal read proves that the awaited operation was reconciled.
+  const unresolvedAwaited = new Set<string>();
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const clearRetry = () => {
     if (retryTimer !== null) clearTimeout(retryTimer);
@@ -219,9 +239,11 @@ export function connectCadOperations(
     const at = now();
     const since = recoveredUpTo
       ?? (Number.isFinite(stored) && stored > 0 ? stored : at - FIRST_CONNECTION_WINDOW_MS);
-    const awaited = new Set(pendingCadOperations(useCadOperationsStore.getState().operations).map((operation) => operation.operationId));
-    void recoverMissedSnapshots(since, fetch, awaited).then(() => {
+    pendingCadOperations(useCadOperationsStore.getState().operations)
+      .forEach((operation) => unresolvedAwaited.add(operation.operationId));
+    void recoverMissedSnapshots(since, fetch, unresolvedAwaited).then((reconciled) => {
       if (generation !== recoveryGeneration) return;
+      reconciled.forEach((operationId) => unresolvedAwaited.delete(operationId));
       recoveredUpTo = Math.max(recoveredUpTo ?? 0, at);
       try { storage?.setItem(SEEN_SINCE_KEY, String(recoveredUpTo)); } catch { /* in memory only */ }
       useCadOperationsStore.getState().setRecoveryError(null);
@@ -238,10 +260,15 @@ export function connectCadOperations(
     });
   };
   const unsubscribe = manager.subscribeCadOperations({
-    operation: (operation) => { useCadOperationsStore.getState().apply(operation); },
+    operation: (operation) => {
+      useCadOperationsStore.getState().apply(operation);
+      if (!isPendingCadOperation(operation)) unresolvedAwaited.delete(operation.operationId);
+    },
     refusal: (refusal) => { useCadOperationsStore.getState().recordRefusal(refusal); },
     deliveryStatus: (status) => { useCadOperationsStore.getState().setDeliveryStatus(status); },
+    addinStatusChanged: () => { useCadOperationsStore.getState().noteAddinStatusChanged(); },
     resync: () => {
+      useCadOperationsStore.getState().noteAddinStatusChanged();
       // Every connection, the first included: a Send accepted before this page
       // first connected (WG's start-up pass, a reload) was pushed to nobody.
       // Since the last successful recovery -- kept across reloads -- or, for a
@@ -260,5 +287,5 @@ export function connectCadOperations(
 export function resetCadOperationsStore(): void {
   loadGeneration += 1;
   appliedDuringLoad.clear();
-  useCadOperationsStore.setState({ operations: {}, refusals: [], unseenRefusals: 0, deliveryStatus: null, recoveryError: null });
+  useCadOperationsStore.setState({ operations: {}, refusals: [], unseenRefusals: 0, deliveryStatus: null, recoveryError: null, addinStatusRevision: 0 });
 }

@@ -50,7 +50,12 @@ from server.workspace.archive import (
 from .addin_update import last_refresh, loaded_addin_identity, poll_activation
 from .coordination import COORDINATION_ON
 from .delivery_status import delivery_status
-from .fusion_status import ADDIN_OUTDATED_MESSAGE, fusion_process_running, read_fusion_status
+from .fusion_status import (
+    ADDIN_OUTDATED_MESSAGE,
+    addin_inbox_session_signature,
+    fusion_process_running,
+    read_fusion_status,
+)
 from .fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
 from .fusion_outcomes import FUSION_KINDS, settle_from_heartbeat
 from .fusion_delivery import (
@@ -1662,6 +1667,7 @@ class CadOperationSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     operation_id: str = Field(alias="operationId")
+    accepted_seq: int | None = Field(alias="acceptedSeq")
     kind: str
     state: str
     stage: str | None
@@ -2276,12 +2282,21 @@ def _deliver_solve_commands(application: FastAPI):
             # rather than idle says so -- once, not once a second.
             pass_reporter = DeliveryPassReporter()
             notes: list[str | None] = []
+            addin_signature: tuple[str | None, bool] | None = None
             status.started()
             try:
                 while True:
                     try:
                         status.pass_started()
                         workspace_root = await asyncio.to_thread(_selected_workspace_root, state)
+                        next_addin_signature = await asyncio.to_thread(
+                            addin_inbox_session_signature, workspace_root
+                        )
+                        if next_addin_signature != addin_signature:
+                            addin_signature = next_addin_signature
+                            events = getattr(getattr(state, "jobs_runtime", None), "events", None)
+                            if events is not None:
+                                events.publish({"v": 1, "kind": "cadAddinStatusChanged"})
                         notes.clear()
                         one_pass = asyncio.ensure_future(run_delivery_pass(
                             _preparation_context(state, workspace_root=workspace_root),

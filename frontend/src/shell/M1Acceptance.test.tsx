@@ -377,6 +377,11 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
 
   /** Exactly a reconnect's two reads, against a server that answers `finished`. */
   async function reconnect(finished: CadOperationSummary[]): Promise<void> {
+    mocks.getCadOperation.mockImplementation(async (operationId: string) => {
+      const found = finished.find((item) => item.operationId === operationId);
+      if (!found) throw new CadLinkApiError('Unknown CAD operation', [], 404);
+      return { ...found, approvals: [], preparation: null };
+    });
     const api = (async (input: RequestInfo | URL) => new Response(JSON.stringify({
       operations: String(input).includes('pending=false') ? finished : [],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;

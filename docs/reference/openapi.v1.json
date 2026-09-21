@@ -257,6 +257,17 @@
       "CadOperationSummary": {
         "additionalProperties": false,
         "properties": {
+          "acceptedSeq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acceptedseq"
+          },
           "attemptGeneration": {
             "title": "Attemptgeneration",
             "type": "integer"
@@ -378,6 +389,7 @@
         },
         "required": [
           "operationId",
+          "acceptedSeq",
           "kind",
           "state",
           "stage",

@@ -244,13 +244,18 @@ describe('WG CAD coordination gate', () => {
     expect(polls()).toBe(reads);
   });
 
-  it('on: the same status is left alone, the clock keeps it current (the control)', async () => {
+  it('on: a held status still ages when later status requests stall', async () => {
     gate = 'on';
     statusAnswer = { ...fusionOpen, updatedAt: new Date().toISOString() } as FusionCadStatus;
     await mount();
-    // Between two reads, well past the status's own window.
-    await act(async () => { await vi.advanceTimersByTimeAsync(61_000); });
-    expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.statusObserved).toBeUndefined();
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => (
+      String(input).endsWith('/fusion-status')
+        ? new Promise<Response>(() => undefined)
+        : originalFetch(input, init)
+    )));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.statusObserved).toBe(false);
   });
 
   // -- review F5: the shipped pin's plain Send needs the listing -------------
@@ -292,5 +297,35 @@ describe('WG CAD coordination gate', () => {
       await vi.advanceTimersByTimeAsync(50);
     });
     expect(statusReads()).toBe(before + 1);
+  });
+
+  it('off: a heartbeat-session event invalidates cached M1 capability and discovers a replacement pin Send', async () => {
+    statusAnswer = { ...fusionOpen, updatedAt: new Date().toISOString(), addinInboxTransfer: true } as FusionCadStatus;
+    await mount();
+    statusAnswer = { ...fusionOpen, updatedAt: new Date().toISOString(), addinInboxTransfer: false } as FusionCadStatus;
+    let listingItems: unknown[] = [{
+      name: 'pin-send.wgreturn', bundlePath: 'wgreturn/pin-send.wgreturn', readable: true,
+      modifiedAt: new Date().toISOString(), documentName: 'New pin Send', designIds: [], sources: [],
+    }];
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/returns')) {
+        calls.push(String(input));
+        return json({ cadFolderConfigured: true, coordination: 'off', items: listingItems });
+      }
+      return originalFetch(input, init);
+    }));
+    act(() => useCadOperationsStore.getState().noteAddinStatusChanged());
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('wgreturn/pin-send.wgreturn');
+
+    // The reverse transition stops the compatibility listing again.
+    listingItems = [];
+    statusAnswer = { ...fusionOpen, updatedAt: new Date().toISOString(), addinInboxTransfer: true } as FusionCadStatus;
+    act(() => useCadOperationsStore.getState().noteAddinStatusChanged());
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    const afterM1 = calls.filter((path) => path.endsWith('/returns')).length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(TEN_MINUTES); });
+    expect(calls.filter((path) => path.endsWith('/returns'))).toHaveLength(afterM1);
   });
 });

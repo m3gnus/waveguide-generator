@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { CadOperationListener } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
-import { pendingCadOperations, resetCadOperationsStore, useCadOperationsStore } from './cadOperations';
+import { connectCadOperations, pendingCadOperations, RECOVERY_RETRY_DELAYS_MS, resetCadOperationsStore, useCadOperationsStore } from './cadOperations';
 
 function summary(overrides: Partial<CadOperationSummary> = {}): CadOperationSummary {
   return {
@@ -94,5 +95,43 @@ describe('CAD operations store', () => {
     const operations = useCadOperationsStore.getState().operations;
     expect(operations['op-1']).toMatchObject({ state: 'accepted', stage: 'submitted', jobId: 'job-1' });
     expect(operations['op-2'].stage).toBe('validating');
+  });
+
+  it('preserves an exact awaited solve across a failed recovery and pending-list removal', async () => {
+    vi.useFakeTimers();
+    let listener: CadOperationListener | null = null;
+    const manager = {
+      subscribeCadOperations: (next: CadOperationListener) => { listener = next; return () => undefined; },
+    };
+    const solve = summary({ operationId: 'awaited-solve', state: 'processing', attemptGeneration: 1 });
+    useCadOperationsStore.getState().apply(solve);
+    let exactReads = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/operations/awaited-solve')) {
+        exactReads += 1;
+        if (exactReads === 1) throw new TypeError('temporary failure');
+        return json({ ...solve, state: 'accepted', stage: 'submitted', jobId: 'new-job' });
+      }
+      // The bounded history page is deliberately empty: the awaited row may
+      // be older than its newest 50 operations. The pending list also omits it.
+      return json({ operations: [] });
+    }));
+    const disconnect = connectCadOperations(manager as never, () => Date.parse('2026-09-21T12:00:00Z'));
+    try {
+      listener!.resync();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(useCadOperationsStore.getState().operations['awaited-solve']).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(RECOVERY_RETRY_DELAYS_MS[0] + 10);
+      expect(exactReads).toBe(2);
+      expect(useCadOperationsStore.getState().operations['awaited-solve']).toMatchObject({
+        state: 'accepted', jobId: 'new-job',
+      });
+      expect(useCadOperationsStore.getState().recoveryError).toBeNull();
+    } finally {
+      disconnect();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 });

@@ -557,7 +557,30 @@ def addin_declares_inbox_transfer(payload: Mapping[str, Any]) -> bool:
     and still publishes a plain Send only as a return WG must find by listing.
     """
 
-    return _activation(payload) is not None
+    activation = _activation(payload)
+    return (
+        activation is not None
+        and isinstance(activation.get("automaticCoordination"), bool)
+        and isinstance(activation.get("settingsKey"), str)
+        and bool(activation["settingsKey"])
+        and activation.get("setting") in {"default", "settings", "invalid"}
+    )
+
+
+def addin_inbox_session_signature(data_dir: Path | None) -> tuple[str | None, bool]:
+    """Identity and validated inbox declaration from the file heartbeat.
+
+    The delivery loop uses this only as a change detector. It deliberately
+    reads no CAD geometry and does not require freshness: a command-driven M1
+    heartbeat may be quiet, while a replacement heartbeat changes the session.
+    """
+
+    if data_dir is None:
+        return None, False
+    payload = _read_file_heartbeat(data_dir)
+    if not isinstance(payload, Mapping):
+        return None, False
+    return _string(payload.get("sessionId")), addin_declares_inbox_transfer(payload)
 
 
 def _command_driven_heartbeat(data_dir: Path, checked_at: datetime) -> Mapping[str, Any] | None:

@@ -245,6 +245,24 @@ def test_the_same_id_and_digest_recovers_one_operation(store: CadLinkStore, tmp_
     assert _count(tmp_path / "cadlink.db") == 1
 
 
+def test_operations_expose_monotonic_acceptance_sequence_when_timestamps_tie(
+    store: CadLinkStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(store_module, "utc_now", lambda: "2026-09-21T12:00:00Z")
+    target, inputs, digest = _solve_request()
+    first, _ = store.accept_operation("cmd-a", SOLVE, digest, target, inputs)
+    second, _ = store.accept_operation("cmd-b", SOLVE, digest, target, inputs)
+
+    assert first["created_at"] == second["created_at"]
+    assert first["accepted_seq"] < second["accepted_seq"]
+    listed = store.list_operations()
+    assert [row["operation_id"] for row in listed[:2]] == ["cmd-b", "cmd-a"]
+
+    from server.cadlink.preparation import operation_summary
+
+    assert operation_summary(first)["acceptedSeq"] == first["accepted_seq"]
+
+
 def test_the_same_id_with_a_different_digest_is_a_conflict_and_leaves_the_original(
     store: CadLinkStore, tmp_path: Path
 ) -> None:
@@ -670,6 +688,66 @@ def test_an_unreadable_ledger_is_left_in_place(tmp_path: Path) -> None:
 
 
 # -- Schema -------------------------------------------------------------------
+
+
+def test_opening_a_base_schema_database_does_not_change_its_schema(tmp_path: Path) -> None:
+    db_path = tmp_path / "cadlink.db"
+    bootstrap = CadLinkStore(db_path)
+    bootstrap.initialize()
+    bootstrap.close()
+
+    base_columns = (
+        "operation_id",
+        "kind",
+        "request_digest",
+        "digest_version",
+        "target_json",
+        "inputs_json",
+        "attempt_generation",
+        "state",
+        "outcome_json",
+        "job_id",
+        "reason",
+        "legacy",
+        "created_at",
+        "updated_at",
+        "stage",
+        "setup_revision_id",
+        "request_json",
+        "snapshot_json",
+        "preparation_id",
+        "approvals_json",
+        "snapshot_unreadable_since",
+        "claim_json",
+    )
+
+    def schema(conn: sqlite3.Connection) -> tuple[list[tuple], tuple[str, ...]]:
+        master = conn.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+        ).fetchall()
+        columns = tuple(row[1] for row in conn.execute("PRAGMA table_info(cad_operations)"))
+        return master, columns
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        columns = tuple(row[1] for row in conn.execute("PRAGMA table_info(cad_operations)"))
+        # Strip the rejected experimental migration when this regression test
+        # is run against that implementation to reproduce 2458b7a8's schema.
+        if "accepted_seq" in columns:
+            conn.execute("DROP TRIGGER IF EXISTS cad_operations_acceptance_sequence")
+            conn.execute("DROP INDEX IF EXISTS cad_operations_by_acceptance_sequence")
+            conn.execute("ALTER TABLE cad_operations DROP COLUMN accepted_seq")
+            conn.commit()
+        before = schema(conn)
+    assert before[1] == base_columns
+
+    reopened = CadLinkStore(db_path)
+    reopened.initialize()
+    reopened.close()
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        after = schema(conn)
+    assert after == before
 
 
 def test_a_v11_registry_upgrades_to_v12_and_keeps_every_row(tmp_path: Path) -> None:

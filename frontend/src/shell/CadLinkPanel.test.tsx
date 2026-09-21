@@ -67,7 +67,7 @@ const closedFusion: FusionCadStatus = {
 };
 const currentFusion: FusionCadStatus = {
   ...closedFusion,
-  state: 'current', processRunning: true, running: true, updatedAt: '2026-08-12T15:30:00Z', documentName: 'Tritonia V', documentId: 'fusion:doc-a', fusionFormula: 'osse',
+  state: 'current', processRunning: true, running: true, updatedAt: new Date().toISOString(), documentName: 'Tritonia V', documentId: 'fusion:doc-a', fusionFormula: 'osse',
   link: {
     instanceId: 'instance-a', bundlePath: '/cad/wglink/horn.wglink', designId: 'wgd_a', lineageId: 'wgl_a', editVersion: '2',
     designHash: 'sha256:current', designName: 'Tritonia-V', formula: 'osse', configPresent: true, parameterCount: 13,

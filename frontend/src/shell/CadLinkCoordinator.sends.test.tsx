@@ -266,6 +266,19 @@ describe('an accepted Send is displayed from its event', () => {
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newest.bundlePath);
   });
 
+  it('uses acceptance sequence when recovered Sends have equal whole-second timestamps', async () => {
+    const tiedAt = new Date(Date.now() - 30_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const old = bundle({ name: 'old.wgreturn', bundlePath: 'wgreturn/old.wgreturn', documentName: 'Old' });
+    const newest = bundle({ name: 'new.wgreturn', bundlePath: 'wgreturn/new.wgreturn', documentName: 'New' });
+    listing = [newest, old];
+    await act(async () => {
+      useCadOperationsStore.getState().apply(send('new-send', newest, { acceptedSeq: 42, createdAt: tiedAt, updatedAt: tiedAt }));
+      useCadOperationsStore.getState().apply(send('old-send', old, { acceptedSeq: 41, createdAt: tiedAt, updatedAt: tiedAt }));
+      await flush();
+    });
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(newest.bundlePath);
+  });
+
   it('never replaces a return the user selects while a Send is being displayed', async () => {
     const arrived = bundle({ modifiedAt: new Date(Date.now() - 5_000).toISOString() });
     const picked = bundle({ name: 'picked.wgreturn', bundlePath: 'wgreturn/picked.wgreturn', documentName: 'Picked' });

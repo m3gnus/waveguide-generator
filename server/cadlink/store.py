@@ -722,7 +722,8 @@ class CadLinkStore:
         now = utc_now()
         with self._lock, self._transaction() as conn:
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
             if row is None:
                 conn.execute(
@@ -748,7 +749,8 @@ class CadLinkStore:
                     ),
                 )
                 row = conn.execute(
-                    "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                    "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                    (operation_id,),
                 ).fetchone()
                 result = "created"
             elif str(row["kind"]) != kind:
@@ -762,7 +764,8 @@ class CadLinkStore:
                         (canonical_json(dict(snapshot)), now, operation_id),
                     )
                     row = conn.execute(
-                        "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                        "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                        (operation_id,),
                     ).fetchone()
             else:
                 result = "conflict"
@@ -858,7 +861,8 @@ class CadLinkStore:
                     (operation_id,),
                 )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return self._row(row)
 
@@ -930,7 +934,8 @@ class CadLinkStore:
         self.initialize()
         with self._lock, self._transaction() as conn:
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
             refused = self._fusion_fence(row, attempt, installation_id)
             if refused is not None:
@@ -948,7 +953,8 @@ class CadLinkStore:
                 (stage, utc_now(), operation_id),
             )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return FUSION_RECORDED, self._row(row)
 
@@ -975,7 +981,8 @@ class CadLinkStore:
         self.initialize()
         with self._lock, self._transaction() as conn:
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
             refused = self._fusion_fence(row, attempt, installation_id)
             if refused is not None:
@@ -1007,7 +1014,8 @@ class CadLinkStore:
                 (state, reason, outcome_json, utc_now(), operation_id),
             )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return FUSION_RECORDED, self._row(row)
 
@@ -1051,7 +1059,8 @@ class CadLinkStore:
             if cursor.rowcount != 1:
                 return None
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return self._row(row)
 
@@ -1096,7 +1105,8 @@ class CadLinkStore:
             if cursor.rowcount != 1:
                 return None
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return self._row(row)
 
@@ -1144,7 +1154,7 @@ class CadLinkStore:
         bounded_limit = max(1, min(int(limit), 1000))
         with self._lock:
             rows = self._connect().execute(
-                "SELECT rowid AS page_rowid, * FROM cad_operations "
+                "SELECT rowid AS page_rowid, rowid AS accepted_seq, * FROM cad_operations "
                 f"WHERE kind = ? AND state IN ({', '.join('?' for _ in wanted)}) "
                 "AND rowid > ? ORDER BY rowid ASC LIMIT ?",
                 (kind, *wanted, int(after_rowid), bounded_limit),
@@ -1175,7 +1185,8 @@ class CadLinkStore:
         self.initialize()
         with self._lock, self._transaction() as conn:
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
             if (
                 row is None
@@ -1195,7 +1206,8 @@ class CadLinkStore:
                 (setup_revision_id, request_json, utc_now(), operation_id),
             )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return self._row(row)
 
@@ -1223,7 +1235,8 @@ class CadLinkStore:
         self.initialize()
         with self._lock, self._transaction() as conn:
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
             if row is None or row["state"] in TERMINAL_STATES:
                 return None
@@ -1258,7 +1271,8 @@ class CadLinkStore:
                 (canonical_json(approvals), utc_now(), operation_id),
             )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return self._row(row)
 
@@ -1275,7 +1289,8 @@ class CadLinkStore:
         self.initialize()
         with self._lock, self._transaction() as conn:
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
             if row is None:
                 return None
@@ -1290,7 +1305,8 @@ class CadLinkStore:
                 (new_state, utc_now(), operation_id),
             )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return self._row(row)
 
@@ -1320,7 +1336,8 @@ class CadLinkStore:
                 ),
             )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return self._row(row) if cursor.rowcount == 1 else None
 
@@ -1336,7 +1353,8 @@ class CadLinkStore:
                 (CANCELLED, utc_now(), operation_id, attempt, CANCEL_REQUESTED),
             )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return self._row(row) if cursor.rowcount == 1 else None
 
@@ -1492,7 +1510,8 @@ class CadLinkStore:
                 (preparation_id, STAGE_READY, now, operation_id),
             )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return self._row(row)
 
@@ -1539,7 +1558,8 @@ class CadLinkStore:
                 (operation_id, kind, state, outcome_json, job_id, now, now),
             )
             row = conn.execute(
-                "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+                "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+                (operation_id,),
             ).fetchone()
         return dict(row), cursor.rowcount == 1
 
@@ -1548,7 +1568,8 @@ class CadLinkStore:
         # before anyone asks it a question.
         self.initialize()
         return self._read_one(
-            "SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)
+            "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
+            (operation_id,),
         )
 
     def list_operations(
@@ -1584,11 +1605,11 @@ class CadLinkStore:
         order = (
             "ORDER BY rowid ASC "
             if oldest_first
-            else "ORDER BY updated_at DESC, operation_id DESC "
+            else "ORDER BY updated_at DESC, rowid DESC "
         )
         with self._lock:
             rows = self._connect().execute(
-                f"SELECT * FROM cad_operations {where}{order}LIMIT ?",
+                f"SELECT rowid AS accepted_seq, * FROM cad_operations {where}{order}LIMIT ?",
                 (*parameters, bounded_limit),
             ).fetchall()
         return [dict(row) for row in rows]
