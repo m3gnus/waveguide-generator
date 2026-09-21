@@ -40,6 +40,8 @@ class DeliveryStatus:
         self._declined: str | None = None
         self._pass_started_at: str | None = None
         self._last_pass_completed_at: str | None = None
+        #: The pass under way has run past the hung threshold (the loop's watchdog).
+        self._pass_hung = False
         self._refusals: deque[dict[str, Any]] = deque(maxlen=RECENT_REFUSALS)
 
     def _set(self, **fields: Any) -> None:
@@ -63,12 +65,27 @@ class DeliveryStatus:
     def pass_started(self) -> None:
         self._set(pass_started_at=utc_now())
 
-    def pass_finished(self, declined: str | None) -> None:
-        self._set(declined=declined, last_pass_completed_at=utc_now())
+    def pass_hung(self) -> None:
+        self._set(pass_hung=True)
 
-    def pass_failed(self, error: str) -> None:
+    def pass_finished(self, declined: str | None) -> bool:
+        """Record a completed pass; True when what it says to the user changed."""
+
+        with self._lock:
+            changed = declined != self._declined or self._pass_hung
+            self._declined = declined
+            self._pass_hung = False
+            self._last_pass_completed_at = utc_now()
+        return changed
+
+    def pass_failed(self, error: str) -> bool:
         # Not a completed pass: liveness stays where the last good one left it.
-        self._set(declined=f"The last delivery pass failed: {error}")
+        declined = f"The last delivery pass failed: {error}"
+        with self._lock:
+            changed = declined != self._declined or self._pass_hung
+            self._declined = declined
+            self._pass_hung = False
+        return changed
 
     def refused(self, refusal: Mapping[str, Any]) -> None:
         with self._lock:
@@ -81,6 +98,7 @@ class DeliveryStatus:
                 "declined": self._declined,
                 "passStartedAt": self._pass_started_at,
                 "lastPassCompletedAt": self._last_pass_completed_at,
+                "passHung": self._pass_hung,
                 "recentRefusals": list(self._refusals),
             }
 

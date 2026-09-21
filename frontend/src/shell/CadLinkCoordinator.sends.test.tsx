@@ -90,6 +90,7 @@ describe('an accepted Send is displayed from its event', () => {
     resetCadOperationsStore();
     resetCadCoordinationForTests();
     preferencesStore.resetForTests();
+    sessionStorage.clear();
     workspaceModeStore.setMode('parametric');
     listing = [];
     ingests = [];
@@ -189,6 +190,63 @@ describe('an accepted Send is displayed from its event', () => {
       state: 'rejected', reason: 'snapshot_invalid', message: 'The return in the WGLink folder is not the one Fusion named.',
     }));
     expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('not the one Fusion named');
+    expect(ingests).toEqual([]);
+  });
+
+  it('does not re-list for every other operation update once a Send is shown', async () => {
+    const arrived = bundle({ modifiedAt: '2026-09-21T12:00:00Z' });
+    listing = [arrived];
+    await deliver(send('send-1', arrived));
+    const after = listings;
+    for (let index = 0; index < 5; index += 1) {
+      await deliver({ ...send(`op-${index}`, arrived), kind: 'prepare_and_solve', state: 'processing' });
+    }
+    expect(listings).toBe(after);
+  });
+
+  it('still shows a Send once per event stream when the tab cannot store its record', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+    const arrived = bundle({ modifiedAt: '2026-09-21T12:00:00Z' });
+    listing = [arrived];
+    await deliver(send('send-1', arrived));
+    const after = listings;
+    await deliver({ ...send('op-other', arrived), kind: 'prepare_and_solve', state: 'processing' });
+    await deliver({ ...send('op-other', arrived), kind: 'prepare_and_solve', state: 'processing', updatedAt: new Date(Date.now() + 1_000).toISOString() });
+    expect(listings).toBe(after);
+    setItem.mockRestore();
+  });
+
+  it('brings a re-Send of the model already selected back to the front', async () => {
+    const arrived = bundle({ modifiedAt: '2026-09-21T12:00:00Z' });
+    listing = [arrived];
+    await deliver(send('send-1', arrived));
+    act(() => workspaceModeStore.setMode('parametric'));
+    await deliver(send('send-2', arrived));
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(arrived.bundlePath);
+  });
+
+  it('never shows a Send twice across a reload', async () => {
+    const arrived = bundle({ modifiedAt: '2026-09-21T12:00:00Z' });
+    listing = [arrived];
+    await deliver(send('send-1', arrived));
+    expect(ingests).toHaveLength(1);
+    // The page reloads; its recovery hands the same accepted Send back.
+    act(() => root.unmount());
+    resetCadReturnStore();
+    act(() => workspaceModeStore.setMode('parametric'));
+    root = createRoot(host);
+    await act(async () => { root.render(<CadLinkCoordinator/>); await flush(); });
+    await deliver(send('send-1', arrived, { updatedAt: new Date(Date.now() + 5_000).toISOString() }));
+    expect(ingests).toHaveLength(1);
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+  });
+
+  it('says so when an accepted Send is no longer in the WGLink folder', async () => {
+    listing = [];
+    await deliver(send('send-gone', bundle()));
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('no longer in the WGLink folder');
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(ingests).toEqual([]);
   });
 

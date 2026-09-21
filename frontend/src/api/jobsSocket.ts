@@ -1,6 +1,6 @@
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { compareSelection, provisionalResults, type ResultData } from './results';
-import type { CadInboxRefusal, CadOperationSummary } from './cadOperations';
+import type { CadDeliveryStatus, CadInboxRefusal, CadOperationSummary } from './cadOperations';
 
 /**
  * Reference-compares own properties. Nested values are compared by identity,
@@ -655,6 +655,8 @@ export interface CadOperationListener {
   operation(operation: CadOperationSummary): void;
   /** A taken request file WG refused, with no operation row of its own. */
   refusal?(refusal: CadInboxRefusal): void;
+  /** WG's request consumer changed what it says: a declined reason, or a stuck pass. */
+  deliveryStatus?(status: CadDeliveryStatus): void;
   /** Updates carry no cursor, so every connection -- the first included --
    * reads the authoritative list again: an update sent before it, or while
    * disconnected, is recovered there. */
@@ -939,6 +941,17 @@ export class JobsSocketManager {
         return;
       }
       this.onEvent(event);
+      return;
+    }
+    if (decoded.kind === 'cadDeliveryStatus') {
+      this.armHeartbeat();
+      const status = decoded.status;
+      if (!isRecord(status) || typeof status.consumer !== 'string') {
+        this.update({ error: 'Invalid jobs cadDeliveryStatus message' });
+        return;
+      }
+      const parsed = status as unknown as CadDeliveryStatus;
+      this.cadOperationListeners.forEach((listener) => listener.deliveryStatus?.(parsed));
       return;
     }
     if (decoded.kind === 'cadInboxRefusal') {

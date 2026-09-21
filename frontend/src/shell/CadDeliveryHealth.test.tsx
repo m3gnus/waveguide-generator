@@ -36,6 +36,19 @@ describe('why a request from Fusion is not moving', () => {
     expect(line.text).toBe('Requests from Fusion are waiting: No CAD Link folder is selected.');
   });
 
+  it('reports a pass that hung after earlier passes completed', () => {
+    const lines = deliveryHealthLines(status({
+      lastPassCompletedAt: new Date(NOW - HUNG_PASS_MS - 60_000).toISOString(),
+      passStartedAt: new Date(NOW - HUNG_PASS_MS - 1_000).toISOString(),
+    }), NOW);
+    expect(lines.map((line) => line.text).join(' ')).toContain('has not finished a pass since');
+  });
+
+  it('believes the server when it says a pass is stuck', () => {
+    const lines = deliveryHealthLines(status({ passHung: true }), NOW);
+    expect(lines.map((line) => line.text).join(' ')).toContain('has not finished a pass since');
+  });
+
   it('tells a stuck pass from an idle one', () => {
     const started = new Date(NOW - HUNG_PASS_MS - 1_000).toISOString();
     const stuck = deliveryHealthLines(status({ passStartedAt: started, lastPassCompletedAt: null }), NOW);
@@ -99,6 +112,20 @@ describe('the CAD Link panel section', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(3 * WAITING_READ_MS); });
     expect(reads).toBeGreaterThanOrEqual(3);
     expect(host.textContent).toContain('about to restart');
+  });
+
+  it('shows a pass that hangs after the panel mounted, from the server\'s push', async () => {
+    await mount();
+    expect(host.textContent).toBe('');
+    await act(async () => {
+      useCadOperationsStore.getState().setDeliveryStatus(status({
+        passStartedAt: '2026-09-21T11:59:40Z', lastPassCompletedAt: '2026-09-21T11:59:39Z', passHung: true,
+      }));
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(host.textContent).toContain('has not finished a pass since');
+    // The push was enough: no clock was needed to learn it.
+    expect(reads).toBe(1);
   });
 
   it('lists refusals the server kept for a page that connected late', async () => {

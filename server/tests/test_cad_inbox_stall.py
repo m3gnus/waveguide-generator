@@ -301,3 +301,62 @@ def test_the_real_v3_solve_file_is_still_a_solve(tmp_path: Path) -> None:
     row = application.state.cadlink_store.get_operation(fixture(V3_SOLVE)["commandId"])
     assert row is not None and row["kind"] == PREPARE_AND_SOLVE and row["state"] == "received"
     application.state.cadlink_store.close()
+
+
+# -- the consumer's state reaches the page without a clock (review F4) ---------
+
+
+def _pushes(application) -> list[dict[str, Any]]:
+    pushed: list[dict[str, Any]] = []
+    application.state.jobs_runtime.events.publish = pushed.append
+    return pushed
+
+
+def test_a_pass_that_hangs_after_passes_completed_is_pushed_as_hung(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.cadlink import api as cadlink_api
+
+    monkeypatch.delenv(CAD_DELIVERY_ENV, raising=False)
+    monkeypatch.setattr(cadlink_api, "DELIVERY_PASS_HUNG_S", 0.3)
+    application, _data_dir, _workspace = app_for(tmp_path)
+    real = cadlink_api.run_delivery_pass
+    calls = {"n": 0}
+
+    async def hang_on_the_third(*args: Any, **kwargs: Any) -> list[str]:
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            await asyncio.Event().wait()
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(cadlink_api, "run_delivery_pass", hang_on_the_third)
+    pushed = _pushes(application)
+    status = delivery_status(run_loop(application, 3.2))
+
+    assert status["lastPassCompletedAt"] is not None  # earlier passes did complete
+    assert status["passHung"] is True
+    hung = [m["status"] for m in pushed if m.get("kind") == "cadDeliveryStatus" and m["status"]["passHung"]]
+    assert len(hung) == 1
+    application.state.cadlink_store.close()
+
+
+def test_a_new_declined_reason_is_pushed_once_and_an_idle_pass_pushes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(CAD_DELIVERY_ENV, raising=False)
+    # No WGLink folder: every pass declines with the same reason.
+    application, _data_dir, _workspace = app_for(tmp_path, select=False)
+    pushed = _pushes(application)
+    run_loop(application, 2.5)
+    declined = [m for m in pushed if m.get("kind") == "cadDeliveryStatus"]
+    assert len(declined) == 1
+    assert declined[0]["status"]["declined"] == preparation.NO_WORKSPACE_REASON
+    application.state.cadlink_store.close()
+
+    # The zero: an idle consumer, several passes, no status pushed at all.
+    (tmp_path / "idle").mkdir()
+    idle, _d, _w = app_for(tmp_path / "idle")
+    quiet = _pushes(idle)
+    run_loop(idle, 2.5)
+    assert [m for m in quiet if m.get("kind") == "cadDeliveryStatus"] == []
+    idle.state.cadlink_store.close()

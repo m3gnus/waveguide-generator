@@ -29,7 +29,7 @@ import {
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
-import { connectCadOperations, pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
+import { connectCadOperations, displayedSends, pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
 import { cadCoordinationOff, cadCoordinationStore } from '../api/cadCoordination';
 import { solveAttention } from './solveAttention';
 import { useSolveOptionsStore } from '../stores/solveOptions';
@@ -1335,15 +1335,31 @@ export function CadLinkCoordinator() {
     }
     const listed = await listReturns().catch(() => null);
     const bundle = listed?.items.find((item) => item.bundlePath === bundlePath && item.readable);
-    if (bundle) selectBundleRef.current(bundle);
+    if (bundle) {
+      selectBundleRef.current(bundle);
+      return;
+    }
+    // Accepted, and WG holds its copy, but there is nothing here to open: said,
+    // not left as a Send that silently did nothing.
+    const name = operation.snapshot?.documentName ?? 'the model Fusion sent';
+    setStatus(listed === null
+      ? `Received ${name} from Fusion 360, but WG could not read the WGLink folder to open it. Refresh CAD Link to try again.`
+      : `Received ${name} from Fusion 360, but it is no longer in the WGLink folder, so WG cannot open it here. Send it again from Fusion.`);
+    enterCadWorkspace();
   }, [noteCadActivity, refresh]);
   useEffect(() => {
     if (onshape) return undefined;
     const handle = (operations: Record<string, CadOperationSummary>) => {
       for (const operation of Object.values(operations)) {
         if (operation.kind !== 'receive_snapshot' || handledSends.current.has(operation.operationId)) continue;
+        // Shown before a reload: never shown again (a recovery re-applies it).
+        if (displayedSends.has(operation.operationId)) {
+          handledSends.current.add(operation.operationId);
+          continue;
+        }
         if (operation.state === 'rejected') {
           handledSends.current.add(operation.operationId);
+          displayedSends.add(operation.operationId);
           const name = operation.snapshot?.documentName ?? 'a model';
           setError(`Fusion sent ${name}, but WG could not take it: ${operation.message ?? operation.reason ?? 'refused'}`);
           enterCadWorkspace();
@@ -1351,6 +1367,7 @@ export function CadLinkCoordinator() {
         }
         if (operation.state !== 'accepted') continue;
         handledSends.current.add(operation.operationId);
+        displayedSends.add(operation.operationId);
         void displaySend(operation);
       }
     };

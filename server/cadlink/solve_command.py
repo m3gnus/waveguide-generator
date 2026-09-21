@@ -71,7 +71,32 @@ CURRENT_SCHEMAS = frozenset({3, 4})
 KINDED_SCHEMA_VERSION = 4
 _KINDS = frozenset({PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT})
 _OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
-UNREADABLE_CLAIM_REASON = "WG could not read this request file as a request of any version."
+UNREADABLE_CLAIM_REASON = "This file is not a request WG can read: not JSON, or no version WG knows."
+#: How many passes a claim WG cannot read (the read itself fails: a file another
+#: process holds, a drive that went away) is kept and read again before WG says
+#: so. It is still never deleted: it may be a valid request that is held.
+UNREADABLE_PASSES = 30
+#: A read or delete that meets a file another process holds is retried briefly
+#: before the pass moves on (Windows sharing violations are short).
+_HELD_ATTEMPTS = 10
+_HELD_RETRY_SECONDS = 0.02
+# Each claim WG could not read, by claim name: the request file it was, and how
+# many passes its read has failed.
+_unreadable_waits: dict[str, tuple[str, int]] = {}
+# Claims already refused (or reported unreadable) whose file is still there, by
+# claim name: reported once; afterwards only the delete is retried, quietly.
+_refused_claims: set[str] = set()
+
+
+class _Unreadable:
+    """What reading a file returned when the read itself failed."""
+
+    def __init__(self, error: OSError) -> None:
+        self.error = error
+
+
+def _held(error: OSError) -> bool:
+    return not isinstance(error, FileNotFoundError)
 # One file per command, named <commandId>.json. A producer stages a file under
 # a name starting with "." (or not ending in .json) and renames it into place.
 SOLVE_REQUESTS_DIRECTORY = ".wg-solve-requests"
@@ -415,8 +440,11 @@ def _command_from_payload(
     if not isinstance(payload, Mapping):
         return None
     schema = payload.get("schemaVersion")
+    # Only an integer is compared: a list or object here is not a request WG can
+    # identify, and must never stop the pass (``in`` on it raises).
     if (
-        isinstance(schema, bool)
+        not isinstance(schema, int)
+        or isinstance(schema, bool)
         or schema not in schema_versions
         or payload.get("target") != "waveguide-generator"
     ):
@@ -432,9 +460,15 @@ def _command_from_payload(
         raise InvalidRequest("Its operationId is not its commandId.")
     kind = PREPARE_AND_SOLVE
     return_id = str(payload.get("returnId") or "")
+    if schema != KINDED_SCHEMA_VERSION and "kind" in payload and payload["kind"] != PREPARE_AND_SOLVE:
+        # Schema 3 and earlier mean a solve. A file that says it is something
+        # else is not read as one.
+        raise InvalidRequest(
+            f"A schema-{schema} request is a solve, and this one names another kind."
+        )
     if schema == KINDED_SCHEMA_VERSION:
         kind = payload.get("kind")
-        if kind not in _KINDS:
+        if not isinstance(kind, str) or kind not in _KINDS:
             raise InvalidRequest(
                 "It does not name its kind (receive_snapshot or prepare_and_solve)."
                 if kind is None
@@ -460,10 +494,28 @@ def _command_from_payload(
 
 
 def _read_payload(path: Path) -> object:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return None
+    """The JSON a file holds; None when its bytes are not JSON; :class:`_Unreadable`
+    when the read itself failed, after a brief retry of a file that is held.
+
+    The two failures mean different things: bytes that are not a request can be
+    refused, a file WG could not read may be a valid request it must keep.
+    """
+
+    for attempt in range(_HELD_ATTEMPTS):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            if not _held(exc) or attempt == _HELD_ATTEMPTS - 1:
+                return _Unreadable(exc)
+            time.sleep(_HELD_RETRY_SECONDS)
+            continue
+        except ValueError:
+            return None  # read, and not text
+        try:
+            return json.loads(text)
+        except (ValueError, TypeError):
+            return None
+    return None  # pragma: no cover - the loop always returns
 
 
 @dataclass(frozen=True)
@@ -489,6 +541,16 @@ def _delivery(
 ) -> _Delivery | None:
     payload = _read_payload(path)
     invalid: str | None = None
+    if isinstance(payload, _Unreadable):
+        # Not read: nothing is known about it. An unclaimed file is tried again
+        # next pass; a claim is kept, and the pass reads it again.
+        if not claimed:
+            return None
+        try:
+            modified = path.stat().st_mtime_ns
+        except OSError:
+            return None
+        return _Delivery(path, claimed, schema_versions, None, ("", modified, path.name), None)
     try:
         command = _command_from_payload(payload, path, schema_versions=schema_versions)
     except InvalidRequest as exc:
@@ -569,17 +631,27 @@ def _claim(path: Path) -> Path | None:
     return claim
 
 
-def _acknowledge(path: Path) -> bool:
-    """Delete a consumed delivery. False leaves it for the next poll to recover."""
+def _acknowledge(path: Path, *, quiet: bool = False) -> bool:
+    """Delete a consumed delivery. False leaves it for the next poll to recover.
 
-    try:
-        path.unlink()
-    except FileNotFoundError:
+    A file another process holds is retried briefly first.
+    """
+
+    for attempt in range(_HELD_ATTEMPTS):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            if attempt < _HELD_ATTEMPTS - 1:
+                time.sleep(_HELD_RETRY_SECONDS)
+                continue
+            (logger.debug if quiet else logger.warning)(
+                "Could not delete the consumed solve command %s: %s", path.name, exc
+            )
+            return False
         return True
-    except OSError as exc:
-        logger.warning("Could not delete the consumed solve command %s: %s", path.name, exc)
-        return False
-    return True
+    return False  # pragma: no cover - the loop always returns
 
 
 def solve_command_request(command: PendingSolveCommand) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -753,16 +825,46 @@ def collect_solve_deliveries(
         present = {delivery.path.name for delivery in deliveries if delivery.claimed}
         for name in set(_retention_waits) - present:
             del _retention_waits[name]
+        for name in set(_unreadable_waits) - present:
+            del _unreadable_waits[name]
+        _refused_claims.intersection_update(present)
         if held is not None:
             # A pass can stop at an answer before it reaches a waiting claim;
             # that claim's operation is held all the same.
             held.update(operation_id for operation_id, _waited in _retention_waits.values())
         for delivery in deliveries:
+            if delivery.claimed and delivery.path.name in _refused_claims:
+                # Refused (or reported unreadable) already, and its file is
+                # still here: only the delete is retried, and quietly.
+                _acknowledge(delivery.path, quiet=True)
+                continue
             claim = delivery.path if delivery.claimed else _claim(delivery.path)
             if claim is None:
                 continue
             # What the rename took is the request, not what was read before.
             payload = _read_payload(claim)
+            if isinstance(payload, _Unreadable):
+                # The read failed: this may be a valid request another process
+                # holds. It is kept and read again next pass -- never refused
+                # and deleted for it -- and said once it has stayed unreadable.
+                name, waited = _unreadable_waits.get(claim.name, (delivery.path.name, 0))
+                waited += 1
+                _unreadable_waits[claim.name] = (name, waited)
+                if waited == 1:
+                    logger.info(
+                        "Could not read the CAD Link request file %s (%s); it is kept and read again.",
+                        name, payload.error,
+                    )
+                if waited == UNREADABLE_PASSES:
+                    refusal = inbox_refusal(
+                        None, name,
+                        f"WG could not read this request file for {waited} passes ({payload.error}). "
+                        "It is kept and read again; if it stays, close whatever holds it.",
+                    )
+                    logger.warning("CAD Link request file %s: %s", name, refusal["reason"])
+                    refused(refusal)
+                continue
+            _unreadable_waits.pop(claim.name, None)
             try:
                 command = _command_from_payload(
                     payload, claim, schema_versions=delivery.schema_versions
@@ -779,7 +881,9 @@ def collect_solve_deliveries(
                 )
                 refused(refusal)
                 _retention_waits.pop(claim.name, None)
-                _acknowledge(claim)
+                if not _acknowledge(claim):
+                    # Held: reported once, the delete retried quietly each pass.
+                    _refused_claims.add(claim.name)
                 continue
             outdated = (
                 isinstance(payload, Mapping)

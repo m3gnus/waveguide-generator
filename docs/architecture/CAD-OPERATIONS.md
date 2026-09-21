@@ -461,13 +461,23 @@ through the same route and stages as a solve requested by Fusion.
   advertises `solveCommandDelivery: 4` on its own (the heartbeat and Fusion-bound
   delivery stay 3), and advertises nothing while the consumer is off. A file WG can
   identify as a request but cannot accept is claimed, refused with its reason and
-  deleted; one it cannot identify is left alone; a claim that is not a request ends. A
+  deleted; one it cannot identify is left alone (a field it cannot even compare, such as
+  a list, included); a claim whose bytes were read and are not a request ends. A file WG
+  could not *read* (another process holds it, a drive went away) is never refused for
+  it: the read is retried briefly, the claim is kept and read again each pass, and after
+  30 passes it is reported once, still kept. A refused claim WG cannot delete is
+  reported once and its delete retried quietly. A schema-3 file naming a kind other than
+  `prepare_and_solve` is refused, not read as a Solve. A
   Send taken by file is settled as the live route settles one, and the page displays it
   from its `cadOperation` event. Every row the inbox creates, recovers or refuses is
   published on `/ws/jobs`; a refusal with no row of its own is published as
   `cadInboxRefusal` and kept (the last 20) for `GET /api/cadlink/delivery`, which also
   says whether the consumer runs, why its last pass started nothing, and when a pass last
-  completed. While the consumer is off the live delivery route answers a retryable 409
+  completed. The loop pushes that state (`cadDeliveryStatus`) when its declined reason
+  changes or a pass runs past 15 s, so the panel needs no clock to hear of either. A
+  page's first connection also recovers Sends accepted in the previous ten minutes (or
+  since the tab's last connection, across a reload), and never shows one twice. While
+  the consumer is off the live delivery route answers a retryable 409
   `delivery_consumer_disabled` instead of accepting what nothing would run.
 - **Coordination gate.** `WG2_CAD_COORDINATION=off` (read once at start-up, reported on
   the "application initialized" log line, the CAD Link panel and

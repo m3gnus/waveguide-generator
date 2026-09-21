@@ -2226,6 +2226,9 @@ async def put_solver_selection(
 #: test suite sets it, so no test run collects a real delivery.
 CAD_DELIVERY_ENV = "WG2_CAD_DELIVERY"
 _DELIVERY_INTERVAL_S = 1.0
+#: A pass still running after this long is reported as stuck, pushed to the
+#: page once (a pass normally takes milliseconds).
+DELIVERY_PASS_HUNG_S = 15.0
 
 
 def delivery_consumer_enabled(environ: Mapping[str, str] | None = None) -> bool:
@@ -2252,6 +2255,14 @@ def _deliver_solve_commands(application: FastAPI):
             return
         running: set[str] = set()
 
+        def announce() -> None:
+            # The consumer's state changed in a way the user sees: pushed on
+            # the jobs channel, so the CAD Link panel needs no clock to hear
+            # of a pass that declines or hangs (M1 contract C4, review F4).
+            events = getattr(getattr(state, "jobs_runtime", None), "events", None)
+            if events is not None:
+                events.publish({"v": 1, "kind": "cadDeliveryStatus", "status": status.snapshot()})
+
         def spawn(operation_id: str, coroutine: Awaitable[Any]) -> None:
             task = asyncio.ensure_future(coroutine)
             running.add(operation_id)
@@ -2272,16 +2283,31 @@ def _deliver_solve_commands(application: FastAPI):
                         status.pass_started()
                         workspace_root = await asyncio.to_thread(_selected_workspace_root, state)
                         notes.clear()
-                        await run_delivery_pass(
+                        one_pass = asyncio.ensure_future(run_delivery_pass(
                             _preparation_context(state, workspace_root=workspace_root),
                             spawn=spawn,
                             running=running,
                             note=notes.append,
-                        )
+                        ))
+                        try:
+                            done, _pending = await asyncio.wait({one_pass}, timeout=DELIVERY_PASS_HUNG_S)
+                            if not done:
+                                # Stuck inside the pass: said now, not when it returns.
+                                status.pass_hung()
+                                logger.warning(
+                                    "CAD solve delivery: a pass has run for %.0f s and has not finished.",
+                                    DELIVERY_PASS_HUNG_S,
+                                )
+                                announce()
+                            await one_pass
+                        except asyncio.CancelledError:
+                            one_pass.cancel()
+                            raise
                         # Read outside the handler below: a swallowed exception
                         # must never be mistaken for a pass that ran and declined.
                         declined = notes[0] if notes else None
-                        status.pass_finished(declined)
+                        if status.pass_finished(declined):
+                            announce()
                         line = pass_reporter.observe(declined)
                         if line is not None:
                             logger.info("CAD solve delivery: %s", line)
@@ -2291,7 +2317,8 @@ def _deliver_solve_commands(application: FastAPI):
                     except Exception as exc:  # noqa: BLE001 - the next pass tries again
                         failures += 1
                         error = f"{type(exc).__name__}: {exc}"
-                        status.pass_failed(error)
+                        if status.pass_failed(error):
+                            announce()
                         if error != reported:
                             # Each distinct failure once, not every second.
                             logger.warning("Delivering CAD solve commands failed.", exc_info=True)

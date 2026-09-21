@@ -172,6 +172,8 @@ export interface CadDeliveryStatus {
   declined: string | null;
   passStartedAt: string | null;
   lastPassCompletedAt: string | null;
+  /** The pass under way ran past the server's hung threshold. */
+  passHung?: boolean;
   recentRefusals: CadInboxRefusal[];
   variable?: string;
 }

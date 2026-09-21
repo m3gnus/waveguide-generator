@@ -42,7 +42,7 @@ export function deliveryHealthLines(status: CadDeliveryStatus | null, now: numbe
   const started = status.passStartedAt ? Date.parse(status.passStartedAt) : Number.NaN;
   const finished = status.lastPassCompletedAt ? Date.parse(status.lastPassCompletedAt) : Number.NaN;
   const unfinished = Number.isFinite(started) && (!Number.isFinite(finished) || started > finished);
-  if (unfinished && now - started > HUNG_PASS_MS) {
+  if (status.passHung || (unfinished && now - started > HUNG_PASS_MS)) {
     lines.push({
       tone: 'blocked',
       text: `WG’s request consumer has not finished a pass since ${clock(status.passStartedAt!)}; requests sent since then have not been taken.`,
@@ -66,15 +66,20 @@ export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
   const refusals = useCadOperationsStore((state) => state.refusals);
   const unseen = useCadOperationsStore((state) => state.unseenRefusals);
   const visible = usePanelVisible();
-  const [status, setStatus] = useState<CadDeliveryStatus | null>(null);
+  const [read, setRead] = useState<{ status: CadDeliveryStatus; at: number } | null>(null);
+  const pushed = useCadOperationsStore((state) => state.deliveryStatus);
+  const [pushedAt, setPushedAt] = useState(0);
   const waiting = waitingToBeTaken(operations);
+  // The newer of what was read and what the server pushed since.
+  useEffect(() => { if (pushed) setPushedAt(now()); }, [pushed, now]);
+  const status = pushed && (!read || pushedAt >= read.at) ? pushed : read?.status ?? null;
 
   useEffect(() => {
     let current = true;
     const read = () => {
       void getDeliveryStatus().then((next) => {
         if (!current) return;
-        setStatus(next);
+        setRead({ status: next, at: now() });
         useCadOperationsStore.getState().mergeRefusals(next.recentRefusals ?? []);
       }).catch(() => undefined);
     };
@@ -84,7 +89,10 @@ export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
       current = false;
       if (timer !== null) window.clearInterval(timer);
     };
-  }, [waiting, refusals.length]);
+    // Re-read on the events that can change it: the panel coming into view,
+    // a refusal, work starting or ending. The server also pushes a declined
+    // reason or a stuck pass as it happens (cadDeliveryStatus).
+  }, [waiting, refusals.length, visible, now]);
 
   // Seeing the list is what acknowledges it.
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { isPendingCadOperation, listCadOperations, type CadInboxRefusal, type CadOperationSummary } from '../api/cadOperations';
+import { isPendingCadOperation, listCadOperations, type CadDeliveryStatus, type CadInboxRefusal, type CadOperationSummary } from '../api/cadOperations';
 import { jobsSocket, type JobsSocketManager } from '../api/jobsSocket';
 
 /** How many refusals the CAD Link panel keeps, as the server does. */
@@ -15,6 +15,9 @@ interface CadOperationsState {
   /** Merge the server's recent list (a page that connected late). */
   mergeRefusals: (refusals: CadInboxRefusal[]) => void;
   acknowledgeRefusals: () => void;
+  /** The consumer's state as the server last pushed it, or null before any push. */
+  deliveryStatus: CadDeliveryStatus | null;
+  setDeliveryStatus: (status: CadDeliveryStatus) => void;
   /** Read the unfinished operations, which are authoritative. */
   load: (fetcher?: typeof fetch) => Promise<void>;
   /** Merge one `cadOperation` message; false when it is older than what is held. */
@@ -60,6 +63,8 @@ export const useCadOperationsStore = create<CadOperationsState>((set, get) => ({
   operations: {},
   refusals: [],
   unseenRefusals: 0,
+  deliveryStatus: null,
+  setDeliveryStatus: (status) => set({ deliveryStatus: status }),
   recordRefusal: (refusal) => {
     const held = get().refusals;
     if (held.some((item) => refusalKey(item) === refusalKey(refusal))) return;
@@ -111,6 +116,46 @@ export function pendingCadOperations(
 /** How far back a reconnect looks for Sends accepted while it was away, beyond
  * the previous connection's start: a margin for clocks, not a history. */
 const RECONNECT_MARGIN_MS = 5_000;
+/** How far back a page's first connection looks, when this tab has never
+ * connected before: long enough for a WG that just started (its first pass
+ * takes the Sends that waited while it was closed), short enough that a new
+ * window does not replay the day. */
+export const FIRST_CONNECTION_WINDOW_MS = 10 * 60_000;
+const SEEN_SINCE_KEY = 'wg2.cad.sends.since.v1';
+const DISPLAYED_KEY = 'wg2.cad.sends.displayed.v1';
+const DISPLAYED_LIMIT = 100;
+
+function sessionStore(): Storage | null {
+  try {
+    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The Sends this tab has already put on screen (or reported refused), kept
+ * across reloads so a recovery after a reload never shows one twice.
+ */
+export const displayedSends = {
+  has(operationId: string): boolean {
+    try {
+      const held = JSON.parse(sessionStore()?.getItem(DISPLAYED_KEY) ?? '[]') as unknown;
+      return Array.isArray(held) && held.includes(operationId);
+    } catch {
+      return false;
+    }
+  },
+  add(operationId: string): void {
+    const storage = sessionStore();
+    if (!storage) return;
+    try {
+      const held = JSON.parse(storage.getItem(DISPLAYED_KEY) ?? '[]') as unknown;
+      const ids = Array.isArray(held) ? held.filter((id): id is string => typeof id === 'string' && id !== operationId) : [];
+      storage.setItem(DISPLAYED_KEY, JSON.stringify([...ids, operationId].slice(-DISPLAYED_LIMIT)));
+    } catch { /* a tab that cannot store keeps the in-memory record only */ }
+  },
+};
 
 /**
  * Sends WG accepted while this page was not listening (M1 transfer contract,
@@ -136,11 +181,22 @@ export function connectCadOperations(
   return manager.subscribeCadOperations({
     operation: (operation) => { useCadOperationsStore.getState().apply(operation); },
     refusal: (refusal) => { useCadOperationsStore.getState().recordRefusal(refusal); },
+    deliveryStatus: (status) => { useCadOperationsStore.getState().setDeliveryStatus(status); },
     resync: () => {
       void useCadOperationsStore.getState().load().catch(() => undefined);
-      const since = previousConnection;
-      previousConnection = now();
-      if (since !== null) void recoverMissedSnapshots(since).catch(() => undefined);
+      // Every connection, the first included: a Send accepted before this page
+      // first connected (WG's start-up pass, a reload) was pushed to nobody.
+      // Since this tab's previous connection -- kept across reloads -- or, for
+      // a tab that never connected, a bounded window. What this tab already
+      // displayed is recorded (displayedSends), so nothing is shown twice.
+      const storage = sessionStore();
+      const stored = Number(storage?.getItem(SEEN_SINCE_KEY) ?? Number.NaN);
+      const at = now();
+      const since = previousConnection
+        ?? (Number.isFinite(stored) && stored > 0 ? stored : at - FIRST_CONNECTION_WINDOW_MS);
+      previousConnection = at;
+      try { storage?.setItem(SEEN_SINCE_KEY, String(at)); } catch { /* in memory only */ }
+      void recoverMissedSnapshots(since).catch(() => undefined);
     },
   });
 }
@@ -148,5 +204,5 @@ export function connectCadOperations(
 export function resetCadOperationsStore(): void {
   loadGeneration += 1;
   appliedDuringLoad.clear();
-  useCadOperationsStore.setState({ operations: {}, refusals: [], unseenRefusals: 0 });
+  useCadOperationsStore.setState({ operations: {}, refusals: [], unseenRefusals: 0, deliveryStatus: null });
 }

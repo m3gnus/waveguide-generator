@@ -308,8 +308,9 @@ def test_a_failed_delete_after_persisting_recovers_the_same_operation(
     original_unlink = Path.unlink
     refused: list[str] = []
 
+    # Held for the whole of one pass, brief retries included.
     def held_open_once(self, *args, **kwargs):
-        if not refused:
+        if len(refused) < solve_command._HELD_ATTEMPTS:
             refused.append(str(self))
             raise PermissionError(13, "The process cannot access the file")
         return original_unlink(self, *args, **kwargs)

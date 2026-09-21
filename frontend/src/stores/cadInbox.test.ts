@@ -2,9 +2,11 @@
  * The WG request inbox, as the page hears of it (M1 transfer contract, C4, C7).
  *
  * A refusal with no operation row arrives as a `cadInboxRefusal` message on the
- * jobs channel and lands in the store's bounded list. A reconnect also reads
- * the Sends accepted while the page was away (E3); the first connection does
- * not, so an idle page makes no such read.
+ * jobs channel and lands in the store's bounded list. Every connection also
+ * reads the Sends accepted while the page was not listening (E3): since this
+ * tab's previous connection, kept across reloads, or a bounded window for a tab
+ * that never connected -- WG's start-up pass takes a Send before any page is
+ * connected to hear it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JobsSocketManager, type CadOperationListener, type JobsWebSocketLike } from '../api/jobsSocket';
@@ -46,6 +48,7 @@ describe('the WG request inbox on the page', () => {
 
   beforeEach(() => {
     resetCadOperationsStore();
+    sessionStorage.clear();
     socket = new MockSocket();
     manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
     clock = Date.parse('2026-09-21T12:00:00Z');
@@ -54,7 +57,11 @@ describe('the WG request inbox on the page', () => {
       const path = String(input);
       if (path.includes('pending=false')) {
         finishedReads += 1;
-        return json({ operations: [sent('send-old', '2026-09-21T11:00:00Z'), sent('send-missed', '2026-09-21T12:01:00Z')] });
+        return json({ operations: [
+          sent('send-old', '2026-09-21T11:00:00Z'),
+          sent('send-at-startup', '2026-09-21T11:58:00Z'),
+          sent('send-missed', '2026-09-21T12:01:00Z'),
+        ] });
       }
       return json({ operations: [] });
     }));
@@ -97,23 +104,49 @@ describe('the WG request inbox on the page', () => {
     expect(useCadOperationsStore.getState().refusals).toEqual([]);
   });
 
-  it('reads nothing finished on the first connection (the zero)', async () => {
+  it('recovers, on the first connection, a Send accepted before the page connected -- within a bounded window', async () => {
     const listener = capture();
     listener.resync();
     await flush();
-    expect(finishedReads).toBe(0);
+    expect(finishedReads).toBe(1);
+    const operations = useCadOperationsStore.getState().operations;
+    // Accepted two minutes ago, by the start-up pass nobody heard: recovered.
+    expect(operations['send-at-startup']?.state).toBe('accepted');
+    // An hour ago is outside the window: not replayed.
+    expect(operations['send-old']).toBeUndefined();
+  });
+
+  it('after a reload, looks back to the previous connection of this tab, not a fixed window', async () => {
+    sessionStorage.setItem('wg2.cad.sends.since.v1', String(Date.parse('2026-09-21T10:30:00Z')));
+    const listener = capture();
+    listener.resync();
+    await flush();
+    expect(useCadOperationsStore.getState().operations['send-old']?.state).toBe('accepted');
+    expect(Number(sessionStorage.getItem('wg2.cad.sends.since.v1'))).toBe(clock);
+  });
+
+  it('keeps a pushed delivery status for the panel', () => {
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({
+      v: 1, kind: 'cadDeliveryStatus',
+      status: { consumer: 'running', declined: null, passStartedAt: 'x', lastPassCompletedAt: 'y', passHung: true, recentRefusals: [] },
+    });
+    expect(useCadOperationsStore.getState().deliveryStatus?.passHung).toBe(true);
   });
 
   it('recovers a Send accepted while the socket was down, and only a recent one (the positive control)', async () => {
     const listener = capture();
     listener.resync();
     await flush();
+    resetCadOperationsStore();
     clock = Date.parse('2026-09-21T12:05:00Z');
     listener.resync();
     await flush();
-    expect(finishedReads).toBe(1);
+    expect(finishedReads).toBe(2);
     const operations = useCadOperationsStore.getState().operations;
     expect(operations['send-missed']?.state).toBe('accepted');
+    // Since the previous connection (12:00), not the first-connection window.
+    expect(operations['send-at-startup']).toBeUndefined();
     expect(operations['send-old']).toBeUndefined();
   });
 });
