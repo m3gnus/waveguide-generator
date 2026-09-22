@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
 import { createCadOperation, createSetupRevision, getCadOperation, getSetupRevision, isPendingCadOperation, prepareCadOperation, putProjectSetup, type CadOperationSummary, type CadSolveSetup } from '../api/cadOperations';
-import { CadLinkApiError } from '../api/cadlink';
+import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
 import { planSolveDesign, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import {
   useCapabilities,
@@ -180,21 +180,26 @@ const CAD_VIEWPORT_MISMATCH =
  * gate. The viewport check is evidence about what the user is looking at; the
  * rest is the shared imported-submission blocker. */
 export function cadSolveBlockerNow(): string | null {
+  return cadInputBlockerNow() ?? frameSolveBlocker(useCadReturnStore.getState().ingestRecord?.ingest_id);
+}
+
+/** The same rule without the frame, which a Solve judges once the frame read
+ * the card has under way has answered. */
+function cadInputBlockerNow(): string | null {
   const cadReturn = useCadReturnStore.getState();
   const cad = importedMeshStore.getSnapshot().cad;
   if (cadReturn.ingestRecord !== null && cad !== null
     && (!cad.ingestId || cad.ingestId !== cadReturn.ingestRecord.ingest_id)) {
     return CAD_VIEWPORT_MISMATCH;
   }
-  return importedSubmissionBlocker(cadReturn) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id);
+  return importedSubmissionBlocker(cadReturn);
 }
 
-/** The request for the model on screen that Solve is held on while the
- * backend prepares or submits it, and the words that say so. */
-function heldOnRequest(): { operation: CadOperationSummary; words: string } | null {
-  const operation = onScreenRequestInFlight(
-    useCadOperationsStore.getState().operations, useCadReturnStore.getState().ingestRecord,
-  );
+/** The request for the snapshot a Solve was given for that the backend is
+ * preparing or submitting, and the words that say so. Always the snapshot
+ * captured at the press, never whatever is selected by the time it is asked. */
+function heldOnRequest(record: CadReturnIngestRecord | null): { operation: CadOperationSummary; words: string } | null {
+  const operation = onScreenRequestInFlight(useCadOperationsStore.getState().operations, record);
   return operation ? { operation, words: inFlightWords(operation) } : null;
 }
 
@@ -482,18 +487,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // same row and cannot create a second job.
   const solveCurrentCadImport = useCallback(async () => {
     if (submissionInFlight.current) return 'busy' as const;
-    const heldAtPress = heldOnRequest();
-    if (heldAtPress) return holdOnRequest(heldAtPress);
-    // A Solve given right after a preparation (Bring in & solve) waits for the
-    // frame read the card has under way, holding the mutex while it does.
-    const reading = frameReadInFlight(useCadReturnStore.getState().ingestRecord?.ingest_id);
-    if (reading) {
-      submissionInFlight.current = true;
-      try { await reading; } finally { submissionInFlight.current = false; }
-    }
-    const blocker = cadSolveBlockerNow();
-    if (blocker) throw new Error(blocker);
+    // The input is what is on screen at the press: the snapshot and the
+    // settings are captured here, before anything is awaited, and everything
+    // below uses these -- never whatever is selected by the time an answer
+    // arrives (PLAN.md M1b, "captures the displayed snapshot").
     const cad = useCadReturnStore.getState();
+    const heldAtPress = heldOnRequest(cad.ingestRecord);
+    if (heldAtPress) return holdOnRequest(heldAtPress);
+    const blocker = cadInputBlockerNow();
+    if (blocker) throw new Error(blocker);
     const ingestId = cad.ingestRecord?.ingest_id;
     if (!ingestId) throw new Error('Ingest a CAD return before solving.');
     // A first-time CAD document has no project lineage yet. The manual solve
@@ -506,17 +508,25 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     try {
       setSubmitting(true);
       setActionError(null);
+      // A Solve given right after a preparation (Bring in & solve) waits for
+      // the frame read the card has under way for this snapshot.
+      const reading = frameReadInFlight(ingestId);
+      if (reading) await reading;
+      const frameBlocker = frameSolveBlocker(ingestId);
+      if (frameBlocker) throw new Error(frameBlocker);
       // The frame on screen is part of the input (PLAN.md M1b/M1e): Solve
       // confirms the axis the card shows before anything is prepared, and the
       // server records whether that was its suggestion or the user's choice.
-      await confirmDisplayedFrame(ingestId);
+      // The preparation is then held to that axis: a confirmation changed
+      // elsewhere stops it at the frame gate rather than change the axis.
+      const frameAxis = await confirmDisplayedFrame(ingestId);
       // Solve remembers the settings it uses for this model's project, so a
       // later solve -- Fusion's too -- starts from them. Never a global default,
       // never the CAD document.
       if (project) await putProjectSetup(built);
       // A request for this snapshot that started while those were answered:
       // this press is that request's, not a second one.
-      const heldNow = heldOnRequest();
+      const heldNow = heldOnRequest(cad.ingestRecord);
       if (heldNow) return holdOnRequest(heldNow);
       // A new identity is a new run of the design. When a request for this
       // very snapshot is waiting on screen (Fusion's "Solve in WG", say), the
@@ -614,10 +624,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         const created = await createCadOperation({ operationId, ingestId });
         useCadOperationsStore.getState().apply(created);
       }
-      const prepared = await prepareCadOperation(
-        operationId,
-        revisionId ? { setupRevisionId: revisionId, submit: true } : { submit: true },
-      );
+      const prepared = await prepareCadOperation(operationId, {
+        ...(revisionId ? { setupRevisionId: revisionId } : {}),
+        submit: true,
+        ...(frameAxis ? { frameAxis } : {}),
+      });
       acknowledgeManualCadSolvePreparation(ingestId, operationId);
       useCadOperationsStore.getState().apply(prepared);
       return 'submitted' as const;

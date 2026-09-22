@@ -28,6 +28,9 @@ export interface CadFrameView {
   axis: SolverFrameAxis | null;
   /** The user picked `axis` here rather than taking the preselection. */
   picked: boolean;
+  /** The axis this card showed before a fresh read found the project's frame
+   * changed elsewhere; null when nothing changed under the user. */
+  changedFrom: SolverFrameAxis | null;
   error: string | null;
 }
 
@@ -56,17 +59,21 @@ export function preselectedAxis(frame: SolverFrameState): SolverFrameAxis | null
 
 function viewOf(ingestId: string, preview: SolverFramePreview, held?: CadFrameView): CadFrameView {
   if (preview.linked) {
-    return { ingestId, status: 'ready', frame: null, linked: true, axis: null, picked: false, error: null };
+    return { ingestId, status: 'ready', frame: null, linked: true, axis: null, picked: false, changedFrom: null, error: null };
   }
   // A pick the user made stays theirs while the snapshot allows it.
   const keep = held?.picked && allows(preview, held.axis) ? held.axis : null;
+  const axis = keep ?? preselectedAxis(preview);
+  // The axis shown moved without the user choosing: say so, never silently.
+  const changedFrom = keep === null && held?.axis && held.axis !== axis ? held.axis : held?.changedFrom ?? null;
   return {
     ingestId,
     status: 'ready',
     frame: preview,
     linked: false,
-    axis: keep ?? preselectedAxis(preview),
+    axis,
     picked: keep !== null,
+    changedFrom: changedFrom === axis ? null : changedFrom,
     error: null,
   };
 }
@@ -83,7 +90,7 @@ export const useCadSolverFrameStore = create<CadSolverFrameStore>((set, get) => 
       ...get().frames,
       [ingestId]: held
         ? { ...held, status: held.status === 'error' ? 'loading' : held.status }
-        : { ingestId, status: 'loading', frame: null, linked: false, axis: null, picked: false, error: null },
+        : { ingestId, status: 'loading', frame: null, linked: false, axis: null, picked: false, changedFrom: null, error: null },
     } });
     const request = getSolverFrame({ ingestId }, fetcher)
       .then((preview) => {
@@ -97,7 +104,8 @@ export const useCadSolverFrameStore = create<CadSolverFrameStore>((set, get) => 
         const current = get().frames[ingestId];
         set({ frames: { ...get().frames, [ingestId]: {
           ingestId, status: 'error', frame: current?.frame ?? null, linked: false,
-          axis: current?.axis ?? null, picked: current?.picked ?? false, error: message,
+          axis: current?.axis ?? null, picked: current?.picked ?? false, changedFrom: current?.changedFrom ?? null,
+          error: message,
         } } });
       })
       .finally(() => { loads.delete(ingestId); });
@@ -107,7 +115,7 @@ export const useCadSolverFrameStore = create<CadSolverFrameStore>((set, get) => 
   pick: (ingestId, axis) => {
     const held = get().frames[ingestId];
     if (!held?.frame || !allows(held.frame, axis)) return;
-    set({ frames: { ...get().frames, [ingestId]: { ...held, axis, picked: true } } });
+    set({ frames: { ...get().frames, [ingestId]: { ...held, axis, picked: true, changedFrom: null } } });
   },
   apply: (ingestId, preview) => {
     if (!preview.linked && !Array.isArray((preview as Partial<SolverFrameState>).axes)) return;
@@ -135,7 +143,11 @@ export function frameSolveBlocker(ingestId: string | null | undefined): string |
 }
 
 /**
- * Confirm the axis the Solve card shows for this ingestion, as part of Solve.
+ * Confirm the axis the Solve card shows for this ingestion, as part of Solve,
+ * and answer it: the preparation is then held to exactly that axis
+ * (`frameAxis` on prepare), so a project confirmation changed elsewhere after
+ * this card last read it stops the solve at the frame gate instead of
+ * changing the axis solved.
  *
  * Only a frame the card has on screen is confirmed: with nothing read (the
  * card never showed one) or a read that failed, nothing is sent, and the

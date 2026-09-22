@@ -402,6 +402,10 @@ preselects it, so confirming it is normally one press of Solve.
   findings and approvals, an unconfirmed frame waits as `frame_confirmation_required`;
   the preparation it made is the preview's geometry. Confirming `+z` resumes that
   preparation; any other axis makes a new one, and approvals never carry to it. A
+  prepare request may name `frameAxis`, the axis WG showed when Solve was pressed: an
+  unlinked snapshot is then solved only along it, and a confirmation changed elsewhere
+  in the meantime stops at `frame_confirmation_required`, saying so, instead of changing
+  the axis solved. A
   preparation is resumed only in the frame, and under the contract, this attempt would
   mesh in. `+z` is never written into the ingest options, so no mesh cached before
   this contract is made again.

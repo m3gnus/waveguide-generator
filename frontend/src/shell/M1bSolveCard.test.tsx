@@ -96,6 +96,7 @@ vi.mock('../jobs/useImportedSolvePlan', () => ({
 }));
 
 const MANIFEST = `sha256:${'1'.repeat(64)}`;
+const SECOND = `sha256:${'4'.repeat(64)}`;
 const MSH = [
   '$MeshFormat', '2.2 0 8', '$EndMeshFormat',
   '$Nodes', '3', '1 0 0 0', '2 1 0 0', '3 0 1 0', '$EndNodes',
@@ -402,7 +403,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(mocks.createCadOperation).toHaveBeenCalledOnce();
     const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
     expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
-    expect(mocks.prepareCadOperation).toHaveBeenCalledWith(operationId, { setupRevisionId: expect.any(String), submit: true });
+    expect(mocks.prepareCadOperation).toHaveBeenCalledWith(operationId, { setupRevisionId: expect.any(String), submit: true, frameAxis: '+x' });
     const bound = revisions.get(mocks.prepareCadOperation.mock.calls[0][1].setupRevisionId as string)!;
     expect(bound.options).toMatchObject({ frequency_range: [200, 20_000], num_frequencies: 24 });
     // The remembered settings are the ones solved, without the run's name.
@@ -671,6 +672,87 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(mocks.prepareCadOperation.mock.calls.map((call) => call[0])).toEqual([operationId, operationId]);
   });
 
+  /** Another model put on screen -- another snapshot, other settings -- as a
+   * newer return does. */
+  function selectSecond(): void {
+    const first = useCadReturnStore.getState().ingestRecord!;
+    useCadReturnStore.setState({
+      ingestRecord: { ...first, ingest_id: 'wgi_second', manifest_sha256: SECOND } as CadReturnIngestRecord,
+      frequencyCount: 99,
+    });
+    importedMeshStore.setCad({ name: 'Speaker B', source: 'cad', ingestId: 'wgi_second' } as ImportedMeshScene);
+  }
+
+  it('solves the model on screen at the press when another is selected while it waits for the frame read', async () => {
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => { answer = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith('/api/cadlink/solver-frame?')) await held;
+      return base(input, init);
+    }));
+    await act(async () => {
+      const record = useCadReturnStore.getState().ingestRecord!;
+      root.render(<JobsCoordinator now={() => new Date(2026, 8, 22, 12)}><CadSolveCard record={record} label="Speaker"/></JobsCoordinator>);
+      await flush(8);
+    });
+    let outcome!: Promise<'submitted' | 'busy'>;
+    await act(async () => { outcome = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); await flush(); });
+    act(() => selectSecond());
+    await act(async () => { answer(); await expect(outcome).resolves.toBe('submitted'); });
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+    expect(mocks.createCadOperation.mock.calls[0][0]).toMatchObject({ ingestId: 'wgi_first' });
+    expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '+x' }]);
+    const bound = revisions.get(mocks.prepareCadOperation.mock.calls[0][1].setupRevisionId as string)!;
+    expect(bound.options).toMatchObject({ num_frequencies: 24 });
+  });
+
+  it('never attaches a Solve to a request for a model selected while its settings were being saved', async () => {
+    await mount();
+    mocks.putProjectSetup.mockImplementationOnce(async (request: { lineageId: string; setup: CadSolveSetup }) => {
+      // Another model is put on screen, with a Fusion request being prepared for it.
+      selectSecond();
+      useCadOperationsStore.getState().apply(operation('cmd-b', 'processing', {
+        snapshot: { manifestSha256: SECOND, documentName: 'Speaker B', projectLineageId: 'wgl_test' },
+        updatedAt: '2026-09-22T10:00:01Z',
+      }));
+      return { lineageId: request.lineageId, inventorySha256: 'sha256:inv', revisionId: 'wgs_b' };
+    });
+    await pressSolve();
+    // The model pressed for is solved; the other request is left alone.
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+    expect(mocks.createCadOperation.mock.calls[0][0]).toMatchObject({ ingestId: 'wgi_first' });
+    expect(mocks.prepareCadOperation.mock.calls.map((call) => call[0])).not.toContain('cmd-b');
+  });
+
+  it('never solves along an axis the card did not show: a frame changed elsewhere stops the solve and the card shows it', async () => {
+    frame = frameAnswer({ confirmed: '+z', preselected: { axis: '+z', source: 'confirmed' } });
+    await mount();
+    expect(host.querySelector('.cad-solver-frame-line')!.textContent).toBe('Radiates along +z · Change');
+    // Another window confirms +x for the project; this card still shows +z.
+    frame = frameAnswer({ confirmed: '+x', preselected: { axis: '+x', source: 'confirmed' } });
+    await pressSolve();
+    // Already confirmed as far as this card knows: no PUT, but the
+    // preparation is held to the axis shown.
+    expect(puts).toEqual([]);
+    const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
+    expect(mocks.prepareCadOperation.mock.calls[0][1]).toMatchObject({ frameAxis: '+z', submit: true });
+    // The backend finds +x confirmed and stops at the frame gate.
+    await deliver(operation(operationId, 'needs_user_input', {
+      reason: 'frame_confirmation_required', stage: 'ready', attemptGeneration: 1, preparationId: 'wgp_x',
+      message: 'This project\u2019s solver frame is +x now, not the +z WG showed when you pressed Solve.',
+      updatedAt: '2026-09-22T10:00:03Z',
+    }));
+    await vi.waitFor(() => expect(host.querySelector('.cad-solver-frame-line')!.textContent).toBe('Radiates along +x · Change'));
+    expect(host.querySelector('.cad-solver-frame-changed')!.textContent).toContain('changed elsewhere to +x; this card showed +z');
+    // Solve again: along the axis now shown, the same request (recovered
+    // under the id this window holds; a create of it is idempotent).
+    await pressSolve();
+    expect(mocks.createCadOperation.mock.calls.map((call) => call[0].operationId)).toEqual([operationId, operationId]);
+    expect(mocks.prepareCadOperation.mock.calls[1][0]).toBe(operationId);
+    expect(mocks.prepareCadOperation.mock.calls[1][1]).toMatchObject({ frameAxis: '+x' });
+  });
+
   it('solves and remembers the settings as edited, not as they were', async () => {
     await mount();
     act(() => {
@@ -722,7 +804,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await pressSolve();
     expect(mocks.createCadOperation).not.toHaveBeenCalled();
     expect(mocks.prepareCadOperation).toHaveBeenCalledTimes(2);
-    expect(mocks.prepareCadOperation.mock.calls[1]).toEqual(['cmd-fusion', { submit: true }]);
+    expect(mocks.prepareCadOperation.mock.calls[1]).toEqual(['cmd-fusion', { submit: true, frameAxis: '+x' }]);
     expect(useSolveOptionsStore.getState().engine).toBe('bempp');
     // Remembered for the project as displayed, both times.
     expect(mocks.putProjectSetup.mock.calls.map((call) => (call[0].setup as CadSolveSetup).options.engine)).toEqual(['bempp', 'bempp']);
@@ -749,7 +831,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     }));
     await deliver(operation(operationId, 'accepted', { jobId: 'job-own', updatedAt: '2026-09-22T10:00:03Z' }));
     await pressSolve();
-    expect(mocks.prepareCadOperation.mock.calls[1]).toEqual(['cmd-held', { submit: true }]);
+    expect(mocks.prepareCadOperation.mock.calls[1]).toEqual(['cmd-held', { submit: true, frameAxis: '+x' }]);
   });
 
   it('binds the settings on screen when the setup a request holds cannot be read', async () => {
@@ -761,7 +843,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await pressSolve();
     expect(mocks.getSetupRevision).toHaveBeenCalledWith('wgs_gone');
     expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
-    expect(mocks.prepareCadOperation.mock.calls[0]).toEqual(['cmd-fusion', { setupRevisionId: expect.any(String), submit: true }]);
+    expect(mocks.prepareCadOperation.mock.calls[0]).toEqual(['cmd-fusion', { setupRevisionId: expect.any(String), submit: true, frameAxis: '+x' }]);
   });
 
   it('shows a failure and a cancellation, and reveals nothing for them', async () => {

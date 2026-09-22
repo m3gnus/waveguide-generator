@@ -232,6 +232,39 @@ def test_confirming_another_axis_prepares_again_in_that_frame(real) -> None:
     assert harness.submitted[0].geometry.ingest_id == solved["preparationId"]
 
 
+def test_a_frame_changed_elsewhere_stops_the_solve_instead_of_changing_its_axis(real) -> None:
+    """The axis shown is the axis solved: Solve names the axis it showed."""
+
+    harness, mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    waiting = _prepare(harness)
+    # The card showed +z and was about to solve along it; another window
+    # confirmed +y for the project in the meantime.
+    confirm_frame(harness.store, _record(harness, waiting), "+y")
+
+    stopped = _prepare(harness, expected_frame_axis="+z")
+
+    assert _waiting_for_frame(stopped), stopped
+    assert "+y now, not the +z WG showed" in stopped["message"]
+    assert harness.submitted == []
+    # Named as the axis it now is, it solves (the control).
+    solved = _prepare(harness, expected_frame_axis="+y")
+    assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
+    assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+y"
+
+
+def test_the_prepare_route_takes_only_a_known_frame_axis() -> None:
+    from pydantic import ValidationError
+
+    from server.cadlink.api import PrepareOperationRequest
+
+    assert PrepareOperationRequest.model_validate({"frameAxis": "-y"}).frame_axis == "-y"
+    assert PrepareOperationRequest.model_validate({}).frame_axis is None
+    with pytest.raises(ValidationError):
+        PrepareOperationRequest.model_validate({"frameAxis": "y"})
+
+
 def test_a_later_export_of_the_same_project_reuses_the_confirmed_frame(real) -> None:
     harness, mesher = real
     first = b"STEP authored"

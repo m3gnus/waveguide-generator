@@ -83,6 +83,7 @@ from .solver_frame import (
     REASON as FRAME_CONFIRMATION_REQUIRED,
     ensure_frame_suggestion,
     record_frame_refusal,
+    record_is_unlinked,
     resolve_for_manifest as resolve_solver_frame,
 )
 from .solve_command import (
@@ -118,6 +119,10 @@ class PreparationInput:
     submit: bool = True
     approve_preparation_id: str | None = None
     approve_finding_ids: tuple[str, ...] = ()
+    #: The solver frame axis the user saw when they pressed Solve. An unlinked
+    #: snapshot is solved only along it: a confirmation changed elsewhere in
+    #: the meantime stops at the frame gate instead of changing the axis.
+    expected_frame_axis: str | None = None
 
 
 @dataclass
@@ -806,6 +811,17 @@ def _resumable(
     return record
 
 
+def _record_frame_axis(record: Mapping[str, Any]) -> str | None:
+    """The solver frame axis an unlinked record was meshed in; None when linked."""
+
+    if not record_is_unlinked(record):
+        return None
+    normalisation = record.get("normalisation")
+    frame = normalisation.get("solver_frame") if isinstance(normalisation, Mapping) else None
+    axis = frame.get("axis") if isinstance(frame, Mapping) else None
+    return str(axis) if axis else None
+
+
 def _project_gate(retained: Mapping[str, Any]) -> dict[str, str]:
     """The design and instance the ingest's project gate is given for a snapshot.
 
@@ -1049,6 +1065,21 @@ def _prepare_sync(
         return "done", _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT,
             reason=FRAME_CONFIRMATION_REQUIRED, message=frame_refusal,
+        )
+    prepared_axis = _record_frame_axis(record)
+    if (
+        request.expected_frame_axis is not None
+        and prepared_axis is not None
+        and prepared_axis != request.expected_frame_axis
+    ):
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT,
+            reason=FRAME_CONFIRMATION_REQUIRED,
+            message=(
+                f"This project's solver frame is {prepared_axis} now, not the "
+                f"{request.expected_frame_axis} WG showed when you pressed Solve: it was "
+                "changed elsewhere. Check it, then press Solve again."
+            ),
         )
 
     reviewed = (

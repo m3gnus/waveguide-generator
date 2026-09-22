@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { confirmSolverFrame, type SolverFrameState } from '../api/solverFrame';
+import { useCadOperationsStore } from '../stores/cadOperations';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { parseMSH, type ParsedMSH } from '../viewport/mshParser';
 import {
@@ -146,8 +147,11 @@ const SOURCE_WORDS: Record<string, string> = {
  * notice offers: Solve confirms the axis shown (`confirmDisplayedFrame`). The
  * preview applies the server's matrices; nothing here computes a frame.
  */
-export function CadSolverFrame({ ingestId, label, fetcher = fetch }: {
+export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetch }: {
   ingestId: string;
+  /** The snapshot shown: a solve of it that stops at the frame gate means the
+   * frame may have changed, so the card reads it again. */
+  manifestSha256?: string;
   label: string;
   fetcher?: typeof fetch;
 }) {
@@ -158,7 +162,18 @@ export function CadSolverFrame({ ingestId, label, fetcher = fetch }: {
   const [changing, setChanging] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
-  useEffect(() => { void load(ingestId, fetcher); }, [fetcher, ingestId, load]);
+  // Each time a solve of this snapshot stops at the frame gate -- a frame
+  // changed elsewhere, say -- the card reads the frame again and shows it.
+  const frameGate = useCadOperationsStore((state) => Object.values(state.operations)
+    .filter((operation) => operation.kind === 'prepare_and_solve'
+      && operation.state === 'needs_user_input'
+      && operation.reason === 'frame_confirmation_required'
+      && manifestSha256 !== undefined
+      && operation.snapshot?.manifestSha256 === manifestSha256)
+    .map((operation) => `${operation.operationId}:${operation.attemptGeneration}:${operation.updatedAt ?? ''}`)
+    .sort()
+    .join('|'));
+  useEffect(() => { void load(ingestId, fetcher); }, [fetcher, frameGate, ingestId, load]);
   useEffect(() => { setChanging(false); setSwitchError(null); }, [ingestId]);
   const frame = view?.frame ?? null;
   const { mesh } = useFrameMesh(ingestId, fetcher);
@@ -227,6 +242,9 @@ export function CadSolverFrame({ ingestId, label, fetcher = fetch }: {
         : <p className="cad-detail">Choose the model axis that points out of the mouth; the preview shows it as the solver +Z.</p>}
       {changing && <button className="link-button" data-action="done-solver-frame" onClick={() => setChanging(false)}>Done</button>}
     </>}
+    {view.changedFrom && axis && <p className="cad-alert cad-alert-notice cad-solver-frame-changed" role="status">
+      This project’s solver frame was changed elsewhere to {axis}; this card showed {view.changedFrom}. Solve now solves along {axis}.
+    </p>}
     {axis && frame.recordAxis !== axis && <p className="cad-detail">
       Prepared along {frame.recordAxis}; Solve prepares it again along {axis}.
     </p>}

@@ -101,7 +101,7 @@ from .preparation import (
 from .project_setup import SOLVER_SELECTION, inventory_sha256
 from .setup import setup_content, setup_digest, validate_setup
 from .roles import canonical_source_role
-from .solver_frame import ensure_frame_suggestion, record_is_unlinked
+from .solver_frame import AXES as SOLVER_FRAME_AXES, ensure_frame_suggestion, record_is_unlinked
 from .store import CadLinkStore
 from .wgreturn import WgReturnError, declared_domain_planes
 
@@ -1736,6 +1736,16 @@ class PrepareOperationRequest(BaseModel):
     approvals: OperationApprovalsRequest | None = None
     #: Answer with the prepared or submitted state instead of at once.
     wait: bool = False
+    #: The solver frame axis the user saw when they pressed Solve (unlinked
+    #: snapshots): solved only along it, or stopped at the frame gate.
+    frame_axis: str | None = Field(default=None, alias="frameAxis")
+
+    @field_validator("frame_axis")
+    @classmethod
+    def known_axis(cls, value: str | None) -> str | None:
+        if value is not None and value not in SOLVER_FRAME_AXES:
+            raise ValueError(f"frameAxis must be one of {', '.join(SOLVER_FRAME_AXES)}")
+        return value
 
 
 _PENDING_STATES = frozenset(STATES - TERMINAL_STATES)
@@ -2127,6 +2137,7 @@ async def post_prepare_cad_operation(
                 submit=payload.submit,
                 approve_preparation_id=approvals.preparation_id if approvals else None,
                 approve_finding_ids=tuple(approvals.finding_ids) if approvals else (),
+                expected_frame_axis=payload.frame_axis,
             ),
         )
     )

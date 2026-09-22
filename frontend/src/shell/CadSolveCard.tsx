@@ -159,7 +159,7 @@ export function CadSolveCard({ record, label, fetcher }: {
   const disabled = !available || solve!.disabled;
   return <section className="cad-solve-card" aria-label={`Solve ${label}`}>
     <p className="cad-solve-summary">{modelSummary(record)}</p>
-    {unlinked && <CadSolverFrame ingestId={record.ingest_id} label={label} fetcher={fetcher}/>}
+    {unlinked && <CadSolverFrame ingestId={record.ingest_id} manifestSha256={record.manifest_sha256} label={label} fetcher={fetcher}/>}
     <SettingsLine record={record}/>
     <OnScreenSolveStatus record={record}/>
     <RunLine record={record}/>
