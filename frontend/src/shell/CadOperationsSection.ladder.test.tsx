@@ -13,11 +13,12 @@ const coordinator = vi.hoisted(() => ({
   solveOperation: vi.fn(async () => undefined),
   approveOperation: vi.fn(async () => undefined),
   dismissOperation: vi.fn(async () => undefined),
+  solveOperationWithSettings: vi.fn(async () => undefined),
 }));
 vi.mock('./CadLinkCoordinator', () => {
   const snapshot = {
     ...coordinator,
-    solveOperationWithSettings: vi.fn(), reconcileOperation: vi.fn(), reportError: vi.fn(),
+    reconcileOperation: vi.fn(), reportError: vi.fn(),
     fusionStatus: null,
   };
   return { cadLinkCoordinatorBridge: { getSnapshot: () => snapshot, subscribe: () => () => undefined } };
@@ -107,7 +108,10 @@ describe('the needs_user_input ladder', () => {
     const confirm = host.querySelector<HTMLButtonElement>('button[data-action="confirm-frame"]')!;
     expect(confirm).not.toBeNull();
     await act(async () => { confirm.click(); });
-    expect(coordinator.solveOperation).toHaveBeenCalledWith('manual-solve:op-1');
+    // A solve started in WG: the confirmation solves with the settings on
+    // screen, never with none (that fell back to setup_required).
+    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith('manual-solve:op-1');
+    expect(coordinator.solveOperation).not.toHaveBeenCalled();
     // A manual solve is the user's own, never "Fusion asked for a solve".
     expect(host.textContent).toContain('Your solve is waiting');
   });
@@ -134,9 +138,10 @@ describe('the needs_user_input ladder', () => {
     expect(steps(ladder).map((step) => [step.gate, step.current])).toEqual([['findings', true], ['solve', false]]);
     expect(host.textContent).toContain(FINDING);
     await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Approve and solve: PartyMEH"]')!.click(); });
-    expect(coordinator.approveOperation).toHaveBeenCalledWith('manual-solve:op-1', {
+    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith('manual-solve:op-1', {
       preparationId: 'wgi_prep1', findingIds: [FINDING],
     });
+    expect(coordinator.approveOperation).not.toHaveBeenCalled();
   });
 
   it('at the last gate, offers Solve now', async () => {
@@ -145,7 +150,7 @@ describe('the needs_user_input ladder', () => {
     expect(steps(ladder).map((step) => [step.gate, step.current])).toEqual([['solve', true]]);
     const solve = host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!;
     await act(async () => { solve.click(); });
-    expect(coordinator.solveOperation).toHaveBeenCalledWith('manual-solve:op-1');
+    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith('manual-solve:op-1');
   });
 
   it('counts an approval only on the preparation it was given for, as the backend records them', async () => {

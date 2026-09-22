@@ -458,6 +458,58 @@ describe('CadLinkPanel', () => {
     });
   });
 
+  /** A solve started from Simulation → Solve binds its settings once, on the
+   * first prepare. Its follow-ups used to send none, so the backend looked for
+   * a project setup a first-time project does not have, answered
+   * setup_required, and dropped the approvals. They now send the settings on
+   * screen, as "Use these settings and solve" does. */
+  it('sends the settings on screen with every follow-up of a solve started in WG', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json({ ...record, project: { lineage_id: 'wgl_speaker' } });
+    }));
+    await renderAndSelect();
+    await clickIngest();
+    const manual = 'manual-solve:op-wg';
+    const posted = recordOperationRequests({
+      detail: {
+        ...cadOperation({ operationId: manual, reason: 'findings_need_review', preparationId: 'wgp_7' }),
+        approvals: [],
+        preparation: {
+          preparationId: 'wgp_7', ingestId: record.ingest_id, snapshotSha256: 'sha256:s', setupRevisionId: 'wgs_manual',
+          reportSha256: record.report_sha256, blockingFindingIds: ['finding-a'], attemptGeneration: 1,
+        },
+      },
+    });
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: manual, reason: 'findings_need_review', preparationId: 'wgp_7', setupRevisionId: 'wgs_manual',
+      }));
+    });
+    const card = operationCard(manual);
+    await vi.waitFor(() => expect(buttonIn(card, 'Approve and solve')).toBeDefined());
+    await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[0]).toMatchObject({ path: '/api/cadlink/project-setups', body: { lineageId: 'wgl_speaker' } });
+    expect(posted[1]).toEqual({
+      path: `/api/cadlink/operations/${encodeURIComponent(manual)}/prepare`,
+      body: { setupRevisionId: 'wgs_9', submit: true, approvals: { preparationId: 'wgp_7', findingIds: ['finding-a'] } },
+    });
+    // Its progress line is about the user's own solve, not one Fusion sent.
+    await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toBeTruthy());
+    expect(host.querySelector('.cad-status-strip')?.textContent).not.toContain('Fusion sent');
+
+    // Positive control: a solve Fusion asked for keeps its project's own setup.
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({ operationId: 'op-fusion', createdAt: '2026-09-14T10:00:03Z' }));
+    });
+    await act(async () => { buttonIn(operationCard('op-fusion'), 'Solve now')!.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(3));
+    expect(posted[2]).toEqual({ path: '/api/cadlink/operations/op-fusion/prepare', body: { submit: true } });
+  });
+
   it('holds an action until its operation moves on, offers it again when the request fails, and leaves a received one to the backend', async () => {
     await renderAndSelect();
     await clickIngest();

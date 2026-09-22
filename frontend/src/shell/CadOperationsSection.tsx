@@ -273,6 +273,17 @@ function CadOperationCard({ operation, record }: {
   // Only the preparation the operation names: an approval never carries to another.
   const reviewedPreparation = review.findingIds.length > 0
     && review.preparationId === operation.preparationId ? review.preparationId : null;
+  // A solve started from Simulation → Solve bound its settings on its first
+  // prepare only, and no project setup was recorded for it. Every follow-up
+  // therefore sends the settings on screen, as "Use these settings and solve"
+  // does; one without them falls back to the project setup and stops again.
+  const manual = operation.operationId.startsWith('manual-solve:');
+  const solveRequest = () => (manual
+    ? coordinator.solveOperationWithSettings(operation.operationId)
+    : coordinator.solveOperation(operation.operationId));
+  const approveRequest = (approvals: { preparationId: string; findingIds: string[] }) => (manual
+    ? coordinator.solveOperationWithSettings(operation.operationId, approvals)
+    : coordinator.approveOperation(operation.operationId, approvals));
   const ask = (action: OperationAction, request: () => Promise<void>) => {
     setAsked({ action, attemptGeneration: operation.attemptGeneration, state: operation.state });
     void request().catch(() => setAsked(null));
@@ -302,7 +313,7 @@ function CadOperationCard({ operation, record }: {
     disabled={heldAction === 'solve'}
     aria-label={`Solve now: ${label}`}
     title="Prepare this model from its project’s own solve settings and start the solve."
-    onClick={() => ask('solve', () => coordinator.solveOperation(operation.operationId))}
+    onClick={() => ask('solve', solveRequest)}
   >Solve now</button>;
   const status = [
     STATE_COPY[operation.state] ?? operation.state,
@@ -310,7 +321,6 @@ function CadOperationCard({ operation, record }: {
     operation.reason ? REASON_COPY[operation.reason] ?? operation.reason : null,
   ].filter(Boolean).join(' · ');
   const ladder = solveGateLadder(operation, review.error ? null : review);
-  const manual = operation.operationId.startsWith('manual-solve:');
   return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId}>
     <div>
       <b>{solve ? (manual ? 'Your solve is waiting' : 'Fusion asked for a solve') : `CAD operation · ${operation.kind}`}{documentName ? ` · ${documentName}` : ''}</b>
@@ -340,7 +350,7 @@ function CadOperationCard({ operation, record }: {
         key={`${operation.operationId}:${operation.attemptGeneration}:${operation.preparationId ?? ''}`}
         snapshot={{ operationId: operation.operationId }}
         label={label}
-        onConfirmed={() => ask('solve', () => coordinator.solveOperation(operation.operationId))}
+        onConfirmed={() => ask('solve', solveRequest)}
       />}
       <CadSolveInputs
         operationId={operation.operationId}
@@ -364,7 +374,7 @@ function CadOperationCard({ operation, record }: {
         className="primary"
         disabled={heldAction === 'approve'}
         aria-label={`Approve and solve: ${label}`}
-        onClick={() => ask('approve', () => coordinator.approveOperation(operation.operationId, {
+        onClick={() => ask('approve', () => approveRequest({
           preparationId: reviewedPreparation, findingIds: review.findingIds,
         }))}
       >Approve and solve</button>}
