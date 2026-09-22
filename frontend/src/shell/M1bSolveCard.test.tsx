@@ -33,6 +33,7 @@ import fixtureV2 from '../viewport/solverFrame.v2.fixture.json';
 import { SOLVER_FRAME_AXES, type SolverFrameAxis } from '../viewport/solverFrame';
 import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
 import { ResultsPanel } from './ResultsPanel';
+import { SolveActions } from './TopBar';
 import { CadSolveCard } from './CadSolveCard';
 import { CadOperationsSection } from './CadOperationsSection';
 import { resetSolveAttentionForTests } from './solveAttention';
@@ -262,6 +263,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
       root.render(<JobsCoordinator now={() => new Date(2026, 8, 22, 12)}>
         <CadSolveCard record={record} label="Speaker"/>
         <CadOperationsSection record={record} solves={false}/>
+        <div className="topbar"><SolveActions/></div>
         <ResultsPanel/>
       </JobsCoordinator>);
       await flush(8);
@@ -269,7 +271,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
   }
 
-  const solveButtons = () => [...host.querySelectorAll<HTMLButtonElement>('button')]
+  // The CAD Link panel's buttons; the top bar's Solve is the same command, elsewhere.
+  const solveButtons = () => [...host.querySelectorAll<HTMLButtonElement>('button:not(.solve-button)')]
     .filter((button) => /solve/i.test(button.textContent ?? '') || button.dataset.action === 'solve');
   const solveButton = () => host.querySelector<HTMLButtonElement>('button[data-action="solve"]')!;
 
@@ -587,6 +590,85 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await jobs([cadJob('job-f')]);
     expect(compareSelection.getSnapshot().primary).toBe('job-f');
     expect(activations).toContain('results');
+  });
+
+  it('holds Solve on a Fusion request the backend is still preparing, then continues it at its gate and reveals its result', async () => {
+    await mount();
+    await deliver(operation('cmd-fusion', 'processing', { stage: 'preparing-mesh', updatedAt: '2026-09-22T10:00:01Z' }));
+    // One card, with the request's progress; Solve held with that status,
+    // the top bar's too.
+    const card = host.querySelector('.cad-solve-card .cad-operation')!;
+    expect(card.textContent).toContain('Preparing the request from Fusion…');
+    expect(solveButton().disabled).toBe(true);
+    expect(host.querySelector('.cad-solve-blocker')!.textContent).toBe('Preparing the request from Fusion…');
+    const topBar = host.querySelector<HTMLButtonElement>('.topbar .solve-button')!;
+    expect(topBar.disabled).toBe(true);
+    expect(topBar.title).toBe('Preparing the request from Fusion…');
+    // Every other caller of the one command resolves to that request.
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.prepareCadOperation).not.toHaveBeenCalled();
+    expect(puts).toEqual([]);
+
+    // It stops at the frame gate: Solve is the normal continuation.
+    await deliver(operation('cmd-fusion', 'needs_user_input', {
+      reason: 'frame_confirmation_required', stage: 'ready', attemptGeneration: 1,
+      preparationId: 'wgp_1', updatedAt: '2026-09-22T10:00:03Z',
+    }));
+    await pressSolve();
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
+    expect(mocks.prepareCadOperation.mock.calls[0][0]).toBe('cmd-fusion');
+    expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '+x' }]);
+    await deliver(operation('cmd-fusion', 'accepted', { jobId: 'job-f', attemptGeneration: 2, updatedAt: '2026-09-22T10:00:09Z' }));
+    await jobs([cadJob('job-f')]);
+    expect(compareSelection.getSnapshot().primary).toBe('job-f');
+    expect(activations.filter((panel) => panel === 'results')).toEqual(['results']);
+  });
+
+  it('reveals the result of a request that finishes while Solve is held on it', async () => {
+    await mount();
+    await deliver(operation('cmd-fusion', 'processing', { updatedAt: '2026-09-22T10:00:01Z' }));
+    expect(solveButton().disabled).toBe(true);
+    await deliver(operation('cmd-fusion', 'accepted', { jobId: 'job-f', updatedAt: '2026-09-22T10:00:09Z' }));
+    await jobs([cadJob('job-f')]);
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(compareSelection.getSnapshot().primary).toBe('job-f');
+    expect(activations).toContain('results');
+    expect(solveButton().disabled).toBe(false);
+  });
+
+  it('resolves a press that races a request going in flight to that request, never a second one', async () => {
+    await mount();
+    // The press starts with nothing in flight; while its settings are being
+    // recorded, Fusion's request for this snapshot arrives and is prepared.
+    mocks.putProjectSetup.mockImplementationOnce(async (request: { lineageId: string; setup: CadSolveSetup }) => {
+      useCadOperationsStore.getState().apply(operation('cmd-race', 'processing', { updatedAt: '2026-09-22T10:00:01Z' }));
+      return { lineageId: request.lineageId, inventorySha256: 'sha256:inv', revisionId: 'wgs_r' };
+    });
+    await pressSolve();
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.prepareCadOperation).not.toHaveBeenCalled();
+    // The press's arm went to that request: its result follows the user.
+    await deliver(operation('cmd-race', 'accepted', { jobId: 'job-r', updatedAt: '2026-09-22T10:00:09Z' }));
+    await jobs([cadJob('job-r')]);
+    expect(compareSelection.getSnapshot().primary).toBe('job-r');
+    expect(activations).toContain('results');
+  });
+
+  it('lets Solve recover its own solve after a lost response: the same operation again, never a second', async () => {
+    await mount();
+    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('connection closed'));
+    await act(async () => { solveButton().click(); await flush(12); });
+    const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
+    // Its own request, created and not yet prepared as far as this page knows.
+    expect(useCadOperationsStore.getState().operations[operationId].state).toBe('received');
+    expect(host.querySelector('.cad-solve-card .cad-operation')!.textContent).toContain('Preparing your solve…');
+    await pressSolve();
+    expect(mocks.createCadOperation.mock.calls.map((call) => call[0].operationId)).toEqual([operationId, operationId]);
+    expect(mocks.prepareCadOperation.mock.calls.map((call) => call[0])).toEqual([operationId, operationId]);
   });
 
   it('solves and remembers the settings as edited, not as they were', async () => {

@@ -5,6 +5,7 @@ import { listCadProjects } from '../api/cadProjects';
 import { pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { openCadProject } from './CadProjectPanel';
+import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
 import { workspaceNavigation } from './workspaceNavigation';
 
@@ -300,6 +301,8 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
           must not read as a problem with this one. */}
       {review.error && operation.reason === 'findings_need_review' && <span>Could not read the findings to review: {review.error}</span>}
       {waiting && help.text && <span>{help.text}</span>}
+      {solve && (operation.state === 'received' || operation.state === 'processing')
+        && <span className="cad-operation-in-flight">{inFlightWords(operation)}</span>}
     </div>
     <div className="cad-confirm-actions">
       {operation.state !== 'cancel_requested' && <button

@@ -30,7 +30,7 @@ import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '.
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
-import { onScreenRequestToContinue } from './cadOnScreenSettings';
+import { inFlightWords, onScreenRequestInFlight, onScreenRequestToContinue } from './cadOnScreenSettings';
 import { solveAttention, useOperationAttention } from './solveAttention';
 
 /**
@@ -187,6 +187,23 @@ export function cadSolveBlockerNow(): string | null {
     return CAD_VIEWPORT_MISMATCH;
   }
   return importedSubmissionBlocker(cadReturn) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id);
+}
+
+/** The request for the model on screen that Solve is held on while the
+ * backend prepares or submits it, and the words that say so. */
+function heldOnRequest(): { operation: CadOperationSummary; words: string } | null {
+  const operation = onScreenRequestInFlight(
+    useCadOperationsStore.getState().operations, useCadReturnStore.getState().ingestRecord,
+  );
+  return operation ? { operation, words: inFlightWords(operation) } : null;
+}
+
+/** A Solve given while that request is in flight -- a press that raced the
+ * button's hold -- is that request's: its arm follows it, so the gate it stops
+ * at or the result it ends in follows the user. Nothing new is created. */
+function holdOnRequest(held: { operation: CadOperationSummary }): 'submitted' {
+  solveAttention.bindOperation(held.operation.operationId);
+  return 'submitted';
 }
 
 const jobsConnection = () => jobsSocket.getSnapshot().connection;
@@ -355,10 +372,12 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     !cadViewportGeometry.ingestId
     || cadViewportGeometry.ingestId !== cadReturn.ingestRecord?.ingest_id
   );
+  const inFlight = cadGeometryActive ? onScreenRequestInFlight(cadOperations, cadReturn.ingestRecord) : null;
   const cadSolveBlocker = cadGeometryMismatch
     ? CAD_VIEWPORT_MISMATCH
     : cadGeometryActive
-      ? importedSubmissionBlocker(cadReturn, solveOptions) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id)
+      ? (inFlight ? inFlightWords(inFlight) : null)
+        ?? importedSubmissionBlocker(cadReturn, solveOptions) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id)
       : null;
   const directivityError = polarValidationError(solveOptions.polar);
   const solveBlocker = cadSolveBlocker ?? directivityError;
@@ -463,6 +482,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // same row and cannot create a second job.
   const solveCurrentCadImport = useCallback(async () => {
     if (submissionInFlight.current) return 'busy' as const;
+    const heldAtPress = heldOnRequest();
+    if (heldAtPress) return holdOnRequest(heldAtPress);
     // A Solve given right after a preparation (Bring in & solve) waits for the
     // frame read the card has under way, holding the mutex while it does.
     const reading = frameReadInFlight(useCadReturnStore.getState().ingestRecord?.ingest_id);
@@ -493,6 +514,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // later solve -- Fusion's too -- starts from them. Never a global default,
       // never the CAD document.
       if (project) await putProjectSetup(built);
+      // A request for this snapshot that started while those were answered:
+      // this press is that request's, not a second one.
+      const heldNow = heldOnRequest();
+      if (heldNow) return holdOnRequest(heldNow);
       // A new identity is a new run of the design. When a request for this
       // very snapshot is waiting on screen (Fusion's "Solve in WG", say), the
       // identity names that operation instead: this press continues it with
