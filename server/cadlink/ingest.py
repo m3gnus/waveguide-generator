@@ -39,9 +39,11 @@ from .solver_frame import (
     AS_MODELLED,
     allowed_axes,
     frame_matrix,
+    frame_spec,
     is_unlinked_manifest,
     record_solver_frame,
     resolve_for_manifest,
+    spec_matrix,
 )
 from .wgreturn import (
     WgReturnBundle,
@@ -754,7 +756,7 @@ def _cache_key(
     transform = (
         rigid_inverse(anchor["assembly_from_link"]).tolist()
         if anchor is not None
-        else frame_matrix(str(solver_frame_axis)).tolist()
+        else spec_matrix(solver_frame_axis).tolist()
         if solver_frame_axis is not None
         else [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
     )
@@ -1097,7 +1099,12 @@ def _design_target_hint(store: CadLinkStore, design_ids: set[str]) -> str:
 def _requested_solver_frame(
     manifest: Mapping[str, Any], prep_options: Mapping[str, Any] | None
 ) -> str:
-    """The solver frame axis this preparation meshes an unlinked return in."""
+    """The solver frame axis this preparation meshes an unlinked return in.
+
+    A request names only the forward axis. Its complete frame -- the roll,
+    from the document up the return states -- is the current contract's
+    (``solver_frame.frame_spec``), never the caller's.
+    """
 
     requested = (prep_options or {}).get("solver_frame")
     if requested is None:
@@ -1270,8 +1277,14 @@ def ingest_bundle(
         raise
     options = dict(prep_options or {})
     options.pop("solver_frame", None)
+    # The complete frame, not only its axis, so the mesh cache key and the
+    # mesher both see the transform (contract v2 fixes the roll). The modelled
+    # frame is the identity under every up rule and is still never written.
+    solver_frame = (
+        frame_spec(solver_frame_axis, manifest) if is_unlinked_manifest(manifest) else None
+    )
     if solver_frame_axis != AS_MODELLED:
-        options["solver_frame"] = solver_frame_axis
+        options["solver_frame"] = solver_frame
     # The domain declaration comes from the CAD bundle, never from the request:
     # it is a statement about the geometry that arrived, and a caller must not
     # be able to assert it over the top of one. It joins the options here so it
@@ -1675,7 +1688,7 @@ def ingest_bundle(
             "normalisation": (
                 {
                     **built["normalisation"],
-                    "solver_frame": record_solver_frame(manifest, solver_frame_axis),
+                    "solver_frame": record_solver_frame(manifest, solver_frame),
                 }
                 if is_unlinked_manifest(manifest)
                 else built["normalisation"]

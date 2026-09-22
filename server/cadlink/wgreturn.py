@@ -30,6 +30,7 @@ SUPPORTED_FEATURES = frozenset(
         "fem-air-volume-v1",
         "reduced-domain-v1",
         "source-identity-v1",
+        "document-up-v1",
     }
 )
 # The CAD author's statement that the exported bodies ARE the reduced domain:
@@ -48,6 +49,14 @@ SUPPORTED_FEATURES = frozenset(
 # writer states it. Absent means the root component, which is what every bundle
 # written before the member existed exported.
 EXPORT_FRAMES = ("root-component", "selected-occurrence-component")
+# The CAD document's up axis, in the coordinates the STEP is written in.
+# Fusion documents are Y-up or Z-up. A writer states it under this feature,
+# and only when WG advertises ``documentUp`` (``fusion_delivery.py``); WG then
+# takes the horizontal polar plane perpendicular to it
+# (``solver_frame.py``, contract v2). Without the feature WG assumes CAD +Z up,
+# or +Y when the model radiates along +-Z.
+DOCUMENT_UP_FEATURE = "document-up-v1"
+DOCUMENT_UP_AXES = ("+y", "+z")
 DOMAIN_PLANES = ("x0", "y0")
 DOMAIN_KIND_FOR_PLANES = {
     (): "full",
@@ -671,6 +680,22 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
                 f"must be one of {', '.join(EXPORT_FRAMES)}",
             )
 
+    # Paired in both directions, as the reduced domain is: a stated up that no
+    # feature makes binding, or a feature with nothing stated, is refused.
+    if ("document_up" in coordinates) != (DOCUMENT_UP_FEATURE in feature_names):
+        _fail(
+            "$.required_features",
+            f"{DOCUMENT_UP_FEATURE} is required exactly when "
+            "$.coordinate_system.document_up is present",
+        )
+    if "document_up" in coordinates:
+        up = _string(coordinates["document_up"], "$.coordinate_system.document_up")
+        if up not in DOCUMENT_UP_AXES:
+            _fail(
+                "$.coordinate_system.document_up",
+                f"must be one of {', '.join(DOCUMENT_UP_AXES)}",
+            )
+
     assembly = _mapping(_required(manifest, "assembly", "$"), "$.assembly")
     _string(_required(assembly, "file", "$.assembly"), "$.assembly.file")
     _integer(_required(assembly, "n_bodies_expected", "$.assembly"), "$.assembly.n_bodies_expected", minimum=1)
@@ -969,6 +994,8 @@ def declared_domain_planes(manifest: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 __all__ = [
+    "DOCUMENT_UP_AXES",
+    "DOCUMENT_UP_FEATURE",
     "DOMAIN_PLANES",
     "EXPORT_FRAMES",
     "REDUCED_DOMAIN_FEATURE",

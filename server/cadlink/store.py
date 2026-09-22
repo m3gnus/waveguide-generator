@@ -282,6 +282,7 @@ _SCHEMA = (
       confirmed_at TEXT NOT NULL
     )
     """,
+
 )
 # Columns later stages added to cad_operations: nullable (or defaulted), so a
 # row written before them -- by an earlier build, or by an older release, which
@@ -316,11 +317,15 @@ FUSION_ALREADY_RECORDED = "already_recorded"
 
 
 def _frame_confirmation(row: Mapping[str, Any]) -> dict[str, Any]:
+    frame = row["frame_json"] if "frame_json" in row.keys() else None
     return {
         "key": row["key"],
         "requirement": json.loads(row["requirement_json"]),
         "axis": row["axis"],
         "confirmed_at": row["confirmed_at"],
+        # The complete transform and its up provenance; None for a row
+        # confirmed before they were recorded.
+        "frame": json.loads(frame) if frame else None,
     }
 
 
@@ -674,6 +679,11 @@ class CadLinkStore:
             # open reruns both. The file is renamed only after the commit.
             # The table is additive, so the file keeps the format an older
             # release reads (STORE_FORMAT_VERSION).
+            confirmation_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(cad_frame_confirmations)")
+            }
+            if "frame_json" not in confirmation_columns:
+                conn.execute("ALTER TABLE cad_frame_confirmations ADD COLUMN frame_json TEXT")
             operation_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(cad_operations)")
             }
@@ -1451,9 +1461,18 @@ class CadLinkStore:
         return json.loads(row["value_json"]) if row is not None else None
 
     def record_frame_confirmation(
-        self, key: str, requirement: Mapping[str, Any], axis: str
+        self,
+        key: str,
+        requirement: Mapping[str, Any],
+        axis: str,
+        *,
+        frame: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Confirm an unlinked model's solver frame; the latest confirmation wins."""
+        """Confirm an unlinked model's solver frame; the latest confirmation wins.
+
+        ``frame`` records the complete transform the axis means and where its
+        up came from (``solver_frame.confirm_frame``).
+        """
 
         from .solver_frame import AXES
 
@@ -1462,11 +1481,18 @@ class CadLinkStore:
         self.initialize()
         with self._lock, self._transaction() as conn:
             conn.execute(
-                "INSERT INTO cad_frame_confirmations (key, requirement_json, axis, confirmed_at) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
+                "INSERT INTO cad_frame_confirmations "
+                "(key, requirement_json, axis, confirmed_at, frame_json) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
                 "requirement_json = excluded.requirement_json, axis = excluded.axis, "
-                "confirmed_at = excluded.confirmed_at",
-                (key, canonical_json(dict(requirement)), axis, utc_now()),
+                "confirmed_at = excluded.confirmed_at, frame_json = excluded.frame_json",
+                (
+                    key,
+                    canonical_json(dict(requirement)),
+                    axis,
+                    utc_now(),
+                    canonical_json(dict(frame)) if frame is not None else None,
+                ),
             )
             row = conn.execute(
                 "SELECT * FROM cad_frame_confirmations WHERE key = ?", (key,)

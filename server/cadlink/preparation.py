@@ -79,6 +79,7 @@ from .project_setup import (
 from .setup import CadSolveSetup, solve_request_for, validate_setup
 from .solver_frame import (
     AS_MODELLED,
+    CONTRACT as FRAME_CONTRACT,
     REASON as FRAME_CONFIRMATION_REQUIRED,
     record_frame_refusal,
     resolve_for_manifest as resolve_solver_frame,
@@ -793,7 +794,13 @@ def _resumable(
     if frame_axis is not None:
         normalisation = record.get("normalisation")
         frame = normalisation.get("solver_frame") if isinstance(normalisation, Mapping) else None
-        if not isinstance(frame, Mapping) or frame.get("axis") != frame_axis:
+        if (
+            not isinstance(frame, Mapping)
+            or frame.get("axis") != frame_axis
+            # A record prepared under an earlier frame contract keeps its own
+            # meaning, but a new attempt meshes under the current one.
+            or frame.get("contract") != FRAME_CONTRACT
+        ):
             return None
     return record
 

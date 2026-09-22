@@ -194,7 +194,10 @@ def test_confirming_another_axis_prepares_again_in_that_frame(real) -> None:
 
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
     assert solved["preparationId"] != waiting["preparationId"]
-    assert mesher.calls[-1]["options"]["solver_frame"] == "+y"
+    # The complete frame reaches the mesher (contract v2: the roll too).
+    assert mesher.calls[-1]["options"]["solver_frame"] == {
+        "contract": CONTRACT, "axis": "+y", "up": "+z", "up_source": "default", "document_up": None,
+    }
     assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+y"
     assert harness.submitted[0].geometry.ingest_id == solved["preparationId"]
 
@@ -210,7 +213,7 @@ def test_a_later_export_of_the_same_project_reuses_the_confirmed_frame(real) -> 
     solved = _prepare(harness, "cmd-2")
 
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
-    assert mesher.calls[-1]["options"]["solver_frame"] == "-x"
+    assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "-x"
 
 
 def test_an_export_in_another_components_coordinates_asks_again(real) -> None:
@@ -227,7 +230,7 @@ def test_an_export_in_another_components_coordinates_asks_again(real) -> None:
     assert _waiting_for_frame(summary), summary
     assert "solver_frame" not in mesher.calls[-1]["options"]
     assert _record(harness, summary)["normalisation"]["solver_frame"]["requirement"] == {
-        "contract": CONTRACT, "export_frame": "selected-occurrence-component",
+        "contract": CONTRACT, "export_frame": "selected-occurrence-component", "document_up": None,
     }
 
 
@@ -371,7 +374,7 @@ def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monke
     record = asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
 
     assert record["normalisation"]["solver_frame"]["axis"] == "+y"
-    assert mesher.calls[-1]["options"]["solver_frame"] == "+y"
+    assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "+y"
     with pytest.raises(Exception):
         CadReturnIngestRequest.model_validate({**copy.deepcopy(payload.model_dump(by_alias=True)), "solverFrame": "+x"})
 

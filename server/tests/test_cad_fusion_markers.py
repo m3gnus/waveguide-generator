@@ -229,6 +229,7 @@ def test_wg_advertises_its_delivery_versions_at_startup(
         "fusionRequestDelivery": 3,
         "sourceIdentity": 1,
         "liveProtocol": 1,
+        "documentUp": 1,
     }
 
 

@@ -20,9 +20,10 @@ from server.cadlink.ingest import IngestRefusal, ingest_bundle
 from server.cadlink.solver_frame import (
     CONTRACT,
     confirm_frame,
-    frame_matrix,
     frame_preview,
+    frame_spec,
     record_frame_refusal,
+    spec_matrix,
 )
 from server.cadlink.store import CadLinkStore
 from server.mesh.gmsh_worker import _run_in_gmsh_session
@@ -175,13 +176,18 @@ def test_the_preview_matrix_turns_the_modelled_geometry_into_the_solved_geometry
     solved = _ingest(bundle, data_dir, solver_frame="+y")
     frame = solved["normalisation"]["solver_frame"]
     assert frame["axis"] == "+y" and frame["contract"] == CONTRACT
-    assert frame["requirement"] == {"contract": CONTRACT, "export_frame": "root-component"}
+    assert frame["requirement"] == {
+        "contract": CONTRACT, "export_frame": "root-component", "document_up": None,
+    }
+    # No document up stated: CAD +Z is up, so solver +Y is CAD +Z.
+    assert (frame["up"], frame["up_source"]) == ("+z", "default")
     # One matrix: what was applied, what the record states, what the preview offers.
     preview = {item["axis"]: item for item in frame_preview(store, shown)["axes"]}
     # The record states the matrix OCC actually applied, rebuilt from its
     # rotations, so it may differ from the contract's in the last bit only.
     applied = np.asarray(solved["normalisation"]["matrix"], dtype=float)
-    assert np.allclose(applied, frame_matrix("+y"), rtol=0.0, atol=1e-12)
+    expected = spec_matrix(frame_spec("+y", {}))
+    assert np.allclose(applied, expected, rtol=0.0, atol=1e-12)
     assert np.allclose(preview["+y"]["solverFromAssembly"], applied, rtol=0.0, atol=1e-12)
     assert solved["normalisation"]["solver_frame"]["matrix"] == preview["+y"]["solverFromAssembly"]
     assert solved["normalisation"]["assembly_frame_is_solver_frame"] is False
