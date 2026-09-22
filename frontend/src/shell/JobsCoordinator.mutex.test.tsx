@@ -892,6 +892,85 @@ describe('solve invocation mutex', () => {
     expect(mocks.prepareCadOperation).toHaveBeenCalledWith('op-this', { setupRevisionId: 'wgs_manual', submit: true });
   });
 
+  it('never claims a continued request\'s run again after the next Solve starts another', async () => {
+    const record = filedCad('wgi_claim_once');
+    act(() => workspaceModeStore.setMode('cad'));
+    const snapshot = { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' };
+    act(() => {
+      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', { reason: 'setup_required', snapshot }));
+    });
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+    await act(async () => {
+      useCadOperationsStore.getState().apply(operation('op-fusion', 'accepted', {
+        jobId: 'job-old', updatedAt: '2026-09-15T10:00:01Z', snapshot,
+      }));
+      await Promise.resolve();
+    });
+    const awaited = vi.spyOn(compareSelection, 'awaitRun');
+
+    // The user pins another result, then solves again: a new run.
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+      await Promise.resolve();
+    });
+
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+    expect(awaited).not.toHaveBeenCalledWith('job-old');
+  });
+
+  it('reports a continued solve refused after a reload', async () => {
+    const record = filedCad('wgi_refused_after_reload');
+    const snapshot = { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test', documentName: 'Speaker' };
+    act(() => {
+      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', { reason: 'setup_required', snapshot }));
+    });
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+    act(() => root.unmount());
+    resetCadOperationsStore();
+    root = createRoot(host);
+    await act(async () => { root.render(<JobsCoordinator now={() => new Date(2026, 7, 12, 12)}><span>ready</span></JobsCoordinator>); });
+
+    await act(async () => {
+      useCadOperationsStore.getState().apply(operation('op-fusion', 'processing', { snapshot, updatedAt: '2026-09-15T10:00:01Z' }));
+    });
+    await act(async () => {
+      useCadOperationsStore.getState().apply(operation('op-fusion', 'rejected', {
+        reason: 'snapshot_invalid', message: 'The return is damaged.', snapshot, updatedAt: '2026-09-15T10:00:02Z',
+      }));
+    });
+
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('The solve of Speaker was refused: The return is damaged.');
+  });
+
+  it('never sends the settings on screen to a held request for another snapshot', async () => {
+    const record = filedCad('wgi_stale_mapping');
+    // A held identity that names another snapshot's request.
+    sessionStorage.setItem('wg2.cad.manual-solve.v1:wgi_stale_mapping', JSON.stringify({
+      operationId: 'op-other', prepareAcknowledged: false, completionAcknowledged: false,
+      designName: 'Speaker', label: 'Speaker1',
+    }));
+    act(() => {
+      useCadOperationsStore.getState().apply(operation('op-other', 'needs_user_input', {
+        reason: 'setup_required', snapshot: { manifestSha256: `sha256:${'9'.repeat(64)}`, projectLineageId: 'wgl_test' },
+      }));
+    });
+    expect(record.manifest_sha256).not.toBe(`sha256:${'9'.repeat(64)}`);
+
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+
+    expect(mocks.prepareCadOperation).not.toHaveBeenCalledWith('op-other', expect.anything());
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+    const created = mocks.createCadOperation.mock.calls[0][0].operationId as string;
+    expect(created).toMatch(/^manual-solve:/);
+    expect(mocks.prepareCadOperation).toHaveBeenCalledWith(created, { setupRevisionId: 'wgs_manual', submit: true });
+  });
+
   it('starts a solve of its own when the request it continued no longer exists', async () => {
     const record = filedCad('wgi_gone');
     act(() => {

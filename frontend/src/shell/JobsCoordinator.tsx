@@ -239,8 +239,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   useEffect(() => {
     for (const operation of Object.values(cadOperations)) {
       if (operation.kind !== 'prepare_and_solve' || operation.operationId.startsWith('manual-solve:')) continue;
-      // A request a WG Solve continued completes as that solve, above.
-      if (manualCadSolveIngestFor(operation.operationId) !== null) continue;
+      // A request a WG Solve continued completes as that solve, above, and is
+      // claimed for good: the held identity rotates on the next Solve, and
+      // its run must not be claimed again then.
+      if (manualCadSolveIngestFor(operation.operationId) !== null) {
+        claimedOperations.current.add(operation.operationId);
+        continue;
+      }
       if (isPendingCadOperation(operation)) {
         watchedOperations.current.add(operation.operationId);
         continue;
@@ -263,9 +268,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     for (const operation of Object.values(cadOperations)) {
       if (operation.kind !== 'prepare_and_solve' || operation.state !== 'rejected') continue;
       if (reportedRefusals.current.has(operation.operationId)) continue;
-      const mine = operation.operationId.startsWith('manual-solve:')
-        ? manualCadSolveIngestFor(operation.operationId) !== null
-        : watchedOperations.current.has(operation.operationId);
+      // A solve this window holds -- its own, or a request its Solve
+      // continued, across a reload -- or a Fusion request it watched.
+      const mine = manualCadSolveIngestFor(operation.operationId) !== null
+        || (!operation.operationId.startsWith('manual-solve:') && watchedOperations.current.has(operation.operationId));
       if (!mine) continue;
       reportedRefusals.current.add(operation.operationId);
       const name = operation.snapshot?.documentName ?? 'the model';
@@ -458,7 +464,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // never committed, pending means recover it, terminal means this click
       // is a new explicit solve and therefore needs a fresh identity.
       try {
-        const held = await getCadOperation(operationId);
+        let held = await getCadOperation(operationId);
+        const heldManifest = held.snapshot?.manifestSha256 ?? null;
+        if (heldManifest && heldManifest !== cad.ingestRecord?.manifest_sha256) {
+          // The identity names a request for another snapshot. The settings
+          // on screen are never sent to it: a solve of its own instead.
+          forgetManualCadSolveOperationId(ingestId, operationId);
+          identity = manualCadSolveIdentity(ingestId, newRun);
+          operationId = identity.operationId;
+          held = await getCadOperation(operationId);
+        }
         if (!isPendingCadOperation(held)) {
           if (!manualCadSolvePreparationAcknowledged(ingestId, operationId)) {
             // A lost prepare response can race the backend all the way to a
