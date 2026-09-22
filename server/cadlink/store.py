@@ -700,6 +700,8 @@ class CadLinkStore:
         inputs: Mapping[str, Any] | None = None,
         *,
         snapshot: Mapping[str, Any] | None = None,
+        _superseded: list[dict[str, Any]] | None = None,
+        _supersede_waiting_solves: bool = False,
     ) -> tuple[dict[str, Any], str]:
         """Persist a delivered request, or recover the operation it repeats.
 
@@ -711,6 +713,54 @@ class CadLinkStore:
         id alone, and the row is never rewritten.
         """
 
+        row, result, superseded = self._accept_operation(
+            operation_id,
+            kind,
+            digest,
+            target,
+            inputs,
+            snapshot=snapshot,
+            supersede_waiting_solves=_supersede_waiting_solves,
+        )
+        if _superseded is not None:
+            _superseded.extend(superseded)
+        return row, result
+
+    def accept_solve_operation(
+        self,
+        operation_id: str,
+        digest: str,
+        target: Mapping[str, Any] | None,
+        inputs: Mapping[str, Any] | None = None,
+        *,
+        snapshot: Mapping[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
+        """Accept a solve and retire older user-waiting copies of its snapshot."""
+
+        superseded: list[dict[str, Any]] = []
+        row, result = self.accept_operation(
+            operation_id,
+            PREPARE_AND_SOLVE,
+            digest,
+            target,
+            inputs,
+            snapshot=snapshot,
+            _superseded=superseded,
+            _supersede_waiting_solves=True,
+        )
+        return row, result, superseded
+
+    def _accept_operation(
+        self,
+        operation_id: str,
+        kind: str,
+        digest: str,
+        target: Mapping[str, Any] | None,
+        inputs: Mapping[str, Any] | None,
+        *,
+        snapshot: Mapping[str, Any] | None,
+        supersede_waiting_solves: bool,
+    ) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
         _require_operation_id(operation_id)
         normalized_target, normalized_inputs = normalize_request(kind, target, inputs)
         destination = normalized_target.get("destination")
@@ -729,6 +779,7 @@ class CadLinkStore:
             )
         self.initialize()
         now = utc_now()
+        superseded: list[dict[str, Any]] = []
         with self._lock, self._transaction() as conn:
             row = conn.execute(
                 "SELECT rowid AS accepted_seq, * FROM cad_operations WHERE operation_id = ?",
@@ -762,6 +813,54 @@ class CadLinkStore:
                     (operation_id,),
                 ).fetchone()
                 result = "created"
+                if supersede_waiting_solves:
+                    manifest_sha256 = normalized_inputs.get("manifest_sha256")
+                    # Only a waiting request that never had settings of its
+                    # own (setup_required) is replaced: it carries no solve
+                    # intent beyond the snapshot. Two requests that each hold
+                    # settings stay distinct, as the operation contract says.
+                    candidates = conn.execute(
+                        "SELECT rowid AS accepted_seq, * FROM cad_operations "
+                        "WHERE operation_id != ? AND kind = ? AND state = ? AND reason = ? "
+                        "ORDER BY rowid",
+                        (operation_id, PREPARE_AND_SOLVE, NEEDS_USER_INPUT, "setup_required"),
+                    ).fetchall()
+                    operation_ids = [
+                        str(candidate["operation_id"])
+                        for candidate in candidates
+                        if json.loads(str(candidate["inputs_json"])).get("manifest_sha256")
+                        == manifest_sha256
+                    ]
+                    if operation_ids:
+                        placeholders = ", ".join("?" for _ in operation_ids)
+                        replaced_by = validate_outcome(
+                            operation_id,
+                            CANCELLED,
+                            reason="superseded",
+                            outcome={"message": f"Replaced by solve request {operation_id}."},
+                        )
+                        conn.execute(
+                            "UPDATE cad_operations SET state = ?, reason = ?, outcome_json = ?, "
+                            f"updated_at = ? WHERE operation_id IN ({placeholders}) "
+                            "AND state = ? AND reason = ?",
+                            (
+                                CANCELLED,
+                                "superseded",
+                                replaced_by,
+                                now,
+                                *operation_ids,
+                                NEEDS_USER_INPUT,
+                                "setup_required",
+                            ),
+                        )
+                        superseded = [
+                            dict(value)
+                            for value in conn.execute(
+                                "SELECT rowid AS accepted_seq, * FROM cad_operations "
+                                f"WHERE operation_id IN ({placeholders}) ORDER BY rowid",
+                                operation_ids,
+                            ).fetchall()
+                        ]
             elif str(row["kind"]) != kind:
                 result = "conflict"
             elif int(row["legacy"]) == 1 or row["request_digest"] == digest:
@@ -778,7 +877,7 @@ class CadLinkStore:
                     ).fetchone()
             else:
                 result = "conflict"
-        return dict(row), result
+        return dict(row), result, superseded
 
     def claim(self, operation_id: str, expected_generation: int) -> int | None:
         """Start an attempt: a conditional update on the current generation.

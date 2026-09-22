@@ -70,12 +70,12 @@ def recover_manual_solve(
 
 def create_manual_solve(
     store: CadLinkStore, data_dir: str | Path, operation_id: str, ingest_id: str
-) -> tuple[dict[str, Any], str]:
+) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
     """Accept or recover one solve bound to an existing retained ingest."""
 
     existing, ingest, record, inputs = recover_manual_solve(store, operation_id, ingest_id)
     if existing is not None:
-        return existing, "recovered"
+        return existing, "recovered", []
     manifest_sha256 = str(ingest.get("manifest_sha256") or "")
     artifact_sha256 = str(ingest.get("artifact_sha256") or "")
     target: dict[str, Any] = {}
@@ -100,12 +100,12 @@ def create_manual_solve(
         "document_name": str(document.get("name") or ""),
         "project_lineage_id": project.get("lineage_id") or snapshot_project(store, bundle.manifest),
     }
-    row, outcome = store.accept_operation(
-        operation_id, PREPARE_AND_SOLVE, digest, target, inputs, snapshot=snapshot
+    row, outcome, superseded = store.accept_solve_operation(
+        operation_id, digest, target, inputs, snapshot=snapshot
     )
     if outcome == "conflict" or int(row.get("legacy") or 0) == 1 or row.get("request_digest") != digest:
         raise OperationConflict(f"CAD operation {operation_id} already names another request")
-    return row, outcome
+    return row, outcome, superseded
 
 
 __all__ = [

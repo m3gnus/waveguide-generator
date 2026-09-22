@@ -93,6 +93,7 @@ from .preparation import (
     PreparationInput,
     dismiss_operation,
     operation_summary,
+    _publish,
     prepare_operation,
     recover_operations,
     DeliveryPassReporter,
@@ -1926,7 +1927,7 @@ async def post_cad_operation(
             ),
         )
     try:
-        row, _outcome = await asyncio.to_thread(
+        row, _outcome, superseded = await asyncio.to_thread(
             create_manual_solve,
             state.cadlink_store,
             Path(state.data_dir),
@@ -1963,6 +1964,9 @@ async def post_cad_operation(
                 retryable=False,
             ),
         )
+    context = _preparation_context(state)
+    for superseded_row in superseded:
+        _publish(context, superseded_row)
     return ManualSolveOperationResponse(operation=operation_summary(row))
 
 

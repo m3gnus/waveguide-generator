@@ -119,7 +119,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | --- | --- |
 | Same operation ID, same digest | `recovered`: the existing operation, with whatever it has already recorded |
 | Same operation ID, different digest or kind | `conflict`: the delivery is rejected. The stored operation is untouched, and its result is not the answer to this delivery. |
-| Different operation ID, identical inputs | A separate, explicit request |
+| Different operation ID, identical inputs | A separate, explicit request. One narrow exception: a new solve for the same manifest atomically supersedes an older solve still waiting at `setup_required`, which never had settings of its own. The older row is cancelled with reason `superseded` and names its replacement. A request that holds its own settings is never superseded. |
 
 - **"Restartable"** means accepted work is recovered after the WG backend restarts. It
   does not mean work continues after the app and its backend have exited.
@@ -184,7 +184,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `update_restart_pending` | `needs_user_input` | An update restart was approved while the preparation ran, so nothing was submitted. Queued again once no restart is pending (see "Preparation", "Update restart") |
 | `interrupted` | `needs_user_input` | The backend stopped, or the answer was lost, while an attempt held the operation |
 | `ready_to_solve` | `needs_user_input` | Prepared, and waiting for the user to start the solve |
-| `superseded` | `cancelled` | A newer unstarted update for the same exact link replaced this request |
+| `superseded` | `cancelled` | A newer unstarted update for the same exact link, or a newer solve for the same snapshot, replaced this request |
 | `expired` | `cancelled` | An insert remained unclaimed for 30 minutes |
 | `session_changed` | `cancelled` | A return request named a Fusion session that is no longer current |
 | `publication_failed` | `cancelled` | The operation was stored but its request file could not be published |

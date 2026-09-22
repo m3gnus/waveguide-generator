@@ -95,6 +95,20 @@ def _waiting_for_frame(summary: dict[str, Any]) -> bool:
     return (summary["state"], summary["reason"]) == ("needs_user_input", "frame_confirmation_required")
 
 
+def _with_degraded_skip(manifest: dict[str, Any]) -> dict[str, Any]:
+    manifest["scope"]["skipped"].append({
+        "component": "component-1",
+        "kind": "unsupported_body",
+        "name": "Unsupported body",
+        "object_id": "unsupported-1",
+        "path": "component-1/Unsupported body",
+        "reason": "the body cannot be exported",
+        "severity": "degraded",
+    })
+    manifest["scope"]["status"] = "degraded"
+    return manifest
+
+
 def test_an_unconfirmed_authored_model_is_prepared_as_modelled_and_waits(real) -> None:
     harness, mesher = real
     step = b"STEP authored"
@@ -122,6 +136,45 @@ def test_confirming_the_modelled_frame_resumes_that_preparation_and_solves(real)
     confirm_frame(harness.store, _record(harness, waiting), "+z")
 
     solved = _prepare(harness)
+
+    assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
+    assert solved["preparationId"] == waiting["preparationId"]
+    assert len(mesher.calls) == 1
+
+
+def test_revisionless_manual_solve_followups_reuse_the_preparations_settings(real) -> None:
+    """The UI sends no revision when confirming a frame or approving a finding."""
+
+    harness, mesher = real
+    step = b"STEP authored with one degraded skip"
+    _received(harness, "authored", _with_degraded_skip(_authored(step)), step)
+    revision = _revision(harness.store, _setup())
+
+    waiting = asyncio.run(prepare_operation(
+        _context(harness), "cmd-1", PreparationInput(setup_revision_id=revision)
+    ))
+    assert _waiting_for_frame(waiting), waiting
+    confirm_frame(harness.store, _record(harness, waiting), "+z")
+
+    review = asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput()))
+    assert (review["state"], review["reason"]) == (
+        "needs_user_input", "findings_need_review"
+    ), review
+    assert review["preparationId"] == waiting["preparationId"]
+    blocking = [
+        finding["id"]
+        for finding in _record(harness, review)["findings"]
+        if finding.get("blocking")
+    ]
+
+    solved = asyncio.run(prepare_operation(
+        _context(harness),
+        "cmd-1",
+        PreparationInput(
+            approve_preparation_id=review["preparationId"],
+            approve_finding_ids=tuple(blocking),
+        ),
+    ))
 
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
     assert solved["preparationId"] == waiting["preparationId"]

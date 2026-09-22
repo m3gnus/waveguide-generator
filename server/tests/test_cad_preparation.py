@@ -307,6 +307,9 @@ def test_a_first_cad_authored_model_waits_for_its_setup(harness: Harness) -> Non
     summary = harness.prepare()
 
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
+    assert summary["message"] == (
+        "Choose the solve settings for Tritonia speaker in WG, then solve it."
+    )
     assert harness.ingest.calls == [] and harness.submitted == []
 
 
@@ -512,6 +515,20 @@ def test_a_failed_submission_that_created_nothing_releases_the_binding(harness: 
     assert harness.row()["request_json"] is None
     accepted = harness.prepare(setup_revision_id=_revision(harness.store, _setup(engine="bempp")))
     assert accepted["state"] == "accepted" and harness.submitted[-1].options.engine == "bempp"
+
+
+def test_a_revisionless_retry_reuses_the_failed_preparations_settings(harness: Harness) -> None:
+    _received(harness)
+    revision = _revision(harness.store, _setup(engine="metal"))
+    harness.submit_error = RuntimeError("database is locked")
+    failed = harness.prepare(setup_revision_id=revision)
+    assert (failed["state"], failed["reason"]) == ("needs_user_input", "submission_refused")
+    harness.submit_error = None
+
+    accepted = harness.prepare()
+
+    assert accepted["state"] == "accepted"
+    assert harness.submitted[-1].options.engine == "metal"
 
 
 def test_a_submission_key_conflict_is_the_job_that_key_made(harness: Harness) -> None:

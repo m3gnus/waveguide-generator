@@ -40,6 +40,7 @@ from server.cadlink.ingest import (
     evaluate_instance_freshness,
     ingest_bundle,
     instance_identity_inventory,
+    _scope_findings,
     resolve_deferred_viewport,
     validate_registry_echoes,
 )
@@ -155,6 +156,38 @@ def test_freshness_null_design_hash_is_unknown_when_no_later_row_matches() -> No
         recompute=lambda _head: "gh",
     )
     assert result["verdict"] == "unknown"
+
+
+def test_a_degraded_hidden_body_stays_in_scope_without_becoming_a_finding() -> None:
+    skipped = {
+        "kind": "hidden_body",
+        "object_id": "hidden-1",
+        "reason": "hidden bodies are excluded by policy",
+        "severity": "degraded",
+    }
+    manifest = {"scope": {"skipped": [skipped]}}
+
+    assert _scope_findings(manifest) == []
+    assert manifest["scope"]["skipped"] == [skipped]
+
+
+def test_a_degraded_non_hidden_skip_remains_a_blocking_finding() -> None:
+    manifest = {
+        "scope": {
+            "skipped": [{
+                "kind": "unsupported_body",
+                "object_id": "unsupported-1",
+                "reason": "the body cannot be exported",
+                "severity": "degraded",
+            }]
+        }
+    }
+
+    findings = _scope_findings(manifest)
+
+    assert len(findings) == 1
+    assert findings[0]["kind"] == "scope-degradation"
+    assert findings[0]["blocking"] is True
 
 
 def test_consistency_contradiction_is_corruption() -> None:

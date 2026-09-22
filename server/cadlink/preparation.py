@@ -662,6 +662,23 @@ def _load_setup(
     return project_setup(ctx.store, lineage_id, manifest.get("sources") or [])
 
 
+def _operation_setup_revision(
+    store: CadLinkStore, row: Mapping[str, Any], requested: str | None
+) -> str | None:
+    """Use the setup already attached to this operation for a revision-less follow-up."""
+
+    if requested:
+        return requested
+    bound = row.get("setup_revision_id")
+    if bound:
+        return str(bound)
+    preparation_id = row.get("preparation_id")
+    preparation = store.get_preparation(str(preparation_id)) if preparation_id else None
+    if preparation is None or not preparation.get("setup_revision_id"):
+        return None
+    return str(preparation["setup_revision_id"])
+
+
 def _retained_manifest(retained: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """A retained snapshot's manifest, when the copy still is the bundle it is named for.
 
@@ -867,7 +884,9 @@ def _prepare_sync(
         _advance(ctx, operation_id, generation, snapshot=_snapshot_record(store, retained))
 
     try:
-        loaded = _load_setup(ctx, request.setup_revision_id, retained)
+        loaded = _load_setup(
+            ctx, _operation_setup_revision(store, row, request.setup_revision_id), retained
+        )
     except WgReturnError as exc:
         return "done", _finish(
             ctx, operation_id, generation, REJECTED, reason="snapshot_invalid", message=str(exc)
@@ -889,10 +908,9 @@ def _prepare_sync(
         return "done", _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT, reason="setup_required",
             message=(
-                f"Choose the solve settings for {document} in WG: open it from File → "
-                "CAD-linked designs, then press Solve now."
+                f"Choose the solve settings for {document} in WG, then solve it."
                 if document
-                else "Choose the solve settings for this model in WG, then press Solve now."
+                else "Choose the solve settings for this model in WG, then solve it."
             ),
         )
     setup, revision_id = loaded

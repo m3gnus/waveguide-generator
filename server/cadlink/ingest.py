@@ -373,7 +373,7 @@ def instance_identity_inventory(
 def _scope_findings(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     findings = []
     for index, skip in enumerate(manifest["scope"]["skipped"]):
-        if skip.get("severity") != "degraded":
+        if skip.get("severity") != "degraded" or skip.get("kind") == "hidden_body":
             continue
         identity = {
             "index": index,

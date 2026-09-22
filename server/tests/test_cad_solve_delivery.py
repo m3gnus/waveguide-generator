@@ -475,6 +475,33 @@ def test_a_v4_solve_and_a_v4_snapshot_are_taken_as_their_kinds(data_dir, workspa
     assert _delivery_files(data_dir) == []
 
 
+def test_a_superseded_waiting_solve_is_published_with_the_new_solve(
+    data_dir, workspace, store
+) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    target, inputs = prepare_and_solve_request(
+        return_id="wgr-old", bundle_path=bundle_path, manifest_sha256=manifest
+    )
+    old, _ = store.accept_operation(
+        "cmd-old", "prepare_and_solve",
+        request_digest("prepare_and_solve", target, inputs), target, inputs,
+    )
+    generation = store.claim("cmd-old", int(old["attempt_generation"]))
+    assert generation is not None
+    store.record_outcome(
+        "cmd-old", generation, "needs_user_input", reason="setup_required"
+    )
+    _file(data_dir, "cmd-new", bundle_path, manifest)
+    published: list[dict] = []
+
+    assert collect_solve_deliveries(data_dir, store, publish=published.append) is None
+
+    assert [(row["operation_id"], row["state"], row["reason"]) for row in published] == [
+        ("cmd-old", "cancelled", "superseded"),
+        ("cmd-new", "received", None),
+    ]
+
+
 def test_an_outcome_for_a_held_operation_ignores_a_conflicting_file_still_waiting(
     data_dir, workspace, store
 ) -> None:
