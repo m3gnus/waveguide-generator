@@ -330,6 +330,17 @@ def test_evidence_is_applied_only_where_it_revalidates() -> None:
     assert di.apply_evidence(_plan(di.USER), clean, identity_problem="source s was not found").refusal
 
 
+def test_evidence_is_refused_when_the_cut_is_not_the_only_opening() -> None:
+    """A mirrored half with another hole would leak through it (and its image)."""
+
+    leaking = _observe(*_open_box(slot=True))
+    refused = di.apply_evidence(_plan(di.PROVENANCE), leaking)
+    assert refused.applied == () and "other open edge" in refused.refusal
+    assert di.valid_choices(leaking) == []
+    # Control: the same box without the hole takes the evidence.
+    assert di.apply_evidence(_plan(di.PROVENANCE), _observe(*_open_box())).applied == ("x0",)
+
+
 def test_no_evidence_applies_nothing_even_to_a_clean_candidate() -> None:
     clean = _observe(*_open_box())
     none = di.DomainPlan(manifest_domain="automatic")
