@@ -31,6 +31,7 @@ SUPPORTED_FEATURES = frozenset(
         "reduced-domain-v1",
         "source-identity-v1",
         "document-up-v1",
+        "domain-automatic-v1",
     }
 )
 # The CAD author's statement that the exported bodies ARE the reduced domain:
@@ -65,6 +66,25 @@ DOMAIN_KIND_FOR_PLANES = {
     ("x0", "y0"): "quarter",
 }
 REDUCED_DOMAIN_FEATURE = "reduced-domain-v1"
+# M1c-auto (PLAN.md, "Automatic domain"). A writer that requires this feature
+# writes ``"domain": {"kind": "automatic"}``: it declares nothing about the
+# domain and leaves the interpretation to WG. Only under it may the return
+# carry ``assembly.cut_provenance``, the cuts the CAD timeline recorded during
+# the explicit export. The writer states it only when WG advertises
+# ``automaticDomain`` (``fusion_delivery.py``); a WG without it refuses the
+# unknown required feature, so a new writer is never misread by an old reader.
+#
+# The provenance is evidence, not a verdict: WG revalidates every entry
+# against the body, frame and meshed geometry before it mirrors anything
+# (``server/cadlink/domain_interpretation.py``).
+DOMAIN_AUTOMATIC_FEATURE = "domain-automatic-v1"
+DOMAIN_AUTOMATIC = "automatic"
+CUT_FEATURE_KINDS = ("split-body", "extrude-cut", "other")
+CUT_TOOL_KINDS = ("origin-plane", "construction-plane")
+# The origin plane a cut tool is (or is coincident with), and the coordinate
+# plane it is in the exported frame.
+CUT_ORIGIN_PLANES = {"YZ": "x0", "XZ": "y0", "XY": "z0"}
+CUT_KEPT_SIDES = ("positive", "negative")
 # A return that requires this feature states that every ``sources[].id`` is the
 # CAD-authored identity of that logical source, the same across exports. The
 # field and its uniqueness are unchanged; the feature adds only a canonical form
@@ -332,18 +352,36 @@ def _vector(value: Any, path: str, length: int) -> list[float]:
     return [_number(item, f"{path}[{index}]") for index, item in enumerate(items)]
 
 
-def _domain(value: Any) -> tuple[str, ...]:
+def _domain(value: Any, *, automatic_feature: bool = False) -> tuple[str, ...]:
     """Validate ``assembly.domain`` and return the planes it declares.
 
     Absent means the full domain, so every bundle written before the member
-    existed validates unchanged.
+    existed validates unchanged. ``{"kind": "automatic"}`` declares no plane
+    and is accepted only under ``domain-automatic-v1`` (and required by it).
     """
 
     path = "$.assembly.domain"
     if value is None:
+        if automatic_feature:
+            _fail(
+                "$.required_features",
+                f"{DOMAIN_AUTOMATIC_FEATURE} is required exactly when "
+                "$.assembly.domain.kind is 'automatic'",
+            )
         return ()
     domain = _mapping(value, path)
     kind = _string(_required(domain, "kind", path), f"{path}.kind")
+    if (kind == DOMAIN_AUTOMATIC) != automatic_feature:
+        _fail(
+            "$.required_features",
+            f"{DOMAIN_AUTOMATIC_FEATURE} is required exactly when "
+            "$.assembly.domain.kind is 'automatic'",
+        )
+    if kind == DOMAIN_AUTOMATIC:
+        extra = sorted(set(domain) - {"kind"})
+        if extra:
+            _fail(path, f"an automatic domain states nothing else, got {', '.join(extra)}")
+        return ()
     names = [
         _string(item, f"{path}.cut_planes[{index}]")
         for index, item in enumerate(
@@ -380,6 +418,50 @@ def _domain(value: Any) -> tuple[str, ...]:
         if maximum <= tolerance:
             _fail(entry_path, f"declares a reduced domain with no extent on the positive side of {plane}")
     return planes
+
+
+def _cut_provenance(value: Any, included_ids: set[str]) -> None:
+    """Validate ``assembly.cut_provenance``: the cuts the CAD timeline recorded.
+
+    One entry per recorded cut of one exported body. Schema only: whether an
+    entry is usable -- its body and frame are this snapshot's, its side is
+    supported, the meshed geometry agrees -- is WG's revalidation, not the
+    reader's (``domain_interpretation.py``).
+    """
+
+    path = "$.assembly.cut_provenance"
+    entries = _list(value, path)
+    for index, item in enumerate(entries):
+        entry_path = f"{path}[{index}]"
+        entry = _mapping(item, entry_path)
+        allowed = {"body_object_id", "feature", "tool", "plane", "kept_side", "export_frame"}
+        extra = sorted(set(entry) - allowed)
+        if extra:
+            _fail(entry_path, f"unknown member(s): {', '.join(extra)}")
+        body = _string(_required(entry, "body_object_id", entry_path), f"{entry_path}.body_object_id")
+        if body not in included_ids:
+            _fail(f"{entry_path}.body_object_id", "must name a $.scope.included body")
+        feature = _mapping(_required(entry, "feature", entry_path), f"{entry_path}.feature")
+        if _string(_required(feature, "kind", f"{entry_path}.feature"), f"{entry_path}.feature.kind") not in CUT_FEATURE_KINDS:
+            _fail(f"{entry_path}.feature.kind", f"must be one of {', '.join(CUT_FEATURE_KINDS)}")
+        name = _string(_required(feature, "name", f"{entry_path}.feature"), f"{entry_path}.feature.name")
+        if not name or not name.strip() or len(name) > 200:
+            _fail(f"{entry_path}.feature.name", "must be a non-empty name of at most 200 characters")
+        tool = _mapping(_required(entry, "tool", entry_path), f"{entry_path}.tool")
+        if _string(_required(tool, "kind", f"{entry_path}.tool"), f"{entry_path}.tool.kind") not in CUT_TOOL_KINDS:
+            _fail(f"{entry_path}.tool.kind", f"must be one of {', '.join(CUT_TOOL_KINDS)}")
+        origin = _string(_required(tool, "origin_plane", f"{entry_path}.tool"), f"{entry_path}.tool.origin_plane")
+        if origin not in CUT_ORIGIN_PLANES:
+            _fail(f"{entry_path}.tool.origin_plane", f"must be one of {', '.join(CUT_ORIGIN_PLANES)}")
+        plane = _string(_required(entry, "plane", entry_path), f"{entry_path}.plane")
+        if plane not in CUT_ORIGIN_PLANES.values():
+            _fail(f"{entry_path}.plane", "must be one of x0, y0, z0")
+        if CUT_ORIGIN_PLANES[str(origin)] != plane:
+            _fail(f"{entry_path}.plane", f"the {origin} plane is {CUT_ORIGIN_PLANES[str(origin)]}, not {plane}")
+        if _string(_required(entry, "kept_side", entry_path), f"{entry_path}.kept_side") not in CUT_KEPT_SIDES:
+            _fail(f"{entry_path}.kept_side", f"must be one of {', '.join(CUT_KEPT_SIDES)}")
+        if _string(_required(entry, "export_frame", entry_path), f"{entry_path}.export_frame") not in EXPORT_FRAMES:
+            _fail(f"{entry_path}.export_frame", f"must be one of {', '.join(EXPORT_FRAMES)}")
 
 
 def _bbox(value: Any, path: str) -> list[list[float]]:
@@ -709,7 +791,10 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         )
     elif assembly.get("signature_hash") is not None:
         _string(assembly["signature_hash"], "$.assembly.signature_hash")
-    domain_planes = _domain(assembly.get("domain"))
+    domain_planes = _domain(
+        assembly.get("domain"),
+        automatic_feature=DOMAIN_AUTOMATIC_FEATURE in feature_names,
+    )
     # Paired in both directions, so neither an ignored reduction nor a
     # decorative feature name is representable.
     if bool(domain_planes) != (REDUCED_DOMAIN_FEATURE in feature_names):
@@ -732,6 +817,18 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(_required(entry, "visible", entry_path), bool):
             _fail(f"{entry_path}.visible", "must be boolean")
         _string(entry.get("wglink_instance_id"), f"{entry_path}.wglink_instance_id", nullable=True)
+    if "cut_provenance" in assembly:
+        # Only a writer that left the domain to WG records its cuts; beside a
+        # declaration they would be a second, conflicting statement.
+        if DOMAIN_AUTOMATIC_FEATURE not in feature_names:
+            _fail(
+                "$.assembly.cut_provenance",
+                f"is accepted only with {DOMAIN_AUTOMATIC_FEATURE} and an automatic domain",
+            )
+        _cut_provenance(
+            assembly["cut_provenance"],
+            {str(item["object_id"]) for item in included if isinstance(item, Mapping)},
+        )
     skipped = _list(_required(scope, "skipped", "$.scope"), "$.scope.skipped")
     degraded = False
     for index, item in enumerate(skipped):
@@ -993,8 +1090,29 @@ def declared_domain_planes(manifest: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(plane for plane in DOMAIN_PLANES if plane in names)
 
 
+def domain_kind(manifest: Mapping[str, Any]) -> str:
+    """How a validated manifest states its domain: absent, automatic or declared."""
+
+    assembly = manifest.get("assembly")
+    domain = assembly.get("domain") if isinstance(assembly, Mapping) else None
+    if not isinstance(domain, Mapping):
+        return "absent"
+    return DOMAIN_AUTOMATIC if domain.get("kind") == DOMAIN_AUTOMATIC else "declared"
+
+
+def cut_provenance(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The recorded cuts of a validated manifest (empty when it carries none)."""
+
+    assembly = manifest.get("assembly")
+    entries = assembly.get("cut_provenance") if isinstance(assembly, Mapping) else None
+    return [dict(entry) for entry in entries or [] if isinstance(entry, Mapping)]
+
+
 __all__ = [
+    "CUT_ORIGIN_PLANES",
     "DOCUMENT_UP_AXES",
+    "DOMAIN_AUTOMATIC",
+    "DOMAIN_AUTOMATIC_FEATURE",
     "DOCUMENT_UP_FEATURE",
     "DOMAIN_PLANES",
     "EXPORT_FRAMES",
@@ -1005,7 +1123,9 @@ __all__ = [
     "WORST_CASE_SOURCE_TAG",
     "source_physical_name",
     "SUPPORTED_FEATURES",
+    "cut_provenance",
     "declared_domain_planes",
+    "domain_kind",
     "WgReturnBundle",
     "WgReturnError",
     "WgReturnIntegrityError",

@@ -295,6 +295,18 @@ _SCHEMA = (
       PRIMARY KEY (snapshot_sha256, algorithm)
     )
     """,
+    # How a model's domain is read, per project (or per snapshot when it
+    # belongs to none): the user's own reading (Change), or a reading that
+    # recorded Fusion cut provenance backed (server/cadlink/
+    # domain_interpretation.py). A "solved as shown" outcome is never written
+    # here: it is never evidence for mirroring. Additive, like the tables above.
+    """
+    CREATE TABLE IF NOT EXISTS cad_domain_readings (
+      key TEXT PRIMARY KEY,
+      reading_json TEXT NOT NULL,
+      recorded_at TEXT NOT NULL
+    )
+    """,
 )
 # Columns later stages added to cad_operations: nullable (or defaulted), so a
 # row written before them -- by an earlier build, or by an older release, which
@@ -1589,6 +1601,33 @@ class CadLinkStore:
             (snapshot_sha256, algorithm),
         )
         return json.loads(row["suggestion_json"]) if row is not None else None
+
+    def record_domain_reading(self, key: str, reading: Mapping[str, Any]) -> dict[str, Any]:
+        """Remember how a lineage's (or snapshot's) domain is read; the latest wins."""
+
+        if not key or reading.get("source") not in {"user", "cad-provenance"}:
+            raise ValueError("a domain reading names a key and a user or provenance source")
+        if reading.get("reading") not in {"reduced", "as-shown"}:
+            raise ValueError("a domain reading is 'reduced' or 'as-shown'")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO cad_domain_readings (key, reading_json, recorded_at) "
+                "VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
+                "reading_json = excluded.reading_json, recorded_at = excluded.recorded_at",
+                (key, canonical_json(dict(reading)), utc_now()),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_domain_readings WHERE key = ?", (key,)
+            ).fetchone()
+        return {**json.loads(row["reading_json"]), "key": row["key"], "recorded_at": row["recorded_at"]}
+
+    def get_domain_reading(self, key: str) -> dict[str, Any] | None:
+        self.initialize()
+        row = self._read_one("SELECT * FROM cad_domain_readings WHERE key = ?", (key,))
+        if row is None:
+            return None
+        return {**json.loads(row["reading_json"]), "key": row["key"], "recorded_at": row["recorded_at"]}
 
     def record_preparation(
         self,

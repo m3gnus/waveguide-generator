@@ -694,3 +694,22 @@ def test_acceptance_evidence_backed_precut_equals_the_same_cut_declared_by_hand(
     assert automatic["source_tags"] == declared["source_tags"]
     assert automatic["post_cut_source_areas"] == declared["post_cut_source_areas"]
     assert _interpretation(declared)["evidence"]["source"] == "declaration"
+
+
+def test_an_explicit_reading_enters_the_mesh_cache_key_even_when_the_mesh_is_the_same(
+    tmp_path: Path,
+) -> None:
+    """The interpretation is part of what was prepared, not only of what was meshed."""
+
+    from server.cadlink.domain_interpretation import record_reading
+
+    data_dir = tmp_path / "data"
+    default = _ingest(_bundle(tmp_path, "cache-key", _open_half, HORN_THROAT), data_dir)
+    record_reading(_store(data_dir), default, {"reading": "as-shown"})
+    chosen = _ingest(Path(default["bundle_store_path"]), data_dir)
+
+    assert _interpretation(chosen)["evidence"]["source"] == "user"
+    assert _interpretation(chosen)["reading"] == "as-shown"
+    assert chosen["mesh_cache_key"] != default["mesh_cache_key"]
+    # The same model meshed the same way: only the reading differs.
+    assert chosen["mesh_content_sha256"] == default["mesh_content_sha256"]

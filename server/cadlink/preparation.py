@@ -77,6 +77,11 @@ from .project_setup import (
     widen_polar_to_derivation,
 )
 from .setup import CadSolveSetup, solve_request_for, validate_setup
+from .domain_interpretation import (
+    excitation_problem,
+    record_plan_identity,
+    resolve_domain_plan,
+)
 from .solver_frame import (
     AS_MODELLED,
     CONTRACT as FRAME_CONTRACT,
@@ -774,6 +779,7 @@ def _resumable(
     manifest_sha256: str,
     semantics: str,
     frame: Mapping[str, Any] | None = None,
+    domain: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """The operation's last preparation, when this attempt would make the same one.
 
@@ -784,6 +790,11 @@ def _resumable(
     provenance, export frame and transform, not the forward axis alone:
     a preparation meshed in another frame, or one that states none, is made
     again rather than solved in a frame nobody confirmed.
+
+    Also the same domain interpretation plan (``domain``,
+    ``DomainPlan.identity``; None when there is no evidence beyond a
+    declaration): a reading changed since -- a Change, recorded provenance --
+    is a new preparation, so no approval given on the old one carries to it.
     """
 
     preparation_id = row.get("preparation_id")
@@ -806,6 +817,9 @@ def _resumable(
         # roll, keeps its own meaning; a new attempt meshes in this frame.
         if frame.get("contract") != FRAME_CONTRACT or record_frame_identity(record) != dict(frame):
             return None
+    held = record_plan_identity(record)
+    if held != (dict(domain) if domain is not None else None):
+        return None
     return record
 
 
@@ -975,7 +989,12 @@ def _prepare_sync(
     frame_axis = solver_frame.axis if solver_frame is not None else None
     frame_identity = resolution_identity(solver_frame) if solver_frame is not None else None
 
-    record = _resumable(store, row, revision_id, manifest_sha256, semantics, frame_identity)
+    # The domain reading this preparation would be made under (M1c-auto).
+    domain_identity = resolve_domain_plan(store, retained_manifest, manifest_sha256).identity()
+
+    record = _resumable(
+        store, row, revision_id, manifest_sha256, semantics, frame_identity, domain_identity
+    )
     if record is None:
         # preparing-mesh: from the retained copy, under the attempt's fence.
         _advance(ctx, operation_id, generation, stage=STAGE_PREPARING_MESH)
@@ -1132,6 +1151,14 @@ def _prepare_sync(
         return "done", _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT, reason="submission_refused",
             message=str(exc),
+        )
+    # Acoustic compatibility, a hard check on every submission: the excitation
+    # is the setup's, so it is judged again whenever the settings change.
+    excitation = excitation_problem(record, getattr(solve_request.geometry, "drive_channels", ()))
+    if excitation is not None:
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="submission_refused",
+            message=excitation,
         )
     return "submit", (solve_request, revision_id)
 

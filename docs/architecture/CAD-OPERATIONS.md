@@ -447,6 +447,14 @@ preselects it, so confirming it is normally one press of Solve.
   unlinked return in its project's confirmed frame; the request names none.
 - **Linked snapshots** are unaffected: they are solved in their anchor's frame and never
   asked.
+- **Domain interpretation (M1c-auto).** `GET /api/cadlink/domain-interpretation?operationId=|ingestId=`
+  answers the record's `domain_interpretation` (what was solved and why, and the readings
+  Change offers), the reading remembered for the project, and `pending` (a Change the
+  prepared model does not show yet). `PUT /api/cadlink/domain-interpretation`
+  `{operationId | ingestId, reading: "as-shown" | "reduced", planes}` remembers one of the
+  offered readings for the project (422 otherwise). Like a frame confirmation it prepares
+  nothing; Solve prepares again under it, as a new preparation, so no approval carries.
+  See `docs/reference/SYMMETRY-CONTRACT.md`, "The automatic domain".
 
 ## Preparation
 

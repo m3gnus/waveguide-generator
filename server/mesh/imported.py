@@ -2573,6 +2573,14 @@ def build_imported_mesh(
     declared_cut_planes = tuple(
         plane for plane in SUPPORTED_CUT_PLANES if plane in set(declared_cut_planes)
     )
+    # Planes read as cut on recorded evidence (M1c-auto) are prepared exactly
+    # as declared ones; only the wording of a refusal and the report's plane
+    # source differ.
+    interpretation = options.get("domain_interpretation")
+    interpreted = (
+        isinstance(interpretation, Mapping)
+        and bool(interpretation.get("applied"))
+    )
     if declared_cut_planes and symmetry_mode == "full":
         # Forcing the full domain disables WG's cutter; it cannot restore a half
         # the author already removed, so accepting the pair would solve a half
@@ -3074,7 +3082,14 @@ def build_imported_mesh(
             for source_id, resolution in resolutions.items()
             if not resolution.get("skipped")
         }
-        if any(dim == 2 for dim, _tag in imported):
+        # A model already cut open in CAD (declared, or read so on recorded
+        # evidence) is all open surfaces. Its remaining plane is still mirror
+        # tested and cut like any other: the smallest model the checks allow
+        # (PLAN.md M1c-auto), verified below with the declared planes.
+        precut_open_shell = bool(declared_cut_planes) and all(
+            dim == 2 for dim, _tag in imported
+        )
+        if any(dim == 2 for dim, _tag in imported) and not precut_open_shell:
             # A standalone source sheet is an intentionally open acoustic
             # surface. Cutting every surface body independently can weld its
             # cut edges into the solid shell and create nonmanifold topology,
@@ -3132,7 +3147,11 @@ def build_imported_mesh(
                 planes_report[plane] = {
                     "plane": plane,
                     "accepted": True,
-                    "source": "declared-by-cad-author",
+                    "source": (
+                        "interpreted-from-evidence"
+                        if interpreted and plane in (interpretation or {}).get("applied", ())
+                        else "declared-by-cad-author"
+                    ),
                     "reason": (
                         "the return declares this plane was cut in CAD; the "
                         "meshed boundary is verified below"
@@ -3613,6 +3632,14 @@ def build_imported_mesh(
         and isinstance(verification, Mapping)
         and not verification.get("verified", True)
     ):
+        if interpreted:
+            # Read as cut on recorded evidence rather than declared: the caller
+            # (``domain_interpretation``) words the refusal for its evidence.
+            raise ImportedMeshError(
+                "symmetry: the meshed boundary denies the cut on "
+                + ", ".join(declared_cut_planes)
+                + f": {verification.get('reason')}"
+            )
         raise ImportedMeshError(
             "symmetry: this return declares it was already cut on "
             + ", ".join(declared_cut_planes)

@@ -35,6 +35,16 @@ from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes
 
+from .domain_interpretation import (
+    EvidenceOutcome,
+    apply_evidence,
+    evidence_refusal_message,
+    interpretation_finding,
+    interpretation_record,
+    observe_record_mesh,
+    remember_provenance_reading,
+    resolve_domain_plan,
+)
 from .solver_frame import (
     AS_MODELLED,
     allowed_axes,
@@ -46,6 +56,7 @@ from .solver_frame import (
     spec_matrix,
 )
 from .wgreturn import (
+    DOMAIN_PLANES,
     WgReturnBundle,
     WgReturnError,
     WgReturnIntegrityError,
@@ -1130,6 +1141,33 @@ def _requested_solver_frame(
     return str(requested)
 
 
+_IDENTITY_FINDINGS = frozenset({"geometry-overrode-paint", "source-paint-missing"})
+
+
+def _source_identity_problem(built: Mapping[str, Any], skipped_source_ids: list[str]) -> str | None:
+    """Why this build's sources are not validated identities, or None.
+
+    A mirror doubles each source as the same identity; a source resolved by
+    geometry against its paint, or dropped, is not one WG can mirror on the
+    strength of recorded evidence alone.
+    """
+
+    for item in built.get("role_findings") or []:
+        if isinstance(item, Mapping) and item.get("kind") in _IDENTITY_FINDINGS:
+            return f"source {item.get('source_id') or '?'} could not be identified by its own faces"
+    for source_id, resolution in (built.get("role_resolution") or {}).items():
+        if isinstance(resolution, Mapping) and resolution.get("skipped") and source_id not in skipped_source_ids:
+            return f"source {source_id} was not found on the model"
+    return None
+
+
+def _mesher_denial(message: str) -> str:
+    """The mesher's reason a mirrored reading failed, without its stage prefix."""
+
+    text = message.rsplit("symmetry:", 1)[-1].strip()
+    return text.rstrip(".") or "the meshed boundary denies the cut"
+
+
 def ingest_bundle(
     bundle_path: str | Path,
     mesh: Mapping[str, Any],
@@ -1277,6 +1315,9 @@ def ingest_bundle(
         raise
     options = dict(prep_options or {})
     options.pop("solver_frame", None)
+    # A caller never states the domain interpretation: it is resolved here,
+    # from the return and the store, like the declaration below.
+    options.pop("domain_interpretation", None)
     # The complete frame, not only its axis, so the mesh cache key and the
     # mesher both see the transform (contract v2 fixes the roll). The modelled
     # frame is the identity under every up rule and is still never written.
@@ -1291,109 +1332,191 @@ def ingest_bundle(
     # is part of the mesh cache key -- the same STEP declared differently is a
     # different solve.
     options["declared_cut_planes"] = list(declared_domain_planes(manifest))
+    # M1c-auto: the evidence for this snapshot's domain (domain_interpretation).
+    # A reading that changes what is solved enters the cache key; with no
+    # evidence the key is exactly what it was before.
+    plan = resolve_domain_plan(store, manifest, bundle.manifest_sha256)
+    if plan.refusal is not None:
+        raise IngestRefusal("stage 6 symmetry", f"symmetry: {plan.refusal}")
+    if plan.identity() is not None and not plan.evidenced_planes:
+        options["domain_interpretation"] = plan.identity()
     imports_root = data_paths(data_dir).root / "imports"
-    viewport_lookup_key = _viewport_cache_lookup_key(
-        bundle, manifest, skipped_source_ids, options
-    )
-    viewport_index_path = _viewport_index_path(imports_root, viewport_lookup_key)
-    viewport_cache_key = _read_cas_index(viewport_index_path)
-    viewport_mesh_path, viewport_metadata_path = _viewport_paths(
-        imports_root, viewport_cache_key or ".pending"
-    )
-    viewport_artifact = (
-        _load_cached_viewport_mesh(viewport_mesh_path, viewport_metadata_path)
-        if viewport_cache_key
-        else None
-    )
-    viewport_cache_hit = viewport_artifact is not None
-    lookup_key = _cache_lookup_key(
-        bundle, manifest, normalized_mesh, skipped_source_ids, options
-    )
-    index_path = imports_root / "meshes" / "index" / f"{lookup_key}.txt"
-    cache_key = _read_cas_index(index_path)
-    mesh_path = imports_root / "meshes" / f"{cache_key}.msh" if cache_key else imports_root / "meshes" / ".pending.msh"
-    metadata_path = imports_root / "meshes" / f"{cache_key}.json" if cache_key else imports_root / "meshes" / ".pending.json"
-    built = _load_cached_mesh(mesh_path, metadata_path) if cache_key else None
-    if built is not None:
-        try:
-            expected_cache_key = _cache_key(
+
+    def viewport_for(opts: Mapping[str, Any]) -> tuple[str, Path, str | None, Path, Path, dict[str, Any] | None]:
+        lookup = _viewport_cache_lookup_key(bundle, manifest, skipped_source_ids, opts)
+        index = _viewport_index_path(imports_root, lookup)
+        key = _read_cas_index(index)
+        mesh_file, metadata_file = _viewport_paths(imports_root, key or ".pending")
+        artifact = _load_cached_viewport_mesh(mesh_file, metadata_file) if key else None
+        return lookup, index, key, mesh_file, metadata_file, artifact
+
+    def mesh_for(opts: Mapping[str, Any], *, include_viewport: bool) -> tuple[dict[str, Any], str, bool, Path]:
+        """The solve mesh for ``opts``: served from the content-addressed cache, or built."""
+
+        lookup_key = _cache_lookup_key(
+            bundle, manifest, normalized_mesh, skipped_source_ids, opts
+        )
+        index_path = imports_root / "meshes" / "index" / f"{lookup_key}.txt"
+        cache_key = _read_cas_index(index_path)
+        mesh_path = imports_root / "meshes" / f"{cache_key}.msh" if cache_key else imports_root / "meshes" / ".pending.msh"
+        metadata_path = imports_root / "meshes" / f"{cache_key}.json" if cache_key else imports_root / "meshes" / ".pending.json"
+        built = _load_cached_mesh(mesh_path, metadata_path) if cache_key else None
+        if built is not None:
+            try:
+                expected_cache_key = _cache_key(
+                    bundle,
+                    manifest,
+                    normalized_mesh,
+                    skipped_source_ids,
+                    opts,
+                    str(built["transformed_geometry_hash"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                built = None
+            else:
+                # The lookup index is only a shortcut from immutable bundle inputs
+                # to measured geometry. It is not itself evidence: require the
+                # sidecar's stored geometry hash to reproduce the indexed CAS key.
+                if expected_cache_key != cache_key:
+                    built = None
+        if built is not None:
+            built = _judge_cached_reduced_winding(built, str(cache_key))
+        cache_hit = built is not None
+        if built is None:
+            try:
+                # A returned bundle's assembly.step is external CAD, so it is
+                # opened in a disposable child with its own deadline and memory
+                # budget (``docs/plans/STEP-PARSER-ISOLATION.md``). A crash, hang,
+                # or over-budget parse in there is this refusal, and there is no
+                # in-process retry behind it.
+                built = build_imported_mesh_isolated(
+                    bundle.assembly_path,
+                    manifest,
+                    normalized_mesh,
+                    skipped_source_ids=skipped_source_ids,
+                    options=dict(opts),
+                    include_viewport_mesh=include_viewport,
+                    expected_sha256=bundle.artifact_sha256,
+                    expected_size_bytes=bundle.artifact_size_bytes,
+                )
+            except ImportedMeshDependencyError:
+                raise
+            except ChildRefusal as exc:
+                # A refusal from a child that ran is already in the server log with
+                # its exit and output tail; the user's refusal keeps stage and wording.
+                raise IngestRefusal(exc.stage, exc.detail) from exc
+            except Exception as exc:
+                message = str(exc)
+                stage = "stage 7 meshing"
+                for marker, labelled in (
+                    ("scope gate:", "stage 2 scope gate"),
+                    ("STEP import + normalisation:", "stage 4 STEP import + normalisation"),
+                    ("normalisation:", "stage 4 STEP import + normalisation"),
+                    ("role resolution:", "stage 5 role resolution"),
+                    ("symmetry:", "stage 6 symmetry"),
+                ):
+                    if marker in message:
+                        stage = labelled
+                        break
+                raise IngestRefusal(
+                    stage,
+                    message,
+                    area_drift_sources=(
+                        exc.area_drift_sources
+                        if isinstance(exc, RoleResolutionError)
+                        else ()
+                    ),
+                ) from exc
+            cache_key = _cache_key(
                 bundle,
                 manifest,
                 normalized_mesh,
                 skipped_source_ids,
-                options,
+                opts,
                 str(built["transformed_geometry_hash"]),
             )
-        except (KeyError, TypeError, ValueError):
-            built = None
-        else:
-            # The lookup index is only a shortcut from immutable bundle inputs
-            # to measured geometry. It is not itself evidence: require the
-            # sidecar's stored geometry hash to reproduce the indexed CAS key.
-            if expected_cache_key != cache_key:
-                built = None
-    if built is not None:
-        built = _judge_cached_reduced_winding(built, str(cache_key))
-    cache_hit = built is not None
-    if built is None:
-        try:
-            # A returned bundle's assembly.step is external CAD, so it is
-            # opened in a disposable child with its own deadline and memory
-            # budget (``docs/plans/STEP-PARSER-ISOLATION.md``). A crash, hang,
-            # or over-budget parse in there is this refusal, and there is no
-            # in-process retry behind it.
-            built = build_imported_mesh_isolated(
-                bundle.assembly_path,
-                manifest,
-                normalized_mesh,
-                skipped_source_ids=skipped_source_ids,
-                options=options,
-                include_viewport_mesh=viewport_artifact is None and not defer_viewport,
-                expected_sha256=bundle.artifact_sha256,
-                expected_size_bytes=bundle.artifact_size_bytes,
-            )
-        except ImportedMeshDependencyError:
-            raise
-        except ChildRefusal as exc:
-            # A refusal from a child that ran is already in the server log with
-            # its exit and output tail; the user's refusal keeps stage and wording.
-            raise IngestRefusal(exc.stage, exc.detail) from exc
-        except Exception as exc:
-            message = str(exc)
-            stage = "stage 7 meshing"
-            for marker, labelled in (
-                ("scope gate:", "stage 2 scope gate"),
-                ("STEP import + normalisation:", "stage 4 STEP import + normalisation"),
-                ("normalisation:", "stage 4 STEP import + normalisation"),
-                ("role resolution:", "stage 5 role resolution"),
-                ("symmetry:", "stage 6 symmetry"),
-            ):
-                if marker in message:
-                    stage = labelled
-                    break
-            raise IngestRefusal(
-                stage,
-                message,
-                area_drift_sources=(
-                    exc.area_drift_sources
-                    if isinstance(exc, RoleResolutionError)
-                    else ()
-                ),
-            ) from exc
-        cache_key = _cache_key(
-            bundle,
-            manifest,
-            normalized_mesh,
-            skipped_source_ids,
-            options,
-            str(built["transformed_geometry_hash"]),
+            mesh_path = imports_root / "meshes" / f"{cache_key}.msh"
+            metadata_path = imports_root / "meshes" / f"{cache_key}.json"
+            _write_cache(mesh_path, metadata_path, built)
+            _write_cas_index(index_path, cache_key)
+        assert built is not None
+        assert cache_key is not None
+        return built, cache_key, cache_hit, mesh_path
+
+    # The model as it arrived is always meshed first when evidence asks for a
+    # mirror: the detector reads that mesh, and a reading that does not apply
+    # (the model is whole again) solves exactly it. With no evidence it is the
+    # only mesh, as before.
+    evidence_outcome: EvidenceOutcome | None = None
+    applied_planes: tuple[str, ...] = ()
+    if plan.evidenced_planes:
+        shown = mesh_for(options, include_viewport=False)
+        observations = observe_record_mesh(shown[0])
+        evidence_outcome = apply_evidence(
+            plan, observations, identity_problem=_source_identity_problem(shown[0], skipped_source_ids)
         )
-        mesh_path = imports_root / "meshes" / f"{cache_key}.msh"
-        metadata_path = imports_root / "meshes" / f"{cache_key}.json"
-        _write_cache(mesh_path, metadata_path, built)
-        _write_cas_index(index_path, cache_key)
-    assert built is not None
-    assert cache_key is not None
+        if evidence_outcome.refusal is not None:
+            raise IngestRefusal("stage 6 symmetry", evidence_refusal_message(plan, evidence_outcome.refusal))
+        chosen = shown
+        if evidence_outcome.applied:
+            # The same preparation as a hand declaration of these planes, in the
+            # frame they were modelled in: a reduced domain is +z until M1d.
+            mirrored_options = {
+                **{key: value for key, value in options.items() if key != "solver_frame"},
+                "declared_cut_planes": [
+                    plane
+                    for plane in DOMAIN_PLANES
+                    if plane in set(options["declared_cut_planes"]) | set(evidence_outcome.applied)
+                ],
+                "domain_interpretation": {**(plan.identity() or {}), "applied": list(evidence_outcome.applied)},
+            }
+            try:
+                chosen = mesh_for(mirrored_options, include_viewport=True)
+            except IngestRefusal as exc:
+                if plan.strict:
+                    raise IngestRefusal(
+                        "stage 6 symmetry",
+                        evidence_refusal_message(plan, _mesher_denial(str(exc))),
+                    ) from exc
+                evidence_outcome = EvidenceOutcome(
+                    (),
+                    {plane: _mesher_denial(str(exc)) for plane in evidence_outcome.applied},
+                    None,
+                )
+            else:
+                options = mirrored_options
+                applied_planes = evidence_outcome.applied
+                if solver_frame is not None:
+                    solver_frame = frame_spec(AS_MODELLED, manifest)
+        built, cache_key, cache_hit, mesh_path = chosen
+        built_inline_viewport = bool(applied_planes)
+    else:
+        viewport_state = viewport_for(options)
+        built, cache_key, cache_hit, mesh_path = mesh_for(
+            options, include_viewport=viewport_state[5] is None and not defer_viewport
+        )
+        observations = observe_record_mesh(built)
+        built_inline_viewport = True
+    (
+        viewport_lookup_key,
+        _viewport_index,
+        viewport_cache_key,
+        viewport_mesh_path,
+        _viewport_metadata,
+        viewport_artifact,
+    ) = viewport_for(options)
+    viewport_cache_hit = viewport_artifact is not None
+    domain_interpretation = interpretation_record(
+        plan,
+        observations,
+        {
+            **dict(built.get("symmetry") or {}),
+            "declared_cut_planes": list(declared_domain_planes(manifest)),
+        },
+        applied=applied_planes,
+        outcome=evidence_outcome,
+        cache_identity=options.get("domain_interpretation"),
+    )
 
     viewport_failure_reason: str | None = None
     viewport_deferred = False
@@ -1407,7 +1530,9 @@ def ingest_bundle(
                 "stats": built["viewport_mesh"]["stats"],
                 "metadata": built["viewport_mesh"]["metadata"],
             }
-        elif cache_hit and isinstance(built.get("viewport_recipe"), Mapping):
+        elif (cache_hit or not built_inline_viewport) and isinstance(
+            built.get("viewport_recipe"), Mapping
+        ):
             try:
                 generated_viewport = build_imported_viewport_mesh_isolated(
                     bundle.assembly_path,
@@ -1469,7 +1594,7 @@ def ingest_bundle(
         )
     verification = built.get("symmetry_verification")
     verification = verification if isinstance(verification, Mapping) else {}
-    declared_planes = list(verification.get("declared_cut_planes") or [])
+    declared_planes = list(declared_domain_planes(manifest))
     if declared_planes:
         # Not a warning: the reduction was asked for, checked against the mesh,
         # and granted. It is recorded so the run says which domain it solved.
@@ -1490,31 +1615,15 @@ def ingest_bundle(
                 ),
             }
         )
-    undeclared = [
-        str(plane) for plane in (verification.get("undeclared_open_planes") or [])
-    ]
-    if undeclared:
-        # Blocking, because nothing else in the pipeline can tell the difference
-        # and the wrong answer is silent: an already-cut model solved whole
-        # radiates through the open cut face. The remedy is one dropdown in CAD.
+    # M1c-auto replaced the blocking "set Model domain" finding: a model that
+    # looks cut is solved as shown, or mirrored on recorded evidence, and the
+    # model card states which. The finding only records it, blocking nothing.
+    interpreted = interpretation_finding(domain_interpretation)
+    if interpreted is not None:
         findings.append(
             {
-                "id": _finding_id(
-                    "undeclared-reduced-domain",
-                    {"cache_key": cache_key, "planes": undeclared},
-                ),
-                "kind": "undeclared-reduced-domain",
-                "blocking": True,
-                "detected_planes": undeclared,
-                "detail": (
-                    "this model is open on "
-                    + ", ".join(undeclared)
-                    + " with all of its geometry on one side, which is what a "
-                    "model already cut in half looks like. It was returned as a "
-                    "full model, so WG will solve it whole and the open face "
-                    "will radiate. If it is a half, set Model domain in the "
-                    "Fusion Send dialog and return it again."
-                ),
+                "id": _finding_id(interpreted["kind"], {"cache_key": cache_key, **interpreted}),
+                **interpreted,
             }
         )
     fallback = verification.get("fallback")
@@ -1690,7 +1799,9 @@ def ingest_bundle(
             "normalisation": (
                 {
                     **built["normalisation"],
-                    "solver_frame": record_solver_frame(manifest, solver_frame),
+                    "solver_frame": record_solver_frame(
+                        manifest, solver_frame, domain_planes=applied_planes
+                    ),
                 }
                 if is_unlinked_manifest(manifest)
                 else built["normalisation"]
@@ -1733,6 +1844,7 @@ def ingest_bundle(
             "role_findings": built.get("role_findings", []),
             "symmetry": built["symmetry"],
             "symmetry_verification": built.get("symmetry_verification"),
+            "domain_interpretation": domain_interpretation,
             # What each source actually kept through the cut, measured rather
             # than assumed. It was computed and dropped before, which left the
             # reduction with no observable evidence at all outside the mesher.
@@ -1762,7 +1874,12 @@ def ingest_bundle(
     finally:
         if staged_bundle_root is not None:
             shutil.rmtree(staged_bundle_root, ignore_errors=True)
-    return json.loads(str(row["record_json"]))
+    published = json.loads(str(row["record_json"]))
+    try:
+        remember_provenance_reading(store, published)
+    except Exception:  # noqa: BLE001 - memory for the next version, never this one's outcome
+        logger.warning("Could not remember the domain reading of %s", published.get("ingest_id"), exc_info=True)
+    return published
 
 
 def get_ingestion_record(store: CadLinkStore, ingest_id: str) -> dict[str, Any] | None:

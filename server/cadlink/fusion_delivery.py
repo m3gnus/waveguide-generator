@@ -61,6 +61,12 @@ SOURCE_IDENTITY = 1
 # of the solver frame (``solver_frame.py``). The add-in states it only when WG
 # advertises this; an older WG would refuse the unknown required feature.
 DOCUMENT_UP = 1
+# WG reads returns that require ``domain-automatic-v1``: ``"domain": {"kind":
+# "automatic"}`` and the optional ``assembly.cut_provenance`` (``wgreturn.py``),
+# and interprets the domain itself (PLAN.md M1c-auto,
+# ``domain_interpretation.py``). The add-in writes them only when WG advertises
+# this; an older WG refuses the unknown required feature, visibly.
+AUTOMATIC_DOMAIN = 1
 # WG serves the live session protocol, version 1, at the address in
 # ``wg-endpoint.json`` (``server/cadlink/live``). The add-in goes live only when
 # WG advertises this; otherwise it keeps to the files above.
@@ -124,6 +130,7 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "sourceIdentity": SOURCE_IDENTITY,
         "liveProtocol": LIVE_PROTOCOL,
         "documentUp": DOCUMENT_UP,
+        "automaticDomain": AUTOMATIC_DOMAIN,
     }
     if not solve_delivery:
         del advertised["solveCommandDelivery"]

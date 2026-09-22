@@ -964,18 +964,21 @@ def test_a_declared_half_is_mirrored_rather_than_cut_again(tmp_path: Path) -> No
 
     The cutter correctly declines a plane the model does not straddle, so
     without the declaration this model comes back ``full`` -- solved as an open
-    shell radiating through its own cut face.
+    shell radiating through its own cut face. The declared plane is never cut
+    again; the other plane still is, where the mirror test validates it
+    (M1c-auto: the smallest model the checks allow).
     """
 
     pytest.importorskip("gmsh")
     record = _ingest(tmp_path, _reduced_bundle(tmp_path, "half"))
 
     symmetry = record["symmetry"]
-    # Nothing was cut here; the domain is what the author already cut.
-    assert symmetry["cut_planes"] == []
+    # The declared plane is the author's cut; WG cut only the other one.
+    assert symmetry["cut_planes"] == ["x0"]
     assert symmetry["declared_cut_planes"] == ["y0"]
-    assert symmetry["domain_planes"] == ["y0"]
+    assert symmetry["domain_planes"] == ["x0", "y0"]
     assert symmetry["planes"]["y0"]["source"] == "declared-by-cad-author"
+    assert symmetry["planes"]["x0"]["accepted"] is True
 
     verification = record["symmetry_verification"]
     assert verification["verified"] is True
@@ -984,17 +987,15 @@ def test_a_declared_half_is_mirrored_rather_than_cut_again(tmp_path: Path) -> No
     assert verification["off_plane_free_edge_count"] == 0
     assert "fallback" not in verification
 
-    # The solve halves, and the polar sweep with it.
-    assert record["mesh"]["stats"]["domain_multiplier"] == 2.0
-    assert record["mesh"]["stats"]["dense_solver_domain_multiplier"] == 2
+    # The solve reduces to a quarter, and the polar sweep with it.
+    assert record["mesh"]["stats"]["domain_multiplier"] == 4.0
+    assert record["mesh"]["stats"]["dense_solver_domain_multiplier"] == 4
     derivation = record["polar_grid_derivation"]
-    assert derivation["cut_planes"] == ["y0"]
-    assert derivation["axes"]["vertical"]["minimum_deg"] == 0.0
-    assert derivation["axes"]["horizontal"]["minimum_deg"] == -180.0
+    assert derivation["cut_planes"] == ["x0", "y0"]
 
     bounds = record["mesh"]["stats"]["bounds_m"]
     assert bounds["min_y"] == pytest.approx(0.0, abs=1.0e-9)
-    assert bounds["min_x"] < 0.0 < bounds["max_x"]
+    assert bounds["min_x"] == pytest.approx(0.0, abs=1.0e-9)
 
     # The half throat still carries its source tag: the retained half of the
     # contract's disc is what the linked selector is matched against.
@@ -1007,15 +1008,16 @@ def test_a_declared_half_is_mirrored_rather_than_cut_again(tmp_path: Path) -> No
     assert finding["declared_cut_planes"] == ["y0"]
 
 
-def test_the_same_half_returned_undeclared_is_reported_not_solved_in_silence(
+def test_the_same_half_returned_undeclared_is_solved_as_shown_and_says_so(
     tmp_path: Path,
 ) -> None:
-    """One dropdown apart, on a Fusion-first return nothing else can catch.
+    """One recorded cut apart, on a Fusion-first return nothing else can catch.
 
     A linked return whose throat was halved fails role resolution, so it is
-    already refused. An unlinked one has no design to contradict: the half
-    meshes cleanly and would be solved whole, radiating through its own cut
-    face, unless something recognises the shape of a reduced domain.
+    already refused. An unlinked one has no design to contradict. Geometry
+    alone shows only that it *can* be read as a half, so without recorded
+    evidence it is solved as shown -- never mirrored, never blocked -- and the
+    record says it looks cut (PLAN.md M1c-auto).
     """
 
     pytest.importorskip("gmsh")
@@ -1027,15 +1029,18 @@ def test_the_same_half_returned_undeclared_is_reported_not_solved_in_silence(
     assert record["symmetry"]["domain_planes"] == []
     assert record["mesh"]["stats"]["domain_multiplier"] == 1.0
     assert record["symmetry_verification"]["undeclared_open_planes"] == ["y0"]
+    interpretation = record["domain_interpretation"]
+    assert interpretation["reading"] == "as-shown"
+    assert interpretation["looks_cut"] == ["y0"]
 
+    assert not any(item["blocking"] for item in record["findings"] if "domain" in item["kind"])
     finding = next(
         item
         for item in record["findings"]
-        if item["kind"] == "undeclared-reduced-domain"
+        if item["kind"] == "domain-solved-as-shown"
     )
-    assert finding["blocking"] is True
-    assert finding["detected_planes"] == ["y0"]
-    assert "Model domain" in finding["detail"]
+    assert finding["blocking"] is False
+    assert finding["looks_cut"] == ["y0"]
 
 
 def test_forcing_the_full_domain_on_a_declared_half_is_refused(tmp_path: Path) -> None:
@@ -1205,7 +1210,7 @@ def test_a_declared_quarter_is_cut_on_both_planes_and_solved_as_a_quarter(
 
 
 def test_an_undeclared_quarter_is_recognised_on_both_planes(tmp_path: Path) -> None:
-    """Two planes to miss instead of one, and neither may pass in silence."""
+    """Two planes that look cut, and neither is mirrored without evidence."""
 
     pytest.importorskip("gmsh")
     record = _ingest(
@@ -1229,10 +1234,10 @@ def test_an_undeclared_quarter_is_recognised_on_both_planes(tmp_path: Path) -> N
     finding = next(
         item
         for item in record["findings"]
-        if item["kind"] == "undeclared-reduced-domain"
+        if item["kind"] == "domain-solved-as-shown"
     )
-    assert finding["blocking"] is True
-    assert sorted(finding["detected_planes"]) == ["x0", "y0"]
+    assert finding["blocking"] is False
+    assert sorted(finding["looks_cut"]) == ["x0", "y0"]
 
 
 # ----------------------------------- a reduced domain vs the full model it mirrors

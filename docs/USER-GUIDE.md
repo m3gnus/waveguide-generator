@@ -542,16 +542,19 @@ sent and solved the same way. Three things make it a valid return:
    can be detected; the dialog's pre-flight summary still warns when the model
    appears to violate the +Z convention. A model declared as a half or
    quarter (next item) is solved only along +Z, as modelled.
-4. **Say so if it is already a half.** A model you cut in CAD before exporting
-   is not a full model with a hole in it, and nothing in the geometry says
-   which one it is. Set **Model domain** in the Send/Solve dialog to the half
-   or quarter it is; WG then mirrors the missing part instead of solving an
-   open shell. Keep the retained side on x ≥ 0 / y ≥ 0, and leave the cut
-   plane open — a face left on the plane meshes as a wall, not as a mirror, and
-   WG refuses it rather than solving it. **Force full domain** is refused for
-   such a return: the other half is not in the file. If you return a half
-   without declaring it, WG recognises the shape and blocks the run with a
-   finding rather than solving it whole in silence.
+4. **A model already cut in half.** WG reads the domain itself and never
+   asks; the model card says what it solves ("Half model · cut at x = 0
+   (Split Body 3) · Change", "Solved as shown · looks cut at x = 0 · Change").
+   A model cut in Fusion on the YZ or XZ origin plane (Split Body or a cut,
+   recorded by the add-in when it sends) is mirrored automatically. The
+   geometry alone never is: a model that only *looks* cut — it could be a real
+   opening — is solved as shown, and **Change** on the card solves it mirrored
+   (WG checks the cut first and remembers your choice for the project).
+   **Change** also turns a mirrored model back to "as shown". Keep the retained
+   side on x ≥ 0 / y ≥ 0, and leave the cut plane open — a face left on the
+   plane meshes as a wall, not as a mirror, and WG refuses it rather than
+   solving it. **Force full domain** is refused for a mirrored return: the
+   other half is not in the file.
 
 **Solve in WG** then works as for a linked design. The return arrives marked
 as an imported CAD model — an informational note states that WG has no design

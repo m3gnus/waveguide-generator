@@ -1827,6 +1827,60 @@
         "title": "DirectivityRenderRequest",
         "type": "object"
       },
+      "DomainReadingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "ingestId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingestid"
+          },
+          "operationId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operationid"
+          },
+          "planes": {
+            "items": {
+              "enum": [
+                "x0",
+                "y0"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Planes",
+            "type": "array"
+          },
+          "reading": {
+            "enum": [
+              "as-shown",
+              "reduced"
+            ],
+            "title": "Reading",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reading"
+        ],
+        "title": "DomainReadingRequest",
+        "type": "object"
+      },
       "DriveChannel": {
         "additionalProperties": false,
         "properties": {
@@ -8494,6 +8548,116 @@
           }
         },
         "summary": "Get Design",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/domain-interpretation": {
+      "get": {
+        "description": "How this snapshot's domain was read, the readings Change offers, and any pending Change.",
+        "operationId": "get_domain_interpretation_api_cadlink_domain_interpretation_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "operationId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Operationid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ingestId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ingestid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Domain Interpretation Api Cadlink Domain Interpretation Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Domain Interpretation",
+        "tags": [
+          "cadlink"
+        ]
+      },
+      "put": {
+        "description": "Change: remember the user's reading of this model's domain for its lineage.",
+        "operationId": "put_domain_interpretation_api_cadlink_domain_interpretation_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainReadingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Put Domain Interpretation Api Cadlink Domain Interpretation Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Domain Interpretation",
         "tags": [
           "cadlink"
         ]

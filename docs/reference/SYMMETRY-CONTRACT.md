@@ -159,7 +159,80 @@ in the manifest — `assembly.bbox_mm`, each `instances[].assembly_from_link`,
 the domain evidence — is in that frame. Absent means `root-component`, which is
 what every bundle written before the member exported.
 
-An undeclared return whose meshed boundary looks reduced — open on a coordinate
-plane, with the whole mesh on one side of it — raises the blocking
-`undeclared-reduced-domain` finding. It is the only guard on a Fusion-first
-return, which has no design contract to contradict.
+### The automatic domain (M1c-auto)
+
+A writer that leaves the domain to WG requires `domain-automatic-v1` and writes
+
+```json
+"domain": {"kind": "automatic"}
+```
+
+with nothing else in it. The feature and the automatic kind are paired both
+ways; a declared `full`/`half`/`quarter` never carries the feature. WG
+advertises the feature as `"automaticDomain": 1` in `wg-capabilities.json`
+(`server/cadlink/fusion_delivery.py`), and a writer uses it only then: a WG
+without it refuses the return as an unknown required feature, so a new writer
+is refused visibly by an old WG and never read as a declaration. An absent
+domain keeps its meaning — a full model that WG may cut on its own validated
+mirror test — so an older writer is unchanged. For the frame, `automatic` is
+not a declared domain: every axis stays available (`solver_frame.allowed_axes`).
+
+Under the feature, and only under it, the writer may record the cuts the CAD
+timeline shows, read during the explicit export and never in the background:
+
+```json
+"cut_provenance": [
+  {
+    "body_object_id": "<a scope.included[].object_id>",
+    "feature": {"kind": "split-body" | "extrude-cut" | "other", "name": "Split Body 3"},
+    "tool": {"kind": "origin-plane" | "construction-plane", "origin_plane": "YZ" | "XZ" | "XY"},
+    "plane": "x0" | "y0" | "z0",
+    "kept_side": "positive" | "negative",
+    "export_frame": "root-component" | "selected-occurrence-component"
+  }
+]
+```
+
+One entry per recorded cut of one exported body. `plane` is the cut plane in the
+exported frame and must be the one `origin_plane` names (YZ is `x0`, XZ `y0`,
+XY `z0`); a `construction-plane` tool is recorded only when it is coincident
+with that origin plane (an offset of zero). `kept_side` is the side of `plane`
+the body kept. `export_frame` must be the frame `assembly.step` is written in.
+The reader checks the schema and that the body is an included one; everything
+else is WG's revalidation.
+
+WG decides with one detector (`server/cadlink/domain_interpretation.py`) that
+reads the solve mesh, never the display mesh, and separates observations (per
+CAD plane: which side the geometry is on, a free rim on the plane, faces lying
+in it, sources meeting or bisected by it, open edges elsewhere) from
+conclusions:
+
+| Geometry | With no evidence | With evidence that revalidates |
+|---|---|---|
+| Whole model across a plane | today's mirror test and auto-cut, unchanged | not applicable there (the evidence is set aside) |
+| Positive-side open rim on x0/y0, a source on the plane, nothing else open or capped (`candidate`) | **solved as shown**, "looks cut at x = 0" | mirrored, exactly as the same planes declared by hand; the other plane is still cut where it validates |
+| A rim that is not a clean candidate, or a face on the plane that bisects a source (`ambiguous`) | solved as shown | mirrored when the plane is open, positive-side, uncapped and the only opening; otherwise refused |
+| Negative side, capped cut, rim off the plane, z0 | solved as shown | refused, with the remedy in words (e.g. "keep the x ≥ 0 side and leave the cut open") |
+
+Evidence, in precedence order: a declaration (the declared path above); the
+user's own reading ("Change" on the model card,
+`PUT /api/cadlink/domain-interpretation`), remembered per project; this
+return's own `cut_provenance`; an earlier provenance-backed reading of the same
+project. A previous "solved as shown" is never evidence. Evidence of this very
+snapshot (its provenance, a Change made on it) that does not revalidate refuses
+the preparation; evidence reused from the project that does not revalidate is
+set aside and the model is solved as shown. Before any mirror WG revalidates:
+the provenance belongs to an exported body and this frame; each plane is
+open over its whole section on the positive side with no cap and no other
+opening; the mesher's declared-domain verification (open section, leaks,
+winding) passes; the sources resolved by their own faces; and, at every
+submission, the excitation is invariant under the reflection
+(`excitation_problem`). A reduced reading is solved only as modelled (+Z) until
+M1d.
+
+The reading is recorded on the ingestion record (`domain_interpretation`),
+enters the mesh cache key whenever it changes what is solved, and is part of a
+preparation's identity, so a changed reading is a new preparation and no
+approval carries to it. It replaced the blocking `undeclared-reduced-domain`
+finding: the non-blocking `domain-solved-as-shown` and
+`interpreted-reduced-domain` findings record which reading was solved.

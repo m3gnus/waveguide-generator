@@ -56,7 +56,7 @@ confirmed frame is reported, never acted on.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import logging
 from typing import Any, TYPE_CHECKING
@@ -241,13 +241,45 @@ def frame_requirement(manifest: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def allowed_axes(manifest: Mapping[str, Any]) -> tuple[str, ...]:
-    """The axes this snapshot can be solved along."""
+#: The axes a reduced (mirrored) domain may be solved along until M1d permits
+#: more: the frame it was modelled in, where its planes keep their meaning.
+REDUCED_DOMAIN_AXES: tuple[str, ...] = (AS_MODELLED,)
 
-    assembly = manifest.get("assembly")
-    domain = assembly.get("domain") if isinstance(assembly, Mapping) else None
-    if domain:
+
+def axes_in_planes(planes: Iterable[str]) -> tuple[str, ...]:
+    """The axes that lie in every one of ``planes`` (x0, y0; CAD frame).
+
+    A mirror plane must contain the radiation axis: x = 0 leaves +-y and +-z,
+    y = 0 leaves +-x and +-z, both leave +-z.
+    """
+
+    normals = {"x0": "x", "y0": "y", "z0": "z"}
+    excluded = {normals[str(plane)] for plane in planes if str(plane) in normals}
+    return tuple(axis for axis in AXES if axis[1] not in excluded)
+
+
+def allowed_axes(
+    manifest: Mapping[str, Any], domain_planes: Iterable[str] = ()
+) -> tuple[str, ...]:
+    """The axes this snapshot can be solved along.
+
+    - A declared domain (half, quarter, or an explicit full) keeps the frame
+      it was modelled in, as before M1c-auto.
+    - ``"kind": "automatic"`` declares nothing, so it is treated as no domain
+      at all -- never as a truthy declaration that forces +Z.
+    - ``domain_planes`` are validated pre-cut planes WG mirrors on recorded
+      evidence (``domain_interpretation``). They restrict the axes to those
+      lying in every plane, and a reduced domain is then +Z only until M1d.
+    """
+
+    from .wgreturn import domain_kind
+
+    if domain_kind(manifest) == "declared":
         return (AS_MODELLED,)
+    planes = tuple(domain_planes)
+    if planes:
+        inside = axes_in_planes(planes)
+        return tuple(axis for axis in inside if axis in REDUCED_DOMAIN_AXES)
     return AXES
 
 
@@ -368,15 +400,21 @@ def resolve_for_manifest(
 
 
 def record_solver_frame(
-    manifest: Mapping[str, Any], frame: str | Mapping[str, Any]
+    manifest: Mapping[str, Any],
+    frame: str | Mapping[str, Any],
+    *,
+    domain_planes: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """What an unlinked ingestion record states about the frame it was meshed in."""
+    """What an unlinked ingestion record states about the frame it was meshed in.
+
+    ``domain_planes``: the pre-cut planes the preparation mirrored on evidence.
+    """
 
     spec = dict(frame) if isinstance(frame, Mapping) else frame_spec(frame, manifest)
     if spec.get("contract") != CONTRACT_V2:
         raise ValueError("a new preparation is made under the current solver frame contract")
     matrix = spec_matrix(spec)
-    allowed = allowed_axes(manifest)
+    allowed = allowed_axes(manifest, domain_planes)
     if allowed == (AS_MODELLED,) and not np.array_equal(matrix, np.eye(4)):
         # A declared domain keeps its modelled transform until M1d permits more.
         raise ValueError("a declared half or quarter is solved only in the frame it was modelled in")
@@ -521,8 +559,8 @@ def record_frame_refusal(store: CadLinkStore, record: Mapping[str, Any]) -> str 
         )
     if confirmed not in allowed:
         return (
-            f"The confirmed solver frame ({confirmed}) cannot be used: this return is "
-            "declared as a half or quarter model, which is solved only in the frame "
+            f"The confirmed solver frame ({confirmed}) cannot be used: this model is "
+            "solved as a half or quarter model, which is solved only in the frame "
             "it was modelled in (+z). Confirm +z, or return the whole model."
         )
     if confirmed != frame["axis"]:
@@ -556,7 +594,7 @@ def confirm_frame(
         raise FrameConfirmationError(str(exc)) from exc
     if chosen not in _record_allowed(frame):
         raise FrameConfirmationError(
-            "this return is declared as a half or quarter model and is solved only "
+            "this model is solved as a half or quarter model, and so only "
             "in the frame it was modelled in (+z)"
         )
     spec = _frame_for_axis(frame, chosen)
@@ -778,7 +816,9 @@ __all__ = [
     "FrameConfirmationError",
     "FrameResolution",
     "REASON",
+    "REDUCED_DOMAIN_AXES",
     "allowed_axes",
+    "axes_in_planes",
     "carried_axis",
     "confirm_frame",
     "confirmation_key",

@@ -2477,6 +2477,10 @@ def mount_cadlink(application: FastAPI) -> None:
     from .solver_frame_api import router as solver_frame_router
 
     application.include_router(solver_frame_router)
+    # A model's domain interpretation: what was solved, and Change (M1c-auto).
+    from .domain_interpretation_api import router as domain_interpretation_router
+
+    application.include_router(domain_interpretation_router)
 
     async def advertise_fusion_delivery_on_startup() -> None:
         # Removes what a WG older than delivery version 3 left for its add-in,
