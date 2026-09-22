@@ -670,6 +670,18 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(mocks.prepareCadOperation.mock.calls[1]).toEqual(['cmd-held', { submit: true }]);
   });
 
+  it('binds the settings on screen when the setup a request holds cannot be read', async () => {
+    await mount();
+    await deliver(operation('cmd-fusion', 'needs_user_input', {
+      reason: 'preparation_failed', stage: 'ready', attemptGeneration: 1,
+      setupRevisionId: 'wgs_gone', preparationId: null, updatedAt: '2026-09-22T10:00:02Z',
+    }));
+    await pressSolve();
+    expect(mocks.getSetupRevision).toHaveBeenCalledWith('wgs_gone');
+    expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
+    expect(mocks.prepareCadOperation.mock.calls[0]).toEqual(['cmd-fusion', { setupRevisionId: expect.any(String), submit: true }]);
+  });
+
   it('shows a failure and a cancellation, and reveals nothing for them', async () => {
     await mount();
     await pressSolve();

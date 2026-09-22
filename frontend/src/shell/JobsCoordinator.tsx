@@ -579,8 +579,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ? (pending?.operationId === operationId ? pending : useCadOperationsStore.getState().operations[operationId])
           ?.setupRevisionId ?? null
         : null;
-      const keepBound = bound !== null
-        && solveInputsKey((await getSetupRevision(bound)).setup) === solveInputsKey(setup);
+      // A bound setup that cannot be read is not kept: the settings on screen
+      // are bound instead, which is what this press asked for anyway.
+      const keepBound = bound !== null && await getSetupRevision(bound)
+        .then((revision) => solveInputsKey(revision.setup) === solveInputsKey(setup), () => false);
       const revisionId = keepBound ? null : (await createSetupRevision(setup)).revisionId;
       // A continued request exists already; only a solve of its own is created.
       if (!continued) {
