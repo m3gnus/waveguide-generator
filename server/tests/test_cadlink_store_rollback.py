@@ -201,6 +201,7 @@ M1_TABLES = (
     "cad_project_setups",
     "cad_settings",
     "cad_frame_confirmations",
+    "cad_frame_suggestions",
 )
 
 
@@ -210,8 +211,8 @@ def _populate(store: CadLinkStore, design_id: str) -> None:
     A solve taken all the way to its job (snapshot, preparation, approval,
     bound request, outcome); a solve waiting for the user; a Fusion-bound
     request claimed over the live protocol (``claim_json``); a legacy outcome;
-    a setup revision, the project setup that names it, a setting and a frame
-    confirmation.
+    a setup revision, the project setup that names it, a setting, a frame
+    confirmation with its recorded frame, and a frame suggestion.
     """
 
     lineage_id = store.get_design(design_id)["lineage_id"]
@@ -219,7 +220,13 @@ def _populate(store: CadLinkStore, design_id: str) -> None:
     store.record_project_setup(lineage_id, "sha256:" + "7" * 64, revision)
     store.set_setting("solverSelection", {"engine": "metal"})
     store.record_frame_confirmation(
-        "wgl_frame", {"anchor": "instance-1", "requirement": "unlinked-v1"}, "+z"
+        "wgl_frame",
+        {"anchor": "instance-1", "requirement": "unlinked-v1"},
+        "+z",
+        frame={"contract": "cad-solver-frame-v2", "axis": "+z", "up": "+y"},
+    )
+    store.record_frame_suggestion(
+        "sha256:" + "5" * 64, "frame-infer-v1", {"status": "automatic", "axis": "+z"}, "wgi_prepared"
     )
 
     _accept_solve(store, "cmd-solved")
