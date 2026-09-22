@@ -180,11 +180,17 @@ export function CadSolverFrameConfirm({ snapshot, label, onConfirmed, mode = 'co
         that points out of the mouth. WG solves along the solver +Z (blue) from the model’s origin, and
         remembers your choice for this project.
       </span>
-      : <span>
-        Confirmed for this project: <b>{confirmed ?? 'nothing yet'}</b>. Change it if the model was
-        reoriented in CAD. A change applies to later preparations of this project only: runs already
-        solved keep the frame they were solved in. Prepare the model again to solve it in the new frame.
-      </span>}
+      : confirmed === null
+        // Nothing to change yet: choosing one is a first choice, not a change.
+        ? <span>
+          Choose the model axis that points out of the mouth. WG remembers it for this project and
+          prepares the model in that frame from now on.
+        </span>
+        : <span>
+          Confirmed for this project: <b>{confirmed}</b>. Change it if the model was
+          reoriented in CAD. A change applies to later preparations of this project only: runs already
+          solved keep the frame they were solved in. Prepare the model again to solve it in the new frame.
+        </span>}
     <fieldset>
       <legend>Radiates along</legend>
       {loaded.preview.axes.map((item) => <label key={item.axis} title={item.reason ?? undefined}>
@@ -220,7 +226,8 @@ export function CadSolverFrameConfirm({ snapshot, label, onConfirmed, mode = 'co
         : `Choose a solver frame axis: ${label}`}
       onClick={confirm}
     >{axis === null
-        ? 'Choose an axis'
+        // An instruction, not a dead button: the choice is the radios above.
+        ? 'Pick an axis above'
         : mode === 'confirm' ? `Confirm ${axis} and solve` : `Use ${axis} for this project`}</button>
   </div>;
 }

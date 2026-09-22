@@ -1,6 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { useCadOperationsStore } from '../stores/cadOperations';
 import fixture from '../viewport/solverFrame.fixture.json';
@@ -33,6 +34,9 @@ const operation = (reason: string): CadOperationSummary => ({
   snapshot: { manifestSha256: `sha256:${'a'.repeat(64)}`, documentName: 'Authored horn', projectLineageId: 'wgl_1' },
   legacy: false, createdAt: 'now', updatedAt: 'now',
 });
+
+// Cards are shown for the model on screen only.
+const onScreen = { manifest_sha256: `sha256:${'a'.repeat(64)}` } as CadReturnIngestRecord;
 
 const json = (body: unknown) => new Response(JSON.stringify(body), {
   status: 200, headers: { 'Content-Type': 'application/json' },
@@ -80,7 +84,7 @@ describe('an operation waiting for its solver frame', () => {
       throw new Error(`unexpected ${url}`);
     }));
     useCadOperationsStore.setState({ operations: { 'op-1': operation('frame_confirmation_required') } });
-    await act(async () => root.render(<CadOperationsSection record={null}/>));
+    await act(async () => root.render(<CadOperationsSection record={onScreen}/>));
     expect(host.textContent).toContain('needs its solver frame confirmed');
     await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
     // No plain Solve now: solving without confirming would only wait again.
@@ -95,7 +99,7 @@ describe('an operation waiting for its solver frame', () => {
   it('offers no frame confirmation for any other reason', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('no request expected'); }));
     useCadOperationsStore.setState({ operations: { 'op-1': operation('engine_unavailable') } });
-    await act(async () => root.render(<CadOperationsSection record={null}/>));
+    await act(async () => root.render(<CadOperationsSection record={onScreen}/>));
     expect(host.querySelector('.cad-solver-frame')).toBeNull();
     expect(host.querySelector('button[aria-label="Solve now: Authored horn"]')).not.toBeNull();
   });

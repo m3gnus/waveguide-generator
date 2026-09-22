@@ -1737,7 +1737,8 @@ describe('CadLinkCoordinator', () => {
     expect(useCadReturnStore.getState().selectedBundle).toEqual(arrived);
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
     expect(ingestBodies).toHaveLength(1);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain(ingestRecord.ingest_id);
+    // The strip names the document it received, never the ingestion id.
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Received Speaker rebuilt from Fusion.');
     // The status above renders only inside the CAD Link panel, which exists
     // only in CAD mode — so the arrival has to enter it to be visible at all.
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
@@ -1858,7 +1859,7 @@ describe('CadLinkCoordinator', () => {
 
     expect(cadLinkCoordinatorBridge.getSnapshot().bundles).toEqual([newer]);
     expect(useCadReturnStore.getState().selectedBundle).toEqual(newer);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('wgi_newest_listing');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Received Newest listing from Fusion.');
   });
 
   it('marks an ingestion stale while the CAD Link panel is unmounted', async () => {
@@ -1965,7 +1966,7 @@ describe('CadLinkCoordinator', () => {
       await Promise.resolve();
     });
     expect(cadLinkCoordinatorBridge.getSnapshot().ingesting).toBe(false);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('wgi_newer');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Received Speaker from Fusion.');
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_newer');
   });
 

@@ -71,9 +71,12 @@ describe('confirming an unlinked model solver frame', () => {
     // Nothing preselected, not even the modelled +z, and nothing can be confirmed yet.
     expect([...host.querySelectorAll<HTMLInputElement>('input[type="radio"]')].some((input) => input.checked)).toBe(false);
     expect(button(host)!.disabled).toBe(true);
+    // Unchosen, it reads as the instruction it is, not as a dead button.
+    expect(button(host)!.textContent).toBe('Pick an axis above');
     expect(host.querySelector('[data-frame-preview-axis]')).toBeNull();
     await act(async () => { host.querySelector<HTMLInputElement>('input[value="+y"]')!.click(); });
     expect(button(host)!.disabled).toBe(false);
+    expect(button(host)!.textContent).toBe('Confirm +y and solve');
     expect(host.textContent).toContain('model +y → solver +Z');
     expect(host.querySelector('[data-frame-preview-axis]')?.getAttribute('data-frame-preview-axis')).toBe('+y');
     await act(async () => { button(host)!.click(); });

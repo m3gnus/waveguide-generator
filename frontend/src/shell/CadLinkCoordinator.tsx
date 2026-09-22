@@ -12,7 +12,6 @@ import type { JobItem } from '../api/jobsSocket';
 import {
   cancelCadOperation,
   prepareCadOperation,
-  putProjectSetup,
   reconcileCadOperation,
   type CadOperationApprovals,
   type CadOperationSummary,
@@ -20,12 +19,8 @@ import {
 import type { WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
-import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { useCadPreparationStore } from '../stores/cadPreparation';
-import {
-  bundleIdentity,
-  useCadReturnStore,
-} from '../stores/cadReturn';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
@@ -40,8 +35,9 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
-import { buildCadProjectSetup, startCadSetupPublisher } from './cadSetupPublisher';
+import { startCadSetupPublisher } from './cadSetupPublisher';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { recordOnScreenSettings } from './cadOnScreenSettings';
 import { workspaceNavigation } from './workspaceNavigation';
 import { useModalDialogFocus } from './dialogFocus';
 import {
@@ -261,39 +257,10 @@ function publishBridge(snapshot: CadLinkCoordinatorSnapshot): void {
   bridgeListeners.forEach((listener) => listener());
 }
 
-/** The project the settings on screen may be recorded under for this
- * operation, or why they may not.
- *
- * Checked when "Use these settings and solve" is pressed, not when its card
- * rendered: the selection, the ingestion or the listing may all have moved
- * since. The settings are the on-screen model's, so that model has to be
- * this operation's snapshot, prepared from this very listing of its return,
- * and filed under the project the backend names. With no project named, only
- * the ingestion's own counts; the parametric document's lineage never does. */
-function settingsProjectFor(
-  operation: CadOperationSummary | undefined,
-  state: ReturnType<typeof useCadReturnStore.getState>,
-): string {
-  const snapshot = operation?.snapshot;
-  const record = state.ingestRecord;
-  if (!snapshot?.manifestSha256 || !record || record.manifest_sha256 !== snapshot.manifestSha256) {
-    throw new Error('This request is for a model that is not the model on screen. Select and prepare its return first.');
-  }
-  if (state.needsIngest || !state.selectedBundle
-    || bundleIdentity(state.selectedBundle) !== state.ingestedBundleIdentity) {
-    throw new Error('The model on screen has changed since it was prepared. Prepare it again, then use its settings.');
-  }
-  const filed = record.project?.lineage_id ?? null;
-  if (snapshot.projectLineageId) {
-    if (snapshot.projectLineageId !== (filed ?? state.projectLineageId)) {
-      throw new Error('The model on screen is filed under another project than this request names. Open that project first.');
-    }
-    return snapshot.projectLineageId;
-  }
-  if (!filed) {
-    throw new Error('WG does not know which project this model belongs to yet, so its settings cannot be recorded for it.');
-  }
-  return filed;
+/** What a waiting solve is, in a progress line: the user's own solve when it
+ * was started from Simulation, otherwise the model Fusion sent. */
+function operationSubject(operationId: string): string {
+  return operationId.startsWith('manual-solve:') ? 'your solve' : 'the model Fusion sent';
 }
 
 /** Show the CAD workspace and focus its panel.
@@ -1030,7 +997,8 @@ export function CadLinkCoordinator() {
       }
       if (request === ingestRequest.current && mounted.current) {
         rememberCadProject(record.project?.lineage_id);
-        setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
+        const origin = current.selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
+        setStatus(`Received ${current.selectedBundle.documentName || current.selectedBundle.name} from ${origin}.`);
         // Before the display, so the viewport adopts the CAD slot rather than
         // loading it invisibly behind the parametric design.
         enterCadWorkspace();
@@ -1252,14 +1220,14 @@ export function CadLinkCoordinator() {
    * recorded -- never from whatever is open here -- and submits it. */
   const solveOperation = useCallback((operationId: string) => actOnOperation(
     () => { solveAttention.armOperation(operationId); return prepareCadOperation(operationId); },
-    'Preparing the model Fusion sent. Its run appears in the Jobs rail once it is submitted.',
+    `Preparing ${operationSubject(operationId)}. Its run appears in the Jobs rail once it is submitted.`,
   ), [actOnOperation]);
 
   /** Approve and solve: the findings the user reviewed, on the one preparation
    * that reported them. A new preparation needs its own review. */
   const approveOperation = useCallback((operationId: string, approvals: CadOperationApprovals) => actOnOperation(
     () => { solveAttention.armOperation(operationId); return prepareCadOperation(operationId, { approvals }); },
-    'Approved the reviewed findings for this preparation. Preparing and solving the model Fusion sent.',
+    `Approved the reviewed findings for this preparation. Preparing and solving ${operationSubject(operationId)}.`,
   ), [actOnOperation]);
 
   /** Dismiss: the backend reconciles with the jobs first, so a solve whose job
@@ -1290,12 +1258,8 @@ export function CadLinkCoordinator() {
    * knows -- and the operation is prepared with exactly that revision. */
   const solveOperationWithSettings = useCallback((operationId: string) => actOnOperation(async () => {
     solveAttention.armOperation(operationId);
-    const state = useCadReturnStore.getState();
-    const lineageId = settingsProjectFor(useCadOperationsStore.getState().operations[operationId], state);
-    const built = buildCadProjectSetup(state, undefined, undefined, lineageId);
-    if (!built) throw new Error(importedSubmissionBlocker() ?? 'The solve settings on screen are not complete yet.');
-    const recorded = await putProjectSetup(built);
-    return prepareCadOperation(operationId, { setupRevisionId: recorded.revisionId });
+    const setupRevisionId = await recordOnScreenSettings(operationId);
+    return prepareCadOperation(operationId, { setupRevisionId });
   }, 'Recorded these settings for the model’s project. Preparing and solving it; its run appears in the Jobs rail once it is submitted.'),
   [actOnOperation]);
 

@@ -440,8 +440,13 @@ export function CadProjectHistory() {
     {error && <div className="cad-alert cad-alert-notice" role="status">Could not read the archived Fusion files: {error}</div>}
     {removeError && <div className="cad-alert cad-alert-error" role="alert">{removeError}</div>}
     {runs.length === 0 && <div className="empty-state">
-      <b>No runs yet</b>
-      <span>Bring geometry in from CAD and solve it. Every solve of this project is listed here with the model it came from.</span>
+      {/* With a model on screen the geometry is already in: nothing to instruct. */}
+      {liveIngestId !== null
+        ? <b>No runs yet.</b>
+        : <>
+          <b>No runs yet</b>
+          <span>Bring geometry in from CAD and solve it. Every solve of this project is listed here with the model it came from.</span>
+        </>}
     </div>}
     {runs.length > 0 && <div className="cad-run-list" role="list" aria-label="Runs in this project">
       {shownGroups.map((group, index) => <div key={`${group.returnStateHash ?? 'none'}-${index}`} className="cad-run-group">

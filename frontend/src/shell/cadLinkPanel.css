@@ -123,6 +123,8 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-check-detail { padding: 2px 0 6px 20px; }
 .cad-check-findings { margin-top: 6px; border-top: 1px solid var(--hair); }
 .cad-check-findings-head { margin: 5px 0 0; color: var(--fg3); font-size: var(--text-micro); letter-spacing: .06em; text-transform: uppercase; }
+.cad-check-notes { margin-top: 6px; border-top: 1px solid var(--hair); }
+.cad-check-info > .cad-check-glyph { color: var(--fg3); }
 .cad-blocking-suffix { display: inline; color: var(--amber); font-size: inherit; font-weight: 500; cursor: help; }
 
 .cad-section { margin-top: 7px; padding: 7px; border: 1px solid var(--hair); background: var(--surface-panel); }
@@ -207,3 +209,12 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-delivery-waiting { color: var(--amber); }
 .cad-delivery-refusals ul { margin: 4px 0 0; padding-left: 16px; color: var(--fg2); }
 .cad-model-provenance { overflow-wrap: anywhere; }
+.cad-earlier-requests { margin-top: 8px; color: var(--fg3); font-size: var(--text-base); }
+.cad-earlier-requests summary { cursor: pointer; }
+.cad-earlier-requests ul { margin: 4px 0; padding-left: 16px; }
+.cad-earlier-requests li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.cad-earlier-requests time { color: var(--fg4); }
+.cad-solver-frame-section { margin-top: 8px; }
+.cad-solver-frame-line { margin: 0; }
+.cad-model-details { margin-top: 8px; color: var(--fg3); font-size: var(--text-base); }
+.cad-model-details summary { cursor: pointer; }

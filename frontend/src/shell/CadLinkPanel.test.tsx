@@ -262,16 +262,16 @@ describe('CadLinkPanel', () => {
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Dismiss')).toBe(false);
   });
 
-  it('shows only durable interrupted mutations with their journal phase and recovery actions', async () => {
-    await renderAndSelect();
-    await clickIngest();
+  /** The active Fusion document reports the interrupted update `operationId`,
+   * which is what makes its recovery card loud. */
+  const reportRecovery = async (operationId: string) => {
     const base = vi.mocked(fetch).getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
       String(input).endsWith('/fusion-status')
         ? json({
           ...currentFusion,
           recoveryRequired: {
-            operationId: 'op-update', kind: 'update', instanceId: 'instance-a', exportId: 'wge_2', phase: 'applied',
+            operationId, kind: 'update', instanceId: 'instance-a', exportId: 'wge_2', phase: 'applied',
           },
         })
         : base(input, init)
@@ -280,6 +280,12 @@ describe('CadLinkPanel', () => {
       window.dispatchEvent(new Event('focus'));
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
+  };
+
+  it('shows only durable interrupted mutations the active document reports, with their recovery actions', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    await reportRecovery('op-update');
     act(() => {
       const { apply } = useCadOperationsStore.getState();
       apply(cadOperation({ operationId: 'op-return', kind: 'request_return', state: 'recovery_required' }));
@@ -289,14 +295,17 @@ describe('CadLinkPanel', () => {
     const card = operationCard('op-update');
     expect(host.querySelectorAll('.cad-operation')).toHaveLength(1);
     expect(card.textContent).toContain('Update interrupted — recovery required');
-    expect(card.textContent).toContain('Journal phase: applied');
     expect(card.textContent).toContain('Fusion has no transaction covering these edits');
+    // The journal and the operation id are WG's bookkeeping, not the user's.
+    expect(card.textContent).not.toContain('Journal phase');
+    expect(card.textContent).not.toContain('op-update');
     expect(buttonTexts(card)).toEqual(['Dismiss', 'Check Fusion again']);
   });
 
   it('settles a recovery card from Fusion evidence without offering the update again', async () => {
     await renderAndSelect();
     await clickIngest();
+    await reportRecovery('op-update');
     const posted = recordOperationRequests({ reconcileAccepted: ['op-update'] });
     act(() => useCadOperationsStore.getState().apply(cadOperation({
       operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
@@ -322,6 +331,7 @@ describe('CadLinkPanel', () => {
   it('does not claim Fusion reported an interruption when reconciliation finds no current evidence', async () => {
     await renderAndSelect();
     await clickIngest();
+    await reportRecovery('op-update');
     const posted = recordOperationRequests();
     act(() => useCadOperationsStore.getState().apply(cadOperation({
       operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
@@ -397,9 +407,15 @@ describe('CadLinkPanel', () => {
     expect(ready.querySelector('[role="status"] button')).toBeNull();
     expect(ready.textContent).toContain('Fusion asked for a solve');
     expect(ready.textContent).toContain('Prepared, and waiting for you to start the solve.');
-    for (const id of ['op-ready', 'wgs_1', 'wgp_1']) expect(ready.textContent).toContain(id);
-    await vi.waitFor(() => expect(ready.textContent).toContain('Enginemetal'));
-    expect(ready.textContent).not.toContain('beat-cpu');
+    // Its bound inputs are bookkeeping: in the model card's Details, not on the card.
+    for (const id of ['op-ready', 'wgs_1', 'wgp_1']) expect(ready.textContent).not.toContain(id);
+    const details = host.querySelector<HTMLDetailsElement>('.cad-model-details')!;
+    expect(details.open).toBe(false);
+    const inputs = [...details.querySelectorAll<HTMLElement>('.cad-solve-inputs')]
+      .find((item) => item.textContent?.includes('op-ready'))!;
+    for (const id of ['op-ready', 'wgs_1', 'wgp_1']) expect(inputs.textContent).toContain(id);
+    await vi.waitFor(() => expect(inputs.textContent).toContain('Enginemetal'));
+    expect(inputs.textContent).not.toContain('beat-cpu');
     expect(buttonTexts(ready)).toEqual(['Dismiss', 'Solve now']);
     // Each action names what it acts on: the document when known.
     expect(buttonLabels(ready)).toEqual(['Dismiss: Speaker', 'Solve now: Speaker']);
@@ -408,7 +424,13 @@ describe('CadLinkPanel', () => {
     expect(engine.textContent).toContain('solver selector');
     expect(buttonTexts(engine)).toEqual(['Dismiss', 'Open Simulation', 'Solve now']);
     expect(buttonLabels(engine)[0]).toBe('Dismiss: operation op-engine');
-    expect(setup.textContent).toContain('Choose the solve settings for this model in WG');
+    // The model is on screen, so the card's own guidance replaces the backend's
+    // message; only the collapsed Solve inputs record keeps it, as reported.
+    expect(setup.querySelector(':scope > div > span:not([role])')?.textContent).toContain('This model is on screen');
+    expect([...setup.querySelectorAll(':scope > div > span')].map((span) => span.textContent).join(' '))
+      .not.toContain('Choose the solve settings for this model in WG');
+    expect([...details.querySelectorAll('.cad-solve-inputs-reported')].map((item) => item.textContent).join(' '))
+      .toContain('Choose the solve settings for this model in WG');
     expect(buttonTexts(setup)).toEqual(['Dismiss', 'Open Simulation', 'Use these settings and solve']);
 
     await act(async () => { ready.querySelector<HTMLButtonElement>('button.primary')!.click(); });
@@ -447,14 +469,73 @@ describe('CadLinkPanel', () => {
     await vi.waitFor(() => expect(card.textContent).toContain('Could not read the findings'));
     expect(buttonIn(card, 'Approve and solve')).toBeUndefined();
     await act(async () => { buttonIn(card, 'Retry')!.click(); });
-    await vi.waitFor(() => expect(card.textContent).toContain('finding-a'));
+    await vi.waitFor(() => expect(card.querySelector('.cad-operation-findings')?.textContent).toBe('freshness'));
     expect(card.textContent).not.toContain('Could not read the findings');
-    expect(card.textContent).toContain('freshness');
+    // In words, never by id.
+    expect(card.textContent).not.toContain('finding-a');
     await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toEqual({
       path: '/api/cadlink/operations/op-review/prepare',
       body: { submit: true, approvals: { preparationId: 'wgp_7', findingIds: ['finding-a'] } },
+    });
+  });
+
+  /** A continuation -- an approval, a frame confirmation, a retry -- keeps the
+   * setup revision the operation already holds, which the backend reuses. It
+   * used to rebuild the settings from the controls: a different revision (no
+   * run label), so a new preparation, the approval lost, and no job. Only an
+   * action that chooses settings sends them: here, a new engine after
+   * engine_unavailable. */
+  it('continues a solve with the settings it holds, and sends new ones only when the card asks for them', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json({ ...record, project: { lineage_id: 'wgl_speaker' } });
+    }));
+    await renderAndSelect();
+    await clickIngest();
+    const manual = 'manual-solve:op-wg';
+    const posted = recordOperationRequests({
+      detail: {
+        ...cadOperation({ operationId: manual, reason: 'findings_need_review', preparationId: 'wgp_7' }),
+        approvals: [],
+        preparation: {
+          preparationId: 'wgp_7', ingestId: record.ingest_id, snapshotSha256: 'sha256:s', setupRevisionId: 'wgs_manual',
+          reportSha256: record.report_sha256, blockingFindingIds: ['finding-a'], attemptGeneration: 1,
+        },
+      },
+    });
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: manual, reason: 'findings_need_review', preparationId: 'wgp_7', setupRevisionId: 'wgs_manual',
+      }));
+    });
+    const card = operationCard(manual);
+    await vi.waitFor(() => expect(buttonIn(card, 'Approve and solve')).toBeDefined());
+    await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toEqual({
+      path: `/api/cadlink/operations/${encodeURIComponent(manual)}/prepare`,
+      body: { submit: true, approvals: { preparationId: 'wgp_7', findingIds: ['finding-a'] } },
+    });
+    // Its progress line is about the user's own solve, not one Fusion sent.
+    await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toBeTruthy());
+    expect(host.querySelector('.cad-status-strip')?.textContent).not.toContain('Fusion sent');
+
+    // After engine_unavailable the card asks for another engine, then Solve
+    // now: that press records the settings on screen and sends that revision.
+    act(() => {
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: 'op-fusion', reason: 'engine_unavailable', createdAt: '2026-09-14T10:00:03Z',
+      }));
+    });
+    await act(async () => { buttonIn(operationCard('op-fusion'), 'Solve now')!.click(); });
+    await vi.waitFor(() => expect(posted).toHaveLength(3));
+    expect(posted[1]).toMatchObject({ path: '/api/cadlink/project-setups', body: { lineageId: 'wgl_speaker' } });
+    expect(posted[2]).toEqual({
+      path: '/api/cadlink/operations/op-fusion/prepare', body: { setupRevisionId: 'wgs_9', submit: true },
     });
   });
 
@@ -551,8 +632,11 @@ describe('CadLinkPanel', () => {
         snapshot: { manifestSha256: `sha256:${'b'.repeat(64)}`, documentName: 'Tritonia', projectLineageId: 'wgl_other' },
       }));
     });
+    // Not the model on screen: one quiet line under Earlier requests, which
+    // can still open its project.
     const card = operationCard('op-other');
-    expect(buttonTexts(card)).toEqual(['Dismiss', 'Open Tritonia', 'Solve now']);
+    expect(card.closest('.cad-earlier-requests')).not.toBeNull();
+    expect(buttonTexts(card)).toEqual(['Open Tritonia', 'Dismiss']);
 
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     act(() => {
@@ -576,13 +660,13 @@ describe('CadLinkPanel', () => {
     // The coordinator says what the open found; the card does not talk over it.
     await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Project design loaded'));
     expect(host.querySelector('.cad-status-strip')?.textContent).not.toContain('Opened');
-    // Its return is not on screen, and the project may have recorded settings
-    // by now: the request is solvable from here.
-    await act(async () => { buttonIn(operationCard('op-other'), 'Solve now')!.click(); });
-    await vi.waitFor(() => expect(prepared).toEqual([{ submit: true }]));
+    // Its return is still not on screen: it stays a quiet line, and nothing is
+    // prepared from here.
+    expect(buttonIn(operationCard('op-other'), 'Solve now')).toBeUndefined();
+    expect(prepared).toEqual([]);
   });
 
-  it('lets each waiting version of one project be solved once its project’s settings are recorded', async () => {
+  it('solves the waiting version on screen with its settings, and keeps the other one a quiet line', async () => {
     // The ingestion files the model on screen under the project both versions belong to.
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -612,15 +696,12 @@ describe('CadLinkPanel', () => {
     await act(async () => { buttonIn(operationCard('op-v2'), 'Use these settings and solve')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[0]).toMatchObject({ path: '/api/cadlink/project-setups', body: { lineageId: 'wgl_other' } });
-    // v1's return is not on screen, and may have left the returns folder: it is
-    // solved from the setup its project has now.
-    expect(buttonTexts(operationCard('op-v1'))).toEqual(['Dismiss', 'Open Tritonia v1', 'Solve now']);
-    await act(async () => { buttonIn(operationCard('op-v1'), 'Solve now')!.click(); });
-    await vi.waitFor(() => expect(posted).toHaveLength(3));
-    expect(posted[2]).toEqual({ path: '/api/cadlink/operations/op-v1/prepare', body: { submit: true } });
+    // v1's return is not on screen: one quiet line under Earlier requests.
+    expect(operationCard('op-v1').closest('.cad-earlier-requests')).not.toBeNull();
+    expect(buttonTexts(operationCard('op-v1'))).toEqual(['Open Tritonia v1', 'Dismiss']);
   });
 
-  it('asks for the return to be selected first when its model has no project yet', async () => {
+  it('lists a request whose model has no project yet as a quiet line to dismiss', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     act(() => {
       useCadOperationsStore.getState().apply(cadOperation({
@@ -630,7 +711,8 @@ describe('CadLinkPanel', () => {
       }));
     });
     const card = operationCard('op-first');
-    expect(card.textContent).toContain('Select Tritonia v2 in the return list first');
+    expect(card.closest('.cad-earlier-requests')).not.toBeNull();
+    expect(card.textContent).toContain('Tritonia v2');
     expect(buttonTexts(card)).toEqual(['Dismiss']);
   });
 
@@ -1486,11 +1568,10 @@ describe('CadLinkPanel', () => {
 
     withFusion({ ...currentFusion, adapterVersion: '0.1.1' });
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    const shown = host.querySelector('.cad-addin-version')!;
-    expect(shown.textContent).toContain('WGLink add-in 0.1.1');
-    // Informational only. The heartbeat reports the add-in manifest's version,
-    // which does not establish the commit it was built from.
-    expect(shown.getAttribute('title')).toContain('not the commit');
+    // Informational only, so it is a hover on the card, not a line in it.
+    const summary = () => host.querySelector('.cad-link-quiet > summary')!;
+    expect(summary().getAttribute('title')).toContain('WGLink add-in 0.1.1');
+    expect(host.querySelector('.cad-link-card')!.textContent).not.toContain('WGLink add-in');
     // It must not turn into a connection problem: the workflow state is untouched.
     expect(host.querySelector('.cad-connection-dot-current')).not.toBeNull();
 
@@ -1498,7 +1579,7 @@ describe('CadLinkPanel', () => {
     root = createRoot(host);
     withFusion({ ...currentFusion, adapterVersion: null });
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    expect(host.querySelector('.cad-addin-version')).toBeNull();
+    expect(summary().getAttribute('title')).not.toContain('WGLink add-in');
   });
 
   it('selects the newest readable return when CAD Link first mounts', async () => {
@@ -1513,6 +1594,13 @@ describe('CadLinkPanel', () => {
 
   it('points directly to the Simulation tab from the prepared model', async () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate');
+    // Nothing gates this model's solve.
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json({ ...record, findings: [] });
+    }));
     await renderAndSelect();
     await clickIngest();
 
@@ -1523,6 +1611,15 @@ describe('CadLinkPanel', () => {
     expect(open.title).toContain('Drivers, crossover, sweep, directivity, solve options');
     act(() => open.click());
     expect(activate).toHaveBeenCalledWith('simulation');
+  });
+
+  it('claims nothing is prepared while a finding or a waiting solve still stands before the solve', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    // The record's blocking finding still needs approving.
+    expect(host.querySelector('.cad-model-card')).not.toBeNull();
+    expect(host.querySelector('.cad-prepared-line')).toBeNull();
+    expect(host.textContent).not.toContain('Prepared for simulation');
   });
 
   it('rolls the selected return summary into its preparing state', async () => {
@@ -1689,7 +1786,7 @@ describe('CadLinkPanel', () => {
     expect(scope.textContent).toContain('Skipped · Body B');
   });
 
-  it('does not mislabel native STEP-coordinate diagnostics as millimetres', async () => {
+  it('shows symmetry residuals in millimetres to two significant figures, and a rejected candidate as information', async () => {
     const stepUnitRecord = {
       ...record,
       symmetry: {
@@ -1714,13 +1811,18 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
 
-    expect(host.textContent).toContain('max residual 0.125 STEP units');
-    expect(host.textContent).toContain('worst off-model 0.25 STEP units');
-    expect(host.textContent).not.toContain('max residual 0.125 mm');
+    // WG imports STEP through OpenCASCADE in millimetres (the mesh it builds
+    // from the same geometry is read as points_mm), so the verifier's STEP
+    // units are millimetres: shown as such, to two significant figures.
+    expect(host.textContent).toContain('max residual 0.13 mm');
+    expect(host.textContent).toContain('worst off-model 0.25 mm');
+    expect(host.textContent).not.toContain('STEP units');
     const symmetry = [...host.querySelectorAll<HTMLDetailsElement>('details.cad-check')]
       .find((row) => row.textContent?.includes('Symmetry'))!;
-    expect(symmetry.textContent).toContain('solving full domain');
-    expect(symmetry.textContent).toContain('Resolved independently from Parametric mode');
+    // A rejected candidate is information, not a failing check.
+    expect(symmetry.textContent).toContain('Full model');
+    expect(symmetry.className).toContain('cad-check-ok');
+    expect(symmetry.textContent).not.toContain('Resolved independently from Parametric mode');
     // The hover explanation carries the safe-domain rule.
     expect(symmetry.querySelector('summary')?.title).toContain('keeps the larger safe domain');
   });
@@ -2134,13 +2236,218 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
 
-    const verdict = host.querySelector('.cad-verdict.neutral');
-    expect(verdict?.textContent).toContain('Imported CAD model — not linked to a Waveguide Generator design.');
-    expect(verdict?.textContent).toContain('radiation along +Z with the throat at the origin');
+    // A model authored in Fusion is not a warning: a neutral "from Fusion".
+    const chip = host.querySelector('.cad-model-identity .cad-state-chip')!;
+    expect(chip.textContent).toBe('from Fusion');
+    expect(chip.className).not.toContain('warn');
+    // Its hover no longer claims it is solved along +Z as-is: WG asks for the frame.
+    expect(chip.getAttribute('title')).toContain('WG asks once, before its first solve');
+    expect(host.textContent).not.toContain('radiation along +Z');
+    // There is no WG design to be fresh against, so there is no Freshness row.
+    expect([...host.querySelectorAll('.cad-check b')].map((name) => name.textContent)).not.toContain('Freshness');
     expect(host.querySelector('.cad-verdict.warn')).toBeNull();
     expect(host.querySelector('.cad-findings input[type="checkbox"]')).toBeNull();
     expect(importedSubmissionBlocker()).toBeNull();
     expect([...host.querySelectorAll('button')].some((button) => button.textContent === 'Refresh geometry from Fusion')).toBe(false);
+  });
+
+  it('shows Fusion as one quiet connected line while a Fusion-authored model is on screen, with nothing that inserts the WG design', async () => {
+    const unlinked = {
+      ...record,
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+      findings: [],
+    };
+    const notLinked: FusionCadStatus = { ...currentFusion, state: 'not_linked', link: null, documentName: 'PartyMEH v10', adapterVersion: '0.1.1' };
+    const surface = async (ingested: CadReturnIngestRecord) => {
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.endsWith('/returns')) return json(listing);
+        if (path.endsWith('/fusion-status')) return json(notLinked);
+        return json(ingested);
+      }));
+      await renderAndSelect();
+      await clickIngest();
+      return host.querySelector<HTMLElement>('.cad-link-card')!;
+    };
+    const buttons = (card: HTMLElement) => [...card.querySelectorAll('button')].map((button) => button.textContent);
+
+    const card = await surface(unlinked as CadReturnIngestRecord);
+    expect(card.querySelector('.cad-link-quiet > summary b')?.textContent).toBe('Fusion 360 · connected');
+    expect(card.querySelector('.cad-link-quiet > summary .cad-link-meta')?.textContent).toBe('PartyMEH v10');
+    expect(card.textContent).not.toContain('not linked in the active Fusion document');
+    expect(buttons(card)).not.toContain('Open in Fusion 360');
+    expect(buttons(card)).not.toContain('Send to Fusion');
+    // The add-in version is a hover, not a line.
+    expect(card.textContent).not.toContain('WGLink add-in');
+    expect(card.querySelector('.cad-link-quiet > summary')?.getAttribute('title')).toContain('WGLink add-in 0.1.1');
+
+    // Positive control: with a WG-linked model on screen, not_linked is the
+    // parametric design's state, and opening it in Fusion is the action.
+    act(() => root.unmount());
+    root = createRoot(host);
+    resetCadReturnStore();
+    const linkedCard = await surface(record);
+    expect(linkedCard.querySelector('.cad-primary-action')?.textContent).toBe('Open in Fusion 360');
+  });
+
+  it('mentions background coordination only when it is off', async () => {
+    const { CadCoordinationNote } = await import('./CadLinkPanel');
+    const { resetCadCoordinationForTests } = await import('../api/cadCoordination');
+    resetCadCoordinationForTests('on');
+    await act(async () => { root.render(<CadCoordinationNote/>); });
+    expect(host.textContent).toBe('');
+    resetCadCoordinationForTests('off');
+    await act(async () => { root.render(<CadCoordinationNote/>); });
+    expect(host.textContent).toContain('Background coordination: off');
+    resetCadCoordinationForTests();
+  });
+
+  it('flags only mistakes in the checks: a declared cut that fails, never a candidate plane, hidden skips of construction, or double counts', async () => {
+    const reviewed = {
+      ...record,
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+      scope: {
+        status: 'degraded', degraded_skip_count: 1,
+        skipped: [
+          { object_id: 'body-11', name: 'Body11', kind: 'hidden_body', severity: 'degraded', reason: 'hidden bodies are excluded by policy' },
+          { name: 'construction entities', kind: 'construction', severity: 'info', reason: 'construction entities have no STEP representation' },
+        ],
+      },
+      findings: [
+        { id: 'finding-scope', kind: 'scope-degradation', blocking: true, reason: 'hidden bodies are excluded by policy' },
+        { id: 'unlinked-mode', kind: 'freshness', blocking: false, verdict: 'unlinked' },
+      ],
+      symmetry: {
+        mode: 'auto-cut', cut_planes: ['x0'], declared_cut_planes: [], domain_planes: ['x0'],
+        planes: {
+          x0: { accepted: true, max_residual_step_units: 0.003615718258137861, worst_off_model_distance_step_units: null },
+          y0: { accepted: false, max_residual_step_units: 0.005859440511656944, worst_off_model_distance_step_units: 463.55555545555603 },
+        },
+      },
+      sizing_estimate: {
+        n_triangles: 2825, ram_gb: 0.128, solve_seconds_total: 12, freq_count: 1, is_lower_bound: true,
+        measured: { n_triangles: 10084, ram_gb: 1.627, solve_seconds_total: 30, freq_count: 1, feasibility: 'ok' },
+      },
+    } as unknown as CadReturnIngestRecord;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json(reviewed);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+
+    const checks = host.querySelector<HTMLElement>('.cad-checks')!;
+    const row = (name: string) => [...checks.querySelectorAll<HTMLElement>('.cad-check')]
+      .find((item) => item.querySelector('b')?.textContent === name);
+    // The hidden body and its blocking finding are one problem, not two.
+    expect(checks.querySelector('.cad-state-chip')?.textContent).toBe('1 need attention');
+    expect(row('Symmetry')!.className).toContain('cad-check-ok');
+    expect(row('Symmetry')!.textContent).toContain('Half model · mirrored at x = 0');
+    expect(row('Symmetry')!.textContent).toContain('max residual 0.0036 mm');
+    expect(row('Symmetry')!.textContent).toContain('worst off-model 460 mm');
+    expect(row('Symmetry')!.textContent).not.toContain('—');
+    expect(row('Freshness')).toBeUndefined();
+    expect(row('Scope')!.textContent).toContain('Body11');
+    expect(row('Scope')!.textContent).not.toContain('construction entities');
+    // The measured mesh, not the lower-bound estimate; no time without a sweep.
+    expect(row('Mesh')!.querySelector('.cad-check-verdict')?.textContent).toBe('10.1 k triangles · ~1.6 GB');
+    // Only the finding that blocks is listed, and its hover says what it does.
+    const findings = checks.querySelector('.cad-check-findings')!;
+    expect(findings.textContent).toContain('scope degradation');
+    expect(findings.textContent).not.toContain('freshness');
+    expect(findings.querySelector('.cad-blocking-suffix')?.getAttribute('title')).not.toContain('Solving is not blocked');
+    expect(findings.querySelector('.cad-blocking-suffix')?.getAttribute('title')).toContain('approve');
+  });
+
+  it('keeps a finding that limits confidence in view, in words, and drops only the unlinked line of a Fusion-first model', async () => {
+    const legacy = {
+      ...record,
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+      findings: [
+        {
+          id: 'finding-stale-7c1e', kind: 'stale-detection-unavailable', blocking: false,
+          reason: 'stale detection unavailable: this returned bundle predates wgreturn 1.1 and carries no document signature',
+        },
+        { id: 'unlinked-mode', kind: 'freshness', blocking: false, verdict: 'unlinked' },
+      ],
+    } as unknown as CadReturnIngestRecord;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json(legacy);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+
+    const checks = host.querySelector<HTMLElement>('.cad-checks')!;
+    // It limits confidence in the result, so the checks open on it, quietly.
+    expect(checks.querySelector('.cad-state-chip')?.textContent).toBe('passed · 1 note');
+    expect(checks.className).not.toContain('degraded');
+    const notes = checks.querySelector<HTMLElement>('.cad-check-notes');
+    expect(notes).not.toBeNull();
+    // WG cannot tell whether this model is stale: said in words, never by id.
+    expect(notes!.textContent).toContain('WG cannot tell whether this model is out of date');
+    expect(notes!.textContent).toContain('carries no document signature');
+    expect(checks.textContent).not.toContain('finding-stale-7c1e');
+    // Not a blocker: nothing to approve, and it is not counted as one.
+    expect(checks.querySelector('.cad-check-findings')).toBeNull();
+    expect(notes!.querySelector('.cad-blocking-suffix')).toBeNull();
+    // The unlinked freshness line of a Fusion-first model is the one dropped.
+    expect(notes!.textContent).not.toContain('unlinked');
+    expect(notes!.querySelectorAll('.cad-check')).toHaveLength(1);
+  });
+
+  it('keeps a note that only records what was asked for one click away', async () => {
+    // Positive control for the test above: a declared reduced model is not a
+    // limit on confidence, so its note does not open the checks.
+    const declared = {
+      ...record,
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+      findings: [{
+        id: 'finding-declared-1', kind: 'declared-reduced-domain', blocking: false,
+        detail: 'the return declares it was already cut on x0',
+      }],
+    } as unknown as CadReturnIngestRecord;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json(declared);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+
+    const checks = host.querySelector<HTMLElement>('.cad-checks')!;
+    expect(checks.querySelector('.cad-state-chip')?.textContent).toBe('passed · 1 note');
+    expect(checks.querySelector('.cad-check-notes')).toBeNull();
+    await act(async () => { checks.querySelector<HTMLButtonElement>('.section-head')!.click(); });
+    expect(checks.querySelector('.cad-check-notes')?.textContent).toContain('the return declares it was already cut on x0');
+  });
+
+  it('warns about symmetry when a cut plane the CAD author declared does not mirror', async () => {
+    // Positive control for the check above: a declared cut is a promise.
+    const declared = {
+      ...record,
+      symmetry: {
+        cut_planes: [], declared_cut_planes: ['y0'], domain_planes: ['y0'],
+        planes: { y0: { accepted: false, source: 'declared-by-cad-author' } },
+      },
+    } as unknown as CadReturnIngestRecord;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json(declared);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+    const symmetry = [...host.querySelectorAll<HTMLElement>('.cad-checks .cad-check')]
+      .find((item) => item.querySelector('b')?.textContent === 'Symmetry')!;
+    expect(symmetry.className).toContain('cad-check-warn');
+    expect(symmetry.textContent).toContain('declared cut y = 0 does not mirror');
   });
 
   it('sends the design on screen to CAD and refreshes the returned bundles', async () => {
