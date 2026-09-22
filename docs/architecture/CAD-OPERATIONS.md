@@ -405,7 +405,9 @@ preselects it, so confirming it is normally one press of Solve.
   prepare request may name `frameAxis`, the axis WG showed when Solve was pressed: an
   unlinked snapshot is then solved only along it, and a confirmation changed elsewhere
   in the meantime stops at `frame_confirmation_required`, saying so, instead of changing
-  the axis solved. A
+  the axis solved. The operation keeps that axis (`cad_operations.frame_axis`): every
+  later attempt -- an automatic continuation after the update restart, a retry that
+  names none -- is held to it, and only a prepare naming another axis replaces it. A
   preparation is resumed only in the frame, and under the contract, this attempt would
   mesh in. `+z` is never written into the ingest options, so no mesh cached before
   this contract is made again.

@@ -254,6 +254,68 @@ def test_a_frame_changed_elsewhere_stops_the_solve_instead_of_changing_its_axis(
     assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+y"
 
 
+def test_an_automatic_continuation_after_the_update_restart_keeps_the_axis_shown(real) -> None:
+    """The reviewer's reproduction: Solve asks for +z, the update restart parks
+    it, another window confirms +x, and the continuation the delivery loop
+    starts after the restart names no axis. It must not solve along +x."""
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    confirm_frame(harness.store, _record(harness, _prepare(harness)), "+z")
+    harness.blocked = "An update restart is pending."
+
+    parked = _prepare(harness, expected_frame_axis="+z")
+    assert (parked["state"], parked["reason"]) == ("needs_user_input", "update_restart_pending")
+    assert harness.submitted == []
+
+    confirm_frame(harness.store, _record(harness, parked), "+x")
+    harness.blocked = None
+    assert preparation.requeue_restart_parked(_context(harness)) == ["cmd-1"]
+    # The loop's continuation: an empty request, as run_delivery_pass sends.
+    continued = asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput()))
+
+    assert _waiting_for_frame(continued), continued
+    assert "+x now, not the +z WG showed" in continued["message"]
+    assert harness.submitted == []
+
+
+def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_another(real) -> None:
+    from server.cadlink.store import CadLinkStore
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    waiting = _prepare(harness, expected_frame_axis="+z")
+    assert _waiting_for_frame(waiting)
+    # Kept by the store: a restarted WG reads it back.
+    assert CadLinkStore(harness.store.db_path).get_operation("cmd-1")["frame_axis"] == "+z"
+
+    # Another window confirms +x; a retry that names no axis is held to +z.
+    confirm_frame(harness.store, _record(harness, waiting), "+x")
+    retried = _prepare(harness)
+    assert _waiting_for_frame(retried) and "not the +z WG showed" in retried["message"]
+    assert harness.submitted == []
+
+    # A press naming the axis now shown replaces it, and solves along it.
+    solved = _prepare(harness, expected_frame_axis="+x")
+    assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+x"
+    assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+x"
+
+
+def test_a_request_no_one_named_an_axis_for_is_held_to_none(real) -> None:
+    """Fusion's own request, never pressed in WG: the confirmed frame decides (the control)."""
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    confirm_frame(harness.store, _record(harness, _prepare(harness)), "+y")
+    solved = _prepare(harness)
+    assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
+    assert harness.store.get_operation("cmd-1")["frame_axis"] is None
+
+
 def test_the_prepare_route_takes_only_a_known_frame_axis() -> None:
     from pydantic import ValidationError
 

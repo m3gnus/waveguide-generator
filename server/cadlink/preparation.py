@@ -864,7 +864,14 @@ def _prepare_sync(
         return "submit", (SolveRequest.model_validate_json(row["request_json"]), row.get("setup_revision_id"))
 
     # validating: the retained copy, made now if the operation predates it.
-    _advance(ctx, operation_id, generation, stage=STAGE_VALIDATING)
+    # The frame axis a user's Solve showed is the operation's from now on: an
+    # automatic continuation (after the update restart, say) and a retry that
+    # names none are held to it, and only a press naming another replaces it.
+    validating = _advance(
+        ctx, operation_id, generation, stage=STAGE_VALIDATING,
+        frame_axis=request.expected_frame_axis,
+    )
+    expected_frame_axis = request.expected_frame_axis or validating.get("frame_axis")
     retained = _retained(ctx.data_dir, row)
     if retained is not None and not _copy_is_whole(retained):
         # WG's own copy is no longer the bundle its digest names. It is
@@ -1068,16 +1075,16 @@ def _prepare_sync(
         )
     prepared_axis = _record_frame_axis(record)
     if (
-        request.expected_frame_axis is not None
+        expected_frame_axis is not None
         and prepared_axis is not None
-        and prepared_axis != request.expected_frame_axis
+        and prepared_axis != expected_frame_axis
     ):
         return "done", _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT,
             reason=FRAME_CONFIRMATION_REQUIRED,
             message=(
                 f"This project's solver frame is {prepared_axis} now, not the "
-                f"{request.expected_frame_axis} WG showed when you pressed Solve: it was "
+                f"{expected_frame_axis} WG showed when you pressed Solve: it was "
                 "changed elsewhere. Check it, then press Solve again."
             ),
         )
@@ -1252,7 +1259,11 @@ def requeue_restart_parked(ctx: PreparationContext) -> list[str]:
 
 
 def _hold_for_restart(
-    ctx: PreparationContext, operation_id: str, listed_generation: int, refusal: str
+    ctx: PreparationContext,
+    operation_id: str,
+    listed_generation: int,
+    refusal: str,
+    frame_axis: str | None = None,
 ) -> dict[str, Any]:
     """Park an operation the user asked for while an update restart is approved.
 
@@ -1261,7 +1272,9 @@ def _hold_for_restart(
     like any solve the latch held. The request itself is not kept: the queued
     attempt prepares and submits from the project's setup, as the delivery
     loop does, and approvals sent with this request are asked for again. Ones
-    already recorded on the preparation still apply.
+    already recorded on the preparation still apply. The frame axis the
+    request named is kept, like one given to any attempt: the queued attempt is
+    held to it.
     """
 
     generation = ctx.store.claim(operation_id, listed_generation)
@@ -1269,6 +1282,8 @@ def _hold_for_restart(
         return ctx.store.get_operation(operation_id) or {}
     logger.info("CAD operation %s: attempt %d holds it for the update restart.", operation_id, generation)
     try:
+        if frame_axis is not None:
+            _advance(ctx, operation_id, generation, frame_axis=frame_axis)
         return _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT,
             reason=REASON_UPDATE_RESTART_PENDING, message=refusal,
@@ -1355,7 +1370,8 @@ async def prepare_operation(
         if row["state"] == RECEIVED:
             return operation_summary(row)
         return operation_summary(await asyncio.to_thread(
-            _hold_for_restart, ctx, operation_id, int(row["attempt_generation"]), refusal
+            _hold_for_restart, ctx, operation_id, int(row["attempt_generation"]), refusal,
+            request.expected_frame_axis,
         ))
     generation = await asyncio.to_thread(
         store.claim, operation_id, int(row["attempt_generation"])

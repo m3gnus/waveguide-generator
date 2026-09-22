@@ -234,6 +234,7 @@ def _populate(store: CadLinkStore, design_id: str) -> None:
     assert store.note_snapshot_unreadable("cmd-solved", "2026-09-21T09:00:00+00:00")
     generation = store.claim("cmd-solved", 0)
     assert generation == 1
+    assert store.advance_operation("cmd-solved", generation, frame_axis="+z") is not None
     assert store.record_preparation(
         "cmd-solved", generation, preparation_id="wgi_prepared", snapshot_sha256="sha256:" + "4" * 64,
         setup_revision_id=revision, ingest_id="wgi_prepared", report_sha256="sha256:" + "8" * 64,

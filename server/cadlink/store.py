@@ -314,6 +314,9 @@ _OPERATION_COLUMNS = (
     # request it took, so a lost claim answer replays after its file is gone
     # (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7). Never a token.
     ("claim_json", "TEXT"),
+    # The solver frame axis a user's Solve showed (an unlinked snapshot): every
+    # later attempt, automatic or not, is held to it until a press names another.
+    ("frame_axis", "TEXT"),
 )
 # The kinds WG asks Fusion to run (``fusion_outcomes.FUSION_KINDS``).
 _FUSION_KINDS = (INSERT_LINK, REQUEST_RETURN, UPDATE_LINK)
@@ -1059,6 +1062,7 @@ class CadLinkStore:
         snapshot: Mapping[str, Any] | None = None,
         preparation_id: str | None = None,
         setup_revision_id: str | None = None,
+        frame_axis: str | None = None,
     ) -> dict[str, Any] | None:
         """Move the attempt holding ``generation`` on, recording what it made.
 
@@ -1070,6 +1074,9 @@ class CadLinkStore:
         ``setup_revision_id`` is the setup the attempt selected, recorded
         before it meshes so a later revision-less retry still has it. A bound
         request is never rewritten: its revision stays the one it was bound with.
+
+        ``frame_axis`` is the solver frame axis the user's Solve showed; it
+        replaces the one held, and omitting it keeps that one.
         """
 
         attempt = _require_generation(generation)
@@ -1082,13 +1089,15 @@ class CadLinkStore:
                 "snapshot_json = COALESCE(?, snapshot_json), "
                 "preparation_id = COALESCE(?, preparation_id), "
                 "setup_revision_id = CASE WHEN request_json IS NULL "
-                "THEN COALESCE(?, setup_revision_id) ELSE setup_revision_id END, updated_at = ? "
+                "THEN COALESCE(?, setup_revision_id) ELSE setup_revision_id END, "
+                "frame_axis = COALESCE(?, frame_axis), updated_at = ? "
                 "WHERE operation_id = ? AND attempt_generation = ? AND state = ?",
                 (
                     stage,
                     canonical_json(dict(snapshot)) if snapshot is not None else None,
                     preparation_id,
                     setup_revision_id,
+                    frame_axis,
                     utc_now(),
                     operation_id,
                     attempt,
