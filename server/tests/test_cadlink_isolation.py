@@ -114,13 +114,22 @@ def test_staging_is_destroyed_when_the_invocation_ends(step_file: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("platform", "enabled"),
-    [("linux", True), ("darwin", True), ("win32", False)],
+    ("platform", "qualified", "enabled"),
+    [
+        # Qualified nowhere yet: serial on every platform.
+        ("linux", frozenset(), False),
+        ("darwin", frozenset(), False),
+        ("win32", frozenset(), False),
+        # Positive control: the gate turns it on once a platform qualifies.
+        ("linux", frozenset({"linux"}), True),
+    ],
 )
 def test_mesher_child_enables_parallel_occ_only_on_qualified_platforms(
-    monkeypatch, platform: str, enabled: bool
+    monkeypatch, platform: str, qualified: frozenset[str], enabled: bool
 ) -> None:
     from server.cadlink import child_main
+
+    monkeypatch.setattr(child_main, "_OCC_PARALLEL_QUALIFIED_PLATFORMS", qualified)
 
     calls: list[tuple[str, float]] = []
 
@@ -168,7 +177,20 @@ def test_occ_parallel_preserves_small_fixture_mesh_arrays() -> None:
         gmsh.model.mesh.generate(2)
         node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
         element_tags, triangle_nodes = gmsh.model.mesh.getElementsByType(2)
-        physical = np.full(len(element_tags), 101, dtype=np.int32)
+        # Read the physical groups back from gmsh, per triangle, rather than
+        # assuming them: a parallel build that retags a surface must fail.
+        surface_group: dict[int, int] = {}
+        for dim, group in gmsh.model.getPhysicalGroups(2):
+            for surface in gmsh.model.getEntitiesForPhysicalGroup(dim, group):
+                surface_group[int(surface)] = int(group)
+        physical_by_element: dict[int, int] = {}
+        for surface in gmsh.model.getEntities(2):
+            tags, _ = gmsh.model.mesh.getElementsByType(2, surface[1])
+            for element in tags:
+                physical_by_element[int(element)] = surface_group.get(int(surface[1]), 0)
+        physical = np.asarray(
+            [physical_by_element[int(element)] for element in element_tags], dtype=np.int32
+        )
         order = np.argsort(np.asarray(element_tags, dtype=np.int64))
         nodes = np.column_stack((node_tags, np.asarray(coordinates).reshape(-1, 3)))
         triangles = np.column_stack(
@@ -186,6 +208,9 @@ def test_occ_parallel_preserves_small_fixture_mesh_arrays() -> None:
         gmsh.clear()
         gmsh.option.setNumber("Geometry.OCCParallel", 0)
 
+    # The tags were read back from gmsh, not assumed: every triangle carries
+    # the one boundary group, so a lost or changed group shows here too.
+    assert set(serial[2].tolist()) == {101}
     for serial_array, parallel_array in zip(serial, parallel, strict=True):
         np.testing.assert_array_equal(serial_array, parallel_array)
 

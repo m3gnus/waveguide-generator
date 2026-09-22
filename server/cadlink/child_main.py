@@ -352,6 +352,14 @@ _TASKS = {"inspect": _task_inspect, "mesh": _task_mesh, "viewport": _task_viewpo
 _GMSH_TASKS = frozenset(_TASKS)
 
 
+# Platforms on which Geometry.OCCParallel is qualified for the mesher child.
+_OCC_PARALLEL_QUALIFIED_PLATFORMS: frozenset[str] = frozenset()
+
+
+def _occ_parallel_qualified(platform: str) -> bool:
+    return platform in _OCC_PARALLEL_QUALIFIED_PLATFORMS
+
+
 def _open_gmsh_session() -> Any:
     """Initialize gmsh the way the worker thread does, or report why not.
 
@@ -382,9 +390,11 @@ def _open_gmsh_session() -> Any:
         with _preserve_native_windows_path():
             gmsh.initialize(interruptible=False)
         gmsh.option.setNumber("General.Terminal", 0)
-        # Windows remains serial until the hosted determinism test supplies the
-        # pending platform qualification for node, triangle and tag identity.
-        if sys.platform != "win32":
+        # Parallel OCC is qualified on no platform yet: it changes how every
+        # imported solve mesh is built, and the only evidence so far is one
+        # macOS measurement. Flip this once a real-STEP serial/parallel test
+        # through this child passes on hosted Windows, ubuntu and macOS.
+        if _occ_parallel_qualified(sys.platform):
             gmsh.option.setNumber("Geometry.OCCParallel", 1)
     return gmsh
 
