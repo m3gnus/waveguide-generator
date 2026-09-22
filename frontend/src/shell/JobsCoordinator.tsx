@@ -25,7 +25,7 @@ import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadOperationsStore } from '../stores/cadOperations';
-import { confirmDisplayedFrame, frameSolveBlocker, useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { confirmDisplayedFrame, frameSolveBlocker, frameReadInFlight, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -463,6 +463,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // same row and cannot create a second job.
   const solveCurrentCadImport = useCallback(async () => {
     if (submissionInFlight.current) return 'busy' as const;
+    // A Solve given right after a preparation (Bring in & solve) waits for the
+    // frame read the card has under way, holding the mutex while it does.
+    const reading = frameReadInFlight(useCadReturnStore.getState().ingestRecord?.ingest_id);
+    if (reading) {
+      submissionInFlight.current = true;
+      try { await reading; } finally { submissionInFlight.current = false; }
+    }
     const blocker = cadSolveBlockerNow();
     if (blocker) throw new Error(blocker);
     const cad = useCadReturnStore.getState();

@@ -466,6 +466,31 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '+z' }]);
   });
 
+  it('waits for a frame read still in flight, then confirms the axis it shows (Bring in & solve)', async () => {
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => { answer = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith('/api/cadlink/solver-frame?')) await held;
+      return base(input, init);
+    }));
+    await act(async () => {
+      const record = useCadReturnStore.getState().ingestRecord!;
+      root.render(<JobsCoordinator now={() => new Date(2026, 8, 22, 12)}><CadSolveCard record={record} label="Speaker"/></JobsCoordinator>);
+      await flush(8);
+    });
+    expect(host.querySelector('[data-frame-preview="loading"]')).not.toBeNull();
+    let outcome!: Promise<'submitted' | 'busy'>;
+    await act(async () => { outcome = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); await flush(); });
+    // Held: nothing is prepared on a frame nobody has seen yet, and a second
+    // call while it waits is the busy one.
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    await act(async () => { await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('busy'); });
+    await act(async () => { answer(); await expect(outcome).resolves.toBe('submitted'); });
+    expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '+x' }]);
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+  });
+
   it('changes the axis on the card, and Solve confirms the one shown', async () => {
     await mount();
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); });
