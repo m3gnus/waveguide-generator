@@ -1078,11 +1078,12 @@ def test_return_listing_rejects_escaping_symlinks_and_plain_files_and_explains_b
     assert "positive" in result["items"][0]["reason"]
 
 
-def test_return_listing_reports_an_unconfigured_wglink_folder(tmp_path: Path) -> None:
+def test_return_listing_reports_an_unconfigured_wglink_folder(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("WG2_CAD_COORDINATION", raising=False)
     app = create_app(data_dir=tmp_path / "data")
     result = asyncio.run(list_returns(SimpleNamespace(app=app)))
     # The coordination gate rides on the listing (server/cadlink/coordination.py).
-    assert result == {"items": [], "cadFolderConfigured": False, "coordination": "on"}
+    assert result == {"items": [], "cadFolderConfigured": False, "coordination": "off"}
 
 
 def test_endpoint_error_mapping_and_workspace_guards(monkeypatch, tmp_path: Path) -> None:

@@ -48,7 +48,7 @@ from server.workspace.archive import (
 )
 
 from .addin_update import last_refresh, loaded_addin_identity, poll_activation
-from .coordination import COORDINATION_ON
+from .coordination import COORDINATION_OFF
 from .delivery_status import delivery_status
 from .fusion_status import (
     ADDIN_OUTDATED_MESSAGE,
@@ -767,7 +767,7 @@ async def list_returns(request: Request) -> dict[str, Any]:
     workspace: WorkspaceState = request.app.state.cad_workspace
     # WG's coordination gate (``coordination.py``) rides on the listing the
     # frontend reads at mount, so learning it costs no request of its own.
-    coordination = getattr(request.app.state, "cad_coordination", COORDINATION_ON)
+    coordination = getattr(request.app.state, "cad_coordination", COORDINATION_OFF)
     selected = workspace.selected_path()
     if selected is None:
         return {"items": [], "cadFolderConfigured": False, "coordination": coordination}

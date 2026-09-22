@@ -587,15 +587,17 @@ through the same route and stages as a solve requested by Fusion.
   the folder), and the CAD Link panel says so. While
   the consumer is off the live delivery route answers a retryable 409
   `delivery_consumer_disabled` instead of accepting what nothing would run.
-- **Coordination gate.** `WG2_CAD_COORDINATION=off` (read once at start-up, reported on
-  the "application initialized" log line, the CAD Link panel and
-  `GET /api/cadlink/coordination`) stops the frontend's clock-driven CAD returns listing
-  and Fusion-status read unless CAD work is in flight: an unfinished operation, or a
+- **Coordination gate.** Unset or unrecognized `WG2_CAD_COORDINATION` values default to
+  `off`; explicit `on`, `1`, `true`, or `yes` enables clock-driven checks. The gate is
+  read once at start-up and reported on the "application initialized" log line and
+  `GET /api/cadlink/returns`; the CAD Link panel shows when it is off. The off setting
+  stops the frontend's clock-driven CAD returns listing and Fusion-status read unless
+  CAD work is in flight: an unfinished operation, or a
   Send or pull the user started. They still run on explicit events (start-up, window
   focus, entering CAD mode, choosing a folder), a Send reads Fusion's status when it is
   pressed, and operation changes arrive as `cadOperation` messages on `/ws/jobs`. The
-  default, `on`, is the behaviour before the gate existed. The gate never stops the
-  delivery loop above: that is the transfer path, not coordination. An operation parked
+  explicit `on` setting retains the behaviour before the gate existed. The gate never
+  stops the delivery loop above: that is the transfer path, not coordination. An operation parked
   on the user (`needs_user_input`, `recovery_required`) is not work in flight: neither
   read can move it, so it keeps no clock running. A design edit still reads Fusion's
   status once, as the event it is (it compares the edited design with the linked one;

@@ -111,7 +111,13 @@ function deferred<T>() {
 }
 
 function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  // These coordinator scenarios retain their prior clock behavior by opting
+  // in explicitly; default-off and missing responses are covered in pollGate.
+  const response = body && typeof body === 'object'
+    && 'cadFolderConfigured' in body && 'items' in body && !('coordination' in body)
+    ? { ...body, coordination: 'on' }
+    : body;
+  return new Response(JSON.stringify(response), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
 /** A Fusion document with one managed link, ready to send to or return from. */
@@ -164,8 +170,8 @@ describe('CadLinkCoordinator', () => {
     resetDocumentStore();
     resetSolveOptionsStore();
     resetCadOperationsStore();
-    // Each mount reads the coordination gate once; a fresh page every test.
-    resetCadCoordinationForTests();
+    // These existing coordinator scenarios exercise explicit-on behavior.
+    resetCadCoordinationForTests('on');
     workspaceModeStore.setMode('parametric');
     localStorage.removeItem('wg2.workspace.mode.v1');
     localStorage.removeItem('wg2.cad.project.v1');

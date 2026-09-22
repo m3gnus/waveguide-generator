@@ -1,8 +1,8 @@
 /**
  * WG's CAD coordination gate (M1 contract, C7 and C8).
  *
- * On -- the default -- is today's behaviour: the returns listing and the
- * Fusion-status read run on their adaptive clocks. Off: neither runs
+ * Explicit on keeps the returns listing and the Fusion-status read on their
+ * adaptive clocks. Off is the default: neither runs
  * unconditionally; they run while CAD work is in flight and on explicit
  * events, and operation changes arrive as pushes on the jobs socket.
  *
@@ -14,7 +14,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FusionCadStatus } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
-import { resetCadCoordinationForTests } from '../api/cadCoordination';
+import { cadCoordinationOff, resetCadCoordinationForTests } from '../api/cadCoordination';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { resetCadPreparationStore } from '../stores/cadPreparation';
@@ -75,8 +75,8 @@ describe('WG CAD coordination gate', () => {
     resetCadOperationsStore();
     resetCadCoordinationForTests();
     preferencesStore.resetForTests();
-    // CAD mode and a running Fusion: the two standing conditions that hold
-    // today's polls at their base rate. Neither is CAD work in flight.
+    // CAD mode and a running Fusion keep explicitly enabled polls at their
+    // base rate. Neither is CAD work in flight.
     workspaceModeStore.setMode('cad');
     calls = [];
     gate = 'off';
@@ -143,7 +143,7 @@ describe('WG CAD coordination gate', () => {
     expect(polls()).toBe(settled);
   });
 
-  it('on (the default): the same idle window polls as it does today', async () => {
+  it('explicit on: the same idle window keeps polling', async () => {
     gate = 'on';
     await mount();
     const atMount = polls();
@@ -152,12 +152,16 @@ describe('WG CAD coordination gate', () => {
     expect(polls() - atMount).toBeGreaterThan(400);
   });
 
-  it('an older server that cannot answer is treated as on, never as off', async () => {
-    gate = null;
+  it.each([null, 'unexpected'])('an absent or unrecognized server answer keeps clock polls off (%s)', async (answer) => {
+    gate = answer;
     await mount();
     const atMount = polls();
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-    expect(polls() - atMount).toBeGreaterThan(20);
+    expect(polls()).toBe(atMount);
+  });
+
+  it('defaults to off before the first listing answer', () => {
+    expect(cadCoordinationOff()).toBe(true);
   });
 
   it('learns the gate from the listing it reads at mount, with no request of its own', async () => {

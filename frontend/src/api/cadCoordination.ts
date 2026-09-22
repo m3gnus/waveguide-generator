@@ -3,12 +3,11 @@
  *
  * The server reads it once at start-up; the page learns it from the CAD
  * returns listing it reads at mount, so no request exists only to ask.
- * `on` is today's behaviour: the CAD returns listing and the Fusion-status
- * read run on their adaptive clocks. `off` stops both unless CAD work is in
- * flight; operation changes still arrive as `cadOperation` pushes on the jobs
- * socket. Until the server answers the state is `unknown`, which behaves as
- * `on`, and so does a server too old to answer: an unanswered question never
- * silences a poll the user may depend on.
+ * Explicit `on` runs the CAD returns listing and the Fusion-status read on
+ * their adaptive clocks. `off` stops both unless CAD work is in flight;
+ * operation changes still arrive as `cadOperation` pushes on the jobs socket.
+ * Until the server answers, `unknown` behaves as `off`, as does a response
+ * without a recognized coordination value.
  */
 export type CadCoordination = 'unknown' | 'on' | 'off';
 
@@ -29,7 +28,7 @@ export const cadCoordinationStore = {
 };
 
 export function cadCoordinationOff(): boolean {
-  return state === 'off';
+  return state !== 'on';
 }
 
 /** Tests only. */

@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
+import { resetCadCoordinationForTests } from '../api/cadCoordination';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { applyOpenedDesign } from '../design/openCadProject';
@@ -32,6 +33,7 @@ vi.mock('../jobs/actions', async (importOriginal) => {
 
 const listing: CadReturnListing = {
   cadFolderConfigured: true,
+  coordination: 'on',
   items: [{
     name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
     documentName: 'Speaker', requestId: null, sourceCount: 1, instanceCount: 1,
@@ -105,6 +107,7 @@ describe('CadLinkPanel', () => {
     resetCadReturnStore(); resetSolveOptionsStore(); resetDocumentStore(); resetDesignStore(); preferencesStore.resetForTests();
     capabilityClient.clear();
     resetCadOperationsStore();
+    resetCadCoordinationForTests('on');
     workspaceModeStore.setMode('parametric');
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);

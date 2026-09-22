@@ -153,7 +153,7 @@ export function useCadReturnArrivals({
       const next = new Map(response.items.map((item) => [item.bundlePath, item.modifiedAt]));
       const wasConfigured = cadFolderConfigured.current;
       cadFolderConfigured.current = response.cadFolderConfigured;
-      cadCoordinationStore.set(response.coordination === 'off' ? 'off' : 'on');
+      cadCoordinationStore.set(response.coordination === 'on' ? 'on' : 'off');
       const listingChanged = previous === null
         || previous.size !== next.size
         || [...next].some(([path, modifiedAt]) => previous.get(path) !== modifiedAt);
