@@ -179,6 +179,8 @@ def test_revisionless_manual_solve_followups_reuse_the_preparations_settings(rea
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
     assert solved["preparationId"] == waiting["preparationId"]
     assert len(mesher.calls) == 1
+    # Exactly one job: the approval was not lost to a new preparation.
+    assert len(harness.submitted) == 1 and len(harness.jobs) == 1
 
 
 def test_confirming_another_axis_prepares_again_in_that_frame(real) -> None:

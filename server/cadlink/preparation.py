@@ -665,7 +665,14 @@ def _load_setup(
 def _operation_setup_revision(
     store: CadLinkStore, row: Mapping[str, Any], requested: str | None
 ) -> str | None:
-    """Use the setup already attached to this operation for a revision-less follow-up."""
+    """The setup revision one attempt prepares with.
+
+    An explicit revision always wins: the user chose settings. Otherwise a
+    follow-up that continues the operation -- a frame confirmation, an
+    approval, a retry -- reuses the revision the operation already selected,
+    recorded before meshing, or its last preparation's. None only for an
+    operation that never had one: the project's own setup then applies.
+    """
 
     if requested:
         return requested
@@ -914,6 +921,10 @@ def _prepare_sync(
             ),
         )
     setup, revision_id = loaded
+    # Recorded before anything can fail: a preparation that fails before it
+    # is recorded (the mesher, a damaged copy) still leaves the operation
+    # holding the settings it was asked with, for a revision-less retry.
+    _advance(ctx, operation_id, generation, setup_revision_id=revision_id)
     manifest_sha256 = str(retained["manifest_sha256"])
     semantics = meshing_semantics_fingerprint()
     # An unlinked (CAD-authored) snapshot is meshed in the solver frame its

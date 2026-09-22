@@ -295,8 +295,14 @@ whatever project is open. Nothing on the backend reads the live UI:
   (`PUT /api/cadlink/project-setups`, `{lineageId, inventory, setup}`); the latest
   recording is the project's. The solver selection is recorded the same way
   (`PUT /api/cadlink/solver-selection`, `{engine}`).
-- **Resolved from the snapshot.** A preparation that names no setup revision takes the
-  snapshot's project as ingestion files it -- the lineage of the solver anchor instance's
+- **The operation keeps its settings.** The revision an attempt selects is recorded on the
+  operation before it meshes, so it survives a preparation that fails. A follow-up that
+  names no revision -- a frame confirmation, an approval, a retry -- continues with the
+  revision the operation holds, or its last preparation's, so approvals given on that
+  preparation still apply. A named revision always wins: an action that chooses settings
+  ("Use these settings and solve", a new engine after `engine_unavailable`) sends one.
+- **Resolved from the snapshot.** A preparation of an operation that has never had a setup
+  revision, and names none, takes the snapshot's project as ingestion files it -- the lineage of the solver anchor instance's
   WG design or, when the anchor names no design, the one its Fusion document already has;
   never a new claim -- and that project's setup for exactly the snapshot's sources (id,
   canonical role and required, as the returns listing states them). A recorded setup this

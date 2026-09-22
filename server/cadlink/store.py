@@ -1036,6 +1036,7 @@ class CadLinkStore:
         stage: str | None = None,
         snapshot: Mapping[str, Any] | None = None,
         preparation_id: str | None = None,
+        setup_revision_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Move the attempt holding ``generation`` on, recording what it made.
 
@@ -1043,6 +1044,10 @@ class CadLinkStore:
         operation still ``processing``. A takeover, a cancellation or an
         outcome changes one of those, and the obsolete attempt then gets None
         and must stop without committing anything.
+
+        ``setup_revision_id`` is the setup the attempt selected, recorded
+        before it meshes so a later revision-less retry still has it. A bound
+        request is never rewritten: its revision stays the one it was bound with.
         """
 
         attempt = _require_generation(generation)
@@ -1053,12 +1058,15 @@ class CadLinkStore:
             cursor = conn.execute(
                 "UPDATE cad_operations SET stage = COALESCE(?, stage), "
                 "snapshot_json = COALESCE(?, snapshot_json), "
-                "preparation_id = COALESCE(?, preparation_id), updated_at = ? "
+                "preparation_id = COALESCE(?, preparation_id), "
+                "setup_revision_id = CASE WHEN request_json IS NULL "
+                "THEN COALESCE(?, setup_revision_id) ELSE setup_revision_id END, updated_at = ? "
                 "WHERE operation_id = ? AND attempt_generation = ? AND state = ?",
                 (
                     stage,
                     canonical_json(dict(snapshot)) if snapshot is not None else None,
                     preparation_id,
+                    setup_revision_id,
                     utc_now(),
                     operation_id,
                     attempt,
