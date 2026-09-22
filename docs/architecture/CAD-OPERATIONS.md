@@ -327,38 +327,83 @@ whatever project is open. Nothing on the backend reads the live UI:
 ## Unlinked solver frame
 
 A return with no WG instance -- a model drawn from scratch in CAD -- carries no throat
-frame, so nothing in it says which way it radiates. It is not solvable until the user
-confirms its solver frame, once per project. `server/cadlink/solver_frame.py` is the
-executable half of this section.
+frame, so nothing in it says which way it radiates. It is not solvable until its solver
+frame is confirmed, once per project. WG infers the frame from the geometry and
+preselects it, so confirming it is normally one press of Solve.
+`server/cadlink/solver_frame.py` is the executable half of this section, and
+`server/cadlink/frame_infer.py` the inference.
 
-- **The frame (`cad-solver-frame-v1`).** The model axis that points out of the mouth,
-  one of `+z -z +x -x +y -y`. Each is one fixed proper rotation taking that axis to the
-  solver's +Z, by the minimal rotation (the perpendicular axis the two share is kept);
-  the origin is the model's own. `+z` is the identity, the frame every earlier release
-  solved in. `frame_matrix` is the only producer of these matrices: preparation meshes
-  with it, the ingestion record states it, and the preview and the frontend's fixture
-  (`frontend/src/viewport/solverFrame.fixture.json`, pinned equal on both sides) read
-  it, so the preview is the solved frame.
-- **Frame requirement.** A confirmation holds for this contract and the manifest's
-  `coordinate_system.export_frame` (absent = `root-component`). A snapshot written in
-  another component's coordinates is a different frame and is confirmed again. A return
-  declaring a reduced domain (`assembly.domain`) states its planes in the modelled frame,
-  so it allows only `+z`.
+- **The frame.** The model axis that points out of the mouth, one of
+  `+z -z +x -x +y -y`, is the solver's +Z; the origin is the model's own. Two contracts
+  exist.
+  - **`cad-solver-frame-v2`** (every new preparation) also fixes the roll. The solver's
+    +Y is the model's **up**, so the horizontal polar plane (solver x-z) contains the
+    forward axis and is perpendicular to up. Up is the CAD document's up axis when the
+    return states it (`coordinate_system.document_up` under `document-up-v1`); otherwise
+    CAD +Z, or +Y when the forward axis is ±Z. A forward axis parallel to the stated up
+    takes the other of +Y and +Z, recorded as `forward-parallel-to-document-up`. The
+    transform's rows are (up × forward, up, forward). `+z` is the identity under every
+    rule, so the modelled frame, and every declared (reduced) domain, keep exactly the
+    transform they had.
+  - **`cad-solver-frame-v1`** turned each axis by the minimal rotation, keeping the
+    perpendicular axis the two frames share. Records and confirmations made under it keep
+    that meaning: a v1 record still resolves, previews and solves as v1 while its v1
+    confirmation stands. The frontend fixture
+    (`frontend/src/viewport/solverFrame.fixture.json`) pins the v1 matrices; the frontend
+    applies whatever matrices the server hands it.
+  - `spec_matrix` is the only producer of these matrices: preparation meshes with it,
+    the mesh cache key holds the complete frame, the ingestion record states it, and the
+    preview and the confirmation read it, so the preview is the solved frame.
+- **Frame requirement.** A confirmation holds for the contract, the manifest's
+  `coordinate_system.export_frame` (absent = `root-component`) and, under v2, the stated
+  document up (`document_up`, null when none). With the axis these fix the whole
+  transform. A snapshot written in another component's coordinates, or stating another
+  up, is a different frame and is confirmed again. A return declaring a reduced domain
+  (`assembly.domain`) states its planes in the modelled frame, so it allows only `+z`.
 - **Confirmed per project.** `cad_frame_confirmations` holds the latest confirmation per
   key: the snapshot's project (`lineage:<id>`), or the exact snapshot
   (`snapshot:<manifest hash>`) when it belongs to no project (an unsaved CAD document).
   The key and requirement come from the ingestion record, never from a request. It is
   not part of a setup revision, which any client records. No row means unconfirmed;
-  nothing is written when a store opens.
+  nothing is written when a store opens. Each row also records the complete transform,
+  its up and where that came from, and the suggestion it agreed with (`provenance`
+  `suggested`) or overrode (`chosen`) (`frame_json`, null on rows written before it).
+- **The automatic suggestion (M1e).** One pure function over the full model in CAD
+  coordinates: the record's solver mesh, mirrored back across its domain planes (WG's
+  own cuts are provisional and never constrain it) and mapped back through the inverse
+  of the frame it was meshed in. Sources come from the production source tags, never
+  from area matching. Three kinds of evidence score all six axes: role-weighted source
+  normals (HF 9 : MF 3 : LF 1, passive cardioid 0, averaged within a role first), a
+  role-weighted far-observer visibility survey with small tilts, and the largest
+  envelope opening the sources reach. The result is automatic only when the vote share
+  is at least 0.60, the normalised lead at least 0.25, and at least two evidence types,
+  one of them geometric, support the winner at a minimum strength. Otherwise it asks,
+  with the reason in words, as it does with no HF or MF source, unvalidated source
+  identity, sources that cannot be seen from outside, an unreliable surface
+  orientation, or an unrestricted winner the snapshot does not allow (it never
+  promotes a weaker allowed axis). Weights and thresholds are frozen under the
+  algorithm version.
+  - It runs inside the explicit commands: backend preparation computes it once the
+    preparation is recorded, and `POST /api/cadlink/ingest` starts it after answering.
+    It is cached in `cad_frame_suggestions` by snapshot and algorithm version; a survey
+    that could not run is not cached.
+  - It preselects; it never confirms. **Precedence:** a confirmed frame whose identity
+    matches, then an automatic suggestion the snapshot allows, else nothing. When a
+    snapshot's automatic suggestion disagrees with the confirmed frame, the preview
+    carries a non-blocking notice and the confirmed frame still holds.
 - **Preparation.** An unlinked snapshot is meshed in its project's confirmed frame, or
   as modelled (`+z`) until one is, and its record states the frame
-  (`normalisation.solver_frame`: contract, axis, requirement, allowed axes, matrix).
-  Right after the preparation is recorded, and before findings and approvals, an
-  unconfirmed frame waits as `frame_confirmation_required`; the preparation it made is
-  the preview's geometry. Confirming `+z` resumes that preparation; any other axis makes
-  a new one, and approvals never carry to it. A preparation is resumed only in the frame
-  this attempt would mesh in. `+z` is never written into the ingest options, so no mesh
-  cached before this contract is made again.
+  (`normalisation.solver_frame`: contract, axis, up, up source, stated document up,
+  requirement, allowed axes, matrix). Right after the preparation is recorded, and before
+  findings and approvals, an unconfirmed frame waits as `frame_confirmation_required`;
+  the preparation it made is the preview's geometry. Confirming `+z` resumes that
+  preparation; any other axis makes a new one, and approvals never carry to it. A
+  preparation is resumed only in the frame, and under the contract, this attempt would
+  mesh in. `+z` is never written into the ingest options, so no mesh cached before
+  this contract is made again.
+- **Axial drive.** An `axial` channel is driven along the record's observation axis,
+  solver +Z, which is the chosen CAD forward direction; a source facing back along it is
+  flipped to drive outward, as for a model modelled along +z.
 - **Every submission.** The jobs system refuses, at submission, an unlinked record whose
   frame is not the confirmed one under the same requirement
   (`frame_confirmation_required`), so `/api/solve`, a retry, a CAD operation's own
@@ -374,7 +419,12 @@ executable half of this section.
     example `PUT /api/cadlink/solver-frame` with `{"ingestId": "wgi_…", "axis": "+z"}`.
 - **Routes.** `GET /api/cadlink/solver-frame?operationId=|ingestId=` answers every axis's
   `solverFromAssembly` and `previewFromRecord` (the matrix that turns the record's
-  geometry into that axis's frame), the requirement and the project's confirmation.
+  geometry into that axis's frame) and its up, the record's contract and frame, the
+  requirement, the project's confirmation (with its recorded frame), the snapshot's
+  `suggestion` (`status` `automatic`/`ask`/`unavailable`, `axis`, `confidence`,
+  `reason`, `reasonCode`, `algorithm`, per-evidence scores), `preselected`
+  (`{axis, source: "confirmed" | "suggested"}` or null) and `differs` (the non-blocking
+  notice, or null). It computes the suggestion if the import's survey has not finished.
   `PUT /api/cadlink/solver-frame` `{operationId | ingestId, axis}` confirms it (422 for a
   linked snapshot or an axis the snapshot does not allow). Confirming prepares nothing,
   so the update-restart latch does not apply. `POST /api/cadlink/ingest` meshes an
@@ -935,7 +985,7 @@ it accepts, in `<data dir>/ipc/wglink/wg-capabilities.json`. WG writes it atomic
 every start:
 
 ```json
-{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 4, "fusionRequestDelivery": 3, "sourceIdentity": 1, "liveProtocol": 1}
+{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 4, "fusionRequestDelivery": 3, "sourceIdentity": 1, "liveProtocol": 1, "documentUp": 1}
 ```
 
 - **`sourceIdentity: 1`** means WG reads returns that require `source-identity-v1`
@@ -946,6 +996,11 @@ every start:
   a boolean) -- the same reading rules as the delivery versions. Anything else means "do
   not declare it". Adding the field changed neither `schemaVersion` nor either delivery
   version.
+- **`documentUp: 1`** means WG reads returns that require `document-up-v1`: the CAD
+  document's up axis in `coordinate_system.document_up` (`"+y"` or `"+z"`), which sets
+  the roll of an unlinked model's solver frame (see "Unlinked solver frame"). The
+  feature and the field are required together. Read by the same rules as
+  `sourceIdentity`; an add-in states it only when WG advertises it.
 - **`liveProtocol: 1`** means this WG serves live protocol 1 at the address in
   `wg-endpoint.json` (`docs/reference/CADLINK-LIVE-PROTOCOL.md`). An add-in goes live only
   when WG advertises it, read by the same rules; anything else means "use the files". It
