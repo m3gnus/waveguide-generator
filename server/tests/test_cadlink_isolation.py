@@ -153,6 +153,41 @@ def test_mesher_child_enables_parallel_occ_only_on_qualified_platforms(
     assert (("Geometry.OCCParallel", 1) in calls) is enabled
 
 
+@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
+def test_the_shipped_mesher_child_never_enables_parallel_occ(
+    monkeypatch, platform: str
+) -> None:
+    """Pins the SHIPPED gate, not a patched one: parallel OCC is qualified on
+    no platform. A platform is added to ``_OCC_PARALLEL_QUALIFIED_PLATFORMS``
+    only by the qualification follow-up (a real-STEP serial/parallel test
+    through this child on hosted Windows, ubuntu and macOS)."""
+
+    from server.cadlink import child_main
+
+    assert child_main._OCC_PARALLEL_QUALIFIED_PLATFORMS == frozenset()
+
+    calls: list[tuple[str, float]] = []
+
+    class Option:
+        @staticmethod
+        def setNumber(name: str, value: float) -> None:
+            calls.append((name, value))
+
+    fake_gmsh = type("FakeGmsh", (), {
+        "option": Option(),
+        "isInitialized": staticmethod(lambda: False),
+        "initialize": staticmethod(lambda **_kwargs: None),
+    })()
+    monkeypatch.setitem(sys.modules, "gmsh", fake_gmsh)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(
+        "server.mesh.gmsh_worker._preserve_native_windows_path", nullcontext
+    )
+
+    assert child_main._open_gmsh_session() is fake_gmsh
+    assert not any(name == "Geometry.OCCParallel" for name, _ in calls)
+
+
 def test_occ_parallel_preserves_small_fixture_mesh_arrays() -> None:
     """Portable qualification evidence for enabling OCCParallel on Windows."""
 
