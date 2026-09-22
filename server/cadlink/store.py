@@ -1112,6 +1112,26 @@ class CadLinkStore:
             ).fetchone()
         return self._row(row)
 
+    def admit_frame_axis(self, operation_id: str, frame_axis: str) -> bool:
+        """Keep the solver frame axis a user's Solve named, as it is admitted.
+
+        Written before anything can return early -- a restart approved while
+        the press is reconciled leaves the operation ``received`` -- so every
+        later attempt, the delivery loop's included, is held to it. Not an
+        attempt's write: no generation fence, only an unfinished operation.
+        ``updated_at`` is left alone, so a client's ordering of the row's
+        states does not move. False when the operation is finished or unknown.
+        """
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_operations SET frame_axis = ? "
+                f"WHERE operation_id = ? AND state NOT IN ({', '.join('?' for _ in TERMINAL_STATES)})",
+                (frame_axis, operation_id, *sorted(TERMINAL_STATES)),
+            )
+            return cursor.rowcount == 1
+
     def attempt_is_current(
         self, conn: sqlite3.Connection, operation_id: str, generation: int
     ) -> bool:

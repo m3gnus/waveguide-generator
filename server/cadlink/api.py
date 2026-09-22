@@ -2128,6 +2128,11 @@ async def post_prepare_cad_operation(
                 retryable=True,
             ),
         )
+    if payload.frame_axis is not None:
+        # Admitted: the axis this press showed is the operation's before
+        # anything is started, so no early return and no later continuation
+        # of the attempt can lose it.
+        await asyncio.to_thread(store.admit_frame_axis, operation_id, payload.frame_axis)
     task = asyncio.create_task(
         prepare_operation(
             context,

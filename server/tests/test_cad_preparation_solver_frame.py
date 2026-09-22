@@ -15,6 +15,7 @@ import dataclasses
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -278,6 +279,113 @@ def test_an_automatic_continuation_after_the_update_restart_keeps_the_axis_shown
     assert _waiting_for_frame(continued), continued
     assert "+x now, not the +z WG showed" in continued["message"]
     assert harness.submitted == []
+
+
+def test_a_press_admitted_then_overtaken_by_the_update_restart_keeps_its_axis(real, monkeypatch) -> None:
+    """The reviewer's round-3 reproduction, through the HTTP handler: a +z press
+    passes the route's restart check, the restart is approved while the press
+    is reconciled with the jobs (so the operation stays received), +x is
+    confirmed elsewhere, and after a reopen the loop's empty continuation must
+    not solve along +x."""
+
+    from server.cadlink import api
+    from server.cadlink.store import CadLinkStore
+    from server.updates.restart import RestartApproval
+
+    from test_cad_preparation import _latched_state
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    approval = RestartApproval()
+    started: list[asyncio.Task[Any]] = []
+
+    def reconcile_then_approve(_ctx: Any, _operation_id: str) -> None:
+        approval.approve("0.3.4")
+        return None
+
+    real_reconcile = preparation.reconcile_with_jobs
+    monkeypatch.setattr(preparation, "reconcile_with_jobs", reconcile_then_approve)
+    monkeypatch.setattr(api, "_track", lambda _state, task: started.append(task))
+    request = SimpleNamespace(app=SimpleNamespace(state=_latched_state(harness, approval)))
+
+    async def press() -> Any:
+        response = await api.post_prepare_cad_operation(
+            "cmd-1", api.PrepareOperationRequest(frameAxis="+z"), request
+        )
+        await asyncio.gather(*started)
+        return response
+
+    answered = asyncio.run(press())
+    assert answered["operation"]["state"] == "received"
+    assert harness.store.get_operation("cmd-1")["state"] == "received"
+    assert harness.submitted == []
+    monkeypatch.setattr(preparation, "reconcile_with_jobs", real_reconcile)
+
+    # Another window confirms +x for the project (through another export).
+    other = b"STEP authored, again"
+    _received(harness, "authored-2", _authored(other), other, command="cmd-2")
+    confirm_frame(harness.store, _record(harness, _prepare(harness, "cmd-2")), "+x")
+
+    # WG restarts: the axis the press showed is still the operation's.
+    reopened = CadLinkStore(harness.store.db_path)
+    assert reopened.get_operation("cmd-1")["frame_axis"] == "+z"
+    approval.release("the launcher discarded the request")
+    continued = asyncio.run(prepare_operation(
+        _context(harness), "cmd-1", PreparationInput(setup_revision_id=_revision(harness.store, _setup())),
+        expected_generation=0,
+    ))
+    assert _waiting_for_frame(continued), continued
+    assert "+x now, not the +z WG showed" in continued["message"]
+    assert harness.submitted == []
+
+
+def test_the_route_keeps_an_admitted_press_axis_before_anything_starts(real, monkeypatch) -> None:
+    """Kept at admission, by the handler itself: even an attempt that never
+    runs (WG stopped right after answering) leaves the axis on the operation."""
+
+    from server.cadlink import api
+    from server.updates.restart import RestartApproval
+
+    from test_cad_preparation import _latched_state
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+
+    async def never_runs(_ctx: Any, operation_id: str, _request: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("not started in this test")
+
+    tasks: list[asyncio.Task[Any]] = []
+
+    def track(_state: Any, task: asyncio.Task[Any]) -> None:
+        task.cancel()
+        tasks.append(task)
+
+    monkeypatch.setattr(api, "prepare_operation", never_runs)
+    monkeypatch.setattr(api, "_track", track)
+    request = SimpleNamespace(app=SimpleNamespace(state=_latched_state(harness, RestartApproval())))
+    asyncio.run(api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(frameAxis="-y"), request))
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-y"
+    # A press naming none leaves it as it is (the control).
+    asyncio.run(api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(), request))
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-y"
+
+
+def test_a_press_the_restart_overtakes_before_its_claim_keeps_its_axis(real) -> None:
+    """The same, for any caller of prepare_operation: kept before the early return."""
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+
+    summary = asyncio.run(prepare_operation(
+        _context(harness), "cmd-1", PreparationInput(expected_frame_axis="+z"), expected_generation=0,
+    ))
+
+    assert (summary["state"], summary["attemptGeneration"]) == ("received", 0)
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+z"
 
 
 def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_another(real) -> None:
