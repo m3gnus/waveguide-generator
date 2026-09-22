@@ -973,14 +973,22 @@ def interpretation_view(store: CadLinkStore, record: Mapping[str, Any]) -> dict[
     remembered = lineage_reading(store, record)
     pending = None
     if remembered is not None and remembered.get("source") == USER:
-        wanted = {"reading": remembered.get("reading"), "planes": list(remembered.get("planes") or [])}
-        solved = {"reading": interpretation.get("reading"), "planes": list(interpretation.get("planes") or [])}
+        wanted = {"reading": remembered.get("reading")}
+        if wanted["reading"] == READING_REDUCED:
+            wanted["planes"] = list(remembered.get("planes") or [])
+        solved = {"reading": interpretation.get("reading")}
+        if solved["reading"] == READING_REDUCED:
+            solved["planes"] = list(interpretation.get("planes") or [])
         solved_as_user = (interpretation.get("evidence") or {}).get("source") in (USER, USER_LINEAGE)
         if wanted["reading"] == READING_AS_SHOWN:
             differs = solved["reading"] == READING_REDUCED
         else:
             differs = solved != wanted or not solved_as_user
-        if differs:
+        offered = [dict(choice) for choice in interpretation.get("choices") or []]
+        # A carried reading can stop applying after the model changes (for
+        # example, a former half becomes whole). Do not promise that Solve
+        # will apply a reading this geometry no longer offers.
+        if differs and wanted in offered:
             pending = wanted
     return {
         "ingestId": record.get("ingest_id"),

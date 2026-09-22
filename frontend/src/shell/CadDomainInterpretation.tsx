@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   changeDomainReading,
   getDomainInterpretation,
@@ -86,26 +86,50 @@ export function CadDomainInterpretation({ ingestId, interpretation, fetcher = fe
   const [pending, setPending] = useState<DomainReading | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestGeneration = useRef(0);
+  const renderedIngestId = useRef(ingestId);
+  if (renderedIngestId.current !== ingestId) {
+    renderedIngestId.current = ingestId;
+    requestGeneration.current += 1;
+  }
   useEffect(() => {
     let current = true;
+    const generation = ++requestGeneration.current;
     setChanging(false);
     setPending(null);
+    setSaving(false);
     setError(null);
     // A Change made earlier (in another window, say) that this preparation
     // does not show yet. Advisory: the line stands without it.
     void getDomainInterpretation(ingestId, fetcher)
-      .then((view) => { if (current) setPending(view.pending ?? null); })
+      .then((view) => {
+        if (current && generation === requestGeneration.current && view.ingestId === ingestId) {
+          setPending(view.pending ?? null);
+        }
+      })
       .catch(() => undefined);
     return () => { current = false; };
   }, [fetcher, ingestId]);
   const { text, change } = domainLine(interpretation);
   const choose = (reading: DomainReading) => {
+    const generation = ++requestGeneration.current;
     setSaving(true);
     setError(null);
     void changeDomainReading(ingestId, reading, fetcher)
-      .then((view) => { setPending(view.pending ?? null); setChanging(false); })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
-      .finally(() => setSaving(false));
+      .then((view) => {
+        if (generation === requestGeneration.current && view.ingestId === ingestId) {
+          setPending(view.pending ?? null);
+          setChanging(false);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (generation === requestGeneration.current) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      })
+      .finally(() => {
+        if (generation === requestGeneration.current) setSaving(false);
+      });
   };
   return <div className="cad-domain" data-domain-reading={interpretation.reading}>
     <p className="cad-domain-line">

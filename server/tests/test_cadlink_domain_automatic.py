@@ -491,7 +491,7 @@ def test_the_same_open_half_without_provenance_is_solved_as_shown(tmp_path: Path
 
 
 def test_change_to_half_is_checked_mirrored_and_remembered_for_the_lineage(tmp_path: Path) -> None:
-    from server.cadlink.domain_interpretation import record_reading
+    from server.cadlink.domain_interpretation import interpretation_view, record_reading
 
     data_dir = tmp_path / "data"
     first = _ingest(_bundle(tmp_path, "half-change", _open_half, HORN_THROAT), data_dir)
@@ -516,6 +516,8 @@ def test_change_to_half_is_checked_mirrored_and_remembered_for_the_lineage(tmp_p
     assert _interpretation(full)["reading"] == "full"
     assert _interpretation(full)["evidence"]["applied"] is False
     assert full["symmetry"]["cut_planes"] == ["x0", "y0"]
+    assert _interpretation(full)["choices"] == []
+    assert interpretation_view(_store(data_dir), full)["pending"] is None
 
 
 def test_open_quarter_with_provenance_on_both_planes_is_a_quarter(tmp_path: Path) -> None:

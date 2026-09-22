@@ -42,6 +42,12 @@ const LOOKS_CUT = interpretation({
   choices: [{ reading: 'reduced', planes: ['x0'] }],
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 describe('the domain line', () => {
   it('says what was solved, and why, in the words of the plan', () => {
     expect(domainLine(PROVENANCE_HALF)).toEqual({ text: 'Half model · cut at x = 0 (Split Body 3)', change: true });
@@ -122,6 +128,62 @@ describe('Change', () => {
     expect(puts).toEqual([{ ingestId: 'wgi_1', reading: 'reduced', planes: ['x0'] }]);
     expect(host.querySelector('.cad-domain-pending')!.textContent).toBe('Solve prepares it again: half model, cut at x = 0.');
     expect(host.querySelector('.cad-domain-choices')).toBeNull();
+  });
+
+  it('does not let the mount read overwrite a newer Change', async () => {
+    const get = deferred<Response>();
+    const put = deferred<Response>();
+    const orderedFetcher = ((_: RequestInfo | URL, init?: RequestInit) => (
+      init?.method === 'PUT' ? put.promise : get.promise
+    )) as typeof fetch;
+    await act(async () => {
+      root.render(<CadDomainInterpretation ingestId="wgi_1" interpretation={LOOKS_CUT} fetcher={orderedFetcher}/>);
+    });
+    await act(async () => { (host.querySelector('[data-action="change-domain"]') as HTMLButtonElement).click(); });
+    await act(async () => { (host.querySelector('[data-action="choose-domain"]') as HTMLButtonElement).click(); });
+    await act(async () => {
+      put.resolve(new Response(JSON.stringify({
+        ingestId: 'wgi_1', available: true, pending: { reading: 'reduced', planes: ['x0'] },
+      }), { status: 200 }));
+      await put.promise;
+    });
+    expect(host.querySelector('.cad-domain-pending')!.textContent).toContain('half model');
+
+    await act(async () => {
+      get.resolve(new Response(JSON.stringify({ ingestId: 'wgi_1', available: true, pending: null }), { status: 200 }));
+      await get.promise;
+    });
+    expect(host.querySelector('.cad-domain-pending')!.textContent).toContain('half model');
+  });
+
+  it('does not apply a completed Change after the card switches records', async () => {
+    const oldPut = deferred<Response>();
+    const switchingFetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PUT') return oldPut.promise;
+      const ingestId = new URL(String(input), 'http://wg.test').searchParams.get('ingestId');
+      return new Response(JSON.stringify({
+        ingestId,
+        available: true,
+        pending: ingestId === 'wgi_2' ? { reading: 'as-shown' } : null,
+      }), { status: 200 });
+    }) as typeof fetch;
+    await act(async () => {
+      root.render(<CadDomainInterpretation ingestId="wgi_1" interpretation={LOOKS_CUT} fetcher={switchingFetcher}/>);
+    });
+    await act(async () => { (host.querySelector('[data-action="change-domain"]') as HTMLButtonElement).click(); });
+    await act(async () => { (host.querySelector('[data-action="choose-domain"]') as HTMLButtonElement).click(); });
+    await act(async () => {
+      root.render(<CadDomainInterpretation ingestId="wgi_2" interpretation={PROVENANCE_HALF} fetcher={switchingFetcher}/>);
+    });
+    expect(host.querySelector('.cad-domain-pending')!.textContent).toContain('as shown');
+
+    await act(async () => {
+      oldPut.resolve(new Response(JSON.stringify({
+        ingestId: 'wgi_1', available: true, pending: { reading: 'reduced', planes: ['x0'] },
+      }), { status: 200 }));
+      await oldPut.promise;
+    });
+    expect(host.querySelector('.cad-domain-pending')!.textContent).toContain('as shown');
   });
 
   it('solves a mirrored model unmirrored on Change, and shows a Change made elsewhere', async () => {
