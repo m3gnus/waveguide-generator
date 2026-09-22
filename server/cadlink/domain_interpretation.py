@@ -123,7 +123,11 @@ class DomainPlan:
     ignored: tuple[Mapping[str, Any], ...] = ()
     #: Why this snapshot's own evidence is refused before any meshing.
     refusal: str | None = None
+    refusals: tuple[tuple[str, str], ...] = ()
     unlinked: bool = True
+    #: Identity that permits a reading to carry to a later snapshot.
+    body_object_ids: tuple[str, ...] = ()
+    export_frame: str = "root-component"
 
     @property
     def strict(self) -> bool:
@@ -153,6 +157,8 @@ class DomainPlan:
             "planes": list(self.planes),
             "snapshot": self.snapshot,
             "features": [dict(item) for item in self.features],
+            "body_object_ids": list(self.body_object_ids),
+            "export_frame": self.export_frame,
         }
 
 
@@ -166,6 +172,34 @@ def _is_unlinked(manifest: Mapping[str, Any]) -> bool:
     from .solver_frame import is_unlinked_manifest
 
     return is_unlinked_manifest(manifest)
+
+
+def _manifest_context(manifest: Mapping[str, Any]) -> tuple[tuple[str, ...], str]:
+    scope = manifest.get("scope")
+    included = scope.get("included") if isinstance(scope, Mapping) else None
+    body_ids = tuple(
+        sorted(
+            str(item.get("object_id"))
+            for item in included or ()
+            if isinstance(item, Mapping) and item.get("object_id")
+        )
+    )
+    return body_ids, _export_frame(manifest)
+
+
+def _remembered_applies(
+    remembered: Mapping[str, Any], manifest_sha256: str, context: tuple[tuple[str, ...], str]
+) -> bool:
+    """A reading carries only to the same exported bodies in the same frame."""
+
+    if remembered.get("snapshot") == manifest_sha256:
+        return True
+    body_ids, export_frame = context
+    return (
+        tuple(sorted(str(item) for item in remembered.get("body_object_ids") or ()))
+        == body_ids
+        and remembered.get("export_frame") == export_frame
+    )
 
 
 def reading_key(store: CadLinkStore, manifest: Mapping[str, Any], manifest_sha256: str) -> str:
@@ -209,9 +243,14 @@ def resolve_domain_plan(
         # A linked return is solved in its WG design's frame, and a pre-cut
         # linked throat already fails role resolution; nothing to read here.
         return DomainPlan(manifest_domain=kind, unlinked=False)
+    body_ids, export_frame = _manifest_context(manifest)
     remembered = None
     if store is not None:
         remembered = store.get_domain_reading(reading_key(store, manifest, manifest_sha256))
+        if remembered is not None and not _remembered_applies(
+            remembered, manifest_sha256, (body_ids, export_frame)
+        ):
+            remembered = None
     if remembered is not None and remembered.get("source") == USER:
         own = remembered.get("snapshot") == manifest_sha256
         return DomainPlan(
@@ -220,6 +259,8 @@ def resolve_domain_plan(
             reading=str(remembered.get("reading")),
             planes=tuple(plane for plane in PLANES if plane in (remembered.get("planes") or [])),
             snapshot=str(remembered.get("snapshot") or "") or None,
+            body_object_ids=body_ids,
+            export_frame=export_frame,
         )
     entries, ignored = _usable_provenance(manifest)
     if entries:
@@ -228,7 +269,7 @@ def resolve_domain_plan(
             for entry in entries
         )
         planes = tuple(plane for plane in PLANES if any(entry["plane"] == plane for entry in entries))
-        refusal = _provenance_refusal(entries)
+        refusals = _provenance_refusals(entries)
         return DomainPlan(
             manifest_domain=kind,
             source=PROVENANCE,
@@ -236,7 +277,10 @@ def resolve_domain_plan(
             planes=planes,
             features=features,
             ignored=tuple(ignored),
-            refusal=refusal,
+            refusal=refusals[0][1] if refusals else None,
+            refusals=tuple(refusals),
+            body_object_ids=body_ids,
+            export_frame=export_frame,
         )
     if remembered is not None and remembered.get("source") == PROVENANCE:
         return DomainPlan(
@@ -247,8 +291,15 @@ def resolve_domain_plan(
             snapshot=str(remembered.get("snapshot") or "") or None,
             features=tuple(dict(item) for item in remembered.get("features") or []),
             ignored=tuple(ignored),
+            body_object_ids=body_ids,
+            export_frame=export_frame,
         )
-    return DomainPlan(manifest_domain=kind, ignored=tuple(ignored))
+    return DomainPlan(
+        manifest_domain=kind,
+        ignored=tuple(ignored),
+        body_object_ids=body_ids,
+        export_frame=export_frame,
+    )
 
 
 def _usable_provenance(
@@ -277,23 +328,32 @@ def _usable_provenance(
     return usable, ignored
 
 
-def _provenance_refusal(entries: Sequence[Mapping[str, Any]]) -> str | None:
+def _provenance_refusals(
+    entries: Sequence[Mapping[str, Any]],
+) -> list[tuple[str, str]]:
+    refusals: list[tuple[str, str]] = []
     for entry in entries:
         plane = str(entry["plane"])
         name = (entry.get("feature") or {}).get("name") or "the cut"
         if plane not in SUPPORTED_PLANES:
-            return (
-                f"{name} cuts this model on {plane_words(plane)} "
-                f"(the {_ORIGIN_PLANE[plane]} plane), which WG cannot mirror yet. Cut it on "
-                "the YZ or XZ origin plane instead, or send the whole model."
+            refusals.append(
+                (
+                    plane,
+                    f"{name} cuts this model on {plane_words(plane)} "
+                    f"(the {_ORIGIN_PLANE[plane]} plane), which WG cannot mirror yet. Cut it on "
+                    "the YZ or XZ origin plane instead, or send the whole model.",
+                )
             )
-        if entry.get("kept_side") != "positive":
-            return (
-                f"{name} keeps the negative side of {plane_words(plane)}, which WG cannot "
-                f"mirror yet: keep the {_positive_side(plane)} side and leave the cut open, "
-                "or send the whole model."
+        elif entry.get("kept_side") != "positive":
+            refusals.append(
+                (
+                    plane,
+                    f"{name} keeps the negative side of {plane_words(plane)}, which WG cannot "
+                    f"mirror yet: keep the {_positive_side(plane)} side and leave the cut open, "
+                    "or send the whole model.",
+                )
             )
-    return None
+    return refusals
 
 
 # -- the detector: observations on the solve mesh ------------------------------------------
@@ -607,7 +667,9 @@ def apply_evidence(plan: DomainPlan, observations: Observations | None, *, ident
         if observation.wg_cut or (observation.negative and observation.positive):
             skipped[plane] = f"the model spans both sides of {plane_words(plane)}, so it is not cut there"
             continue
-        problem = _mirrorable(observation, observations.other_open_edges)
+        problem = dict(plan.refusals).get(plane) or _mirrorable(
+            observation, observations.other_open_edges
+        )
         if problem is None and identity_problem:
             problem = identity_problem
         if problem is None:
@@ -703,6 +765,10 @@ def interpretation_record(
         "choices": choices,
         "plan": plan.identity(),
         "cache_identity": dict(cache_identity) if cache_identity is not None else None,
+        "lineage_context": {
+            "body_object_ids": list(plan.body_object_ids),
+            "export_frame": plan.export_frame,
+        },
         "excitation": {
             "requirement": "reflection-invariant" if built_symmetry.get("domain_planes") else None,
         },
@@ -854,6 +920,7 @@ def record_reading(store: CadLinkStore, record: Mapping[str, Any], reading: Mapp
             "planes": planes,
             "snapshot": str(record.get("manifest_sha256") or ""),
             "ingest_id": record.get("ingest_id"),
+            **dict(interpretation.get("lineage_context") or {}),
         },
     )
 
@@ -886,6 +953,7 @@ def remember_provenance_reading(store: CadLinkStore, record: Mapping[str, Any]) 
             "features": list(evidence.get("features") or []),
             "snapshot": str(record.get("manifest_sha256") or ""),
             "ingest_id": record.get("ingest_id"),
+            **dict(interpretation.get("lineage_context") or {}),
         },
     )
 

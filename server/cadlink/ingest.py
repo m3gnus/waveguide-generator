@@ -114,6 +114,9 @@ def meshing_semantics() -> dict[str, Any]:
         "sagitta_flat_curvature": meshing._SAGITTA_FLAT_CURVATURE,
         "sagitta_grid_samples": meshing._SAGITTA_GRID_SAMPLES,
         "sagitta_quantise_log": meshing._SAGITTA_QUANTISE_LOG,
+        # M1c-auto lets an already-cut open shell reduce on a second valid
+        # plane. Older cached declared halves must not be reused as halves.
+        "precut_reduction_contract": "smallest-domain-v1",
     }
     # Rounded: a constant computed at import (``math.log``) may differ in its
     # last bit between platforms' maths libraries, and the fingerprint must not.
@@ -1161,6 +1164,28 @@ def _source_identity_problem(built: Mapping[str, Any], skipped_source_ids: list[
     return None
 
 
+def _reconstruction_integrity_problem(built: Mapping[str, Any]) -> str | None:
+    """Why mirroring this arrived mesh would reproduce overlapping geometry."""
+
+    integrity = built.get("integrity")
+    report = integrity.get("self_intersection") if isinstance(integrity, Mapping) else None
+    if not isinstance(report, Mapping) or report.get("checked") is not True:
+        return "the model's self-intersection check is unavailable"
+    proper = report.get("proper_crossing_count")
+    coplanar = report.get("coplanar_overlap_count")
+    if not isinstance(proper, int) or isinstance(proper, bool):
+        return "the model's self-intersection report is invalid"
+    if not isinstance(coplanar, int) or isinstance(coplanar, bool):
+        return "the model's self-intersection report is invalid"
+    if proper > 0 or coplanar > 0:
+        return (
+            "the model intersects itself "
+            f"({proper} crossing(s), {coplanar} coplanar overlap(s)); "
+            "a mirrored reconstruction would overlap"
+        )
+    return None
+
+
 def _mesher_denial(message: str) -> str:
     """The mesher's reason a mirrored reading failed, without its stage prefix."""
 
@@ -1336,8 +1361,6 @@ def ingest_bundle(
     # A reading that changes what is solved enters the cache key; with no
     # evidence the key is exactly what it was before.
     plan = resolve_domain_plan(store, manifest, bundle.manifest_sha256)
-    if plan.refusal is not None:
-        raise IngestRefusal("stage 6 symmetry", f"symmetry: {plan.refusal}")
     if plan.identity() is not None and not plan.evidenced_planes:
         options["domain_interpretation"] = plan.identity()
     imports_root = data_paths(data_dir).root / "imports"
@@ -1453,7 +1476,12 @@ def ingest_bundle(
         shown = mesh_for(options, include_viewport=False)
         observations = observe_record_mesh(shown[0])
         evidence_outcome = apply_evidence(
-            plan, observations, identity_problem=_source_identity_problem(shown[0], skipped_source_ids)
+            plan,
+            observations,
+            identity_problem=(
+                _source_identity_problem(shown[0], skipped_source_ids)
+                or _reconstruction_integrity_problem(shown[0])
+            ),
         )
         if evidence_outcome.refusal is not None:
             raise IngestRefusal("stage 6 symmetry", evidence_refusal_message(plan, evidence_outcome.refusal))

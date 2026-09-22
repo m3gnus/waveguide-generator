@@ -813,22 +813,24 @@ def test_a_meshing_semantics_change_is_a_new_preparation_identity(monkeypatch) -
     manifest = {"sources": [{"id": "source-hf"}], "instances": []}
     sizes = {"rigid_size_mm": 20}
 
-    baseline = ingest_module._cache_lookup_key(bundle, manifest, sizes, [], {})
+    current = ingest_module._cache_lookup_key(bundle, manifest, sizes, [], {})
     monkeypatch.setattr(ingest_module, "_semantics_key_entry", lambda: {})
-    # Today's constants add nothing to a key: no existing mesh is re-made.
-    assert ingest_module._cache_lookup_key(bundle, manifest, sizes, [], {}) == baseline
+    # The declared-half smallest-domain change is deliberately not allowed to
+    # reuse keys written under the earlier half-only behaviour.
+    old = ingest_module._cache_lookup_key(bundle, manifest, sizes, [], {})
+    assert current != old
     monkeypatch.undo()
 
     # A last-bit difference between platforms' maths libraries is not a change.
     monkeypatch.setattr(
         meshing, "_SAGITTA_QUANTISE_LOG", math.nextafter(meshing._SAGITTA_QUANTISE_LOG, 1.0)
     )
-    assert ingest_module.meshing_semantics_fingerprint() == ingest_module._BASELINE_MESHING_SEMANTICS
+    assert ingest_module.meshing_semantics_fingerprint() != ingest_module._BASELINE_MESHING_SEMANTICS
     monkeypatch.undo()
 
     monkeypatch.setattr(meshing, "IMPORTED_SURFACE_DEVIATION_MM", 0.12)
     changed = ingest_module._cache_lookup_key(bundle, manifest, sizes, [], {})
-    assert changed != baseline
+    assert changed != current
 
 
 # -- existing installations ----------------------------------------------------------

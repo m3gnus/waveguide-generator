@@ -217,6 +217,50 @@ def test_a_users_reading_wins_over_provenance(tmp_path: Path) -> None:
     assert di.resolve_domain_plan(store, manifest, "sha256:other").source == di.PROVENANCE
 
 
+def test_a_lineage_reading_does_not_carry_to_other_bodies(tmp_path: Path) -> None:
+    from server.cadlink.store import CadLinkStore
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = validate_manifest(_new_add_in())
+    key = di.reading_key(store, first, "sha256:first")
+    store.record_domain_reading(
+        key,
+        {
+            "source": "user",
+            "reading": "reduced",
+            "planes": ["x0"],
+            "snapshot": "sha256:first",
+            "body_object_ids": ["speaker"],
+            "export_frame": "root-component",
+        },
+    )
+    other = copy.deepcopy(first)
+    other["scope"]["included"][0]["object_id"] = "another-body"
+
+    plan = di.resolve_domain_plan(store, other, "sha256:later")
+
+    assert plan.source is None
+    assert plan.evidenced_planes == ()
+
+
+def test_reconstruction_requires_a_clean_self_intersection_report() -> None:
+    clean = {
+        "integrity": {
+            "self_intersection": {
+                "checked": True,
+                "proper_crossing_count": 0,
+                "coplanar_overlap_count": 0,
+            }
+        }
+    }
+    crossing = copy.deepcopy(clean)
+    crossing["integrity"]["self_intersection"]["proper_crossing_count"] = 34
+
+    assert ingest_module._reconstruction_integrity_problem(clean) is None
+    assert "34 crossing" in ingest_module._reconstruction_integrity_problem(crossing)
+    assert "unavailable" in ingest_module._reconstruction_integrity_problem({})
+
+
 # -- the detector on synthetic meshes ----------------------------------------------------------
 
 

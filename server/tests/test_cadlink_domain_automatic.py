@@ -619,6 +619,22 @@ def test_provenance_naming_the_negative_side_is_refused_with_its_remedy(tmp_path
         _ingest(bundle, tmp_path / "data")
 
 
+def test_negative_side_history_is_set_aside_when_the_model_is_whole_again(tmp_path: Path) -> None:
+    bundle = _bundle(
+        tmp_path,
+        "negative-history-whole-model",
+        _horn,
+        HORN_THROAT,
+        cut=[provenance("body-0", kept_side="negative")],
+    )
+
+    record = _ingest(bundle, tmp_path / "data")
+
+    assert _interpretation(record)["reading"] == "full"
+    assert _interpretation(record)["evidence"]["applied"] is False
+    assert "x0" in _interpretation(record)["evidence"]["not_applicable"]
+
+
 def test_a_capped_half_with_provenance_is_refused(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path, "capped", _capped_half, HORN_THROAT, cut=[provenance("body-0")])
 
