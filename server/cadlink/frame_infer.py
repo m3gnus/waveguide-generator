@@ -551,7 +551,8 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
     backing = tuple(supporters[winner])
     common = {
         "unrestricted_axis": winner,
-        "confidence": lead,
+        # Only an automatic answer carries a confidence; an asked one has none.
+        "confidence": 0.0,
         "vote_share": share,
         "vote_lead": lead,
         "supporting": backing,
@@ -583,12 +584,19 @@ def infer_frame(mesh: SurveyMesh, *, supported_axes: Iterable[str] = AXES) -> Fr
             "Check the model, or send the whole model.",
             **common,
         )
+    strengths = {
+        NORMALS: normal_confidence,
+        VISIBILITY: visibility_confidence,
+        APERTURE: aperture_confidence,
+    }
+    # The vote's lead, scaled by how strongly the agreeing evidence decided.
+    confidence = lead * float(np.mean([strengths[name] for name in backing]))
     return FrameInference(
         algorithm=ALGORITHM_VERSION,
         status=STATUS_AUTOMATIC,
         axis=winner,
         unrestricted_axis=winner,
-        confidence=lead,
+        confidence=confidence,
         vote_share=share,
         vote_lead=lead,
         supporting_evidence=backing,

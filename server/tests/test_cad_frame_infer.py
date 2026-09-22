@@ -94,12 +94,14 @@ def test_fixture_expectation(name: str) -> None:
     if expected is ASK:
         assert result.status == STATUS_ASK, (name, result.axis, result.reason)
         assert result.axis is None
+        assert result.confidence == 0.0
         assert result.reason and "Pick the front" in result.reason
         if code is not None:
             assert result.reason_code == code, (name, result.reason_code, result.reason)
     else:
         assert result.status == STATUS_AUTOMATIC, (name, result.reason_code, result.reason, result.evidence)
         assert result.axis == expected
+        assert 0.0 < result.confidence <= result.vote_lead
         assert result.vote_share >= frame_infer.MIN_VOTE_SHARE
         assert result.vote_lead >= frame_infer.MIN_LEAD
         assert len(result.supporting_evidence) >= 2
