@@ -382,6 +382,7 @@ def _open_gmsh_session() -> Any:
         with _preserve_native_windows_path():
             gmsh.initialize(interruptible=False)
         gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.option.setNumber("Geometry.OCCParallel", 1)
     return gmsh
 
 

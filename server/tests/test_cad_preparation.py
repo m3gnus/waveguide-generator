@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import closing
+import dataclasses
 import hashlib
 import json
 import math
@@ -138,13 +139,15 @@ class FakeIngest:
 
     def __call__(
         self, bundle_path, mesh, skipped, store, data_dir, *, prep_options, commit_guard,
-        retained_copy=False, expected_design_id=None, expected_instance_id=None,
+        retained_copy=False, defer_viewport=False, expected_design_id=None,
+        expected_instance_id=None,
     ):
         self.calls.append(
             {
                 "bundle_path": str(bundle_path),
                 "mesh": dict(mesh),
                 "retained_copy": retained_copy,
+                "defer_viewport": defer_viewport,
                 "expected_design_id": expected_design_id,
                 "expected_instance_id": expected_instance_id,
             }
@@ -1855,6 +1858,28 @@ def test_a_dismissal_follows_a_job_the_operation_already_made(harness: Harness) 
     # the job in the jobs list. It never reads "cancelled" beside a running job.
     assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
     assert (harness.row()["state"], harness.row()["job_id"]) == ("accepted", "job-1")
+
+
+def test_preparation_always_defers_the_viewport(harness: Harness) -> None:
+    _received(harness)
+    revision = _revision(harness.store, _setup())
+    calls: list[dict[str, Any]] = []
+    ingest = harness.ingest
+
+    def recording_ingest(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return ingest(*args, **kwargs)
+
+    context = dataclasses.replace(harness.context(), ingest=recording_ingest)
+    asyncio.run(
+        prepare_operation(
+            context,
+            "cmd-1",
+            PreparationInput(setup_revision_id=revision, submit=False),
+        )
+    )
+
+    assert calls and calls[0]["defer_viewport"] is True
 
 
 def test_a_dismissal_waits_while_wg_cannot_tell_whether_a_job_exists(harness: Harness) -> None:

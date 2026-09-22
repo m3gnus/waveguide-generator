@@ -245,3 +245,31 @@ def test_protocol_forwards_a_cad_operation_update_without_a_cursor(tmp_path: Pat
         await task
 
     asyncio.run(scenario())
+
+
+def test_protocol_forwards_cad_viewport_readiness_without_a_cursor(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        runtime = JobRuntime(store)
+        runtime._started = True
+        transport = FakeTransport()
+        protocol = JobsProtocol(runtime, epoch=6, heartbeat_seconds=1)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: len(transport.json) >= 2)
+
+        runtime.events.publish(
+            {"v": 1, "kind": "cadViewportReady", "ingestId": "wgi_1"}
+        )
+        await _wait_until(lambda: len(transport.json) >= 3)
+
+        assert transport.json[2] == {
+            "v": 1,
+            "kind": "cadViewportReady",
+            "ingestId": "wgi_1",
+            "epoch": 6,
+        }
+        await transport.incoming.put(None)
+        await task
+
+    asyncio.run(scenario())

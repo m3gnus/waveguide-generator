@@ -56,7 +56,7 @@ describe('changing a project solver frame', () => {
   const unconfirmedFetcher = () => vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith('/api/cadlink/solver-frame?')) return json(preview(null));
-    if (url.endsWith('/viewport-mesh')) return new Response(MSH, { status: 200 });
+    if (url.endsWith('/mesh')) return new Response(MSH, { status: 200 });
     throw new Error(`unexpected ${url}`);
   });
 
@@ -94,7 +94,7 @@ describe('changing a project solver frame', () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/cadlink/solver-frame?ingestId=wgi_1' && !init?.method) return json(preview(confirmed));
-      if (url.endsWith('/viewport-mesh')) return new Response(MSH, { status: 200 });
+      if (url.endsWith('/mesh')) return new Response(MSH, { status: 200 });
       if (url === '/api/cadlink/solver-frame' && init?.method === 'PUT') {
         const body = JSON.parse(String(init.body)) as { axis: string };
         puts.push(body);

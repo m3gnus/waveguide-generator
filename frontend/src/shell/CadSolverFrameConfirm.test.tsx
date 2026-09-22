@@ -56,7 +56,7 @@ describe('confirming an unlinked model solver frame', () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/cadlink/solver-frame?operationId=op-1' && !init?.method) return json(framePreview());
-      if (url === '/api/cadlink/ingest/wgi_1/viewport-mesh') return new Response(MSH, { status: 200 });
+      if (url === '/api/cadlink/ingest/wgi_1/mesh') return new Response(MSH, { status: 200 });
       if (url === '/api/cadlink/solver-frame' && init?.method === 'PUT') {
         puts.push(JSON.parse(String(init.body)));
         return json(framePreview('+y'));
@@ -68,6 +68,7 @@ describe('confirming an unlinked model solver frame', () => {
       snapshot={{ operationId: 'op-1' }} label="Authored horn" fetcher={fetcher} onConfirmed={onConfirmed}
     />));
     await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
+    expect(fetcher).not.toHaveBeenCalledWith('/api/cadlink/ingest/wgi_1/viewport-mesh');
     // Nothing preselected, not even the modelled +z, and nothing can be confirmed yet.
     expect([...host.querySelectorAll<HTMLInputElement>('input[type="radio"]')].some((input) => input.checked)).toBe(false);
     expect(button(host)!.disabled).toBe(true);
@@ -89,7 +90,7 @@ describe('confirming an unlinked model solver frame', () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith('/api/cadlink/solver-frame?')) return json(framePreview());
-      if (url.endsWith('/viewport-mesh')) return new Response(MSH, { status: 200 });
+      if (url.endsWith('/mesh')) return new Response(MSH, { status: 200 });
       if (init?.method === 'PUT') {
         attempts += 1;
         return attempts === 1 ? json({ detail: 'the store is busy' }, 503) : json(framePreview('-x'));
@@ -118,7 +119,7 @@ describe('confirming an unlinked model solver frame', () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/cadlink/solver-frame?ingestId=wgi_1' && !init?.method) return json(framePreview('+y'));
-      if (url.endsWith('/viewport-mesh')) return new Response(MSH, { status: 200 });
+      if (url.endsWith('/mesh')) return new Response(MSH, { status: 200 });
       if (init?.method === 'PUT') {
         puts.push(JSON.parse(String(init.body)));
         return json(framePreview('-z'));
@@ -141,11 +142,10 @@ describe('confirming an unlinked model solver frame', () => {
     expect(puts).toEqual([{ ingestId: 'wgi_1', axis: '-z' }]);
   });
 
-  it('offers only the modelled frame for a half model, and falls back to the solve mesh', async () => {
+  it('offers only the modelled frame for a half model and uses the solve mesh', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/cadlink/solver-frame?')) return json(framePreview(null, ['+z']));
-      if (url.endsWith('/viewport-mesh')) return new Response('', { status: 404 });
       if (url === '/api/cadlink/ingest/wgi_1/mesh') return new Response(MSH, { status: 200 });
       throw new Error(`unexpected ${url}`);
     });

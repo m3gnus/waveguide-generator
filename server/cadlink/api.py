@@ -209,7 +209,9 @@ async def _await_cad_document_capture(return_state_hash: str) -> None:
     await asyncio.wait({task}, timeout=_CAPTURE_WAIT_SECONDS)
 
 
-def _schedule_deferred_viewport(record: Mapping[str, Any], data_dir: Path) -> None:
+def _schedule_deferred_viewport(
+    record: Mapping[str, Any], data_dir: Path, events: Any | None = None
+) -> None:
     """Start the display tessellation the ingestion response did not wait for."""
 
     lookup_key = deferred_viewport_lookup_key(record)
@@ -218,7 +220,15 @@ def _schedule_deferred_viewport(record: Mapping[str, Any], data_dir: Path) -> No
 
     async def build() -> None:
         try:
-            await asyncio.to_thread(build_deferred_viewport, record, data_dir)
+            artifact = await asyncio.to_thread(build_deferred_viewport, record, data_dir)
+            if artifact is not None and events is not None:
+                events.publish(
+                    {
+                        "v": 1,
+                        "kind": "cadViewportReady",
+                        "ingestId": str(record.get("ingest_id")),
+                    }
+                )
         except Exception as exc:  # noqa: BLE001
             # Advisory by construction: the solve mesh is already on screen and
             # is what the solve uses. A failure here costs display fidelity.
@@ -1151,7 +1161,8 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
         raise
     except Exception as exc:
         raise _ingest_error(exc) from exc
-    _schedule_deferred_viewport(record, data_dir)
+    runtime = getattr(request.app.state, "jobs_runtime", None)
+    _schedule_deferred_viewport(record, data_dir, getattr(runtime, "events", None))
     # Filing the captured document is the user's archive, not this response's
     # subject, and it copies tens of megabytes out of a possibly cloud-synced
     # folder. Answering first is what puts the geometry on screen sooner.
@@ -1352,7 +1363,8 @@ async def get_ingest_viewport_mesh(
         # process was restarted since the record was published. Either way the
         # inputs are all still there, so start it again rather than answering
         # with a permanent 404 for an artifact that is merely absent.
-        _schedule_deferred_viewport(record, data_dir)
+        runtime = getattr(request.app.state, "jobs_runtime", None)
+        _schedule_deferred_viewport(record, data_dir, getattr(runtime, "events", None))
         return PlainTextResponse(
             "", status_code=202, media_type="text/plain; charset=utf-8"
         )

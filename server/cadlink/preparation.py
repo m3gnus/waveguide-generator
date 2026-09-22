@@ -973,6 +973,7 @@ def _prepare_sync(
                 },
                 commit_guard=lambda conn: store.attempt_is_current(conn, operation_id, generation),
                 retained_copy=True,
+                defer_viewport=True,
                 **_project_gate(retained),
             )
         except StaleAttempt as exc:

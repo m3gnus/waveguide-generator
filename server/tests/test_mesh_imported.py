@@ -83,7 +83,10 @@ def test_imported_viewport_tessellation_is_scale_based_and_coarsens() -> None:
     second = imported_viewport_tessellation_settings(
         [0, 0, 0, 420, 400, 300], retry=1
     )
-    assert 1.0 <= first["mesh_size_max_mm"] <= 6.0
+    assert first["mesh_size_max_mm"] == pytest.approx(
+        math.sqrt(420**2 + 400**2 + 300**2) / 40.0
+    )
+    assert first["mesh_size_max_mm"] <= 25.0
     assert first["curvature_segments_per_2pi"] == 48
     assert second["mesh_size_max_mm"] > first["mesh_size_max_mm"]
     assert second["curvature_segments_per_2pi"] < first["curvature_segments_per_2pi"]

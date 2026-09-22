@@ -78,7 +78,7 @@ logger = logging.getLogger(__name__)
 # The mix is visible in the artifact, not hidden behind a shared version string.
 # Anything that changes a project's inputs re-keys it into the new rule anyway.
 IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v5"
-IMPORT_VIEWPORT_PIPELINE_CONTRACT = "wg-import-viewport-v1"
+IMPORT_VIEWPORT_PIPELINE_CONTRACT = "wg-import-viewport-v2"
 # The semantics every v5 key so far was made under: the fingerprint of
 # ``meshing_semantics()`` as those constants stand. A mesh key names the
 # semantics only when they differ from these. So no existing key changes and no

@@ -80,7 +80,7 @@ describe('an operation waiting for its solver frame', () => {
           })),
         });
       }
-      if (url.endsWith('/viewport-mesh')) return new Response(MSH, { status: 200 });
+      if (url.endsWith('/mesh')) return new Response(MSH, { status: 200 });
       throw new Error(`unexpected ${url}`);
     }));
     useCadOperationsStore.setState({ operations: { 'op-1': operation('frame_confirmation_required') } });

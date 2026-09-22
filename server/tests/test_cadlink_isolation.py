@@ -112,6 +112,27 @@ def test_staging_is_destroyed_when_the_invocation_ends(step_file: Path) -> None:
     assert not staged.parent.exists()
 
 
+def test_mesher_child_enables_parallel_occ(monkeypatch) -> None:
+    from server.cadlink import child_main
+
+    calls: list[tuple[str, float]] = []
+
+    class Option:
+        @staticmethod
+        def setNumber(name: str, value: float) -> None:
+            calls.append((name, value))
+
+    fake_gmsh = type("FakeGmsh", (), {
+        "option": Option(),
+        "isInitialized": staticmethod(lambda: False),
+        "initialize": staticmethod(lambda **_kwargs: None),
+    })()
+    monkeypatch.setitem(sys.modules, "gmsh", fake_gmsh)
+
+    assert child_main._open_gmsh_session() is fake_gmsh
+    assert ("Geometry.OCCParallel", 1) in calls
+
+
 def test_the_sandbox_is_made_in_the_servers_temporary_session_and_removed_whole(
     step_file: Path, tmp_path: Path
 ) -> None:

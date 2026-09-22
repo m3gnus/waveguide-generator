@@ -30,9 +30,11 @@ from server.cadlink.api import (
 from server.cadlink.identity import SaveIdentity
 from server.cadlink.ingest import (
     IMPORT_MESH_PIPELINE_CONTRACT,
+    IMPORT_VIEWPORT_PIPELINE_CONTRACT,
     IngestRefusal,
     _cache_key,
     _cache_lookup_key,
+    _viewport_cache_lookup_key,
     _canonical,
     build_deferred_viewport,
     compute_freshness,
@@ -611,6 +613,12 @@ def test_the_sizing_change_does_not_re_mesh_existing_projects() -> None:
     for key_function in (_cache_key, _cache_lookup_key):
         source = inspect.getsource(key_function)
         assert '"import_pipeline_contract": IMPORT_MESH_PIPELINE_CONTRACT' in source
+
+
+def test_viewport_sizing_change_invalidates_cached_display_meshes() -> None:
+    assert IMPORT_VIEWPORT_PIPELINE_CONTRACT == "wg-import-viewport-v2"
+    source = inspect.getsource(_viewport_cache_lookup_key)
+    assert '"viewport_pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT' in source
 
 
 def test_surface_deviation_is_bounded_to_the_band_where_the_dial_has_authority() -> None:
@@ -1292,7 +1300,7 @@ def test_viewport_endpoint_answers_202_while_a_deferred_tessellation_is_building
     scheduled: list[str] = []
     monkeypatch.setattr(
         "server.cadlink.api._schedule_deferred_viewport",
-        lambda published, data_dir: scheduled.append(str(published["ingest_id"])),
+        lambda published, data_dir, *_args: scheduled.append(str(published["ingest_id"])),
     )
 
     pending = asyncio.run(get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app)))
@@ -1305,6 +1313,32 @@ def test_viewport_endpoint_answers_202_while_a_deferred_tessellation_is_building
     ready = asyncio.run(get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app)))
     assert ready.status_code == 200
     assert ready.body == b"visual"
+
+
+def test_deferred_viewport_publishes_a_ready_event(monkeypatch, tmp_path: Path) -> None:
+    from server.cadlink import api
+
+    lookup_key = "d" * 64
+    record = {
+        "ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C",
+        "viewport_mesh": {"available": False, "pending": True, "lookup_key": lookup_key},
+    }
+    published: list[dict[str, object]] = []
+    events = SimpleNamespace(publish=lambda message: published.append(message))
+    monkeypatch.setattr(api, "build_deferred_viewport", lambda *_args: {"msh_text": "visual"})
+
+    async def run() -> None:
+        api._schedule_deferred_viewport(record, tmp_path, events)
+        task = api._DEFERRED_VIEWPORTS[lookup_key]
+        await task
+
+    asyncio.run(run())
+
+    assert published == [{
+        "v": 1,
+        "kind": "cadViewportReady",
+        "ingestId": record["ingest_id"],
+    }]
 
 
 def test_canonical_json_coerces_numpy_values() -> None:

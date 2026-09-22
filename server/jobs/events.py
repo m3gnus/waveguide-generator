@@ -120,10 +120,14 @@ class JobsProtocol:
                     receive_task = asyncio.create_task(transport.receive())
                 if event_task in done:
                     event = event_task.result()
-                    # Ephemeral kinds carry no cursor: a result delta, and a CAD
-                    # operation's new state (stored before it is published; a
-                    # reconnecting client reads GET /api/cadlink/operations).
-                    if event.get("kind") in {"partialResult", "cadOperation"}:
+                    # Ephemeral kinds carry no cursor: result deltas and CAD
+                    # notifications. Durable operation state is stored before
+                    # publication; viewport readiness has a slow HTTP fallback.
+                    if event.get("kind") in {
+                        "partialResult",
+                        "cadOperation",
+                        "cadViewportReady",
+                    }:
                         message = dict(event)
                         message["epoch"] = self.epoch
                         await transport.send_json(message)

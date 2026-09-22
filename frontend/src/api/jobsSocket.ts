@@ -710,6 +710,7 @@ export class JobsSocketManager {
   }>();
   private readonly listeners = new Set<() => void>();
   private readonly cadOperationListeners = new Set<CadOperationListener>();
+  private readonly cadViewportReadyListeners = new Set<(ingestId: string) => void>();
   private snapshot: JobsSnapshot = {
     connection: 'idle', epoch: null, cursor: null, jobs: [], error: null,
   };
@@ -730,6 +731,11 @@ export class JobsSocketManager {
   subscribeCadOperations = (listener: CadOperationListener): (() => void) => {
     this.cadOperationListeners.add(listener);
     return () => this.cadOperationListeners.delete(listener);
+  };
+
+  subscribeCadViewportReady = (listener: (ingestId: string) => void): (() => void) => {
+    this.cadViewportReadyListeners.add(listener);
+    return () => this.cadViewportReadyListeners.delete(listener);
   };
 
   start(): void {
@@ -980,6 +986,15 @@ export class JobsSocketManager {
     if (decoded.kind === 'cadAddinStatusChanged') {
       this.armHeartbeat();
       this.cadOperationListeners.forEach((listener) => listener.addinStatusChanged?.());
+      return;
+    }
+    if (decoded.kind === 'cadViewportReady') {
+      this.armHeartbeat();
+      if (typeof decoded.ingestId !== 'string' || decoded.ingestId.length === 0) {
+        this.update({ error: 'Invalid jobs cadViewportReady message' });
+        return;
+      }
+      this.cadViewportReadyListeners.forEach((listener) => listener(decoded.ingestId as string));
       return;
     }
     // Additive message kinds are ignored until this client understands them.

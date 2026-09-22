@@ -509,6 +509,26 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('hands viewport readiness to its listener without changing the jobs cursor', () => {
+    const sockets: MockSocket[] = [];
+    const manager = new JobsSocketManager(() => {
+      const socket = new MockSocket();
+      sockets.push(socket);
+      return socket;
+    }, vi.fn(), 'ws://test/ws/jobs');
+    const ready: string[] = [];
+    const unsubscribe = manager.subscribeCadViewportReady((ingestId) => ready.push(ingestId));
+    manager.start();
+    sockets[0].message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    sockets[0].message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 27, jobs: [] });
+    sockets[0].message({ v: 1, kind: 'cadViewportReady', epoch: 4, ingestId: 'wgi_1' });
+
+    expect(ready).toEqual(['wgi_1']);
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 27, jobs: [], error: null });
+    unsubscribe();
+    manager.stop();
+  });
+
   it('recovers a cursor gap by requesting replay without relying on an unsolicited snapshot', async () => {
     const socket = new MockSocket();
     const fetcher = vi.fn(async () => json(job({ status: 'running' })));

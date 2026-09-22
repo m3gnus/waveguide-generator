@@ -16,11 +16,10 @@ import {
 type Loaded = { preview: Extract<SolverFramePreview, { linked: false }>; mesh: ParsedMSH };
 
 async function loadModel(ingestId: string, fetcher: typeof fetch): Promise<ParsedMSH> {
-  // The display tessellation when it exists; the solve mesh is the same model.
-  for (const artifact of ['viewport-mesh', 'mesh']) {
-    const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/${artifact}`);
-    if (response.ok && response.status !== 202) return parseMSH(await response.text());
-  }
+  // This thumbnail draws every triangle twice on a 220×150 canvas. The exact
+  // solve mesh is already available and preserves the same source tags.
+  const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
+  if (response.ok) return parseMSH(await response.text());
   throw new Error('the prepared model’s mesh is not available to preview');
 }
 

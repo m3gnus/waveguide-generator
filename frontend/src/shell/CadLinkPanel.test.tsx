@@ -827,6 +827,11 @@ describe('CadLinkPanel', () => {
   it('shows the solve mesh at once when the display tessellation is still building, then swaps it in', async () => {
     const requests: string[] = [];
     let displayReady = false;
+    let viewportReady: (ingestId: string) => void = () => undefined;
+    vi.spyOn(jobsSocket, 'subscribeCadViewportReady').mockImplementation((listener) => {
+      viewportReady = listener;
+      return () => undefined;
+    });
     const fetcher = (async (input: RequestInfo | URL) => {
       const path = String(input);
       requests.push(path);
@@ -852,6 +857,7 @@ describe('CadLinkPanel', () => {
     ]);
 
     displayReady = true;
+    viewportReady(record.ingest_id);
     await vi.waitFor(() => {
       expect(importedMeshStore.getSnapshot().cad?.artifactToken).toBe(`${record.ingest_id}:viewport`);
     }, { timeout: 4_000 });

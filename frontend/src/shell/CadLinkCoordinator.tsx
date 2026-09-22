@@ -8,7 +8,7 @@ import {
   type CadReturnIngestRecord,
   type FusionCadStatus,
 } from '../api/cadlink';
-import type { JobItem } from '../api/jobsSocket';
+import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import {
   cancelCadOperation,
   prepareCadOperation,
@@ -326,15 +326,11 @@ function cadDisplayScene(record: CadReturnIngestRecord, name: string, meshText: 
   );
 }
 
-/** Delays before each re-check of a deferred display tessellation. The first
- * is short because the artifact is occasionally already on disk; the rest back
- * off to the order of a real tessellation, which takes several seconds. */
-const DISPLAY_UPGRADE_DELAYS_MS = [250, 500, 1_000, 1_500, 2_000, 2_000, 3_000, 3_000, 3_000, 3_000, 3_000, 3_000];
+/** Slow recovery checks if the websocket notification was missed during a
+ * disconnect. Normal pickup is event-driven. */
+const DISPLAY_UPGRADE_FALLBACK_DELAYS_MS = [10_000, 20_000, 30_000, 60_000];
 
 const displayUpgradesInFlight = new Set<string>();
-
-const wait = (ms: number): Promise<void> =>
-  new Promise((resolve) => { window.setTimeout(resolve, ms); });
 
 /** Swap the smooth display tessellation in behind an already-visible solve mesh.
  *
@@ -365,9 +361,31 @@ function upgradeToDisplayMesh(
   if (displayUpgradesInFlight.has(ingestId)) return;
   displayUpgradesInFlight.add(ingestId);
   void (async () => {
+    let signalled = false;
+    let wake: (() => void) | null = null;
+    const unsubscribe = jobsSocket.subscribeCadViewportReady((readyIngestId) => {
+      if (readyIngestId !== ingestId) return;
+      signalled = true;
+      wake?.();
+    });
     try {
-      for (const delay of DISPLAY_UPGRADE_DELAYS_MS) {
-        await wait(delay);
+      for (const delay of DISPLAY_UPGRADE_FALLBACK_DELAYS_MS) {
+        if (signalled) {
+          signalled = false;
+        } else {
+          await new Promise<void>((resolve) => {
+            const timer = window.setTimeout(() => {
+              wake = null;
+              resolve();
+            }, delay);
+            wake = () => {
+              window.clearTimeout(timer);
+              resolve();
+            };
+          });
+          wake = null;
+          signalled = false;
+        }
         if (importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) return;
         let result: FetchedMesh;
         try {
@@ -394,6 +412,7 @@ function upgradeToDisplayMesh(
         return;
       }
     } finally {
+      unsubscribe();
       displayUpgradesInFlight.delete(ingestId);
     }
   })();
