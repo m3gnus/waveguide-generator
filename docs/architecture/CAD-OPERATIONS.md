@@ -402,14 +402,16 @@ preselects it, so confirming it is normally one press of Solve.
   findings and approvals, an unconfirmed frame waits as `frame_confirmation_required`;
   the preparation it made is the preview's geometry. Confirming `+z` resumes that
   preparation; any other axis makes a new one, and approvals never carry to it. A
+  preparation is resumed only in the same complete frame -- contract, forward axis,
+  resolved up and its provenance, stated document up, export frame and transform
+  (`resolution_identity` against `record_frame_identity`) -- never on the forward axis
+  alone; the mesh cache key holds the same transform. A
   prepare request may name `frameAxis`, the axis WG showed when Solve was pressed: an
   unlinked snapshot is then solved only along it, and a confirmation changed elsewhere
   in the meantime stops at `frame_confirmation_required`, saying so, instead of changing
   the axis solved. The operation keeps that axis (`cad_operations.frame_axis`): every
   later attempt -- an automatic continuation after the update restart, a retry that
-  names none -- is held to it, and only a prepare naming another axis replaces it. A
-  preparation is resumed only in the frame, and under the contract, this attempt would
-  mesh in. `+z` is never written into the ingest options, so no mesh cached before
+  names none -- is held to it, and only a prepare naming another axis replaces it. `+z` is never written into the ingest options, so no mesh cached before
   this contract is made again.
 - **Axial drive.** An `axial` channel is driven along the record's observation axis,
   solver +Z, which is the chosen CAD forward direction; a source facing back along it is

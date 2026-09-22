@@ -82,8 +82,10 @@ from .solver_frame import (
     CONTRACT as FRAME_CONTRACT,
     REASON as FRAME_CONFIRMATION_REQUIRED,
     ensure_frame_suggestion,
+    record_frame_identity,
     record_frame_refusal,
     record_is_unlinked,
+    resolution_identity,
     resolve_for_manifest as resolve_solver_frame,
 )
 from .solve_command import (
@@ -771,13 +773,15 @@ def _resumable(
     revision_id: str,
     manifest_sha256: str,
     semantics: str,
-    frame_axis: str | None = None,
+    frame: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """The operation's last preparation, when this attempt would make the same one.
 
     The same snapshot, setup revision and meshing semantics: the attempt
     resumes it instead of preparing anew, so the approvals given on it apply.
-    For an unlinked snapshot (``frame_axis`` given) also the same solver frame:
+    For an unlinked snapshot (``frame`` given, ``resolution_identity``) also the
+    same complete solver frame -- contract, forward axis, resolved up and its
+    provenance, export frame and transform, not the forward axis alone:
     a preparation meshed in another frame, or one that states none, is made
     again rather than solved in a frame nobody confirmed.
     """
@@ -797,16 +801,10 @@ def _resumable(
     if ingest is None:
         return None
     record = json.loads(ingest["record_json"])
-    if frame_axis is not None:
-        normalisation = record.get("normalisation")
-        frame = normalisation.get("solver_frame") if isinstance(normalisation, Mapping) else None
-        if (
-            not isinstance(frame, Mapping)
-            or frame.get("axis") != frame_axis
-            # A record prepared under an earlier frame contract keeps its own
-            # meaning, but a new attempt meshes under the current one.
-            or frame.get("contract") != FRAME_CONTRACT
-        ):
+    if frame is not None:
+        # A record prepared under an earlier frame contract, or with another
+        # roll, keeps its own meaning; a new attempt meshes in this frame.
+        if frame.get("contract") != FRAME_CONTRACT or record_frame_identity(record) != dict(frame):
             return None
     return record
 
@@ -975,8 +973,9 @@ def _prepare_sync(
         )
     solver_frame = resolve_solver_frame(store, retained_manifest, manifest_sha256)
     frame_axis = solver_frame.axis if solver_frame is not None else None
+    frame_identity = resolution_identity(solver_frame) if solver_frame is not None else None
 
-    record = _resumable(store, row, revision_id, manifest_sha256, semantics, frame_axis)
+    record = _resumable(store, row, revision_id, manifest_sha256, semantics, frame_identity)
     if record is None:
         # preparing-mesh: from the retained copy, under the attempt's fence.
         _advance(ctx, operation_id, generation, stage=STAGE_PREPARING_MESH)

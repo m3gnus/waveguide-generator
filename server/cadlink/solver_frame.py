@@ -441,6 +441,44 @@ def _frame_for_axis(frame: Mapping[str, Any], axis: str) -> dict[str, Any]:
     }
 
 
+def resolution_identity(resolution: FrameResolution) -> dict[str, Any]:
+    """The complete frame a preparation of this snapshot would mesh in.
+
+    Everything that fixes the transform: the contract, the forward axis, the
+    resolved up and where it came from, the stated document up, the export
+    frame, and the matrix itself. Compared with :func:`record_frame_identity`.
+    """
+
+    spec = resolution.spec
+    return {
+        "contract": spec["contract"],
+        "axis": spec["axis"],
+        "up": spec["up"],
+        "up_source": spec["up_source"],
+        "document_up": spec["document_up"],
+        "export_frame": resolution.requirement.get("export_frame"),
+        "matrix": spec_matrix(spec).tolist(),
+    }
+
+
+def record_frame_identity(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The complete frame an unlinked record states it was meshed in, or None."""
+
+    frame = _record_frame(record)
+    if frame is None:
+        return None
+    requirement = frame.get("requirement")
+    return {
+        "contract": frame.get("contract"),
+        "axis": frame.get("axis"),
+        "up": frame.get("up"),
+        "up_source": frame.get("up_source"),
+        "document_up": frame.get("document_up"),
+        "export_frame": requirement.get("export_frame") if isinstance(requirement, Mapping) else None,
+        "matrix": frame.get("matrix"),
+    }
+
+
 def record_confirmation_key(record: Mapping[str, Any]) -> str:
     project = record.get("project")
     lineage = project.get("lineage_id") if isinstance(project, Mapping) else None
@@ -752,9 +790,11 @@ __all__ = [
     "frame_spec",
     "is_unlinked_manifest",
     "record_confirmation_key",
+    "record_frame_identity",
     "record_frame_refusal",
     "record_is_unlinked",
     "record_solver_frame",
+    "resolution_identity",
     "resolve_for_manifest",
     "resolve_up",
     "spec_axis",

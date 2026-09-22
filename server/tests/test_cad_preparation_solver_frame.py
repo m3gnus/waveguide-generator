@@ -316,6 +316,102 @@ def test_a_request_no_one_named_an_axis_for_is_held_to_none(real) -> None:
     assert harness.store.get_operation("cmd-1")["frame_axis"] is None
 
 
+def _stated(document_up: str | None) -> dict[str, Any]:
+    manifest: dict[str, Any] = {
+        "instances": [], "assembly": {}, "coordinate_system": {"export_frame": "root-component"},
+        "required_features": [],
+    }
+    if document_up is not None:
+        manifest["required_features"].append("document-up-v1")
+        manifest["coordinate_system"]["document_up"] = document_up
+    return manifest
+
+
+class _PreparedStore:
+    """The two reads ``_resumable`` makes, answering one prepared record."""
+
+    def __init__(self, record: dict[str, Any]) -> None:
+        self.record = record
+
+    def get_preparation(self, _preparation_id: str) -> dict[str, Any]:
+        return {
+            "setup_revision_id": "wgs_1", "snapshot_sha256": "sha256:s",
+            "meshing_semantics": "semantics", "ingest_id": "wgi_1",
+        }
+
+    def get_ingest(self, _ingest_id: str) -> dict[str, Any]:
+        return {"record_json": json.dumps(self.record)}
+
+
+def test_a_preparation_resumes_only_in_the_same_complete_frame_not_the_same_axis() -> None:
+    """Two preparations along +x with a different resolved up are different
+    frames (contract v2 fixes the roll): neither resumes the other."""
+
+    from server.cadlink.solver_frame import FrameResolution, record_solver_frame, frame_spec
+
+    def resolution(document_up: str | None) -> FrameResolution:
+        return FrameResolution(
+            key="lineage:wgl",
+            requirement={"contract": CONTRACT, "export_frame": "root-component", "document_up": document_up},
+            allowed_axes=("+z", "-z", "+x", "-x", "+y", "-y"), confirmed_axis="+x", document_up=document_up,
+        )
+
+    def record(document_up: str | None) -> dict[str, Any]:
+        manifest = _stated(document_up)
+        frame = record_solver_frame(manifest, frame_spec("+x", manifest))
+        return {
+            "anchor": {"instance_id": None},
+            "normalisation": {"anchor_instance_id": None, "matrix": frame["matrix"], "solver_frame": frame},
+        }
+
+    row = {"preparation_id": "wgp_1"}
+    z_up, y_up = record(None), record("+y")
+    assert z_up["normalisation"]["solver_frame"]["up"] == "+z"
+    assert y_up["normalisation"]["solver_frame"]["up"] == "+y"
+    same = preparation.resolution_identity(resolution(None))
+    other = preparation.resolution_identity(resolution("+y"))
+    assert same["axis"] == other["axis"] == "+x" and same != other
+    resume = preparation._resumable
+    # The same complete frame resumes (the control)...
+    assert resume(_PreparedStore(z_up), row, "wgs_1", "sha256:s", "semantics", same) == z_up
+    assert resume(_PreparedStore(y_up), row, "wgs_1", "sha256:s", "semantics", other) == y_up
+    # ...the same forward axis with another up does not, either way round.
+    assert resume(_PreparedStore(z_up), row, "wgs_1", "sha256:s", "semantics", other) is None
+    assert resume(_PreparedStore(y_up), row, "wgs_1", "sha256:s", "semantics", same) is None
+    # Nor does a record whose stated transform is not its frame's.
+    tampered = copy.deepcopy(z_up)
+    tampered["normalisation"]["solver_frame"]["matrix"][0][0] = 0.5
+    assert resume(_PreparedStore(tampered), row, "wgs_1", "sha256:s", "semantics", same) is None
+
+
+def test_the_mesh_cache_key_holds_the_complete_frame_transform() -> None:
+    """Same snapshot, same forward axis, another up: another mesh."""
+
+    from types import SimpleNamespace
+
+    from server.cadlink.solver_frame import frame_spec
+
+    bundle = SimpleNamespace(artifact_sha256="sha256:a", manifest_sha256="sha256:m")
+    manifest = {"instances": [], "coordinate_system": {}, "sources": []}
+
+    def key(document_up: str | None) -> str:
+        spec = frame_spec("+x", _stated(document_up))
+        return ingest_module._cache_key(bundle, manifest, {}, [], {"solver_frame": spec}, "sha256:g")
+
+    assert key(None) == key(None)
+    assert key(None) != key("+y")
+    # The transform itself is in the key, not only the options that name it:
+    # the same options with the matrix they mean changed is another key.
+    spec = frame_spec("+x", _stated(None))
+    real = ingest_module.spec_matrix
+    try:
+        ingest_module.spec_matrix = lambda value: real(frame_spec("+x", _stated("+y")))
+        swapped = ingest_module._cache_key(bundle, manifest, {}, [], {"solver_frame": spec}, "sha256:g")
+    finally:
+        ingest_module.spec_matrix = real
+    assert swapped != key(None)
+
+
 def test_the_prepare_route_takes_only_a_known_frame_axis() -> None:
     from pydantic import ValidationError
 
