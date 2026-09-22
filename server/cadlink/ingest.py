@@ -370,10 +370,16 @@ def instance_identity_inventory(
     }
 
 
+#: Bodies left out on purpose -- hidden, or excluded with Declare Body -- are
+#: information, never a blocking finding, whatever severity an older add-in
+#: states. One carrying a painted source is refused by the add-in itself.
+_DELIBERATE_SKIPS = frozenset({"hidden_body", "excluded_body"})
+
+
 def _scope_findings(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     findings = []
     for index, skip in enumerate(manifest["scope"]["skipped"]):
-        if skip.get("severity") != "degraded" or skip.get("kind") == "hidden_body":
+        if skip.get("severity") != "degraded" or skip.get("kind") in _DELIBERATE_SKIPS:
             continue
         identity = {
             "index": index,

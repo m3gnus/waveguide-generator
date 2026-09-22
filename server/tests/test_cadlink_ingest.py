@@ -158,11 +158,22 @@ def test_freshness_null_design_hash_is_unknown_when_no_later_row_matches() -> No
     assert result["verdict"] == "unknown"
 
 
-def test_a_degraded_hidden_body_stays_in_scope_without_becoming_a_finding() -> None:
+@pytest.mark.parametrize(
+    ("kind", "reason"),
+    [
+        ("hidden_body", "hidden bodies are excluded by policy"),
+        # Declare Body... -> exclude: the user's own choice, recorded as info by
+        # the add-in; an older add-in may still state it as degraded.
+        ("excluded_body", "excluded by the user"),
+    ],
+)
+def test_a_degraded_hidden_or_excluded_body_stays_in_scope_without_becoming_a_finding(
+    kind: str, reason: str
+) -> None:
     skipped = {
-        "kind": "hidden_body",
-        "object_id": "hidden-1",
-        "reason": "hidden bodies are excluded by policy",
+        "kind": kind,
+        "object_id": "body-1",
+        "reason": reason,
         "severity": "degraded",
     }
     manifest = {"scope": {"skipped": [skipped]}}
