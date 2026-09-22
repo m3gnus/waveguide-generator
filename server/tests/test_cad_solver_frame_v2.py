@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from server.cadlink.frame_infer import ALGORITHM_VERSION
 from server.cadlink.solver_frame import (
     AS_MODELLED,
     AXES,
@@ -28,6 +29,7 @@ from server.cadlink.solver_frame import (
     frame_spec,
     record_frame_refusal,
     record_solver_frame,
+    resolve_for_manifest,
     resolve_up,
     spec_matrix,
 )
@@ -206,6 +208,93 @@ def test_a_historical_record_keeps_its_contract(tmp_path: Path) -> None:
     assert record_frame_refusal(store, new) is None
     assert old["normalisation"]["solver_frame"]["contract"] == CONTRACT_V1
     assert record_frame_refusal(store, old) is not None
+
+
+# -- a v1 confirmation carries forward (existing projects are not asked again) --
+
+
+def _v1_confirmed(store: CadLinkStore, axis: str = "+x") -> dict:
+    """The project confirmed ``axis`` on a record prepared under contract v1."""
+
+    return confirm_frame(store, _record(_manifest(), axis, contract=CONTRACT_V1, sha="0"), axis)
+
+
+def test_a_v1_confirmation_is_preselected_for_a_v2_preparation(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    _v1_confirmed(store, "+x")
+    new = _record(_manifest("+z"), "+x", sha="d")
+    preview = frame_preview(store, new)
+    # Not asked again: the project's own v1 choice is what Solve confirms...
+    assert preview["preselected"] == {"axis": "+x", "source": "carried"}
+    # ...but it is not a v2 confirmation, and nothing is solved until Solve
+    # confirms it under v2.
+    assert preview["confirmed"] is None
+    assert record_frame_refusal(store, new) is not None
+    row = confirm_frame(store, new, "+x")
+    assert row["requirement"] == frame_requirement(_manifest("+z"))
+    assert row["frame"]["contract"] == CONTRACT_V2
+    assert record_frame_refusal(store, new) is None
+    assert frame_preview(store, new)["preselected"] == {"axis": "+x", "source": "confirmed"}
+
+
+def test_a_v2_preparation_meshes_in_the_carried_axis(tmp_path: Path, monkeypatch) -> None:
+    import server.cadlink.project_setup as project_setup
+
+    monkeypatch.setattr(project_setup, "snapshot_project", lambda _store, _manifest: "wgl_project")
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    manifest = _manifest()
+    resolved = resolve_for_manifest(store, manifest, "sha256:" + "d" * 64)
+    assert resolved is not None and resolved.axis == AS_MODELLED and resolved.carried_axis is None
+    _v1_confirmed(store, "-y")
+    resolved = resolve_for_manifest(store, manifest, "sha256:" + "d" * 64)
+    assert resolved is not None
+    # Meshed along the carried axis, so Solve's confirmation resumes it...
+    assert resolved.axis == "-y"
+    assert resolved.spec["contract"] == CONTRACT_V2 and resolved.spec["axis"] == "-y"
+    # ...never taken as confirmed.
+    assert resolved.confirmed is False and resolved.confirmed_axis is None
+    # A declared half allows only +z: nothing carried forward is meshed in.
+    half = _manifest(domain={"kind": "half", "cut_planes": ["x0"]})
+    held = resolve_for_manifest(store, half, "sha256:" + "e" * 64)
+    assert held is not None and held.axis == AS_MODELLED
+
+
+def test_only_a_v1_confirmation_of_the_same_export_frame_carries(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    _v1_confirmed(store, "+x")
+    other = _manifest()
+    other["coordinate_system"]["export_frame"] = "component:Body"
+    moved = _record(other, "+z", sha="e")
+    preview = frame_preview(store, moved)
+    assert preview["preselected"] is None or preview["preselected"]["source"] != "carried"
+    # A declared half cannot take the carried +x.
+    half = _record(_manifest(domain={"kind": "half", "cut_planes": ["x0"]}), AS_MODELLED, sha="f")
+    assert frame_preview(store, half)["preselected"] is None
+
+
+def test_a_suggestion_that_disagrees_with_the_carried_axis_is_only_a_notice(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    _v1_confirmed(store, "+x")
+    new = _record(_manifest(), "+x", sha="d")
+    store.record_frame_suggestion(
+        new["manifest_sha256"], ALGORITHM_VERSION,
+        {"status": "automatic", "axis": "-y", "confidence": 0.8, "reason": "Radiates along -y",
+         "algorithm": ALGORITHM_VERSION, "snapshotSha256": new["manifest_sha256"]},
+        new["ingest_id"],
+    )
+    preview = frame_preview(store, new)
+    assert preview["preselected"] == {"axis": "+x", "source": "carried"}
+    assert preview["differs"]["confirmedAxis"] == "+x"
+    assert preview["differs"]["suggestedAxis"] == "-y"
+    # The same suggestion with nothing carried is preselected (the control).
+    fresh = CadLinkStore(tmp_path / "fresh.db")
+    fresh.record_frame_suggestion(
+        new["manifest_sha256"], ALGORITHM_VERSION,
+        {"status": "automatic", "axis": "-y", "confidence": 0.8, "reason": "Radiates along -y",
+         "algorithm": ALGORITHM_VERSION, "snapshotSha256": new["manifest_sha256"]},
+        new["ingest_id"],
+    )
+    assert frame_preview(fresh, new)["preselected"] == {"axis": "-y", "source": "suggested"}
 
 
 def test_the_preview_states_the_record_frame_and_each_axis_up(tmp_path: Path) -> None:

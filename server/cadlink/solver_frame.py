@@ -23,7 +23,10 @@ Two contracts exist. Both name the forward ``axis``, one of
 - ``cad-solver-frame-v1`` (historical) turned each axis by the minimal
   rotation, keeping the perpendicular axis the two frames share. Records and
   confirmations made under it keep that meaning: they still resolve and solve
-  as they were prepared. New preparations are v2.
+  as they were prepared. New preparations are v2. A v1 confirmation is carried
+  forward (:func:`carried_axis`): a v2 preparation meshes in and preselects
+  its axis, and Solve confirms it under v2, so an existing project is not
+  asked again.
 
 :func:`spec_matrix` is the only producer of these matrices. Mesh preparation,
 the ingestion record, the mesh cache key, the preview and the confirmation all
@@ -268,6 +271,9 @@ class FrameResolution:
     confirmed_axis: str | None
     #: The manifest's stated document up (None when it states none).
     document_up: str | None = None
+    #: The axis the project confirmed under contract v1 (``carried_axis``):
+    #: preselected and meshed in, never taken as confirmed.
+    carried_axis: str | None = None
 
     @property
     def confirmed(self) -> bool:
@@ -275,9 +281,19 @@ class FrameResolution:
 
     @property
     def axis(self) -> str:
-        """The frame a preparation meshes in: the confirmed one, else as modelled."""
+        """The frame a preparation meshes in: the confirmed one, else a v1
+        confirmation carried forward, else as modelled.
 
-        return self.confirmed_axis if self.confirmed else AS_MODELLED  # type: ignore[return-value]
+        Meshing in the carried axis is what lets Solve confirm it under the
+        current contract without preparing the model again; the solve still
+        waits for that confirmation (``record_frame_refusal``).
+        """
+
+        if self.confirmed:
+            return self.confirmed_axis  # type: ignore[return-value]
+        if self.carried_axis is not None and self.carried_axis in self.allowed_axes:
+            return self.carried_axis
+        return AS_MODELLED
 
     @property
     def spec(self) -> dict[str, Any]:
@@ -303,6 +319,33 @@ def _confirmed_axis(
     return axis if axis in _ROTATIONS else None
 
 
+def carried_axis(
+    row: Mapping[str, Any] | None, requirement: Mapping[str, Any] | None
+) -> str | None:
+    """A project's contract-v1 confirmation, carried forward to a v2 requirement.
+
+    Contract v2 changed only the roll: the forward axis a user confirmed under
+    v1 still names the same CAD direction. So an existing CAD project is not
+    asked again. Its v1 axis is preselected for a v2 preparation, which Solve
+    then confirms under v2, and it is never taken as confirmed until then.
+    Only for the same ``export_frame``: a snapshot written in another
+    component's coordinates is a different frame under every contract.
+    """
+
+    if row is None or not isinstance(requirement, Mapping):
+        return None
+    held = row.get("requirement")
+    if (
+        not isinstance(held, Mapping)
+        or held.get("contract") != CONTRACT_V1
+        or requirement.get("contract") != CONTRACT_V2
+        or held.get("export_frame") != requirement.get("export_frame")
+    ):
+        return None
+    axis = row.get("axis")
+    return axis if axis in _ROTATIONS else None
+
+
 def resolve_for_manifest(
     store: CadLinkStore, manifest: Mapping[str, Any], manifest_sha256: str
 ) -> FrameResolution | None:
@@ -320,6 +363,7 @@ def resolve_for_manifest(
         allowed_axes=allowed_axes(manifest),
         confirmed_axis=_confirmed_axis(store, key, requirement),
         document_up=document_up(manifest),
+        carried_axis=carried_axis(store.get_frame_confirmation(key), requirement),
     )
 
 
@@ -584,8 +628,9 @@ def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, A
     """Every axis's matrix, relative to the frame this record's geometry is shown in.
 
     Also the automatic suggestion for the snapshot, which axis is preselected
-    and why -- a matching confirmed frame first, then an automatic suggestion
-    the snapshot allows, else none -- and, when the suggestion clearly
+    and why -- a matching confirmed frame first, then a v1 confirmation
+    carried forward, then an automatic suggestion the snapshot allows, else
+    none -- and, when the suggestion clearly
     disagrees with the confirmed frame, a notice that never changes it.
     """
 
@@ -642,8 +687,14 @@ def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, A
     if frame is not None and suggestion is None:
         suggestion = ensure_frame_suggestion(store, record)
     confirmed_axis = confirmed["axis"] if confirmed is not None else None
+    carried = carried_axis(row, requirement) if confirmed is None else None
     if confirmed_axis is not None and confirmed_axis in allowed:
         preselected = {"axis": confirmed_axis, "source": "confirmed"}
+    elif carried is not None and carried in allowed:
+        # Confirmed under contract v1: the project's own choice, preselected
+        # ahead of any suggestion, and confirmed under v2 by Solve.
+        preselected = {"axis": carried, "source": "carried"}
+        confirmed_axis = carried
     elif (
         suggestion is not None
         and suggestion.get("status") == "automatic"
@@ -690,6 +741,7 @@ __all__ = [
     "FrameResolution",
     "REASON",
     "allowed_axes",
+    "carried_axis",
     "confirm_frame",
     "confirmation_key",
     "document_up",

@@ -348,7 +348,10 @@ preselects it, so confirming it is normally one press of Solve.
   - **`cad-solver-frame-v1`** turned each axis by the minimal rotation, keeping the
     perpendicular axis the two frames share. Records and confirmations made under it keep
     that meaning: a v1 record still resolves, previews and solves as v1 while its v1
-    confirmation stands. The frontend fixture
+    confirmation stands. A project confirmed under v1 is not asked again: for the same
+    `export_frame`, its v1 axis is carried forward to a v2 preparation, which is meshed
+    in it and preselects it (`source: "carried"`), and Solve confirms it under v2. It is
+    never taken as confirmed before that. The frontend fixture
     (`frontend/src/viewport/solverFrame.fixture.json`) pins the v1 matrices; the frontend
     applies whatever matrices the server hands it.
   - `spec_matrix` is the only producer of these matrices: preparation meshes with it,
@@ -388,11 +391,12 @@ preselects it, so confirming it is normally one press of Solve.
     It is cached in `cad_frame_suggestions` by snapshot and algorithm version; a survey
     that could not run is not cached.
   - It preselects; it never confirms. **Precedence:** a confirmed frame whose identity
-    matches, then an automatic suggestion the snapshot allows, else nothing. When a
+    matches, then a v1 confirmation carried forward, then an automatic suggestion the
+    snapshot allows, else nothing. When a
     snapshot's automatic suggestion disagrees with the confirmed frame, the preview
     carries a non-blocking notice and the confirmed frame still holds.
-- **Preparation.** An unlinked snapshot is meshed in its project's confirmed frame, or
-  as modelled (`+z`) until one is, and its record states the frame
+- **Preparation.** An unlinked snapshot is meshed in its project's confirmed frame (or
+  the axis a v1 confirmation carries forward), or as modelled (`+z`) until one is, and its record states the frame
   (`normalisation.solver_frame`: contract, axis, up, up source, stated document up,
   requirement, allowed axes, matrix). Right after the preparation is recorded, and before
   findings and approvals, an unconfirmed frame waits as `frame_confirmation_required`;
@@ -423,7 +427,7 @@ preselects it, so confirming it is normally one press of Solve.
   requirement, the project's confirmation (with its recorded frame), the snapshot's
   `suggestion` (`status` `automatic`/`ask`/`unavailable`, `axis`, `confidence`,
   `reason`, `reasonCode`, `algorithm`, per-evidence scores), `preselected`
-  (`{axis, source: "confirmed" | "suggested"}` or null) and `differs` (the non-blocking
+  (`{axis, source: "confirmed" | "carried" | "suggested"}` or null) and `differs` (the non-blocking
   notice, or null). It computes the suggestion if the import's survey has not finished.
   `PUT /api/cadlink/solver-frame` `{operationId | ingestId, axis}` confirms it (422 for a
   linked snapshot or an axis the snapshot does not allow). Confirming prepares nothing,
