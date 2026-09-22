@@ -460,6 +460,42 @@ export function SolverFrameSection({ record, fetcher = fetch, onConfirmedAxis }:
   </div>;
 }
 
+/** What a finding that blocks nothing tells the user, in words. */
+const NOTE_TITLE: Record<string, string> = {
+  'stale-detection-unavailable': 'WG cannot tell whether this model is out of date',
+  'declared-reduced-domain': 'Solved as the reduced model the CAD author declared',
+};
+
+/** Non-blocking findings that only record what was done, as asked. Any other
+ * non-blocking finding limits confidence in the result, so the checks open
+ * on it rather than leave it one click away. */
+const RECORD_ONLY: ReadonlySet<string> = new Set(['declared-reduced-domain']);
+
+/** Whether a finding that blocks nothing is still worth a line: every one is,
+ * because it can limit confidence in the result (WG cannot say whether the
+ * model is stale, say). The one exception is the unlinked freshness line of a
+ * Fusion-first model: no WG design exists to be stale against, which is what
+ * such a model is, not news about it. */
+function isNote(finding: CadReturnFinding): boolean {
+  if (finding.blocking) return false;
+  return !(finding.kind === 'freshness' && finding.verdict === 'unlinked');
+}
+
+/** The findings that block nothing: what limits confidence in the result, in
+ * words and never by id, under the checks. Blocking findings are listed where
+ * they are approved. */
+function NoteRows({ record }: { record: CadReturnIngestRecord }) {
+  const notes = record.findings.filter(isNote);
+  if (notes.length === 0) return null;
+  return <div className="cad-check-notes">
+    {notes.map((finding) => <div key={finding.id} className="cad-check cad-check-info">
+      <span className="cad-check-glyph" aria-hidden="true">i</span>
+      <b>{NOTE_TITLE[finding.kind] ?? finding.kind.replaceAll('-', ' ')}</b>
+      <span className="cad-check-verdict">{findingDetail(finding)}</span>
+    </div>)}
+  </div>;
+}
+
 /** The check row that reports the same problem as a finding of this kind. */
 const FINDING_CHECK: Record<string, string> = {
   'scope-degradation': 'scope',
@@ -475,17 +511,22 @@ function ChecksSection({ record }: { record: CadReturnIngestRecord }) {
     && !warned.has(FINDING_CHECK[finding.kind] ?? '')).length;
   const problems = warned.size + unreported;
   const needsAttention = problems > 0;
-  const chip = needsAttention ? `${problems} need attention` : 'all passed';
+  const notes = record.findings.filter(isNote);
+  const limitsConfidence = notes.some((finding) => !RECORD_ONLY.has(finding.kind));
+  const chip = needsAttention
+    ? `${problems} need attention`
+    : notes.length > 0 ? `passed · ${pluralized(notes.length, 'note')}` : 'all passed';
   return <CadDrawer
     key={record.ingest_id}
     title={`Checks (${checks.length})`}
     chip={chip}
-    defaultOpen={needsAttention}
+    defaultOpen={needsAttention || limitsConfidence}
     warning={needsAttention}
     className="cad-checks"
   >
     {checks.map((check) => <CheckRow key={check.key} check={check}/>)}
     <FindingRows record={record}/>
+    <NoteRows record={record}/>
   </CadDrawer>;
 }
 

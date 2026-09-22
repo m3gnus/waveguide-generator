@@ -2361,6 +2361,72 @@ describe('CadLinkPanel', () => {
     expect(findings.querySelector('.cad-blocking-suffix')?.getAttribute('title')).toContain('approve');
   });
 
+  it('keeps a finding that limits confidence in view, in words, and drops only the unlinked line of a Fusion-first model', async () => {
+    const legacy = {
+      ...record,
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+      findings: [
+        {
+          id: 'finding-stale-7c1e', kind: 'stale-detection-unavailable', blocking: false,
+          reason: 'stale detection unavailable: this returned bundle predates wgreturn 1.1 and carries no document signature',
+        },
+        { id: 'unlinked-mode', kind: 'freshness', blocking: false, verdict: 'unlinked' },
+      ],
+    } as unknown as CadReturnIngestRecord;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json(legacy);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+
+    const checks = host.querySelector<HTMLElement>('.cad-checks')!;
+    // It limits confidence in the result, so the checks open on it, quietly.
+    expect(checks.querySelector('.cad-state-chip')?.textContent).toBe('passed · 1 note');
+    expect(checks.className).not.toContain('degraded');
+    const notes = checks.querySelector<HTMLElement>('.cad-check-notes');
+    expect(notes).not.toBeNull();
+    // WG cannot tell whether this model is stale: said in words, never by id.
+    expect(notes!.textContent).toContain('WG cannot tell whether this model is out of date');
+    expect(notes!.textContent).toContain('carries no document signature');
+    expect(checks.textContent).not.toContain('finding-stale-7c1e');
+    // Not a blocker: nothing to approve, and it is not counted as one.
+    expect(checks.querySelector('.cad-check-findings')).toBeNull();
+    expect(notes!.querySelector('.cad-blocking-suffix')).toBeNull();
+    // The unlinked freshness line of a Fusion-first model is the one dropped.
+    expect(notes!.textContent).not.toContain('unlinked');
+    expect(notes!.querySelectorAll('.cad-check')).toHaveLength(1);
+  });
+
+  it('keeps a note that only records what was asked for one click away', async () => {
+    // Positive control for the test above: a declared reduced model is not a
+    // limit on confidence, so its note does not open the checks.
+    const declared = {
+      ...record,
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+      findings: [{
+        id: 'finding-declared-1', kind: 'declared-reduced-domain', blocking: false,
+        detail: 'the return declares it was already cut on x0',
+      }],
+    } as unknown as CadReturnIngestRecord;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json(declared);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+
+    const checks = host.querySelector<HTMLElement>('.cad-checks')!;
+    expect(checks.querySelector('.cad-state-chip')?.textContent).toBe('passed · 1 note');
+    expect(checks.querySelector('.cad-check-notes')).toBeNull();
+    await act(async () => { checks.querySelector<HTMLButtonElement>('.section-head')!.click(); });
+    expect(checks.querySelector('.cad-check-notes')?.textContent).toContain('the return declares it was already cut on x0');
+  });
+
   it('warns about symmetry when a cut plane the CAD author declared does not mirror', async () => {
     // Positive control for the check above: a declared cut is a promise.
     const declared = {
