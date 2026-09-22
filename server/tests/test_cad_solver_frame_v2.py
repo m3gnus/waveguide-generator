@@ -169,6 +169,7 @@ def test_the_confirmation_records_the_whole_transform_and_its_up(tmp_path: Path)
         CONTRACT_V2, "+x", "+y", "document",
     )
     assert frame["matrix"] == spec_matrix(frame_spec("+x", manifest)).tolist()
+    assert frame["provenance"] == "chosen"
     assert record_frame_refusal(store, record) is None
 
 

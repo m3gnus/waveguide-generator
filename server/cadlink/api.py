@@ -101,6 +101,7 @@ from .preparation import (
 from .project_setup import SOLVER_SELECTION, inventory_sha256
 from .setup import setup_content, setup_digest, validate_setup
 from .roles import canonical_source_role
+from .solver_frame import ensure_frame_suggestion, record_is_unlinked
 from .store import CadLinkStore
 from .wgreturn import WgReturnError, declared_domain_planes
 
@@ -119,6 +120,8 @@ _RETURN_INVENTORY_CACHE_LOCK = threading.Lock()
 #: coming?" -- the artifact itself is content-addressed on disk, so a restart
 #: that empties this map costs one rebuild, never a wrong answer.
 _DEFERRED_VIEWPORTS: dict[str, asyncio.Task[Any]] = {}
+# Automatic solver-frame surveys in flight, by snapshot (``_schedule_frame_suggestion``).
+_FRAME_SUGGESTIONS: dict[str, asyncio.Task[Any]] = {}
 
 #: asyncio keeps only a weak reference to a running task, so a fire-and-forget
 #: task that nobody holds can be collected mid-flight. This is that holder.
@@ -231,6 +234,32 @@ def _schedule_deferred_viewport(record: Mapping[str, Any], data_dir: Path) -> No
             _DEFERRED_VIEWPORTS.pop(lookup_key, None)
 
     _DEFERRED_VIEWPORTS[lookup_key] = asyncio.create_task(build())
+
+
+def _schedule_frame_suggestion(store: CadLinkStore, record: Mapping[str, Any]) -> None:
+    """Survey an unlinked import for its solver frame without holding the response.
+
+    Part of the import command (M1e): the suggestion is cached per snapshot, so
+    the frame card reads it. The card's own read computes it if this has not
+    finished yet; the survey is deterministic, so doing both costs time only.
+    """
+
+    snapshot = str(record.get("manifest_sha256") or "")
+    if not snapshot or not record_is_unlinked(record) or snapshot in _FRAME_SUGGESTIONS:
+        return
+
+    async def survey() -> None:
+        try:
+            await asyncio.to_thread(ensure_frame_suggestion, store, record)
+        except Exception as exc:  # noqa: BLE001
+            # Advisory by construction: without it the card asks.
+            logger.warning(
+                "Solver frame survey failed for %s: %s", record.get("ingest_id"), exc
+            )
+        finally:
+            _FRAME_SUGGESTIONS.pop(snapshot, None)
+
+    _FRAME_SUGGESTIONS[snapshot] = asyncio.create_task(survey())
 
 
 def _parse_return_manifest(path: Path) -> Mapping[str, Any]:
@@ -1152,6 +1181,7 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
     except Exception as exc:
         raise _ingest_error(exc) from exc
     _schedule_deferred_viewport(record, data_dir)
+    _schedule_frame_suggestion(store, record)
     # Filing the captured document is the user's archive, not this response's
     # subject, and it copies tens of megabytes out of a possibly cloud-synced
     # folder. Answering first is what puts the geometry on screen sooner.

@@ -282,7 +282,19 @@ _SCHEMA = (
       confirmed_at TEXT NOT NULL
     )
     """,
-
+    # The automatic solver-frame suggestion (server/cadlink/frame_infer.py),
+    # one per snapshot and algorithm version: a new algorithm recomputes, and
+    # nothing here ever confirms a frame. Additive, like the table above.
+    """
+    CREATE TABLE IF NOT EXISTS cad_frame_suggestions (
+      snapshot_sha256 TEXT NOT NULL,
+      algorithm TEXT NOT NULL,
+      suggestion_json TEXT NOT NULL,
+      ingest_id TEXT NOT NULL,
+      computed_at TEXT NOT NULL,
+      PRIMARY KEY (snapshot_sha256, algorithm)
+    )
+    """,
 )
 # Columns later stages added to cad_operations: nullable (or defaulted), so a
 # row written before them -- by an earlier build, or by an older release, which
@@ -1503,6 +1515,45 @@ class CadLinkStore:
         self.initialize()
         row = self._read_one("SELECT * FROM cad_frame_confirmations WHERE key = ?", (key,))
         return _frame_confirmation(row) if row is not None else None
+
+    def record_frame_suggestion(
+        self,
+        snapshot_sha256: str,
+        algorithm: str,
+        suggestion: Mapping[str, Any],
+        ingest_id: str,
+    ) -> dict[str, Any]:
+        """Cache a snapshot's automatic frame suggestion; the first one stays.
+
+        The survey is deterministic for a snapshot, so a second computation
+        (two commands racing) is the same answer and is not written.
+        """
+
+        if not snapshot_sha256 or not algorithm:
+            raise ValueError("a frame suggestion names its snapshot and algorithm")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO cad_frame_suggestions "
+                "(snapshot_sha256, algorithm, suggestion_json, ingest_id, computed_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (snapshot_sha256, algorithm, canonical_json(dict(suggestion)), ingest_id, utc_now()),
+            )
+            row = conn.execute(
+                "SELECT suggestion_json FROM cad_frame_suggestions "
+                "WHERE snapshot_sha256 = ? AND algorithm = ?",
+                (snapshot_sha256, algorithm),
+            ).fetchone()
+        return json.loads(row["suggestion_json"])
+
+    def get_frame_suggestion(self, snapshot_sha256: str, algorithm: str) -> dict[str, Any] | None:
+        self.initialize()
+        row = self._read_one(
+            "SELECT suggestion_json FROM cad_frame_suggestions "
+            "WHERE snapshot_sha256 = ? AND algorithm = ?",
+            (snapshot_sha256, algorithm),
+        )
+        return json.loads(row["suggestion_json"]) if row is not None else None
 
     def record_preparation(
         self,

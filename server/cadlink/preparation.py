@@ -81,6 +81,7 @@ from .solver_frame import (
     AS_MODELLED,
     CONTRACT as FRAME_CONTRACT,
     REASON as FRAME_CONFIRMATION_REQUIRED,
+    ensure_frame_suggestion,
     record_frame_refusal,
     resolve_for_manifest as resolve_solver_frame,
 )
@@ -1030,6 +1031,14 @@ def _prepare_sync(
         operation_id, generation, preparation_id,
     )
     _publish(ctx, prepared)
+
+    # The automatic frame suggestion (M1e), inside this explicit command and
+    # cached per snapshot: the frame card preselects it. It never confirms,
+    # and a survey that fails only leaves the card asking.
+    try:
+        ensure_frame_suggestion(store, record)
+    except Exception as exc:  # noqa: BLE001 - advisory by construction
+        logger.warning("Solver frame suggestion failed for %s: %s", preparation_id, exc)
 
     # Before findings and approvals: a frame confirmed differently is a new
     # preparation, and approvals never carry to it. Read from the record, for

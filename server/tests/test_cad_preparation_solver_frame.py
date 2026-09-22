@@ -183,6 +183,36 @@ def test_revisionless_manual_solve_followups_reuse_the_preparations_settings(rea
     assert len(harness.submitted) == 1 and len(harness.jobs) == 1
 
 
+def test_preparation_surveys_the_frame_inside_its_command(real, monkeypatch) -> None:
+    """M1e: the suggestion is computed by the preparation, for the record it made."""
+
+    harness, _mesher = real
+    surveyed: list[str] = []
+
+    def survey(store, record):
+        surveyed.append(str(record["ingest_id"]))
+        return None
+
+    monkeypatch.setattr(preparation, "ensure_frame_suggestion", survey)
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    summary = _prepare(harness)
+    assert _waiting_for_frame(summary), summary
+    assert surveyed == [summary["preparationId"]]
+
+
+def test_a_failing_survey_never_fails_the_preparation(real, monkeypatch) -> None:
+    harness, _mesher = real
+
+    def survey(store, record):
+        raise RuntimeError("survey exploded")
+
+    monkeypatch.setattr(preparation, "ensure_frame_suggestion", survey)
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    assert _waiting_for_frame(_prepare(harness))
+
+
 def test_confirming_another_axis_prepares_again_in_that_frame(real) -> None:
     harness, mesher = real
     step = b"STEP authored"
@@ -358,6 +388,7 @@ def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monke
     harness, mesher = real
     monkeypatch.setattr("server.cadlink.api._schedule_deferred_viewport", lambda *_args: None)
     monkeypatch.setattr("server.cadlink.api._schedule_cad_document_capture", lambda *_args: None)
+    monkeypatch.setattr("server.cadlink.api._schedule_frame_suggestion", lambda *_args: None)
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
     waiting = _prepare(harness)

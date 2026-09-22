@@ -4,8 +4,8 @@ docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame". A return with no
 WG instance carries no throat frame: nothing in it says which way the model
 radiates. WG used to solve it in the assembly frame as modelled (+Z) and warn
 nothing; a mis-framed model then gave wrong directivity in silence. Now the
-user confirms, once per project, which assembly axis the model radiates along,
-after seeing the geometry in that frame, and no path solves it before then.
+forward axis is confirmed once per project, after WG infers it from the
+geometry (``frame_infer``) and shows it; no path solves it before then.
 
 Two contracts exist. Both name the forward ``axis``, one of
 ``+z -z +x -x +y -y``, and map it to the solver's +Z about the assembly origin.
@@ -43,12 +43,19 @@ setup revision: a revision is recorded from UI state by any client and must
 not be able to confirm a frame. The frame reaches a solve through the
 ingestion record, which states the frame it was meshed in, and so through the
 bound ``ingest_id``.
+
+The automatic suggestion (``frame_infer``) is computed inside the explicit
+import and preparation commands and cached per snapshot and algorithm version.
+It preselects; it never confirms. A confirmed frame whose identity matches
+always wins over it, and a suggestion that clearly disagrees with the
+confirmed frame is reported, never acted on.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import logging
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
@@ -58,6 +65,8 @@ from .wgreturn import DOCUMENT_UP_AXES, DOCUMENT_UP_FEATURE
 if TYPE_CHECKING:  # pragma: no cover
     from .store import CadLinkStore
 
+
+logger = logging.getLogger(__name__)
 
 CONTRACT_V1 = "cad-solver-frame-v1"
 CONTRACT_V2 = "cad-solver-frame-v2"
@@ -448,7 +457,8 @@ def confirm_frame(
     """Record the user's confirmation for the project an ingestion record belongs to.
 
     The row records the complete transform the confirmed axis means under this
-    record's contract, its up and where that came from.
+    record's contract, its up and where that came from, and the automatic
+    suggestion it agreed with or overrode.
     """
 
     if not record_is_unlinked(record):
@@ -468,14 +478,116 @@ def confirm_frame(
             "in the frame it was modelled in (+z)"
         )
     spec = _frame_for_axis(frame, chosen)
-    confirmed_frame = {**spec, "matrix": spec_matrix(spec).tolist()}
+    suggestion = _cached_suggestion(store, record)
+    confirmed_frame = {
+        **spec,
+        "matrix": spec_matrix(spec).tolist(),
+        "provenance": (
+            "suggested"
+            if suggestion is not None
+            and suggestion.get("status") == "automatic"
+            and suggestion.get("axis") == chosen
+            else "chosen"
+        ),
+        "suggestion": (
+            {
+                "algorithm": suggestion.get("algorithm"),
+                "status": suggestion.get("status"),
+                "axis": suggestion.get("axis"),
+                "confidence": suggestion.get("confidence"),
+                "snapshotSha256": suggestion.get("snapshotSha256"),
+            }
+            if suggestion is not None
+            else None
+        ),
+    }
     return store.record_frame_confirmation(
         record_confirmation_key(record), dict(frame["requirement"]), chosen, frame=confirmed_frame
     )
 
 
+# -- the automatic suggestion ----------------------------------------------------
+
+
+def _snapshot(record: Mapping[str, Any]) -> str:
+    return str(record.get("manifest_sha256") or "")
+
+
+def _cached_suggestion(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, Any] | None:
+    from .frame_infer import ALGORITHM_VERSION
+
+    snapshot = _snapshot(record)
+    if not snapshot:
+        return None
+    return store.get_frame_suggestion(snapshot, ALGORITHM_VERSION)
+
+
+def ensure_frame_suggestion(
+    store: CadLinkStore, record: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """The automatic suggestion for this record's snapshot, computed once and cached.
+
+    Run inside the explicit import and preparation commands. Keyed by the
+    snapshot and the algorithm version, so a new algorithm recomputes and a
+    confirmation is never touched. A survey that could not run is returned
+    but not cached, so the next command tries again. None for a linked record.
+    """
+
+    if not record_is_unlinked(record):
+        return None
+    from server.mesh.artifact import read_verified_import_mesh
+
+    from .frame_infer import STATUS_UNAVAILABLE, infer_record_frame, unavailable
+
+    cached = _cached_suggestion(store, record)
+    if cached is not None:
+        return cached
+    frame = _record_frame(record)
+    allowed = _record_allowed(frame) if frame is not None else ()
+    try:
+        result = infer_record_frame(record, read_verified_import_mesh(record), supported_axes=allowed)
+    except Exception as exc:  # noqa: BLE001 - the survey only ever advises
+        logger.warning("Solver frame survey failed for %s: %s", record.get("ingest_id"), exc)
+        result = unavailable(str(exc) or type(exc).__name__, supported_axes=allowed)
+    payload = {
+        **result.to_json(),
+        "snapshotSha256": _snapshot(record),
+        "ingestId": record.get("ingest_id"),
+    }
+    if result.status != STATUS_UNAVAILABLE and payload["snapshotSha256"]:
+        return store.record_frame_suggestion(
+            payload["snapshotSha256"], result.algorithm, payload, str(record.get("ingest_id") or "")
+        )
+    return payload
+
+
+def _differs_notice(confirmed_axis: str | None, suggestion: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if (
+        confirmed_axis is None
+        or suggestion is None
+        or suggestion.get("status") != "automatic"
+        or suggestion.get("axis") in (None, confirmed_axis)
+    ):
+        return None
+    suggested = str(suggestion["axis"])
+    return {
+        "confirmedAxis": confirmed_axis,
+        "suggestedAxis": suggested,
+        "message": (
+            f"This version looks like it faces {suggested}; this project is set to "
+            f"{confirmed_axis}. WG keeps {confirmed_axis} until you switch."
+        ),
+    }
+
+
 def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, Any]:
-    """Every axis's matrix, relative to the frame this record's geometry is shown in."""
+    """Every axis's matrix, relative to the frame this record's geometry is shown in.
+
+    Also the automatic suggestion for the snapshot, which axis is preselected
+    and why -- a matching confirmed frame first, then an automatic suggestion
+    the snapshot allows, else none -- and, when the suggestion clearly
+    disagrees with the confirmed frame, a notice that never changes it.
+    """
 
     if not record_is_unlinked(record):
         return {"linked": True}
@@ -526,6 +638,20 @@ def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, A
                 "previewFromRecord": (solver_from_assembly @ assembly_from_record).tolist(),
             }
         )
+    suggestion = _cached_suggestion(store, record) if frame is not None else None
+    if frame is not None and suggestion is None:
+        suggestion = ensure_frame_suggestion(store, record)
+    confirmed_axis = confirmed["axis"] if confirmed is not None else None
+    if confirmed_axis is not None and confirmed_axis in allowed:
+        preselected = {"axis": confirmed_axis, "source": "confirmed"}
+    elif (
+        suggestion is not None
+        and suggestion.get("status") == "automatic"
+        and suggestion.get("axis") in allowed
+    ):
+        preselected = {"axis": suggestion["axis"], "source": "suggested"}
+    else:
+        preselected = None
     return {
         "linked": False,
         "ingestId": record.get("ingest_id"),
@@ -545,6 +671,9 @@ def frame_preview(store: CadLinkStore, record: Mapping[str, Any]) -> dict[str, A
         ),
         "confirmed": confirmed,
         "axes": axes,
+        "suggestion": suggestion,
+        "preselected": preselected,
+        "differs": _differs_notice(confirmed_axis if confirmed_axis in allowed else None, suggestion),
     }
 
 
@@ -564,6 +693,7 @@ __all__ = [
     "confirm_frame",
     "confirmation_key",
     "document_up",
+    "ensure_frame_suggestion",
     "frame_matrix",
     "frame_preview",
     "frame_requirement",
